@@ -1,0 +1,18 @@
+# Run the extraction worker in Docker (no local Python/dep-scan needed).
+# From backend/extraction-worker:
+#   docker compose up --build
+#
+# Backend must be reachable from the container. If the backend runs on your host:
+#   set BACKEND_URL=http://host.docker.internal:3001 in .env (or below)
+
+services:
+  extraction-worker:
+    build: .
+    env_file: .env
+    environment:
+      # So the container can call your local backend
+      - BACKEND_URL=${BACKEND_URL:-http://host.docker.internal:3001}
+    volumes:
+      # Mount GitHub App key so the worker can clone repos
+      - ./github-app-private-key.pem:/app/github-app-private-key.pem:ro
+    restart: unless-stopped

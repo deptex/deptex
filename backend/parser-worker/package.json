@@ -1,0 +1,30 @@
+{
+  "name": "deptex-parser-worker",
+  "version": "0.1.0",
+  "description": "AST Parser Worker for Deptex - Analyzes GitHub repositories to extract import information",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "type-check": "tsc --noEmit"
+  },
+  "keywords": [
+    "ast-parser",
+    "dependency-analysis"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "@upstash/redis": "^1.25.0",
+    "dotenv": "^16.3.1",
+    "oxc-parser": "^0.15.0",
+    "simple-git": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}

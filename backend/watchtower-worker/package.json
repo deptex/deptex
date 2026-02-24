@@ -1,0 +1,37 @@
+{
+  "name": "deptex-watchtower-worker",
+  "version": "0.1.0",
+  "description": "Watchtower Worker for Deptex - Performs forensic analysis on watched packages",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "type-check": "tsc --noEmit",
+    "test:registry": "tsx src/run-registry-integrity.ts"
+  },
+  "keywords": [
+    "watchtower",
+    "supply-chain-security",
+    "forensic-analysis"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "@upstash/redis": "^1.25.0",
+    "dir-compare": "^5.0.0",
+    "dotenv": "^16.3.1",
+    "glob": "^11.0.0",
+    "oxc-parser": "^0.111.0",
+    "pacote": "^18.0.0",
+    "semver": "^7.7.4",
+    "simple-git": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "@types/pacote": "^11.1.8",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}

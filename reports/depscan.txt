@@ -1,0 +1,88 @@
+( ●    ) Downloading the latest vulnerability database to 
+C:\Users\hruck\AppData\Local\vdb\vdb. Please wait ...
+[18:27:28] WARNING  Credential helper 'docker-credential-desktop' failed:
+           WARNING  Credential helper 'docker-credential-desktop' failed:
+[18:31:45] INFO     cdxgen command not found. Please install using npm   
+                    install @cyclonedx/cdxgen or set PATH variable       
+( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(     ●) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(●     ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(     ●) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(●     ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(     ●) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(●     ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(     ●) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(●     ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(     ●) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(●     ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(     ●) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(●     ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(     ●) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(●     ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(     ●) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(●     ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(     ●) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(●     ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(     ●) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(●     ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(     ●) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(●     ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.( ●    ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(     ●) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(    ● ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(   ●  ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.(  ●   ) Generating BOM for the source 'C:\Coding\Deptex' with cdxgen.
+[18:31:54] INFO     To improve performance, cache the bom file and invoke
+                    depscan with --bom ./reports\sbom-npm.cdx.json       
+                    instead of -i                                        
+           INFO     Scanning C:\Coding\Deptex with type npm              
+
+Vulnerability Disclosure Report                                          
+
+The table below lists all vulnerabilities identified in this project.    
+Review and triage the information to identify any critical               
+vulnerabilities.                                                         
+
+                      Dependency Scan Results (NPM)                      
+╔══════════════════╤═══════════════════╤═════════════╤══════════╤═══════╗
+║ Dependency Tree  │ Insights          │ Fix Version │ Severity │ Score ║
+╟──────────────────┼───────────────────┼─────────────┼──────────┼───────╢
+║ brace-expansion… │ 📓 Indirect       │ 5.0.1       │ HIGH     │   8.7 ║
+║ ⬅ CVE-2026-25547 │ dependency        │             │          │       ║
+╟──────────────────┼───────────────────┼─────────────┼──────────┼───────╢
+║ eslintrc@2.1.4   │ 📓 Indirect       │ 8.18.0      │ MEDIUM   │   5.0 ║
+║ └── ajv@6.12.6 ⬅ │ dependency        │             │          │       ║
+║     CVE-2025-69… │                   │             │          │       ║
+╟──────────────────┼───────────────────┼─────────────┼──────────┼───────╢
+║ cdxgen@11.11.0   │ 📓 Indirect       │ 2.2.1       │ MEDIUM   │   5.5 ║
+║ └── body-parser… │ dependency        │             │          │       ║
+║     ⬅            │                   │             │          │       ║
+║     CVE-2025-13… │                   │             │          │       ║
+╟──────────────────┼───────────────────┼─────────────┼──────────┼───────╢
+║ ts-node@10.9.2   │ 🎯 Used in 1      │ 4.0.4       │ LOW      │   2.7 ║
+║ └── diff@4.0.2 ⬅ │ locations         │             │          │       ║
+║     CVE-2026-24… │                   │             │          │       ║
+╟──────────────────┼───────────────────┼─────────────┼──────────┼───────╢
+║ vite@5.4.21      │ 📓 Indirect       │ 0.25.0      │ MEDIUM   │   5.3 ║
+║ └── esbuild@0.2… │ dependency        │             │          │       ║
+║     ⬅            │                   │             │          │       ║
+║     GHSA-67mh-4… │                   │             │          │       ║
+╟──────────────────┼───────────────────┼─────────────┼──────────┼───────╢
+║ xml-builder@3.9… │ 📓 Indirect       │ 5.3.6       │ HIGH     │   7.5 ║
+║ └── fast-xml-pa… │ dependency        │             │          │       ║
+║     ⬅            │                   │             │          │       ║
+║     CVE-2026-26… │                   │             │          │       ║
+║ xml-builder@3.9… │                   │             │ HIGH     │   7.3 ║
+║ └── fast-xml-pa… │                   │             │          │       ║
+║     ⬅            │                   │             │          │       ║
+║     CVE-2026-25… │                   │             │          │       ║
+╟──────────────────┼───────────────────┼─────────────┼──────────┼───────╢
+║ package-json@7.… │ 🎯 Used in 3      │ 11.1.0      │ HIGH     │   7.5 ║
+║ └── glob@11.0.3  │ locations         │             │          │       ║
+║     ⬅            │                   │             │          │       ║
+║     CVE-2025-64… │                   │             │          │       ║
+╟──────────────────┼───────────────────┼─────────────┼──────────┼───────╢
+║ cdxgen@11.11.0   │ 📓 Indirect       │ 4.0.1       │ HIGH     │   7.5 ║
+║ └── jws@4.0.0 ⬅  │ dependency        │             │          │       ║
+║     CVE-2025-65… │                   │             │          │       ║
+╟──────────────────┼───────────────────┼─────────────┼──────────┼───────╢
+║ body-parser@1.2… │ 📓 Indirect       │             │ LOW      │   3.1 ║
+║ └── qs@6.14.1 ⬅  │ dependency        │             │          │       ║
+║     CVE-2026-23… │                   │             │          │       ║
+╟──────────────────┼───────────────────┼─────────────┼──────────┼───────╢
+║ node-gyp@12.2.0  │ 📓 Indirect       │ 7.5.8       │ HIGH     │   7.3 ║
+║ └── tar@7.5.7 ⬅  │ dependency        │             │          │       ║
+║     CVE-2026-26… │                   │             │          │       ║
+║ cacache@18.0.4   │                   │             │ HIGH     │   7.3 ║
+║ └── tar@6.2.1 ⬅  │                   │             │          │       ║
+║     CVE-2026-24… │                   │             │          │       ║
+║ cacache@18.0.4   │                   │             │ HIGH     │   7.3 ║
+║ └── tar@6.2.1 ⬅  │                   │             │          │       ║
+║     CVE-2026-23… │                   │             │          │       ║
+║ cacache@18.0.4   │                   │             │ HIGH     │   7.3 ║
+║ └── tar@6.2.1 ⬅  │                   │             │          │       ║
+║     CVE-2026-23… │                   │             │          │       ║
+║ cacache@19.0.1   │                   │             │ MEDIUM   │   6.1 ║
+║ └── tar@7.5.1 ⬅  │                   │             │          │       ║
+║     CVE-2025-64… │                   │             │          │       ║
+╚══════════════════╧═══════════════════╧═════════════╧══════════╧═══════╝
+                        Vulnerabilities count: 15                        
+
+╭─────────────────────────── Recommendation ────────────────────────────╮
+│ ✅ No packages require immediate attention, as the major              │
+│ vulnerabilities are only present in dev packages and indirect         │
+│ dependencies.                                                         │
+╰───────────────────────────────────────────────────────────────────────╯
