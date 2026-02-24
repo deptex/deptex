@@ -2313,7 +2313,7 @@ router.get('/slack/org-callback', async (req, res) => {
 
     if (!tokenData.ok) {
       console.error('Slack OAuth error:', tokenData.error);
-      return res.redirect(`${frontendUrl}/organizations/${orgId}/settings?section=integrations&error=slack&message=${encodeURIComponent(tokenData.error || 'Unknown error')}`);
+      return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=slack&message=${encodeURIComponent(tokenData.error || 'Unknown error')}`);
     }
 
     const { error: dbError } = await supabase
@@ -2339,10 +2339,10 @@ router.get('/slack/org-callback', async (req, res) => {
 
     if (dbError) {
       console.error('Slack org integration DB error:', dbError);
-      return res.redirect(`${frontendUrl}/organizations/${orgId}/settings?section=integrations&error=slack&message=Failed to save integration`);
+      return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=slack&message=Failed to save integration`);
     }
 
-    res.redirect(`${frontendUrl}/organizations/${orgId}/settings?section=integrations&connected=slack`);
+    res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?connected=slack`);
   } catch (err: any) {
     console.error('Slack org callback error:', err);
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';

@@ -4,6 +4,7 @@ import DocsApp from "./DocsApp";
 import DocsLayout from "./pages/DocsLayout";
 import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/LoginPage";
+import AuthCallbackPage from "./pages/AuthCallbackPage";
 import OrganizationsPage from "./pages/OrganizationsPage";
 import OrganizationLayout from "./pages/OrganizationLayout";
 import OrganizationDetailPage from "./pages/OrganizationDetailPage";
@@ -265,6 +266,14 @@ export const router = createBrowserRouter([
     element: (
       <PublicRoute>
         <LoginPage />
+      </PublicRoute>
+    ),
+  },
+  {
+    path: "/auth/callback",
+    element: (
+      <PublicRoute>
+        <AuthCallbackPage />
       </PublicRoute>
     ),
   },

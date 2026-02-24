@@ -114,16 +114,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signInWithGitHub = async () => {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'github',
-      options: {
-        redirectTo: `${window.location.origin}/organizations`,
-      },
-    });
-    if (error) {
-      console.error('Error signing in with GitHub:', error);
-      throw error;
-    }
+    // Use our backend OAuth flow so GitHub shows "Redirect to yourapp.com" instead of "Redirect to xxx.supabase.co"
+    const apiBase = import.meta.env.VITE_API_BASE_URL || (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:3001` : 'http://localhost:3001');
+    const returnTo = (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('redirect')) || '/organizations';
+    window.location.href = `${apiBase.replace(/\/$/, '')}/api/auth/github?returnTo=${encodeURIComponent(returnTo)}`;
   };
 
   const signOut = async () => {

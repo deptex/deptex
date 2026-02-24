@@ -132,6 +132,18 @@ In your **frontend** env (e.g. `frontend/.env` or Vercel env vars), set:
 
 - **`VITE_API_BASE_URL`** = same as `BACKEND_URL` (e.g. `https://api.yourdomain.com`) so login and API calls use the deployed backend.
 
+### Login with GitHub (no Supabase URL on GitHub’s page)
+
+To have GitHub show “Redirect to **yourapp.com**” instead of “Redirect to **xxx.supabase.co**”, the app uses a custom GitHub OAuth flow for **login** (separate from the GitHub App used for repo access):
+
+1. **Create a separate GitHub OAuth App** (e.g. “Deptex Login”): GitHub → Settings → Developer settings → OAuth Apps → New OAuth App.
+2. Set **Authorization callback URL** to your **frontend** URL so GitHub shows your app domain (e.g. “Redirect to **deptex.dev**”), not your backend: `{FRONTEND_URL}/auth/callback` (e.g. `https://deptex.dev/auth/callback`).
+3. In the backend, set:
+   - **`GITHUB_OAUTH_CLIENT_ID`** = Client ID of that OAuth App
+   - **`GITHUB_OAUTH_CLIENT_SECRET`** = Client secret of that OAuth App
+
+Then “Sign in with GitHub” will go: your app → GitHub (shows your domain as redirect) → your backend → Supabase session → back to your app. Keep your existing Supabase Auth GitHub provider/callback for Google or other providers if you use them.
+
 ## Development
 
 The project uses TypeScript for type safety. Run type checking:
