@@ -1,9 +1,12 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+
+// Permissive schema type so table/row types are not inferred as 'never' when no generated types are used
+export type SupabaseClientAny = SupabaseClient<any, 'public', any>;
 
 // Lazy initialization - only create client when first accessed
-let _supabase: ReturnType<typeof createClient> | null = null;
+let _supabase: SupabaseClientAny | null = null;
 
-function initSupabase() {
+function initSupabase(): SupabaseClientAny {
   if (_supabase) return _supabase;
 
   const supabaseUrl = process.env.SUPABASE_URL;
@@ -13,18 +16,18 @@ function initSupabase() {
     throw new Error('Missing Supabase environment variables. Make sure .env file exists in the backend directory.');
   }
 
-  _supabase = createClient<any>(supabaseUrl, supabaseServiceRoleKey, {
+  _supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
     },
-  });
+  }) as SupabaseClientAny;
 
   return _supabase;
 }
 
 // Export a getter that initializes on first access
-export const supabase = new Proxy({} as ReturnType<typeof createClient>, {
+export const supabase: SupabaseClientAny = new Proxy({} as SupabaseClientAny, {
   get(_target, prop) {
     const client = initSupabase();
     const value = (client as any)[prop];

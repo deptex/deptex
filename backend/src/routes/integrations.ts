@@ -1218,7 +1218,7 @@ type PushProjectRow = {
   default_branch: string;
   package_json_path: string | null;
   installation_id: string;
-  projects: { organization_id: string } | null;
+  projects: { organization_id: string }[] | { organization_id: string } | null;
 };
 
 async function handlePushEvent(payload: any): Promise<void> {
@@ -1247,9 +1247,10 @@ async function handlePushEvent(payload: any): Promise<void> {
     return;
   }
   const expectedRef = (branch: string) => `refs/heads/${branch}`;
-  const projects = (rows ?? []).filter(
-    (r: PushProjectRow) => r.default_branch && ref === expectedRef(r.default_branch)
-  ) as PushProjectRow[];
+  const rowList = (rows ?? []) as PushProjectRow[];
+  const projects = rowList.filter(
+    (r) => r.default_branch && ref === expectedRef(r.default_branch)
+  );
   if (projects.length === 0) {
     return;
   }
@@ -1262,7 +1263,8 @@ async function handlePushEvent(payload: any): Promise<void> {
   };
 
   for (const row of projects) {
-    const organizationId = row.projects?.organization_id;
+    const proj = row.projects;
+    const organizationId = Array.isArray(proj) ? proj[0]?.organization_id : proj?.organization_id;
     if (!organizationId) continue;
     try {
       const result = await extractDependencies(row.project_id, organizationId, {
@@ -1448,7 +1450,7 @@ async function getLicenseForPackage(name: string, _version?: string | null): Pro
       headers: { Accept: 'application/json', 'User-Agent': 'Deptex-App' },
     });
     if (!res.ok) return null;
-    const data2 = await res.json();
+    const data2 = (await res.json()) as { license?: string | { type?: string }; [key: string]: unknown };
     const lic = data2?.license;
     if (typeof lic === 'string') return lic;
     if (lic?.type) return lic.type;
@@ -1635,10 +1637,11 @@ async function handlePullRequestEvent(payload: any): Promise<void> {
     ): Promise<{ vulnCounts: VulnCounts; license: string | null; policyViolation: boolean }> => {
       const vulnCounts = await getVulnCountsForPackageVersion(supabase, name, version);
       const license = await getLicenseForPackage(name, version);
-      const policyViolation =
+      const policyViolation = Boolean(
         guardrails.block_policy_violations &&
         acceptedLicenses.length > 0 &&
-        isLicenseAllowed(license, acceptedLicenses) === false;
+        isLicenseAllowed(license, acceptedLicenses) === false
+      );
 
       if (guardrails.block_policy_violations && acceptedLicenses.length > 0 && policyViolation) {
         workspaceBlocked = true;

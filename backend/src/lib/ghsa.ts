@@ -62,7 +62,11 @@ export async function fetchGhsaVulnerabilitiesBatch(packageNames: string[]): Pro
       console.warn('[GHSA] GraphQL request failed:', res.status, await res.text());
       return result;
     }
-    const json = await res.json();
+    const json = (await res.json()) as { errors?: unknown; data?: Record<string, { nodes: Array<{
+      advisory: { ghsaId: string; summary: string | null; description: string | null; severity: string | null; publishedAt: string | null; updatedAt: string | null; identifiers: Array<{ type: string; value: string }> };
+      vulnerableVersionRange: string;
+      firstPatchedVersion: { identifier: string } | null;
+    }> }> };
     if (json.errors) {
       console.warn('[GHSA] GraphQL errors:', JSON.stringify(json.errors));
       return result;

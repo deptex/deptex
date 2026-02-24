@@ -111,12 +111,12 @@ const fetchNpmLicense = async (name: string, version: string | null): Promise<st
       return null;
     }
 
-    const data = await response.json();
-    if (version && data?.versions?.[version]) {
-      return normalizeLicense(data.versions[version].license);
+    const data = (await response.json()) as Record<string, unknown>;
+    if (version && (data?.versions as Record<string, { license?: string }> | undefined)?.[version]) {
+      return normalizeLicense((data.versions as Record<string, { license?: string }>)[version].license);
     }
 
-    return normalizeLicense(data?.license);
+    return normalizeLicense((data?.license as string) ?? null);
   } catch (e) {
     recordNpmCall();
     console.warn('[NPM] GET', url, { error: (e as Error).message });
@@ -155,16 +155,20 @@ async function fetchNpmDependencyMetadata(name: string): Promise<NpmDependencyMe
       else console.warn(`[NPM] GET`, registryUrl, { status: metaRes.status });
       return out;
     }
-    const meta = await metaRes.json();
-    out.license = normalizeLicense(meta?.license);
-    const repo = meta?.repository?.url || meta?.repository;
+    const meta = (await metaRes.json()) as Record<string, unknown>;
+    out.license = normalizeLicense((meta?.license as string) ?? null);
+    const repo = (meta?.repository as { url?: string } | undefined)?.url || (meta?.repository as string);
     if (typeof repo === 'string') {
       const m = repo.match(/github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?$/i);
       if (m) out.github_url = `https://github.com/${m[1]}/${m[2]}`;
     }
-    const latest = meta?.['dist-tags']?.latest && meta?.versions?.[meta['dist-tags'].latest];
-    if (latest?.time) out.last_published_at = new Date(latest.time).toISOString();
-    else if (meta?.time?.modified) out.last_published_at = new Date(meta.time.modified).toISOString();
+    const distTags = meta?.['dist-tags'] as { latest?: string } | undefined;
+    const versions = meta?.versions as Record<string, { time?: string }> | undefined;
+    const latestTag = distTags?.latest;
+    const latest = latestTag && versions?.[latestTag];
+    const latestObj = latest && typeof latest === 'object' ? latest : null;
+    if (latestObj?.time) out.last_published_at = new Date(latestObj.time).toISOString();
+    else if ((meta?.time as { modified?: string } | undefined)?.modified) out.last_published_at = new Date((meta.time as { modified: string }).modified).toISOString();
 
     await waitForNpmRateLimit();
     console.log('[NPM] GET', downloadsUrl, { package: name, api: 'downloads' });
@@ -173,7 +177,7 @@ async function fetchNpmDependencyMetadata(name: string): Promise<NpmDependencyMe
     });
     recordNpmCall();
     if (dlRes.ok) {
-      const dl = await dlRes.json();
+      const dl = (await dlRes.json()) as { downloads?: number };
       out.weekly_downloads = dl.downloads ?? null;
     } else if (dlRes.status === 429) {
       console.warn('[NPM] GET', downloadsUrl, { status: 429, rateLimited: true });
@@ -232,8 +236,8 @@ const parsePackageLock = (lockJson: any): ParsedLockData => {
     if (parts.length >= 3) {
       // This package has a parent - it's nested under another package
       // Example: ['', 'express', 'body-parser'] -> express is parent of body-parser
-      const childName = entry?.name || parts[parts.length - 1];
-      const childVersion = entry?.version;
+      const childName = (entry as { name?: string })?.name || parts[parts.length - 1];
+      const childVersion = (entry as { version?: string })?.version;
 
       if (!childName || !childVersion) continue;
 
@@ -260,12 +264,13 @@ const parsePackageLock = (lockJson: any): ParsedLockData => {
   // Also extract relationships from the "dependencies" field within each package entry
   // This catches dependencies that are hoisted but still declared as dependencies
   for (const [path, entry] of Object.entries(packages)) {
-    if (path === '' || !entry?.dependencies) continue;
+    const deps = (entry as { dependencies?: Record<string, string> })?.dependencies;
+    if (path === '' || !deps) continue;
 
     const parentInfo = packageInfoMap.get(path);
     if (!parentInfo) continue;
 
-    for (const childName of Object.keys(entry.dependencies)) {
+    for (const childName of Object.keys(deps)) {
       // Find the child package - could be at various levels due to hoisting
       // First check if it's nested directly under this package
       const nestedPath = `${path}/node_modules/${childName}`;
@@ -406,7 +411,7 @@ export async function extractDependencies(
   try {
     log('start');
     const t0 = Date.now();
-    const installationToken = await createInstallationToken(repoRecord.installation_id);
+    const installationToken = await createInstallationToken(String(repoRecord.installation_id));
     log('got GitHub token', { elapsedMs: Date.now() - extractStart, tokenMs: Date.now() - t0 });
 
     const lockPath = package_json_path ? `${package_json_path}/package-lock.json` : 'package-lock.json';
@@ -792,7 +797,7 @@ async function fetchOsvVulnerabilities(
       return [];
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as { vulns?: OsvVulnerability[] };
     return data.vulns || [];
   } catch (error) {
     console.error(`Failed to fetch OSV vulnerabilities for ${packageName}@${version}:`, error);
@@ -840,8 +845,8 @@ async function fetchOpenssfScorecardForRepo(githubUrl: string | null): Promise<O
       { headers: { 'User-Agent': 'Deptex-App' } }
     );
     if (!scorecardResponse.ok) return { score: null, data: null };
-    const scorecardData = await scorecardResponse.json();
-    return { score: scorecardData.score ?? null, data: scorecardData };
+    const scorecardData = (await scorecardResponse.json()) as Record<string, unknown>;
+    return { score: (scorecardData.score as number | null) ?? null, data: scorecardData as Record<string, unknown> | null };
   } catch (error) {
     return { score: null, data: null };
   }
@@ -892,7 +897,7 @@ async function fetchNpmPackageInfo(packageName: string): Promise<NpmPackageInfo>
 
     recordNpmCall();
     if (metaResponse.ok) {
-      const metaData = await metaResponse.json();
+      const metaData = (await metaResponse.json()) as Record<string, unknown>;
 
       // Get package description
       if (typeof metaData.description === 'string' && metaData.description.trim()) {
@@ -900,24 +905,26 @@ async function fetchNpmPackageInfo(packageName: string): Promise<NpmPackageInfo>
       }
 
       // Get last published date
-      if (metaData.time?.modified) {
-        result.lastPublishedAt = new Date(metaData.time.modified);
+      const metaTime = metaData.time as { modified?: string; [k: string]: unknown } | undefined;
+      if (metaTime?.modified) {
+        result.lastPublishedAt = new Date(metaTime.modified);
       }
 
       // Get version list for fetching past vulnerabilities (stable releases only, newest first)
-      if (metaData.versions) {
-        const all = Object.keys(metaData.versions);
+      const metaVersions = metaData.versions as Record<string, unknown> | undefined;
+      if (metaVersions) {
+        const all = Object.keys(metaVersions);
         const stable = all.filter((v) => isStableVersion(v));
         result.versions = stable.length > 0 ? semver.rsort(stable) : all.reverse();
       }
 
       // Get version timestamps and count stable releases in last 12 months
-      if (metaData.time) {
+      if (metaTime) {
         const now = new Date();
         const oneYearAgo = new Date(now);
         oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
         let recentCount = 0;
-        for (const [ver, dateStr] of Object.entries(metaData.time)) {
+        for (const [ver, dateStr] of Object.entries(metaTime)) {
           if (ver === 'created' || ver === 'modified') continue; // skip metadata keys
           if (typeof dateStr === 'string') {
             result.versionTimestamps[ver] = dateStr;
@@ -931,17 +938,20 @@ async function fetchNpmPackageInfo(packageName: string): Promise<NpmPackageInfo>
       }
 
       // GitHub URL from repository field
-      const repo = metaData?.repository?.url || metaData?.repository;
+      const metaRepo = metaData?.repository as { url?: string } | string | undefined;
+      const repo = (typeof metaRepo === 'object' && metaRepo?.url) ? metaRepo.url : metaRepo;
       if (typeof repo === 'string') {
         const m = repo.match(/github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?$/i);
         if (m) result.github_url = `https://github.com/${m[1]}/${m[2]}`;
       }
 
       // Latest version and its release date (for dependencies table)
-      const latest = metaData?.['dist-tags']?.latest;
+      const distTags = metaData?.['dist-tags'] as { latest?: string } | undefined;
+      const latest = distTags?.latest;
       if (latest) {
         result.latest_version = latest;
-        const time = metaData?.time?.[latest];
+        const timeMap = metaData?.time as Record<string, string> | undefined;
+        const time = timeMap?.[latest];
         if (time) result.latest_release_date = new Date(time).toISOString();
       }
     }
@@ -971,7 +981,7 @@ async function fetchNpmPackageInfo(packageName: string): Promise<NpmPackageInfo>
     }
 
     if (downloadsResponse.ok) {
-      const downloadsData = await downloadsResponse.json();
+      const downloadsData = (await downloadsResponse.json()) as { downloads?: number };
       result.weeklyDownloads = downloadsData.downloads ?? null;
     }
   } catch (error: any) {

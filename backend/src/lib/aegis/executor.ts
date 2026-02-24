@@ -118,8 +118,9 @@ export async function executeMessage(
     const toolCall = response.tool_calls?.[0] || response.function_call;
 
     if (toolCall) {
-      const functionName = toolCall.function?.name || toolCall.name;
-      const functionParams = JSON.parse(toolCall.function?.arguments || toolCall.arguments || '{}');
+      const fn = 'function' in toolCall && toolCall.function ? toolCall.function : { name: (toolCall as { name?: string }).name, arguments: (toolCall as { arguments?: string }).arguments };
+      const functionName = fn?.name ?? '';
+      const functionParams = JSON.parse(fn?.arguments || '{}');
 
       // Get action handler
       const handler = getActionHandler(functionName);
@@ -148,7 +149,7 @@ export async function executeMessage(
 
       // After performing an action, we need to generate a natural language response
       // Add the function result to the conversation and ask OpenAI to format a response
-      const toolCallId = toolCall.id || ('call_' + Date.now());
+      const toolCallId = ('id' in toolCall && toolCall.id) || ('call_' + Date.now());
 
       const actionResultMessage = {
         role: 'assistant' as const,

@@ -134,8 +134,8 @@ export async function queueDependencyAnalysis(
       return null;
     }
 
-    const result = await response.json();
-    return { messageId: result.messageId };
+    const result = (await response.json()) as { messageId?: string };
+    return result.messageId ? { messageId: result.messageId } : null;
   } catch (error) {
     console.error('Failed to queue dependency analysis:', error);
     return null;

@@ -1,7 +1,7 @@
 import express from 'express';
 import semver from 'semver';
 import { supabase } from '../lib/supabase';
-import { AuthRequest } from '../middleware/auth';
+import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { createActivity } from '../lib/activities';
 import {
   createInstallationToken,
@@ -53,7 +53,7 @@ function isStableVersion(version: string): boolean {
 
 /** Batched ancestor paths: one edge query for project subgraph, then BFS in memory. */
 async function getAncestorPathsBatched(
-  client: ReturnType<typeof supabase>,
+  client: import('../lib/supabase').SupabaseClientAny,
   projectId: string,
   dependencyVersionId: string,
   parentName: string,
@@ -153,10 +153,10 @@ async function fetchLatestNpmVersion(packageName: string): Promise<{ latest_vers
       headers: { Accept: 'application/json' },
     });
     if (!res.ok) return { latest_version: null, latest_release_date: null };
-    const data = await res.json();
-    const latest = data['dist-tags']?.latest;
+    const data = (await res.json()) as Record<string, unknown>;
+    const latest = (data['dist-tags'] as Record<string, string> | undefined)?.latest;
     if (!latest) return { latest_version: null, latest_release_date: null };
-    const time = data.time?.[latest]; // ISO string or undefined
+    const time = (data.time as Record<string, string> | undefined)?.[latest]; // ISO string or undefined
     return {
       latest_version: latest,
       latest_release_date: time ? new Date(time).toISOString() : null,
@@ -287,6 +287,7 @@ async function updateAllProjectsCompliance(organizationId: string): Promise<void
 }
 
 const router = express.Router();
+router.use(authenticateUser);
 
 // Helper function to check if user has access to a project
 // Access is granted if user is org owner, has manage_teams_and_projects permission,
@@ -1388,8 +1389,9 @@ router.get('/:id/projects/:projectId', async (req: AuthRequest, res) => {
 
     // Find owner team
     const ownerTeamEntry = projectTeams?.find((pt: any) => pt.is_owner);
-    const ownerTeamId = ownerTeamEntry?.teams?.id || null;
-    const ownerTeamName = ownerTeamEntry?.teams?.name || null;
+    const team = Array.isArray(ownerTeamEntry?.teams) ? ownerTeamEntry?.teams?.[0] : ownerTeamEntry?.teams;
+    const ownerTeamId = (team as { id?: string } | undefined)?.id ?? null;
+    const ownerTeamName = (team as { name?: string } | undefined)?.name ?? null;
 
     // Get user's project role and permissions
     let userRole = null;
@@ -3315,8 +3317,6 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
       default_branch: default_branch,
       package_json_path: package_json_path,
       ecosystem: resolvedEcosystem,
-      provider: resolvedProvider,
-      integration_id: integrationId || undefined,
     });
 
     if (!queueResult.success) {
@@ -4514,7 +4514,7 @@ type SupplyChainChildRow = {
 };
 
 async function buildSupplyChainChildren(
-  client: ReturnType<typeof supabase>,
+  client: import('../lib/supabase').SupabaseClientAny,
   projectId: string,
   projectDependencyId: string
 ): Promise<SupplyChainChildRow[]> {
@@ -5610,7 +5610,7 @@ router.patch('/:id/projects/:projectId/dependencies/:dependencyId/watching', asy
             .from('dependencies')
             .insert({
               name: depDetails.name,
-              license: depDetails.license,
+              license: (depDetails as { license?: string }).license ?? null,
             })
             .select('id')
             .single();

@@ -334,7 +334,7 @@ router.get('/:packageName/commits', authenticateUser, async (req: AuthRequest, r
           countQuery = countQuery.not('sha', 'in', `(${clearedList})`);
         }
         const { count: totalCount } = await countQuery.range(0, 0);
-        count = totalCount ?? commits.length;
+        count = totalCount ?? (commits?.length ?? 0);
       } else {
         let query = supabase
           .from('package_commits')
@@ -724,12 +724,12 @@ router.get('/:packageName/summary', authenticateUser, async (req: AuthRequest, r
       bump_pr_url,
       decrease_pr_url,
       // Status fields from dependency_versions
-      registry_integrity_status: versionData.registry_integrity_status || null,
-      registry_integrity_reason: versionData.registry_integrity_reason || null,
-      install_scripts_status: versionData.install_scripts_status || null,
-      install_scripts_reason: versionData.install_scripts_reason || null,
-      entropy_analysis_status: versionData.entropy_analysis_status || null,
-      entropy_analysis_reason: versionData.entropy_analysis_reason || null,
+      registry_integrity_status: (versionData as Record<string, unknown>).registry_integrity_status || null,
+      registry_integrity_reason: (versionData as Record<string, unknown>).registry_integrity_reason || null,
+      install_scripts_status: (versionData as Record<string, unknown>).install_scripts_status || null,
+      install_scripts_reason: (versionData as Record<string, unknown>).install_scripts_reason || null,
+      entropy_analysis_status: (versionData as Record<string, unknown>).entropy_analysis_status || null,
+      entropy_analysis_reason: (versionData as Record<string, unknown>).entropy_analysis_reason || null,
       // Counts
       commits_count: commitCount || 0,
       contributors_count: contributorCount || 0,
@@ -832,8 +832,8 @@ router.post('/analyze-commit', authenticateUser, async (req: AuthRequest, res) =
         return res.status(400).json({ error: `Failed to fetch package info from npm: ${npmResponse.status}` });
       }
 
-      const npmData = await npmResponse.json();
-      const repoUrl = npmData.repository?.url || '';
+      const npmData = (await npmResponse.json()) as Record<string, unknown>;
+      const repoUrl = (npmData.repository as { url?: string } | undefined)?.url || '';
 
       // Extract GitHub owner/repo from various URL formats
       const githubMatch = repoUrl.match(/github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?$/i);

@@ -1,9 +1,10 @@
 import express from 'express';
 import { supabase } from '../lib/supabase';
-import { AuthRequest } from '../middleware/auth';
+import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { createActivity } from '../lib/activities';
 
 const router = express.Router();
+router.use(authenticateUser);
 
 // Helper function to check if user has access to a team
 // Access is granted if user is a team member OR has org-level permissions
@@ -231,6 +232,7 @@ router.get('/:id/teams', async (req: AuthRequest, res) => {
             view_settings: true,
             view_roles: true,
             edit_roles: true,
+            manage_notification_settings: true,
           };
           // Org admins/owners have effective rank of 0 (highest) for team role management
           userRank = 0;
@@ -644,6 +646,9 @@ router.get('/:id/teams/:teamId', async (req: AuthRequest, res) => {
 
     // Org admins/owners OR users with view_all_teams_and_projects/manage_teams_and_projects permission get all permissions on teams
     // We need to check org role permissions for this
+    if (!orgMembership) {
+      return res.status(403).json({ error: 'Not a member of this organization' });
+    }
     const { data: orgRole } = await supabase
       .from('organization_roles')
       .select('permissions, display_order')
@@ -657,7 +662,7 @@ router.get('/:id/teams/:teamId', async (req: AuthRequest, res) => {
     const canViewAllTeamsAndProjects = orgRole?.permissions?.view_all_teams_and_projects === true;
     const canManageTeamsAndProjects = orgRole?.permissions?.manage_teams_and_projects === true;
 
-    if (orgMembership.role === 'owner' || orgMembership.role === 'admin' || canViewAllTeamsAndProjects || canManageTeamsAndProjects) {
+    if (orgMembership?.role === 'owner' || orgMembership?.role === 'admin' || canViewAllTeamsAndProjects || canManageTeamsAndProjects) {
       userPermissions = {
         view_overview: true,
         resolve_alerts: true,
@@ -666,6 +671,7 @@ router.get('/:id/teams/:teamId', async (req: AuthRequest, res) => {
         view_settings: true,
         view_roles: true,
         edit_roles: true,
+        manage_notification_settings: true,
       };
       // Org admins/owners have effective rank of 0 (highest) for team role management
       userRank = 0;
@@ -778,7 +784,7 @@ router.post('/:id/teams/:teamId/roles', async (req: AuthRequest, res) => {
       for (const key of permissionKeys) {
         // If trying to set a permission to true that the user doesn't have
         if (permissions[key] === true && !userPermissions[key]) {
-          return res.status(403).json({ error: `You cannot grant the '${key}' permission because you don't have it` });
+          return res.status(403).json({ error: `You cannot grant the '${String(key)}' permission because you don't have it` });
         }
       }
     }
@@ -931,7 +937,7 @@ router.put('/:id/teams/:teamId/roles/:roleId', async (req: AuthRequest, res) => 
       for (const key of permissionKeys) {
         // If trying to set a permission to true that the user doesn't have
         if (permissions[key] === true && !userPermissions[key]) {
-          return res.status(403).json({ error: `You cannot grant the '${key}' permission because you don't have it` });
+          return res.status(403).json({ error: `You cannot grant the '${String(key)}' permission because you don't have it` });
         }
       }
     }
@@ -1023,7 +1029,7 @@ router.put('/:id/teams/:teamId/roles/:roleId', async (req: AuthRequest, res) => 
         metadata.permissions_changed = true;
       }
 
-      if (color !== undefined && color !== targetRole.color) {
+      if (color !== undefined && color !== (targetRole as { color?: string }).color) {
         changes.push('color');
       }
 
@@ -1162,7 +1168,7 @@ router.delete('/:id/teams/:teamId/roles/:roleId', async (req: AuthRequest, res) 
     }
 
     // Create activity log
-    const roleDisplayName = roleToDelete?.display_name || roleToDelete?.name || 'Unknown';
+    const roleDisplayName = (roleToDelete as { display_name?: string; name?: string } | undefined)?.display_name || (roleToDelete as { name?: string } | undefined)?.name || 'Unknown';
     await createActivity({
       organization_id: id,
       user_id: userId,
