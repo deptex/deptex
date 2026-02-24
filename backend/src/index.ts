@@ -17,7 +17,6 @@ import aegisRouter from './routes/aegis';
 import workersRouter from './routes/workers';
 import watchtowerRouter from './routes/watchtower';
 import internalRouter from './routes/internal';
-import authRouter from './routes/auth';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -83,7 +82,6 @@ app.use('/api/aegis', aegisRouter);
 app.use('/api/workers', workersRouter);
 app.use('/api/watchtower', watchtowerRouter);
 app.use('/api/internal', internalRouter);
-app.use('/api/auth', authRouter);
 
 // Webhook routes (must be before error handling). GitHub sends to this URL; handler uses req.rawBody for signature verification.
 import { githubWebhookHandler } from './routes/integrations';

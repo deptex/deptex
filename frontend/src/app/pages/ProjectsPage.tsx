@@ -359,8 +359,13 @@ export default function ProjectsPage() {
     try {
       const connections = await api.getOrganizationConnections(id);
       setSidebarConnections(connections);
-      if (connections.length > 0 && !sidebarSelectedIntegration) {
-        setSidebarSelectedIntegration(connections[0].id);
+      const gitConnections = connections.filter((c) => c.provider !== 'slack');
+      if (gitConnections.length > 0) {
+        const currentValid = sidebarSelectedIntegration && gitConnections.some((c) => c.id === sidebarSelectedIntegration);
+        const effectiveId = currentValid ? sidebarSelectedIntegration! : gitConnections[0].id;
+        if (!currentValid) setSidebarSelectedIntegration(gitConnections[0].id);
+        // Load repos for the effective provider only (first by default, or current selection)
+        loadSidebarRepos(effectiveId);
       }
     } catch { /* ignore */ }
   };
@@ -387,8 +392,7 @@ export default function ProjectsPage() {
     setAssetTier('EXTERNAL');
     setShowCreateModal(true);
     if (id) {
-      loadSidebarConnections();
-      loadSidebarRepos();
+      loadSidebarConnections(); // loads connections and first provider's repos (no separate loadSidebarRepos)
     }
   };
 
@@ -1023,8 +1027,15 @@ export default function ProjectsPage() {
                             <div className="flex items-center gap-1.5">
                               <div className="relative flex-1 min-w-0" ref={sidebarGitHubDropdownRef}>
                                 {(() => {
-                                  const selectedConn = sidebarConnections.find((c) => c.id === sidebarSelectedIntegration);
-                                  const providerIcon = (p: string) => p === 'github' ? '/images/integrations/github.png' : p === 'gitlab' ? '/images/integrations/gitlab.png' : '/images/integrations/bitbucket.png';
+                                  const gitConnections = sidebarConnections.filter((c) => c.provider !== 'slack');
+                                  const selectedConn = gitConnections.find((c) => c.id === sidebarSelectedIntegration) ?? gitConnections[0] ?? null;
+                                  const providerLogo = (p: string) => p === 'github' ? '/images/integrations/github.png' : p === 'gitlab' ? '/images/integrations/gitlab.png' : '/images/integrations/bitbucket.png';
+                                  const connectionIcon = (conn: CiCdConnection) => {
+                                    const avatar = conn.provider === 'github' ? (conn.metadata as { account_avatar_url?: string } | undefined)?.account_avatar_url : undefined;
+                                    if (avatar) return avatar;
+                                    return providerLogo(conn.provider);
+                                  };
+                                  const connectionIconClass = (conn: CiCdConnection) => (conn.provider === 'github' && (conn.metadata as { account_avatar_url?: string } | undefined)?.account_avatar_url) ? 'h-4 w-4 flex-shrink-0 rounded-full' : 'h-4 w-4 flex-shrink-0 rounded-sm';
                                   return (
                                     <>
                                       <button
@@ -1035,46 +1046,29 @@ export default function ProjectsPage() {
                                         <div className="flex items-center gap-2 min-w-0">
                                           {selectedConn ? (
                                             <>
-                                              <img src={providerIcon(selectedConn.provider)} alt="" className="h-4 w-4 flex-shrink-0 rounded-sm" />
+                                              <img src={connectionIcon(selectedConn)} alt="" className={connectionIconClass(selectedConn)} />
                                               <span className="truncate">{selectedConn.display_name || selectedConn.provider}</span>
                                             </>
                                           ) : (
-                                            <span className="truncate text-foreground-secondary">All sources</span>
+                                            <span className="truncate text-foreground-secondary">No sources</span>
                                           )}
                                         </div>
                                         <ChevronDown className={`h-4 w-4 flex-shrink-0 text-foreground-secondary transition-transform ${sidebarGitHubDropdownOpen ? 'rotate-180' : ''}`} />
                                       </button>
                                       {sidebarGitHubDropdownOpen && (
                                         <div className="absolute z-50 left-0 right-0 mt-1 py-0.5 bg-background-card border border-border rounded-lg shadow-xl overflow-hidden animate-in fade-in-0 zoom-in-95 duration-100">
-                                          <button
-                                            type="button"
-                                            className="w-full px-3 py-1.5 flex items-center justify-between gap-2 hover:bg-table-hover transition-colors"
-                                            onClick={() => {
-                                              setSidebarSelectedIntegration(null);
-                                              setSidebarGitHubDropdownOpen(false);
-                                              loadSidebarRepos(undefined);
-                                            }}
-                                          >
-                                            <span className="text-sm text-foreground">All sources</span>
-                                            {!sidebarSelectedIntegration && (
-                                              <div className="h-4 w-4 rounded-full border-2 border-foreground bg-foreground flex-shrink-0 flex items-center justify-center">
-                                                <Check className="h-2.5 w-2.5 text-background" />
-                                              </div>
-                                            )}
-                                          </button>
-                                          {sidebarConnections.map((conn) => (
+                                          {gitConnections.map((conn) => (
                                             <button
                                               key={conn.id}
                                               type="button"
                                               className="w-full px-3 py-1.5 flex items-center justify-between gap-2 hover:bg-table-hover transition-colors"
                                               onClick={() => {
                                                 setSidebarSelectedIntegration(conn.id);
-                                                setSidebarGitHubDropdownOpen(false);
                                                 loadSidebarRepos(conn.id);
                                               }}
                                             >
                                               <div className="flex items-center gap-2 min-w-0">
-                                                <img src={providerIcon(conn.provider)} alt="" className="h-4 w-4 flex-shrink-0 rounded-sm" />
+                                                <img src={connectionIcon(conn)} alt="" className={connectionIconClass(conn)} />
                                                 <span className="text-sm font-medium text-foreground truncate">{conn.display_name || conn.provider}</span>
                                               </div>
                                               {sidebarSelectedIntegration === conn.id && (
@@ -1237,11 +1231,6 @@ export default function ProjectsPage() {
                                     </div>
                                   );
                                       })}
-                                    {!sidebarRepoSearch.trim() && sidebarRepos.length > 5 && (
-                                      <p className="text-xs text-foreground-secondary text-center py-2">
-                                        {sidebarRepos.length - 5} more — use search to find them
-                                      </p>
-                                    )}
                                   </>
                                 );
                               })()}

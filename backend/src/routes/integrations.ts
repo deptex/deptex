@@ -2370,6 +2370,7 @@ router.get('/organizations/:orgId/connections', authenticateUser, async (req: Au
       .from('organization_integrations')
       .select('id, organization_id, provider, installation_id, display_name, metadata, status, connected_at, created_at, updated_at')
       .eq('organization_id', orgId)
+      .eq('status', 'connected')
       .in('provider', ['github', 'gitlab', 'bitbucket', 'slack'])
       .order('created_at', { ascending: true });
     if (dbError) {
