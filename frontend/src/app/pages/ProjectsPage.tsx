@@ -940,70 +940,7 @@ export default function ProjectsPage() {
                           </div>
                         </div>
 
-                        {sidebarReposLoading ? (
-                          <div className="space-y-2">
-                            {/* Dropdown skeleton (same size/structure as real) + real search bar */}
-                            <div className="flex items-center gap-1.5">
-                              <div className="relative flex-1 min-w-0">
-                                <div
-                                  className="w-full px-3 py-2 border border-border rounded-lg bg-background-card flex items-center justify-between gap-2"
-                                  aria-hidden
-                                >
-                                  <div className="flex items-center gap-2 min-w-0">
-                                    <div className="h-4 w-4 flex-shrink-0 rounded-sm bg-muted animate-pulse" />
-                                    <div className="h-4 rounded bg-muted animate-pulse flex-1 min-w-[80px] max-w-[140px]" />
-                                  </div>
-                                  <div className="h-4 w-4 flex-shrink-0 rounded bg-muted animate-pulse" />
-                                </div>
-                              </div>
-                              <div className="relative flex-1 min-w-0">
-                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-foreground-secondary pointer-events-none" />
-                                <input
-                                  type="text"
-                                  placeholder="Search..."
-                                  value={sidebarRepoSearch}
-                                  onChange={(e) => setSidebarRepoSearch(e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Escape' && sidebarRepoSearch) {
-                                      setSidebarRepoSearch('');
-                                      (e.target as HTMLInputElement).blur();
-                                    }
-                                  }}
-                                  className={`w-full pl-9 py-2 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${sidebarRepoSearch ? 'pr-14' : 'pr-3'}`}
-                                />
-                                {sidebarRepoSearch && (
-                                  <button
-                                    type="button"
-                                    onClick={() => setSidebarRepoSearch('')}
-                                    className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded text-xs font-medium text-foreground-secondary hover:text-foreground bg-transparent border border-border/60 hover:border-border transition-colors"
-                                    aria-label="Clear search (Esc)"
-                                  >
-                                    Esc
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                            {/* Repo list skeletons — exact match to real card (radio + two text lines, same padding/structure) */}
-                            {[1, 2, 3, 4, 5].map((i) => (
-                              <div
-                                key={i}
-                                className="rounded-lg border border-border bg-background-card"
-                                aria-hidden
-                              >
-                                <div className="w-full px-4 py-3 flex items-center gap-3 text-left">
-                                  <div className="h-4 w-4 flex-shrink-0 rounded-full bg-muted animate-pulse" />
-                                  <div className="min-w-0 flex-1 space-y-1">
-                                    <div
-                                      className="h-3.5 rounded bg-muted animate-pulse"
-                                      style={{ width: `${52 + (i % 3) * 20}%` }}
-                                    />
-                                    <div className="h-3 rounded bg-muted/80 animate-pulse w-10" />
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        ) : sidebarReposError && (sidebarReposError.includes('integration') || sidebarReposError.includes('GitHub App') || sidebarReposError.includes('No source')) ? (
+                        {sidebarReposError && (sidebarReposError.includes('integration') || sidebarReposError.includes('GitHub App') || sidebarReposError.includes('No source')) ? (
                           <div className="bg-background-card border border-border rounded-lg overflow-hidden p-4 text-center">
                             <p className="text-sm font-semibold text-foreground mb-1">No source code connections</p>
                             <p className="text-xs text-foreground-secondary mb-3">
@@ -1019,11 +956,9 @@ export default function ProjectsPage() {
                           </div>
                         ) : sidebarReposError ? (
                           <p className="text-sm text-foreground-secondary">{sidebarReposError}</p>
-                        ) : sidebarRepos.length === 0 ? (
-                          <p className="text-sm text-foreground-secondary">No repositories available.</p>
                         ) : (
                           <div className="space-y-2">
-                            {/* Top bar: Source dropdown (left) + Search (right) */}
+                            {/* Top bar: Source dropdown (left) + Search (right) — always shown so it doesn't refresh when switching provider */}
                             <div className="flex items-center gap-1.5">
                               <div className="relative flex-1 min-w-0" ref={sidebarGitHubDropdownRef}>
                                 {(() => {
@@ -1111,6 +1046,30 @@ export default function ProjectsPage() {
                                 )}
                               </div>
                             </div>
+                            {sidebarReposLoading ? (
+                              <div className="space-y-2">
+                                {[1, 2, 3, 4, 5].map((i) => (
+                                  <div
+                                    key={i}
+                                    className="rounded-lg border border-border bg-background-card"
+                                    aria-hidden
+                                  >
+                                    <div className="w-full px-4 py-3 flex items-center gap-3 text-left">
+                                      <div className="h-4 w-4 flex-shrink-0 rounded-full bg-muted animate-pulse" />
+                                      <div className="min-w-0 flex-1 space-y-1">
+                                        <div
+                                          className="h-3.5 rounded bg-muted animate-pulse"
+                                          style={{ width: `${52 + (i % 3) * 20}%` }}
+                                        />
+                                        <div className="h-3 rounded bg-muted/80 animate-pulse w-10" />
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : sidebarRepos.length === 0 ? (
+                              <p className="text-sm text-foreground-secondary">No repositories available.</p>
+                            ) : (
                             <div className="space-y-2">
                               {(() => {
                                 const filteredSidebarRepos = sidebarRepos.filter(
@@ -1235,6 +1194,7 @@ export default function ProjectsPage() {
                                 );
                               })()}
                             </div>
+                            )}
                           </div>
                         )}
                       </div>
