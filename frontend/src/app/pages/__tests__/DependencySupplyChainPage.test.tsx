@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '../../../test/utils';
 import DependencySupplyChainPage from '../DependencySupplyChainPage';
-import { api } from '../../../lib/api';
+import { api, type ProjectEffectivePolicies } from '../../../lib/api';
 
 vi.mock('react-router-dom', async (importOriginal) => {
   const mod = await importOriginal<typeof import('react-router-dom')>();
@@ -94,7 +94,12 @@ describe('DependencySupplyChainPage', () => {
     } as any);
     vi.mocked(api.consumePrefetchedSupplyChain).mockReturnValue(null);
     vi.mocked(api.getDependencySupplyChain).mockResolvedValue(mockSupplyChainResponse);
-    vi.mocked(api.getProjectPolicies).mockResolvedValue(null);
+    vi.mocked(api.getProjectPolicies).mockResolvedValue({
+      inherited: { accepted_licenses: [], slsa_enforcement: 'none', slsa_level: null },
+      effective: { accepted_licenses: [], slsa_enforcement: 'none', slsa_level: null },
+      accepted_exceptions: [],
+      pending_exceptions: [],
+    } as ProjectEffectivePolicies);
     vi.mocked(api.getDependencyVersions).mockResolvedValue(mockVersionsResponse);
     vi.mocked(api.getLatestSafeVersion).mockResolvedValue({
       safeVersion: '4.17.21',

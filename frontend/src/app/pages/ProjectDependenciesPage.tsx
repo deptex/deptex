@@ -496,7 +496,7 @@ export default function ProjectDependenciesPage() {
                   ? { action: 'decrease', decreasePrUrl: summary.decrease_pr_url ?? undefined }
                   : {
                       action: 'bump',
-                      safeVersion: safeVersionData.safeVersion,
+                      safeVersion: safeVersionData.safeVersion!,
                       bumpPrUrl: summary.bump_pr_url ?? undefined,
                     },
             }));
@@ -616,7 +616,7 @@ export default function ProjectDependenciesPage() {
             const next = { ...prev };
             if (cmp < 0) {
               next[selectedDepId] = { action: 'decrease', decreasePrUrl: summary.decrease_pr_url ?? undefined };
-            } else if (cmp > 0) {
+            } else if (cmp > 0 && panelSafeVersionData.safeVersion) {
               next[selectedDepId] = {
                 action: 'bump',
                 safeVersion: panelSafeVersionData.safeVersion,
@@ -1459,7 +1459,7 @@ export default function ProjectDependenciesPage() {
                                 ? { action: 'decrease', decreasePrUrl: summary.decrease_pr_url ?? undefined }
                                 : {
                                     action: 'bump',
-                                    safeVersion: safeVersionData.safeVersion,
+                                    safeVersion: safeVersionData.safeVersion!,
                                     bumpPrUrl: summary.bump_pr_url ?? undefined,
                                   },
                           }));

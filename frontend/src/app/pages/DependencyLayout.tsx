@@ -125,9 +125,9 @@ export default function DependencyLayout() {
             const status = summary && summary.status === 'ready'
               ? (summary.is_current_version_quarantined
                 ? 'not-good'
-                : [summary.registry_integrity_status, summary.install_scripts_status, summary.entropy_analysis_status].some((s: string) => s === 'fail')
+                : [summary.registry_integrity_status, summary.install_scripts_status, summary.entropy_analysis_status].some((s): s is 'fail' => s === 'fail')
                   ? 'unsafe'
-                  : [summary.registry_integrity_status, summary.install_scripts_status, summary.entropy_analysis_status].every((s: string) => s === 'pass')
+                  : [summary.registry_integrity_status, summary.install_scripts_status, summary.entropy_analysis_status].every((s): s is 'pass' => s === 'pass')
                     ? 'safe'
                     : null)
               : null;

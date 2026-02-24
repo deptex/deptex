@@ -91,8 +91,9 @@ export default function SecurityAgentPage() {
       let messageText = '';
       if (typeof response.message === 'string') {
         messageText = response.message;
-      } else if (response.message && typeof response.message === 'object' && response.message.message) {
-        messageText = typeof response.message.message === 'string' ? response.message.message : JSON.stringify(response.message.message);
+      } else if (response.message && typeof response.message === 'object' && (response.message as { message?: unknown }).message) {
+        const msg = (response.message as { message: unknown }).message;
+        messageText = typeof msg === 'string' ? msg : JSON.stringify(msg);
       } else {
         messageText = JSON.stringify(response.message);
       }
@@ -260,8 +261,9 @@ export default function SecurityAgentPage() {
                         }
                       } else if (message.content && typeof message.content === 'object') {
                         // If it's an object with a 'message' field, extract that
-                        if (message.content.message) {
-                          displayContent = typeof message.content.message === 'string' ? message.content.message : JSON.stringify(message.content.message);
+                        const contentMsg = (message.content as { message?: unknown }).message;
+                        if (contentMsg !== undefined && contentMsg !== null) {
+                          displayContent = typeof contentMsg === 'string' ? contentMsg : JSON.stringify(contentMsg);
                         } else {
                           displayContent = JSON.stringify(message.content, null, 2);
                         }

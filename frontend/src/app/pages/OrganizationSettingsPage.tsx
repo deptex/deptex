@@ -519,7 +519,7 @@ export default function OrganizationSettingsPage() {
       }
 
       // If we have cached permissions and user doesn't have view_settings, redirect
-      if (cachedPerms && cachedPerms.view_settings !== true) {
+      if (cachedPerms && !cachedPerms.view_settings) {
         navigate(`/organizations/${id}`, { replace: true });
         return;
       }
@@ -2535,6 +2535,7 @@ export default function OrganizationSettingsPage() {
                         view_settings: false,
                         manage_billing: false,
                         view_activity: false,
+                        view_compliance: false,
                         edit_policies: false,
                         interact_with_security_agent: false,
                         manage_aegis: false,
@@ -2545,6 +2546,7 @@ export default function OrganizationSettingsPage() {
                         kick_members: false,
                         view_all_teams_and_projects: false,
                         manage_teams_and_projects: false,
+                        manage_integrations: false,
                         view_overview: false,
                       });
                     }}
@@ -2566,6 +2568,7 @@ export default function OrganizationSettingsPage() {
                             view_settings: false,
                             manage_billing: false,
                             view_activity: false,
+                            view_compliance: false,
                             edit_policies: false,
                             interact_with_security_agent: false,
                             manage_aegis: false,
@@ -2575,6 +2578,7 @@ export default function OrganizationSettingsPage() {
                             edit_permissions: false,
                             kick_members: false,
                             manage_teams_and_projects: false,
+                            manage_integrations: false,
                             view_overview: false,
                           });
                         }}
@@ -2748,6 +2752,7 @@ export default function OrganizationSettingsPage() {
                             view_settings: false,
                             manage_billing: false,
                             view_activity: false,
+                            view_compliance: false,
                             edit_policies: false,
                             interact_with_security_agent: false,
                             manage_aegis: false,
@@ -2757,6 +2762,7 @@ export default function OrganizationSettingsPage() {
                             edit_permissions: false,
                             kick_members: false,
                             manage_teams_and_projects: false,
+                            manage_integrations: false,
                             view_overview: false,
                           });
                         }}

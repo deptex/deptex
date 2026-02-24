@@ -76,7 +76,7 @@ export default function ProjectSettingsPage() {
   const [scanResult, setScanResult] = useState<{
     isMonorepo: boolean;
     confidence?: 'high' | 'medium';
-    potentialProjects: Array<{ name: string; path: string; isLinked: boolean; linkedByProjectId?: string; linkedByProjectName?: string }>;
+    potentialProjects: Array<{ name: string; path: string; isLinked: boolean; linkedByProjectId?: string; linkedByProjectName?: string; ecosystem?: string }>;
   } | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
   const [selectedPackagePath, setSelectedPackagePath] = useState<string>('');
@@ -725,7 +725,7 @@ export default function ProjectSettingsPage() {
     setScanError(null);
     setScanResult(null);
     try {
-      const data = await api.getRepositoryScan(organizationId, projectId, repo.full_name, repo.default_branch, repo.integration_id);
+      const data = await api.getRepositoryScan(organizationId, projectId, repo.full_name, repo.default_branch, repo.integration_id ?? '');
       setScanResult(data);
       if (data.potentialProjects.length === 0) {
         toast({ title: 'No package.json found', description: 'This repository has no detectable package.json (root or workspaces).', variant: 'destructive' });

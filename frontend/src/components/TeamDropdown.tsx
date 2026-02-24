@@ -4,8 +4,8 @@ import { ChevronDown, Check } from 'lucide-react';
 interface Team {
   id: string;
   name: string;
-  avatar_url?: string;
-  description?: string;
+  avatar_url?: string | null;
+  description?: string | null;
 }
 
 interface TeamDropdownProps {

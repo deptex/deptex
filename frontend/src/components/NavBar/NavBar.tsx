@@ -137,7 +137,7 @@ export default function NavBar() {
   const { user, signOut } = useAuth();
   const { avatarUrl } = useUserProfile();
   const navigate = useNavigate();
-  const [dropdownTimeout, setDropdownTimeout] = useState<number | null>(null);
+  const [dropdownTimeout, setDropdownTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const handleScroll = () => {

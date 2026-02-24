@@ -61,6 +61,7 @@ export default function TeamSettingsPage() {
     view_overview: false,
     resolve_alerts: false,
     manage_projects: false,
+    manage_members: false,
     view_settings: false,
     view_members: false,
     add_members: false,
@@ -329,6 +330,7 @@ export default function TeamSettingsPage() {
         view_settings: false,
         view_roles: false,
         edit_roles: false,
+        manage_notification_settings: false,
       });
       setShowAddRoleSidepanel(false);
       toast({
@@ -484,6 +486,7 @@ export default function TeamSettingsPage() {
       view_settings: false,
       view_roles: false,
       edit_roles: false,
+      manage_notification_settings: false,
     });
     setEditingRoleColor(role.color || '');
     setShowRoleSettingsModal(true);
@@ -1052,13 +1055,14 @@ export default function TeamSettingsPage() {
                       view_overview: false,
                       resolve_alerts: false,
                       manage_projects: false,
+                      manage_members: false,
                       view_settings: false,
                       view_members: false,
                       add_members: false,
                       kick_members: false,
                       view_roles: false,
                       edit_roles: false,
-                      edit_policies: false,
+                      manage_notification_settings: false,
                     });
                   }}
                 />
@@ -1228,13 +1232,11 @@ export default function TeamSettingsPage() {
                           view_overview: false,
                           resolve_alerts: false,
                           manage_projects: false,
+                          manage_members: false,
                           view_settings: false,
-                          view_members: false,
-                          add_members: false,
-                          kick_members: false,
                           view_roles: false,
                           edit_roles: false,
-                          edit_policies: false,
+                          manage_notification_settings: false,
                         });
                       }}
                       disabled={isCreatingRole}

@@ -259,7 +259,10 @@ describe('PackageOverview', () => {
         safeVersionData={{
           safeVersion: '1.2.3',
           isCurrent: true,
-          summary: null,
+          safeVersionId: null,
+          severity: 'high',
+          versionsChecked: 0,
+          message: null,
         }}
       />
     );
@@ -276,7 +279,10 @@ describe('PackageOverview', () => {
         safeVersionData={{
           safeVersion: '1.2.3',
           isCurrent: false,
-          summary: null,
+          safeVersionId: null,
+          severity: 'high',
+          versionsChecked: 0,
+          message: null,
         }}
         onBumpVersion={async () => {}}
       />
@@ -295,7 +301,10 @@ describe('PackageOverview', () => {
         safeVersionData={{
           safeVersion: '1.2.3',
           isCurrent: false,
-          summary: null,
+          safeVersionId: null,
+          severity: 'high',
+          versionsChecked: 0,
+          message: null,
         }}
         bumpPrUrl="https://github.com/org/repo/pull/42"
         onBumpVersion={async () => {}}
@@ -314,7 +323,10 @@ describe('PackageOverview', () => {
         safeVersionData={{
           safeVersion: null,
           isCurrent: false,
-          summary: null,
+          safeVersionId: null,
+          severity: 'high',
+          versionsChecked: 0,
+          message: null,
         }}
       />
     );
@@ -334,7 +346,10 @@ describe('PackageOverview', () => {
         safeVersionData={{
           safeVersion: '1.2.3',
           isCurrent: true,
-          summary: null,
+          safeVersionId: null,
+          severity: 'high',
+          versionsChecked: 0,
+          message: null,
         }}
       />
     );

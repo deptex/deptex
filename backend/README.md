@@ -110,7 +110,27 @@ backend/
 - `SUPABASE_ANON_KEY` - Supabase anonymous key
 - `PORT` - Server port (default: 3001)
 - `NODE_ENV` - Environment (development/production)
-- `FRONTEND_URL` - Frontend URL for CORS configuration
+- `FRONTEND_URL` - Frontend URL for CORS and OAuth redirects (e.g. `http://localhost:3000` or `https://your-app.vercel.app`)
+- `BACKEND_URL` - Backend API base URL for OAuth callback URLs (e.g. `http://localhost:3001` or `https://api.yourdomain.com`). Use **no trailing slash**.
+
+### Production: CI/CD integrations (GitHub, GitLab, Bitbucket)
+
+When hosting the app online, set in your backend environment:
+
+- **`BACKEND_URL`** = your deployed backend API root (e.g. `https://api.yourdomain.com`) — **no trailing slash**
+- **`FRONTEND_URL`** = your deployed frontend app root (e.g. `https://deptex.vercel.app`) — **no trailing slash**
+
+Then register these **exact** callback URLs in each provider:
+
+| Provider   | Where to set it | Callback URL to register |
+|-----------|------------------|---------------------------|
+| **GitHub**  | GitHub App → General → "Callback URL" / "Setup URL" | `{BACKEND_URL}/api/integrations/github/callback` |
+| **GitLab**  | GitLab → Settings → Applications → Redirect URI | `{BACKEND_URL}/api/integrations/gitlab/org-callback` |
+| **Bitbucket** | Bitbucket → Settings → OAuth consumers → Callback URL | `{BACKEND_URL}/api/integrations/bitbucket/org-callback` |
+
+In your **frontend** env (e.g. `frontend/.env` or Vercel env vars), set:
+
+- **`VITE_API_BASE_URL`** = same as `BACKEND_URL` (e.g. `https://api.yourdomain.com`) so login and API calls use the deployed backend.
 
 ## Development
 

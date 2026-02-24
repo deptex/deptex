@@ -65,8 +65,7 @@ describe('ProtectedRoute', () => {
             </ProtectedRoute>
           } />
         </Routes>
-      </MemoryRouter>,
-      { wrapper: undefined } // Override the default wrapper which adds another router
+      </MemoryRouter>
     );
 
     expect(screen.getByText('Home Page')).toBeInTheDocument();

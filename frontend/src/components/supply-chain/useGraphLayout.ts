@@ -178,6 +178,7 @@ export function useGraphLayout(
     onUnbanClick: (banId: string) => void;
     currentVersion?: string;
     versionSecurityData?: SupplyChainVersionSecurityData | null;
+    safeVersion?: string | null;
     versionSwitching?: boolean;
     onOpenVersionsSidebar?: () => void;
     assetTier?: AssetTier;
@@ -222,21 +223,22 @@ export function useGraphLayout(
 
     // Check parent's own vulnerabilities
     for (const v of parentVulns) {
-      if (v.severity === 'critical') { worstSeverity = 'critical'; break; }
-      if (v.severity === 'high' && worstSeverity !== 'critical') worstSeverity = 'high';
-      if (v.severity === 'medium' && worstSeverity !== 'critical' && worstSeverity !== 'high') worstSeverity = 'medium';
-      if (v.severity === 'low' && worstSeverity === 'none') worstSeverity = 'low';
+      const s = (v as { severity?: string }).severity;
+      if (s === 'critical') { worstSeverity = 'critical'; break; }
+      if (s === 'high' && (worstSeverity as string) !== 'critical') worstSeverity = 'high';
+      if (s === 'medium' && (worstSeverity as string) !== 'critical' && worstSeverity !== 'high') worstSeverity = 'medium';
+      if (s === 'low' && worstSeverity === 'none') worstSeverity = 'low';
     }
 
-    // Check children's vulnerabilities
+    // Check children's vulnerabilities (use string cast to avoid TS narrowing on 'critical')
     for (const child of data.children) {
-      if (worstSeverity === 'critical') break;
+      if ((worstSeverity as string) === 'critical') break;
       if (child.critical_vulns > 0) {
         worstSeverity = 'critical';
         break; // Can't get worse than critical
-      } else if (child.high_vulns > 0 && worstSeverity !== 'critical') {
+      } else if (child.high_vulns > 0 && (worstSeverity as string) !== 'critical') {
         worstSeverity = 'high';
-      } else if (child.medium_vulns > 0 && worstSeverity !== 'critical' && worstSeverity !== 'high') {
+      } else if (child.medium_vulns > 0 && (worstSeverity as string) !== 'critical' && worstSeverity !== 'high') {
         worstSeverity = 'medium';
       } else if (child.low_vulns > 0 && worstSeverity === 'none') {
         worstSeverity = 'low';
@@ -322,7 +324,7 @@ export function useGraphLayout(
             id: vulnNodeId,
             type: 'vulnerabilityNode',
             position: { x: vulnX, y: vulnY },
-            data: vulnToNodeData(vuln as Parameters<typeof vulnToNodeData>[0]),
+            data: vulnToNodeData(vuln as Parameters<typeof vulnToNodeData>[0]) as unknown as Record<string, unknown>,
             draggable: true,
             selectable: false,
           });
@@ -481,7 +483,7 @@ export function useGraphLayout(
           id: vulnNodeId,
           type: 'vulnerabilityNode',
           position: { x: vulnX, y: vulnY },
-          data: vulnToNodeData(vuln as Parameters<typeof vulnToNodeData>[0]),
+          data: vulnToNodeData(vuln as Parameters<typeof vulnToNodeData>[0]) as unknown as Record<string, unknown>,
           draggable: true,
           selectable: false,
         });
@@ -540,7 +542,7 @@ export function useGraphLayout(
           id: vulnNodeId,
           type: 'vulnerabilityNode',
           position: { x: vulnX, y: vulnY },
-          data: vulnToNodeData(vuln as Parameters<typeof vulnToNodeData>[0]),
+          data: vulnToNodeData(vuln as Parameters<typeof vulnToNodeData>[0]) as unknown as Record<string, unknown>,
           draggable: true,
           selectable: false,
         });

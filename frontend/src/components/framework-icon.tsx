@@ -52,7 +52,7 @@ const icons: Record<string, React.ComponentType<{ size?: number; className?: str
     flutter: SiFlutter,
     elixir: SiElixir,
     swift: SiSwift,
-};
+} as Record<string, React.ComponentType<{ size?: number; className?: string }>>;
 
 export function FrameworkIcon({ frameworkId, size = 20, className }: { frameworkId?: string | null; size?: number; className?: string }) {
     const Icon = frameworkId ? icons[frameworkId] : null;

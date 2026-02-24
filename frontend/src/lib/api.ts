@@ -37,6 +37,8 @@ export interface RolePermissions {
   kick_members: boolean;
   manage_teams_and_projects: boolean;
   manage_integrations: boolean;
+  view_overview?: boolean;
+  view_all_teams_and_projects?: boolean;
 }
 
 export interface OrganizationRole {
@@ -99,9 +101,9 @@ export interface RepoWithProvider {
   private: boolean;
   framework: string;
   ecosystem?: string;
-  provider: CiCdProvider;
-  integration_id: string;
-  display_name: string;
+  provider?: CiCdProvider;
+  integration_id?: string;
+  display_name?: string;
 }
 
 export interface OrganizationInvitation {
@@ -542,14 +544,14 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/roles`);
   },
 
-  async createOrganizationRole(organizationId: string, data: { name: string; display_name?: string; display_order?: number; permissions?: RolePermissions }): Promise<OrganizationRole> {
+  async createOrganizationRole(organizationId: string, data: { name: string; display_name?: string; display_order?: number; permissions?: RolePermissions; color?: string | null }): Promise<OrganizationRole> {
     return fetchWithAuth(`/api/organizations/${organizationId}/roles`, {
       method: 'POST',
       body: JSON.stringify(data),
     });
   },
 
-  async updateOrganizationRole(organizationId: string, roleId: string, data: { name?: string; display_name?: string; display_order?: number; permissions?: RolePermissions }): Promise<OrganizationRole> {
+  async updateOrganizationRole(organizationId: string, roleId: string, data: { name?: string; display_name?: string; display_order?: number; permissions?: RolePermissions; color?: string | null }): Promise<OrganizationRole> {
     return fetchWithAuth(`/api/organizations/${organizationId}/roles/${roleId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -1651,6 +1653,9 @@ export interface TeamPermissions {
   view_roles: boolean;
   edit_roles: boolean;
   manage_notification_settings: boolean;
+  view_members?: boolean;
+  add_members?: boolean;
+  kick_members?: boolean;
 }
 
 export interface TeamWithRole extends Team {
@@ -2025,6 +2030,7 @@ export interface ProjectPermissions {
   edit_settings: boolean;
   /** True when user has org manage_teams_and_projects or team manage_projects (owner team). Required for watchtower management. */
   can_manage_watchtower?: boolean;
+  view_watchlist?: boolean;
 }
 
 export interface ProjectWithRole extends Project {

@@ -26,6 +26,7 @@ export function getTeamPermissionsFromRole(role: string | undefined): TeamPermis
       view_overview: true,
       resolve_alerts: true,
       manage_projects: true,
+      manage_members: true,
       view_settings: true,
       view_members: true,
       add_members: true,
@@ -41,12 +42,14 @@ export function getTeamPermissionsFromRole(role: string | undefined): TeamPermis
     view_overview: true, // Everyone can view the team overview
     resolve_alerts: false,
     manage_projects: false,
+    manage_members: false,
     view_settings: false,
     view_members: false,
     add_members: false,
     kick_members: false,
     view_roles: false,
     edit_roles: false,
+    manage_notification_settings: false,
   };
 }
 

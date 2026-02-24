@@ -88,11 +88,20 @@ describe('DependencyOverviewPage', () => {
     vi.mocked(api.getLatestSafeVersion).mockResolvedValue({
       safeVersion: '1.2.3',
       isCurrent: true,
-      summary: null,
+      safeVersionId: null,
+      severity: 'high',
+      versionsChecked: 0,
+      message: null,
     });
     vi.mocked(api.getWatchtowerSummary).mockResolvedValue({
+      name: 'pkg',
+      status: 'ready',
       bump_pr_url: null,
       latest_allowed_version: null,
+      commits_count: 0,
+      contributors_count: 0,
+      anomalies_count: 0,
+      top_anomaly_score: 0,
     });
   });
 

@@ -23,6 +23,18 @@ import * as path from 'path';
 
 const PR_GUARDRAILS_CHECK_NAME = 'Deptex PR guardrails';
 
+/** Base URL of this backend (no trailing slash). Used for OAuth redirect/callback URLs. */
+function getBackendUrl(): string {
+  const url = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`;
+  return url.replace(/\/$/, '');
+}
+
+/** Base URL of the frontend app (no trailing slash). Used to redirect users after OAuth. */
+function getFrontendUrl(): string {
+  const url = process.env.FRONTEND_URL || 'http://localhost:3000';
+  return url.replace(/\/$/, '');
+}
+
 const router = express.Router();
 
 // Initiate Slack OAuth
@@ -1030,7 +1042,7 @@ router.get('/github/install', authenticateUser, async (req: AuthRequest, res) =>
 // GitHub App installation callback (Setup URL)
 // This is called by GitHub after the user completes the installation
 router.get('/github/callback', async (req, res) => {
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const frontendUrl = getFrontendUrl();
   try {
     const { installation_id, setup_action, state } = req.query;
 
@@ -1141,8 +1153,7 @@ router.get('/github/callback', async (req, res) => {
     res.redirect(redirectUrl);
   } catch (error: any) {
     console.error('GitHub App callback error:', error);
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    res.redirect(`${frontendUrl}?error=github&message=${encodeURIComponent(error.message || 'Unknown error')}`);
+    res.redirect(`${getFrontendUrl()}?error=github&message=${encodeURIComponent(error.message || 'Unknown error')}`);
   }
 });
 
@@ -1985,8 +1996,7 @@ router.get('/gitlab/install', authenticateUser, async (req: AuthRequest, res) =>
     if (!membership) {
       return res.status(403).json({ error: 'Not a member of this organization' });
     }
-    const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`;
-    const redirectUri = `${backendUrl}/api/integrations/gitlab/org-callback`;
+    const redirectUri = `${getBackendUrl()}/api/integrations/gitlab/org-callback`;
     const scopes = 'api read_user read_repository';
     const state = Buffer.from(JSON.stringify({ userId: req.user!.id, orgId: org_id })).toString('base64');
     const authUrl = `${gitlabUrl}/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scopes)}&state=${encodeURIComponent(state)}`;
@@ -1999,7 +2009,7 @@ router.get('/gitlab/install', authenticateUser, async (req: AuthRequest, res) =>
 
 router.get('/gitlab/org-callback', async (req, res) => {
   const { code, state, error } = req.query;
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const frontendUrl = getFrontendUrl();
   const gitlabUrl = process.env.GITLAB_URL || 'https://gitlab.com';
 
   if (error) {
@@ -2030,8 +2040,7 @@ router.get('/gitlab/org-callback', async (req, res) => {
       return res.redirect(`${frontendUrl}?error=gitlab&message=Not authorized`);
     }
 
-    const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`;
-    const redirectUri = `${backendUrl}/api/integrations/gitlab/org-callback`;
+    const redirectUri = `${getBackendUrl()}/api/integrations/gitlab/org-callback`;
 
     const tokenRes = await fetch(`${gitlabUrl}/oauth/token`, {
       method: 'POST',
@@ -2109,8 +2118,7 @@ router.get('/bitbucket/install', authenticateUser, async (req: AuthRequest, res)
     if (!membership) {
       return res.status(403).json({ error: 'Not a member of this organization' });
     }
-    const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`;
-    const redirectUri = `${backendUrl}/api/integrations/bitbucket/org-callback`;
+    const redirectUri = `${getBackendUrl()}/api/integrations/bitbucket/org-callback`;
     const state = Buffer.from(JSON.stringify({ userId: req.user!.id, orgId: org_id })).toString('base64');
     const authUrl = `https://bitbucket.org/site/oauth2/authorize?client_id=${clientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}`;
     res.json({ redirectUrl: authUrl });
@@ -2122,7 +2130,7 @@ router.get('/bitbucket/install', authenticateUser, async (req: AuthRequest, res)
 
 router.get('/bitbucket/org-callback', async (req, res) => {
   const { code, state, error } = req.query;
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const frontendUrl = getFrontendUrl();
 
   if (error) {
     return res.redirect(`${frontendUrl}?error=bitbucket&message=${encodeURIComponent(error as string)}`);
@@ -2152,8 +2160,7 @@ router.get('/bitbucket/org-callback', async (req, res) => {
       return res.redirect(`${frontendUrl}?error=bitbucket&message=Not authorized`);
     }
 
-    const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`;
-    const redirectUri = `${backendUrl}/api/integrations/bitbucket/org-callback`;
+    const redirectUri = `${getBackendUrl()}/api/integrations/bitbucket/org-callback`;
     const clientId = process.env.BITBUCKET_CLIENT_ID!;
     const clientSecret = process.env.BITBUCKET_CLIENT_SECRET!;
 

@@ -272,7 +272,7 @@ export default function ProjectsPage() {
         } else {
           setSidebarScanLoading(true);
           try {
-            const scanData = await api.getRepositoryScan(id, newProject.id, sidebarRepoToConnect.full_name, sidebarRepoToConnect.default_branch, sidebarRepoToConnect.integration_id);
+            const scanData = await api.getRepositoryScan(id, newProject.id, sidebarRepoToConnect.full_name, sidebarRepoToConnect.default_branch, sidebarRepoToConnect.integration_id ?? '');
             if (scanData.potentialProjects.length === 0) {
               toast({ title: 'No manifest file found', description: 'No supported manifest file found in this repository.', variant: 'destructive' });
               closeModal();
@@ -333,7 +333,7 @@ export default function ProjectsPage() {
     if (!id) return;
     setSidebarRepoScanLoading(repo.full_name);
     try {
-      const scanData = await api.getOrganizationRepositoryScan(id, repo.full_name, repo.default_branch, repo.integration_id);
+      const scanData = await api.getOrganizationRepositoryScan(id, repo.full_name, repo.default_branch, repo.integration_id ?? '');
       if (scanData.potentialProjects.length === 0) {
         setSidebarRepoScanError('No projects found in this repository.');
       } else {

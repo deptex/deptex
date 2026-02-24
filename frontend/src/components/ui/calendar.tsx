@@ -4,9 +4,10 @@ import { DayPicker, DayPickerRangeProps, DayPickerSingleProps } from "react-day-
 
 import { cn } from "../../lib/utils"
 
-export type CalendarProps =
+export type CalendarProps = (
     | (DayPickerSingleProps & { mode: "single" })
     | (DayPickerRangeProps & { mode: "range" })
+) & { className?: string; classNames?: Record<string, string>; showOutsideDays?: boolean }
 
 function Calendar({
     className,
@@ -66,9 +67,9 @@ function Calendar({
                 ...classNames,
             }}
             components={{
-                IconLeft: ({ ...props }) => <ChevronLeft className="h-4 w-4" />,
-                IconRight: ({ ...props }) => <ChevronRight className="h-4 w-4" />,
-            }}
+                Chevron: (props: { orientation?: 'left' | 'right' }) =>
+                    props.orientation === 'left' ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />,
+            } as React.ComponentProps<typeof DayPicker>['components']}
             {...props}
         />
     )

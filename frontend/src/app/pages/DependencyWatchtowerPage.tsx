@@ -236,7 +236,7 @@ export function WatchtowerContent({
       api.getProjectRepositories(organizationId, projectId)
         .then(data => {
           if (data.connectedRepository) {
-            setRepoFullName(data.connectedRepository.full_name);
+            setRepoFullName(data.connectedRepository.repo_full_name);
           }
         })
         .catch(console.error);

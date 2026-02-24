@@ -164,12 +164,12 @@ export default function DependencyOverviewPage() {
         high_vulns: res.high_vulns ?? 0,
         medium_vulns: res.medium_vulns ?? 0,
         low_vulns: res.low_vulns ?? 0,
-        github_url: res.github_url,
-        license: res.license,
-        weekly_downloads: res.weekly_downloads,
-        latest_release_date: res.latest_release_date,
-        latest_version: res.latest_version,
-        last_published_at: res.last_published_at,
+        github_url: res.github_url ?? null,
+        license: res.license ?? null,
+        weekly_downloads: res.weekly_downloads ?? null,
+        latest_release_date: res.latest_release_date ?? null,
+        latest_version: res.latest_version ?? null,
+        last_published_at: res.last_published_at ?? null,
         releases_last_12_months: res.releases_last_12_months ?? null,
         openssf_score: res.openssf_score ?? null,
         openssf_penalty: res.openssf_penalty ?? null,
@@ -185,7 +185,7 @@ export default function DependencyOverviewPage() {
         description: res.description ?? null,
         remove_pr_url: res.remove_pr_url ?? null,
       });
-      setDeprecation(res.deprecation ?? null);
+      setDeprecation((res.deprecation ?? null) as { recommended_alternative: string; deprecated_by: string | null; created_at: string; scope?: 'organization' | 'team'; team_id?: string } | null);
     };
 
     if (prefetched) {

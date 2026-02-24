@@ -788,7 +788,6 @@ export function SupplyChainContent({ orgId, projectId, dependencyId, dependencyN
   // Hold sentinel DOM node in state so effect runs after it's mounted
   const [versionsLoadMoreNode, setVersionsLoadMoreNode] = useState<HTMLDivElement | null>(null);
   const setVersionsLoadMoreRef = useCallback((el: HTMLDivElement | null) => {
-    versionsLoadMoreRef.current = el;
     setVersionsLoadMoreNode(el);
   }, []);
 
@@ -1134,8 +1133,8 @@ export function SupplyChainContent({ orgId, projectId, dependencyId, dependencyN
     ],
     [dependencyName, dependencyVersion]
   );
-  const [graphNodes, setGraphNodes, onGraphNodesChange] = useNodesState(skeletonNodes);
-  const [graphEdges, setGraphEdges, onGraphEdgesChange] = useEdgesState([]);
+  const [graphNodes, setGraphNodes, onGraphNodesChange] = useNodesState<Node>(skeletonNodes);
+  const [graphEdges, setGraphEdges, onGraphEdgesChange] = useEdgesState<Edge>([]);
 
   // Show skeleton until we have synced real layout into graph state. Otherwise when loading
   // becomes false we briefly render graphNodes (still skeleton) with real nodeTypes, and
