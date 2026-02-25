@@ -2220,7 +2220,7 @@ export default function OrganizationSettingsPage() {
                           </div>
                         ) : (
                           <div className="space-y-3">
-                            {cicdConnections.filter(c => c.provider !== 'slack' && c.provider !== 'discord' && c.provider !== 'teams').length > 0 && (
+                            {cicdConnections.filter(c => c.provider !== 'slack' && c.provider !== 'discord').length > 0 && (
                               <div className="bg-background-card border border-border rounded-lg overflow-hidden">
                                 <table className="w-full table-fixed">
                                   <colgroup>
@@ -2236,7 +2236,7 @@ export default function OrganizationSettingsPage() {
                                     </tr>
                                   </thead>
                                   <tbody className="divide-y divide-border">
-                                    {cicdConnections.filter(c => c.provider !== 'slack' && c.provider !== 'discord' && c.provider !== 'teams').map((conn) => {
+                                    {cicdConnections.filter(c => c.provider !== 'slack' && c.provider !== 'discord').map((conn) => {
                                       const providerIcon = conn.provider === 'github' ? '/images/integrations/github.png'
                                         : conn.provider === 'gitlab' ? '/images/integrations/gitlab.png'
                                         : '/images/integrations/bitbucket.png';
@@ -2291,7 +2291,7 @@ export default function OrganizationSettingsPage() {
                                 </table>
                               </div>
                             )}
-                            {cicdConnections.filter(c => c.provider !== 'slack' && c.provider !== 'discord' && c.provider !== 'teams').length === 0 && (
+                            {cicdConnections.filter(c => c.provider !== 'slack' && c.provider !== 'discord').length === 0 && (
                               <div className="bg-background-card border border-border rounded-lg p-6 text-center">
                                 <Plug className="mx-auto h-10 w-10 text-foreground-secondary mb-3" />
                                 <h4 className="text-sm font-semibold text-foreground mb-1">No source code connections</h4>
