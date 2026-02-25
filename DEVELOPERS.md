@@ -33,7 +33,7 @@ cp .env.example .env   # or create .env with required vars
 **Required env vars** (see `.env.example`):
 
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY`
-- For EE features: `UPSTASH_REDIS_URL`, `UPSTASH_REDIS_TOKEN`, `QSTASH_*`, GitHub App credentials, etc.
+- For EE features: `UPSTASH_REDIS_URL`, `UPSTASH_REDIS_TOKEN`, `QSTASH_`*, GitHub App credentials, etc.
 
 ### 3. Run the backend
 
@@ -42,13 +42,6 @@ cp .env.example .env   # or create .env with required vars
 ```bash
 cd backend
 npm run dev
-```
-
-**CE-only mode** (core features only — no org/team/integrations):
-
-```bash
-cd backend
-npm run dev:ce
 ```
 
 Backend runs at `http://localhost:3001`.
@@ -110,13 +103,17 @@ flowchart LR
     BE --> EW
 ```
 
-| Directory | Purpose |
-|-----------|---------|
-| `backend/` | Express API, core libs, CE routes |
-| `backend/extraction-worker/` | Clone, cdxgen, SBOM, dep-scan pipeline |
-| `ee/backend/` | EE routes (orgs, teams, integrations, Aegis, workers) |
-| `frontend/` | React dashboard |
-| `backend/database/` | SQL migrations |
+
+
+
+| Directory                    | Purpose                                               |
+| ---------------------------- | ----------------------------------------------------- |
+| `backend/`                   | Express API, core libs, CE routes                     |
+| `backend/extraction-worker/` | Clone, cdxgen, SBOM, dep-scan pipeline                |
+| `ee/backend/`                | EE routes (orgs, teams, integrations, Aegis, workers) |
+| `frontend/`                  | React dashboard                                       |
+| `backend/database/`          | SQL migrations                                        |
+
 
 ---
 
@@ -133,11 +130,12 @@ Tests run with `DEPTEX_EDITION=ee` so EE routes are available. Use mocks for ext
 
 ## Environment Modes
 
-| Variable | Effect |
-|----------|--------|
-| `DEPTEX_EDITION=ce` | CE only — no EE routes mounted |
-| `DEPTEX_EDITION=ee` or unset | Full mode — EE routes loaded |
-| `NODE_PATH=node_modules` | Required for EE modules to resolve (set in scripts) |
+
+| Variable                     | Effect                                              |
+| ---------------------------- | --------------------------------------------------- |
+| `DEPTEX_EDITION=ee` or unset | Full mode — EE routes loaded                        |
+| `NODE_PATH=node_modules`     | Required for EE modules to resolve (set in scripts) |
+
 
 ---
 
@@ -172,3 +170,4 @@ Tests run with `DEPTEX_EDITION=ee` so EE routes are available. Use mocks for ext
 - **"Cannot find module" for EE libs**: Ensure `NODE_PATH=node_modules` when running (scripts set this)
 - **404 on /api/organizations**: You're in CE mode; use `npm run dev` (not `dev:ce`) for full features
 - **Supabase errors**: Check `.env` has correct Supabase URL and keys
+
