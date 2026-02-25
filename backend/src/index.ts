@@ -4,6 +4,7 @@ import path from 'path';
 // Load .env file from the backend root directory (one level up from src/)
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
+// EE routes loaded via load-ee-routes.js (plain JS) so tsc never compiles ee/
 import express from 'express';
 import cors from 'cors';
 import { isEeEdition } from './lib/features';
@@ -65,22 +66,8 @@ app.get('/health', (req, res) => {
 app.use('/api/user-profile', userProfileRouter);
 
 // API Routes - EE (mounted only when DEPTEX_EDITION=ee, loaded from ee/backend/routes/)
-// Dynamic require so tsc doesn't compile ee/ (which lacks backend deps). Loaded at runtime.
 if (isEeEdition()) {
-  const eeRoutes = path.join(__dirname, '../../ee/backend/routes');
-  app.use('/api/organizations', require(path.join(eeRoutes, 'organizations')).default);
-  app.use('/api/organizations', require(path.join(eeRoutes, 'teams')).default);
-  app.use('/api/organizations', require(path.join(eeRoutes, 'projects')).default);
-  app.use('/api/organizations', require(path.join(eeRoutes, 'activities')).default);
-  app.use('/api/integrations', require(path.join(eeRoutes, 'integrations')).default);
-  app.use('/api/invitations', require(path.join(eeRoutes, 'invitations')).default);
-  app.use('/api/aegis', require(path.join(eeRoutes, 'aegis')).default);
-  app.use('/api/workers', require(path.join(eeRoutes, 'workers')).default);
-  app.use('/api/watchtower', require(path.join(eeRoutes, 'watchtower')).default);
-  app.use('/api/internal', require(path.join(eeRoutes, 'internal')).default);
-
-  const integrations = require(path.join(eeRoutes, 'integrations'));
-  app.post('/api/webhook/github', integrations.githubWebhookHandler);
+  require('../load-ee-routes')(app);
 }
 
 // Error handling middleware
