@@ -17,6 +17,12 @@ interface ProjectContextType {
   userPermissions: ProjectPermissions | null;
 }
 
+/** Repo name without account prefix: "owner/repo" -> "repo" */
+function repoNameOnly(fullName: string): string {
+  const parts = fullName.split('/');
+  return parts.length > 1 ? parts[parts.length - 1] : fullName;
+}
+
 /** Display label for package.json path: "Root" or folder name e.g. "Frontend". */
 function getWorkspaceDisplayPath(packageJsonPath: string | undefined): string {
   if (!packageJsonPath || packageJsonPath === 'package.json' || packageJsonPath.trim() === '') return 'Root';
@@ -1056,7 +1062,7 @@ export default function ProjectSettingsPage() {
                               } ${isSelected ? 'ring-inset ring-2 ring-primary/50 bg-primary/5' : ''}`}
                             >
                               <div className="min-w-0">
-                                <div className="text-sm font-medium text-foreground truncate">{p.name}</div>
+                                <div className="text-sm font-medium text-foreground truncate">{p.path === '' ? (repoToConnect ? repoNameOnly(repoToConnect.full_name) : 'Root') : p.name}</div>
                                 <div className="text-xs text-foreground-secondary">{p.path === '' ? 'Root' : p.path}</div>
                               </div>
                               {p.isLinked && (

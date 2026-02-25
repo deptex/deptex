@@ -1,3 +1,10 @@
+-- asset_tier enum (4-tier asset criticality)
+DO $$ BEGIN
+  CREATE TYPE asset_tier AS ENUM ('CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
 -- Projects table
 CREATE TABLE projects (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -5,7 +12,7 @@ CREATE TABLE projects (
   name TEXT NOT NULL,
   team_id UUID REFERENCES teams(id) ON DELETE SET NULL,
   health_score INTEGER DEFAULT 0 CHECK (health_score >= 0 AND health_score <= 100),
-  asset_criticality INTEGER NOT NULL DEFAULT 2 CHECK (asset_criticality >= 1 AND asset_criticality <= 3),
+  asset_tier asset_tier NOT NULL DEFAULT 'EXTERNAL',
   status TEXT DEFAULT 'compliant',
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),

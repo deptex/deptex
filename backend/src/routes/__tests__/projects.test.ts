@@ -5,7 +5,7 @@ import { supabase, queryBuilder } from '../../test/mocks/supabaseSingleton';
 // Mock dependencies
 jest.mock('../../lib/supabase');
 
-jest.mock('../../lib/activities', () => ({
+jest.mock('../../../../ee/backend/lib/activities', () => ({
   createActivity: jest.fn(),
 }));
 
@@ -13,7 +13,7 @@ const mockGetCached = jest.fn().mockResolvedValue(null);
 const mockSetCached = jest.fn().mockResolvedValue(undefined);
 const mockGetDependencyVersionsCacheKey = jest.fn((org: string, project: string, pd: string) => `dependency-versions:${org}:${project}:${pd}`);
 const mockInvalidateDependencyVersionsCacheByDependencyId = jest.fn().mockResolvedValue(undefined);
-jest.mock('../../lib/cache', () => ({
+jest.mock('../../../../ee/backend/lib/cache', () => ({
   getCached: (...args: unknown[]) => mockGetCached(...args),
   setCached: (...args: unknown[]) => mockSetCached(...args),
   getDependenciesCacheKey: jest.fn((org: string, project: string) => `deps:v1:${org}:${project}`),
@@ -27,7 +27,7 @@ jest.mock('../../lib/cache', () => ({
   invalidateProjectCachesForTeam: jest.fn().mockResolvedValue(undefined),
 }));
 
-jest.mock('../../lib/watchtower-queue', () => ({
+jest.mock('../../../../ee/backend/lib/watchtower-queue', () => ({
   queueWatchtowerJob: jest.fn().mockResolvedValue({ success: true }),
 }));
 

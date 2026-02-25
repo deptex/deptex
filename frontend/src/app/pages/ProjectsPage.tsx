@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useOutletContext, useNavigate } from 'react-router-dom';
-import { Plus, Folder, Search, Grid3x3, List, ChevronRight, Bell, Check, Lock, Loader2, Save, Globe, Building2, FlaskConical, Crown, HelpCircle, ChevronDown } from 'lucide-react';
+import { Plus, Search, Grid3x3, List, ChevronRight, Bell, Check, Lock, Loader2, Save, Globe, Building2, FlaskConical, Crown, HelpCircle, ChevronDown } from 'lucide-react';
 import { api, Project, Team, Organization, RolePermissions, type AssetTier, type CiCdConnection, type RepoWithProvider } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { Button } from '../../components/ui/button';
@@ -11,6 +11,38 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/too
 interface OrganizationContextType {
   organization: Organization | null;
   reloadOrganization: () => Promise<void>;
+}
+
+// Repo name without account prefix: "owner/repo" -> "repo"
+function repoNameOnly(fullName: string): string {
+  const parts = fullName.split('/');
+  return parts.length > 1 ? parts[parts.length - 1] : fullName;
+}
+
+// Short extraction status label for project cards
+function projectStatusLabel(project: Project): { label: string; inProgress: boolean; isError: boolean } {
+  const status = project.repo_status;
+  if (status === 'initializing' || status === 'extracting' || status === 'analyzing' || status === 'finalizing') {
+    const step = project.extraction_step;
+    const labels: Record<string, string> = {
+      queued: 'Creating',
+      cloning: 'Creating',
+      sbom: 'Creating',
+      deps_synced: 'Creating',
+      ast_parsing: 'Creating',
+      scanning: 'Creating',
+      uploading: 'Creating',
+      completed: 'Creating',
+    };
+    const label = step ? (labels[step] ?? 'Creating') : (status === 'analyzing' || status === 'finalizing' ? 'Analyzing' : 'Creating');
+    return { label, inProgress: true, isError: false };
+  }
+  if (status === 'error') return { label: 'Failed', inProgress: false, isError: true };
+  return {
+    label: project.is_compliant !== false ? 'COMPLIANT' : 'NOT COMPLIANT',
+    inProgress: false,
+    isError: false,
+  };
 }
 
 // Format date as "01 Dec 25"
@@ -692,7 +724,6 @@ export default function ProjectsPage() {
       ) : filteredProjects.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-12 px-4">
           <div className="text-center">
-            <Folder className="mx-auto h-12 w-12 text-foreground-secondary mb-4" />
             <h3 className="text-lg font-semibold text-foreground mb-2">No projects found</h3>
             <p className="text-foreground-secondary mb-4">
               {searchQuery
@@ -726,15 +757,38 @@ export default function ProjectsPage() {
                 <div className="flex items-center gap-3 flex-1 min-w-0">
                   <FrameworkIcon frameworkId={project.framework} size={24} />
                   <h3 className="text-base font-semibold text-foreground truncate">{project.name}</h3>
-                  {project.is_compliant !== false ? (
-                    <span className="px-2 py-0.5 rounded text-xs font-medium border bg-success/20 text-success border-success/40 flex-shrink-0">
-                      COMPLIANT
-                    </span>
-                  ) : (
-                    <span className="px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40 flex-shrink-0">
-                      NOT COMPLIANT
-                    </span>
-                  )}
+                  {(() => {
+                    const { label, inProgress, isError } = projectStatusLabel(project);
+                    if (inProgress) {
+                      return (
+                        <span className="px-2 py-0.5 rounded text-xs font-medium border bg-foreground-secondary/20 text-foreground-secondary border-foreground-secondary/40 flex-shrink-0 flex items-center gap-1">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          {label}
+                        </span>
+                      );
+                    }
+                    if (isError) {
+                      return (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40 flex-shrink-0">
+                              Failed
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent>{project.extraction_error || 'Extraction failed'}</TooltipContent>
+                        </Tooltip>
+                      );
+                    }
+                    return label === 'COMPLIANT' ? (
+                      <span className="px-2 py-0.5 rounded text-xs font-medium border bg-success/20 text-success border-success/40 flex-shrink-0">
+                        COMPLIANT
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40 flex-shrink-0">
+                        NOT COMPLIANT
+                      </span>
+                    );
+                  })()}
                 </div>
                 <ChevronRight className="h-5 w-5 text-foreground-secondary group-hover:text-foreground transition-colors flex-shrink-0 ml-2" />
               </div>
@@ -783,15 +837,38 @@ export default function ProjectsPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    {project.is_compliant !== false ? (
-                      <span className="px-2 py-0.5 rounded text-xs font-medium border bg-success/20 text-success border-success/40">
-                        COMPLIANT
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40">
-                        NOT COMPLIANT
-                      </span>
-                    )}
+                    {(() => {
+                      const { label, inProgress, isError } = projectStatusLabel(project);
+                      if (inProgress) {
+                        return (
+                          <span className="px-2 py-0.5 rounded text-xs font-medium border bg-foreground-secondary/20 text-foreground-secondary border-foreground-secondary/40 flex items-center gap-1 w-fit">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            {label}
+                          </span>
+                        );
+                      }
+                      if (isError) {
+                        return (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40 w-fit cursor-help">
+                                Failed
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent>{project.extraction_error || 'Extraction failed'}</TooltipContent>
+                          </Tooltip>
+                        );
+                      }
+                      return label === 'COMPLIANT' ? (
+                        <span className="px-2 py-0.5 rounded text-xs font-medium border bg-success/20 text-success border-success/40">
+                          COMPLIANT
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40">
+                          NOT COMPLIANT
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1.5">
@@ -1162,7 +1239,7 @@ export default function ProjectsPage() {
                                                   </div>
                                                   <FrameworkIcon frameworkId={repo.framework} />
                                                   <div className="min-w-0">
-                                                    <div className="text-sm font-medium text-foreground truncate">{p.name}</div>
+                                                    <div className="text-sm font-medium text-foreground truncate">{p.path === '' ? repoNameOnly(repo.full_name) : p.name}</div>
                                                     <div className="text-xs text-foreground-secondary font-mono">{p.path === '' ? 'Root' : p.path}</div>
                                                   </div>
                                                 </div>
@@ -1243,7 +1320,7 @@ export default function ProjectsPage() {
                           <div className="flex items-center gap-2.5 min-w-0">
                             <div className={`h-2 w-2 rounded-full flex-shrink-0 ${isChosen ? 'bg-primary' : 'bg-border'}`} />
                             <div className="min-w-0">
-                              <div className="text-sm font-medium text-foreground truncate">{p.name}</div>
+                              <div className="text-sm font-medium text-foreground truncate">{p.path === '' ? (sidebarRepoToConnect ? repoNameOnly(sidebarRepoToConnect.full_name) : 'Root') : p.name}</div>
                               <div className="text-xs text-foreground-secondary font-mono">{p.path === '' ? 'Root' : p.path}</div>
                             </div>
                           </div>

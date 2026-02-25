@@ -6,17 +6,8 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 import express from 'express';
 import cors from 'cors';
-import organizationsRouter from './routes/organizations';
-import integrationsRouter from './routes/integrations';
-import invitationsRouter from './routes/invitations';
-import teamsRouter from './routes/teams';
-import projectsRouter from './routes/projects';
+import { isEeEdition } from './lib/features';
 import userProfileRouter from './routes/userProfile';
-import activitiesRouter from './routes/activities';
-import aegisRouter from './routes/aegis';
-import workersRouter from './routes/workers';
-import watchtowerRouter from './routes/watchtower';
-import internalRouter from './routes/internal';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -70,22 +61,26 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// API Routes
-app.use('/api/organizations', organizationsRouter);
-app.use('/api/organizations', teamsRouter);
-app.use('/api/organizations', projectsRouter);
-app.use('/api/organizations', activitiesRouter);
-app.use('/api/integrations', integrationsRouter);
-app.use('/api/invitations', invitationsRouter);
+// API Routes - CE (always mounted)
 app.use('/api/user-profile', userProfileRouter);
-app.use('/api/aegis', aegisRouter);
-app.use('/api/workers', workersRouter);
-app.use('/api/watchtower', watchtowerRouter);
-app.use('/api/internal', internalRouter);
 
-// Webhook routes (must be before error handling). GitHub sends to this URL; handler uses req.rawBody for signature verification.
-import { githubWebhookHandler } from './routes/integrations';
-app.post('/api/webhook/github', githubWebhookHandler);
+// API Routes - EE (mounted only when DEPTEX_EDITION=ee, loaded from ee/backend/routes/)
+if (isEeEdition()) {
+  app.use('/api/organizations', require('../../ee/backend/routes/organizations').default);
+  app.use('/api/organizations', require('../../ee/backend/routes/teams').default);
+  app.use('/api/organizations', require('../../ee/backend/routes/projects').default);
+  app.use('/api/organizations', require('../../ee/backend/routes/activities').default);
+  app.use('/api/integrations', require('../../ee/backend/routes/integrations').default);
+  app.use('/api/invitations', require('../../ee/backend/routes/invitations').default);
+  app.use('/api/aegis', require('../../ee/backend/routes/aegis').default);
+  app.use('/api/workers', require('../../ee/backend/routes/workers').default);
+  app.use('/api/watchtower', require('../../ee/backend/routes/watchtower').default);
+  app.use('/api/internal', require('../../ee/backend/routes/internal').default);
+
+  // Webhook routes (must be before error handling). GitHub sends to this URL; handler uses req.rawBody for signature verification.
+  const { githubWebhookHandler } = require('../../ee/backend/routes/integrations');
+  app.post('/api/webhook/github', githubWebhookHandler);
+}
 
 // Error handling middleware
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {

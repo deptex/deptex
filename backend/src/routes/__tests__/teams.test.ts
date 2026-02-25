@@ -5,7 +5,7 @@ import { supabase, queryBuilder } from '../../test/mocks/supabaseSingleton';
 // Mock dependencies
 jest.mock('../../lib/supabase');
 
-jest.mock('../../lib/activities', () => ({
+jest.mock('../../../../ee/backend/lib/activities', () => ({
   createActivity: jest.fn(),
 }));
 

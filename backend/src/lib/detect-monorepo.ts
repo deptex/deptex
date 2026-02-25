@@ -1,5 +1,11 @@
-import type { GitProvider } from './git-provider';
 import { MANIFEST_FILES, MANIFEST_EXTENSIONS, IGNORED_DIRS } from './ecosystems';
+
+/** Minimal provider interface for monorepo detection (avoids coupling to ee git-provider). */
+export interface MonorepoGitProvider {
+  getFileContent(repo: string, filePath: string, ref: string): Promise<string>;
+  getTreeRecursive(repo: string, ref: string): Promise<Array<{ path: string; type: string }>>;
+  getRootContents(repo: string, ref: string): Promise<Array<{ path: string; type: string }>>;
+}
 
 export type MonorepoConfidence = 'high' | 'medium';
 
@@ -74,7 +80,7 @@ function getManifestDirsFromTree(
 }
 
 async function getPackageName(
-  provider: GitProvider,
+  provider: MonorepoGitProvider,
   repoFullName: string,
   ref: string,
   filePath: string
@@ -119,7 +125,7 @@ function parsePnpmWorkspaceYaml(content: string): string[] {
  * Accepts a GitProvider so it works for GitHub, GitLab, and Bitbucket.
  */
 export async function detectMonorepo(
-  provider: GitProvider,
+  provider: MonorepoGitProvider,
   repoFullName: string,
   defaultBranch: string
 ): Promise<DetectMonorepoResult> {
@@ -194,7 +200,7 @@ export async function detectMonorepo(
 }
 
 async function fallbackTreeScan(
-  provider: GitProvider,
+  provider: MonorepoGitProvider,
   repoFullName: string,
   defaultBranch: string
 ): Promise<DetectMonorepoResult> {
@@ -212,6 +218,7 @@ async function fallbackTreeScan(
     const manifestFile = filePath.split('/').pop() || filePath;
     potentialProjects.push({ name, path: dirPath, ecosystem, manifestFile });
   }
+  potentialProjects.sort((a, b) => (a.path === '' ? -1 : b.path === '' ? 1 : 0));
   return {
     isMonorepo: potentialProjects.length > 1,
     confidence: potentialProjects.length > 1 ? 'medium' : undefined,

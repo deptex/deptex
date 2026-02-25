@@ -9,8 +9,7 @@ import {
   Webhook,
   Code,
   Shield,
-  FileCode,
-  Users
+  FileCode
 } from "lucide-react";
 
 const integrations = [
@@ -30,12 +29,6 @@ const integrations = [
     name: "Slack",
     icon: <Slack className="h-6 w-6" />,
     description: "Get real-time security alerts and vulnerability notifications directly in your Slack channels.",
-    category: "Communication",
-  },
-  {
-    name: "Microsoft Teams",
-    icon: <Users className="h-6 w-6" />,
-    description: "Receive security updates and compliance reports in your Teams workspace.",
     category: "Communication",
   },
   {

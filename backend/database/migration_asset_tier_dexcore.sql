@@ -19,18 +19,25 @@ END $$;
 ALTER TABLE projects
   ADD COLUMN IF NOT EXISTS asset_tier asset_tier NOT NULL DEFAULT 'EXTERNAL';
 
--- Backfill from legacy asset_criticality: 1=EXTERNAL, 2=INTERNAL, 3=NON_PRODUCTION
-UPDATE projects
-SET asset_tier = CASE
-  WHEN asset_criticality = 1 THEN 'EXTERNAL'::asset_tier
-  WHEN asset_criticality = 2 THEN 'INTERNAL'::asset_tier
-  WHEN asset_criticality = 3 THEN 'NON_PRODUCTION'::asset_tier
-  ELSE 'EXTERNAL'::asset_tier
-END
-WHERE asset_criticality IS NOT NULL;
-
-ALTER TABLE projects DROP CONSTRAINT IF EXISTS chk_projects_asset_criticality;
-ALTER TABLE projects DROP COLUMN IF EXISTS asset_criticality;
+-- Backfill from legacy asset_criticality (1-3) if that column exists
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'projects' AND column_name = 'asset_criticality'
+  ) THEN
+    UPDATE projects
+    SET asset_tier = CASE
+      WHEN asset_criticality = 1 THEN 'EXTERNAL'::asset_tier
+      WHEN asset_criticality = 2 THEN 'INTERNAL'::asset_tier
+      WHEN asset_criticality = 3 THEN 'NON_PRODUCTION'::asset_tier
+      ELSE 'EXTERNAL'::asset_tier
+    END
+    WHERE asset_criticality IS NOT NULL;
+    ALTER TABLE projects DROP CONSTRAINT IF EXISTS chk_projects_asset_criticality;
+    ALTER TABLE projects DROP COLUMN asset_criticality;
+  END IF;
+END $$;
 
 COMMENT ON COLUMN projects.asset_tier IS '4-tier asset criticality: CROWN_JEWELS, EXTERNAL, INTERNAL, NON_PRODUCTION';
 

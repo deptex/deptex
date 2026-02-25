@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useOutletContext, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
@@ -12,7 +12,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug } from 'lucide-react';
+import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell } from 'lucide-react';
 import { PermissionEditor } from '../../components/PermissionEditor';
 import { RoleDropdown } from '../../components/RoleDropdown';
 import { RoleBadge } from '../../components/RoleBadge';
@@ -119,7 +119,7 @@ const orgRolesCache: Record<string, OrganizationRole[]> = {};
 const CACHE_KEY_MEMBERS = (orgId: string) => `org_members_${orgId}`;
 const CACHE_KEY_ROLES = (orgId: string) => `org_roles_${orgId}`;
 
-const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'integrations', 'policies', 'audit_logs', 'usage', 'plan']);
+const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'integrations', 'notifications', 'policies', 'audit_logs', 'usage', 'plan']);
 
 /** Renders a tab-specific content skeleton for the org settings loading state. */
 function OrgSettingsTabSkeleton({ section }: { section: string }) {
@@ -209,24 +209,103 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
       return (
         <div className="space-y-8">
           <div>
-            <div className={`h-8 w-32 ${pulse} mb-2`} />
+            <h2 className="text-2xl font-bold text-foreground">Integrations</h2>
+            <p className="text-foreground-secondary mt-1">Connect external tools and services to your organization.</p>
+          </div>
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <h3 className="text-lg font-semibold text-foreground">CI/CD</h3>
+              <span className="text-sm text-foreground-secondary">Source code & repositories</span>
+            </div>
+            <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+              <table className="w-full table-fixed">
+                <colgroup>
+                  <col className="w-[200px]" />
+                  <col />
+                  <col className="w-[120px]" />
+                </colgroup>
+                <thead className="bg-background-card-header border-b border-border">
+                  <tr>
+                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
+                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
+                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {[1, 2, 3, 4].map((i) => (
+                    <tr key={i}>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="h-5 w-5 rounded-sm bg-muted animate-pulse flex-shrink-0" />
+                          <div className={`h-4 w-20 ${pulse}`} />
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="h-6 w-6 rounded-full bg-muted animate-pulse flex-shrink-0" />
+                          <div className={`h-4 w-28 ${pulse}`} />
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <div className={`h-8 w-20 ${pulse} ml-auto`} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <h3 className="text-lg font-semibold text-foreground">Notifications</h3>
+              <span className="text-sm text-foreground-secondary">Alerts & messaging</span>
+            </div>
+            <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+              <table className="w-full table-fixed">
+                <colgroup>
+                  <col className="w-[200px]" />
+                  <col />
+                  <col className="w-[120px]" />
+                </colgroup>
+                <thead className="bg-background-card-header border-b border-border">
+                  <tr>
+                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
+                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
+                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {[1, 2, 3].map((i) => (
+                    <tr key={i}>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="h-5 w-5 rounded-sm bg-muted animate-pulse flex-shrink-0" />
+                          <div className={`h-4 w-20 ${pulse}`} />
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className={`h-4 w-28 ${pulse}`} />
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <div className={`h-8 w-20 ${pulse} ml-auto`} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    case 'notifications':
+      return (
+        <div className="space-y-6">
+          <div>
+            <div className={`h-8 w-48 ${pulse} mb-2`} />
             <div className={`h-4 w-80 ${pulse}`} />
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="bg-background-card border border-border rounded-lg overflow-hidden">
-                <div className="p-6 flex items-start gap-4">
-                  <div className="h-12 w-12 rounded bg-muted animate-pulse flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className={`h-5 w-28 ${pulse} mb-2`} />
-                    <div className={`h-4 w-full ${pulse}`} />
-                  </div>
-                </div>
-                <div className="px-6 py-3 bg-black/20 border-t border-border">
-                  <div className={`h-8 w-24 ${pulse}`} />
-                </div>
-              </div>
-            ))}
+          <div className="bg-background-card border border-border rounded-lg overflow-hidden min-h-[320px] p-12 flex items-center justify-center">
+            <div className={`h-4 w-56 ${pulse}`} />
           </div>
         </div>
       );
@@ -367,6 +446,10 @@ export default function OrganizationSettingsPage() {
   const [loadingRoles, setLoadingRoles] = useState(false);
   const [cicdConnections, setCicdConnections] = useState<CiCdConnection[]>([]);
   const [loadingConnections, setLoadingConnections] = useState(false);
+  const notificationConnections = useMemo(
+    () => cicdConnections.filter(c => c.provider === 'slack' || c.provider === 'discord'),
+    [cicdConnections]
+  );
   // Initialize isOwner/isAdmin from cached permissions
   const [isOwner, setIsOwner] = useState(() => {
     const cached = organization?.permissions || (() => {
@@ -1221,6 +1304,12 @@ export default function OrganizationSettingsPage() {
       label: 'Integrations',
       icon: <Plug className="h-4 w-4 tab-icon-shake" />,
     }] : []),
+    // Notifications section (after Integrations)
+    ...(effectivePermissions?.manage_integrations ? [{
+      id: 'notifications',
+      label: 'Notifications',
+      icon: <Bell className="h-4 w-4 tab-icon-shake" />,
+    }] : []),
 
     // Security Category
     {
@@ -2044,31 +2133,110 @@ export default function OrganizationSettingsPage() {
                     <div className="space-y-8">
                       {/* CI/CD Section */}
                       <div className="space-y-4">
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-lg font-semibold text-foreground">CI/CD</h3>
-                          <span className="text-sm text-foreground-secondary">Source code & repositories</span>
+                        <div className="flex items-center justify-between gap-4 flex-wrap">
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-lg font-semibold text-foreground">CI/CD</h3>
+                            <span className="text-sm text-foreground-secondary">Source code & repositories</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {([
+                              { provider: 'github' as CiCdProvider, label: 'GitHub', icon: '/images/integrations/github.png', endpoint: 'github/install' },
+                              { provider: 'gitlab' as CiCdProvider, label: 'GitLab', icon: '/images/integrations/gitlab.png', endpoint: 'gitlab/install' },
+                              { provider: 'bitbucket' as CiCdProvider, label: 'Bitbucket', icon: '/images/integrations/bitbucket.png', endpoint: 'bitbucket/install' },
+                            ]).map(({ provider, label, icon, endpoint }) => (
+                              <Button
+                                key={provider}
+                                variant="outline"
+                                size="sm"
+                                className="text-xs"
+                                onClick={async () => {
+                                  if (!organization?.id) return;
+                                  try {
+                                    const { data: { session } } = await supabase.auth.getSession();
+                                    if (!session?.access_token) {
+                                      toast({ title: 'Error', description: 'Please log in first.', variant: 'destructive' });
+                                      return;
+                                    }
+                                    const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+                                    const response = await fetch(`${API_BASE_URL}/api/integrations/${endpoint}?org_id=${organization.id}`, {
+                                      headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+                                    });
+                                    if (!response.ok) {
+                                      const err = await response.json().catch(() => ({ error: `Failed to connect ${label}` }));
+                                      throw new Error(err.error || `Failed to start ${label} connection`);
+                                    }
+                                    const data = await response.json();
+                                    if (data.redirectUrl) {
+                                      window.location.href = data.redirectUrl;
+                                    }
+                                  } catch (err: any) {
+                                    toast({ title: 'Error', description: err.message || `Failed to connect ${label}.`, variant: 'destructive' });
+                                  }
+                                }}
+                              >
+                                <img src={icon} alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5" />
+                                Add {label}
+                              </Button>
+                            ))}
+                          </div>
                         </div>
                         {loadingConnections ? (
                           <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                            <div className="p-6 flex items-center justify-center">
-                              <div className="h-5 w-5 border-2 border-foreground-secondary/30 border-t-foreground-secondary rounded-full animate-spin" />
-                            </div>
+                            <table className="w-full table-fixed">
+                              <colgroup>
+                                <col className="w-[200px]" />
+                                <col />
+                                <col className="w-[120px]" />
+                              </colgroup>
+                              <thead className="bg-background-card-header border-b border-border">
+                                <tr>
+                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
+                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
+                                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-border">
+                                {[1, 2, 3, 4].map((i) => (
+                                  <tr key={i}>
+                                    <td className="px-4 py-3">
+                                      <div className="flex items-center gap-2.5">
+                                        <div className="h-5 w-5 rounded-sm bg-muted animate-pulse flex-shrink-0" />
+                                        <div className="h-4 w-20 bg-muted animate-pulse rounded" />
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-3">
+                                      <div className="flex items-center gap-2.5">
+                                        <div className="h-6 w-6 rounded-full bg-muted animate-pulse flex-shrink-0" />
+                                        <div className="h-4 w-28 bg-muted animate-pulse rounded" />
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-3 text-right">
+                                      <div className="h-8 w-20 bg-muted animate-pulse rounded ml-auto" />
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
                           </div>
                         ) : (
                           <div className="space-y-3">
-                            {cicdConnections.filter(c => c.provider !== 'slack').length > 0 && (
+                            {cicdConnections.filter(c => c.provider !== 'slack' && c.provider !== 'discord' && c.provider !== 'teams').length > 0 && (
                               <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                                <table className="w-full">
+                                <table className="w-full table-fixed">
+                                  <colgroup>
+                                    <col className="w-[200px]" />
+                                    <col />
+                                    <col className="w-[120px]" />
+                                  </colgroup>
                                   <thead className="bg-background-card-header border-b border-border">
                                     <tr>
                                       <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
                                       <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
-                                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</th>
                                       <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
                                     </tr>
                                   </thead>
                                   <tbody className="divide-y divide-border">
-                                    {cicdConnections.filter(c => c.provider !== 'slack').map((conn) => {
+                                    {cicdConnections.filter(c => c.provider !== 'slack' && c.provider !== 'discord' && c.provider !== 'teams').map((conn) => {
                                       const providerIcon = conn.provider === 'github' ? '/images/integrations/github.png'
                                         : conn.provider === 'gitlab' ? '/images/integrations/gitlab.png'
                                         : '/images/integrations/bitbucket.png';
@@ -2083,32 +2251,27 @@ export default function OrganizationSettingsPage() {
                                               <span className="text-sm font-medium text-foreground">{providerLabel}</span>
                                             </div>
                                           </td>
-                                          <td className="px-4 py-3">
-                                            <div className="flex items-center gap-2.5">
+                                          <td className="px-4 py-3 min-w-0">
+                                            <div className="flex items-center gap-2.5 min-w-0">
                                               {accountAvatarUrl ? <img src={accountAvatarUrl} alt="" className="h-6 w-6 rounded-full flex-shrink-0 bg-muted" /> : null}
-                                              <span className="text-sm text-foreground">{conn.display_name || conn.installation_id || '-'}</span>
+                                              <span className="text-sm text-foreground truncate">{conn.display_name || conn.installation_id || '-'}</span>
                                             </div>
-                                          </td>
-                                          <td className="px-4 py-3">
-                                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                                              conn.status === 'connected'
-                                                ? 'bg-green-500/10 text-green-500 border border-green-500/20'
-                                                : 'bg-foreground-secondary/10 text-foreground-secondary border border-foreground-secondary/20'
-                                            }`}>
-                                              {conn.status === 'connected' ? 'Connected' : conn.status}
-                                            </span>
                                           </td>
                                           <td className="px-4 py-3 text-right">
                                             <Button
                                               variant="outline"
                                               size="sm"
-                                              className="text-xs"
+                                              className="text-xs hover:bg-destructive/10 hover:border-destructive/30"
                                               onClick={async () => {
                                                 if (!confirm(`Disconnect this ${providerLabel} connection (${conn.display_name || conn.installation_id})?`)) return;
                                                 try {
                                                   const result = await api.deleteOrganizationConnection(organization!.id, conn.id);
-                                                  if (result.provider === 'github' && result.installationId) {
+                                                  if (result.revokeUrl) {
+                                                    window.open(result.revokeUrl, '_blank');
+                                                    toast({ title: `Opening ${providerLabel}`, description: 'Complete revoke in the opened tab.' });
+                                                  } else if (result.provider === 'github' && result.installationId) {
                                                     window.open(`https://github.com/settings/installations/${result.installationId}`, '_blank');
+                                                    toast({ title: 'Opening GitHub', description: 'Complete uninstall in the opened tab.' });
                                                   }
                                                   await reloadOrganization();
                                                   await loadConnections();
@@ -2128,224 +2291,152 @@ export default function OrganizationSettingsPage() {
                                 </table>
                               </div>
                             )}
-                            {cicdConnections.filter(c => c.provider !== 'slack').length === 0 && (
+                            {cicdConnections.filter(c => c.provider !== 'slack' && c.provider !== 'discord' && c.provider !== 'teams').length === 0 && (
                               <div className="bg-background-card border border-border rounded-lg p-6 text-center">
                                 <Plug className="mx-auto h-10 w-10 text-foreground-secondary mb-3" />
                                 <h4 className="text-sm font-semibold text-foreground mb-1">No source code connections</h4>
                                 <p className="text-xs text-foreground-secondary mb-4">Connect a Git provider to start scanning repositories.</p>
                               </div>
                             )}
-                            <div className="flex items-center gap-2">
-                              {([
-                                { provider: 'github' as CiCdProvider, label: 'GitHub', icon: '/images/integrations/github.png', endpoint: 'github/install' },
-                                { provider: 'gitlab' as CiCdProvider, label: 'GitLab', icon: '/images/integrations/gitlab.png', endpoint: 'gitlab/install' },
-                                { provider: 'bitbucket' as CiCdProvider, label: 'Bitbucket', icon: '/images/integrations/bitbucket.png', endpoint: 'bitbucket/install' },
-                              ]).map(({ provider, label, icon, endpoint }) => (
-                                <Button
-                                  key={provider}
-                                  variant="outline"
-                                  size="sm"
-                                  className="text-xs"
-                                  onClick={async () => {
-                                    if (!organization?.id) return;
-                                    try {
-                                      const { data: { session } } = await supabase.auth.getSession();
-                                      if (!session?.access_token) {
-                                        toast({ title: 'Error', description: 'Please log in first.', variant: 'destructive' });
-                                        return;
-                                      }
-                                      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
-                                      const response = await fetch(`${API_BASE_URL}/api/integrations/${endpoint}?org_id=${organization.id}`, {
-                                        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
-                                      });
-                                      if (!response.ok) {
-                                        const err = await response.json().catch(() => ({ error: `Failed to connect ${label}` }));
-                                        throw new Error(err.error || `Failed to start ${label} connection`);
-                                      }
-                                      const data = await response.json();
-                                      if (data.redirectUrl) {
-                                        window.location.href = data.redirectUrl;
-                                      }
-                                    } catch (err: any) {
-                                      toast({ title: 'Error', description: err.message || `Failed to connect ${label}.`, variant: 'destructive' });
-                                    }
-                                  }}
-                                >
-                                  <img src={icon} alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5" />
-                                  Add {label}
-                                </Button>
-                              ))}
-                            </div>
                           </div>
                         )}
                       </div>
 
                       {/* Notifications Section */}
                       <div className="space-y-4">
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-lg font-semibold text-foreground">Notifications</h3>
-                          <span className="text-sm text-foreground-secondary">Alerts & messaging</span>
+                        <div className="flex items-center justify-between gap-4 flex-wrap">
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-lg font-semibold text-foreground">Notifications</h3>
+                            <span className="text-sm text-foreground-secondary">Alerts & messaging</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {([
+                              { provider: 'slack' as const, label: 'Slack', icon: '/images/integrations/slack.png', getRedirect: api.connectSlackOrg },
+                              { provider: 'discord' as const, label: 'Discord', icon: '/images/integrations/discord.png', getRedirect: api.connectDiscordOrg },
+                            ]).map(({ provider, label, icon, getRedirect }) => (
+                              <Button
+                                key={provider}
+                                variant="outline"
+                                size="sm"
+                                className="text-xs"
+                                onClick={async () => {
+                                  if (!organization?.id) return;
+                                  try {
+                                    const { redirectUrl } = await getRedirect(organization.id);
+                                    window.location.href = redirectUrl;
+                                  } catch (err: any) {
+                                    toast({ title: 'Error', description: err.message || `Failed to start ${label} connection.`, variant: 'destructive' });
+                                  }
+                                }}
+                              >
+                                <img src={icon} alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5 object-contain" />
+                                Add {label}
+                              </Button>
+                            ))}
+                          </div>
                         </div>
-                        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-                          {/* Slack Integration */}
-                          {(() => {
-                            const slackConn = cicdConnections.find(c => c.provider === 'slack');
-                            const isConnected = slackConn && slackConn.status === 'connected';
-                            return (
-                              <div className={`bg-background-card border rounded-lg overflow-hidden flex flex-col ${isConnected ? 'border-green-500/30' : 'border-border'}`}>
-                                <div className="p-6 flex-1">
-                                  <div className="flex items-start gap-4">
-                                    <div className="flex-shrink-0">
-                                      <img
-                                        src="/images/integrations/slack.png"
-                                        alt="Slack"
-                                        className="h-12 w-12 rounded object-contain"
-                                      />
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                      <div className="flex items-center gap-2 mb-2">
-                                        <h3 className="text-lg font-semibold text-foreground">Slack</h3>
-                                        {isConnected && (
-                                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-500/10 text-green-400 border border-green-500/20">
-                                            Connected
-                                          </span>
-                                        )}
+                        {loadingConnections ? (
+                          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                            <table className="w-full table-fixed">
+                              <colgroup>
+                                <col className="w-[200px]" />
+                                <col />
+                                <col className="w-[120px]" />
+                              </colgroup>
+                              <thead className="bg-background-card-header border-b border-border">
+                                <tr>
+                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
+                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
+                                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-border">
+                                {[1, 2, 3].map((i) => (
+                                  <tr key={i}>
+                                    <td className="px-4 py-3">
+                                      <div className="flex items-center gap-2.5">
+                                        <div className="h-5 w-5 rounded-sm bg-muted animate-pulse flex-shrink-0" />
+                                        <div className="h-4 w-20 bg-muted animate-pulse rounded" />
                                       </div>
-                                      <p className="text-sm text-foreground-secondary">
-                                        {isConnected
-                                          ? `Connected to ${slackConn.display_name || 'Slack workspace'}`
-                                          : 'Get real-time notifications about vulnerabilities and security alerts in Slack.'
-                                        }
-                                      </p>
-                                    </div>
-                                  </div>
-                                </div>
-                                <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                                  {isConnected ? (
-                                    <>
-                                      <p className="text-xs text-foreground-secondary">
-                                        Workspace: {slackConn.display_name || slackConn.metadata?.team_name || 'Unknown'}
-                                      </p>
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="text-xs text-red-400 border-red-500/30 hover:bg-red-500/10"
-                                        onClick={async () => {
-                                          if (!confirm('Disconnect Slack from this organization?')) return;
-                                          try {
-                                            await api.deleteOrganizationConnection(organization!.id, slackConn.id);
-                                            await loadConnections();
-                                            toast({ title: 'Disconnected', description: 'Slack has been disconnected.' });
-                                          } catch (err: any) {
-                                            toast({ title: 'Error', description: err.message || 'Failed to disconnect.', variant: 'destructive' });
-                                          }
-                                        }}
-                                      >
-                                        Disconnect
-                                      </Button>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <p className="text-xs text-foreground-secondary">
-                                        Connect your Slack workspace
-                                      </p>
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        onClick={async () => {
-                                          try {
-                                            const { redirectUrl } = await api.connectSlackOrg(organization!.id);
-                                            window.location.href = redirectUrl;
-                                          } catch (err: any) {
-                                            toast({ title: 'Error', description: err.message || 'Failed to start Slack connection.', variant: 'destructive' });
-                                          }
-                                        }}
-                                      >
-                                        Connect
-                                      </Button>
-                                    </>
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })()}
-
-                          {/* Discord Integration - Coming Soon */}
-                          <div className="bg-background-card border border-border rounded-lg overflow-hidden opacity-60 flex flex-col">
-                            <div className="p-6 flex-1">
-                              <div className="flex items-start gap-4">
-                                <div className="flex-shrink-0">
-                                  <img
-                                    src="/images/integrations/discord.png"
-                                    alt="Discord"
-                                    className="h-12 w-12 rounded object-contain opacity-60"
-                                  />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-2 mb-2">
-                                    <h3 className="text-lg font-semibold text-foreground">Discord</h3>
-                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-foreground-secondary/10 text-foreground-secondary border border-foreground-secondary/20">
-                                      Coming Soon
-                                    </span>
-                                  </div>
-                                  <p className="text-sm text-foreground-secondary">
-                                    Receive security notifications and alerts directly in your Discord server.
-                                  </p>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                              <p className="text-xs text-foreground-secondary">
-                                Discord integration coming soon
-                              </p>
-                              <Button
-                                size="sm"
-                                disabled
-                                variant="outline"
-                              >
-                                Coming Soon
-                              </Button>
-                            </div>
+                                    </td>
+                                    <td className="px-4 py-3">
+                                      <div className="h-4 w-28 bg-muted animate-pulse rounded" />
+                                    </td>
+                                    <td className="px-4 py-3 text-right">
+                                      <div className="h-8 w-20 bg-muted animate-pulse rounded ml-auto" />
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
                           </div>
-
-                          {/* Teams Integration - Coming Soon */}
-                          <div className="bg-background-card border border-border rounded-lg overflow-hidden opacity-60 flex flex-col">
-                            <div className="p-6 flex-1">
-                              <div className="flex items-start gap-4">
-                                <div className="flex-shrink-0">
-                                  <img
-                                    src="/images/integrations/teams.png"
-                                    alt="Microsoft Teams"
-                                    className="h-12 w-12 rounded object-contain opacity-60"
-                                  />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-2 mb-2">
-                                    <h3 className="text-lg font-semibold text-foreground">Microsoft Teams</h3>
-                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-foreground-secondary/10 text-foreground-secondary border border-foreground-secondary/20">
-                                      Coming Soon
-                                    </span>
-                                  </div>
-                                  <p className="text-sm text-foreground-secondary">
-                                    Get security alerts and vulnerability notifications in Microsoft Teams.
-                                  </p>
-                                </div>
+                        ) : (
+                          <div className="space-y-3">
+                            {notificationConnections.length > 0 ? (
+                              <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                                <table className="w-full table-fixed">
+                                  <colgroup>
+                                    <col className="w-[200px]" />
+                                    <col />
+                                    <col className="w-[120px]" />
+                                  </colgroup>
+                                  <thead className="bg-background-card-header border-b border-border">
+                                    <tr>
+                                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
+                                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
+                                      <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-border">
+                                    {notificationConnections.map((conn) => {
+                                      const providerConfig = conn.provider === 'slack'
+                                        ? { label: 'Slack', icon: '/images/integrations/slack.png' }
+                                        : { label: 'Discord', icon: '/images/integrations/discord.png' };
+                                      return (
+                                        <tr key={conn.id} className="hover:bg-table-hover transition-colors">
+                                          <td className="px-4 py-3">
+                                            <div className="flex items-center gap-2.5">
+                                              <img src={providerConfig.icon} alt="" className="h-5 w-5 rounded-sm flex-shrink-0 object-contain" />
+                                              <span className="text-sm font-medium text-foreground">{providerConfig.label}</span>
+                                            </div>
+                                          </td>
+                                          <td className="px-4 py-3 min-w-0">
+                                            <span className="text-sm text-foreground truncate block">{conn.display_name || 'Connected'}</span>
+                                          </td>
+                                          <td className="px-4 py-3 text-right">
+                                            <Button
+                                              variant="outline"
+                                              size="sm"
+                                              className="text-xs hover:bg-destructive/10 hover:border-destructive/30"
+                                              onClick={async () => {
+                                                if (!confirm(`Disconnect this ${providerConfig.label} connection (${conn.display_name || providerConfig.label})?`)) return;
+                                                try {
+                                                  await api.deleteOrganizationConnection(organization!.id, conn.id);
+                                                  await loadConnections();
+                                                  toast({ title: 'Disconnected', description: `${providerConfig.label} connection removed.` });
+                                                } catch (err: any) {
+                                                  toast({ title: 'Error', description: err.message || 'Failed to disconnect.', variant: 'destructive' });
+                                                }
+                                              }}
+                                            >
+                                              Disconnect
+                                            </Button>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
                               </div>
-                            </div>
-                            <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                              <p className="text-xs text-foreground-secondary">
-                                Teams integration coming soon
-                              </p>
-                              <Button
-                                size="sm"
-                                disabled
-                                variant="outline"
-                              >
-                                Coming Soon
-                              </Button>
-                            </div>
+                            ) : (
+                              <div className="bg-background-card border border-border rounded-lg p-6 text-center">
+                                <Plug className="mx-auto h-10 w-10 text-foreground-secondary mb-3" />
+                                <h4 className="text-sm font-semibold text-foreground mb-1">No notification connections</h4>
+                                <p className="text-xs text-foreground-secondary mb-4">Add Slack or Discord to receive alerts.</p>
+                              </div>
+                            )}
                           </div>
-                        </div>
+                        )}
                       </div>
 
                       {/* Ticketing Section */}
@@ -2472,6 +2563,20 @@ export default function OrganizationSettingsPage() {
                       </div>
                     </div>
                   )}
+                </div>
+              )}
+
+              {activeSection === 'notifications' && (
+                <div className="space-y-6">
+                  <div>
+                    <h2 className="text-2xl font-bold text-foreground">Notifications</h2>
+                    <p className="text-foreground-secondary mt-1">
+                      Configure how and when your organization receives notifications.
+                    </p>
+                  </div>
+                  <div className="bg-background-card border border-border rounded-lg p-12 flex flex-col items-center justify-center text-center min-h-[320px]">
+                    <p className="text-sm text-foreground-secondary">Notification settings will be available here soon.</p>
+                  </div>
                 </div>
               )}
 

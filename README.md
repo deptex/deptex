@@ -1,120 +1,105 @@
-<p align="center">
-  <img src="https://avatars.githubusercontent.com/u/247051051?v=4" width="120" />
-</p>
+# Deptex
 
-<h1 align="center">Deptex</h1>
-
-<p align="center">
-  The AI-powered Open Source Security Platform.<br/>
-  Automate dependency intelligence, vulnerability analysis, and supply-chain anomaly detection — all with one autonomous AI security engineer.
-</p>
+The AI-powered Open Source Security Platform.  
+Automate dependency intelligence, vulnerability analysis, and supply-chain anomaly detection.
 
 ---
 
 ## Overview
 
-Deptex is a next-generation security and compliance platform that helps organizations understand, monitor, and protect their codebases.  
-It combines **deep dependency intelligence**, **continuous monitoring**, and an **autonomous AI security agent** to automate the hardest parts of modern software security.
+Deptex is a security and compliance platform that helps organizations understand, monitor, and protect their codebases. It combines **dependency intelligence**, **continuous monitoring**, and an **autonomous AI security agent** to automate the hardest parts of modern software security.
 
-- [x] Project dependency graphing  
-- [x] Vulnerability & license compliance  
-- [x] AI code reviewer & security engineer  
-- [x] SBOM generation & change detection  
-- [x] Anomaly detection for supply-chain attacks  
-- [x] Realtime alerts for upstream risks  
-- [x] GitHub App integration  
-- [x] Organization-wide insights  
-
-Deptex aims to make world-class security accessible to every engineering team — from startups to large enterprises.
+**Documentation:** [deptex.ca/docs](http://deptex.ca/docs)
 
 ---
 
-## Key Features
+## How it works
 
-### Security Intelligence  
-- Vulnerability scanning  
-- Impact analysis (is this CVE reachable in *your* code?)  
-- License auditing  
-- Policy enforcement  
+Deptex uses open-source tools and builds on top of a core extraction and analysis pipeline. You sign up, connect your repos, and start getting dependency intelligence and vulnerability insights without installing anything.
 
-### Autonomous AI Agent  
-Your AI “security employee” that:
-- Reviews pull requests with actionable security comments  
-- Investigates vulnerabilities automatically  
-- Suggests or generates patches  
-- Monitors watchlists & flags emerging risks  
-- Runs background tasks across all org projects  
+### Architecture
 
-### Dependency Graph Engine  
-- Flattened dependency mapping  
-- Transitive dependency analysis  
-- Reachability detection  
-- Upstream commit anomaly tracking  
+```mermaid
+flowchart TB
+    subgraph Entry [Entry]
+        Frontend[Dashboard]
+        GitHubApp[GitHub / GitLab / Bitbucket App]
+    end
 
-### SBOM Management  
-- Automatic SBOM generation  
-- SBOM drift detection  
-- Compliance workflow tooling  
+    subgraph API [API Layer]
+        Backend[Backend API]
+    end
 
-### Workflow Automation  
-- Scheduled scans  
-- Watchlist monitoring  
-- PR integrations  
-- Policy checks  
+    subgraph Core [Core Engine]
+        Extraction[Extraction Worker]
+        Ingestion[Ingestion Engine]
+        Vuln[Vulnerability Processing]
+    end
+
+    subgraph Data [Data Layer]
+        Postgres[(PostgreSQL)]
+    end
+
+    subgraph EE [Cloud Layer]
+        Aegis[Aegis AI Agent]
+        Watchtower[Watchtower]
+    end
+
+    Frontend --> Backend
+    GitHubApp --> Backend
+    Backend --> Extraction
+    Backend --> Ingestion
+    Ingestion --> Vuln
+    Ingestion --> Postgres
+    Vuln --> Postgres
+    Backend --> Aegis
+    Backend --> Watchtower
+```
+
+### Core components
+
+| Component | Description |
+|-----------|-------------|
+| **Dashboard** | React UI for projects, dependencies, vulnerabilities, and compliance. Connects to your repos and displays the dependency graph, CVE reachability, and license info. |
+| **Backend API** | Express API that orchestrates ingestion, triggers extraction jobs, and serves data to the frontend. Handles auth, webhooks, and routing. |
+| **Extraction Worker** | Clones repos, runs cdxgen for SBOM generation, dep-scan for vulnerability detection, and AST analysis. Produces dependency trees and metadata. |
+| **Ingestion Engine** | Processes SBOMs, normalizes packages across ecosystems, builds the dependency graph, and stores everything in PostgreSQL. |
+| **Vulnerability Processing** | Matches dependencies to CVEs (via GHSA and NVD), analyzes reachability, and computes impact. Powers the vulnerability dashboard. |
+| **Aegis AI** | Autonomous security agent — PR comments, patch suggestions, background audits. (Cloud) |
+| **Watchtower** | Upstream anomaly detection for supply-chain risks. (Cloud) |
+
+### Key features
+
+- **Vulnerability scanning** — CVE reachability, impact analysis
+- **License auditing** — Policy enforcement
+- **Dependency graph** — Transitive analysis, reachability
+- **SBOM** — Automatic generation, drift detection
+- **Watchtower** — Upstream anomaly detection (Cloud)
+- **Aegis AI** — PR reviews, patch suggestions, background audits (Cloud)
 
 ---
 
-## Documentation  
-Full documentation at <http://deptex.ca/docs>.
+## Open core
 
-## How Deptex Works
+Deptex uses an open-core model: the core engine (extraction, ingestion, vulnerability processing) is open source; the cloud platform (organizations, teams, integrations, Aegis, Watchtower) is commercial.
 
-Deptex consists of several services working together to provide real-time security intelligence.
-
-### 🧩 Core Components
-
-- **Deptex Core**  
-  Ingestion engine, dependency graphing, vulnerability processing, and project intelligence.
-
-- **Deptex Agent**  
-  The autonomous AI security engineer.  
-  Evaluates alerts, writes PR comments, suggests patches, and performs background audits.
-
-- **Deptex Dashboard**  
-  Modern UI for managing organizations, projects, dependencies, SBOMs, alerts, and AI activity.
-
-- **Deptex GitHub App**  
-  Integrates with repos, syncs code, receives events, and performs PR reviews.
-
-- **Deptex SDK**  
-  Lightweight client libraries for custom workflows and integrations.
-
----
-
-## Client Libraries
-
-Deptex follows a modular, SDK-first design.
-
-### Official
-| Language | Library |
-|---------|---------|
-| TypeScript | `@deptex/sdk` |
-| Python | _(planned)_ |
-| Go | _(planned)_ |
-
-Community support is welcome — details coming soon.
+| Layer | What | License |
+|-------|------|---------|
+| **Core** | backend/, frontend/, extraction-worker | Apache 2.0 |
+| **Cloud** | ee/ (orgs, teams, GitHub App, Aegis, Watchtower) | Proprietary |
 
 ---
 
 ## Community & Support
 
-- **GitHub Issues** – Bug reports & feature requests  
-- **Email Support** – For infrastructure or enterprise needs  
+- **GitHub Issues** — Bug reports, feature requests
+- **Contributing** — [CONTRIBUTING.md](./CONTRIBUTING.md)
+- **Email** — For infrastructure or enterprise needs
 
 ---
 
-## About
+## License
 
-Deptex is built to redefine how organizations handle open-source security — replacing fragmented scanners with a unified, AI-assisted platform that works continuously and intelligently.
+- **Core**: Apache 2.0 — see [LICENSE](./LICENSE)
+- **ee/**: Proprietary — see [ee/LICENSE](./ee/LICENSE)
 
-Always improving. Always watching. Always secure.

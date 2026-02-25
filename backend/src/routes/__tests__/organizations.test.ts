@@ -5,16 +5,16 @@ import { supabase, queryBuilder } from '../../test/mocks/supabaseSingleton';
 // Mock dependencies
 jest.mock('../../lib/supabase');
 
-jest.mock('../../lib/activities', () => ({
+jest.mock('../../../../ee/backend/lib/activities', () => ({
   createActivity: jest.fn(),
 }));
 
-jest.mock('../../lib/email', () => ({
+jest.mock('../../../../ee/backend/lib/email', () => ({
   sendInvitationEmail: jest.fn(),
 }));
 
 // Mock OpenAI
-jest.mock('../../lib/openai', () => ({
+jest.mock('../../../../ee/backend/lib/openai', () => ({
   getOpenAIClient: jest.fn().mockReturnValue({
     chat: { completions: { create: jest.fn() } }
   }),

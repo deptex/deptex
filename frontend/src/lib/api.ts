@@ -65,7 +65,7 @@ export interface Integration {
 export interface OrganizationIntegration {
   id: string;
   organization_id: string;
-  provider: 'github' | 'gitlab' | 'bitbucket' | 'slack' | 'jira';
+  provider: 'github' | 'gitlab' | 'bitbucket' | 'slack' | 'discord' | 'jira';
   installation_id?: string | null;
   display_name?: string | null;
   access_token?: string | null;
@@ -79,7 +79,7 @@ export interface OrganizationIntegration {
   updated_at: string;
 }
 
-export type CiCdProvider = 'github' | 'gitlab' | 'bitbucket' | 'slack';
+export type CiCdProvider = 'github' | 'gitlab' | 'bitbucket' | 'slack' | 'discord';
 
 export interface CiCdConnection {
   id: string;
@@ -525,12 +525,16 @@ export const api = {
     return fetchWithAuth(`/api/integrations/organizations/${organizationId}/connections`);
   },
 
-  async deleteOrganizationConnection(organizationId: string, connectionId: string): Promise<{ success: boolean; provider: string; installationId?: string }> {
+  async deleteOrganizationConnection(organizationId: string, connectionId: string): Promise<{ success: boolean; provider: string; installationId?: string; revokeUrl?: string }> {
     return fetchWithAuth(`/api/integrations/organizations/${organizationId}/connections/${connectionId}`, { method: 'DELETE' });
   },
 
   async connectSlackOrg(organizationId: string): Promise<{ redirectUrl: string }> {
     return fetchWithAuth(`/api/integrations/slack/install?org_id=${organizationId}`);
+  },
+
+  async connectDiscordOrg(organizationId: string): Promise<{ redirectUrl: string }> {
+    return fetchWithAuth(`/api/integrations/discord/install?org_id=${organizationId}`);
   },
 
   async transferOrganizationOwnership(organizationId: string, userId: string, newRole: string = 'admin'): Promise<{ message: string }> {
@@ -1714,6 +1718,9 @@ export interface Project {
   dependencies_count?: number;
   framework?: string | null;
   alerts_count?: number;
+  repo_status?: string | null;
+  extraction_step?: string | null;
+  extraction_error?: string | null;
   role?: string;
   asset_tier?: AssetTier;
 }

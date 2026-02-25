@@ -24,22 +24,38 @@ export interface GhsaVuln {
   identifiers: Array<{ type: string; value: string }>;
 }
 
+/** Map our ecosystem ids to GHSA GraphQL SecurityAdvisoryEcosystem enum values. */
+const ECOSYSTEM_TO_GHSA: Record<string, string> = {
+  npm: 'NPM',
+  pypi: 'PIP',
+  maven: 'MAVEN',
+  nuget: 'NUGET',
+  golang: 'GO',
+  cargo: 'RUST',
+  gem: 'RUBYGEMS',
+  composer: 'COMPOSER',
+  pub: 'PUB',
+  hex: 'ERLANG',
+  swift: 'SWIFT',
+};
+
 /**
- * Fetch vulnerabilities for multiple npm packages in one GraphQL request (up to 100).
- * Uses GitHub Advisory Database (GHSA) – same source as npm audit.
+ * Fetch vulnerabilities for multiple packages in one GraphQL request (up to 100).
+ * Uses GitHub Advisory Database (GHSA).
  * Rate limits: unauthenticated 60/h; with GITHUB_TOKEN 5000 points/h.
  */
-export async function fetchGhsaVulnerabilitiesBatch(packageNames: string[]): Promise<Map<string, GhsaVuln[]>> {
+export async function fetchGhsaVulnerabilitiesBatch(packageNames: string[], ecosystem?: string): Promise<Map<string, GhsaVuln[]>> {
   const result = new Map<string, GhsaVuln[]>();
   if (packageNames.length === 0) return result;
   const maxPerQuery = 100;
   const firstPerPackage = 30;
   const names = packageNames.slice(0, maxPerQuery);
+  const ghsaEcosystem = ECOSYSTEM_TO_GHSA[ecosystem ?? 'npm'] ?? 'NPM';
 
   const buildQuery = (): string => {
     const parts = names.map((name, i) => {
       const escaped = JSON.stringify(name);
-      return `p${i}: securityVulnerabilities(package: ${escaped}, ecosystem: NPM, first: ${firstPerPackage}) { nodes { advisory { ghsaId summary description severity publishedAt updatedAt identifiers { type value } } vulnerableVersionRange firstPatchedVersion { identifier } } }`;
+      return `p${i}: securityVulnerabilities(package: ${escaped}, ecosystem: ${ghsaEcosystem}, first: ${firstPerPackage}) { nodes { advisory { ghsaId summary description severity publishedAt updatedAt identifiers { type value } } vulnerableVersionRange firstPatchedVersion { identifier } } }`;
     });
     return `query { ${parts.join(' ')} }`;
   };

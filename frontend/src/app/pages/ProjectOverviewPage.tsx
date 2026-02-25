@@ -43,6 +43,7 @@ function extractionStepLabel(step: string | null | undefined): string {
     cloning: 'Cloning repository...',
     sbom: 'Building SBOM...',
     deps_synced: 'Syncing dependencies...',
+    ast_parsing: 'Analyzing imports...',
     scanning: 'Scanning for vulnerabilities...',
     uploading: 'Uploading results...',
     completed: 'Finishing up...',

@@ -1,5 +1,5 @@
 /**
- * Extraction pipeline: clone -> cdxgen -> parse SBOM -> upsert deps -> queue populate -> dep-scan -> Semgrep -> TruffleHog -> upload -> update status
+ * Extraction pipeline: clone -> cdxgen -> parse SBOM -> upsert deps -> queue populate -> AST import analysis -> dep-scan -> Semgrep -> TruffleHog -> upload -> update status
  */
 
 import * as fs from 'fs';
@@ -10,6 +10,8 @@ import { cloneRepository, cleanupRepository, cloneByProvider } from './clone';
 import { parseSbom, getBomRefToNameVersion, type ParsedSbomDep, type ParsedSbomRelationship } from './sbom';
 import { calculateDepscore, SEVERITY_TO_CVSS } from './depscore';
 import { calculateDexcore, type AssetTier } from './dexcore';
+import { analyzeRepository } from './ast-parser';
+import { storeAstAnalysisResults } from './ast-storage';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
@@ -85,7 +87,8 @@ async function callQueuePopulate(
   workerSecret: string | undefined,
   projectId: string,
   organizationId: string,
-  deps: Array<{ dependencyId: string; name: string }>
+  deps: Array<{ dependencyId: string; name: string }>,
+  ecosystem: string
 ): Promise<void> {
   const url = `${backendBaseUrl.replace(/\/$/, '')}/api/workers/queue-populate`;
   const headers: Record<string, string> = {
@@ -100,7 +103,8 @@ async function callQueuePopulate(
     body: JSON.stringify({
       projectId,
       organizationId,
-      dependencies: deps.map((d) => ({ dependencyId: d.dependencyId, name: d.name })),
+      ecosystem,
+      dependencies: deps.map((d) => ({ dependencyId: d.dependencyId, name: d.name, ecosystem })),
     }),
   });
   if (!res.ok) {
@@ -216,11 +220,14 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
       if (!nameToLicense.has(d.name)) nameToLicense.set(d.name, d.license);
     }
 
+    const jobEcosystem = job.ecosystem || 'npm';
+
     for (let i = 0; i < namesToCreate.length; i += 100) {
       const batch = namesToCreate.slice(i, i + 100);
       const rows = batch.map((name) => ({
         name,
         license: nameToLicense.get(name) ?? null,
+        ecosystem: jobEcosystem,
       }));
       const { data: inserted, error } = await supabase
         .from('dependencies')
@@ -287,7 +294,7 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
     const workerSecret = process.env.EXTRACTION_WORKER_SECRET;
     if (newDepsToPopulate.length > 0) {
       log('populate', `Queuing populate for ${newDepsToPopulate.length} direct dependencies`);
-      await callQueuePopulate(backendBaseUrl, workerSecret, projectId, organizationId, newDepsToPopulate);
+      await callQueuePopulate(backendBaseUrl, workerSecret, projectId, organizationId, newDepsToPopulate, jobEcosystem);
     } else {
       log('populate', 'No new direct dependencies to populate');
     }
@@ -354,6 +361,28 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
       await supabase
         .from('dependency_version_edges')
         .upsert(chunk, { onConflict: 'parent_version_id,child_version_id', ignoreDuplicates: true });
+    }
+
+    // AST import analysis (JS/TS only; non-blocking -- failures do not abort the pipeline)
+    let astParsedSuccessfully = false;
+    await updateStep(supabase, projectId, 'ast_parsing');
+    log('ast', 'Running AST import analysis...');
+    try {
+      const analysisResults = analyzeRepository(workspaceRoot);
+      if (analysisResults.length > 0) {
+        const storeResult = await storeAstAnalysisResults(supabase, projectId, organizationId, analysisResults);
+        if (storeResult.success) {
+          astParsedSuccessfully = true;
+          log('ast', `AST analysis stored`, { filesWithImports: analysisResults.length });
+        } else {
+          log('ast', `AST storage failed (non-fatal): ${storeResult.error}`);
+        }
+      } else {
+        astParsedSuccessfully = true;
+        log('ast', 'No JS/TS imports found (repo may use a different ecosystem)');
+      }
+    } catch (e: any) {
+      log('ast', `AST parsing failed (non-fatal): ${e.message}`);
     }
 
     await updateStep(supabase, projectId, 'scanning');
@@ -866,7 +895,7 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
         status,
         extraction_step: 'completed',
         extraction_error: null,
-        ast_parsed_at: new Date().toISOString(),
+        ...(astParsedSuccessfully ? { ast_parsed_at: new Date().toISOString() } : {}),
         updated_at: new Date().toISOString(),
       })
       .eq('project_id', projectId);
