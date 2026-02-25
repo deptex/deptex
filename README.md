@@ -9,7 +9,7 @@ Automate dependency intelligence, vulnerability analysis, and supply-chain anoma
 
 Deptex is a security and compliance platform that helps organizations understand, monitor, and protect their codebases. It combines **dependency intelligence**, **continuous monitoring**, and an **autonomous AI security agent** to automate the hardest parts of modern software security.
 
-**Documentation:** [deptex.ca/docs](http://deptex.ca/docs)
+**Documentation:** [deptex.dev/docs](http://deptex.dev/docs)
 
 ---
 
