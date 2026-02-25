@@ -14,7 +14,6 @@ describe('OrganizationTabs', () => {
 
     // Restricted tabs should not be visible
     expect(screen.queryByText('Settings')).not.toBeInTheDocument();
-    expect(screen.queryByText('Aegis')).not.toBeInTheDocument();
   });
 
   it('renders Settings tab when view_settings permission is true', () => {
@@ -35,25 +34,5 @@ describe('OrganizationTabs', () => {
     render(<OrganizationTabs organizationId={mockOrgId} userPermissions={permissions} />);
 
     expect(screen.queryByText('Settings')).not.toBeInTheDocument();
-  });
-
-  it('renders Aegis tab when interact_with_security_agent permission is true', () => {
-    const permissions = {
-      interact_with_security_agent: true,
-    } as RolePermissions;
-
-    render(<OrganizationTabs organizationId={mockOrgId} userPermissions={permissions} />);
-
-    expect(screen.getByText('Aegis')).toBeInTheDocument();
-  });
-
-  it('does not render Aegis tab when interact_with_security_agent permission is false', () => {
-    const permissions = {
-      interact_with_security_agent: false,
-    } as RolePermissions;
-
-    render(<OrganizationTabs organizationId={mockOrgId} userPermissions={permissions} />);
-
-    expect(screen.queryByText('Aegis')).not.toBeInTheDocument();
   });
 });

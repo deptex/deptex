@@ -224,15 +224,9 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
         <div className="mb-8 flex items-center justify-between">
           <div>
             {isSettingsSubpage ? (
-              <>
-                <h2 className="text-2xl font-bold text-foreground">Policies</h2>
-                <p className="text-foreground-secondary mt-1">Define your organization&apos;s policy as code.</p>
-              </>
+              <h2 className="text-2xl font-bold text-foreground">Policies</h2>
             ) : (
-              <>
-                <h1 className="text-3xl font-bold text-foreground mb-2">Policies</h1>
-                <p className="text-foreground-secondary">Define your organization&apos;s policy as code.</p>
-              </>
+              <h1 className="text-3xl font-bold text-foreground mb-2">Policies</h1>
             )}
           </div>
         </div>
@@ -282,15 +276,9 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
           <>
             <div className="mb-6">
               {isSettingsSubpage ? (
-                <>
-                  <h2 className="text-2xl font-bold text-foreground">Policies</h2>
-                  <p className="text-foreground-secondary mt-1">Define your organization&apos;s policy as code.</p>
-                </>
+                <h2 className="text-2xl font-bold text-foreground">Policies</h2>
               ) : (
-                <>
-                  <h1 className="text-3xl font-bold text-foreground mb-2">Policies</h1>
-                  <p className="text-foreground-secondary">Define your organization&apos;s policy as code.</p>
-                </>
+                <h1 className="text-3xl font-bold text-foreground mb-2">Policies</h1>
               )}
             </div>
             <div className="relative">
@@ -330,7 +318,6 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
           <div className="space-y-6">
             <div>
               <h2 className="text-2xl font-bold text-foreground">Exception applications</h2>
-              <p className="text-foreground-secondary mt-1">Review and accept or reject policy exception requests from projects.</p>
             </div>
             {reviewingException && reviewingException.status === 'pending' && (
               <div className="rounded-lg border border-border bg-background-card overflow-hidden">

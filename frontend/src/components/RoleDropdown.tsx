@@ -89,8 +89,8 @@ export function RoleDropdown({
       </button>
 
       {isOpen && (
-        <div className="absolute z-50 mt-1.5 w-full min-w-[240px] bg-background-card border border-border rounded-lg shadow-xl overflow-hidden animate-in fade-in-0 zoom-in-95 duration-100">
-          <div className="py-1 max-h-60 overflow-auto">
+        <div className={`absolute mt-1.5 w-full min-w-[240px] bg-background-card border border-border rounded-lg shadow-xl overflow-hidden animate-in fade-in-0 zoom-in-95 duration-100 ${variant === 'modal' ? 'z-[9999]' : 'z-50'}`}>
+          <div className="py-1 max-h-60 overflow-auto overscroll-contain">
             {availableRoles.map((role) => {
               const memberCount = memberCounts?.[role.name] ?? 0;
               const hasDetails = showBadges && role.name !== 'all';

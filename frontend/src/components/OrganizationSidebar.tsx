@@ -1,6 +1,6 @@
 import { memo, useState, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, FolderKanban, Users, ShieldAlert, Shield, ClipboardCheck, Settings } from 'lucide-react';
+import { LayoutDashboard, FolderKanban, Users, ShieldAlert, ClipboardCheck, Settings } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { RolePermissions } from '../lib/api';
 
@@ -14,7 +14,6 @@ const allNavItems = [
   { id: 'vulnerabilities', label: 'Vulnerabilities', path: 'vulnerabilities', icon: ShieldAlert, requiredPermission: null },
   { id: 'projects', label: 'Projects', path: 'projects', icon: FolderKanban, requiredPermission: null },
   { id: 'teams', label: 'Teams', path: 'teams', icon: Users, requiredPermission: null },
-  { id: 'aegis', label: 'Aegis', path: 'aegis', icon: Shield, requiredPermission: 'interact_with_security_agent' as const },
   { id: 'compliance', label: 'Compliance', path: 'compliance', icon: ClipboardCheck, requiredPermission: 'view_compliance' as const },
   { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: 'view_settings' as const },
 ];
@@ -108,7 +107,7 @@ export default memo(OrganizationSidebar, (prevProps, nextProps) => {
 
   const permissionKeys: (keyof RolePermissions)[] = [
     'view_settings', 'view_activity', 'edit_policies', 'view_compliance',
-    'interact_with_security_agent', 'view_members', 'add_members',
+    'view_members', 'add_members',
     'edit_roles', 'edit_permissions', 'kick_members',
     'manage_teams_and_projects'
   ];

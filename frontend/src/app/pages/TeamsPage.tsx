@@ -6,6 +6,7 @@ import { useToast } from '../../hooks/use-toast';
 import { Button } from '../../components/ui/button';
 import { RoleBadge } from '../../components/RoleBadge';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
 
 interface OrganizationContextType {
   organization: Organization | null;
@@ -589,104 +590,83 @@ export default function TeamsPage() {
         </div>
       )}
 
-      {/* Create/Edit Side Panel */}
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50">
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-            onClick={closeModal}
-          />
+      {/* Create/Edit Team Dialog */}
+      <Dialog open={showCreateModal} onOpenChange={(open) => { if (!open) closeModal(); }}>
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-hidden max-h-[90vh] flex flex-col">
+          <div className="px-6 pt-6 pb-4 border-b border-border flex-shrink-0">
+            <DialogTitle>{editingTeam ? 'Edit Team' : 'Create Team'}</DialogTitle>
+            <DialogDescription className="mt-1">
+              Teams are part of the same organization and allow you to group projects and members together.
+              They add another level of access control, enabling members to only see and interact with resources
+              within their assigned teams.
+            </DialogDescription>
+          </div>
 
-          {/* Side Panel */}
-          <div
-            className="fixed right-0 top-0 h-full w-full max-w-lg bg-background border-l border-border shadow-2xl transform transition-transform duration-300 translate-x-0 flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="px-6 py-5 border-b border-border flex-shrink-0 bg-[#141618]">
-              <h2 className="text-xl font-semibold text-foreground">
-                {editingTeam ? 'Edit Team' : 'Create Team'}
-              </h2>
+          <div className="px-6 py-4 grid gap-4 bg-background overflow-y-auto max-h-[60vh] min-h-0">
+            <div>
+              <label htmlFor="team-name" className="block text-sm font-medium text-foreground mb-2">
+                Team Name
+              </label>
+              <input
+                id="team-name"
+                type="text"
+                value={teamName}
+                onChange={(e) => setTeamName(e.target.value)}
+                placeholder="Engineering Team"
+                className="w-full px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent mb-4"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    editingTeam ? handleUpdateTeam() : handleCreateTeam();
+                  }
+                }}
+              />
             </div>
 
-            {/* Content */}
-            <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-6">
-              <div className="space-y-6">
-                {/* Description */}
-                <div className="space-y-2">
-                  <p className="text-sm text-foreground-secondary leading-relaxed">
-                    Teams are part of the same organization and allow you to group projects and members together.
-                    They add another level of access control, enabling members to only see and interact with resources
-                    within their assigned teams.
-                  </p>
-                </div>
-
-                {/* Form */}
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-2">
-                    Team Name
-                  </label>
-                  <input
-                    type="text"
-                    value={teamName}
-                    onChange={(e) => setTeamName(e.target.value)}
-                    placeholder="Engineering Team"
-                    className="w-full px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent mb-4"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault(); // Prevent form submission if in form
-                        // Only submit if name is focused, for description we want new lines maybe or just standard behavior
-                        editingTeam ? handleUpdateTeam() : handleCreateTeam();
-                      }
-                    }}
-                  />
-
-                  <label className="block text-sm font-medium text-foreground mb-2">
-                    Description
-                  </label>
-                  <textarea
-                    value={teamDescription}
-                    onChange={(e) => setTeamDescription(e.target.value)}
-                    placeholder="Describe the team's purpose..."
-                    rows={4}
-                    className="w-full px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent resize-none"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="px-6 py-5 flex items-center justify-end gap-3 flex-shrink-0">
-              <Button variant="outline" onClick={closeModal}>
-                Cancel
-              </Button>
-              <Button
-                onClick={editingTeam ? handleUpdateTeam : handleCreateTeam}
-                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-                disabled={creating}
-              >
-                {creating ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin mr-2 flex-shrink-0" />
-                    Create
-                  </>
-                ) : editingTeam ? (
-                  <>
-                    <Pencil className="h-4 w-4 mr-2 flex-shrink-0" />
-                    Update
-                  </>
-                ) : (
-                  <>
-                    <Plus className="h-4 w-4 mr-2 flex-shrink-0" />
-                    Create
-                  </>
-                )}
-              </Button>
+            <div>
+              <label htmlFor="team-description" className="block text-sm font-medium text-foreground mb-2">
+                Description
+              </label>
+              <textarea
+                id="team-description"
+                value={teamDescription}
+                onChange={(e) => setTeamDescription(e.target.value)}
+                placeholder="Describe the team's purpose..."
+                rows={4}
+                className="w-full px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent resize-none"
+              />
             </div>
           </div>
-        </div>
-      )}
+
+          <DialogFooter className="px-6 py-4 bg-background">
+            <Button variant="outline" onClick={closeModal}>
+              Cancel
+            </Button>
+            <Button
+              onClick={editingTeam ? handleUpdateTeam : handleCreateTeam}
+              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+              disabled={creating}
+            >
+              {creating ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin mr-2 flex-shrink-0" />
+                  Create
+                </>
+              ) : editingTeam ? (
+                <>
+                  <Pencil className="h-4 w-4 mr-2 flex-shrink-0" />
+                  Update
+                </>
+              ) : (
+                <>
+                  <Plus className="h-4 w-4 mr-2 flex-shrink-0" />
+                  Create
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }

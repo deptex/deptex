@@ -1042,10 +1042,9 @@ export default function TeamSettingsPage() {
               </div>
             )}
 
-            {/* Add Role Sidepanel */}
+            {/* Create New Role – Vercel-style right-side popup panel */}
             {showAddRoleSidepanel && (
               <div className="fixed inset-0 z-50">
-                {/* Backdrop */}
                 <div
                   className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
                   onClick={() => {
@@ -1067,14 +1066,17 @@ export default function TeamSettingsPage() {
                   }}
                 />
 
-                {/* Side Panel */}
+                {/* Right-side popup panel – Vercel style: rounded corners, floating feel */}
                 <div
-                  className="fixed right-0 top-0 h-full w-full max-w-lg bg-background border-l border-border shadow-2xl transform transition-transform duration-300 translate-x-0 flex flex-col"
+                  className="fixed right-4 top-4 bottom-4 w-full max-w-[420px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  {/* Header */}
-                  <div className="px-6 py-5 border-b border-border flex-shrink-0 bg-[#141618]">
+                  {/* Header – no X, no border */}
+                  <div className="px-6 py-5 flex-shrink-0">
                     <h2 className="text-xl font-semibold text-foreground">Create New Role</h2>
+                    <p className="text-sm text-foreground-secondary mt-0.5">
+                      Define a custom role with specific permissions for your team.
+                    </p>
                   </div>
 
                   {/* Content */}
@@ -1222,7 +1224,7 @@ export default function TeamSettingsPage() {
                   </div>
 
                   {/* Footer */}
-                  <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0">
+                  <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border">
                     <Button
                       variant="outline"
                       onClick={() => {
@@ -1234,6 +1236,9 @@ export default function TeamSettingsPage() {
                           manage_projects: false,
                           manage_members: false,
                           view_settings: false,
+                          view_members: false,
+                          add_members: false,
+                          kick_members: false,
                           view_roles: false,
                           edit_roles: false,
                           manage_notification_settings: false,
@@ -1248,7 +1253,7 @@ export default function TeamSettingsPage() {
                         await handleCreateRole(newRolePermissions);
                       }}
                       disabled={isCreatingRole || !newRoleNameInput.trim()}
-                      className="bg-primary text-primary-foreground hover:bg-primary/90"
+                      className="bg-primary/90 text-primary-foreground hover:bg-primary/80 border border-primary-foreground/10 hover:border-primary-foreground/20"
                     >
                       {isCreatingRole ? (
                         <>

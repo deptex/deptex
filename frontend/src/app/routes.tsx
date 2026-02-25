@@ -18,7 +18,6 @@ import OrganizationVulnerabilitiesPage from "./pages/OrganizationVulnerabilities
 import InvitePage from "./pages/InvitePage";
 import JoinPage from "./pages/JoinPage";
 import SettingsPage from "./pages/SettingsPage";
-import SecurityAgentPage from "./pages/SecurityAgentPage";
 import AutonomousAgentPage from "./pages/AutonomousAgentPage";
 import RepositoryTrackingPage from "./pages/RepositoryTrackingPage";
 import AnomalyDetectionPage from "./pages/AnomalyDetectionPage";
@@ -110,11 +109,6 @@ export const router = createBrowserRouter([
       {
         path: "policies",
         element: <PoliciesPage />,
-      },
-
-      {
-        path: "aegis",
-        element: <SecurityAgentPage />,
       },
       {
         path: "compliance",

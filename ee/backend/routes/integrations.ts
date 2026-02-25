@@ -387,17 +387,18 @@ router.get('/discord/org-callback', async (req, res) => {
 
     const guildId = (req.query.guild_id as string) || null;
     let displayName = 'Discord Server';
-    if (guildId && tokenData.access_token) {
+    if (guildId) {
+      const botToken = process.env.DISCORD_BOT_TOKEN || tokenData.access_token;
       try {
         const guildRes = await fetch(`https://discord.com/api/v10/guilds/${guildId}`, {
-          headers: { Authorization: `Bot ${tokenData.access_token}` },
+          headers: { Authorization: `Bot ${botToken}` },
         });
         if (guildRes.ok) {
           const guild = await guildRes.json() as { name?: string };
           if (guild.name) displayName = guild.name;
         }
       } catch (_) {
-        // ignore
+        // ignore - falls back to "Discord Server"
       }
     }
 
@@ -412,6 +413,7 @@ router.get('/discord/org-callback', async (req, res) => {
         status: 'connected',
         metadata: {
           guild_id: guildId,
+          guild_name: displayName,
           scope: tokenData.scope,
         },
         connected_at: new Date().toISOString(),
@@ -2450,12 +2452,18 @@ router.get('/slack/org-callback', async (req, res) => {
       return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=slack&message=${encodeURIComponent(tokenData.error || 'Unknown error')}`);
     }
 
+    const webhook = tokenData.incoming_webhook || null;
+    const channelId = webhook?.channel_id;
+    const installationId = channelId
+      ? `${tokenData.team?.id}:${channelId}`
+      : tokenData.team?.id || null;
+
     const { error: dbError } = await supabase
       .from('organization_integrations')
       .insert({
         organization_id: orgId,
         provider: 'slack',
-        installation_id: tokenData.team?.id || null,
+        installation_id: installationId,
         display_name: tokenData.team?.name || 'Slack Workspace',
         access_token: tokenData.access_token,
         status: 'connected',
@@ -2463,9 +2471,11 @@ router.get('/slack/org-callback', async (req, res) => {
           bot_user_id: tokenData.bot_user_id,
           team_id: tokenData.team?.id,
           team_name: tokenData.team?.name,
+          channel: webhook?.channel || null,
+          channel_id: channelId || null,
           authed_user_id: tokenData.authed_user?.id,
           scope: tokenData.scope,
-          incoming_webhook: tokenData.incoming_webhook || null,
+          incoming_webhook: webhook,
         },
         connected_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -2481,6 +2491,446 @@ router.get('/slack/org-callback', async (req, res) => {
     console.error('Slack org callback error:', err);
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     res.redirect(`${frontendUrl}?error=slack&message=${encodeURIComponent(err.message || 'Unknown error')}`);
+  }
+});
+
+// ============================================================
+// TICKETING: Jira Cloud, Jira Data Center (PAT), Linear, Asana
+// ============================================================
+
+router.get('/jira/install', authenticateUser, async (req: AuthRequest, res) => {
+  try {
+    const { org_id } = req.query;
+    if (!org_id || typeof org_id !== 'string') {
+      return res.status(400).json({ error: 'Organization ID is required' });
+    }
+    const clientId = process.env.JIRA_CLIENT_ID;
+    if (!clientId) {
+      return res.status(500).json({ error: 'Jira client ID not configured' });
+    }
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', org_id)
+      .eq('user_id', req.user!.id)
+      .single();
+    if (!membership) {
+      return res.status(403).json({ error: 'Not a member of this organization' });
+    }
+    const backendUrl = getBackendUrl();
+    const redirectUri = `${backendUrl}/api/integrations/jira/org-callback`;
+    const scopes = 'read:jira-work write:jira-work read:jira-user';
+    const state = Buffer.from(JSON.stringify({ userId: req.user!.id, orgId: org_id })).toString('base64');
+    const authUrl = `https://auth.atlassian.com/authorize?audience=api.atlassian.com&client_id=${clientId}&scope=${encodeURIComponent(scopes)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}&response_type=code&prompt=consent`;
+    res.json({ redirectUrl: authUrl });
+  } catch (error: any) {
+    console.error('Jira org install error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/jira/org-callback', async (req, res) => {
+  const { code, state, error } = req.query;
+  const frontendUrl = getFrontendUrl();
+
+  if (error) {
+    return res.redirect(`${frontendUrl}?error=jira&message=${encodeURIComponent(error as string)}`);
+  }
+  if (!code) {
+    return res.redirect(`${frontendUrl}?error=jira&message=No authorization code`);
+  }
+
+  try {
+    let userId: string;
+    let orgId: string;
+    try {
+      const stateData = JSON.parse(Buffer.from(state as string, 'base64').toString());
+      userId = stateData.userId;
+      orgId = stateData.orgId;
+    } catch {
+      return res.redirect(`${frontendUrl}?error=jira&message=Invalid state`);
+    }
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+    if (!membership) {
+      return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=jira&message=Not authorized`);
+    }
+
+    const backendUrl = getBackendUrl();
+    const redirectUri = `${backendUrl}/api/integrations/jira/org-callback`;
+
+    const tokenRes = await fetch('https://auth.atlassian.com/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        client_id: process.env.JIRA_CLIENT_ID!,
+        client_secret: process.env.JIRA_CLIENT_SECRET!,
+        code: code as string,
+        redirect_uri: redirectUri,
+      }),
+    });
+    const tokenData = await tokenRes.json() as any;
+
+    if (tokenData.error) {
+      console.error('Jira OAuth error:', tokenData.error);
+      return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=jira&message=${encodeURIComponent(tokenData.error_description || tokenData.error || 'Unknown error')}`);
+    }
+
+    const sitesRes = await fetch('https://api.atlassian.com/oauth/token/accessible-resources', {
+      headers: { Authorization: `Bearer ${tokenData.access_token}`, Accept: 'application/json' },
+    });
+    const sites = await sitesRes.json() as Array<{ id: string; name: string; url: string }>;
+    const primarySite = sites?.[0];
+    const displayName = primarySite?.name || 'Jira Cloud';
+
+    const { error: dbError } = await supabase
+      .from('organization_integrations')
+      .insert({
+        organization_id: orgId,
+        provider: 'jira',
+        installation_id: primarySite?.id || null,
+        display_name: displayName,
+        access_token: tokenData.access_token,
+        refresh_token: tokenData.refresh_token || null,
+        status: 'connected',
+        metadata: {
+          cloud_id: primarySite?.id,
+          site_name: primarySite?.name,
+          site_url: primarySite?.url,
+          all_sites: sites,
+          scope: tokenData.scope,
+        },
+        connected_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as any);
+
+    if (dbError) {
+      console.error('Jira org integration DB error:', dbError);
+      return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=jira&message=Failed to save integration`);
+    }
+
+    res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?connected=jira`);
+  } catch (err: any) {
+    console.error('Jira org callback error:', err);
+    const frontendUrl = getFrontendUrl();
+    res.redirect(`${frontendUrl}?error=jira&message=${encodeURIComponent(err.message || 'Unknown error')}`);
+  }
+});
+
+router.post('/jira/connect-pat', authenticateUser, async (req: AuthRequest, res) => {
+  try {
+    const { org_id, base_url, token } = req.body;
+    if (!org_id || !base_url || !token) {
+      return res.status(400).json({ error: 'Organization ID, base URL, and personal access token are required' });
+    }
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', org_id)
+      .eq('user_id', req.user!.id)
+      .single();
+    if (!membership) {
+      return res.status(403).json({ error: 'Not a member of this organization' });
+    }
+
+    const normalizedUrl = (base_url as string).replace(/\/$/, '');
+    const verifyRes = await fetch(`${normalizedUrl}/rest/api/2/myself`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    });
+    if (!verifyRes.ok) {
+      return res.status(401).json({ error: 'Invalid credentials. Could not authenticate with the provided Jira server and token.' });
+    }
+    const userData = await verifyRes.json() as { displayName?: string; name?: string; key?: string };
+
+    const { error: dbError } = await supabase
+      .from('organization_integrations')
+      .insert({
+        organization_id: org_id,
+        provider: 'jira',
+        installation_id: `dc:${Buffer.from(normalizedUrl).toString('base64url').slice(0, 32)}`,
+        display_name: userData.displayName || userData.name || normalizedUrl,
+        access_token: token,
+        status: 'connected',
+        metadata: {
+          type: 'data_center',
+          base_url: normalizedUrl,
+          username: userData.name || userData.key,
+          display_name: userData.displayName,
+        },
+        connected_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as any);
+
+    if (dbError) {
+      console.error('Jira DC integration DB error:', dbError);
+      return res.status(500).json({ error: 'Failed to save integration' });
+    }
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Jira PAT connect error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/linear/install', authenticateUser, async (req: AuthRequest, res) => {
+  try {
+    const { org_id } = req.query;
+    if (!org_id || typeof org_id !== 'string') {
+      return res.status(400).json({ error: 'Organization ID is required' });
+    }
+    const clientId = process.env.LINEAR_CLIENT_ID;
+    if (!clientId) {
+      return res.status(500).json({ error: 'Linear client ID not configured' });
+    }
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', org_id)
+      .eq('user_id', req.user!.id)
+      .single();
+    if (!membership) {
+      return res.status(403).json({ error: 'Not a member of this organization' });
+    }
+    const backendUrl = getBackendUrl();
+    const redirectUri = `${backendUrl}/api/integrations/linear/org-callback`;
+    const state = Buffer.from(JSON.stringify({ userId: req.user!.id, orgId: org_id })).toString('base64');
+    const authUrl = `https://linear.app/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}&response_type=code&scope=${encodeURIComponent('read,write,issues:create')}&prompt=consent`;
+    res.json({ redirectUrl: authUrl });
+  } catch (error: any) {
+    console.error('Linear org install error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/linear/org-callback', async (req, res) => {
+  const { code, state, error } = req.query;
+  const frontendUrl = getFrontendUrl();
+
+  if (error) {
+    return res.redirect(`${frontendUrl}?error=linear&message=${encodeURIComponent(error as string)}`);
+  }
+  if (!code) {
+    return res.redirect(`${frontendUrl}?error=linear&message=No authorization code`);
+  }
+
+  try {
+    let userId: string;
+    let orgId: string;
+    try {
+      const stateData = JSON.parse(Buffer.from(state as string, 'base64').toString());
+      userId = stateData.userId;
+      orgId = stateData.orgId;
+    } catch {
+      return res.redirect(`${frontendUrl}?error=linear&message=Invalid state`);
+    }
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+    if (!membership) {
+      return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=linear&message=Not authorized`);
+    }
+
+    const backendUrl = getBackendUrl();
+    const redirectUri = `${backendUrl}/api/integrations/linear/org-callback`;
+
+    const tokenRes = await fetch('https://api.linear.app/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: process.env.LINEAR_CLIENT_ID!,
+        client_secret: process.env.LINEAR_CLIENT_SECRET!,
+        grant_type: 'authorization_code',
+        code: code as string,
+        redirect_uri: redirectUri,
+      }),
+    });
+    const tokenData = await tokenRes.json() as any;
+
+    if (tokenData.error) {
+      console.error('Linear OAuth error:', tokenData.error);
+      return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=linear&message=${encodeURIComponent(tokenData.error_description || tokenData.error || 'Unknown error')}`);
+    }
+
+    let displayName = 'Linear Workspace';
+    let orgKey: string | null = null;
+    try {
+      const gqlRes = await fetch('https://api.linear.app/graphql', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tokenData.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: '{ organization { id name urlKey } }' }),
+      });
+      const gqlData = await gqlRes.json() as any;
+      if (gqlData.data?.organization) {
+        displayName = gqlData.data.organization.name;
+        orgKey = gqlData.data.organization.id;
+      }
+    } catch (_) { /* use defaults */ }
+
+    const { error: dbError } = await supabase
+      .from('organization_integrations')
+      .insert({
+        organization_id: orgId,
+        provider: 'linear',
+        installation_id: orgKey,
+        display_name: displayName,
+        access_token: tokenData.access_token,
+        status: 'connected',
+        metadata: {
+          linear_org_id: orgKey,
+          scope: tokenData.scope,
+        },
+        connected_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as any);
+
+    if (dbError) {
+      console.error('Linear org integration DB error:', dbError);
+      return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=linear&message=Failed to save integration`);
+    }
+
+    res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?connected=linear`);
+  } catch (err: any) {
+    console.error('Linear org callback error:', err);
+    const frontendUrl = getFrontendUrl();
+    res.redirect(`${frontendUrl}?error=linear&message=${encodeURIComponent(err.message || 'Unknown error')}`);
+  }
+});
+
+router.get('/asana/install', authenticateUser, async (req: AuthRequest, res) => {
+  try {
+    const { org_id } = req.query;
+    if (!org_id || typeof org_id !== 'string') {
+      return res.status(400).json({ error: 'Organization ID is required' });
+    }
+    const clientId = process.env.ASANA_CLIENT_ID;
+    if (!clientId) {
+      return res.status(500).json({ error: 'Asana client ID not configured' });
+    }
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', org_id)
+      .eq('user_id', req.user!.id)
+      .single();
+    if (!membership) {
+      return res.status(403).json({ error: 'Not a member of this organization' });
+    }
+    const backendUrl = getBackendUrl();
+    const redirectUri = `${backendUrl}/api/integrations/asana/org-callback`;
+    const state = Buffer.from(JSON.stringify({ userId: req.user!.id, orgId: org_id })).toString('base64');
+    const authUrl = `https://app.asana.com/-/oauth_authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}&response_type=code`;
+    res.json({ redirectUrl: authUrl });
+  } catch (error: any) {
+    console.error('Asana org install error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/asana/org-callback', async (req, res) => {
+  const { code, state, error } = req.query;
+  const frontendUrl = getFrontendUrl();
+
+  if (error) {
+    return res.redirect(`${frontendUrl}?error=asana&message=${encodeURIComponent(error as string)}`);
+  }
+  if (!code) {
+    return res.redirect(`${frontendUrl}?error=asana&message=No authorization code`);
+  }
+
+  try {
+    let userId: string;
+    let orgId: string;
+    try {
+      const stateData = JSON.parse(Buffer.from(state as string, 'base64').toString());
+      userId = stateData.userId;
+      orgId = stateData.orgId;
+    } catch {
+      return res.redirect(`${frontendUrl}?error=asana&message=Invalid state`);
+    }
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+    if (!membership) {
+      return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=asana&message=Not authorized`);
+    }
+
+    const backendUrl = getBackendUrl();
+    const redirectUri = `${backendUrl}/api/integrations/asana/org-callback`;
+
+    const tokenRes = await fetch('https://app.asana.com/-/oauth_token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: process.env.ASANA_CLIENT_ID!,
+        client_secret: process.env.ASANA_CLIENT_SECRET!,
+        grant_type: 'authorization_code',
+        code: code as string,
+        redirect_uri: redirectUri,
+      }),
+    });
+    const tokenData = await tokenRes.json() as any;
+
+    if (tokenData.error) {
+      console.error('Asana OAuth error:', tokenData.error);
+      return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=asana&message=${encodeURIComponent(tokenData.error_description || tokenData.error || 'Unknown error')}`);
+    }
+
+    let displayName = 'Asana Workspace';
+    let workspaceGid: string | null = null;
+    try {
+      const meRes = await fetch('https://app.asana.com/api/1.0/users/me?opt_fields=workspaces,workspaces.name', {
+        headers: { Authorization: `Bearer ${tokenData.access_token}` },
+      });
+      const meData = await meRes.json() as any;
+      const workspace = meData.data?.workspaces?.[0];
+      if (workspace) {
+        displayName = workspace.name;
+        workspaceGid = workspace.gid;
+      }
+    } catch (_) { /* use defaults */ }
+
+    const { error: dbError } = await supabase
+      .from('organization_integrations')
+      .insert({
+        organization_id: orgId,
+        provider: 'asana',
+        installation_id: workspaceGid,
+        display_name: displayName,
+        access_token: tokenData.access_token,
+        refresh_token: tokenData.refresh_token || null,
+        status: 'connected',
+        metadata: {
+          workspace_gid: workspaceGid,
+          workspace_name: displayName,
+        },
+        connected_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as any);
+
+    if (dbError) {
+      console.error('Asana org integration DB error:', dbError);
+      return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=asana&message=Failed to save integration`);
+    }
+
+    res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?connected=asana`);
+  } catch (err: any) {
+    console.error('Asana org callback error:', err);
+    const frontendUrl = getFrontendUrl();
+    res.redirect(`${frontendUrl}?error=asana&message=${encodeURIComponent(err.message || 'Unknown error')}`);
   }
 });
 
@@ -2505,7 +2955,7 @@ router.get('/organizations/:orgId/connections', authenticateUser, async (req: Au
       .select('id, organization_id, provider, installation_id, display_name, metadata, status, connected_at, created_at, updated_at')
       .eq('organization_id', orgId)
       .eq('status', 'connected')
-      .in('provider', ['github', 'gitlab', 'bitbucket', 'slack', 'discord'])
+      .in('provider', ['github', 'gitlab', 'bitbucket', 'slack', 'discord', 'jira', 'linear', 'asana', 'custom_notification', 'custom_ticketing', 'email'])
       .order('created_at', { ascending: true });
     if (dbError) {
       return res.status(500).json({ error: dbError.message });
@@ -2565,8 +3015,14 @@ router.delete('/organizations/:orgId/connections/:connectionId', authenticateUse
       revokeUrl = `${gitlabUrl.replace(/\/$/, '')}/-/user_settings/applications`;
     } else if (connection.provider === 'bitbucket') {
       revokeUrl = 'https://bitbucket.org/account/settings/applications/';
+    } else if (connection.provider === 'slack') {
+      revokeUrl = 'https://app.slack.com/';
     } else if (connection.provider === 'discord') {
-      revokeUrl = 'https://discord.com/developers/applications';
+      // If we have guild_id, take user to their server so they can remove the bot from Server Settings → Integrations
+      const guildId = connection.installation_id || connection.metadata?.guild_id;
+      revokeUrl = guildId
+        ? `https://discord.com/channels/${guildId}`
+        : 'https://discord.com/developers/applications';
     }
 
     res.json({
@@ -2581,5 +3037,240 @@ router.delete('/organizations/:orgId/connections/:connectionId', authenticateUse
   }
 });
 
-export default router;
+// ============================================================
+// EMAIL NOTIFICATIONS (store email addresses for future alerts)
+// ============================================================
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+router.post('/organizations/:orgId/email-notifications', authenticateUser, async (req: AuthRequest, res) => {
+  try {
+    const { orgId } = req.params;
+    const { email } = req.body;
+
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({ error: 'email is required' });
+    }
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) {
+      return res.status(400).json({ error: 'email is required' });
+    }
+    if (!EMAIL_REGEX.test(normalizedEmail)) {
+      return res.status(400).json({ error: 'Please enter a valid email address' });
+    }
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', req.user!.id)
+      .single();
+    if (!membership) {
+      return res.status(403).json({ error: 'Not a member of this organization' });
+    }
+
+    const { data, error: dbError } = await supabase
+      .from('organization_integrations')
+      .insert({
+        organization_id: orgId,
+        provider: 'email',
+        installation_id: crypto.randomUUID(),
+        display_name: normalizedEmail,
+        status: 'connected',
+        metadata: { email: normalizedEmail },
+        connected_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as any)
+      .select('id')
+      .single();
+
+    if (dbError) {
+      console.error('Email notification DB error:', dbError);
+      return res.status(500).json({ error: 'Failed to add email notification' });
+    }
+
+    res.json({ success: true, id: data?.id });
+  } catch (error: any) {
+    console.error('Add email notification error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================
+// CUSTOM / BYO INTEGRATIONS (webhook with HMAC signing)
+// ============================================================
+
+router.post('/organizations/:orgId/custom-integrations', authenticateUser, async (req: AuthRequest, res) => {
+  try {
+    const { orgId } = req.params;
+    const { name, type, webhook_url, icon_url } = req.body;
+
+    if (!name || !type || !webhook_url) {
+      return res.status(400).json({ error: 'name, type (notification|ticketing), and webhook_url are required' });
+    }
+    if (type !== 'notification' && type !== 'ticketing') {
+      return res.status(400).json({ error: 'type must be "notification" or "ticketing"' });
+    }
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', req.user!.id)
+      .single();
+    if (!membership) {
+      return res.status(403).json({ error: 'Not a member of this organization' });
+    }
+
+    const secret = `whsec_${crypto.randomBytes(32).toString('hex')}`;
+    const provider = type === 'notification' ? 'custom_notification' : 'custom_ticketing';
+
+    const { data, error: dbError } = await supabase
+      .from('organization_integrations')
+      .insert({
+        organization_id: orgId,
+        provider,
+        installation_id: crypto.randomUUID(),
+        display_name: name,
+        access_token: secret,
+        status: 'connected',
+        metadata: {
+          webhook_url,
+          icon_url: icon_url || null,
+          custom_name: name,
+          type,
+        },
+        connected_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as any)
+      .select('id')
+      .single();
+
+    if (dbError) {
+      console.error('Custom integration DB error:', dbError);
+      return res.status(500).json({ error: 'Failed to create custom integration' });
+    }
+
+    res.json({ success: true, id: data?.id, secret });
+  } catch (error: any) {
+    console.error('Create custom integration error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.put('/organizations/:orgId/custom-integrations/:id', authenticateUser, async (req: AuthRequest, res) => {
+  try {
+    const { orgId, id } = req.params;
+    const { name, webhook_url, icon_url, regenerate_secret } = req.body;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', req.user!.id)
+      .single();
+    if (!membership) {
+      return res.status(403).json({ error: 'Not a member of this organization' });
+    }
+
+    const { data: existing } = await supabase
+      .from('organization_integrations')
+      .select('*')
+      .eq('id', id)
+      .eq('organization_id', orgId)
+      .in('provider', ['custom_notification', 'custom_ticketing'])
+      .single();
+    if (!existing) {
+      return res.status(404).json({ error: 'Custom integration not found' });
+    }
+
+    const updates: Record<string, any> = { updated_at: new Date().toISOString() };
+    const metadataUpdates = { ...existing.metadata };
+    let newSecret: string | undefined;
+
+    if (name) {
+      updates.display_name = name;
+      metadataUpdates.custom_name = name;
+    }
+    if (webhook_url) {
+      metadataUpdates.webhook_url = webhook_url;
+    }
+    if (icon_url !== undefined) {
+      metadataUpdates.icon_url = icon_url;
+    }
+    if (regenerate_secret) {
+      newSecret = `whsec_${crypto.randomBytes(32).toString('hex')}`;
+      updates.access_token = newSecret;
+    }
+
+    updates.metadata = metadataUpdates;
+
+    const { error: dbError } = await supabase
+      .from('organization_integrations')
+      .update(updates)
+      .eq('id', id)
+      .eq('organization_id', orgId);
+
+    if (dbError) {
+      return res.status(500).json({ error: dbError.message });
+    }
+
+    res.json({ success: true, ...(newSecret ? { secret: newSecret } : {}) });
+  } catch (error: any) {
+    console.error('Update custom integration error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/organizations/:orgId/custom-integrations/upload-icon', authenticateUser, async (req: AuthRequest, res) => {
+  try {
+    const { orgId } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', req.user!.id)
+      .single();
+    if (!membership) {
+      return res.status(403).json({ error: 'Not a member of this organization' });
+    }
+
+    const contentType = req.headers['content-type'] || '';
+    if (!contentType.startsWith('image/png') && !contentType.startsWith('image/jpeg') && !contentType.startsWith('image/webp')) {
+      return res.status(400).json({ error: 'Only PNG, JPEG, and WebP images are supported' });
+    }
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) {
+      chunks.push(Buffer.from(chunk));
+    }
+    const buffer = Buffer.concat(chunks);
+
+    if (buffer.length > 256 * 1024) {
+      return res.status(400).json({ error: 'Image must be under 256KB' });
+    }
+
+    const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
+    const fileName = `${orgId}/${crypto.randomUUID()}.${ext}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from('integration-icons')
+      .upload(fileName, buffer, { contentType, upsert: false });
+
+    if (uploadError) {
+      console.error('Icon upload error:', uploadError);
+      return res.status(500).json({ error: 'Failed to upload icon' });
+    }
+
+    const { data: urlData } = supabase.storage
+      .from('integration-icons')
+      .getPublicUrl(fileName);
+
+    res.json({ url: urlData.publicUrl });
+  } catch (error: any) {
+    console.error('Icon upload error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+export default router;

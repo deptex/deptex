@@ -449,272 +449,28 @@ export default function AuditLogsSection() {
                 <h2 className="text-2xl font-bold text-foreground">Audit Logs</h2>
             </div>
 
+            {/* Original audit logs UI — commented out (free plan restriction)
             <div className="flex items-center justify-between gap-4">
-                {/* Date Filter - Remains on Left */}
                 <div className="flex items-center gap-1">
-                    <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                            <Button variant="outline" className="flex items-center gap-2 h-9 px-3 text-sm font-medium">
-                                <Clock className="h-4 w-4 text-foreground-secondary" />
-                                <span>{getDateFilterDisplay()}</span>
-                            </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="start" className="w-56">
-                            <DropdownMenuLabel>Date Range</DropdownMenuLabel>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem onClick={() => { setDatePreset('all_time'); setDateOffset(0); }}>
-                                All Time
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => { setDatePreset('last_day'); setDateOffset(0); }}>
-                                Last 24 Hours
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => { setDatePreset('last_week'); setDateOffset(0); }}>
-                                Last 7 Days
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => { setDatePreset('last_month'); setDateOffset(0); }}>
-                                Last 30 Days
-                            </DropdownMenuItem>
-                        </DropdownMenuContent>
-                    </DropdownMenu>
-
-                    {datePreset !== 'all_time' && (
-                        <div className="flex items-center -space-x-px">
-                            <Button
-                                variant="outline"
-                                size="icon"
-                                className="h-9 w-9 rounded-r-none border-r-0"
-                                onClick={handlePrevious}
-                            >
-                                <ChevronLeft className="h-4 w-4" />
-                            </Button>
-                            <Button
-                                variant="outline"
-                                size="icon"
-                                className="h-9 w-9 rounded-l-none"
-                                onClick={handleNext}
-                                disabled={dateOffset >= 0}
-                            >
-                                <ChevronRight className="h-4 w-4" />
-                            </Button>
-                        </div>
-                    )}
+                    <DropdownMenu>...</DropdownMenu>
+                    {datePreset !== 'all_time' && (...)}
                 </div>
-
-                {/* Other Filters - Moved to Right */}
                 <div className="flex items-center gap-3">
-                    {/* Team Filter */}
-                    <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                            <Button variant="outline" className="flex items-center gap-2 h-9 px-3 text-sm font-medium text-foreground-secondary hover:text-foreground">
-                                <Users className="h-4 w-4" />
-                                <span>{getTeamLabel()}</span>
-                            </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-56">
-                            <DropdownMenuLabel>Filter by Team</DropdownMenuLabel>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem onClick={() => setSelectedTeamId(null)}>
-                                All Teams
-                            </DropdownMenuItem>
-                            {teams.map(team => (
-                                <DropdownMenuItem key={team.id} onClick={() => setSelectedTeamId(team.id)}>
-                                    <div className="flex items-center justify-between w-full">
-                                        <span>{team.name}</span>
-                                        {selectedTeamId === team.id && <ChevronDown className="h-3 w-3 rotate-[-90deg]" />}
-                                    </div>
-                                </DropdownMenuItem>
-                            ))}
-                            {teams.length === 0 && (
-                                <div className="p-2 text-xs text-foreground-secondary text-center">
-                                    No teams found
-                                </div>
-                            )}
-                        </DropdownMenuContent>
-                    </DropdownMenu>
-
-                    {/* Events Filter */}
-                    <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                            <Button variant="outline" className="flex items-center gap-2 h-9 px-3 text-sm font-medium">
-                                <Filter className="h-4 w-4" />
-                                <span>Events</span>
-                            </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-64 max-h-[400px] overflow-y-auto">
-                            {filterCategories.map((category, idx) => (
-                                <div key={idx}>
-                                    <DropdownMenuLabel className="text-xs text-foreground-secondary uppercase tracking-wider mt-2">{category.title}</DropdownMenuLabel>
-                                    {category.items.map(item => (
-                                        <DropdownMenuCheckboxItem
-                                            key={item.value}
-                                            checked={selectedTypes.includes(item.value)}
-                                            onCheckedChange={() => handleTypeToggle(item.value)}
-                                        >
-                                            {item.label}
-                                        </DropdownMenuCheckboxItem>
-                                    ))}
-                                    {idx < filterCategories.length - 1 && <DropdownMenuSeparator className="mt-2" />}
-                                </div>
-                            ))}
-                            {selectedTypes.length > 0 && (
-                                <>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem
-                                        className="justify-center text-primary font-medium"
-                                        onClick={() => setSelectedTypes([])}
-                                    >
-                                        Clear Filters
-                                    </DropdownMenuItem>
-                                </>
-                            )}
-                        </DropdownMenuContent>
-                    </DropdownMenu>
+                    <DropdownMenu>... Team Filter ...</DropdownMenu>
+                    <DropdownMenu>... Events Filter ...</DropdownMenu>
                 </div>
             </div>
+            {loading ? (skeleton) : activities.length === 0 ? (empty) : (activity list + infinite scroll)}
+            */}
 
-            {loading ? (
-                <div className="space-y-4">
-                    {/* Loading skeleton for month header using same structure as ActivityPage */}
-                    <div>
-                        <div className="h-5 w-32 bg-muted rounded animate-pulse mb-4" />
-                        <div className="space-y-4">
-                            {[...Array(5)].map((_, i) => (
-                                <div key={i} className="flex items-start gap-4 p-4 bg-background-card border border-border rounded-lg">
-                                    <div className="w-8 h-8 rounded-full bg-muted animate-pulse flex-shrink-0" />
-                                    <div className="flex-1 min-w-0">
-                                        <div className="flex items-start justify-between gap-4">
-                                            <div className="flex-1 min-w-0 space-y-2">
-                                                <div className="h-4 bg-muted rounded animate-pulse w-3/4" />
-                                                <div className="h-3 bg-muted rounded animate-pulse w-1/2" />
-                                            </div>
-                                            <div className="h-3 bg-muted rounded animate-pulse w-16" />
-                                        </div>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
+            <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                <div className="px-5 py-3.5 rounded-t-lg bg-background-card-header border-b border-border">
+                    <span className="text-sm font-semibold text-foreground">Audit Logs</span>
                 </div>
-            ) : activities.length === 0 ? (
-                <div className="flex items-center justify-center py-12">
-                    <div className="text-center">
-                        <p className="text-foreground-secondary mb-2">No activities found</p>
-                        <p className="text-sm text-foreground-secondary/70">
-                            Try adjusting your filters to see more results
-                        </p>
-                    </div>
+                <div className="p-6">
+                    <p className="text-sm text-foreground-secondary">Audit logs not available on free plan.</p>
                 </div>
-            ) : (
-                <div className="space-y-8 pb-8">
-                    {groupedActivities.map(({ month, activities: monthActivities }) => (
-                        <div key={month}>
-                            <h3 className="text-sm font-semibold text-foreground mb-4">{month}</h3>
-                            <div className="space-y-4">
-                                {monthActivities.map(activity => {
-                                    const hasDisplayableMetadata = activity.metadata && (
-                                        (activity.metadata.project_name && activity.activity_type !== 'project_created') ||
-                                        (activity.metadata.team_name && activity.activity_type !== 'member_joined_team' && activity.activity_type !== 'team_created') ||
-                                        (activity.metadata.role_name && activity.activity_type !== 'created_role' && activity.activity_type !== 'changed_role_settings' && activity.activity_type !== 'deleted_role') ||
-                                        (activity.activity_type === 'changed_role_settings' && (activity.metadata.name_changed || activity.metadata.permissions_changed)) ||
-                                        (activity.metadata.added_licenses && activity.metadata.added_licenses.length > 0) ||
-                                        (activity.metadata.removed_licenses && activity.metadata.removed_licenses.length > 0) ||
-                                        activity.metadata.slsa_enforcement_changed ||
-                                        activity.metadata.slsa_level_changed
-                                    );
-                                    return (
-                                        <div
-                                            key={activity.id}
-                                            className={`flex gap-3 p-4 bg-background-card border border-border rounded-lg hover:bg-background-card/50 transition-colors ${hasDisplayableMetadata ? 'items-start' : 'items-center'}`}
-                                        >
-                                            <div className="flex-shrink-0">
-                                                {activity.user?.avatar_url ? (
-                                                    <img
-                                                        src={activity.user.avatar_url}
-                                                        alt={activity.user.full_name || activity.user.email || 'User'}
-                                                        className="w-8 h-8 rounded-full object-cover border border-border"
-                                                        onError={(e) => {
-                                                            e.currentTarget.src = '/images/blank_profile_image.png';
-                                                        }}
-                                                    />
-                                                ) : (
-                                                    <div className="w-8 h-8 rounded-full bg-background-subtle border border-border flex items-center justify-center">
-                                                        <span className="text-xs text-foreground-secondary">
-                                                            {(activity.user?.full_name || activity.user?.email || '?')[0].toUpperCase()}
-                                                        </span>
-                                                    </div>
-                                                )}
-                                            </div>
-
-                                            <div className={`flex-1 min-w-0 flex justify-between gap-4 ${hasDisplayableMetadata ? 'items-start' : 'items-center'}`}>
-                                                <div className="flex-1 min-w-0">
-                                                    <p className="text-sm text-foreground leading-5">
-                                                        {activity.user ? (
-                                                            <>
-                                                                <span className="font-medium text-foreground">{activity.user.full_name || activity.user.email}</span>
-                                                                {' '}
-                                                                <span className="text-foreground-secondary">{activity.description}</span>
-                                                            </>
-                                                        ) : (
-                                                            <span className="text-foreground-secondary">{activity.description}</span>
-                                                        )}
-                                                    </p>
-
-                                                    {hasDisplayableMetadata && (
-                                                        <div className="mt-1.5 text-xs text-foreground-secondary/70 space-y-0.5">
-                                                            {activity.metadata!.project_name && activity.activity_type !== 'project_created' && (
-                                                                <div>Project: <span className="text-foreground-secondary">{activity.metadata!.project_name}</span></div>
-                                                            )}
-                                                            {activity.metadata!.team_name && activity.activity_type !== 'member_joined_team' && activity.activity_type !== 'team_created' && (
-                                                                <div>Team: <span className="text-foreground-secondary">{activity.metadata!.team_name}</span></div>
-                                                            )}
-                                                            {activity.activity_type === 'changed_role_settings' && activity.metadata!.name_changed && (
-                                                                <div className="text-foreground-secondary">
-                                                                    Changed name from <span className="text-foreground-secondary">{activity.metadata!.old_name}</span> to <span className="text-foreground-secondary">{activity.metadata!.new_name}</span>
-                                                                </div>
-                                                            )}
-                                                            {activity.activity_type === 'changed_role_settings' && activity.metadata!.permissions_changed && (
-                                                                <>
-                                                                    {activity.metadata!.added_permissions && activity.metadata!.added_permissions.length > 0 && (
-                                                                        <div className="text-foreground-secondary">
-                                                                            Added permissions: {activity.metadata!.added_permissions.map((p: string) => formatPermissionName(p)).join(', ')}
-                                                                        </div>
-                                                                    )}
-                                                                    {activity.metadata!.removed_permissions && activity.metadata!.removed_permissions.length > 0 && (
-                                                                        <div className="text-foreground-secondary">
-                                                                            Removed permissions: {activity.metadata!.removed_permissions.map((p: string) => formatPermissionName(p)).join(', ')}
-                                                                        </div>
-                                                                    )}
-                                                                </>
-                                                            )}
-                                                            {activity.metadata!.role_name && activity.activity_type !== 'created_role' && activity.activity_type !== 'changed_role_settings' && activity.activity_type !== 'deleted_role' && (
-                                                                <div>Role: <span className="text-foreground-secondary">{activity.metadata!.role_name}</span></div>
-                                                            )}
-                                                        </div>
-                                                    )}
-                                                </div>
-
-                                                <span className="text-xs text-foreground-secondary whitespace-nowrap self-start mt-1">
-                                                    {formatDate(activity.created_at)}
-                                                </span>
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    ))}
-
-                    {/* Infinite Scroll Sensor */}
-                    <div ref={observerTarget} className="flex justify-center py-4">
-                        {loadingMore && (
-                            <Loader2 className="h-6 w-6 animate-spin text-foreground-secondary" />
-                        )}
-                        {!hasMore && activities.length > 0 && (
-                            <span className="text-xs text-foreground-secondary">No more activities to load</span>
-                        )}
-                    </div>
-                </div>
-            )}
+            </div>
         </div>
     );
 }

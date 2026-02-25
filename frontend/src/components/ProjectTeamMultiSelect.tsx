@@ -62,19 +62,10 @@ export function ProjectTeamMultiSelect({
           ) : (
             <div className="flex items-center gap-1.5 flex-wrap">
               {selectedTeams.map((team, index) => (
-                <div key={team.id} className="flex items-center gap-1.5">
-                  <div className="flex items-center gap-1.5">
-                    <img
-                      src={team.avatar_url || '/images/team_profile.png'}
-                      alt={team.name}
-                      className="h-4 w-4 rounded-full object-cover border border-border flex-shrink-0"
-                    />
-                    <span className="text-foreground text-sm">{team.name}</span>
-                  </div>
-                  {index < selectedTeams.length - 1 && (
-                    <span className="text-foreground-secondary">,</span>
-                  )}
-                </div>
+                <span key={team.id} className="text-foreground text-sm">
+                  {team.name}
+                  {index < selectedTeams.length - 1 && ','}
+                </span>
               ))}
             </div>
           )}
@@ -83,8 +74,8 @@ export function ProjectTeamMultiSelect({
       </button>
 
       {isOpen && (
-        <div className="absolute z-50 w-full mt-1.5 bg-background-card border border-border rounded-lg shadow-xl overflow-hidden animate-in fade-in-0 zoom-in-95 duration-100">
-          <div className="py-1 max-h-60 overflow-auto">
+        <div className={`absolute mt-1.5 w-full bg-background-card border border-border rounded-lg shadow-xl overflow-hidden animate-in fade-in-0 zoom-in-95 duration-100 ${variant === 'modal' ? 'z-[9999]' : 'z-50'}`}>
+          <div className="py-1 max-h-60 overflow-auto overscroll-contain">
             {teams.length === 0 ? (
               <div className="px-3 py-4 text-sm text-foreground-secondary text-center">
                 No teams available
@@ -97,24 +88,22 @@ export function ProjectTeamMultiSelect({
                     key={team.id}
                     type="button"
                     onClick={() => toggleTeam(team.id)}
-                    className="w-full px-3 py-2.5 flex items-center justify-between hover:bg-background-subtle/20 transition-colors text-left"
+                    className="w-full px-3 py-2.5 flex items-center justify-between hover:bg-table-hover transition-colors text-left"
                   >
-                    <div className="flex items-center gap-2.5">
-                      <img
-                        src={team.avatar_url || '/images/team_profile.png'}
-                        alt={team.name}
-                        className="h-7 w-7 rounded-full object-cover border border-border flex-shrink-0"
-                      />
-                      <div className="flex flex-col">
-                        <span className="text-sm font-medium text-foreground">{team.name}</span>
-                        {team.description && (
-                          <span className="text-xs text-foreground-secondary line-clamp-1">{team.description}</span>
-                        )}
-                      </div>
+                    <div className="flex flex-col gap-0.5 min-w-0">
+                      <span className="text-sm font-medium text-foreground">{team.name}</span>
+                      {team.description && (
+                        <span className="text-xs text-foreground-secondary line-clamp-1">{team.description}</span>
+                      )}
                     </div>
-                    {isSelected && (
-                      <Check className="h-4 w-4 text-foreground flex-shrink-0" />
-                    )}
+                    <div
+                      className={`h-4 w-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${
+                        isSelected ? 'border-foreground bg-foreground text-background' : 'border-foreground-secondary/50 bg-transparent'
+                      }`}
+                      aria-hidden
+                    >
+                      {isSelected && <Check className="h-2.5 w-2.5" />}
+                    </div>
                   </button>
                 );
               })

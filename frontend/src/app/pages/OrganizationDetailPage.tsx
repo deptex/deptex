@@ -28,7 +28,7 @@ interface OrganizationContextType {
 }
 
 // All valid tabs in the organization (handled by various pages)
-const allValidTabs = ['overview', 'projects', 'teams', 'members', 'aegis', 'policies', 'activity', 'settings', 'compliance', 'vulnerabilities'];
+const allValidTabs = ['overview', 'projects', 'teams', 'members', 'policies', 'activity', 'settings', 'compliance', 'vulnerabilities'];
 
 export default function OrganizationDetailPage() {
   const { organization, reloadOrganization } = useOutletContext<OrganizationContextType>();
@@ -116,7 +116,7 @@ export default function OrganizationDetailPage() {
     if (currentTab === 'activity' && !effectivePermissions.view_activity) {
       navigate(`/organizations/${id}`, { replace: true });
     }
-    if (currentTab === 'aegis' && !effectivePermissions.interact_with_security_agent) {
+    if (currentTab === 'aegis') {
       navigate(`/organizations/${id}`, { replace: true });
     }
     if (currentTab === 'compliance' && !effectivePermissions.view_compliance) {

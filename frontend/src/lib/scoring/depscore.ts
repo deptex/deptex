@@ -1,13 +1,14 @@
 /**
- * Dexcore: context-aware vulnerability score (0–100).
- * Same formula as frontend lib/scoring/dexcore.ts for consistency.
+ * Depscore: context-aware vulnerability score (0–100).
+ * Uses 4-tier asset criticality (CROWN_JEWELS, EXTERNAL, INTERNAL, NON_PRODUCTION).
+ * Matches backend extraction-worker depscore formula.
  */
 
 export type AssetTier = 'CROWN_JEWELS' | 'EXTERNAL' | 'INTERNAL' | 'NON_PRODUCTION';
 
-export interface DexcoreContext {
-  cvss: number;
-  epss: number;
+export interface DepscoreContext {
+  cvss: number;       // 0–10
+  epss: number;       // 0–1
   cisaKev: boolean;
   isReachable: boolean;
   assetTier: AssetTier;
@@ -27,7 +28,7 @@ const REACHABILITY_WEIGHT_UNREACHABLE: Record<AssetTier, number> = {
   NON_PRODUCTION: 0.1,
 };
 
-export function calculateDexcore(context: DexcoreContext): number {
+export function calculateDepscore(context: DepscoreContext): number {
   const cvss = Math.max(0, Math.min(10, context.cvss));
   const epss = Math.max(0, Math.min(1, context.epss));
 
@@ -47,3 +48,11 @@ export function calculateDexcore(context: DexcoreContext): number {
 
   return Math.min(100, Math.round(rawScore));
 }
+
+/** Map severity label to CVSS when cvss_score is not available. */
+export const SEVERITY_TO_CVSS: Record<string, number> = {
+  critical: 9.0,
+  high: 7.0,
+  medium: 4.0,
+  low: 2.0,
+};

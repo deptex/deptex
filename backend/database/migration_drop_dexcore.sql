@@ -1,6 +1,13 @@
--- RPC: return project vulnerabilities from project_dependency_vulnerabilities (reachable vulns from dep-scan).
--- Use when extraction worker has populated this table. Falls back to get_project_vulnerabilities (dependency_vulnerabilities) if empty.
+-- Migration: Drop Dexcore, Keep Depscore (4-tier model)
+-- Depscore now uses the 4-tier asset_tier model. Dexcore is redundant.
+--
+-- Run: psql -f backend/database/migration_drop_dexcore.sql
 
+-- STEP 1: Drop dexcore column from project_dependency_vulnerabilities
+ALTER TABLE project_dependency_vulnerabilities
+  DROP COLUMN IF EXISTS dexcore;
+
+-- STEP 2: Update get_project_vulnerabilities_from_pdv to stop returning dexcore
 DROP FUNCTION IF EXISTS get_project_vulnerabilities_from_pdv(UUID);
 
 CREATE OR REPLACE FUNCTION get_project_vulnerabilities_from_pdv(p_project_id UUID)

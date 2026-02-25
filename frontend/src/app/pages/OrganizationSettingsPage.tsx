@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { useParams, useOutletContext, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, useOutletContext, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
 import { api, Organization, OrganizationMember, OrganizationRole, RolePermissions, CiCdConnection, type CiCdProvider } from '../../lib/api';
@@ -12,14 +12,20 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell } from 'lucide-react';
+import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail } from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
+import { Label } from '../../components/ui/label';
+import { Input } from '../../components/ui/input';
 import { PermissionEditor } from '../../components/PermissionEditor';
+import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
+import { cn } from '../../lib/utils';
 import { RoleDropdown } from '../../components/RoleDropdown';
 import { RoleBadge } from '../../components/RoleBadge';
 import { UserCircle, FileText } from 'lucide-react';
 import MembersPage from './MembersPage';
 import AuditLogsSection from './AuditLogsSection';
 import PoliciesPage from './PoliciesPage';
+import NotificationRulesSection from './NotificationRulesSection';
 
 interface OrganizationContextType {
   organization: Organization | null;
@@ -129,8 +135,7 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
       return (
         <div className="space-y-6">
           <div>
-            <div className={`h-8 w-48 ${pulse} mb-2`} />
-            <div className={`h-4 w-72 ${pulse}`} />
+            <div className={`h-8 w-48 ${pulse}`} />
           </div>
           <div className="bg-background-card border border-border rounded-lg overflow-hidden">
             <div className="p-6">
@@ -182,8 +187,7 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
         <div className="space-y-6">
           <div className="flex items-center justify-between">
             <div>
-              <div className={`h-8 w-24 ${pulse} mb-2`} />
-              <div className={`h-4 w-72 ${pulse}`} />
+              <div className={`h-8 w-24 ${pulse}`} />
             </div>
             <div className={`h-8 w-24 ${pulse}`} />
           </div>
@@ -210,12 +214,10 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
         <div className="space-y-8">
           <div>
             <h2 className="text-2xl font-bold text-foreground">Integrations</h2>
-            <p className="text-foreground-secondary mt-1">Connect external tools and services to your organization.</p>
           </div>
           <div className="space-y-4">
             <div className="flex items-center gap-2">
               <h3 className="text-lg font-semibold text-foreground">CI/CD</h3>
-              <span className="text-sm text-foreground-secondary">Source code & repositories</span>
             </div>
             <div className="bg-background-card border border-border rounded-lg overflow-hidden">
               <table className="w-full table-fixed">
@@ -224,7 +226,7 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
                   <col />
                   <col className="w-[120px]" />
                 </colgroup>
-                <thead className="bg-background-card-header border-b border-border">
+                <thead className="bg-background-subtle/30 border-b border-border">
                   <tr>
                     <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
                     <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
@@ -258,7 +260,6 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
           <div className="space-y-4">
             <div className="flex items-center gap-2">
               <h3 className="text-lg font-semibold text-foreground">Notifications</h3>
-              <span className="text-sm text-foreground-secondary">Alerts & messaging</span>
             </div>
             <div className="bg-background-card border border-border rounded-lg overflow-hidden">
               <table className="w-full table-fixed">
@@ -267,7 +268,7 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
                   <col />
                   <col className="w-[120px]" />
                 </colgroup>
-                <thead className="bg-background-card-header border-b border-border">
+                <thead className="bg-background-subtle/30 border-b border-border">
                   <tr>
                     <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
                     <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
@@ -301,8 +302,7 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
       return (
         <div className="space-y-6">
           <div>
-            <div className={`h-8 w-48 ${pulse} mb-2`} />
-            <div className={`h-4 w-80 ${pulse}`} />
+            <div className={`h-8 w-48 ${pulse}`} />
           </div>
           <div className="bg-background-card border border-border rounded-lg overflow-hidden min-h-[320px] p-12 flex items-center justify-center">
             <div className={`h-4 w-56 ${pulse}`} />
@@ -313,8 +313,7 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
       return (
         <div className="space-y-6 h-full">
           <div>
-            <div className={`h-8 w-24 ${pulse} mb-2`} />
-            <div className={`h-4 w-64 ${pulse}`} />
+            <div className={`h-8 w-24 ${pulse}`} />
           </div>
           <div className="bg-background-card border border-border rounded-lg overflow-hidden flex flex-col flex-1 min-h-[320px]">
             <div className="px-4 py-2 border-b border-border flex gap-4">
@@ -361,8 +360,7 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
       return (
         <div className="space-y-6">
           <div>
-            <div className={`h-8 w-24 ${pulse} mb-2`} />
-            <div className={`h-4 w-80 ${pulse}`} />
+            <div className={`h-8 w-24 ${pulse}`} />
           </div>
           <div className="bg-background-card border border-border rounded-lg p-12 flex flex-col items-center justify-center text-center">
             <div className="h-16 w-16 rounded-full bg-muted animate-pulse mb-4" />
@@ -375,8 +373,7 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
       return (
         <div className="space-y-8">
           <div>
-            <div className={`h-8 w-36 ${pulse} mb-2`} />
-            <div className={`h-4 w-80 ${pulse}`} />
+            <div className={`h-8 w-36 ${pulse}`} />
           </div>
           <div className="bg-background border border-border rounded-lg p-6">
             <div className={`h-5 w-28 ${pulse} mb-2`} />
@@ -389,8 +386,7 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
       return (
         <div className="space-y-6">
           <div>
-            <div className={`h-8 w-48 ${pulse} mb-2`} />
-            <div className={`h-4 w-72 ${pulse}`} />
+            <div className={`h-8 w-48 ${pulse}`} />
           </div>
           <div className="bg-background-card border border-border rounded-lg overflow-hidden">
             <div className="p-6">
@@ -447,7 +443,11 @@ export default function OrganizationSettingsPage() {
   const [cicdConnections, setCicdConnections] = useState<CiCdConnection[]>([]);
   const [loadingConnections, setLoadingConnections] = useState(false);
   const notificationConnections = useMemo(
-    () => cicdConnections.filter(c => c.provider === 'slack' || c.provider === 'discord'),
+    () => cicdConnections.filter(c => c.provider === 'slack' || c.provider === 'discord' || c.provider === 'custom_notification' || c.provider === 'email'),
+    [cicdConnections]
+  );
+  const ticketingConnections = useMemo(
+    () => cicdConnections.filter(c => c.provider === 'jira' || c.provider === 'linear' || c.provider === 'asana' || c.provider === 'custom_ticketing'),
     [cicdConnections]
   );
   // Initialize isOwner/isAdmin from cached permissions
@@ -544,6 +544,29 @@ export default function OrganizationSettingsPage() {
     aegis_activity: true,
     administrative: false,
   });
+
+  // Custom integration sidepanel state
+  const [showCustomIntegrationSidepanel, setShowCustomIntegrationSidepanel] = useState(false);
+  const [customIntegrationType, setCustomIntegrationType] = useState<'notification' | 'ticketing'>('notification');
+  const [customIntegrationName, setCustomIntegrationName] = useState('');
+  const [customIntegrationWebhookUrl, setCustomIntegrationWebhookUrl] = useState('');
+  const [customIntegrationIconFile, setCustomIntegrationIconFile] = useState<File | null>(null);
+  const [customIntegrationIconPreview, setCustomIntegrationIconPreview] = useState<string | null>(null);
+  const [customIntegrationSaving, setCustomIntegrationSaving] = useState(false);
+  const [customIntegrationSecret, setCustomIntegrationSecret] = useState<string | null>(null);
+  const [editingCustomIntegration, setEditingCustomIntegration] = useState<CiCdConnection | null>(null);
+  const [newlyCreatedIntegrationId, setNewlyCreatedIntegrationId] = useState<string | null>(null);
+
+  // Jira PAT dialog state
+  const [showJiraPatDialog, setShowJiraPatDialog] = useState(false);
+  const [jiraPatBaseUrl, setJiraPatBaseUrl] = useState('');
+  const [jiraPatToken, setJiraPatToken] = useState('');
+  const [jiraPatSaving, setJiraPatSaving] = useState(false);
+
+  // Email notification dialog state
+  const [showEmailDialog, setShowEmailDialog] = useState(false);
+  const [emailToAdd, setEmailToAdd] = useState('');
+  const [emailSaving, setEmailSaving] = useState(false);
 
 
   // Get cached or organization permissions
@@ -686,7 +709,7 @@ export default function OrganizationSettingsPage() {
 
     if (connected && id) {
       callbackHandledRef.current = callbackKey;
-      const providerLabel = connected === 'github' ? 'GitHub' : connected === 'gitlab' ? 'GitLab' : connected === 'bitbucket' ? 'Bitbucket' : connected === 'slack' ? 'Slack' : connected;
+      const providerLabel = connected === 'github' ? 'GitHub' : connected === 'gitlab' ? 'GitLab' : connected === 'bitbucket' ? 'Bitbucket' : connected === 'slack' ? 'Slack' : connected === 'discord' ? 'Discord' : connected === 'jira' ? 'Jira' : connected === 'linear' ? 'Linear' : connected === 'asana' ? 'Asana' : connected;
       reloadOrganization().then(() => {
         loadConnections();
         toast({
@@ -706,7 +729,7 @@ export default function OrganizationSettingsPage() {
 
     if (error && message) {
       callbackHandledRef.current = callbackKey;
-      const providerLabel = error === 'github' ? 'GitHub' : error === 'gitlab' ? 'GitLab' : error === 'bitbucket' ? 'Bitbucket' : error === 'slack' ? 'Slack' : error;
+      const providerLabel = error === 'github' ? 'GitHub' : error === 'gitlab' ? 'GitLab' : error === 'bitbucket' ? 'Bitbucket' : error === 'slack' ? 'Slack' : error === 'discord' ? 'Discord' : error === 'jira' ? 'Jira' : error === 'linear' ? 'Linear' : error === 'asana' ? 'Asana' : error;
       toast({
         title: `${providerLabel} Connection Failed`,
         description: decodeURIComponent(message),
@@ -1433,9 +1456,6 @@ export default function OrganizationSettingsPage() {
                 <div className="space-y-6">
                   <div>
                     <h2 className="text-2xl font-bold text-foreground">General Settings</h2>
-                    <p className="text-foreground-secondary mt-1">
-                      Manage your organization's profile and settings.
-                    </p>
                   </div>
 
                   {/* Organization Name Card */}
@@ -1573,12 +1593,7 @@ export default function OrganizationSettingsPage() {
                                     className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary flex items-center justify-between hover:border-foreground-secondary/50 transition-all"
                                   >
                                     <div className="flex items-center gap-2 flex-1 min-w-0 text-left">
-                                      {loadingMembers ? (
-                                        <>
-                                          <div className="h-5 w-5 rounded-full bg-muted animate-pulse flex-shrink-0" />
-                                          <div className="h-4 bg-muted animate-pulse rounded w-28 flex-1 min-w-0" />
-                                        </>
-                                      ) : selectedTransferMemberId ? (
+                                      {selectedTransferMemberId && !loadingMembers ? (
                                         (() => {
                                           const selectedMember = members.find(m => m.user_id === selectedTransferMemberId);
                                           if (!selectedMember) return <span className="text-foreground-secondary">Select a member...</span>;
@@ -1600,7 +1615,11 @@ export default function OrganizationSettingsPage() {
                                         <span className="text-foreground-secondary">Select a member...</span>
                                       )}
                                     </div>
-                                    <ChevronDown className={`h-4 w-4 text-foreground-secondary flex-shrink-0 transition-transform ${showMemberDropdown ? 'rotate-180' : ''}`} />
+                                    {loadingMembers ? (
+                                      <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary flex-shrink-0" />
+                                    ) : (
+                                      <ChevronDown className={`h-4 w-4 text-foreground-secondary flex-shrink-0 transition-transform ${showMemberDropdown ? 'rotate-180' : ''}`} />
+                                    )}
                                   </button>
 
                                   {showMemberDropdown && !loadingMembers && (() => {
@@ -1679,37 +1698,36 @@ export default function OrganizationSettingsPage() {
                               </div>
                               <div className="space-y-2">
                                 <label className="text-sm font-medium text-foreground">Your New Role</label>
-                                {loadingMembers ? (
-                                  <div className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm flex items-center gap-2">
-                                    <div className="h-4 bg-muted animate-pulse rounded w-24 flex-1" />
-                                  </div>
-                                ) : (
-                                  <div className="relative" ref={roleDropdownRef}>
-                                    <button
-                                      type="button"
-                                      onClick={() => setShowRoleDropdown(!showRoleDropdown)}
-                                      className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary flex items-center justify-between hover:border-foreground-secondary/50 transition-all"
-                                    >
-                                      <div className="flex items-center gap-2">
-                                        {(() => {
-                                          const selectedRole = allRoles.find(r => r.name === selectedNewRole);
-                                          if (!selectedRole) return <span className="text-foreground-secondary">Select a role...</span>;
-                                          return (
-                                            <>
-                                              <span className="text-foreground">{selectedRole.display_name || selectedRole.name}</span>
-                                              <RoleBadge
-                                                role={selectedRole.name}
-                                                roleDisplayName={selectedRole.display_name}
-                                                roleColor={selectedRole.color}
-                                              />
-                                            </>
-                                          );
-                                        })()}
-                                      </div>
+                                <div className="relative" ref={roleDropdownRef}>
+                                  <button
+                                    type="button"
+                                    onClick={() => setShowRoleDropdown(!showRoleDropdown)}
+                                    className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary flex items-center justify-between hover:border-foreground-secondary/50 transition-all"
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      {(() => {
+                                        const selectedRole = allRoles.find(r => r.name === selectedNewRole);
+                                        if (!selectedRole || loadingMembers) return <span className="text-foreground-secondary">Select a role...</span>;
+                                        return (
+                                          <>
+                                            <span className="text-foreground">{selectedRole.display_name || selectedRole.name}</span>
+                                            <RoleBadge
+                                              role={selectedRole.name}
+                                              roleDisplayName={selectedRole.display_name}
+                                              roleColor={selectedRole.color}
+                                            />
+                                          </>
+                                        );
+                                      })()}
+                                    </div>
+                                    {loadingMembers ? (
+                                      <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary flex-shrink-0" />
+                                    ) : (
                                       <ChevronDown className={`h-4 w-4 text-foreground-secondary flex-shrink-0 transition-transform ${showRoleDropdown ? 'rotate-180' : ''}`} />
-                                    </button>
+                                    )}
+                                  </button>
 
-                                    {showRoleDropdown && (
+                                  {showRoleDropdown && !loadingMembers && (
                                       <div className="absolute z-50 w-full mt-2 bg-background-card border border-border rounded-lg shadow-xl overflow-hidden">
                                         <div className="max-h-60 overflow-auto">
                                           <div className="py-1">
@@ -1756,8 +1774,7 @@ export default function OrganizationSettingsPage() {
                                         </div>
                                       </div>
                                     )}
-                                  </div>
-                                )}
+                                </div>
                               </div>
                             </div>
                           </div>
@@ -1877,20 +1894,21 @@ export default function OrganizationSettingsPage() {
               )}
 
               {activeSection === 'plan' && (
-                <div className="space-y-8">
+                <div className="space-y-6">
                   <div>
                     <h2 className="text-2xl font-bold text-foreground">Plan & Billing</h2>
-                    <p className="text-sm text-foreground-secondary mt-2">
-                      Manage your organization's plan and view usage statistics.
-                    </p>
                   </div>
 
                   {/* Current Plan */}
-                  <div className="bg-background border border-border rounded-lg p-6">
-                    <h3 className="text-lg font-semibold text-foreground mb-2">Current Plan</h3>
-                    <p className="text-sm text-foreground-secondary mb-4">
-                      Your organization is currently on the <strong className="text-foreground capitalize">{organization?.plan || 'free'}</strong> plan.
-                    </p>
+                  <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                    <div className="px-5 py-3.5 rounded-t-lg bg-background-card-header border-b border-border">
+                      <span className="text-sm font-semibold text-foreground">Current Plan</span>
+                    </div>
+                    <div className="p-6">
+                      <p className="text-sm text-foreground-secondary">
+                        Your organization is currently on the <strong className="text-foreground capitalize">{organization?.plan || 'free'}</strong> plan.
+                      </p>
+                    </div>
                   </div>
                 </div>
               )}
@@ -1900,14 +1918,11 @@ export default function OrganizationSettingsPage() {
                   <div className="flex items-center justify-between">
                     <div>
                       <h2 className="text-2xl font-bold text-foreground">Roles</h2>
-                      <p className="text-foreground-secondary mt-2">
-                        Manage roles and permissions for your organization.
-                      </p>
                     </div>
                     {effectivePermissions?.edit_roles && (
                       <Button
                         onClick={() => setShowAddRoleSidepanel(true)}
-                        className="bg-primary text-primary-foreground hover:bg-primary/90 h-8 text-sm"
+                        className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
                       >
                         <Plus className="h-4 w-4 mr-2" />
                         Add Role
@@ -1919,7 +1934,7 @@ export default function OrganizationSettingsPage() {
                   {loadingRoles ? (
                     <div className="bg-background-card border border-border rounded-lg overflow-hidden">
                       {/* Header */}
-                      <div className="px-4 py-2 border-b border-border bg-background-subtle/30 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                      <div className="px-4 py-2 border-b border-border bg-background-card-header text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
                         Roles
                       </div>
                       <div className="divide-y divide-border">
@@ -1937,7 +1952,7 @@ export default function OrganizationSettingsPage() {
                   ) : allRoles.length > 0 ? (
                     <div className="bg-background-card border border-border rounded-lg overflow-hidden">
                       {/* Header */}
-                      <div className="px-4 py-2 border-b border-border bg-background-subtle/30 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                      <div className="px-4 py-2 border-b border-border bg-background-card-header text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
                         Roles
                       </div>
 
@@ -1956,7 +1971,7 @@ export default function OrganizationSettingsPage() {
                           return (
                             <div
                               key={role.id || role.name}
-                              className={`px-4 py-3 flex items-center justify-between transition-all duration-150 group ${isDragging ? 'opacity-50 bg-primary/10 scale-[0.98]' : 'hover:bg-background-subtle/20'
+                              className={`px-4 py-3 flex items-center justify-between transition-all duration-150 group ${isDragging ? 'opacity-50 bg-primary/10 scale-[0.98]' : 'hover:bg-table-hover'
                                 }`}
                               draggable={canDrag}
                               onDragStart={(e) => {
@@ -2111,11 +2126,16 @@ export default function OrganizationSettingsPage() {
 
               {activeSection === 'integrations' && (
                 <div className="space-y-8">
-                  <div>
-                    <h2 className="text-2xl font-bold text-foreground">Integrations</h2>
-                    <p className="text-foreground-secondary mt-1">
-                      Connect external tools and services to your organization.
-                    </p>
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h2 className="text-2xl font-bold text-foreground">Integrations</h2>
+                    </div>
+                    <Link to="/docs/integrations">
+                      <Button variant="outline" size="sm" className="text-xs">
+                        <BookOpen className="h-3.5 w-3.5 mr-1.5" />
+                        Docs
+                      </Button>
+                    </Link>
                   </div>
 
                   {/* Permission Check */}
@@ -2219,24 +2239,28 @@ export default function OrganizationSettingsPage() {
                             </table>
                           </div>
                         ) : (
-                          <div className="space-y-3">
-                            {cicdConnections.filter(c => c.provider !== 'slack' && c.provider !== 'discord').length > 0 && (
-                              <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                                <table className="w-full table-fixed">
-                                  <colgroup>
-                                    <col className="w-[200px]" />
-                                    <col />
-                                    <col className="w-[120px]" />
-                                  </colgroup>
-                                  <thead className="bg-background-card-header border-b border-border">
-                                    <tr>
-                                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
-                                      <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                                    </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-border">
-                                    {cicdConnections.filter(c => c.provider !== 'slack' && c.provider !== 'discord').map((conn) => {
+                          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                            <table className="w-full table-fixed">
+                              <colgroup>
+                                <col className="w-[200px]" />
+                                <col />
+                                <col className="w-[120px]" />
+                              </colgroup>
+                              <thead className="bg-background-card-header border-b border-border">
+                                <tr>
+                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
+                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
+                                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-border">
+                                {cicdConnections.filter(c => c.provider === 'github' || c.provider === 'gitlab' || c.provider === 'bitbucket').length === 0 ? (
+                                  <tr>
+                                    <td colSpan={3} className="px-4 py-6 text-center text-sm text-foreground-secondary">
+                                      No source code integrations. Connect a Git provider above to start scanning repositories.
+                                    </td>
+                                  </tr>
+                                ) : cicdConnections.filter(c => c.provider === 'github' || c.provider === 'gitlab' || c.provider === 'bitbucket').map((conn) => {
                                       const providerIcon = conn.provider === 'github' ? '/images/integrations/github.png'
                                         : conn.provider === 'gitlab' ? '/images/integrations/gitlab.png'
                                         : '/images/integrations/bitbucket.png';
@@ -2244,7 +2268,7 @@ export default function OrganizationSettingsPage() {
                                         : conn.provider === 'gitlab' ? 'GitLab' : 'Bitbucket';
                                       const accountAvatarUrl = conn.provider === 'github' ? (conn.metadata as { account_avatar_url?: string } | undefined)?.account_avatar_url : undefined;
                                       return (
-                                        <tr key={conn.id} className="hover:bg-table-hover transition-colors">
+                                        <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
                                           <td className="px-4 py-3">
                                             <div className="flex items-center gap-2.5">
                                               <img src={providerIcon} alt="" className="h-5 w-5 rounded-sm flex-shrink-0" />
@@ -2261,7 +2285,7 @@ export default function OrganizationSettingsPage() {
                                             <Button
                                               variant="outline"
                                               size="sm"
-                                              className="text-xs hover:bg-destructive/10 hover:border-destructive/30"
+                                              className="text-xs hover:bg-destructive/10 hover:border-destructive/30 opacity-0 group-hover:opacity-100 transition-opacity"
                                               onClick={async () => {
                                                 if (!confirm(`Disconnect this ${providerLabel} connection (${conn.display_name || conn.installation_id})?`)) return;
                                                 try {
@@ -2287,17 +2311,8 @@ export default function OrganizationSettingsPage() {
                                         </tr>
                                       );
                                     })}
-                                  </tbody>
-                                </table>
-                              </div>
-                            )}
-                            {cicdConnections.filter(c => c.provider !== 'slack' && c.provider !== 'discord').length === 0 && (
-                              <div className="bg-background-card border border-border rounded-lg p-6 text-center">
-                                <Plug className="mx-auto h-10 w-10 text-foreground-secondary mb-3" />
-                                <h4 className="text-sm font-semibold text-foreground mb-1">No source code connections</h4>
-                                <p className="text-xs text-foreground-secondary mb-4">Connect a Git provider to start scanning repositories.</p>
-                              </div>
-                            )}
+                              </tbody>
+                            </table>
                           </div>
                         )}
                       </div>
@@ -2310,6 +2325,18 @@ export default function OrganizationSettingsPage() {
                             <span className="text-sm text-foreground-secondary">Alerts & messaging</span>
                           </div>
                           <div className="flex items-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-xs"
+                              onClick={() => {
+                                setEmailToAdd('');
+                                setShowEmailDialog(true);
+                              }}
+                            >
+                              <Mail className="h-3.5 w-3.5 mr-1.5" />
+                              Add Email
+                            </Button>
                             {([
                               { provider: 'slack' as const, label: 'Slack', icon: '/images/integrations/slack.png', getRedirect: api.connectSlackOrg },
                               { provider: 'discord' as const, label: 'Discord', icon: '/images/integrations/discord.png', getRedirect: api.connectDiscordOrg },
@@ -2333,6 +2360,24 @@ export default function OrganizationSettingsPage() {
                                 Add {label}
                               </Button>
                             ))}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-xs"
+                              onClick={() => {
+                                setCustomIntegrationType('notification');
+                                setEditingCustomIntegration(null);
+                                setCustomIntegrationName('');
+                                setCustomIntegrationWebhookUrl('');
+                                setCustomIntegrationIconFile(null);
+                                setCustomIntegrationIconPreview(null);
+                                setCustomIntegrationSecret(null);
+                                setShowCustomIntegrationSidepanel(true);
+                              }}
+                            >
+                              <Webhook className="h-3.5 w-3.5 mr-1.5" />
+                              Add Custom
+                            </Button>
                           </div>
                         </div>
                         {loadingConnections ? (
@@ -2341,12 +2386,12 @@ export default function OrganizationSettingsPage() {
                               <colgroup>
                                 <col className="w-[200px]" />
                                 <col />
-                                <col className="w-[120px]" />
+                                <col className="w-[160px]" />
                               </colgroup>
                               <thead className="bg-background-card-header border-b border-border">
                                 <tr>
                                   <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
+                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
                                   <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
                                 </tr>
                               </thead>
@@ -2371,214 +2416,387 @@ export default function OrganizationSettingsPage() {
                             </table>
                           </div>
                         ) : (
-                          <div className="space-y-3">
-                            {notificationConnections.length > 0 ? (
-                              <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                                <table className="w-full table-fixed">
-                                  <colgroup>
-                                    <col className="w-[200px]" />
-                                    <col />
-                                    <col className="w-[120px]" />
-                                  </colgroup>
-                                  <thead className="bg-background-card-header border-b border-border">
-                                    <tr>
-                                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
-                                      <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                                    </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-border">
-                                    {notificationConnections.map((conn) => {
-                                      const providerConfig = conn.provider === 'slack'
-                                        ? { label: 'Slack', icon: '/images/integrations/slack.png' }
-                                        : { label: 'Discord', icon: '/images/integrations/discord.png' };
+                          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                            <table className="w-full table-fixed">
+                              <colgroup>
+                                <col className="w-[200px]" />
+                                <col />
+                                <col className="w-[160px]" />
+                              </colgroup>
+                              <thead className="bg-background-card-header border-b border-border">
+                                <tr>
+                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
+                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
+                                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-border">
+                                {notificationConnections.length === 0 ? (
+                                  <tr>
+                                    <td colSpan={3} className="px-4 py-6 text-center text-sm text-foreground-secondary">
+                                      No notification integrations. Add Slack, Discord, or Email above to receive alerts.
+                                    </td>
+                                  </tr>
+                                ) : notificationConnections.map((conn) => {
+                                      const isCustom = conn.provider === 'custom_notification';
+                                      const isEmail = conn.provider === 'email';
+                                      const hasCustomIcon = isCustom && conn.metadata?.icon_url;
+                                      const providerLabel = isCustom
+                                        ? (conn.metadata?.custom_name || conn.display_name || 'Custom')
+                                        : isEmail ? 'Email' : conn.provider === 'slack' ? 'Slack' : 'Discord';
+                                      const providerIconSrc = !isCustom && !isEmail
+                                        ? (conn.provider === 'slack' ? '/images/integrations/slack.png' : '/images/integrations/discord.png')
+                                        : (hasCustomIcon ? conn.metadata.icon_url : null);
+
+                                      const channelRaw = conn.metadata?.channel || conn.metadata?.incoming_webhook?.channel || null;
+                                      const channelFormatted = channelRaw ? (channelRaw.startsWith('#') ? channelRaw : `#${channelRaw}`) : null;
+                                      const connectionDisplay = conn.provider === 'slack'
+                                        ? { primary: conn.display_name || conn.metadata?.team_name || 'Slack Workspace', secondary: channelFormatted }
+                                        : conn.provider === 'discord'
+                                          ? { primary: conn.display_name !== 'Discord Server' ? conn.display_name : (conn.metadata?.guild_name || conn.display_name || 'Discord Server'), secondary: null }
+                                          : isEmail
+                                            ? { primary: conn.metadata?.email || conn.display_name || 'Email', secondary: null }
+                                            : isCustom
+                                              ? { primary: conn.metadata?.webhook_url ? conn.metadata.webhook_url.replace(/^https?:\/\//, '').slice(0, 45) : 'Webhook', secondary: null }
+                                              : { primary: conn.display_name || 'Connected', secondary: null };
+
+                                      const showNewSecret = customIntegrationSecret && newlyCreatedIntegrationId === conn.id;
+
                                       return (
-                                        <tr key={conn.id} className="hover:bg-table-hover transition-colors">
+                                        <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
                                           <td className="px-4 py-3">
                                             <div className="flex items-center gap-2.5">
-                                              <img src={providerConfig.icon} alt="" className="h-5 w-5 rounded-sm flex-shrink-0 object-contain" />
-                                              <span className="text-sm font-medium text-foreground">{providerConfig.label}</span>
+                                              {providerIconSrc ? (
+                                                <img src={providerIconSrc} alt="" className="h-5 w-5 rounded-sm flex-shrink-0 object-contain" />
+                                              ) : isEmail ? (
+                                                <div className="h-5 w-5 rounded-sm flex-shrink-0 flex items-center justify-center text-foreground-secondary">
+                                                  <Mail className="h-3.5 w-3.5" />
+                                                </div>
+                                              ) : (
+                                                <div className="h-5 w-5 rounded-sm flex-shrink-0 flex items-center justify-center text-foreground-secondary">
+                                                  <Webhook className="h-3.5 w-3.5" />
+                                                </div>
+                                              )}
+                                              <span className="text-sm font-medium text-foreground">{providerLabel}</span>
                                             </div>
                                           </td>
                                           <td className="px-4 py-3 min-w-0">
-                                            <span className="text-sm text-foreground truncate block">{conn.display_name || 'Connected'}</span>
+                                            {showNewSecret ? (
+                                              <div className="flex items-center gap-2">
+                                                <code className="text-xs bg-background-card px-2 py-1 rounded border border-border font-mono truncate max-w-[280px]">{customIntegrationSecret}</code>
+                                                <button
+                                                  onClick={() => {
+                                                    navigator.clipboard.writeText(customIntegrationSecret!);
+                                                    toast({ title: 'Copied', description: 'Secret copied to clipboard.' });
+                                                  }}
+                                                  className="text-foreground-secondary hover:text-foreground transition-colors flex-shrink-0"
+                                                >
+                                                  <Copy className="h-3.5 w-3.5" />
+                                                </button>
+                                              </div>
+                                            ) : (
+                                              <div className={cn(
+                                                "flex flex-col gap-0.5 truncate",
+                                                connectionDisplay.secondary ? "min-w-0" : ""
+                                              )}>
+                                                <span className="text-sm text-foreground truncate">{connectionDisplay.primary}</span>
+                                                {connectionDisplay.secondary && (
+                                                  <span className="text-xs text-foreground-muted truncate">{connectionDisplay.secondary}</span>
+                                                )}
+                                              </div>
+                                            )}
                                           </td>
                                           <td className="px-4 py-3 text-right">
-                                            <Button
-                                              variant="outline"
-                                              size="sm"
-                                              className="text-xs hover:bg-destructive/10 hover:border-destructive/30"
-                                              onClick={async () => {
-                                                if (!confirm(`Disconnect this ${providerConfig.label} connection (${conn.display_name || providerConfig.label})?`)) return;
-                                                try {
-                                                  await api.deleteOrganizationConnection(organization!.id, conn.id);
-                                                  await loadConnections();
-                                                  toast({ title: 'Disconnected', description: `${providerConfig.label} connection removed.` });
-                                                } catch (err: any) {
-                                                  toast({ title: 'Error', description: err.message || 'Failed to disconnect.', variant: 'destructive' });
-                                                }
-                                              }}
-                                            >
-                                              Disconnect
-                                            </Button>
+                                            <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                              {isCustom && !isEmail && (
+                                                <button
+                                                  className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
+                                                  onClick={() => {
+                                                    setEditingCustomIntegration(conn);
+                                                    setCustomIntegrationType('notification');
+                                                    setCustomIntegrationName(conn.metadata?.custom_name || conn.display_name || '');
+                                                    setCustomIntegrationWebhookUrl(conn.metadata?.webhook_url || '');
+                                                    setCustomIntegrationIconPreview(conn.metadata?.icon_url || null);
+                                                    setCustomIntegrationIconFile(null);
+                                                    setCustomIntegrationSecret(null);
+                                                    setShowCustomIntegrationSidepanel(true);
+                                                  }}
+                                                >
+                                                  <Pencil className="h-3.5 w-3.5" />
+                                                </button>
+                                              )}
+                                              <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="text-xs hover:bg-destructive/10 hover:border-destructive/30"
+                                                onClick={async () => {
+                                                  const label = isCustom ? (conn.metadata?.custom_name || 'custom integration') : isEmail ? (conn.metadata?.email || 'email') : providerLabel;
+                                                  if (!confirm(`${isCustom || isEmail ? 'Remove' : 'Disconnect'} this ${label} connection?`)) return;
+                                                  try {
+                                                    const result = await api.deleteOrganizationConnection(organization!.id, conn.id);
+                                                    if (!isCustom && !isEmail && result.revokeUrl) {
+                                                      window.open(result.revokeUrl, '_blank');
+                                                      toast({ title: 'Disconnected', description: `${label} removed. Complete app removal in the opened tab.` });
+                                                    } else {
+                                                      toast({ title: isCustom || isEmail ? 'Removed' : 'Disconnected', description: `${label} connection removed.` });
+                                                    }
+                                                    await loadConnections();
+                                                  } catch (err: any) {
+                                                    toast({ title: 'Error', description: err.message || 'Failed to disconnect.', variant: 'destructive' });
+                                                  }
+                                                }}
+                                              >
+                                                {isCustom || isEmail ? 'Remove' : 'Disconnect'}
+                                              </Button>
+                                            </div>
                                           </td>
                                         </tr>
                                       );
                                     })}
-                                  </tbody>
-                                </table>
-                              </div>
-                            ) : (
-                              <div className="bg-background-card border border-border rounded-lg p-6 text-center">
-                                <Plug className="mx-auto h-10 w-10 text-foreground-secondary mb-3" />
-                                <h4 className="text-sm font-semibold text-foreground mb-1">No notification connections</h4>
-                                <p className="text-xs text-foreground-secondary mb-4">Add Slack or Discord to receive alerts.</p>
-                              </div>
-                            )}
+                              </tbody>
+                            </table>
                           </div>
                         )}
                       </div>
 
                       {/* Ticketing Section */}
                       <div className="space-y-4">
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-lg font-semibold text-foreground">Ticketing</h3>
-                          <span className="text-sm text-foreground-secondary">Issue tracking & project management</span>
-                        </div>
-                        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-                          {/* Jira Integration - Coming Soon */}
-                          <div className="bg-background-card border border-border rounded-lg overflow-hidden opacity-60 flex flex-col">
-                            <div className="p-6 flex-1">
-                              <div className="flex items-start gap-4">
-                                <div className="flex-shrink-0">
-                                  <img
-                                    src="/images/integrations/jira.png"
-                                    alt="Jira"
-                                    className="h-12 w-12 rounded object-contain opacity-60"
-                                  />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-2 mb-2">
-                                    <h3 className="text-lg font-semibold text-foreground">Jira</h3>
-                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-foreground-secondary/10 text-foreground-secondary border border-foreground-secondary/20">
-                                      Coming Soon
-                                    </span>
-                                  </div>
-                                  <p className="text-sm text-foreground-secondary">
-                                    Automatically create Jira tickets for vulnerabilities and security issues.
-                                  </p>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                              <p className="text-xs text-foreground-secondary">
-                                Jira integration coming soon
-                              </p>
-                              <Button
-                                size="sm"
-                                disabled
-                                variant="outline"
-                              >
-                                Coming Soon
-                              </Button>
-                            </div>
+                        <div className="flex items-center justify-between gap-4 flex-wrap">
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-lg font-semibold text-foreground">Ticketing</h3>
+                            <span className="text-sm text-foreground-secondary">Issue tracking & project management</span>
                           </div>
-
-                          {/* Linear Integration - Coming Soon */}
-                          <div className="bg-background-card border border-border rounded-lg overflow-hidden opacity-60 flex flex-col">
-                            <div className="p-6 flex-1">
-                              <div className="flex items-start gap-4">
-                                <div className="flex-shrink-0">
-                                  <img
-                                    src="/images/integrations/linear.png"
-                                    alt="Linear"
-                                    className="h-12 w-12 rounded object-contain opacity-60"
-                                  />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-2 mb-2">
-                                    <h3 className="text-lg font-semibold text-foreground">Linear</h3>
-                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-foreground-secondary/10 text-foreground-secondary border border-foreground-secondary/20">
-                                      Coming Soon
-                                    </span>
-                                  </div>
-                                  <p className="text-sm text-foreground-secondary">
-                                    Create Linear issues automatically for security vulnerabilities and tracking.
-                                  </p>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                              <p className="text-xs text-foreground-secondary">
-                                Linear integration coming soon
-                              </p>
+                          <div className="flex items-center gap-2">
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="outline" size="sm" className="text-xs">
+                                  <img src="/images/integrations/jira.png" alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5 object-contain" />
+                                  Add Jira
+                                  <ChevronDown className="h-3 w-3 ml-1" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem onClick={async () => {
+                                  if (!organization?.id) return;
+                                  try {
+                                    const { redirectUrl } = await api.connectJiraOrg(organization.id);
+                                    window.location.href = redirectUrl;
+                                  } catch (err: any) {
+                                    toast({ title: 'Error', description: err.message || 'Failed to start Jira connection.', variant: 'destructive' });
+                                  }
+                                }}>
+                                  Jira Cloud (OAuth)
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => {
+                                  setJiraPatBaseUrl('');
+                                  setJiraPatToken('');
+                                  setShowJiraPatDialog(true);
+                                }}>
+                                  Jira Data Center (PAT)
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                            {([
+                              { label: 'Linear', icon: '/images/integrations/linear.png', getRedirect: api.connectLinearOrg },
+                              { label: 'Asana', icon: '/images/integrations/asana.png', getRedirect: api.connectAsanaOrg },
+                            ]).map(({ label, icon, getRedirect }) => (
                               <Button
-                                size="sm"
-                                disabled
+                                key={label}
                                 variant="outline"
-                              >
-                                Coming Soon
-                              </Button>
-                            </div>
-                          </div>
-
-                          {/* Asana Integration - Coming Soon */}
-                          <div className="bg-background-card border border-border rounded-lg overflow-hidden opacity-60 flex flex-col">
-                            <div className="p-6 flex-1">
-                              <div className="flex items-start gap-4">
-                                <div className="flex-shrink-0">
-                                  <img
-                                    src="/images/integrations/asana.png"
-                                    alt="Asana"
-                                    className="h-12 w-12 rounded object-contain opacity-60"
-                                  />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-2 mb-2">
-                                    <h3 className="text-lg font-semibold text-foreground">Asana</h3>
-                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-foreground-secondary/10 text-foreground-secondary border border-foreground-secondary/20">
-                                      Coming Soon
-                                    </span>
-                                  </div>
-                                  <p className="text-sm text-foreground-secondary">
-                                    Generate Asana tasks for vulnerabilities and security-related work items.
-                                  </p>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                              <p className="text-xs text-foreground-secondary">
-                                Asana integration coming soon
-                              </p>
-                              <Button
                                 size="sm"
-                                disabled
-                                variant="outline"
+                                className="text-xs"
+                                onClick={async () => {
+                                  if (!organization?.id) return;
+                                  try {
+                                    const { redirectUrl } = await getRedirect(organization.id);
+                                    window.location.href = redirectUrl;
+                                  } catch (err: any) {
+                                    toast({ title: 'Error', description: err.message || `Failed to start ${label} connection.`, variant: 'destructive' });
+                                  }
+                                }}
                               >
-                                Coming Soon
+                                <img src={icon} alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5 object-contain" />
+                                Add {label}
                               </Button>
-                            </div>
+                            ))}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-xs"
+                              onClick={() => {
+                                setCustomIntegrationType('ticketing');
+                                setEditingCustomIntegration(null);
+                                setCustomIntegrationName('');
+                                setCustomIntegrationWebhookUrl('');
+                                setCustomIntegrationIconFile(null);
+                                setCustomIntegrationIconPreview(null);
+                                setCustomIntegrationSecret(null);
+                                setShowCustomIntegrationSidepanel(true);
+                              }}
+                            >
+                              <Webhook className="h-3.5 w-3.5 mr-1.5" />
+                              Add Custom
+                            </Button>
                           </div>
                         </div>
+                        {loadingConnections ? (
+                          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                            <table className="w-full table-fixed">
+                              <colgroup>
+                                <col className="w-[200px]" />
+                                <col />
+                                <col className="w-[160px]" />
+                              </colgroup>
+                              <thead className="bg-background-card-header border-b border-border">
+                                <tr>
+                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
+                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
+                                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-border">
+                                {[1, 2].map((i) => (
+                                  <tr key={i}>
+                                    <td className="px-4 py-3">
+                                      <div className="flex items-center gap-2.5">
+                                        <div className="h-5 w-5 rounded-sm bg-muted animate-pulse flex-shrink-0" />
+                                        <div className="h-4 w-20 bg-muted animate-pulse rounded" />
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-3"><div className="h-4 w-28 bg-muted animate-pulse rounded" /></td>
+                                    <td className="px-4 py-3 text-right"><div className="h-8 w-20 bg-muted animate-pulse rounded ml-auto" /></td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                            <table className="w-full table-fixed">
+                              <colgroup>
+                                <col className="w-[200px]" />
+                                <col />
+                                <col className="w-[160px]" />
+                              </colgroup>
+                              <thead className="bg-background-card-header border-b border-border">
+                                <tr>
+                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
+                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
+                                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-border">
+                                {ticketingConnections.length === 0 ? (
+                                  <tr>
+                                    <td colSpan={3} className="px-4 py-6 text-center text-sm text-foreground-secondary">
+                                      No ticketing integrations. Add Jira, Linear, or Asana above to create issues automatically.
+                                    </td>
+                                  </tr>
+                                ) : ticketingConnections.map((conn) => {
+                                      const isCustom = conn.provider === 'custom_ticketing';
+                                      const hasCustomIcon = isCustom && conn.metadata?.icon_url;
+                                      const providerLabel = isCustom
+                                        ? (conn.metadata?.custom_name || conn.display_name || 'Custom')
+                                        : conn.provider === 'jira'
+                                          ? (conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira')
+                                          : conn.provider === 'linear' ? 'Linear' : 'Asana';
+                                      const providerIconSrc = !isCustom
+                                        ? (conn.provider === 'jira' ? '/images/integrations/jira.png'
+                                          : conn.provider === 'linear' ? '/images/integrations/linear.png'
+                                          : '/images/integrations/asana.png')
+                                        : (hasCustomIcon ? conn.metadata.icon_url : null);
+
+                                      const connectionDisplay = isCustom
+                                        ? (conn.metadata?.webhook_url ? conn.metadata.webhook_url.replace(/^https?:\/\//, '').slice(0, 45) : 'Webhook')
+                                        : (conn.display_name || 'Connected');
+
+                                      const showNewSecret = customIntegrationSecret && newlyCreatedIntegrationId === conn.id;
+
+                                      return (
+                                        <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
+                                          <td className="px-4 py-3">
+                                            <div className="flex items-center gap-2.5">
+                                              {providerIconSrc ? (
+                                                <img src={providerIconSrc} alt="" className="h-5 w-5 rounded-sm flex-shrink-0 object-contain" />
+                                              ) : (
+                                                <div className="h-5 w-5 rounded-sm flex-shrink-0 flex items-center justify-center text-foreground-secondary">
+                                                  <Webhook className="h-3.5 w-3.5" />
+                                                </div>
+                                              )}
+                                              <span className="text-sm font-medium text-foreground">{providerLabel}</span>
+                                            </div>
+                                          </td>
+                                          <td className="px-4 py-3 min-w-0">
+                                            {showNewSecret ? (
+                                              <div className="flex items-center gap-2">
+                                                <code className="text-xs bg-background-card px-2 py-1 rounded border border-border font-mono truncate max-w-[280px]">{customIntegrationSecret}</code>
+                                                <button
+                                                  onClick={() => {
+                                                    navigator.clipboard.writeText(customIntegrationSecret!);
+                                                    toast({ title: 'Copied', description: 'Secret copied to clipboard.' });
+                                                  }}
+                                                  className="text-foreground-secondary hover:text-foreground transition-colors flex-shrink-0"
+                                                >
+                                                  <Copy className="h-3.5 w-3.5" />
+                                                </button>
+                                              </div>
+                                            ) : (
+                                              <span className="text-sm text-foreground truncate block">{connectionDisplay}</span>
+                                            )}
+                                          </td>
+                                          <td className="px-4 py-3 text-right">
+                                            <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                              {isCustom && (
+                                                <button
+                                                  className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
+                                                  onClick={() => {
+                                                    setEditingCustomIntegration(conn);
+                                                    setCustomIntegrationType('ticketing');
+                                                    setCustomIntegrationName(conn.metadata?.custom_name || conn.display_name || '');
+                                                    setCustomIntegrationWebhookUrl(conn.metadata?.webhook_url || '');
+                                                    setCustomIntegrationIconPreview(conn.metadata?.icon_url || null);
+                                                    setCustomIntegrationIconFile(null);
+                                                    setCustomIntegrationSecret(null);
+                                                    setShowCustomIntegrationSidepanel(true);
+                                                  }}
+                                                >
+                                                  <Pencil className="h-3.5 w-3.5" />
+                                                </button>
+                                              )}
+                                              <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="text-xs hover:bg-destructive/10 hover:border-destructive/30"
+                                                onClick={async () => {
+                                                  const label = isCustom ? (conn.metadata?.custom_name || 'custom integration') : providerLabel;
+                                                  if (!confirm(`${isCustom ? 'Remove' : 'Disconnect'} this ${label} connection?`)) return;
+                                                  try {
+                                                    await api.deleteOrganizationConnection(organization!.id, conn.id);
+                                                    toast({ title: isCustom ? 'Removed' : 'Disconnected', description: `${label} connection removed.` });
+                                                    await loadConnections();
+                                                  } catch (err: any) {
+                                                    toast({ title: 'Error', description: err.message || 'Failed to disconnect.', variant: 'destructive' });
+                                                  }
+                                                }}
+                                              >
+                                                {isCustom ? 'Remove' : 'Disconnect'}
+                                              </Button>
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
                 </div>
               )}
 
-              {activeSection === 'notifications' && (
-                <div className="space-y-6">
-                  <div>
-                    <h2 className="text-2xl font-bold text-foreground">Notifications</h2>
-                    <p className="text-foreground-secondary mt-1">
-                      Configure how and when your organization receives notifications.
-                    </p>
-                  </div>
-                  <div className="bg-background-card border border-border rounded-lg p-12 flex flex-col items-center justify-center text-center min-h-[320px]">
-                    <p className="text-sm text-foreground-secondary">Notification settings will be available here soon.</p>
-                  </div>
-                </div>
-              )}
+              {activeSection === 'notifications' && <NotificationRulesSection />}
 
               {activeSection === 'members' && (
                 <div className="space-y-8">
@@ -2609,33 +2827,30 @@ export default function OrganizationSettingsPage() {
                 <div className="space-y-6">
                   <div>
                     <h2 className="text-2xl font-bold text-foreground">Usage</h2>
-                    <p className="text-foreground-secondary mt-1">
-                      Track your organization's resource usage and limits.
-                    </p>
                   </div>
 
-                  {/* Placeholder Card */}
-                  <div className="bg-background-card border border-border rounded-lg p-12 flex flex-col items-center justify-center text-center">
-                    <div className="h-16 w-16 rounded-full bg-background-subtle flex items-center justify-center mb-4">
-                      <BarChart className="h-8 w-8 text-foreground-secondary" />
+                  <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                    <div className="px-5 py-3.5 rounded-t-lg bg-background-card-header border-b border-border">
+                      <span className="text-sm font-semibold text-foreground">Usage</span>
                     </div>
-                    <h3 className="text-lg font-semibold text-foreground mb-2">Usage Tracking Coming Soon</h3>
-                    <p className="text-sm text-foreground-secondary max-w-md">
-                      We're working on comprehensive usage tracking and analytics. This feature will help you monitor your organization's resource consumption and plan accordingly.
-                    </p>
+                    <div className="p-6">
+                      <p className="text-sm text-foreground-secondary">
+                        You are on the free plan. You are not over your limit yet.
+                      </p>
+                    </div>
                   </div>
                 </div>
               )}
 
-              {/* Add Role Sidepanel */}
+              {/* Create New Role – Vercel-style right-side popup panel */}
               {showAddRoleSidepanel && (
                 <div className="fixed inset-0 z-50">
-                  {/* Backdrop */}
                   <div
                     className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
                     onClick={() => {
                       setShowAddRoleSidepanel(false);
                       setNewRoleNameInput('');
+                      setNewRoleColor('#3b82f6');
                       setNewRolePermissions({
                         view_settings: false,
                         manage_billing: false,
@@ -2657,41 +2872,17 @@ export default function OrganizationSettingsPage() {
                     }}
                   />
 
-                  {/* Side Panel */}
+                  {/* Right-side popup panel – Vercel style: rounded corners, floating feel */}
                   <div
-                    className="fixed right-0 top-0 h-full w-full max-w-lg bg-background border-l border-border shadow-2xl transform transition-transform duration-300 translate-x-0 flex flex-col"
+                    className="fixed right-4 top-4 bottom-4 w-full max-w-[420px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    {/* Header */}
-                    <div className="px-6 py-5 border-b border-border flex items-center justify-between flex-shrink-0">
+                    {/* Header – no X, no border */}
+                    <div className="px-6 py-5 flex-shrink-0">
                       <h2 className="text-xl font-semibold text-foreground">Create New Role</h2>
-                      <button
-                        onClick={() => {
-                          setShowAddRoleSidepanel(false);
-                          setNewRoleNameInput('');
-                          setNewRolePermissions({
-                            view_settings: false,
-                            manage_billing: false,
-                            view_activity: false,
-                            view_compliance: false,
-                            edit_policies: false,
-                            interact_with_security_agent: false,
-                            manage_aegis: false,
-                            view_members: false,
-                            add_members: false,
-                            edit_roles: false,
-                            edit_permissions: false,
-                            kick_members: false,
-                            manage_teams_and_projects: false,
-                            manage_integrations: false,
-                            view_overview: false,
-                          });
-                        }}
-                        className="text-foreground-secondary hover:text-foreground transition-colors"
-                        disabled={isCreatingRole}
-                      >
-                        <X className="h-5 w-5" />
-                      </button>
+                      <p className="text-sm text-foreground-secondary mt-0.5">
+                        Define a custom role with specific permissions.
+                      </p>
                     </div>
 
                     {/* Content */}
@@ -2738,26 +2929,31 @@ export default function OrganizationSettingsPage() {
                               { color: '#8b5cf6', name: 'Purple' },
                               { color: '#ec4899', name: 'Pink' },
                             ].map(({ color, name }) => (
-                              <button
-                                key={color}
-                                type="button"
-                                onClick={() => setNewRoleColor(color)}
-                                disabled={isCreatingRole}
-                                title={name}
-                                className={`h-8 w-8 rounded-lg border-2 transition-all flex items-center justify-center ${newRoleColor === color
-                                  ? 'border-white scale-110 shadow-lg'
-                                  : 'border-transparent hover:scale-105'
-                                  }`}
-                                style={{ backgroundColor: color }}
-                              >
-                                {newRoleColor === color && (
-                                  <Check className="h-4 w-4 text-white drop-shadow-md" />
-                                )}
-                              </button>
+                              <Tooltip key={color}>
+                                <TooltipTrigger asChild>
+                                  <button
+                                    type="button"
+                                    onClick={() => setNewRoleColor(color)}
+                                    disabled={isCreatingRole}
+                                    className={`h-8 w-8 rounded-lg border-2 transition-all flex items-center justify-center ${newRoleColor === color
+                                      ? 'border-white scale-110 shadow-lg'
+                                      : 'border-transparent hover:scale-105'
+                                      }`}
+                                    style={{ backgroundColor: color }}
+                                  >
+                                    {newRoleColor === color && (
+                                      <Check className="h-4 w-4 text-white drop-shadow-md" />
+                                    )}
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent>{name}</TooltipContent>
+                              </Tooltip>
                             ))}
 
                             {/* Custom Color Picker */}
-                            <div className="relative" title="Custom color">
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                            <div className="relative">
                               <input
                                 type="color"
                                 value={newRoleColor || '#6b7280'}
@@ -2794,18 +2990,25 @@ export default function OrganizationSettingsPage() {
                                   )}
                               </div>
                             </div>
+                              </TooltipTrigger>
+                              <TooltipContent>Custom color</TooltipContent>
+                            </Tooltip>
 
                             {/* Clear color button - only show when a color is selected */}
                             {newRoleColor && (
-                              <button
-                                type="button"
-                                onClick={() => setNewRoleColor('')}
-                                disabled={isCreatingRole}
-                                className="h-8 w-8 rounded-lg border border-border text-foreground-secondary hover:text-foreground hover:border-foreground-secondary/50 transition-all flex items-center justify-center"
-                                title="Clear color"
-                              >
-                                <X className="h-4 w-4" />
-                              </button>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button
+                                    type="button"
+                                    onClick={() => setNewRoleColor('')}
+                                    disabled={isCreatingRole}
+                                    className="h-8 w-8 rounded-lg border border-border text-foreground-secondary hover:text-foreground hover:border-foreground-secondary/50 transition-all flex items-center justify-center"
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent>Clear color</TooltipContent>
+                              </Tooltip>
                             )}
                           </div>
 
@@ -2846,7 +3049,7 @@ export default function OrganizationSettingsPage() {
                     </div>
 
                     {/* Footer */}
-                    <div className="px-6 py-4 border-t border-border flex items-center justify-end gap-3 flex-shrink-0">
+                    <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border">
                       <Button
                         variant="outline"
                         onClick={() => {
@@ -2880,12 +3083,12 @@ export default function OrganizationSettingsPage() {
                           await handleCreateRole(newRolePermissions);
                         }}
                         disabled={isCreatingRole || !newRoleNameInput.trim()}
-                        className="bg-primary text-primary-foreground hover:bg-primary/90"
+                        className="bg-primary/90 text-primary-foreground hover:bg-primary/80 border border-primary-foreground/10 hover:border-primary-foreground/20"
                       >
                         {isCreatingRole ? (
                           <>
                             <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                            Creating
+                            Create Role
                           </>
                         ) : (
                           <>
@@ -2906,6 +3109,8 @@ export default function OrganizationSettingsPage() {
                 const isViewingOwnRole = organization?.role === selectedRoleForSettings.name;
                 const isRoleAboveRank = selectedRoleForSettings.display_order < userRank;
                 const canEditThisRole = selectedRoleForSettings.name !== 'owner' && !isViewingOwnRole && !isRoleAboveRank;
+                // Owner can edit owner role's name/color; for other roles use canEditThisRole
+                const canEditNameAndColor = selectedRoleForSettings.name === 'owner' ? isOrgOwner : canEditThisRole;
 
                 return (
                   <div className="fixed inset-0 z-50">
@@ -2926,28 +3131,17 @@ export default function OrganizationSettingsPage() {
                       onClick={(e) => e.stopPropagation()}
                     >
                       {/* Header */}
-                      <div className="px-6 py-5 border-b border-border flex items-center justify-between flex-shrink-0">
+                      <div className="px-6 py-5 border-b border-border bg-background-card-header flex-shrink-0">
                         <h2 className="text-xl font-semibold text-foreground">
                           {selectedRoleForSettings.display_name || selectedRoleForSettings.name.charAt(0).toUpperCase() + selectedRoleForSettings.name.slice(1)} Settings
                         </h2>
-                        <button
-                          onClick={() => {
-                            setShowRoleSettingsModal(false);
-                            setSelectedRoleForSettings(null);
-                            setEditingRolePermissions(null);
-                            setEditingRoleName('');
-                          }}
-                          className="text-foreground-secondary hover:text-foreground transition-colors"
-                        >
-                          <X className="h-5 w-5" />
-                        </button>
                       </div>
 
                       {/* Content */}
                       <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-6">
                         <div className="space-y-6">
-                          {/* Read-only notice for roles above user's rank or own role */}
-                          {!canEditThisRole && (
+                          {/* Read-only notice when user cannot edit name/color */}
+                          {!canEditNameAndColor && (
                             <div className="px-4 py-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
                               <p className="text-sm text-amber-400">
                                 {selectedRoleForSettings.name === 'owner'
@@ -2959,7 +3153,7 @@ export default function OrganizationSettingsPage() {
                             </div>
                           )}
 
-                          {/* Role Name */}
+                          {/* Role Name - owner can edit when they are the org owner */}
                           <div className="space-y-3">
                             <label className="flex items-center gap-2 text-base font-semibold text-foreground">
                               <Tag className="h-5 w-5 text-foreground-secondary" />
@@ -2971,8 +3165,8 @@ export default function OrganizationSettingsPage() {
                               onChange={(e) => setEditingRoleName(e.target.value)}
                               placeholder="Enter role name"
                               maxLength={24}
-                              disabled={!canEditThisRole}
-                              className={`w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all ${!canEditThisRole ? 'opacity-60 cursor-not-allowed' : ''}`}
+                              disabled={!canEditNameAndColor}
+                              className={`w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all ${!canEditNameAndColor ? 'opacity-60 cursor-not-allowed' : ''}`}
                             />
                           </div>
 
@@ -2999,32 +3193,37 @@ export default function OrganizationSettingsPage() {
                                 { color: '#8b5cf6', name: 'Purple' },
                                 { color: '#ec4899', name: 'Pink' },
                               ].map(({ color, name }) => (
-                                <button
-                                  key={color}
-                                  type="button"
-                                  onClick={() => setEditingRoleColor(color)}
-                                  disabled={isSavingRole || !canEditThisRole}
-                                  title={name}
-                                  className={`h-8 w-8 rounded-lg border-2 transition-all flex items-center justify-center ${editingRoleColor === color
-                                    ? 'border-white scale-110 shadow-lg'
-                                    : 'border-transparent hover:scale-105'
-                                    } ${!canEditThisRole ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                  style={{ backgroundColor: color }}
-                                >
-                                  {editingRoleColor === color && (
-                                    <Check className="h-4 w-4 text-white drop-shadow-md" />
-                                  )}
-                                </button>
+                                <Tooltip key={color}>
+                                  <TooltipTrigger asChild>
+                                    <button
+                                      type="button"
+                                    onClick={() => setEditingRoleColor(color)}
+                                    disabled={isSavingRole || !canEditNameAndColor}
+                                      className={`h-8 w-8 rounded-lg border-2 transition-all flex items-center justify-center ${editingRoleColor === color
+                                        ? 'border-white scale-110 shadow-lg'
+                                        : 'border-transparent hover:scale-105'
+                                        } ${!canEditNameAndColor ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                      style={{ backgroundColor: color }}
+                                    >
+                                      {editingRoleColor === color && (
+                                        <Check className="h-4 w-4 text-white drop-shadow-md" />
+                                      )}
+                                    </button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>{name}</TooltipContent>
+                                </Tooltip>
                               ))}
 
                               {/* Custom Color Picker */}
-                              <div className={`relative ${!canEditThisRole ? 'opacity-60 pointer-events-none' : ''}`} title="Custom color">
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                              <div className={`relative ${!canEditNameAndColor ? 'opacity-60 pointer-events-none' : ''}`}>
                                 <input
                                   type="color"
                                   value={editingRoleColor || '#6b7280'}
                                   onChange={(e) => setEditingRoleColor(e.target.value)}
                                   className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                                  disabled={isSavingRole || !canEditThisRole}
+                                  disabled={isSavingRole || !canEditNameAndColor}
                                 />
                                 <div
                                   className={`h-8 w-8 rounded-lg border-2 cursor-pointer transition-all flex items-center justify-center ${editingRoleColor && ![
@@ -3055,18 +3254,25 @@ export default function OrganizationSettingsPage() {
                                     )}
                                 </div>
                               </div>
+                              </TooltipTrigger>
+                              <TooltipContent>Custom color</TooltipContent>
+                            </Tooltip>
 
                               {/* Clear color button - only show when a color is selected */}
-                              {editingRoleColor && canEditThisRole && (
-                                <button
-                                  type="button"
-                                  onClick={() => setEditingRoleColor('')}
-                                  disabled={isSavingRole}
-                                  className="h-8 w-8 rounded-lg border border-border text-foreground-secondary hover:text-foreground hover:border-foreground-secondary/50 transition-all flex items-center justify-center"
-                                  title="Clear color"
-                                >
-                                  <X className="h-4 w-4" />
-                                </button>
+                              {editingRoleColor && canEditNameAndColor && (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditingRoleColor('')}
+                                      disabled={isSavingRole}
+                                      className="h-8 w-8 rounded-lg border border-border text-foreground-secondary hover:text-foreground hover:border-foreground-secondary/50 transition-all flex items-center justify-center"
+                                    >
+                                      <X className="h-4 w-4" />
+                                    </button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>Clear color</TooltipContent>
+                                </Tooltip>
                               )}
                             </div>
 
@@ -3085,7 +3291,6 @@ export default function OrganizationSettingsPage() {
                             )}
                           </div>
 
-
                           {/* Permissions - only for non-default roles OR member role */}
                           {(!selectedRoleForSettings.is_default || selectedRoleForSettings.name === 'member') && (
                             <div className={`space-y-4 pt-4 border-t border-border ${!canEditThisRole ? 'opacity-60 pointer-events-none' : ''}`}>
@@ -3100,122 +3305,97 @@ export default function OrganizationSettingsPage() {
                                 permissions={editingRolePermissions}
                                 onSave={(perms) => handleSaveRolePermissions(selectedRoleForSettings, perms)}
                                 onChange={(perms) => canEditThisRole && setEditingRolePermissions(perms)}
-                                hideActions={selectedRoleForSettings.is_default && selectedRoleForSettings.name === 'member'}
-                                onCancel={() => {
-                                  setShowRoleSettingsModal(false);
-                                  setSelectedRoleForSettings(null);
-                                  setEditingRolePermissions(null);
-                                  setEditingRoleName('');
-                                }}
+                                hideActions={true}
                                 isLoading={isSavingRole}
                                 currentUserPermissions={effectivePermissions}
                                 isOrgOwner={isOrgOwner}
                               />
                             </div>
                           )}
-
-                          {/* Save/Cancel buttons for default roles - only show if editing is allowed */}
-                          {selectedRoleForSettings.is_default && canEditThisRole && (
-                            <div className="flex items-center justify-end gap-3 pt-4 border-t border-border mt-6">
-                              <Button
-                                variant="outline"
-                                onClick={() => {
-                                  setShowRoleSettingsModal(false);
-                                  setSelectedRoleForSettings(null);
-                                  setEditingRolePermissions(null);
-                                  setEditingRoleName('');
-                                }}
-                                disabled={isSavingRole}
-                              >
-                                Cancel
-                              </Button>
-                              <Button
-                                onClick={async () => {
-                                  if (!id || !selectedRoleForSettings.id || !editingRoleName.trim()) return;
-                                  try {
-                                    setIsSavingRole(true);
-                                    const updatedRole = await api.updateOrganizationRole(id, selectedRoleForSettings.id, {
-                                      display_name: editingRoleName.trim(),
-                                      color: editingRoleColor || null,
-                                      permissions: selectedRoleForSettings.name === 'member' ? editingRolePermissions : undefined,
-                                    });
-
-                                    // Optimistically update local state
-                                    setAllRoles(prevRoles =>
-                                      prevRoles.map(r =>
-                                        r.id === selectedRoleForSettings.id
-                                          ? {
-                                            ...r,
-                                            display_name: updatedRole.display_name,
-                                            color: updatedRole.color,
-                                            permissions: updatedRole.permissions || r.permissions
-                                          }
-                                          : r
-                                      )
-                                    );
-
-                                    setShowRoleSettingsModal(false);
-                                    setSelectedRoleForSettings(null);
-                                    setEditingRolePermissions(null);
-                                    setEditingRoleName('');
-
-                                    // Dispatch event to notify header to refresh
-                                    window.dispatchEvent(new CustomEvent('rolesUpdated'));
-
-                                    toast({
-                                      title: 'Role updated',
-                                      description: 'The role has been updated successfully.',
-                                    });
-
-                                    // Refresh roles in the background
-                                    loadRoles().catch(error => {
-                                      console.error('Background role refresh failed:', error);
-                                    });
-                                  } catch (error: any) {
-                                    toast({
-                                      title: 'Failed to update role',
-                                      description: error.message || 'Failed to update role. Please try again.',
-                                      variant: 'destructive',
-                                    });
-                                  } finally {
-                                    setIsSavingRole(false);
-                                  }
-                                }}
-                                disabled={isSavingRole || !editingRoleName.trim()}
-                                className="bg-primary text-primary-foreground hover:bg-primary/90"
-                              >
-                                {isSavingRole ? (
-                                  <>
-                                    <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                                    Saving
-                                  </>
-                                ) : (
-                                  <>
-                                    <Save className="h-4 w-4 mr-2" />
-                                    Save Changes
-                                  </>
-                                )}
-                              </Button>
-                            </div>
-                          )}
-
-                          {/* Close button for view-only mode */}
-                          {!canEditThisRole && (
-                            <div className="flex items-center justify-end pt-4 border-t border-border mt-6">
-                              <Button
-                                variant="outline"
-                                onClick={() => {
-                                  setShowRoleSettingsModal(false);
-                                  setSelectedRoleForSettings(null);
-                                  setEditingRolePermissions(null);
-                                  setEditingRoleName('');
-                                }}
-                              >
-                                Close
-                              </Button>
-                            </div>
-                          )}
                         </div>
+                      </div>
+
+                      {/* Footer - fixed at bottom, always visible */}
+                      <div className="flex-shrink-0 px-6 py-4 border-t border-border bg-background flex items-center justify-end gap-3">
+                        {canEditNameAndColor || canEditThisRole ? (
+                          <>
+                            <Button
+                              variant="outline"
+                              onClick={() => {
+                                setShowRoleSettingsModal(false);
+                                setSelectedRoleForSettings(null);
+                                setEditingRolePermissions(null);
+                                setEditingRoleName('');
+                              }}
+                              disabled={isSavingRole}
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              onClick={async () => {
+                                if (!id || !selectedRoleForSettings.id || !editingRoleName.trim()) return;
+                                try {
+                                  setIsSavingRole(true);
+                                  const isMember = selectedRoleForSettings.name === 'member';
+                                  const payload: { display_name: string; color: string | null; permissions?: RolePermissions } = {
+                                    display_name: editingRoleName.trim(),
+                                    color: editingRoleColor || null,
+                                  };
+                                  if ((!selectedRoleForSettings.is_default || isMember) && canEditThisRole) {
+                                    payload.permissions = editingRolePermissions;
+                                  }
+                                  const updatedRole = await api.updateOrganizationRole(id, selectedRoleForSettings.id, payload);
+
+                                  setAllRoles(prevRoles =>
+                                    prevRoles.map(r =>
+                                      r.id === selectedRoleForSettings.id
+                                        ? { ...r, display_name: updatedRole.display_name, color: updatedRole.color, permissions: updatedRole.permissions || r.permissions }
+                                        : r
+                                    )
+                                  );
+
+                                  setShowRoleSettingsModal(false);
+                                  setSelectedRoleForSettings(null);
+                                  setEditingRolePermissions(null);
+                                  setEditingRoleName('');
+                                  window.dispatchEvent(new CustomEvent('rolesUpdated'));
+                                  toast({ title: 'Role updated', description: 'The role has been updated successfully.' });
+                                  loadRoles().catch(() => {});
+                                } catch (error: any) {
+                                  toast({ title: 'Failed to update role', description: error.message || 'Failed to update role. Please try again.', variant: 'destructive' });
+                                } finally {
+                                  setIsSavingRole(false);
+                                }
+                              }}
+                              disabled={isSavingRole || !editingRoleName.trim()}
+                              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                            >
+                              {isSavingRole ? (
+                                <>
+                                  <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
+                                  Save Changes
+                                </>
+                              ) : (
+                                <>
+                                  <Save className="h-4 w-4 mr-2" />
+                                  Save Changes
+                                </>
+                              )}
+                            </Button>
+                          </>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            onClick={() => {
+                              setShowRoleSettingsModal(false);
+                              setSelectedRoleForSettings(null);
+                              setEditingRolePermissions(null);
+                              setEditingRoleName('');
+                            }}
+                          >
+                            Close
+                          </Button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -3387,6 +3567,313 @@ export default function OrganizationSettingsPage() {
                 </div>
               )}
 
+              {/* Custom Integration Dialog */}
+              <Dialog open={showCustomIntegrationSidepanel} onOpenChange={(open) => {
+                if (!open) {
+                  setShowCustomIntegrationSidepanel(false);
+                  setEditingCustomIntegration(null);
+                  // Don't clear customIntegrationSecret here - it's needed to display after create
+                }
+              }}>
+                <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-hidden">
+                  <div className="px-6 pt-6 pb-4 border-b border-border">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <DialogTitle>
+                          {editingCustomIntegration ? 'Edit custom integration' : 'Add custom integration'}
+                        </DialogTitle>
+                        <DialogDescription className="mt-1">
+                          {editingCustomIntegration
+                            ? 'Update the webhook configuration for this integration.'
+                            : customIntegrationType === 'notification'
+                              ? 'Set up a custom webhook endpoint for notifications.'
+                              : 'Set up a custom webhook endpoint for ticketing.'}
+                        </DialogDescription>
+                      </div>
+                      <Link to="/docs/integrations" target="_blank" rel="noopener noreferrer">
+                        <Button variant="outline" size="sm" className="text-xs shrink-0">
+                          <BookOpen className="h-3.5 w-3.5 mr-1.5" />
+                          Docs
+                        </Button>
+                      </Link>
+                    </div>
+                  </div>
+
+                  <div className="px-6 py-4 grid gap-4 bg-background">
+                    <div className="grid gap-2">
+                      <Label htmlFor="custom-name">Name</Label>
+                      <Input
+                        id="custom-name"
+                        value={customIntegrationName}
+                        onChange={(e) => setCustomIntegrationName(e.target.value)}
+                        placeholder=""
+                      />
+                    </div>
+
+                    <div className="grid gap-2">
+                      <div className="flex items-center gap-2">
+                        <Label htmlFor="custom-webhook" className="flex-1">Webhook URL</Label>
+                        {editingCustomIntegration && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs shrink-0"
+                            onClick={async () => {
+                              if (!organization?.id || !editingCustomIntegration) return;
+                              if (!confirm('Regenerate the signing secret? The old secret will stop working immediately.')) return;
+                              try {
+                                const result = await api.updateCustomIntegration(organization.id, editingCustomIntegration.id, { regenerate_secret: true });
+                                if (result.secret) {
+                                  setNewlyCreatedIntegrationId(editingCustomIntegration.id);
+                                  setCustomIntegrationSecret(result.secret);
+                                  toast({ title: 'Secret regenerated', description: 'The new secret is shown in the table.' });
+                                }
+                              } catch (err: any) {
+                                toast({ title: 'Error', description: err.message || 'Failed to regenerate secret.', variant: 'destructive' });
+                              }
+                            }}
+                          >
+                            Regenerate Secret
+                          </Button>
+                        )}
+                      </div>
+                      <Input
+                        id="custom-webhook"
+                        type="url"
+                        value={customIntegrationWebhookUrl}
+                        onChange={(e) => setCustomIntegrationWebhookUrl(e.target.value)}
+                        placeholder=""
+                      />
+                    </div>
+
+                    <div className="grid gap-2">
+                      <Label>Icon (optional)</Label>
+                      <div className="flex items-center gap-3">
+                        <div className="relative flex-shrink-0">
+                          {(customIntegrationIconPreview || customIntegrationIconFile) ? (
+                            <>
+                              <img
+                                src={customIntegrationIconFile ? URL.createObjectURL(customIntegrationIconFile) : (customIntegrationIconPreview || '')}
+                                alt=""
+                                className="h-9 w-9 rounded-md border border-border object-contain bg-background-card"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCustomIntegrationIconFile(null);
+                                  setCustomIntegrationIconPreview(null);
+                                }}
+                                className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center hover:bg-destructive/90 transition-colors"
+                                aria-label="Remove icon"
+                              >
+                                <X className="h-2.5 w-2.5" />
+                              </button>
+                            </>
+                          ) : (
+                            <div className="h-9 w-9 rounded-md flex items-center justify-center text-foreground-secondary">
+                              <Webhook className="h-4 w-4" />
+                            </div>
+                          )}
+                        </div>
+                        <label className="cursor-pointer">
+                          <div className="inline-flex items-center gap-2 h-9 rounded-md border border-border bg-background-card px-3 py-2.5 text-sm text-foreground transition-colors hover:border-foreground-secondary/40 file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-foreground-secondary focus-within:outline-none focus-within:ring-2 focus-within:ring-primary/50 focus-within:border-primary">
+                            <Upload className="h-3.5 w-3.5 text-foreground-secondary shrink-0" />
+                            <span>{customIntegrationIconFile ? customIntegrationIconFile.name : 'Upload image'}</span>
+                          </div>
+                          <input
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            className="hidden"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                if (file.size > 256 * 1024) {
+                                  toast({ title: 'Error', description: 'Image must be under 256KB.', variant: 'destructive' });
+                                  return;
+                                }
+                                setCustomIntegrationIconFile(file);
+                              }
+                            }}
+                          />
+                        </label>
+                      </div>
+                    </div>
+
+                  </div>
+
+                  <DialogFooter className="px-6 py-4 bg-background">
+                    <Button variant="outline" onClick={() => { setShowCustomIntegrationSidepanel(false); setEditingCustomIntegration(null); setCustomIntegrationSecret(null); }}>
+                      Cancel
+                    </Button>
+                    <Button
+                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                      disabled={!customIntegrationName.trim() || !customIntegrationWebhookUrl.trim() || customIntegrationSaving || !/^https?:\/\/[^\s]+$/i.test(customIntegrationWebhookUrl.trim())}
+                      onClick={async () => {
+                        if (!organization?.id) return;
+                        setCustomIntegrationSaving(true);
+                        try {
+                          let iconUrl = customIntegrationIconPreview || undefined;
+                          if (customIntegrationIconFile) {
+                            const uploaded = await api.uploadIntegrationIcon(organization.id, customIntegrationIconFile);
+                            iconUrl = uploaded.url;
+                          }
+
+                          if (editingCustomIntegration) {
+                            await api.updateCustomIntegration(organization.id, editingCustomIntegration.id, {
+                              name: customIntegrationName.trim(),
+                              webhook_url: customIntegrationWebhookUrl.trim(),
+                              icon_url: iconUrl,
+                            });
+                            toast({ title: 'Updated', description: 'Custom integration updated.' });
+                            setShowCustomIntegrationSidepanel(false);
+                            setEditingCustomIntegration(null);
+                          } else {
+                            const result = await api.createCustomIntegration(organization.id, {
+                              name: customIntegrationName.trim(),
+                              type: customIntegrationType,
+                              webhook_url: customIntegrationWebhookUrl.trim(),
+                              icon_url: iconUrl,
+                            });
+                            setNewlyCreatedIntegrationId(result.id);
+                            setCustomIntegrationSecret(result.secret);
+                            setShowCustomIntegrationSidepanel(false);
+                            setEditingCustomIntegration(null);
+                            toast({ title: 'Created', description: 'Custom integration created. Copy the signing secret from the table.' });
+                          }
+                          await loadConnections();
+                        } catch (err: any) {
+                          toast({ title: 'Error', description: err.message || 'Failed to save.', variant: 'destructive' });
+                        } finally {
+                          setCustomIntegrationSaving(false);
+                        }
+                      }}
+                    >
+                      {customIntegrationSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
+                      {editingCustomIntegration ? 'Save changes' : 'Create connection'}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+
+              {/* Jira Data Center PAT Dialog */}
+              <Dialog open={showJiraPatDialog} onOpenChange={setShowJiraPatDialog}>
+                <DialogContent hideClose className="sm:max-w-[440px] bg-background p-0 gap-0">
+                  <div className="px-6 pt-6 pb-4 border-b border-border">
+                    <div className="flex items-center gap-3">
+                      <img src="/images/integrations/jira.png" alt="Jira" className="h-7 w-7 rounded object-contain" />
+                      <div>
+                        <DialogTitle>Jira Data Center</DialogTitle>
+                        <DialogDescription>Connect via Personal Access Token</DialogDescription>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="px-6 py-6 grid gap-4 bg-background">
+                    <div className="grid gap-2">
+                      <Label htmlFor="jira-url">Server URL</Label>
+                      <Input
+                        id="jira-url"
+                        type="url"
+                        value={jiraPatBaseUrl}
+                        onChange={(e) => setJiraPatBaseUrl(e.target.value)}
+                        placeholder=""
+                      />
+                    </div>
+
+                    <div className="grid gap-2">
+                      <Label htmlFor="jira-pat">Personal Access Token</Label>
+                      <Input
+                        id="jira-pat"
+                        type="password"
+                        value={jiraPatToken}
+                        onChange={(e) => setJiraPatToken(e.target.value)}
+                        placeholder=""
+                      />
+                    </div>
+                  </div>
+
+                  <DialogFooter className="px-6 py-4 bg-background">
+                    <Button variant="outline" onClick={() => setShowJiraPatDialog(false)}>Cancel</Button>
+                    <Button
+                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                      disabled={!jiraPatBaseUrl.trim() || !jiraPatToken.trim() || jiraPatSaving}
+                      onClick={async () => {
+                        if (!organization?.id) return;
+                        setJiraPatSaving(true);
+                        try {
+                          await api.connectJiraPatOrg(organization.id, jiraPatBaseUrl.trim(), jiraPatToken.trim());
+                          toast({ title: 'Connected', description: 'Jira Data Center connected successfully.' });
+                          setShowJiraPatDialog(false);
+                          await loadConnections();
+                        } catch (err: any) {
+                          toast({ title: 'Error', description: err.message || 'Failed to connect.', variant: 'destructive' });
+                        } finally {
+                          setJiraPatSaving(false);
+                        }
+                      }}
+                    >
+                      {jiraPatSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
+                      Create connection
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+
+              {/* Email Notification Dialog */}
+              <Dialog open={showEmailDialog} onOpenChange={setShowEmailDialog}>
+                <DialogContent hideClose className="sm:max-w-[440px] bg-background p-0 gap-0">
+                  <div className="px-6 pt-6 pb-4 border-b border-border">
+                    <div className="flex items-center gap-3">
+                      <div className="h-7 w-7 rounded flex items-center justify-center text-foreground-secondary">
+                        <Mail className="h-7 w-7" />
+                      </div>
+                      <div>
+                        <DialogTitle>Add Email</DialogTitle>
+                        <DialogDescription>Add an email address to receive notification alerts.</DialogDescription>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="px-6 py-6 grid gap-4 bg-background">
+                    <div className="grid gap-2">
+                      <Label htmlFor="email-to-add">Email address</Label>
+                      <Input
+                        id="email-to-add"
+                        type="email"
+                        value={emailToAdd}
+                        onChange={(e) => setEmailToAdd(e.target.value)}
+                        placeholder="alerts@example.com"
+                      />
+                    </div>
+                  </div>
+
+                  <DialogFooter className="px-6 py-4 bg-background">
+                    <Button variant="outline" onClick={() => setShowEmailDialog(false)}>Cancel</Button>
+                    <Button
+                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                      disabled={!emailToAdd.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailToAdd.trim()) || emailSaving}
+                      onClick={async () => {
+                        if (!organization?.id) return;
+                        setEmailSaving(true);
+                        try {
+                          await api.createEmailNotification(organization.id, emailToAdd.trim());
+                          toast({ title: 'Added', description: 'Email notification added successfully.' });
+                          setShowEmailDialog(false);
+                          setEmailToAdd('');
+                          await loadConnections();
+                        } catch (err: any) {
+                          toast({ title: 'Error', description: err.message || 'Failed to add email.', variant: 'destructive' });
+                        } finally {
+                          setEmailSaving(false);
+                        }
+                      }}
+                    >
+                      {emailSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
+                      Add
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
 
             </div>
           </div>

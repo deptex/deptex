@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS project_dependency_vulnerabilities (
   epss_score NUMERIC(5, 4), -- e.g. 0.0001 to 1.0000
   cvss_score NUMERIC(3, 1), -- 0.0 to 10.0
   cisa_kev BOOLEAN NOT NULL DEFAULT false,
-  depscore INTEGER, -- 0-100 composite risk score
+  depscore INTEGER, -- 0-100 composite risk score (4-tier asset_tier: CROWN_JEWELS, EXTERNAL, INTERNAL, NON_PRODUCTION)
   published_at TIMESTAMP WITH TIME ZONE,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   UNIQUE(project_id, project_dependency_id, osv_id)

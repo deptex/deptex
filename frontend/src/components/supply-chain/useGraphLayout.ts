@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { type Node, type Edge, MarkerType, Position } from '@xyflow/react';
 import type { SupplyChainResponse, SupplyChainChild, SupplyChainAvailableVersion, SupplyChainBumpPr, ProjectEffectivePolicies, BannedVersion, SupplyChainVersionSecurityData, VersionVulnerabilitySummaryItem } from '../../lib/api';
 import type { AssetTier } from '../../lib/api';
-import { calculateDexcore, SEVERITY_TO_CVSS } from '../../lib/scoring/dexcore';
+import { calculateDepscore, SEVERITY_TO_CVSS } from '../../lib/scoring/depscore';
 
 // Node dimensions for layout calculation
 const CENTER_NODE_WIDTH = 260;
@@ -75,8 +75,8 @@ export interface VulnerabilityNodeData {
   severity: string;
   summary: string | null;
   aliases: string[];
-  /** Dexcore score (0-100) when asset tier is available for layout. */
-  dexcore?: number;
+  /** Depscore (0-100) when asset tier is available for layout. */
+  depscore?: number;
 }
 
 /**
@@ -186,11 +186,11 @@ export function useGraphLayout(
 ) {
   const tier: AssetTier = extras?.assetTier ?? 'EXTERNAL';
 
-  const vulnToNodeData = (vuln: { osv_id: string; severity: string; summary: string | null; aliases: string[]; dexcore?: number | null; cvss_score?: number | null; epss_score?: number | null; cisa_kev?: boolean; is_reachable?: boolean }): VulnerabilityNodeData => {
+  const vulnToNodeData = (vuln: { osv_id: string; severity: string; summary: string | null; aliases: string[]; depscore?: number | null; cvss_score?: number | null; epss_score?: number | null; cisa_kev?: boolean; is_reachable?: boolean }): VulnerabilityNodeData => {
     const cvss = vuln.cvss_score ?? (vuln.severity ? (SEVERITY_TO_CVSS[vuln.severity] ?? 0) : 0);
-    const dexcore = vuln.dexcore != null && Number.isFinite(vuln.dexcore)
-      ? vuln.dexcore
-      : calculateDexcore({
+    const depscore = vuln.depscore != null && Number.isFinite(vuln.depscore)
+      ? vuln.depscore
+      : calculateDepscore({
           cvss,
           epss: vuln.epss_score ?? 0,
           cisaKev: vuln.cisa_kev ?? false,
@@ -202,7 +202,7 @@ export function useGraphLayout(
       severity: vuln.severity,
       summary: vuln.summary,
       aliases: vuln.aliases ?? [],
-      dexcore,
+      depscore,
     };
   };
 

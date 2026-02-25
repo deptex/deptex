@@ -27,7 +27,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { api, type SupplyChainResponse, type SupplyChainChild, type SupplyChainBumpPr, type ProjectEffectivePolicies, type LatestSafeVersionResponse, type BannedVersion, type SupplyChainVersionSecurityData, type DependencyVersionsResponse, type DependencyVersionItem, type DependencyVersionVulnerability, type AssetTier } from '../../lib/api';
-import { calculateDexcore, SEVERITY_TO_CVSS } from '../../lib/scoring/dexcore';
+import { calculateDepscore, SEVERITY_TO_CVSS } from '../../lib/scoring/depscore';
 import { Button } from '../../components/ui/button';
 import { CenterNode } from '../../components/supply-chain/CenterNode';
 import { DependencyNode } from '../../components/supply-chain/DependencyNode';
@@ -142,8 +142,8 @@ const getVulnSeverityStyles = (severity: string) => {
   }
 };
 
-/** Dexcore badge: 75-100 red, 40-74 yellow, 0-39 gray */
-function getDexcoreBadgeClass(score: number): string {
+/** Depscore badge: 75-100 red, 40-74 yellow, 0-39 gray */
+function getDepscoreBadgeClass(score: number): string {
   if (score >= 75) return 'bg-destructive/10 text-destructive border-destructive/20';
   if (score >= 40) return 'bg-warning/10 text-warning border-warning/20';
   return 'bg-foreground-secondary/10 text-foreground-secondary border-foreground-secondary/20';
@@ -260,10 +260,10 @@ function RecentVersionBlock({
       : `Fixed in ${fixedVersions[0]} +${fixedVersions.length - 1}`;
   };
 
-  const getDexcoreScore = (vuln: DependencyVersionVulnerability): number => {
-    if (vuln.dexcore != null && Number.isFinite(vuln.dexcore)) return vuln.dexcore;
+  const getDepscoreValue = (vuln: DependencyVersionVulnerability): number => {
+    if (vuln.depscore != null && Number.isFinite(vuln.depscore)) return vuln.depscore;
     const cvss = vuln.cvss_score ?? (vuln.severity ? (SEVERITY_TO_CVSS[vuln.severity] ?? 0) : 0);
-    return calculateDexcore({
+    return calculateDepscore({
       cvss,
       epss: vuln.epss_score ?? 0,
       cisaKev: vuln.cisa_kev ?? false,
@@ -278,7 +278,7 @@ function RecentVersionBlock({
       : `https://osv.dev/vulnerability/${vuln.osv_id}`;
     const cveAliases = (vuln.aliases ?? []).filter((a) => a.startsWith('CVE-')).slice(0, 2);
     const isTransitive = introducedBy !== 'Direct';
-    const dexcoreScore = getDexcoreScore(vuln);
+    const depscoreValue = getDepscoreValue(vuln);
     return (
       <tr key={`${vuln.osv_id}-${introducedBy}`} className="hover:bg-table-hover transition-colors">
         <td className="px-4 py-3">
@@ -290,10 +290,10 @@ function RecentVersionBlock({
         </td>
         <td className="px-4 py-3">
           <span
-            className={`inline-flex items-center justify-center w-9 px-2 py-0.5 rounded-full text-xs font-medium border ${getDexcoreBadgeClass(dexcoreScore)}`}
-            title="Dexcore score (0-100)"
+            className={`inline-flex items-center justify-center w-9 px-2 py-0.5 rounded-full text-xs font-medium border ${getDepscoreBadgeClass(depscoreValue)}`}
+            title="Depscore (0-100)"
           >
-            {dexcoreScore}
+            {depscoreValue}
           </span>
         </td>
         <td className="px-4 py-3">
@@ -418,7 +418,7 @@ function RecentVersionBlock({
                 Severity
               </th>
               <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
-                Dexcore
+                Depscore
               </th>
               <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
                 ID
@@ -678,7 +678,7 @@ export function SupplyChainContent({ orgId, projectId, dependencyId, dependencyN
       .finally(() => setBumpScopeLoading(false));
   }, [orgId, projectId]);
 
-  // Load project asset tier for Dexcore (use cache or fetch)
+  // Load project asset tier for Depscore (use cache or fetch)
   useEffect(() => {
     if (!orgId || !projectId) return;
     const cached = api.getCachedProject(orgId, projectId);

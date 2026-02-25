@@ -876,7 +876,7 @@ export default function ProjectSettingsPage() {
                     <div>
                       <h3 className="text-base font-semibold text-foreground mb-1">Asset Tier</h3>
                       <p className="text-sm text-foreground-secondary mb-4">
-                        Used by Dexcore to weight vulnerability scores and blast radius (Crown Jewels vs non-production).
+                        Used by Depscore to weight vulnerability scores and blast radius (Crown Jewels vs non-production).
                       </p>
                       <div className="max-w-md">
                         <select

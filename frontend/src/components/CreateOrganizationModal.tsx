@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { AlertCircle, Plus } from 'lucide-react';
 import { Button } from './ui/button';
 import { api } from '../lib/api';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from './ui/dialog';
 
 interface CreateOrganizationModalProps {
   isOpen: boolean;
@@ -18,14 +19,12 @@ export default function CreateOrganizationModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (!isOpen) return null;
-
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) {
       e.preventDefault();
     }
     if (!name.trim() || loading) return;
-    
+
     setError(null);
     setLoading(true);
 
@@ -41,67 +40,54 @@ export default function CreateOrganizationModal({
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50">
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-        onClick={onClose}
-      />
+  const handleClose = () => {
+    if (!loading) {
+      setName('');
+      setError(null);
+      onClose();
+    }
+  };
 
-      {/* Side Panel */}
-      <div
-        className="fixed right-0 top-0 h-full w-full max-w-lg bg-background border-l border-border shadow-2xl transform transition-transform duration-300 translate-x-0 flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="px-6 py-5 border-b border-border flex-shrink-0 bg-[#141618]">
-          <h2 className="text-xl font-semibold text-foreground">Create a new organization</h2>
+  return (
+    <Dialog open={isOpen} onOpenChange={(open) => { if (!open) handleClose(); }}>
+      <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-hidden max-h-[90vh] flex flex-col">
+        <div className="px-6 pt-6 pb-4 border-b border-border flex-shrink-0">
+          <DialogTitle>Create a new organization</DialogTitle>
+          <DialogDescription className="mt-1">
+            Organizations help you group and manage your projects. Configure team members and billing settings for each organization.
+          </DialogDescription>
         </div>
 
-        {/* Content */}
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto no-scrollbar px-6 py-6 flex flex-col">
-          <div className="space-y-6 flex-1">
-            {/* Description */}
-            <div className="space-y-2">
-              <p className="text-sm text-foreground-secondary leading-relaxed">
-                Organizations help you group and manage your projects. Configure team members and billing settings for each organization.
-              </p>
+        <form onSubmit={handleSubmit} className="px-6 py-4 grid gap-4 bg-background overflow-y-auto max-h-[60vh] min-h-0">
+          {error && (
+            <div className="bg-destructive/10 border border-destructive/20 rounded-md p-3 flex items-start gap-2">
+              <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
+              <p className="text-sm text-destructive">{error}</p>
             </div>
+          )}
 
-            {/* Error message */}
-            {error && (
-              <div className="bg-destructive/10 border border-destructive/20 rounded-md p-3 flex items-start gap-2">
-                <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
-                <p className="text-sm text-destructive">{error}</p>
-              </div>
-            )}
-
-            {/* Form Field */}
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
-                Organization Name
-              </label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="My Organization"
-                className="w-full px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                autoFocus
-                required
-              />
-            </div>
+          <div>
+            <label htmlFor="org-name" className="block text-sm font-medium text-foreground mb-2">
+              Organization Name
+            </label>
+            <input
+              id="org-name"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="My Organization"
+              className="w-full px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+              autoFocus
+              required
+            />
           </div>
         </form>
 
-        {/* Footer */}
-        <div className="px-6 py-5 flex items-center justify-end gap-3 flex-shrink-0">
-          <Button type="button" variant="outline" onClick={onClose} disabled={loading}>
+        <DialogFooter className="px-6 py-4 bg-background">
+          <Button variant="outline" onClick={handleClose} disabled={loading}>
             Cancel
           </Button>
           <Button
-            type="button"
             onClick={handleSubmit}
             className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
             disabled={loading || !name.trim()}
@@ -113,9 +99,9 @@ export default function CreateOrganizationModal({
             )}
             Create
           </Button>
-        </div>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

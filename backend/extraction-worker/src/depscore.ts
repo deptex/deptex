@@ -1,9 +1,16 @@
+/**
+ * Depscore: context-aware vulnerability score (0–100).
+ * Uses 4-tier asset criticality (CROWN_JEWELS, EXTERNAL, INTERNAL, NON_PRODUCTION).
+ */
+
+export type AssetTier = 'CROWN_JEWELS' | 'EXTERNAL' | 'INTERNAL' | 'NON_PRODUCTION';
+
 export interface DepscoreContext {
   cvss: number;
   epss: number;
   cisaKev: boolean;
   isReachable: boolean;
-  assetCriticality: number; // 1 = Internet Facing, 2 = Internal, 3 = Sandbox
+  assetTier: AssetTier;
 }
 
 export const SEVERITY_TO_CVSS: Record<string, number> = {
@@ -13,10 +20,23 @@ export const SEVERITY_TO_CVSS: Record<string, number> = {
   low: 2.0,
 };
 
+const TIER_WEIGHT: Record<AssetTier, number> = {
+  CROWN_JEWELS: 1.3,
+  EXTERNAL: 1.1,
+  INTERNAL: 0.9,
+  NON_PRODUCTION: 0.6,
+};
+
+const REACHABILITY_WEIGHT_UNREACHABLE: Record<AssetTier, number> = {
+  CROWN_JEWELS: 0.8,
+  EXTERNAL: 0.5,
+  INTERNAL: 0.3,
+  NON_PRODUCTION: 0.1,
+};
+
 export function calculateDepscore(ctx: DepscoreContext): number {
   const cvss = Math.max(0, Math.min(10, ctx.cvss));
   const epss = Math.max(0, Math.min(1, ctx.epss));
-  const tier = Math.max(1, Math.min(3, ctx.assetCriticality));
 
   const baseImpact = cvss * 10;
 
@@ -24,10 +44,10 @@ export function calculateDepscore(ctx: DepscoreContext): number {
     ? 1.2
     : 0.6 + 0.6 * Math.sqrt(epss);
 
-  const tierWeight = 1.4 - 0.2 * tier;
+  const tierWeight = TIER_WEIGHT[ctx.assetTier];
   const reachabilityWeight = ctx.isReachable
     ? 1.0
-    : 0.7 - 0.2 * tier;
+    : REACHABILITY_WEIGHT_UNREACHABLE[ctx.assetTier];
   const environmentalMultiplier = tierWeight * reachabilityWeight;
 
   const score = baseImpact * threatMultiplier * environmentalMultiplier;

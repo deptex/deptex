@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Button } from './ui/button';
 import { RolePermissions } from '../lib/api';
-import { Save, Eye, Settings, Shield, Bot, Users } from 'lucide-react';
+import { Save, Settings, Shield, Users } from 'lucide-react';
 
 interface PermissionEditorProps {
   permissions: RolePermissions;
@@ -91,11 +91,6 @@ export function PermissionEditor({
       }
     }
 
-    // If interact_with_security_agent is disabled, disable manage_aegis
-    if (key === 'interact_with_security_agent' && !value) {
-      updated.manage_aegis = false;
-    }
-
     setLocalPermissions(updated);
     if (onChange) {
       onChange(updated);
@@ -107,12 +102,6 @@ export function PermissionEditor({
   };
 
   const permissionGroups = [
-    {
-      title: 'General',
-      icon: <Eye className="h-3.5 w-3.5" />,
-      permissions: [
-      ],
-    },
     {
       title: 'Admin',
       icon: <Settings className="h-3.5 w-3.5" />,
@@ -132,14 +121,6 @@ export function PermissionEditor({
       permissions: [
         { key: 'view_compliance' as const, label: 'View Compliance' },
         { key: 'edit_policies' as const, label: 'Edit Policies' },
-      ],
-    },
-    {
-      title: 'Aegis',
-      icon: <Bot className="h-3.5 w-3.5" />,
-      permissions: [
-        { key: 'interact_with_security_agent' as const, label: 'Interact with Aegis' },
-        { key: 'manage_aegis' as const, label: 'Manage Aegis', dependsOn: 'interact_with_security_agent' as const },
       ],
     },
     {
@@ -164,7 +145,7 @@ export function PermissionEditor({
 
   return (
     <div className="space-y-4">
-      {permissionGroups.map((group) => {
+      {permissionGroups.filter((g) => g.permissions.length > 0).map((group) => {
         const visiblePerms = getVisiblePermissions(group.permissions);
 
         return (
@@ -254,11 +235,11 @@ export function PermissionEditor({
       })}
 
       {!hideActions && (
-        <div className="flex items-center justify-end gap-3 pt-6 border-t border-border">
+        <div className="sticky bottom-0 -mx-6 px-6 py-4 mt-6 bg-background border-t border-border flex items-center justify-end gap-3 flex-shrink-0">
           {onCancel && (
             <Button
               onClick={onCancel}
-              variant="ghost"
+              variant="outline"
               disabled={isLoading}
               className="px-4"
             >
@@ -268,12 +249,12 @@ export function PermissionEditor({
           <Button
             onClick={handleSave}
             disabled={isLoading}
-            className="px-6 bg-primary text-primary-foreground hover:bg-primary/90"
+            className="px-6 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
           >
             {isLoading ? (
               <>
                 <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                Saving
+                Save Permissions
               </>
             ) : (
               <>

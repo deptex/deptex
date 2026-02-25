@@ -943,7 +943,7 @@ export default function ProjectsPage() {
 
                   <div className="border-t border-border" />
 
-                  {/* Asset tier (create only) — 4-tier Dexcore criticality */}
+                  {/* Asset tier (create only) — 4-tier Depscore criticality */}
                   {!editingProject && (
                     <div>
                       <div className="flex items-center gap-1.5 mb-2">
@@ -957,7 +957,7 @@ export default function ProjectsPage() {
                             </span>
                           </TooltipTrigger>
                           <TooltipContent side="top" className="max-w-[260px]">
-                            Used by Dexcore to weight vulnerability scores and blast radius (e.g. Crown Jewels vs non-production).
+                            Used by Depscore to weight vulnerability scores and blast radius (e.g. Crown Jewels vs non-production).
                           </TooltipContent>
                         </Tooltip>
                       </div>

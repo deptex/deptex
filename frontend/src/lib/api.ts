@@ -79,7 +79,7 @@ export interface OrganizationIntegration {
   updated_at: string;
 }
 
-export type CiCdProvider = 'github' | 'gitlab' | 'bitbucket' | 'slack' | 'discord';
+export type CiCdProvider = 'github' | 'gitlab' | 'bitbucket' | 'slack' | 'discord' | 'jira' | 'linear' | 'asana' | 'custom_notification' | 'custom_ticketing' | 'email';
 
 export interface CiCdConnection {
   id: string;
@@ -535,6 +535,64 @@ export const api = {
 
   async connectDiscordOrg(organizationId: string): Promise<{ redirectUrl: string }> {
     return fetchWithAuth(`/api/integrations/discord/install?org_id=${organizationId}`);
+  },
+
+  async connectJiraOrg(organizationId: string): Promise<{ redirectUrl: string }> {
+    return fetchWithAuth(`/api/integrations/jira/install?org_id=${organizationId}`);
+  },
+
+  async connectJiraPatOrg(organizationId: string, baseUrl: string, token: string): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/integrations/jira/connect-pat`, {
+      method: 'POST',
+      body: JSON.stringify({ org_id: organizationId, base_url: baseUrl, token }),
+    });
+  },
+
+  async connectLinearOrg(organizationId: string): Promise<{ redirectUrl: string }> {
+    return fetchWithAuth(`/api/integrations/linear/install?org_id=${organizationId}`);
+  },
+
+  async connectAsanaOrg(organizationId: string): Promise<{ redirectUrl: string }> {
+    return fetchWithAuth(`/api/integrations/asana/install?org_id=${organizationId}`);
+  },
+
+  async createEmailNotification(organizationId: string, email: string): Promise<{ success: boolean; id: string }> {
+    return fetchWithAuth(`/api/integrations/organizations/${organizationId}/email-notifications`, {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  },
+
+  async createCustomIntegration(organizationId: string, data: { name: string; type: 'notification' | 'ticketing'; webhook_url: string; icon_url?: string }): Promise<{ success: boolean; id: string; secret: string }> {
+    return fetchWithAuth(`/api/integrations/organizations/${organizationId}/custom-integrations`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async updateCustomIntegration(organizationId: string, integrationId: string, data: { name?: string; webhook_url?: string; icon_url?: string; regenerate_secret?: boolean }): Promise<{ success: boolean; secret?: string }> {
+    return fetchWithAuth(`/api/integrations/organizations/${organizationId}/custom-integrations/${integrationId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async uploadIntegrationIcon(organizationId: string, file: File): Promise<{ url: string }> {
+    const token = await getAuthToken();
+    if (!token) throw new Error('Not authenticated');
+    const response = await fetch(`${API_BASE_URL}/api/integrations/organizations/${organizationId}/custom-integrations/upload-icon`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': file.type,
+        'Authorization': `Bearer ${token}`,
+      },
+      body: file,
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: 'Upload failed' }));
+      throw new Error(err.error || 'Upload failed');
+    }
+    return response.json();
   },
 
   async transferOrganizationOwnership(organizationId: string, userId: string, newRole: string = 'admin'): Promise<{ message: string }> {
@@ -1818,8 +1876,8 @@ export interface DependencyVersionVulnerability {
   fixed_versions?: string[];
   /** Present for transitive vulnerabilities: name of the dependency that brought in this vuln. */
   from_package?: string;
-  /** Dexcore score (0-100) when available from project vulnerability data. */
-  dexcore?: number | null;
+  /** Depscore (0-100) when available from project vulnerability data. */
+  depscore?: number | null;
   cvss_score?: number | null;
   epss_score?: number | null;
   cisa_kev?: boolean;
@@ -2025,7 +2083,6 @@ export interface ProjectVulnerability {
   cvss_score?: number;
   cisa_kev?: boolean;
   depscore?: number;
-  dexcore?: number;
 }
 
 export interface ProjectPermissions {

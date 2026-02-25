@@ -8,8 +8,7 @@ import { execSync, spawnSync } from 'child_process';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { cloneRepository, cleanupRepository, cloneByProvider } from './clone';
 import { parseSbom, getBomRefToNameVersion, type ParsedSbomDep, type ParsedSbomRelationship } from './sbom';
-import { calculateDepscore, SEVERITY_TO_CVSS } from './depscore';
-import { calculateDexcore, type AssetTier } from './dexcore';
+import { calculateDepscore, SEVERITY_TO_CVSS, type AssetTier } from './depscore';
 import { analyzeRepository } from './ast-parser';
 import { storeAstAnalysisResults } from './ast-storage';
 
@@ -672,12 +671,6 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
           if (raw && VALID_ASSET_TIERS.includes(raw as AssetTier)) assetTier = raw as AssetTier;
         }
 
-        let assetCriticality = 2;
-        if (assetTier === 'EXTERNAL') assetCriticality = 1;
-        else if (assetTier === 'INTERNAL') assetCriticality = 2;
-        else if (assetTier === 'NON_PRODUCTION') assetCriticality = 3;
-        else assetCriticality = 1;
-
         const vulnRows: Array<{
           project_id: string;
           project_dependency_id: string;
@@ -691,7 +684,6 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
           cvss_score: number | null;
           cisa_kev: boolean;
           depscore: number | null;
-          dexcore: number | null;
           published_at: string | null;
         }> = [];
         if (isCycloneVdr) {
@@ -737,7 +729,6 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
                 cvss_score: cvssFromVdr,
                 cisa_kev: false,
                 depscore: null,
-                dexcore: null,
                 published_at: v.published ?? null,
               });
             }
@@ -762,7 +753,6 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
               cvss_score: severity ? (SEVERITY_TO_CVSS[severity] ?? null) : null,
               cisa_kev: false,
               depscore: null,
-              dexcore: null,
               published_at: null,
             });
           }
@@ -809,13 +799,6 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
           const cvss = row.cvss_score ?? (row.severity ? (SEVERITY_TO_CVSS[row.severity] ?? 0) : 0);
           const epss = row.epss_score ?? 0;
           row.depscore = calculateDepscore({
-            cvss,
-            epss,
-            cisaKev: row.cisa_kev,
-            isReachable: row.is_reachable,
-            assetCriticality,
-          });
-          row.dexcore = calculateDexcore({
             cvss,
             epss,
             cisaKev: row.cisa_kev,

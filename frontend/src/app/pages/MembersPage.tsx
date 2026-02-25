@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useOutletContext } from 'react-router-dom';
-import { Search, Link as LinkIcon, MoreVertical, Mail, Check, Plus, X } from 'lucide-react';
+import { Search, Link as LinkIcon, MoreVertical, Mail, Check, Plus, X, Loader2, Send } from 'lucide-react';
 import { api, OrganizationMember, OrganizationInvitation, Team, Organization, OrganizationRole, RolePermissions } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { useAuth } from '../../contexts/AuthContext';
@@ -11,6 +11,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogTitle,
+} from '../../components/ui/dialog';
 import { RoleDropdown } from '../../components/RoleDropdown';
 import { RoleBadge } from '../../components/RoleBadge';
 import { TeamDropdown } from '../../components/TeamDropdown';
@@ -60,6 +67,7 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
   const [permissionsChecked, setPermissionsChecked] = useState(false);
   const [userRolePermissions, setUserRolePermissions] = useState<RolePermissions | null>(null);
   const { toast } = useToast();
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Get cached permissions
   const getCachedPermissions = (): RolePermissions | null => {
@@ -94,6 +102,17 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
       loadData();
     }
   }, [id, permissionsChecked]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && searchQuery) {
+        setSearchQuery('');
+        searchInputRef.current?.blur();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [searchQuery]);
 
   // Refine permissions check with database values after roles load
   useEffect(() => {
@@ -565,7 +584,7 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
             </button>
           </div>
           <Button
-            className="bg-primary text-primary-foreground hover:bg-primary/90 h-8 text-sm mb-1"
+            className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm mb-1"
             disabled
           >
             <Plus className="h-4 w-4 mr-2" />
@@ -602,21 +621,40 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
 
         {/* Loading Skeleton for Members List */}
         <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-          <div className="divide-y divide-border">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="px-4 py-3 flex items-center justify-between">
-                <div className="flex items-center gap-3 flex-1">
-                  <div className="h-10 w-10 rounded-full bg-muted animate-pulse border border-border"></div>
-                  <div className="flex-1 min-w-0">
-                    <div className="h-4 bg-muted rounded animate-pulse w-32 mb-2"></div>
-                    <div className="h-3 bg-muted rounded animate-pulse w-48"></div>
-                  </div>
-                  <div className="h-5 w-16 bg-muted rounded animate-pulse border border-border"></div>
-                </div>
-                <div className="h-4 w-4 bg-muted rounded animate-pulse"></div>
-              </div>
-            ))}
-          </div>
+          <table className="w-full">
+            <thead className="bg-background-card-header border-b border-border">
+              <tr>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                  Member
+                </th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                  Role
+                </th>
+                <th className="w-10"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {[1, 2, 3].map((i) => (
+                <tr key={i} className="animate-pulse">
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <div className="h-10 w-10 rounded-full bg-muted border border-border" />
+                      <div className="space-y-1">
+                        <div className="h-4 bg-muted rounded w-32" />
+                        <div className="h-3 bg-muted rounded w-48" />
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="h-5 w-16 bg-muted rounded border border-border" />
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="h-4 w-4 bg-muted rounded" />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
     );
@@ -648,7 +686,7 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
         </div>
         <Button
           onClick={() => setShowInviteModal(true)}
-          className="bg-primary text-primary-foreground hover:bg-primary/90 h-8 text-sm mb-1"
+          className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm mb-1"
         >
           <Plus className="h-4 w-4 mr-2" />
           Invite
@@ -658,14 +696,25 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
       {/* Search and Filters */}
       <div className="flex items-center gap-4 mb-4">
         <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-foreground-secondary" />
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-foreground-secondary pointer-events-none" />
           <input
+            ref={searchInputRef}
             type="text"
             placeholder="Filter..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+            className={`w-full pl-9 py-2 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent ${searchQuery ? 'pr-14' : 'pr-4'}`}
           />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded text-xs font-medium text-foreground-secondary hover:text-foreground bg-transparent border border-border/60 hover:border-border transition-colors"
+              aria-label="Clear search (Esc)"
+            >
+              Esc
+            </button>
+          )}
         </div>
         <div className="relative">
           <RoleDropdown
@@ -699,52 +748,83 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
               onChange={(value) => setSelectedTeamFilter(value)}
               teams={teams}
               className="min-w-[200px]"
+              memberCounts={(() => {
+                const counts: Record<string, number> = { all: members.length };
+                teams.forEach(team => {
+                  counts[team.id] = members.filter(m => (m.teams?.map(t => t.id) || []).includes(team.id)).length;
+                });
+                return counts;
+              })()}
+              showMemberCounts={true}
             />
           </div>
         )}
       </div>
 
       {/* Members/Invitations List */}
-      {(activeTab === 'members' && filteredMembers.length > 0) || (activeTab === 'invitations' && filteredInvitations.length > 0) ? (
+      {activeTab === 'members' || (activeTab === 'invitations' && invitations.length > 0) ? (
         <div className="bg-background-card border border-border rounded-lg overflow-hidden">
           {activeTab === 'members' ? (
-            <div className="divide-y divide-border">
-              {filteredMembers.map((member) => (
-                <div key={member.user_id} className="px-4 py-3 flex items-center justify-between hover:bg-background-subtle/20 transition-colors">
-                  <div className="flex items-center gap-3 flex-1">
-                    <img
-                      src={member.avatar_url || '/images/blank_profile_image.png'}
-                      alt={member.full_name || member.email}
-                      className="h-10 w-10 rounded-full object-cover border border-border"
-                      referrerPolicy="no-referrer"
-                      onError={(e) => {
-                        e.currentTarget.src = '/images/blank_profile_image.png';
-                      }}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-foreground truncate flex items-center gap-2">
-                        {member.full_name || member.email.split('@')[0]}
-                        {user && member.email.toLowerCase() === user.email?.toLowerCase() && (
-                          <span className="text-xs text-foreground-secondary font-normal">
-                            (You)
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-xs text-foreground-secondary truncate flex items-center gap-2">
-                        {member.email}
-                        {member.teams && member.teams.length > 0 && (
-                          <span className="text-xs text-foreground-secondary">
-                            • {member.teams.map(t => t.name).join(', ')}
-                          </span>
-                        )}
+            <table className="w-full">
+              <thead className="bg-background-card-header border-b border-border">
+                <tr>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                    Member
+                  </th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                    Role
+                  </th>
+                  <th className="w-10"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+              {filteredMembers.length === 0 ? (
+                <tr>
+                  <td colSpan={3} className="px-4 py-8 text-center text-sm text-foreground-secondary">
+                    No members matched this search.
+                  </td>
+                </tr>
+              ) : filteredMembers.map((member) => (
+                <tr key={member.user_id} className="hover:bg-table-hover transition-colors">
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={member.avatar_url || '/images/blank_profile_image.png'}
+                        alt={member.full_name || member.email}
+                        className="h-10 w-10 rounded-full object-cover border border-border"
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          e.currentTarget.src = '/images/blank_profile_image.png';
+                        }}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-foreground truncate flex items-center gap-2">
+                          {member.full_name || member.email.split('@')[0]}
+                          {user && member.email.toLowerCase() === user.email?.toLowerCase() && (
+                            <span className="text-xs text-foreground-secondary font-normal">
+                              (You)
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-foreground-secondary truncate flex items-center gap-2">
+                          {member.email}
+                          {member.teams && member.teams.length > 0 && (
+                            <span className="text-xs text-foreground-secondary">
+                              • {member.teams.map(t => t.name).join(', ')}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
+                  </td>
+                  <td className="px-4 py-3">
                     <RoleBadge
                       role={member.role}
                       roleDisplayName={getRoleDisplayName(member.role)}
                       roleColor={getRoleColor(member.role)}
                     />
-                  </div>
+                  </td>
+                  <td className="px-4 py-3">
                   {/* Only show dropdown if there are actions available */
                     (() => {
                       const isCurrentUser = user && member.user_id === user.id;
@@ -827,38 +907,68 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
                         </DropdownMenu>
                       );
                     })()}
-                </div>
+                  </td>
+                </tr>
               ))}
-            </div>
+              </tbody>
+            </table>
           ) : (
-            <div className="divide-y divide-border">
-              {filteredInvitations.map((invitation) => (
-                <div key={invitation.id} className="px-4 py-3 flex items-center justify-between hover:bg-background-subtle/20 transition-colors">
-                  <div className="flex items-center gap-3 flex-1">
-                    <div className="h-10 w-10 rounded-full bg-background-subtle flex items-center justify-center">
-                      <Mail className="h-5 w-5 text-foreground-secondary" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-foreground truncate">{invitation.email}</div>
-                      <div className="text-xs text-foreground-secondary">
-                        Invited as {invitation.role}
-                        {(() => {
-                          const teamNames = invitation.team_names && invitation.team_names.length > 0
-                            ? invitation.team_names
-                            : (invitation.team_name ? [invitation.team_name] : []);
-                          if (teamNames.length === 1) {
-                            return ` for ${teamNames[0]} team`;
-                          } else if (teamNames.length > 1) {
-                            return ` for ${teamNames.length} teams`;
-                          }
-                          return null;
-                        })()}
+            <table className="w-full">
+              <thead className="bg-background-card-header border-b border-border">
+                <tr>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                    Member
+                  </th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                    Role / Teams
+                  </th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                    Status
+                  </th>
+                  <th className="w-10"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+              {filteredInvitations.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="px-4 py-8 text-center text-sm text-foreground-secondary">
+                    No invitations matched this search.
+                  </td>
+                </tr>
+              ) : filteredInvitations.map((invitation) => (
+                <tr key={invitation.id} className="hover:bg-table-hover transition-colors">
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <div className="h-10 w-10 rounded-full bg-background-subtle flex items-center justify-center">
+                        <Mail className="h-5 w-5 text-foreground-secondary" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-foreground truncate">{invitation.email}</div>
                       </div>
                     </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="text-sm text-foreground-secondary">
+                      Invited as {invitation.role}
+                      {(() => {
+                        const teamNames = invitation.team_names && invitation.team_names.length > 0
+                          ? invitation.team_names
+                          : (invitation.team_name ? [invitation.team_name] : []);
+                        if (teamNames.length === 1) {
+                          return ` for ${teamNames[0]}`;
+                        } else if (teamNames.length > 1) {
+                          return ` for ${teamNames.length} teams`;
+                        }
+                        return null;
+                      })()}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
                     <div className="px-2 py-1 rounded text-xs font-medium border border-border bg-transparent text-foreground-secondary">
                       Pending
                     </div>
-                  </div>
+                  </td>
+                  <td className="px-4 py-3">
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <button className="p-1 text-foreground-secondary hover:text-foreground transition-colors">
@@ -874,9 +984,11 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
-                </div>
+                  </td>
+                </tr>
               ))}
-            </div>
+              </tbody>
+            </table>
           )}
         </div>
       ) : (
@@ -884,7 +996,7 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
           {activeTab === 'invitations' && (
             <Button
               onClick={() => setShowInviteModal(true)}
-              className="bg-primary text-primary-foreground hover:bg-primary/90"
+              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
             >
               <Plus className="h-4 w-4 mr-2" />
               Invite Member
@@ -893,206 +1005,133 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
         </div>
       )}
 
-      {/* Invite Side Panel */}
-      {showInviteModal && (
-        <div className="fixed inset-0 z-50">
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-            onClick={() => {
-              setShowInviteModal(false);
-              setInviteForms([{ email: '', role: 'member', team_ids: [] }]);
-            }}
-          />
+      {/* Invite Dialog */}
+      <Dialog open={showInviteModal} onOpenChange={(open) => {
+        if (!open) {
+          setShowInviteModal(false);
+          setInviteForms([{ email: '', role: 'member', team_ids: [] }]);
+        }
+      }}>
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
+          <div className="px-6 pt-6 pb-4 border-b border-border flex-shrink-0">
+            <DialogTitle>Invite new member</DialogTitle>
+            <DialogDescription className="mt-1">
+              Invite new members to your organization by email. You can assign them a role and optionally add them to a team.
+            </DialogDescription>
+          </div>
 
-          {/* Side Panel */}
-          <div
-            className="fixed right-0 top-0 h-full w-full max-w-lg bg-background border-l border-border shadow-2xl transform transition-transform duration-300 translate-x-0 flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="px-6 py-5 border-b border-border flex items-center justify-between flex-shrink-0">
-              <h2 className="text-xl font-semibold text-foreground">Invite new member</h2>
-              <button
-                onClick={() => {
-                  setShowInviteModal(false);
-                  setInviteForms([{ email: '', role: 'member', team_ids: [] }]);
+          <div className="px-6 py-4 grid gap-4 bg-background overflow-y-auto max-h-[60vh] min-h-0">
+            <div className="grid gap-2">
+              <label htmlFor="invite-email" className="text-sm font-medium text-foreground">Email Address</label>
+              <input
+                id="invite-email"
+                type="email"
+                placeholder=""
+                value={inviteForms[0]?.email || ''}
+                onChange={(e) => handleInviteChange(0, 'email', e.target.value)}
+                className="w-full px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && inviteForms[0]?.email) {
+                    handleSendInvites();
+                  }
                 }}
-                className="text-foreground-secondary hover:text-foreground transition-colors"
-              >
-                <X className="h-5 w-5" />
-              </button>
+              />
             </div>
 
-            {/* Content */}
-            <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-6">
-              <div className="space-y-6">
-                {/* Description */}
-                <div className="space-y-2">
-                  <p className="text-sm text-foreground-secondary leading-relaxed">
-                    Invite new members to your organization by email. You can assign them a role and optionally
-                    add them to a specific team. They'll receive an invitation email to join.
-                  </p>
-                </div>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium text-foreground">Role</label>
+              <RoleDropdown
+                value={inviteForms[0]?.role || 'member'}
+                onChange={(value) => handleInviteChange(0, 'role', value)}
+                roles={getAssignableRoles()}
+                getRoleDisplayName={getRoleDisplayName}
+                getRoleColor={getRoleColor}
+                memberCounts={(() => {
+                  const counts: Record<string, number> = {};
+                  getAssignableRoles().forEach(role => {
+                    counts[role.name] = members.filter(m => m.role === role.name).length;
+                  });
+                  return counts;
+                })()}
+                showBadges={true}
+                variant="modal"
+              />
+            </div>
 
-                {/* Form */}
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-foreground mb-2">
-                      Email Address
-                    </label>
-                    <input
-                      type="email"
-                      placeholder="jane@example.com"
-                      value={inviteForms[0]?.email || ''}
-                      onChange={(e) => handleInviteChange(0, 'email', e.target.value)}
-                      className="w-full px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && inviteForms[0]?.email) {
-                          handleSendInvites();
-                        }
-                      }}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-foreground mb-2">
-                      Role
-                    </label>
-                    <RoleDropdown
-                      value={inviteForms[0]?.role || 'member'}
-                      onChange={(value) => handleInviteChange(0, 'role', value)}
-                      roles={getAssignableRoles()}
-                      getRoleDisplayName={getRoleDisplayName}
-                      getRoleColor={getRoleColor}
-                      memberCounts={(() => {
-                        const counts: Record<string, number> = {};
-                        getAssignableRoles().forEach(role => {
-                          counts[role.name] = members.filter(m => m.role === role.name).length;
-                        });
-                        return counts;
-                      })()}
-                      showBadges={true}
-                      variant="modal"
-                    />
-                  </div>
-
-                  {teams.length > 0 && (
-                    <div>
-                      <label className="block text-sm font-medium text-foreground mb-2">
-                        Teams
-                      </label>
-                      <ProjectTeamMultiSelect
-                        value={inviteForms[0]?.team_ids || []}
-                        onChange={(value) => handleInviteChange(0, 'team_ids', value)}
-                        teams={teams}
-                        variant="modal"
-                      />
-                    </div>
-                  )}
-
-                  <div className="pt-4 border-t border-border">
-                    <div className="flex items-center justify-between">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleCopyShareLink}
-                        className="text-xs"
-                      >
-                        {shareLinkCopied ? (
-                          <>
-                            <Check className="h-3 w-3 mr-1" />
-                            Copied!
-                          </>
-                        ) : (
-                          <>
-                            <LinkIcon className="h-3 w-3 mr-1" />
-                            Copy Invite Link
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
+            {teams.length > 0 && (
+              <div className="grid gap-2">
+                <label className="text-sm font-medium text-foreground">Teams</label>
+                <ProjectTeamMultiSelect
+                  value={inviteForms[0]?.team_ids || []}
+                  onChange={(value) => handleInviteChange(0, 'team_ids', value)}
+                  teams={teams}
+                  variant="modal"
+                />
               </div>
-            </div>
+            )}
 
-            {/* Footer */}
-            <div className="px-6 py-5 border-t border-border flex items-center justify-end gap-3 flex-shrink-0">
+            <div className="pt-2">
               <Button
                 variant="outline"
-                onClick={() => {
-                  setShowInviteModal(false);
-                  setInviteForms([{ email: '', role: 'member', team_ids: [] }]);
-                }}
+                size="sm"
+                onClick={handleCopyShareLink}
+                className="text-xs"
               >
-                Cancel
-              </Button>
-              <Button
-                onClick={handleSendInvites}
-                className="bg-primary text-primary-foreground hover:bg-primary/90"
-                disabled={inviting}
-              >
-                {inviting ? (
+                {shareLinkCopied ? (
                   <>
-                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Inviting
+                    <Check className="h-3 w-3 mr-1" />
+                    Copied!
                   </>
                 ) : (
-                  'Send Invitation'
+                  <>
+                    <LinkIcon className="h-3 w-3 mr-1" />
+                    Copy Invite Link
+                  </>
                 )}
               </Button>
             </div>
           </div>
-        </div>
-      )}
+
+          <DialogFooter className="px-6 py-4 bg-background">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowInviteModal(false);
+                setInviteForms([{ email: '', role: 'member', team_ids: [] }]);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSendInvites}
+              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+              disabled={inviting}
+            >
+              {inviting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
+              Send Invitation
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Change Role Dialog */}
-      {/* Change Role Sidebar */}
-      {showRoleSidebar && selectedMember && (
-        <div className="fixed inset-0 z-50">
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-            onClick={() => {
-              setShowRoleSidebar(false);
-              setSelectedMember(null);
-            }}
-          />
+      <Dialog open={!!(showRoleSidebar && selectedMember)} onOpenChange={(open) => {
+        if (!open) {
+          setShowRoleSidebar(false);
+          setSelectedMember(null);
+        }
+      }}>
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
+          {selectedMember && (
+            <>
+              <div className="px-6 pt-6 pb-4 border-b border-border flex-shrink-0">
+                <DialogTitle>Change Role</DialogTitle>
+                <DialogDescription className="mt-1">
+                  Select a new role for {selectedMember.full_name || selectedMember.email.split('@')[0]}.
+                </DialogDescription>
+              </div>
 
-          {/* Side Panel */}
-          <div
-            className="fixed right-0 top-0 h-full w-full max-w-lg bg-background border-l border-border shadow-2xl transform transition-transform duration-300 translate-x-0 flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="px-6 py-5 border-b border-border flex items-center justify-between flex-shrink-0">
-              <h2 className="text-xl font-semibold text-foreground">Change Role</h2>
-              <button
-                onClick={() => {
-                  setShowRoleSidebar(false);
-                  setSelectedMember(null);
-                }}
-                className="text-foreground-secondary hover:text-foreground transition-colors"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            {/* Content */}
-            <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-6">
-              <div className="space-y-6">
-                {/* Description */}
-                <div className="space-y-2">
-                  <p className="text-sm text-foreground-secondary leading-relaxed">
-                    Select a new role for {selectedMember.full_name || selectedMember.email.split('@')[0]}.
-                  </p>
-                </div>
-
-                {/* Member Info */}
+              <div className="px-6 py-4 grid gap-4 bg-background overflow-y-auto max-h-[60vh] min-h-0">
                 <div className="flex items-center gap-3 p-3 bg-background-card border border-border rounded-md">
                   <img
                     src={selectedMember.avatar_url || '/images/blank_profile_image.png'}
@@ -1112,11 +1151,8 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
                   </div>
                 </div>
 
-                {/* Role Selection */}
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-2">
-                    Role
-                  </label>
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium text-foreground">Role</label>
                   <RoleDropdown
                     value={newRole}
                     onChange={(value) => setNewRole(value)}
@@ -1133,90 +1169,55 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
                     showBadges={true}
                     variant="modal"
                   />
-                  <p className="text-xs text-foreground-secondary mt-2">
+                  <p className="text-xs text-foreground-secondary">
                     You can only assign roles at or below your rank level.
                   </p>
                 </div>
               </div>
-            </div>
 
-            {/* Footer */}
-            <div className="px-6 py-5 border-t border-border flex items-center justify-end gap-3 flex-shrink-0">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setShowRoleSidebar(false);
-                  setSelectedMember(null);
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={handleUpdateRole}
-                className="bg-primary text-primary-foreground hover:bg-primary/90"
-                disabled={changingRole}
-              >
-                {changingRole ? (
-                  <>
-                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Updating
-                  </>
-                ) : (
-                  'Update Role'
-                )}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+              <DialogFooter className="px-6 py-4 bg-background">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setShowRoleSidebar(false);
+                    setSelectedMember(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleUpdateRole}
+                  className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                  disabled={changingRole}
+                >
+                  {changingRole ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Check className="h-4 w-4 mr-2" />}
+                  Update Role
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
 
-      {/* Add to Team Sidebar */}
-      {showAddToTeamSidebar && selectedMember && (
-        <div className="fixed inset-0 z-50">
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-            onClick={() => {
-              setShowAddToTeamSidebar(false);
-              setSelectedMember(null);
-              setSelectedTeamIds([]);
-            }}
-          />
+      {/* Add to Team Dialog */}
+      <Dialog open={!!(showAddToTeamSidebar && selectedMember)} onOpenChange={(open) => {
+        if (!open) {
+          setShowAddToTeamSidebar(false);
+          setSelectedMember(null);
+          setSelectedTeamIds([]);
+        }
+      }}>
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
+          {selectedMember && (
+            <>
+              <div className="px-6 pt-6 pb-4 border-b border-border flex-shrink-0">
+                <DialogTitle>Add to Team</DialogTitle>
+                <DialogDescription className="mt-1">
+                  Select one or more teams to add {selectedMember.full_name || selectedMember.email.split('@')[0]} to.
+                </DialogDescription>
+              </div>
 
-          {/* Side Panel */}
-          <div
-            className="fixed right-0 top-0 h-full w-full max-w-lg bg-background border-l border-border shadow-2xl transform transition-transform duration-300 translate-x-0 flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="px-6 py-5 border-b border-border flex items-center justify-between flex-shrink-0">
-              <h2 className="text-xl font-semibold text-foreground">Add to Team</h2>
-              <button
-                onClick={() => {
-                  setShowAddToTeamSidebar(false);
-                  setSelectedMember(null);
-                  setSelectedTeamIds([]);
-                }}
-                className="text-foreground-secondary hover:text-foreground transition-colors"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            {/* Content */}
-            <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-6">
-              <div className="space-y-6">
-                {/* Description */}
-                <div className="space-y-2">
-                  <p className="text-sm text-foreground-secondary leading-relaxed">
-                    Select one or more teams to add {selectedMember.full_name || selectedMember.email.split('@')[0]} to.
-                  </p>
-                </div>
-
-                {/* Member Info */}
+              <div className="px-6 py-4 grid gap-4 bg-background overflow-y-auto max-h-[60vh] min-h-0">
                 <div className="flex items-center gap-3 p-3 bg-background-card border border-border rounded-md">
                   <img
                     src={selectedMember.avatar_url || '/images/blank_profile_image.png'}
@@ -1236,14 +1237,10 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
                   </div>
                 </div>
 
-                {/* Teams Selection */}
                 {teams.length > 0 ? (
-                  <div>
-                    <label className="block text-sm font-medium text-foreground mb-2">
-                      Teams
-                    </label>
+                  <div className="grid gap-2">
+                    <label className="text-sm font-medium text-foreground">Teams</label>
                     {(() => {
-                      // Filter out teams the member is already in
                       const memberTeamIds = selectedMember.teams?.map(t => t.id) || [];
                       const availableTeams = teams.filter(team => !memberTeamIds.includes(team.id));
 
@@ -1271,41 +1268,31 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
                   </div>
                 )}
               </div>
-            </div>
 
-            {/* Footer */}
-            <div className="px-6 py-5 border-t border-border flex items-center justify-end gap-3 flex-shrink-0">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setShowAddToTeamSidebar(false);
-                  setSelectedMember(null);
-                  setSelectedTeamIds([]);
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={handleAddToTeams}
-                disabled={selectedTeamIds.length === 0 || addingToTeam}
-                className="bg-primary text-primary-foreground hover:bg-primary/90"
-              >
-                {addingToTeam ? (
-                  <>
-                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Adding
-                  </>
-                ) : (
-                  `Add to Team${selectedTeamIds.length > 1 ? 's' : ''}`
-                )}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+              <DialogFooter className="px-6 py-4 bg-background">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setShowAddToTeamSidebar(false);
+                    setSelectedMember(null);
+                    setSelectedTeamIds([]);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleAddToTeams}
+                  disabled={selectedTeamIds.length === 0 || addingToTeam}
+                  className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                >
+                  {addingToTeam ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
+                  {`Add to Team${selectedTeamIds.length > 1 ? 's' : ''}`}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Remove Member Dialog */}
       {showRemoveDialog && (

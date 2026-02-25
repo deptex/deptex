@@ -6449,7 +6449,6 @@ router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, 
         cvss_score: vuln.cvss_score ?? null,
         cisa_kev: vuln.cisa_kev ?? false,
         depscore: vuln.depscore ?? null,
-        dexcore: vuln.dexcore ?? null,
       }),
     }));
 
