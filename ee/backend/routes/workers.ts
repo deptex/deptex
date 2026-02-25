@@ -1175,7 +1175,7 @@ let populateDependenciesInFlight = false;
 
 // POST /api/workers/queue-populate - Called by extraction worker to queue populate jobs for new deps
 // Auth: X-Worker-Secret or Authorization: Bearer <EXTRACTION_WORKER_SECRET>
-router.post('/queue-populate', verifyWorkerSecret, async (req, res) => {
+router.post('/queue-populate', verifyWorkerSecret, async (req: express.Request, res: express.Response) => {
   const { projectId, organizationId, dependencies, ecosystem: bodyEcosystem } = req.body || {};
 
   if (!projectId || !organizationId || !dependencies || !Array.isArray(dependencies)) {
@@ -1202,7 +1202,7 @@ router.post('/queue-populate', verifyWorkerSecret, async (req, res) => {
 
 // POST /api/workers/populate-dependencies - Called by QStash to populate a BATCH of new dependencies
 // Fetches npm info, creates version rows, GHSA vulns, OpenSSF, and calculates reputation score
-router.post('/populate-dependencies', verifyQStash, async (req, res) => {
+router.post('/populate-dependencies', verifyQStash, async (req: express.Request, res: express.Response) => {
   const { dependencies, ecosystem: batchEcosystem } = req.body || {};
 
   if (!dependencies || !Array.isArray(dependencies) || dependencies.length === 0) {
@@ -1286,7 +1286,7 @@ router.post('/populate-dependencies', verifyQStash, async (req, res) => {
 });
 
 // POST /api/workers/backfill-dependency-trees - Populate transitive edges for versions with none (runs after populate)
-router.post('/backfill-dependency-trees', verifyQStash, async (req, res) => {
+router.post('/backfill-dependency-trees', verifyQStash, async (req: express.Request, res: express.Response) => {
   const { dependencyId, name } = req.body || {};
 
   if (!dependencyId || !name) {
@@ -1345,7 +1345,7 @@ router.post('/backfill-dependency-trees', verifyQStash, async (req, res) => {
 });
 
 // POST /api/workers/extract-deps - Legacy endpoint (kept for compatibility)
-router.post('/extract-deps', async (req, res) => {
+router.post('/extract-deps', async (req: express.Request, res: express.Response) => {
   const expectedToken = process.env.QSTASH_TOKEN;
   if (expectedToken) {
     const authHeader = req.headers.authorization || '';

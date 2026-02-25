@@ -4,6 +4,7 @@
   "description": "Deptex backend API - Core logic for dependency tracking and security",
   "main": "dist/index.js",
   "scripts": {
+    "postinstall": "node -e \"var p=require('path').join(process.cwd(),'../ee/backend');try{require('child_process').execSync('npm install --ignore-scripts',{cwd:p,stdio:'inherit'})}catch(e){}\"",
     "dev": "cross-env NODE_PATH=node_modules tsx watch src/index.ts",
     "dev:ce": "cross-env DEPTEX_EDITION=ce tsx watch src/index.ts",
     "build": "tsc",
