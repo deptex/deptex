@@ -12,7 +12,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail } from 'lucide-react';
+import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
@@ -162,23 +162,46 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
             <div className={`h-8 w-32 ${pulse}`} />
             <div className={`h-9 w-24 ${pulse}`} />
           </div>
+          <div className="flex items-center gap-4 mb-4">
+            <div className={`h-9 flex-1 max-w-md ${pulse}`} />
+            <div className={`h-9 w-28 ${pulse}`} />
+            <div className={`h-9 w-28 ${pulse}`} />
+          </div>
           <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-            <div className="p-4 border-b border-border flex items-center gap-3">
-              <div className={`h-9 flex-1 max-w-xs ${pulse}`} />
-              <div className={`h-9 w-28 ${pulse}`} />
-            </div>
-            <div className="divide-y divide-border">
-              {[1, 2, 3, 4, 5].map((i) => (
-                <div key={i} className="px-4 py-3 flex items-center gap-3">
-                  <div className="h-10 w-10 rounded-full bg-muted animate-pulse flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className={`h-4 w-36 ${pulse} mb-1`} />
-                    <div className={`h-3 w-48 ${pulse}`} />
-                  </div>
-                  <div className={`h-6 w-16 ${pulse}`} />
-                </div>
-              ))}
-            </div>
+            <table className="w-full">
+              <thead className="bg-background-card-header border-b border-border">
+                <tr>
+                  <th className="text-left px-4 py-3">
+                    <div className={`h-4 w-16 ${pulse}`} />
+                  </th>
+                  <th className="text-left px-4 py-3">
+                    <div className={`h-4 w-12 ${pulse}`} />
+                  </th>
+                  <th className="w-10"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <tr key={i} className="animate-pulse">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <div className="h-10 w-10 rounded-full bg-muted flex-shrink-0" />
+                        <div className="space-y-1">
+                          <div className={`h-4 w-32 ${pulse}`} />
+                          <div className={`h-3 w-48 ${pulse}`} />
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className={`h-5 w-16 ${pulse}`} />
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className={`h-4 w-4 ${pulse}`} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       );
@@ -502,11 +525,21 @@ export default function OrganizationSettingsPage() {
   const [draggedRoleId, setDraggedRoleId] = useState<string | null>(null);
   const [dragPreviewRoles, setDragPreviewRoles] = useState<OrganizationRole[] | null>(null);
   const [showAddRoleSidepanel, setShowAddRoleSidepanel] = useState(false);
+  const [addRolePanelVisible, setAddRolePanelVisible] = useState(false);
+  const addRoleCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [roleSettingsPanelVisible, setRoleSettingsPanelVisible] = useState(false);
+  const [roleSettingsClosing, setRoleSettingsClosing] = useState(false);
+  const roleSettingsCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isSavingOrgName, setIsSavingOrgName] = useState(false);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
+  const [pendingAvatarPreview, setPendingAvatarPreview] = useState<string | null>(null);
   const [isTransferringOwnership, setIsTransferringOwnership] = useState(false);
   const [isDeletingOrg, setIsDeletingOrg] = useState(false);
   const [showRoleSettingsModal, setShowRoleSettingsModal] = useState(false);
+  const [membersInviteModalOpen, setMembersInviteModalOpen] = useState(false);
+  const [hasVisitedMembers, setHasVisitedMembers] = useState(false);
+  const [hasVisitedIntegrations, setHasVisitedIntegrations] = useState(false);
   const [selectedRoleForSettings, setSelectedRoleForSettings] = useState<OrganizationRole | null>(null);
   const [newRoleNameInput, setNewRoleNameInput] = useState('');
   const [newRoleColor, setNewRoleColor] = useState(''); // No default color (plain gray)
@@ -556,6 +589,14 @@ export default function OrganizationSettingsPage() {
   const [customIntegrationSecret, setCustomIntegrationSecret] = useState<string | null>(null);
   const [editingCustomIntegration, setEditingCustomIntegration] = useState<CiCdConnection | null>(null);
   const [newlyCreatedIntegrationId, setNewlyCreatedIntegrationId] = useState<string | null>(null);
+  const [showCustomIntegrationDetailsSidebar, setShowCustomIntegrationDetailsSidebar] = useState(false);
+  const [customIntegrationDetailsConn, setCustomIntegrationDetailsConn] = useState<CiCdConnection | null>(null);
+  const [customIntegrationTestPinging, setCustomIntegrationTestPinging] = useState(false);
+  const [customIntegrationRegenerating, setCustomIntegrationRegenerating] = useState(false);
+  const [customIntegrationDetailsPanelVisible, setCustomIntegrationDetailsPanelVisible] = useState(false);
+  const [customIntegrationDetailsClosing, setCustomIntegrationDetailsClosing] = useState(false);
+  const [customIntegrationSecretVisible, setCustomIntegrationSecretVisible] = useState(false);
+  const customIntegrationDetailsCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Jira PAT dialog state
   const [showJiraPatDialog, setShowJiraPatDialog] = useState(false);
@@ -643,6 +684,55 @@ export default function OrganizationSettingsPage() {
     }
   }, [id, sectionParam, navigate]);
 
+  // Add role sidebar: animate in on open, animate out before unmount
+  useEffect(() => {
+    if (showAddRoleSidepanel) {
+      setAddRolePanelVisible(false);
+      const raf = requestAnimationFrame(() => {
+        requestAnimationFrame(() => setAddRolePanelVisible(true));
+      });
+      return () => cancelAnimationFrame(raf);
+    } else {
+      setAddRolePanelVisible(false);
+    }
+  }, [showAddRoleSidepanel]);
+
+  // Role Settings sidebar: animate in on open, animate out before unmount
+  useEffect(() => {
+    if (showRoleSettingsModal) {
+      setRoleSettingsPanelVisible(false);
+      const raf = requestAnimationFrame(() => {
+        requestAnimationFrame(() => setRoleSettingsPanelVisible(true));
+      });
+      return () => cancelAnimationFrame(raf);
+    } else {
+      setRoleSettingsPanelVisible(false);
+      setRoleSettingsClosing(false);
+    }
+  }, [showRoleSettingsModal]);
+
+  // Custom Integration Details sidebar: animate in on open, animate out before unmount
+  useEffect(() => {
+    if (showCustomIntegrationDetailsSidebar && customIntegrationDetailsConn) {
+      setCustomIntegrationDetailsPanelVisible(false);
+      setCustomIntegrationDetailsClosing(false);
+      const raf = requestAnimationFrame(() => {
+        requestAnimationFrame(() => setCustomIntegrationDetailsPanelVisible(true));
+      });
+      return () => cancelAnimationFrame(raf);
+    } else {
+      setCustomIntegrationDetailsPanelVisible(false);
+      setCustomIntegrationDetailsClosing(false);
+    }
+  }, [showCustomIntegrationDetailsSidebar, customIntegrationDetailsConn]);
+
+  // Cleanup timeouts on unmount
+  useEffect(() => () => {
+    if (addRoleCloseTimeoutRef.current) clearTimeout(addRoleCloseTimeoutRef.current);
+    if (roleSettingsCloseTimeoutRef.current) clearTimeout(roleSettingsCloseTimeoutRef.current);
+    if (customIntegrationDetailsCloseTimeoutRef.current) clearTimeout(customIntegrationDetailsCloseTimeoutRef.current);
+  }, []);
+
   // Normalize legacy ?section=... query to path so refresh and back/forward work
   useEffect(() => {
     const qSection = searchParams.get('section');
@@ -675,24 +765,42 @@ export default function OrganizationSettingsPage() {
     }
   }, [organization, id, permissionsChecked]);
 
-  const loadConnections = async () => {
+  // Cleanup avatar preview URL on unmount
+  useEffect(() => {
+    return () => {
+      if (pendingAvatarPreview) {
+        URL.revokeObjectURL(pendingAvatarPreview);
+      }
+    };
+  }, [pendingAvatarPreview]);
+
+  const loadConnections = async (opts?: { silent?: boolean }) => {
     if (!id) return;
-    setLoadingConnections(true);
+    const silent = opts?.silent ?? false;
+    if (!silent) setLoadingConnections(true);
     try {
       const data = await api.getOrganizationConnections(id);
       setCicdConnections(data);
     } catch (err: any) {
-      setCicdConnections([]);
+      if (!silent) setCicdConnections([]);
     } finally {
-      setLoadingConnections(false);
+      if (!silent) setLoadingConnections(false);
     }
   };
 
   useEffect(() => {
     if (activeSection === 'integrations' && id) {
-      loadConnections();
+      // First visit: show loading. Revisit: silent background refresh (data already in state from cached mount)
+      const isRevisit = hasVisitedIntegrations && cicdConnections.length > 0;
+      loadConnections({ silent: isRevisit });
     }
   }, [activeSection, id]);
+
+  // Track when user visits Members/Integrations tabs so we can keep them mounted (cached) when switching away
+  useEffect(() => {
+    if (activeSection === 'members') setHasVisitedMembers(true);
+    if (activeSection === 'integrations') setHasVisitedIntegrations(true);
+  }, [activeSection]);
 
   // Handle integration connection callbacks (GitHub, GitLab, Bitbucket)
   useEffect(() => {
@@ -870,9 +978,9 @@ export default function OrganizationSettingsPage() {
     }
   };
 
-  const handleUploadAvatar = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAvatarFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !id) return;
+    if (!file) return;
 
     // Validate file size (max 5MB)
     if (file.size > 5 * 1024 * 1024) {
@@ -894,16 +1002,29 @@ export default function OrganizationSettingsPage() {
       return;
     }
 
+    // Revoke previous preview URL if any
+    if (pendingAvatarPreview) {
+      URL.revokeObjectURL(pendingAvatarPreview);
+    }
+
+    setPendingAvatarFile(file);
+    setPendingAvatarPreview(URL.createObjectURL(file));
+    e.target.value = '';
+  };
+
+  const handleSaveAvatar = async () => {
+    if (!id || !pendingAvatarFile || isUploadingAvatar) return;
+
     setIsUploadingAvatar(true);
     try {
-      const fileExt = file.name.split('.').pop();
+      const fileExt = pendingAvatarFile.name.split('.').pop();
       const fileName = `${id}-${Date.now()}.${fileExt}`;
       const filePath = `${id}/${fileName}`;
 
       // Upload to Supabase Storage
       const { error: uploadError } = await supabase.storage
         .from('organization-avatars')
-        .upload(filePath, file, {
+        .upload(filePath, pendingAvatarFile, {
           cacheControl: '3600',
           upsert: true,
         });
@@ -921,6 +1042,12 @@ export default function OrganizationSettingsPage() {
       await api.updateOrganization(id, { avatar_url: publicUrl });
       await reloadOrganization();
 
+      if (pendingAvatarPreview) {
+        URL.revokeObjectURL(pendingAvatarPreview);
+      }
+      setPendingAvatarFile(null);
+      setPendingAvatarPreview(null);
+
       toast({
         title: 'Avatar updated',
         description: 'The organization avatar has been updated successfully.',
@@ -935,8 +1062,64 @@ export default function OrganizationSettingsPage() {
     } finally {
       setIsUploadingAvatar(false);
     }
+  };
 
-    e.target.value = '';
+  const closeAddRolePanel = () => {
+    setAddRolePanelVisible(false);
+    if (addRoleCloseTimeoutRef.current) clearTimeout(addRoleCloseTimeoutRef.current);
+    addRoleCloseTimeoutRef.current = setTimeout(() => {
+      addRoleCloseTimeoutRef.current = null;
+      setShowAddRoleSidepanel(false);
+      setNewRoleNameInput('');
+      setNewRoleColor('#3b82f6');
+      setNewRolePermissions({
+        view_settings: false,
+        manage_billing: false,
+        view_activity: false,
+        view_compliance: false,
+        edit_policies: false,
+        interact_with_security_agent: false,
+        manage_aegis: false,
+        view_members: false,
+        add_members: false,
+        edit_roles: false,
+        edit_permissions: false,
+        kick_members: false,
+        view_all_teams_and_projects: false,
+        manage_teams_and_projects: false,
+        manage_integrations: false,
+        view_overview: false,
+      });
+    }, 150);
+  };
+
+  const closeCustomIntegrationDetailsPanel = () => {
+    setCustomIntegrationDetailsPanelVisible(false);
+    setCustomIntegrationDetailsClosing(true);
+    setCustomIntegrationSecretVisible(false);
+    if (customIntegrationDetailsCloseTimeoutRef.current) clearTimeout(customIntegrationDetailsCloseTimeoutRef.current);
+    customIntegrationDetailsCloseTimeoutRef.current = setTimeout(() => {
+      customIntegrationDetailsCloseTimeoutRef.current = null;
+      setShowCustomIntegrationDetailsSidebar(false);
+      setCustomIntegrationDetailsConn(null);
+      setCustomIntegrationSecret(null);
+      setNewlyCreatedIntegrationId(null);
+      setCustomIntegrationDetailsClosing(false);
+    }, 150);
+  };
+
+  const closeRoleSettingsPanel = () => {
+    setRoleSettingsPanelVisible(false);
+    setRoleSettingsClosing(true);
+    if (roleSettingsCloseTimeoutRef.current) clearTimeout(roleSettingsCloseTimeoutRef.current);
+    roleSettingsCloseTimeoutRef.current = setTimeout(() => {
+      roleSettingsCloseTimeoutRef.current = null;
+      setShowRoleSettingsModal(false);
+      setSelectedRoleForSettings(null);
+      setEditingRolePermissions(null);
+      setEditingRoleName('');
+      setRoleSettingsClosing(false);
+    }, 150);
   };
 
   const handleCreateRole = async (permissions: RolePermissions) => {
@@ -964,25 +1147,7 @@ export default function OrganizationSettingsPage() {
         color: newRoleColor || null,
       });
       await loadRoles();
-      setNewRoleNameInput('');
-      setNewRoleColor('');
-      setNewRolePermissions({
-        view_settings: false,
-        manage_billing: false,
-        view_activity: false,
-        view_compliance: false,
-        edit_policies: false,
-        interact_with_security_agent: false,
-        manage_aegis: false,
-        view_members: false,
-        add_members: false,
-        edit_roles: false,
-        edit_permissions: false,
-        kick_members: false,
-        manage_teams_and_projects: false,
-        manage_integrations: false,
-      });
-      setShowAddRoleSidepanel(false);
+      closeAddRolePanel();
       toast({
         title: 'Role created',
         description: `The role "${newRoleNameInput.trim()}" has been created.`,
@@ -1207,9 +1372,7 @@ export default function OrganizationSettingsPage() {
         setUserRolePermissions(updatedRole.permissions);
       }
 
-      setShowRoleSettingsModal(false);
-      setSelectedRoleForSettings(null);
-      setEditingRolePermissions(null);
+      closeRoleSettingsPanel();
 
       // Dispatch event to notify header to refresh
       window.dispatchEvent(new CustomEvent('rolesUpdated'));
@@ -1455,16 +1618,13 @@ export default function OrganizationSettingsPage() {
               {activeSection === 'general' && (
                 <div className="space-y-6">
                   <div>
-                    <h2 className="text-2xl font-bold text-foreground">General Settings</h2>
+                    <h2 className="text-2xl font-bold text-foreground">General</h2>
                   </div>
 
                   {/* Organization Name Card */}
                   <div className="bg-background-card border border-border rounded-lg overflow-hidden">
                     <div className="p-6">
-                      <h3 className="text-base font-semibold text-foreground mb-1">Organization Name</h3>
-                      <p className="text-sm text-foreground-secondary mb-4">
-                        This is your organization's visible name. It will be displayed throughout the dashboard.
-                      </p>
+                      <h3 className="text-base font-semibold text-foreground mb-4">Organization Name</h3>
                       {organization ? (
                         <div className="max-w-md">
                           <input
@@ -1489,16 +1649,14 @@ export default function OrganizationSettingsPage() {
                           onClick={handleUpdateOrgName}
                           disabled={isSavingOrgName || orgName === organization?.name}
                           size="sm"
-                          className="h-8"
+                          className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
                         >
                           {isSavingOrgName ? (
-                            <>
-                              <span className="animate-spin h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full mr-2" />
-                              Saving
-                            </>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
                           ) : (
-                            'Save'
+                            <FileCheck className="h-3.5 w-3.5 mr-1.5" />
                           )}
+                          Save
                         </Button>
                       </div>
                     )}
@@ -1517,16 +1675,7 @@ export default function OrganizationSettingsPage() {
                     <div className="p-6">
                       <div className="flex items-start justify-between gap-6">
                         <div className="flex-1">
-                          <h3 className="text-base font-semibold text-foreground mb-1">Organization Avatar</h3>
-                          <p className="text-sm text-foreground-secondary">
-                            This is your organization's avatar. Click on the avatar to upload a custom one from your files.
-                          </p>
-                          {!isOrgOwner && (
-                            <p className="text-xs text-foreground-secondary flex items-center gap-1.5 mt-4">
-                              <Lock className="h-3 w-3" />
-                              Only the organization owner can change the avatar.
-                            </p>
-                          )}
+                          <h3 className="text-base font-semibold text-foreground">Organization Avatar</h3>
                         </div>
                         <div className="flex-shrink-0">
                           {organization ? (
@@ -1537,12 +1686,12 @@ export default function OrganizationSettingsPage() {
                                   accept="image/*"
                                   className="hidden"
                                   id="org-avatar-upload"
-                                  onChange={handleUploadAvatar}
+                                  onChange={handleAvatarFileSelect}
                                 />
                                 <label htmlFor="org-avatar-upload" className={`cursor-pointer block group ${isUploadingAvatar ? 'pointer-events-none' : ''}`}>
                                   <div className="relative">
                                     <img
-                                      src={organization.avatar_url || '/images/org_profile.png'}
+                                      src={pendingAvatarPreview || organization.avatar_url || '/images/org_profile.png'}
                                       alt={organization.name}
                                       className="h-20 w-20 rounded-full object-cover border-2 border-border group-hover:border-primary/50 transition-all shadow-lg"
                                     />
@@ -1571,16 +1720,41 @@ export default function OrganizationSettingsPage() {
                         </div>
                       </div>
                     </div>
+                    {isOrgOwner && (
+                      <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
+                        <p className="text-xs text-foreground-secondary">
+                          {pendingAvatarFile ? 'New avatar selected. Click Save to apply.' : 'Select an image to change the avatar.'}
+                        </p>
+                        <Button
+                          onClick={handleSaveAvatar}
+                          disabled={isUploadingAvatar || !pendingAvatarFile}
+                          size="sm"
+                          className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                        >
+                          {isUploadingAvatar ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                          ) : (
+                            <FileCheck className="h-3.5 w-3.5 mr-1.5" />
+                          )}
+                          Save
+                        </Button>
+                      </div>
+                    )}
+                    {!isOrgOwner && (
+                      <div className="px-6 py-3 bg-black/20 border-t border-border">
+                        <p className="text-xs text-foreground-secondary flex items-center gap-1.5">
+                          <Lock className="h-3 w-3" />
+                          Only the organization owner can change the avatar.
+                        </p>
+                      </div>
+                    )}
                   </div>
 
                   {/* Transfer Ownership Card - Only visible to organization owner */}
                   {isOrgOwner && (
                     <div className="bg-background-card border border-border rounded-lg overflow-visible">
                       <div className="p-6">
-                        <h3 className="text-base font-semibold text-foreground mb-1">Transfer Ownership</h3>
-                        <p className="text-sm text-foreground-secondary mb-5">
-                          Transfer ownership of this organization to another member. You will be assigned a new role after the transfer.
-                        </p>
+                        <h3 className="text-base font-semibold text-foreground mb-5">Transfer Ownership</h3>
                         {members.filter(m => m.user_id !== user?.id).length > 0 || loadingMembers ? (
                           <div className="space-y-4">
                             <div className="grid grid-cols-2 gap-4">
@@ -1660,7 +1834,7 @@ export default function OrganizationSettingsPage() {
                                                     setSelectedTransferMemberId(member.user_id);
                                                     setShowMemberDropdown(false);
                                                   }}
-                                                  className={`w-full px-3 py-2.5 flex items-center gap-3 hover:bg-background-subtle/20 transition-colors text-left ${selectedTransferMemberId === member.user_id ? 'bg-background-subtle/50' : ''}`}
+                                                  className={`w-full px-3 py-2.5 flex items-center gap-3 hover:bg-table-hover transition-colors text-left ${selectedTransferMemberId === member.user_id ? 'bg-background-subtle/50' : ''}`}
                                                 >
                                                   <img
                                                     src={member.avatar_url || '/images/blank_profile_image.png'}
@@ -1679,9 +1853,16 @@ export default function OrganizationSettingsPage() {
                                                       {member.email}
                                                     </div>
                                                   </div>
-                                                  <div className="px-2 py-0.5 rounded text-xs font-medium border border-border bg-transparent text-foreground-secondary flex-shrink-0">
-                                                    {getRoleDisplayName(member.role)}
-                                                  </div>
+                                                  {(() => {
+                                                    const role = allRoles.find(r => r.name === member.role);
+                                                    return (
+                                                      <RoleBadge
+                                                        role={member.role}
+                                                        roleDisplayName={role?.display_name}
+                                                        roleColor={role?.color ?? null}
+                                                      />
+                                                    );
+                                                  })()}
                                                 </button>
                                               ))}
                                             </div>
@@ -1743,7 +1924,7 @@ export default function OrganizationSettingsPage() {
                                                     setSelectedNewRole(role.name);
                                                     setShowRoleDropdown(false);
                                                   }}
-                                                  className={`w-full px-3 py-2.5 flex items-center justify-between hover:bg-background-subtle/20 transition-colors text-left ${isSelected ? 'bg-background-subtle/50' : ''
+                                                  className={`w-full px-3 py-2.5 flex items-center justify-between hover:bg-table-hover transition-colors text-left ${isSelected ? 'bg-background-subtle/50' : ''
                                                     }`}
                                                 >
                                                   <div className="flex flex-col gap-1 min-w-0 flex-1">
@@ -1798,16 +1979,11 @@ export default function OrganizationSettingsPage() {
                             disabled={!selectedTransferMemberId || isTransferringOwnership}
                           >
                             {isTransferringOwnership ? (
-                              <>
-                                <span className="animate-spin h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full mr-2" />
-                                Transferring
-                              </>
+                              <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
                             ) : (
-                              <>
-                                <UserPlus className="h-3.5 w-3.5 mr-2" />
-                                Transfer
-                              </>
+                              <UserPlus className="h-3.5 w-3.5 mr-2" />
                             )}
+                            Transfer
                           </Button>
                         </div>
                       )}
@@ -2115,17 +2291,18 @@ export default function OrganizationSettingsPage() {
                       <div className="h-12 w-12 rounded-full bg-background-subtle flex items-center justify-center mb-4">
                         <Users className="h-6 w-6 text-foreground-secondary" />
                       </div>
-                      <h3 className="text-lg font-semibold text-foreground mb-1">No roles found</h3>
-                      <p className="text-sm text-foreground-secondary max-w-sm">
-                        Create roles to define permissions and access levels for your organization members.
-                      </p>
+                      <h3 className="text-lg font-semibold text-foreground">No roles found</h3>
                     </div>
                   )}
                 </div>
               )}
 
-              {activeSection === 'integrations' && (
-                <div className="space-y-8">
+              {/* Keep Integrations mounted after first visit so it doesn't reload when switching tabs (like Members) */}
+              {(activeSection === 'integrations' || hasVisitedIntegrations) && (
+                <div
+                  className="space-y-8"
+                  style={{ display: activeSection === 'integrations' ? undefined : 'none' }}
+                >
                   <div className="flex items-start justify-between">
                     <div>
                       <h2 className="text-2xl font-bold text-foreground">Integrations</h2>
@@ -2156,7 +2333,6 @@ export default function OrganizationSettingsPage() {
                         <div className="flex items-center justify-between gap-4 flex-wrap">
                           <div className="flex items-center gap-2">
                             <h3 className="text-lg font-semibold text-foreground">CI/CD</h3>
-                            <span className="text-sm text-foreground-secondary">Source code & repositories</span>
                           </div>
                           <div className="flex items-center gap-2">
                             {([
@@ -2322,7 +2498,6 @@ export default function OrganizationSettingsPage() {
                         <div className="flex items-center justify-between gap-4 flex-wrap">
                           <div className="flex items-center gap-2">
                             <h3 className="text-lg font-semibold text-foreground">Notifications</h3>
-                            <span className="text-sm text-foreground-secondary">Alerts & messaging</span>
                           </div>
                           <div className="flex items-center gap-2">
                             <Button
@@ -2442,7 +2617,7 @@ export default function OrganizationSettingsPage() {
                                       const isEmail = conn.provider === 'email';
                                       const hasCustomIcon = isCustom && conn.metadata?.icon_url;
                                       const providerLabel = isCustom
-                                        ? (conn.metadata?.custom_name || conn.display_name || 'Custom')
+                                        ? 'Custom'
                                         : isEmail ? 'Email' : conn.provider === 'slack' ? 'Slack' : 'Discord';
                                       const providerIconSrc = !isCustom && !isEmail
                                         ? (conn.provider === 'slack' ? '/images/integrations/slack.png' : '/images/integrations/discord.png')
@@ -2457,10 +2632,8 @@ export default function OrganizationSettingsPage() {
                                           : isEmail
                                             ? { primary: conn.metadata?.email || conn.display_name || 'Email', secondary: null }
                                             : isCustom
-                                              ? { primary: conn.metadata?.webhook_url ? conn.metadata.webhook_url.replace(/^https?:\/\//, '').slice(0, 45) : 'Webhook', secondary: null }
+                                              ? { primary: (conn.metadata?.custom_name || conn.display_name || (conn.metadata?.webhook_url ? conn.metadata.webhook_url.replace(/^https?:\/\//, '').slice(0, 45) : 'Webhook')), secondary: null }
                                               : { primary: conn.display_name || 'Connected', secondary: null };
-
-                                      const showNewSecret = customIntegrationSecret && newlyCreatedIntegrationId === conn.id;
 
                                       return (
                                         <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
@@ -2481,49 +2654,48 @@ export default function OrganizationSettingsPage() {
                                             </div>
                                           </td>
                                           <td className="px-4 py-3 min-w-0">
-                                            {showNewSecret ? (
-                                              <div className="flex items-center gap-2">
-                                                <code className="text-xs bg-background-card px-2 py-1 rounded border border-border font-mono truncate max-w-[280px]">{customIntegrationSecret}</code>
-                                                <button
-                                                  onClick={() => {
-                                                    navigator.clipboard.writeText(customIntegrationSecret!);
-                                                    toast({ title: 'Copied', description: 'Secret copied to clipboard.' });
-                                                  }}
-                                                  className="text-foreground-secondary hover:text-foreground transition-colors flex-shrink-0"
-                                                >
-                                                  <Copy className="h-3.5 w-3.5" />
-                                                </button>
-                                              </div>
-                                            ) : (
-                                              <div className={cn(
-                                                "flex flex-col gap-0.5 truncate",
-                                                connectionDisplay.secondary ? "min-w-0" : ""
-                                              )}>
-                                                <span className="text-sm text-foreground truncate">{connectionDisplay.primary}</span>
-                                                {connectionDisplay.secondary && (
-                                                  <span className="text-xs text-foreground-muted truncate">{connectionDisplay.secondary}</span>
-                                                )}
-                                              </div>
-                                            )}
+                                            <div className={cn(
+                                              "flex flex-col gap-0.5 truncate",
+                                              connectionDisplay.secondary ? "min-w-0" : ""
+                                            )}>
+                                              <span className="text-sm text-foreground truncate">{connectionDisplay.primary}</span>
+                                              {connectionDisplay.secondary && (
+                                                <span className="text-xs text-foreground-muted truncate">{connectionDisplay.secondary}</span>
+                                              )}
+                                            </div>
                                           </td>
                                           <td className="px-4 py-3 text-right">
                                             <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
                                               {isCustom && !isEmail && (
-                                                <button
-                                                  className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
-                                                  onClick={() => {
-                                                    setEditingCustomIntegration(conn);
-                                                    setCustomIntegrationType('notification');
-                                                    setCustomIntegrationName(conn.metadata?.custom_name || conn.display_name || '');
-                                                    setCustomIntegrationWebhookUrl(conn.metadata?.webhook_url || '');
-                                                    setCustomIntegrationIconPreview(conn.metadata?.icon_url || null);
-                                                    setCustomIntegrationIconFile(null);
-                                                    setCustomIntegrationSecret(null);
-                                                    setShowCustomIntegrationSidepanel(true);
-                                                  }}
-                                                >
-                                                  <Pencil className="h-3.5 w-3.5" />
-                                                </button>
+                                                <>
+                                                  <button
+                                                    className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
+                                                    onClick={() => {
+                                                      setCustomIntegrationDetailsConn(conn);
+                                                      setCustomIntegrationSecret(newlyCreatedIntegrationId === conn.id ? customIntegrationSecret : null);
+                                                      setShowCustomIntegrationDetailsSidebar(true);
+                                                    }}
+                                                    title="View details"
+                                                  >
+                                                    <Eye className="h-3.5 w-3.5" />
+                                                  </button>
+                                                  <button
+                                                    className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
+                                                    onClick={() => {
+                                                      setEditingCustomIntegration(conn);
+                                                      setCustomIntegrationType('notification');
+                                                      setCustomIntegrationName(conn.metadata?.custom_name || conn.display_name || '');
+                                                      setCustomIntegrationWebhookUrl(conn.metadata?.webhook_url || '');
+                                                      setCustomIntegrationIconPreview(conn.metadata?.icon_url || null);
+                                                      setCustomIntegrationIconFile(null);
+                                                      setCustomIntegrationSecret(null);
+                                                      setShowCustomIntegrationSidepanel(true);
+                                                    }}
+                                                    title="Edit"
+                                                  >
+                                                    <Pencil className="h-3.5 w-3.5" />
+                                                  </button>
+                                                </>
                                               )}
                                               <Button
                                                 variant="outline"
@@ -2564,7 +2736,6 @@ export default function OrganizationSettingsPage() {
                         <div className="flex items-center justify-between gap-4 flex-wrap">
                           <div className="flex items-center gap-2">
                             <h3 className="text-lg font-semibold text-foreground">Ticketing</h3>
-                            <span className="text-sm text-foreground-secondary">Issue tracking & project management</span>
                           </div>
                           <div className="flex items-center gap-2">
                             <DropdownMenu>
@@ -2696,7 +2867,7 @@ export default function OrganizationSettingsPage() {
                                       const isCustom = conn.provider === 'custom_ticketing';
                                       const hasCustomIcon = isCustom && conn.metadata?.icon_url;
                                       const providerLabel = isCustom
-                                        ? (conn.metadata?.custom_name || conn.display_name || 'Custom')
+                                        ? 'Custom'
                                         : conn.provider === 'jira'
                                           ? (conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira')
                                           : conn.provider === 'linear' ? 'Linear' : 'Asana';
@@ -2707,10 +2878,8 @@ export default function OrganizationSettingsPage() {
                                         : (hasCustomIcon ? conn.metadata.icon_url : null);
 
                                       const connectionDisplay = isCustom
-                                        ? (conn.metadata?.webhook_url ? conn.metadata.webhook_url.replace(/^https?:\/\//, '').slice(0, 45) : 'Webhook')
+                                        ? (conn.metadata?.custom_name || conn.display_name || (conn.metadata?.webhook_url ? conn.metadata.webhook_url.replace(/^https?:\/\//, '').slice(0, 45) : 'Webhook'))
                                         : (conn.display_name || 'Connected');
-
-                                      const showNewSecret = customIntegrationSecret && newlyCreatedIntegrationId === conn.id;
 
                                       return (
                                         <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
@@ -2727,41 +2896,40 @@ export default function OrganizationSettingsPage() {
                                             </div>
                                           </td>
                                           <td className="px-4 py-3 min-w-0">
-                                            {showNewSecret ? (
-                                              <div className="flex items-center gap-2">
-                                                <code className="text-xs bg-background-card px-2 py-1 rounded border border-border font-mono truncate max-w-[280px]">{customIntegrationSecret}</code>
-                                                <button
-                                                  onClick={() => {
-                                                    navigator.clipboard.writeText(customIntegrationSecret!);
-                                                    toast({ title: 'Copied', description: 'Secret copied to clipboard.' });
-                                                  }}
-                                                  className="text-foreground-secondary hover:text-foreground transition-colors flex-shrink-0"
-                                                >
-                                                  <Copy className="h-3.5 w-3.5" />
-                                                </button>
-                                              </div>
-                                            ) : (
-                                              <span className="text-sm text-foreground truncate block">{connectionDisplay}</span>
-                                            )}
+                                            <span className="text-sm text-foreground truncate block">{connectionDisplay}</span>
                                           </td>
                                           <td className="px-4 py-3 text-right">
                                             <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
                                               {isCustom && (
-                                                <button
-                                                  className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
-                                                  onClick={() => {
-                                                    setEditingCustomIntegration(conn);
-                                                    setCustomIntegrationType('ticketing');
-                                                    setCustomIntegrationName(conn.metadata?.custom_name || conn.display_name || '');
-                                                    setCustomIntegrationWebhookUrl(conn.metadata?.webhook_url || '');
-                                                    setCustomIntegrationIconPreview(conn.metadata?.icon_url || null);
-                                                    setCustomIntegrationIconFile(null);
-                                                    setCustomIntegrationSecret(null);
-                                                    setShowCustomIntegrationSidepanel(true);
-                                                  }}
-                                                >
-                                                  <Pencil className="h-3.5 w-3.5" />
-                                                </button>
+                                                <>
+                                                  <button
+                                                    className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
+                                                    onClick={() => {
+                                                      setCustomIntegrationDetailsConn(conn);
+                                                      setCustomIntegrationSecret(newlyCreatedIntegrationId === conn.id ? customIntegrationSecret : null);
+                                                      setShowCustomIntegrationDetailsSidebar(true);
+                                                    }}
+                                                    title="View details"
+                                                  >
+                                                    <Eye className="h-3.5 w-3.5" />
+                                                  </button>
+                                                  <button
+                                                    className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
+                                                    onClick={() => {
+                                                      setEditingCustomIntegration(conn);
+                                                      setCustomIntegrationType('ticketing');
+                                                      setCustomIntegrationName(conn.metadata?.custom_name || conn.display_name || '');
+                                                      setCustomIntegrationWebhookUrl(conn.metadata?.webhook_url || '');
+                                                      setCustomIntegrationIconPreview(conn.metadata?.icon_url || null);
+                                                      setCustomIntegrationIconFile(null);
+                                                      setCustomIntegrationSecret(null);
+                                                      setShowCustomIntegrationSidepanel(true);
+                                                    }}
+                                                    title="Edit"
+                                                  >
+                                                    <Pencil className="h-3.5 w-3.5" />
+                                                  </button>
+                                                </>
                                               )}
                                               <Button
                                                 variant="outline"
@@ -2798,13 +2966,28 @@ export default function OrganizationSettingsPage() {
 
               {activeSection === 'notifications' && <NotificationRulesSection />}
 
-              {activeSection === 'members' && (
-                <div className="space-y-8">
+              {/* Keep Members mounted after first visit so it doesn't reload when switching tabs (like Roles) */}
+              {(activeSection === 'members' || hasVisitedMembers) && (
+                <div
+                  className="space-y-8"
+                  style={{ display: activeSection === 'members' ? undefined : 'none' }}
+                >
                   <div className="flex items-center justify-between">
                     <h2 className="text-2xl font-bold text-foreground">Members</h2>
+                    <Button
+                      onClick={() => setMembersInviteModalOpen(true)}
+                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
+                    >
+                      <Plus className="h-4 w-4 mr-2" />
+                      Invite
+                    </Button>
                   </div>
                   <div>
-                    <MembersPage isSettingsSubpage={true} />
+                    <MembersPage
+                      isSettingsSubpage={true}
+                      inviteModalOpen={membersInviteModalOpen}
+                      onInviteModalOpenChange={setMembersInviteModalOpen}
+                    />
                   </div>
                 </div>
               )}
@@ -2846,47 +3029,28 @@ export default function OrganizationSettingsPage() {
               {showAddRoleSidepanel && (
                 <div className="fixed inset-0 z-50">
                   <div
-                    className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-                    onClick={() => {
-                      setShowAddRoleSidepanel(false);
-                      setNewRoleNameInput('');
-                      setNewRoleColor('#3b82f6');
-                      setNewRolePermissions({
-                        view_settings: false,
-                        manage_billing: false,
-                        view_activity: false,
-                        view_compliance: false,
-                        edit_policies: false,
-                        interact_with_security_agent: false,
-                        manage_aegis: false,
-                        view_members: false,
-                        add_members: false,
-                        edit_roles: false,
-                        edit_permissions: false,
-                        kick_members: false,
-                        view_all_teams_and_projects: false,
-                        manage_teams_and_projects: false,
-                        manage_integrations: false,
-                        view_overview: false,
-                      });
-                    }}
+                    className={cn(
+                      'fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150',
+                      addRolePanelVisible ? 'opacity-100' : 'opacity-0'
+                    )}
+                    onClick={closeAddRolePanel}
                   />
 
                   {/* Right-side popup panel – Vercel style: rounded corners, floating feel */}
                   <div
-                    className="fixed right-4 top-4 bottom-4 w-full max-w-[420px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden"
+                    className={cn(
+                      'fixed right-4 top-4 bottom-4 w-full max-w-[420px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
+                      addRolePanelVisible ? 'translate-x-0' : 'translate-x-full'
+                    )}
                     onClick={(e) => e.stopPropagation()}
                   >
                     {/* Header – no X, no border */}
-                    <div className="px-6 py-5 flex-shrink-0">
+                    <div className="px-6 pt-5 pb-3 flex-shrink-0">
                       <h2 className="text-xl font-semibold text-foreground">Create New Role</h2>
-                      <p className="text-sm text-foreground-secondary mt-0.5">
-                        Define a custom role with specific permissions.
-                      </p>
                     </div>
 
                     {/* Content */}
-                    <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-6">
+                    <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4">
                       <div className="space-y-6">
                         {/* Role Name Input */}
                         <div className="space-y-3">
@@ -3049,31 +3213,10 @@ export default function OrganizationSettingsPage() {
                     </div>
 
                     {/* Footer */}
-                    <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border">
+                    <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
                       <Button
                         variant="outline"
-                        onClick={() => {
-                          setShowAddRoleSidepanel(false);
-                          setNewRoleNameInput('');
-                          setNewRoleColor('#3b82f6');
-                          setNewRolePermissions({
-                            view_settings: false,
-                            manage_billing: false,
-                            view_activity: false,
-                            view_compliance: false,
-                            edit_policies: false,
-                            interact_with_security_agent: false,
-                            manage_aegis: false,
-                            view_members: false,
-                            add_members: false,
-                            edit_roles: false,
-                            edit_permissions: false,
-                            kick_members: false,
-                            manage_teams_and_projects: false,
-                            manage_integrations: false,
-                            view_overview: false,
-                          });
-                        }}
+                        onClick={closeAddRolePanel}
                         disabled={isCreatingRole}
                       >
                         Cancel
@@ -3083,7 +3226,7 @@ export default function OrganizationSettingsPage() {
                           await handleCreateRole(newRolePermissions);
                         }}
                         disabled={isCreatingRole || !newRoleNameInput.trim()}
-                        className="bg-primary/90 text-primary-foreground hover:bg-primary/80 border border-primary-foreground/10 hover:border-primary-foreground/20"
+                        className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
                       >
                         {isCreatingRole ? (
                           <>
@@ -3092,7 +3235,7 @@ export default function OrganizationSettingsPage() {
                           </>
                         ) : (
                           <>
-                            <Save className="h-4 w-4 mr-2" />
+                            <FileCheck className="h-4 w-4 mr-2" />
                             Create Role
                           </>
                         )}
@@ -3103,7 +3246,7 @@ export default function OrganizationSettingsPage() {
               )}
 
               {/* Role Settings Side Panel */}
-              {showRoleSettingsModal && selectedRoleForSettings && editingRolePermissions && (() => {
+              {(showRoleSettingsModal || roleSettingsClosing) && selectedRoleForSettings && editingRolePermissions && (() => {
                 // Calculate if this role can be edited
                 const userRank = organization?.user_rank ?? 0;
                 const isViewingOwnRole = organization?.role === selectedRoleForSettings.name;
@@ -3116,29 +3259,30 @@ export default function OrganizationSettingsPage() {
                   <div className="fixed inset-0 z-50">
                     {/* Backdrop */}
                     <div
-                      className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-                      onClick={() => {
-                        setShowRoleSettingsModal(false);
-                        setSelectedRoleForSettings(null);
-                        setEditingRolePermissions(null);
-                        setEditingRoleName('');
-                      }}
+                      className={cn(
+                        'fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150',
+                        roleSettingsPanelVisible ? 'opacity-100' : 'opacity-0'
+                      )}
+                      onClick={closeRoleSettingsPanel}
                     />
 
-                    {/* Side Panel */}
+                    {/* Side Panel – matches Create New Role style */}
                     <div
-                      className="fixed right-0 top-0 h-full w-full max-w-lg bg-background border-l border-border shadow-2xl transform transition-transform duration-300 translate-x-0 flex flex-col"
+                      className={cn(
+                        'fixed right-4 top-4 bottom-4 w-full max-w-[420px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
+                        roleSettingsPanelVisible ? 'translate-x-0' : 'translate-x-full'
+                      )}
                       onClick={(e) => e.stopPropagation()}
                     >
                       {/* Header */}
-                      <div className="px-6 py-5 border-b border-border bg-background-card-header flex-shrink-0">
+                      <div className="px-6 pt-5 pb-3 flex-shrink-0">
                         <h2 className="text-xl font-semibold text-foreground">
                           {selectedRoleForSettings.display_name || selectedRoleForSettings.name.charAt(0).toUpperCase() + selectedRoleForSettings.name.slice(1)} Settings
                         </h2>
                       </div>
 
                       {/* Content */}
-                      <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-6">
+                      <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4">
                         <div className="space-y-6">
                           {/* Read-only notice when user cannot edit name/color */}
                           {!canEditNameAndColor && (
@@ -3315,18 +3459,13 @@ export default function OrganizationSettingsPage() {
                         </div>
                       </div>
 
-                      {/* Footer - fixed at bottom, always visible */}
-                      <div className="flex-shrink-0 px-6 py-4 border-t border-border bg-background flex items-center justify-end gap-3">
+                      {/* Footer */}
+                      <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
                         {canEditNameAndColor || canEditThisRole ? (
                           <>
                             <Button
                               variant="outline"
-                              onClick={() => {
-                                setShowRoleSettingsModal(false);
-                                setSelectedRoleForSettings(null);
-                                setEditingRolePermissions(null);
-                                setEditingRoleName('');
-                              }}
+                              onClick={closeRoleSettingsPanel}
                               disabled={isSavingRole}
                             >
                               Cancel
@@ -3354,10 +3493,7 @@ export default function OrganizationSettingsPage() {
                                     )
                                   );
 
-                                  setShowRoleSettingsModal(false);
-                                  setSelectedRoleForSettings(null);
-                                  setEditingRolePermissions(null);
-                                  setEditingRoleName('');
+                                  closeRoleSettingsPanel();
                                   window.dispatchEvent(new CustomEvent('rolesUpdated'));
                                   toast({ title: 'Role updated', description: 'The role has been updated successfully.' });
                                   loadRoles().catch(() => {});
@@ -3377,7 +3513,7 @@ export default function OrganizationSettingsPage() {
                                 </>
                               ) : (
                                 <>
-                                  <Save className="h-4 w-4 mr-2" />
+                                  <FileCheck className="h-4 w-4 mr-2" />
                                   Save Changes
                                 </>
                               )}
@@ -3386,12 +3522,7 @@ export default function OrganizationSettingsPage() {
                         ) : (
                           <Button
                             variant="outline"
-                            onClick={() => {
-                              setShowRoleSettingsModal(false);
-                              setSelectedRoleForSettings(null);
-                              setEditingRolePermissions(null);
-                              setEditingRoleName('');
-                            }}
+                            onClick={closeRoleSettingsPanel}
                           >
                             Close
                           </Button>
@@ -3611,38 +3742,14 @@ export default function OrganizationSettingsPage() {
                     </div>
 
                     <div className="grid gap-2">
-                      <div className="flex items-center gap-2">
-                        <Label htmlFor="custom-webhook" className="flex-1">Webhook URL</Label>
-                        {editingCustomIntegration && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-xs shrink-0"
-                            onClick={async () => {
-                              if (!organization?.id || !editingCustomIntegration) return;
-                              if (!confirm('Regenerate the signing secret? The old secret will stop working immediately.')) return;
-                              try {
-                                const result = await api.updateCustomIntegration(organization.id, editingCustomIntegration.id, { regenerate_secret: true });
-                                if (result.secret) {
-                                  setNewlyCreatedIntegrationId(editingCustomIntegration.id);
-                                  setCustomIntegrationSecret(result.secret);
-                                  toast({ title: 'Secret regenerated', description: 'The new secret is shown in the table.' });
-                                }
-                              } catch (err: any) {
-                                toast({ title: 'Error', description: err.message || 'Failed to regenerate secret.', variant: 'destructive' });
-                              }
-                            }}
-                          >
-                            Regenerate Secret
-                          </Button>
-                        )}
-                      </div>
+                      <Label htmlFor="custom-webhook" className="flex-1">Webhook URL</Label>
                       <Input
                         id="custom-webhook"
                         type="url"
                         value={customIntegrationWebhookUrl}
                         onChange={(e) => setCustomIntegrationWebhookUrl(e.target.value)}
                         placeholder=""
+                        className={customIntegrationWebhookUrl.trim() && !customIntegrationWebhookUrl.trim().toLowerCase().startsWith('https://') ? 'border-destructive focus-visible:ring-destructive/50' : undefined}
                       />
                     </div>
 
@@ -3707,7 +3814,7 @@ export default function OrganizationSettingsPage() {
                     </Button>
                     <Button
                       className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-                      disabled={!customIntegrationName.trim() || !customIntegrationWebhookUrl.trim() || customIntegrationSaving || !/^https?:\/\/[^\s]+$/i.test(customIntegrationWebhookUrl.trim())}
+                      disabled={!customIntegrationName.trim() || !customIntegrationWebhookUrl.trim() || customIntegrationSaving || !/^https:\/\/[^\s]+$/i.test(customIntegrationWebhookUrl.trim())}
                       onClick={async () => {
                         if (!organization?.id) return;
                         setCustomIntegrationSaving(true);
@@ -3738,7 +3845,11 @@ export default function OrganizationSettingsPage() {
                             setCustomIntegrationSecret(result.secret);
                             setShowCustomIntegrationSidepanel(false);
                             setEditingCustomIntegration(null);
-                            toast({ title: 'Created', description: 'Custom integration created. Copy the signing secret from the table.' });
+                            const newConn: CiCdConnection = { id: result.id, display_name: customIntegrationName.trim(), metadata: { custom_name: customIntegrationName.trim(), webhook_url: customIntegrationWebhookUrl.trim(), icon_url: iconUrl }, provider: customIntegrationType === 'notification' ? 'custom_notification' : 'custom_ticketing' } as CiCdConnection;
+                            setCustomIntegrationDetailsConn(newConn);
+                            setShowCustomIntegrationDetailsSidebar(true);
+                            toast({ title: 'Created', description: 'Custom integration created. Copy the signing secret below.' });
+                            loadConnections(); // refresh table in background
                           }
                           await loadConnections();
                         } catch (err: any) {
@@ -3754,6 +3865,205 @@ export default function OrganizationSettingsPage() {
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
+
+              {/* Custom Integration Details Sidebar */}
+              {(showCustomIntegrationDetailsSidebar || customIntegrationDetailsClosing) && customIntegrationDetailsConn && (
+                <div className="fixed inset-0 z-50">
+                  <div
+                    className={cn(
+                      'fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150',
+                      customIntegrationDetailsPanelVisible ? 'opacity-100' : 'opacity-0'
+                    )}
+                    onClick={closeCustomIntegrationDetailsPanel}
+                  />
+                  <div
+                    className={cn(
+                      'fixed right-4 top-4 bottom-4 w-full max-w-[420px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
+                      customIntegrationDetailsPanelVisible ? 'translate-x-0' : 'translate-x-full'
+                    )}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="px-6 pt-5 pb-3 flex-shrink-0 flex items-center gap-3">
+                      {(customIntegrationDetailsConn.metadata?.icon_url) ? (
+                        <img src={customIntegrationDetailsConn.metadata.icon_url} alt="" className="h-9 w-9 rounded-md border border-border object-contain bg-background-card flex-shrink-0" />
+                      ) : (
+                        <div className="h-9 w-9 rounded-md flex items-center justify-center text-foreground-secondary border border-border bg-background-card flex-shrink-0">
+                          <Webhook className="h-4 w-4" />
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <h2 className="text-xl font-semibold text-foreground truncate">
+                          {(customIntegrationDetailsConn.metadata?.custom_name || customIntegrationDetailsConn.display_name || 'Custom')}
+                        </h2>
+                        <p className="text-sm text-foreground-secondary">
+                          Custom webhook integration
+                        </p>
+                      </div>
+                      <Link to="/docs/integrations" target="_blank" rel="noopener noreferrer" className="shrink-0">
+                        <Button variant="outline" size="sm" className="text-xs">
+                          <BookOpen className="h-3.5 w-3.5 mr-1.5" />
+                          Docs
+                        </Button>
+                      </Link>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4">
+                      <div className="space-y-6">
+                        <div className="space-y-2">
+                          <label className="text-sm font-semibold text-foreground">Webhook URL</label>
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 flex items-center gap-2 min-w-0 bg-background-card px-3 py-2 rounded-lg border border-border">
+                              <code className="flex-1 text-xs font-mono truncate text-foreground">
+                                {customIntegrationDetailsConn.metadata?.webhook_url || '—'}
+                              </code>
+                              <button
+                                onClick={() => {
+                                  const url = customIntegrationDetailsConn.metadata?.webhook_url;
+                                  if (url) {
+                                    navigator.clipboard.writeText(url);
+                                    toast({ title: 'Copied', description: 'Webhook URL copied to clipboard.' });
+                                  }
+                                }}
+                                className="h-6 w-6 rounded flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors flex-shrink-0"
+                                title="Copy URL"
+                              >
+                                <Copy className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                          <p className="text-xs text-foreground-secondary">This URL is unique to this integration. Keep it secure.</p>
+                        </div>
+
+                        <div className="border-t border-border" />
+
+                        <div className="space-y-2">
+                          <label className="text-sm font-semibold text-foreground">Signing secret</label>
+                          {customIntegrationSecret ? (
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 flex items-center gap-2 min-w-0 bg-background-card px-3 py-2 rounded-lg border border-border">
+                                <code className="flex-1 text-xs font-mono truncate text-foreground">
+                                  {customIntegrationSecretVisible ? customIntegrationSecret : '••••••••••••••••••••••••••••••••'}
+                                </code>
+                                <button
+                                  onClick={() => setCustomIntegrationSecretVisible(!customIntegrationSecretVisible)}
+                                  className="h-6 w-6 rounded flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors flex-shrink-0"
+                                  title={customIntegrationSecretVisible ? 'Hide secret' : 'Show secret'}
+                                >
+                                  {customIntegrationSecretVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(customIntegrationSecret);
+                                    toast({ title: 'Copied', description: 'Secret copied to clipboard.' });
+                                  }}
+                                  className="h-6 w-6 rounded flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors flex-shrink-0"
+                                  title="Copy secret"
+                                >
+                                  <Copy className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="text-sm text-foreground-secondary">
+                              The secret was shown when you created this integration. Use Regenerate below to get a new one.
+                            </p>
+                          )}
+                          <div className="flex gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={customIntegrationRegenerating}
+                              onClick={async () => {
+                                if (!organization?.id || !customIntegrationDetailsConn) return;
+                                if (!confirm('Regenerate the signing secret? The old secret will stop working immediately.')) return;
+                                setCustomIntegrationRegenerating(true);
+                                setCustomIntegrationSecretVisible(false);
+                                try {
+                                  const result = await api.updateCustomIntegration(organization.id, customIntegrationDetailsConn.id, { regenerate_secret: true });
+                                  if (result.secret) {
+                                    setCustomIntegrationSecret(result.secret);
+                                    setNewlyCreatedIntegrationId(customIntegrationDetailsConn.id);
+                                    toast({ title: 'Secret regenerated', description: 'Copy the new secret above.' });
+                                  }
+                                } catch (err: any) {
+                                  toast({ title: 'Error', description: err.message || 'Failed to regenerate secret.', variant: 'destructive' });
+                                } finally {
+                                  setCustomIntegrationRegenerating(false);
+                                }
+                              }}
+                            >
+                              {customIntegrationRegenerating ? <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5 mr-2" />}
+                              Regenerate
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={customIntegrationTestPinging}
+                              onClick={async () => {
+                                if (!organization?.id || !customIntegrationDetailsConn) return;
+                                setCustomIntegrationTestPinging(true);
+                                try {
+                                  const result = await api.testCustomIntegration(organization.id, customIntegrationDetailsConn.id);
+                                  if (result.success) {
+                                    toast({ title: 'Test ping sent', description: result.message });
+                                  } else {
+                                    toast({ title: 'Test failed', description: result.message || `HTTP ${result.status}`, variant: 'destructive' });
+                                  }
+                                } catch (err: any) {
+                                  toast({ title: 'Error', description: err.message || 'Failed to send test ping.', variant: 'destructive' });
+                                } finally {
+                                  setCustomIntegrationTestPinging(false);
+                                }
+                              }}
+                            >
+                              {customIntegrationTestPinging ? <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" /> : <Zap className="h-3.5 w-3.5 mr-2" />}
+                              Test ping
+                            </Button>
+                          </div>
+                        </div>
+
+                        <div className="rounded-lg border border-border bg-background-card px-4 py-3">
+                          <div className="flex gap-3">
+                            <Info className="h-5 w-5 text-foreground-secondary shrink-0 mt-0.5" />
+                            <p className="text-sm text-foreground-secondary">
+                              {customIntegrationDetailsConn.provider === 'custom_ticketing'
+                                ? 'Custom ticketing events are sent to this URL when configured. Signatures are verified using HMAC-SHA256.'
+                                : 'Custom notifications are sent to this URL when configured. Signatures are verified using HMAC-SHA256.'}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
+                      <Button
+                        variant="outline"
+                        onClick={closeCustomIntegrationDetailsPanel}
+                      >
+                        Close
+                      </Button>
+                      <Button
+                        onClick={() => {
+                          const conn = customIntegrationDetailsConn;
+                          closeCustomIntegrationDetailsPanel();
+                          setEditingCustomIntegration(conn);
+                          setCustomIntegrationType(conn.provider === 'custom_ticketing' ? 'ticketing' : 'notification');
+                          setCustomIntegrationName(conn.metadata?.custom_name || conn.display_name || '');
+                          setCustomIntegrationWebhookUrl(conn.metadata?.webhook_url || '');
+                          setCustomIntegrationIconPreview(conn.metadata?.icon_url || null);
+                          setCustomIntegrationIconFile(null);
+                          setCustomIntegrationSecret(null);
+                          setShowCustomIntegrationSidepanel(true);
+                        }}
+                        className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                      >
+                        <Pencil className="h-4 w-4 mr-2" />
+                        Edit
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Jira Data Center PAT Dialog */}
               <Dialog open={showJiraPatDialog} onOpenChange={setShowJiraPatDialog}>

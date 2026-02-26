@@ -75,7 +75,6 @@ export default function CreateOrganizationModal({
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="My Organization"
               className="w-full px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
               autoFocus
               required

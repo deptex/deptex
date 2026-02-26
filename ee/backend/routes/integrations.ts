@@ -3107,6 +3107,10 @@ router.post('/organizations/:orgId/custom-integrations', authenticateUser, async
     if (!name || !type || !webhook_url) {
       return res.status(400).json({ error: 'name, type (notification|ticketing), and webhook_url are required' });
     }
+    const trimmedUrl = String(webhook_url).trim();
+    if (!/^https:\/\/[^\s]+$/i.test(trimmedUrl)) {
+      return res.status(400).json({ error: 'webhook_url must start with https://' });
+    }
     if (type !== 'notification' && type !== 'ticketing') {
       return res.status(400).json({ error: 'type must be "notification" or "ticketing"' });
     }
@@ -3134,7 +3138,7 @@ router.post('/organizations/:orgId/custom-integrations', authenticateUser, async
         access_token: secret,
         status: 'connected',
         metadata: {
-          webhook_url,
+          webhook_url: trimmedUrl,
           icon_url: icon_url || null,
           custom_name: name,
           type,
@@ -3191,8 +3195,12 @@ router.put('/organizations/:orgId/custom-integrations/:id', authenticateUser, as
       updates.display_name = name;
       metadataUpdates.custom_name = name;
     }
-    if (webhook_url) {
-      metadataUpdates.webhook_url = webhook_url;
+    if (webhook_url !== undefined) {
+      const trimmedUrl = String(webhook_url).trim();
+      if (!/^https:\/\/[^\s]+$/i.test(trimmedUrl)) {
+        return res.status(400).json({ error: 'webhook_url must start with https://' });
+      }
+      metadataUpdates.webhook_url = trimmedUrl;
     }
     if (icon_url !== undefined) {
       metadataUpdates.icon_url = icon_url;
@@ -3218,6 +3226,73 @@ router.put('/organizations/:orgId/custom-integrations/:id', authenticateUser, as
   } catch (error: any) {
     console.error('Update custom integration error:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/organizations/:orgId/custom-integrations/:id/test', authenticateUser, async (req: AuthRequest, res) => {
+  try {
+    const { orgId, id } = req.params;
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', req.user!.id)
+      .single();
+    if (!membership) {
+      return res.status(403).json({ error: 'Not a member of this organization' });
+    }
+
+    const { data: integration } = await supabase
+      .from('organization_integrations')
+      .select('id, access_token, metadata')
+      .eq('id', id)
+      .eq('organization_id', orgId)
+      .in('provider', ['custom_notification', 'custom_ticketing'])
+      .single();
+    if (!integration) {
+      return res.status(404).json({ error: 'Custom integration not found' });
+    }
+
+    const webhookUrl = integration.metadata?.webhook_url;
+    if (!webhookUrl || typeof webhookUrl !== 'string') {
+      return res.status(400).json({ error: 'Webhook URL not configured' });
+    }
+
+    const secret = integration.access_token;
+    const payload = JSON.stringify({
+      event: 'test.ping',
+      timestamp: new Date().toISOString(),
+      organization_id: orgId,
+      data: { message: 'This is a test ping from Deptex. Your webhook is configured correctly.' },
+    });
+    const signature = 'sha256=' + crypto.createHmac('sha256', secret).update(payload).digest('hex');
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Deptex-Signature': signature,
+        'X-Deptex-Event': 'test.ping',
+      },
+      body: payload,
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    res.json({
+      success: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      message: response.ok ? 'Test ping sent successfully.' : `Request failed with status ${response.status}.`,
+    });
+  } catch (error: any) {
+    if (error.name === 'AbortError') {
+      return res.status(504).json({ error: 'Request timed out. The webhook endpoint did not respond within 10 seconds.' });
+    }
+    console.error('Custom integration test ping error:', error);
+    res.status(500).json({ error: error.message || 'Failed to send test ping.' });
   }
 });
 

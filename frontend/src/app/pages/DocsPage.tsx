@@ -66,6 +66,18 @@ const docMeta: Record<string, DocMeta> = {
     title: "Integrations",
     description: "Connect Deptex with your existing tools including GitHub, Slack, and CI/CD pipelines.",
   },
+  api: {
+    title: "API Reference",
+    description: "REST API documentation and endpoints for integrating with Deptex.",
+  },
+  learn: {
+    title: "Learn",
+    description: "Tutorials, guides, and resources to get the most out of Deptex.",
+  },
+  help: {
+    title: "Help & Support",
+    description: "Get help, contact support, and find answers to common questions.",
+  },
 };
 
 const fallback: DocMeta = {
@@ -103,7 +115,7 @@ function IntegrationsContent() {
         <h2 className="text-lg font-semibold text-foreground mb-3">Custom Webhooks</h2>
         <p className="text-foreground-secondary leading-relaxed mb-4">
           From Settings → Integrations, click &quot;Add Custom&quot; in the Notifications or Ticketing section.
-          Enter a name, webhook URL (must start with <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs">https://</code> or <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs">http://</code>),
+          Enter a name, webhook URL (must start with <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs">https://</code>),
           and optionally upload an icon. On creation, you receive a signing secret — copy it immediately; it&apos;s only shown once.
         </p>
         <p className="text-foreground-secondary leading-relaxed">
@@ -245,7 +257,7 @@ function IntroductionContent() {
         <div className="rounded-lg border border-border bg-background-card overflow-hidden shadow-md aspect-video bg-background-subtle flex items-center justify-center min-h-[200px]">
           {screenshotError ? (
             <p className="text-sm text-foreground-muted px-4 text-center">
-              Add a screenshot at <code className="rounded bg-background-card px-1.5 py-0.5 text-xs">public/images/docs-app-overview.png</code> to show your app here.
+              Add a screenshot at <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs">public/images/docs-app-overview.png</code> to show your app here.
             </p>
           ) : (
             <img

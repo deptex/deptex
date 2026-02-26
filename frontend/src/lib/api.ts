@@ -577,6 +577,12 @@ export const api = {
     });
   },
 
+  async testCustomIntegration(organizationId: string, integrationId: string): Promise<{ success: boolean; status: number; statusText: string; message: string }> {
+    return fetchWithAuth(`/api/integrations/organizations/${organizationId}/custom-integrations/${integrationId}/test`, {
+      method: 'POST',
+    });
+  },
+
   async uploadIntegrationIcon(organizationId: string, file: File): Promise<{ url: string }> {
     const token = await getAuthToken();
     if (!token) throw new Error('Not authenticated');

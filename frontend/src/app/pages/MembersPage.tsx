@@ -36,9 +36,11 @@ interface OrganizationContextType {
 
 interface MembersPageProps {
   isSettingsSubpage?: boolean;
+  inviteModalOpen?: boolean;
+  onInviteModalOpenChange?: (open: boolean) => void;
 }
 
-export default function MembersPage({ isSettingsSubpage = false }: MembersPageProps) {
+export default function MembersPage({ isSettingsSubpage = false, inviteModalOpen, onInviteModalOpenChange }: MembersPageProps) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -56,7 +58,13 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
   const [selectedRoleFilter, setSelectedRoleFilter] = useState<string>('all');
   const [inviteForms, setInviteForms] = useState<InviteForm[]>([{ email: '', role: 'member', team_ids: [] }]);
   const [shareLinkCopied, setShareLinkCopied] = useState(false);
-  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [internalShowInviteModal, setInternalShowInviteModal] = useState(false);
+  const showInviteModal = isSettingsSubpage && inviteModalOpen !== undefined
+    ? inviteModalOpen
+    : internalShowInviteModal;
+  const setShowInviteModal = isSettingsSubpage && onInviteModalOpenChange
+    ? onInviteModalOpenChange
+    : setInternalShowInviteModal;
   const [showRoleSidebar, setShowRoleSidebar] = useState(false);
   const [showRemoveDialog, setShowRemoveDialog] = useState(false);
   const [showAddToTeamSidebar, setShowAddToTeamSidebar] = useState(false);
@@ -583,13 +591,15 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
               Pending Invitations
             </button>
           </div>
-          <Button
-            className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm mb-1"
-            disabled
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            Invite
-          </Button>
+          {!isSettingsSubpage && (
+            <Button
+              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm mb-1"
+              disabled
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Invite
+            </Button>
+          )}
         </div>
 
         {/* Search and Filters */}
@@ -600,28 +610,37 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
               type="text"
               placeholder="Filter..."
               disabled
-              className="w-full pl-9 pr-4 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary"
+              className="w-full pl-9 pr-4 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary"
             />
           </div>
-          <select
-            disabled
-            className="px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground"
-          >
-            <option>All Roles</option>
-          </select>
-          {teams.length > 0 && (
+          <div className="relative min-w-[200px]">
             <select
               disabled
-              className="px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground"
+              className="w-full h-9 px-3 bg-background-card border border-border rounded-md text-sm text-foreground"
             >
-              <option>All Teams</option>
+              <option>All Roles</option>
             </select>
+          </div>
+          {teams.length > 0 && (
+            <div className="relative min-w-[200px]">
+              <select
+                disabled
+                className="w-full h-9 px-3 bg-background-card border border-border rounded-md text-sm text-foreground"
+              >
+                <option>All Teams</option>
+              </select>
+            </div>
           )}
         </div>
 
         {/* Loading Skeleton for Members List */}
         <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-          <table className="w-full">
+          <table className="w-full table-fixed">
+            <colgroup>
+              <col style={{ width: 'auto' }} />
+              <col style={{ width: '192px' }} />
+              <col style={{ width: '40px' }} />
+            </colgroup>
             <thead className="bg-background-card-header border-b border-border">
               <tr>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
@@ -630,15 +649,15 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
                 <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
                   Role
                 </th>
-                <th className="w-10"></th>
+                <th></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {[1, 2, 3].map((i) => (
                 <tr key={i} className="animate-pulse">
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-3">
-                      <div className="h-10 w-10 rounded-full bg-muted border border-border" />
+                  <td className="px-4 py-3 min-w-0 overflow-hidden">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="h-10 w-10 rounded-full bg-muted flex-shrink-0" />
                       <div className="space-y-1">
                         <div className="h-4 bg-muted rounded w-32" />
                         <div className="h-3 bg-muted rounded w-48" />
@@ -646,7 +665,7 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <div className="h-5 w-16 bg-muted rounded border border-border" />
+                    <div className="h-5 w-16 bg-muted rounded" />
                   </td>
                   <td className="px-4 py-3">
                     <div className="h-4 w-4 bg-muted rounded" />
@@ -684,13 +703,15 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
             Pending Invitations
           </button>
         </div>
-        <Button
-          onClick={() => setShowInviteModal(true)}
-          className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm mb-1"
-        >
-          <Plus className="h-4 w-4 mr-2" />
-          Invite
-        </Button>
+        {!isSettingsSubpage && (
+          <Button
+            onClick={() => setShowInviteModal(true)}
+            className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm mb-1"
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Invite
+          </Button>
+        )}
       </div>
 
       {/* Search and Filters */}
@@ -703,7 +724,7 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
             placeholder="Filter..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className={`w-full pl-9 py-2 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent ${searchQuery ? 'pr-14' : 'pr-4'}`}
+            className={`w-full pl-9 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent ${searchQuery ? 'pr-14' : 'pr-4'}`}
           />
           {searchQuery && (
             <button
@@ -738,7 +759,7 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
               return counts;
             })()}
             showBadges={true}
-            className="min-w-[200px]"
+            className="min-w-[200px] [&>button]:h-9 [&>button]:py-0"
           />
         </div>
         {teams.length > 0 && (
@@ -747,7 +768,7 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
               value={selectedTeamFilter}
               onChange={(value) => setSelectedTeamFilter(value)}
               teams={teams}
-              className="min-w-[200px]"
+              className="min-w-[200px] [&>button]:h-9 [&>button]:py-0"
               memberCounts={(() => {
                 const counts: Record<string, number> = { all: members.length };
                 teams.forEach(team => {
@@ -765,7 +786,12 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
       {activeTab === 'members' || (activeTab === 'invitations' && invitations.length > 0) ? (
         <div className="bg-background-card border border-border rounded-lg overflow-hidden">
           {activeTab === 'members' ? (
-            <table className="w-full">
+            <table className="w-full table-fixed">
+              <colgroup>
+                <col style={{ width: 'auto' }} />
+                <col style={{ width: '192px' }} />
+                <col style={{ width: '40px' }} />
+              </colgroup>
               <thead className="bg-background-card-header border-b border-border">
                 <tr>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
@@ -774,7 +800,7 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
                   <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
                     Role
                   </th>
-                  <th className="w-10"></th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -786,8 +812,8 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
                 </tr>
               ) : filteredMembers.map((member) => (
                 <tr key={member.user_id} className="hover:bg-table-hover transition-colors">
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-3">
+                  <td className="px-4 py-3 min-w-0 overflow-hidden">
+                    <div className="flex items-center gap-3 min-w-0">
                       <img
                         src={member.avatar_url || '/images/blank_profile_image.png'}
                         alt={member.full_name || member.email}
@@ -993,7 +1019,7 @@ export default function MembersPage({ isSettingsSubpage = false }: MembersPagePr
         </div>
       ) : (
         <div className="text-center py-12">
-          {activeTab === 'invitations' && (
+          {activeTab === 'invitations' && !isSettingsSubpage && (
             <Button
               onClick={() => setShowInviteModal(true)}
               className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
