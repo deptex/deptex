@@ -229,8 +229,8 @@ describe('TeamMembersPage', () => {
       });
       const panel = screen.getByRole('heading', { name: 'Add Team Member' }).closest('div[class*="max-w-[420px]"]');
       expect(panel).toBeTruthy();
-      expect(within(panel!).queryByText('Admin User')).not.toBeInTheDocument();
-      expect(within(panel!).queryByText('Member User')).not.toBeInTheDocument();
+      expect(within(panel! as HTMLElement).queryByText('Admin User')).not.toBeInTheDocument();
+      expect(within(panel! as HTMLElement).queryByText('Member User')).not.toBeInTheDocument();
     });
 
     it('adds selected member to team when Add Member is clicked', async () => {
@@ -241,7 +241,7 @@ describe('TeamMembersPage', () => {
       await waitFor(() => expect(screen.getByText('New User')).toBeInTheDocument());
       await userEvent.click(screen.getByText('New User'));
       const panel = screen.getByRole('heading', { name: 'Add Team Member' }).closest('div[class*="fixed"]');
-      const addBtn = within(panel!).getByRole('button', { name: /^Add Member$/i });
+      const addBtn = within(panel! as HTMLElement).getByRole('button', { name: /^Add Member$/i });
       await userEvent.click(addBtn);
       await waitFor(() => {
         expect(mockAddTeamMember).toHaveBeenCalledWith('org-1', 'team-1', 'user-3', expect.anything());
@@ -255,7 +255,7 @@ describe('TeamMembersPage', () => {
       await userEvent.click(screen.getByRole('button', { name: /Add Member/i }));
       await waitFor(() => expect(screen.getByText('New User')).toBeInTheDocument());
       const panel = screen.getByRole('heading', { name: 'Add Team Member' }).closest('div[class*="fixed"]');
-      const addBtn = within(panel!).getByRole('button', { name: /^Add Member$/i });
+      const addBtn = within(panel! as HTMLElement).getByRole('button', { name: /^Add Member$/i });
       expect(addBtn).toBeDisabled();
     });
 
@@ -274,7 +274,7 @@ describe('TeamMembersPage', () => {
   describe('Change Role', () => {
     const getMemberRowMenuButton = () => {
       const row = screen.getByText('member@example.com').closest('div[class*="hover:bg-table-hover"]');
-      return row ? within(row).getByRole('button') : null;
+      return row ? within(row as HTMLElement).getByRole('button') : null;
     };
 
     it('opens Change Role dialog when Change Role is selected from dropdown', async () => {
@@ -311,7 +311,7 @@ describe('TeamMembersPage', () => {
   describe('Remove / Leave member', () => {
     const getMemberRowMenuButton = () => {
       const row = screen.getByText('member@example.com').closest('div[class*="hover:bg-table-hover"]');
-      return row ? within(row).getByRole('button') : null;
+      return row ? within(row as HTMLElement).getByRole('button') : null;
     };
 
     it('opens confirmation modal when Remove from Team is clicked', async () => {
@@ -350,7 +350,7 @@ describe('TeamMembersPage', () => {
       await waitFor(() => expect(screen.getByText('admin@example.com')).toBeInTheDocument());
       const ownerRow = screen.getByText('(You)').closest('div[class*="hover:bg-table-hover"]');
       expect(ownerRow).toBeTruthy();
-      const menuTrigger = within(ownerRow!).getByRole('button');
+      const menuTrigger = within(ownerRow! as HTMLElement).getByRole('button');
       await userEvent.click(menuTrigger);
       await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Leave Team' })).toBeInTheDocument());
     });

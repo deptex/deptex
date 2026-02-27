@@ -3736,6 +3736,7 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
           extraction_error: (repoRecord as { extraction_error?: string }).extraction_error ?? null,
           provider: (repoRecord as any).provider ?? 'github',
           pull_request_comments_enabled: (repoRecord as { pull_request_comments_enabled?: boolean }).pull_request_comments_enabled !== false,
+          auto_fix_vulnerabilities_enabled: (repoRecord as { auto_fix_vulnerabilities_enabled?: boolean }).auto_fix_vulnerabilities_enabled === true,
           connected_at: (repoRecord as { created_at?: string }).created_at ?? null,
         }
         : null,
@@ -3954,7 +3955,7 @@ router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthR
   try {
     const userId = req.user!.id;
     const { id, projectId } = req.params;
-    const { pull_request_comments_enabled } = req.body || {};
+    const { pull_request_comments_enabled, auto_fix_vulnerabilities_enabled } = req.body || {};
 
     const accessCheck = await checkProjectAccess(userId, id, projectId);
     if (!accessCheck.hasAccess) {
@@ -4017,12 +4018,15 @@ router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthR
     if (typeof pull_request_comments_enabled === 'boolean') {
       updates.pull_request_comments_enabled = pull_request_comments_enabled;
     }
+    if (typeof auto_fix_vulnerabilities_enabled === 'boolean') {
+      updates.auto_fix_vulnerabilities_enabled = auto_fix_vulnerabilities_enabled;
+    }
 
     const { data: updated, error: updateError } = await supabase
       .from('project_repositories')
       .update(updates)
       .eq('project_id', projectId)
-      .select('repo_full_name, default_branch, status, pull_request_comments_enabled')
+      .select('repo_full_name, default_branch, status, pull_request_comments_enabled, auto_fix_vulnerabilities_enabled')
       .single();
 
     if (updateError) {
@@ -4034,6 +4038,7 @@ router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthR
       default_branch: updated.default_branch,
       status: updated.status,
       pull_request_comments_enabled: (updated as { pull_request_comments_enabled?: boolean }).pull_request_comments_enabled !== false,
+      auto_fix_vulnerabilities_enabled: (updated as { auto_fix_vulnerabilities_enabled?: boolean }).auto_fix_vulnerabilities_enabled === true,
     });
   } catch (error: any) {
     console.error('Error updating repository settings:', error);

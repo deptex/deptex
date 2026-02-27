@@ -1,4 +1,5 @@
-import { createBrowserRouter, Navigate, useParams, useLocation } from "react-router-dom";
+import { createBrowserRouter, Navigate, useParams, useLocation, Outlet } from "react-router-dom";
+import { AuthProvider } from "../contexts/AuthContext";
 import App from "./App";
 import DocsApp from "./DocsApp";
 import DocsLayout from "./pages/DocsLayout";
@@ -65,7 +66,19 @@ function RedirectDependencyToOverview() {
   return <Navigate to={to} replace />;
 }
 
+/** Root layout that provides AuthProvider so useAuth is available in all route elements */
+function RootLayout() {
+  return (
+    <AuthProvider>
+      <Outlet />
+    </AuthProvider>
+  );
+}
+
 export const router = createBrowserRouter([
+  {
+    element: <RootLayout />,
+    children: [
   // ============================================
   // AUTHENTICATED ROUTES
   // These require login - unauthenticated users are redirected to /
@@ -460,5 +473,7 @@ export const router = createBrowserRouter([
   {
     path: "*",
     element: <NotFoundRedirect />,
+  },
+    ],
   },
 ]);

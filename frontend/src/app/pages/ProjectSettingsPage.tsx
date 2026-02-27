@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useOutletContext, useNavigate, useParams, useLocation, Link, useSearchParams } from 'react-router-dom';
 import { cn } from '../../lib/utils';
-import { Settings, Trash2, Shield, Bell, ChevronDown, Users, Plus, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, BookOpen, Sparkles, Clock, Loader2, Eye, Ban, Mail, Webhook, GitBranch, Info } from 'lucide-react';
+import { Settings, Trash2, Shield, Bell, ChevronDown, Users, Plus, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, BookOpen, Sparkles, Clock, Loader2, Eye, Ban, Mail, Webhook, GitBranch, Info, RefreshCw, GitCommit } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,6 +27,8 @@ import { FrameworkIcon } from '../../components/framework-icon';
 import { PolicyCodeEditor } from '../../components/PolicyCodeEditor';
 import { PolicyAIAssistant } from '../../components/PolicyAIAssistant';
 import { PolicyExceptionSidebar } from '../../components/PolicyExceptionSidebar';
+import { SyncDetailSidebar, type SyncLogEntry } from '../../components/SyncDetailSidebar';
+import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
 import { ProjectTeamSelect } from '../../components/ProjectTeamSelect';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Switch } from '../../components/ui/switch';
@@ -374,7 +376,8 @@ export default function ProjectSettingsPage() {
   const [frameworkLoading, setFrameworkLoading] = useState(false);
   // Pull request comments toggle (repository settings)
   const [pullRequestCommentsEnabled, setPullRequestCommentsEnabled] = useState(true);
-  const [prCommentsSaving, setPrCommentsSaving] = useState(false);
+  const [autoFixVulnerabilitiesEnabled, setAutoFixVulnerabilitiesEnabled] = useState(false);
+  const [selectedSyncLog, setSelectedSyncLog] = useState<SyncLogEntry | null>(null);
   // Transfer project state
   const [teams, setTeams] = useState<Team[]>([]);
   const [loadingTeams, setLoadingTeams] = useState(false);
@@ -485,6 +488,9 @@ export default function ProjectSettingsPage() {
       setRepositoriesError(null);
       if (data.connectedRepository?.pull_request_comments_enabled !== undefined) {
         setPullRequestCommentsEnabled(data.connectedRepository.pull_request_comments_enabled !== false);
+      }
+      if (data.connectedRepository?.auto_fix_vulnerabilities_enabled !== undefined) {
+        setAutoFixVulnerabilitiesEnabled(data.connectedRepository.auto_fix_vulnerabilities_enabled === true);
       }
     } catch (error: any) {
       setRepositoriesError(error.message || 'Failed to load repositories');
@@ -604,6 +610,9 @@ export default function ProjectSettingsPage() {
         setRepositories(cached.repositories);
         if (cached.connectedRepository?.pull_request_comments_enabled !== undefined) {
           setPullRequestCommentsEnabled(cached.connectedRepository.pull_request_comments_enabled !== false);
+        }
+        if (cached.connectedRepository?.auto_fix_vulnerabilities_enabled !== undefined) {
+          setAutoFixVulnerabilitiesEnabled(cached.connectedRepository.auto_fix_vulnerabilities_enabled === true);
         }
       }
       loadProjectRepositories();
@@ -1302,7 +1311,6 @@ export default function ProjectSettingsPage() {
   const handlePullRequestCommentsToggle = async (enabled: boolean) => {
     if (!organizationId || !projectId) return;
     setPullRequestCommentsEnabled(enabled);
-    setPrCommentsSaving(true);
     try {
       await api.updateProjectRepositorySettings(organizationId, projectId, {
         pull_request_comments_enabled: enabled,
@@ -1317,11 +1325,32 @@ export default function ProjectSettingsPage() {
       setPullRequestCommentsEnabled(!enabled);
       toast({
         title: 'Failed to update setting',
-        description: err.message,
+        description: (err as Error).message,
         variant: 'destructive',
       });
-    } finally {
-      setPrCommentsSaving(false);
+    }
+  };
+
+  const handleAutoFixVulnerabilitiesToggle = async (enabled: boolean) => {
+    if (!organizationId || !projectId) return;
+    setAutoFixVulnerabilitiesEnabled(enabled);
+    try {
+      await api.updateProjectRepositorySettings(organizationId, projectId, {
+        auto_fix_vulnerabilities_enabled: enabled,
+      });
+      setConnectedRepository((prev) =>
+        prev ? { ...prev, auto_fix_vulnerabilities_enabled: enabled } : null
+      );
+      toast({
+        title: enabled ? 'Auto-fix vulnerabilities enabled' : 'Auto-fix vulnerabilities disabled',
+      });
+    } catch (err: any) {
+      setAutoFixVulnerabilitiesEnabled(!enabled);
+      toast({
+        title: 'Failed to update setting',
+        description: (err as Error).message,
+        variant: 'destructive',
+      });
     }
   };
 
@@ -1550,15 +1579,8 @@ export default function ProjectSettingsPage() {
                   <h2 className="text-2xl font-bold text-foreground">Repository</h2>
                 </div>
 
-                {/* Connected Git Repository – divider-based layout, no nested gray boxes */}
+                {/* Connected Git Repository card */}
                 <section className="space-y-4">
-                  <div>
-                    <h3 className="text-base font-semibold text-foreground">Connected Git Repository</h3>
-                    <p className="text-sm text-foreground-secondary mt-1">
-                      Sync dependencies from your Git repository. Deptex tracks commits and analyzes your package.json.
-                    </p>
-                  </div>
-
                   {repositoriesLoading ? (
                     <div className="flex items-center gap-4 py-5 px-4 rounded-lg border border-border/60 bg-background-content/50 min-h-[80px]">
                       <div className="h-12 w-12 rounded-lg bg-muted/60 animate-pulse shrink-0" />
@@ -1585,81 +1607,68 @@ export default function ProjectSettingsPage() {
                       </Button>
                     </div>
                   ) : connectedRepository ? (
-                    <div className={cn(
-                      'rounded-lg border overflow-hidden transition-colors',
-                      (connectedRepository.status === 'ready' && importStatus?.status !== 'finalizing')
-                        ? 'border-primary/30 bg-primary/5'
-                        : 'border-border/70 bg-background-content/50'
-                    )}>
-                      <div className="flex items-center justify-between gap-6 p-5">
-                        <div className="flex items-center gap-4 min-w-0 flex-1">
-                          <div className="flex-shrink-0 h-12 w-12 rounded-lg bg-background flex items-center justify-center border border-border/60 overflow-hidden">
-                            <img
-                              src={(connectedRepository as { provider?: string }).provider === 'gitlab'
-                                ? '/images/integrations/gitlab.png'
-                                : (connectedRepository as { provider?: string }).provider === 'bitbucket'
-                                  ? '/images/integrations/bitbucket.png'
-                                  : '/images/integrations/github.png'}
-                              alt=""
-                              className="h-7 w-7 object-contain"
-                            />
-                          </div>
+                    <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                      <div className="flex items-center justify-between gap-4 p-5">
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          <img
+                            src={(connectedRepository as { provider?: string }).provider === 'gitlab'
+                              ? '/images/integrations/gitlab.png'
+                              : (connectedRepository as { provider?: string }).provider === 'bitbucket'
+                                ? '/images/integrations/bitbucket.png'
+                                : '/images/integrations/github.png'}
+                            alt=""
+                            className="h-5 w-5 rounded-sm flex-shrink-0 object-contain"
+                          />
                           <div className="min-w-0 flex-1">
                             <div className="text-base font-semibold text-foreground truncate font-mono">
                               {connectedRepository.repo_full_name}
                             </div>
-                            <div className="text-xs text-foreground-secondary flex items-center gap-1.5 mt-0.5">
-                              {formatConnectedAgo(connectedRepository.connected_at) && (
-                                <>Connected {formatConnectedAgo(connectedRepository.connected_at)}</>
+                            <div className="text-xs text-foreground-secondary flex items-center gap-2 mt-0.5 flex-wrap">
+                              <span className="flex items-center gap-1">
+                                <GitBranch className="h-3.5 w-3.5" />
+                                {connectedRepository.default_branch || 'main'}
+                              </span>
+                              <span>·</span>
+                              <span>Last synced {formatConnectedAgo(connectedRepository.connected_at) || '—'}</span>
+                              {getWorkspaceDisplayPath(connectedRepository.package_json_path) !== 'Root' && (
+                                <>
+                                  <span>·</span>
+                                  <span>{getWorkspaceDisplayPath(connectedRepository.package_json_path)}</span>
+                                </>
                               )}
                               {(importStatus?.status === 'finalizing' || connectedRepository.status === 'extracting' || connectedRepository.status === 'analyzing' || connectedRepository.status === 'finalizing') && (
                                 <>
+                                  <span>·</span>
                                   {importStatus?.status === 'finalizing' || connectedRepository.status === 'finalizing'
-                                    ? ' · Finalizing'
+                                    ? 'Finalizing'
                                     : connectedRepository.status === 'extracting'
-                                      ? ' · Extracting'
-                                      : ' · Analyzing'}
+                                      ? 'Extracting'
+                                      : 'Analyzing'}
                                   {importStatus && importStatus.total > 0 && ` ${importStatus.ready}/${importStatus.total}`}
                                 </>
                               )}
                             </div>
                           </div>
                         </div>
-                        <div className="flex items-center gap-3 shrink-0">
-                          <span className={cn(
-                            'px-2.5 py-1.5 text-xs font-medium rounded-md flex items-center gap-2',
-                            (connectedRepository.status === 'ready' && importStatus?.status !== 'finalizing')
-                              ? 'bg-success/15 text-success border border-success/40'
-                              : connectedRepository.status === 'extracting' || connectedRepository.status === 'analyzing' || connectedRepository.status === 'finalizing' || importStatus?.status === 'finalizing'
-                                ? 'bg-foreground/5 text-foreground-secondary border border-border'
-                                : connectedRepository.status === 'error'
-                                  ? 'bg-destructive/15 text-destructive border border-destructive/40'
-                                  : 'bg-foreground/5 text-foreground-secondary border border-border'
-                          )}>
-                            {(connectedRepository.status === 'extracting' || connectedRepository.status === 'analyzing' || connectedRepository.status === 'finalizing' || importStatus?.status === 'finalizing') && (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            )}
-                            {(connectedRepository.status === 'ready' && importStatus?.status !== 'finalizing') && (
-                              <Check className="h-3.5 w-3.5" />
-                            )}
-                            {importStatus?.status === 'finalizing' || connectedRepository.status === 'finalizing'
-                              ? 'Finalizing'
-                              : connectedRepository.status === 'ready'
-                                ? 'Connected'
-                                : connectedRepository.status === 'extracting'
-                                  ? 'Extracting'
-                                  : connectedRepository.status === 'analyzing'
-                                    ? 'Analyzing'
-                                    : connectedRepository.status === 'error'
-                                      ? 'Error'
-                                      : 'Pending'}
-                          </span>
-                          <Button variant="outline" size="sm" className="h-8" disabled>
-                            Disconnect
-                          </Button>
-                        </div>
+                        {(connectedRepository.status === 'ready' && importStatus?.status !== 'finalizing') ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                type="button"
+                                className="h-9 w-9 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors shrink-0"
+                                aria-label="Sync repository"
+                              >
+                                <RefreshCw className="h-4 w-4" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent>Sync</TooltipContent>
+                          </Tooltip>
+                        ) : (
+                          <div className="h-9 w-9 rounded-md flex items-center justify-center shrink-0">
+                            <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" />
+                          </div>
+                        )}
                       </div>
-
                       {importStatus && importStatus.total > 0 && (connectedRepository?.status === 'analyzing' || importStatus?.status === 'analyzing') && (
                         <div className="px-5 pb-5 pt-0">
                           <div className="flex justify-between text-xs text-foreground-secondary mb-2">
@@ -1687,81 +1696,114 @@ export default function ProjectSettingsPage() {
                   )}
                 </section>
 
-                {/* Pull Request Comments – settings row style (Stripe/GitHub) */}
+                {/* Automation section */}
                 {connectedRepository && (
-                  <section className="pt-6 border-t border-border/60">
-                    <div className="flex items-center justify-between gap-4 py-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-sm font-medium text-foreground">Pull Request Comments</span>
-                        <button
-                          type="button"
-                          className="text-foreground-secondary hover:text-foreground transition-colors shrink-0"
-                          title="When enabled, Deptex posts policy check results as comments on pull requests"
-                        >
-                          <Info className="h-4 w-4" />
-                        </button>
-                      </div>
-                      <div className="flex items-center gap-3 shrink-0">
-                        {prCommentsSaving && <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" />}
-                        <span className="text-xs text-foreground-secondary">
-                          {pullRequestCommentsEnabled ? 'On' : 'Off'}
-                        </span>
+                  <section>
+                    <h3 className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider pb-3 border-b border-border/60">Automation</h3>
+                    <div className="mt-4 rounded-lg border border-border bg-background-card overflow-hidden">
+                      <div className="flex items-center gap-4 px-4 py-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-foreground">Pull Request Comments</div>
+                          <p className="text-xs text-foreground-secondary mt-0.5">
+                            Post dependency summaries on new PRs automatically.
+                          </p>
+                        </div>
                         <Switch
                           checked={pullRequestCommentsEnabled}
                           onCheckedChange={handlePullRequestCommentsToggle}
-                          disabled={prCommentsSaving}
+                          className="shrink-0 self-center"
                         />
                       </div>
+                      <div className="border-t border-border/60" />
+                      <button
+                        type="button"
+                        onClick={() => handleAutoFixVulnerabilitiesToggle(!autoFixVulnerabilitiesEnabled)}
+                        className="w-full flex items-center gap-4 px-4 py-3 text-left hover:bg-background-subtle/50 transition-colors"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-foreground">Auto-Fix Vulnerabilities</div>
+                          <p className="text-xs text-foreground-secondary mt-0.5">
+                            Create fix PRs for critical security issues.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={autoFixVulnerabilitiesEnabled}
+                          onCheckedChange={handleAutoFixVulnerabilitiesToggle}
+                          className="shrink-0 self-center pointer-events-none"
+                        />
+                      </button>
                     </div>
-                    <p className="text-xs text-foreground-secondary mt-1">
-                      Post policy check results and compliance status as comments on pull requests.
-                    </p>
                   </section>
                 )}
 
-                {/* Sync Logs - standard Deptex table styling */}
-                <div>
-                  <h3 className="text-base font-semibold text-foreground mb-1">Sync Logs</h3>
-                  <p className="text-sm text-foreground-secondary mb-4">
-                    History of repository sync events.
-                  </p>
-                  <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                    <table className="w-full">
-                      <thead className="bg-background-card-header border-b border-border">
-                        <tr>
-                          <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Date</th>
-                          <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Trigger</th>
-                          <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</th>
-                          <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Duration</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border">
-                        {[
-                          { date: '2 hours ago', trigger: 'Push to main', status: 'success' as const, duration: '45s' },
-                          { date: 'Yesterday', trigger: 'Manual sync', status: 'success' as const, duration: '1m 12s' },
-                          { date: '3 days ago', trigger: 'Scheduled', status: 'success' as const, duration: '38s' },
-                          { date: '5 days ago', trigger: 'Push to main', status: 'success' as const, duration: '52s' },
-                          { date: '1 week ago', trigger: 'Manual sync', status: 'error' as const, duration: '—' },
-                        ].map((log, i) => (
-                          <tr key={i} className="group hover:bg-table-hover transition-colors">
-                            <td className="px-4 py-3 text-sm text-foreground">{log.date}</td>
-                            <td className="px-4 py-3 text-sm text-foreground">{log.trigger}</td>
-                            <td className="px-4 py-3">
-                              <span className={`px-2 py-1 text-xs font-medium rounded border ${
-                                log.status === 'success'
-                                  ? 'bg-success/20 text-success border-success/40'
-                                  : 'bg-destructive/20 text-destructive border-destructive/40'
-                              }`}>
-                                {log.status === 'success' ? 'Success' : 'Error'}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 text-sm text-foreground-secondary text-right">{log.duration}</td>
+                {/* Recent Activity */}
+                {connectedRepository && (
+                  <div>
+                    <h3 className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider pb-3 border-b border-border/60">Recent Activity</h3>
+                    <div className="mt-4 rounded-lg border border-border bg-background-card overflow-hidden">
+                      <table className="w-full">
+                        <thead className="bg-background-card-header border-b border-border">
+                          <tr>
+                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Commit</th>
+                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</th>
+                            <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Time</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {([
+                            { id: 8291, shortId: '8sGTNkrBp', commit: '8a2b9f', time: '2 mins ago', duration: '1.2s', status: 'success' as const, trigger: 'Webhook' },
+                            { id: 8290, shortId: '4JuN99N55', commit: '4d1c2a', time: '4 hours ago', duration: '0.4s', status: 'error' as const, trigger: 'Push to main' },
+                            { id: 8289, shortId: 'B55SoE5rj', commit: 'b19c21', time: '1 day ago', duration: '1.8s', status: 'success' as const, trigger: 'Scheduled' },
+                          ] as SyncLogEntry[]).map((log) => (
+                            <tr
+                              key={log.id}
+                              onClick={() => setSelectedSyncLog(log)}
+                              className="group hover:bg-table-hover transition-colors cursor-pointer"
+                            >
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-2">
+                                  <GitCommit className="h-4 w-4 text-foreground-secondary shrink-0" />
+                                  <span className="text-sm font-mono text-foreground">{log.commit}</span>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-2">
+                                  <span className={cn(
+                                    'h-2 w-2 rounded-full shrink-0',
+                                    log.status === 'success' ? 'bg-success' : 'bg-destructive'
+                                  )} />
+                                  <span className="text-sm text-foreground-secondary">
+                                    {log.status === 'success' ? 'Complete' : 'Failed'}
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 text-right text-sm text-foreground-secondary">
+                                {log.time} by henryru
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {/* Note: Cannot disconnect */}
+                {connectedRepository && (
+                  <div className="rounded-lg border border-border/60 bg-background-content/30 px-4 py-4">
+                    <p className="text-sm text-foreground-secondary">
+                      Projects cannot be disconnected from a repository. To use a different repository, create a new project or remove this project.
+                    </p>
+                  </div>
+                )}
+
+                {/* Sync detail sidebar */}
+                {selectedSyncLog && (
+                  <SyncDetailSidebar
+                    entry={selectedSyncLog}
+                    onClose={() => setSelectedSyncLog(null)}
+                  />
+                )}
               </div>
             )}
 

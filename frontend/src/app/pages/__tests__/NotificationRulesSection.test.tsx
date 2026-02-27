@@ -71,12 +71,20 @@ const mockConnections = [
     provider: 'slack' as const,
     display_name: 'Slack Workspace',
     metadata: { channel: '#general' },
+    status: 'connected' as const,
+    connected_at: '2024-01-01T00:00:00Z',
+    created_at: '2024-01-01T00:00:00Z',
+    updated_at: '2024-01-01T00:00:00Z',
   },
   {
     id: 'conn-2',
     provider: 'email' as const,
     display_name: 'Email',
     metadata: { email: 'alerts@example.com' },
+    status: 'connected' as const,
+    connected_at: '2024-01-01T00:00:00Z',
+    created_at: '2024-01-01T00:00:00Z',
+    updated_at: '2024-01-01T00:00:00Z',
   },
 ];
 

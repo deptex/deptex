@@ -1250,7 +1250,7 @@ export const api = {
   async updateProjectRepositorySettings(
     organizationId: string,
     projectId: string,
-    data: { pull_request_comments_enabled?: boolean }
+    data: { pull_request_comments_enabled?: boolean; auto_fix_vulnerabilities_enabled?: boolean }
   ): Promise<ProjectRepository> {
     const result = await fetchWithAuth(
       `/api/organizations/${organizationId}/projects/${projectId}/repositories/settings`,
@@ -2078,6 +2078,7 @@ export interface ProjectRepository {
   extraction_step?: string | null;
   extraction_error?: string | null;
   pull_request_comments_enabled?: boolean;
+  auto_fix_vulnerabilities_enabled?: boolean;
   connected_at?: string | null;
 }
 

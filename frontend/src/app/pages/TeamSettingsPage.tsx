@@ -511,7 +511,7 @@ export default function TeamSettingsPage() {
   const prefetchRoles = useCallback(() => {
     if (!organizationId || !team?.id) return;
     const key = `${organizationId}_${team.id}`;
-    if (teamRolesCache[key]?.length || teamRolesFetchPromise[key]) return;
+    if (teamRolesCache[key]?.length || key in teamRolesFetchPromise) return;
     const promise = api.getTeamRoles(organizationId, team.id);
     teamRolesFetchPromise[key] = promise;
     promise

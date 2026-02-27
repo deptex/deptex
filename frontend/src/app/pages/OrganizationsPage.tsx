@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Search, Plus, Mail, X, ChevronRight } from 'lucide-react';
+import { Search, Plus, Mail, X, ChevronRight, Check, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import OrganizationsHeader from '../../components/OrganizationsHeader';
 import { Button } from '../../components/ui/button';
@@ -214,16 +214,14 @@ export default function OrganizationsPage() {
                     <Button
                       onClick={() => handleAcceptInvitation(invitation)}
                       disabled={acceptingInvitationId === invitation.id}
-                      className="bg-primary text-primary-foreground hover:bg-primary/90 h-9"
+                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-9"
                     >
                       {acceptingInvitationId === invitation.id ? (
-                        <>
-                          <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent"></div>
-                          Accepting
-                        </>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                       ) : (
-                        'Accept'
+                        <Check className="h-4 w-4 mr-2" />
                       )}
+                      Accept
                     </Button>
                     <button
                       onClick={() => handleRejectInvitation(invitation.id)}
