@@ -253,17 +253,26 @@ export default function NotificationRulesSection({ organizationId = '', projectI
     let cancelled = false;
     setLoading(true);
 
-    // Use pre-loaded connections when provided (e.g. from parent OrganizationSettingsPage) to avoid duplicate fetches
-    const connectionsPromise =
-      externalConnections && externalConnections.length > 0
-        ? Promise.resolve(externalConnections)
-        : api.getOrganizationConnections(organizationId).catch(() => [] as CiCdConnection[]);
+    // Rules: use team/project/org API based on context (parallelized)
+    const rulesPromise = teamId
+      ? api.getTeamNotificationRules(organizationId, teamId)
+      : projectId
+        ? api.getProjectNotificationRules(organizationId, projectId)
+        : api.getOrganizationNotificationRules(organizationId);
 
-    Promise.all([
-      api.getOrganizationNotificationRules(organizationId),
-      connectionsPromise,
-      api.getOrganizationMembers(organizationId).catch(() => [] as OrganizationMember[]),
-    ])
+    // Connections: for team/project, parent provides them (avoids duplicate fetches with Destinations tab).
+    // If not yet loaded, use [] so rules render immediately; connections sync via useEffect when parent loads.
+    const connectionsPromise =
+      teamId || projectId
+        ? Promise.resolve(externalConnections ?? [])
+        : externalConnections && externalConnections.length > 0
+          ? Promise.resolve(externalConnections)
+          : api.getOrganizationConnections(organizationId).catch(() => [] as CiCdConnection[]);
+
+    // Members: org members for created-by avatars (parallelized with rules + connections)
+    const membersPromise = api.getOrganizationMembers(organizationId).catch(() => [] as OrganizationMember[]);
+
+    Promise.all([rulesPromise, connectionsPromise, membersPromise])
       .then(([rulesData, conns, membersData]) => {
         if (!cancelled) {
           setRules(rulesData);
@@ -282,14 +291,16 @@ export default function NotificationRulesSection({ organizationId = '', projectI
     return () => {
       cancelled = true;
     };
-  }, [organizationId, toast]);
+  }, [organizationId, teamId, projectId, toast]);
 
-  // When parent passes pre-loaded connections (e.g. from Integrations tab), use them so we stay in sync
+  // When parent passes pre-loaded connections (team/project/org Integrations tab), keep in sync
   useEffect(() => {
-    if (externalConnections && externalConnections.length > 0) {
+    if (teamId || projectId) {
+      if (externalConnections) setConnections(externalConnections);
+    } else if (externalConnections && externalConnections.length > 0) {
       setConnections(externalConnections);
     }
-  }, [externalConnections]);
+  }, [externalConnections, teamId, projectId]);
 
   useEffect(() => {
     if (sidebarOpen) {
@@ -364,26 +375,25 @@ export default function NotificationRulesSection({ organizationId = '', projectI
       return;
     }
     const createdByName = fullName || user?.user_metadata?.full_name || user?.email || 'Unknown';
+    const payload = { name, triggerType: 'custom_code_pipeline' as const, customCode, destinations: dests };
 
     setSaving(true);
     try {
       if (editingRuleId) {
-        const updated = await api.updateOrganizationNotificationRule(organizationId, editingRuleId, {
-          name,
-          triggerType: 'custom_code_pipeline',
-          customCode,
-          destinations: dests,
-        });
+        const updated = teamId
+          ? await api.updateTeamNotificationRule(organizationId, teamId, editingRuleId, payload)
+          : projectId
+            ? await api.updateProjectNotificationRule(organizationId, projectId, editingRuleId, payload)
+            : await api.updateOrganizationNotificationRule(organizationId, editingRuleId, payload);
         setRules((prev) => prev.map((r) => (r.id === editingRuleId ? updated : r)));
         toast({ title: 'Rule updated', description: 'Notification rule saved successfully.' });
       } else {
-        const newRule = await api.createOrganizationNotificationRule(organizationId, {
-          name,
-          triggerType: 'custom_code_pipeline',
-          customCode,
-          destinations: dests,
-          createdByName,
-        });
+        const createPayload = { ...payload, createdByName };
+        const newRule = teamId
+          ? await api.createTeamNotificationRule(organizationId, teamId, createPayload)
+          : projectId
+            ? await api.createProjectNotificationRule(organizationId, projectId, createPayload)
+            : await api.createOrganizationNotificationRule(organizationId, createPayload);
         setRules((prev) => [newRule, ...prev]);
         toast({ title: 'Rule created', description: 'Notification rule saved successfully.' });
       }
@@ -415,7 +425,13 @@ export default function NotificationRulesSection({ organizationId = '', projectI
     setRules((prev) => prev.filter((r) => r.id !== ruleId));
     if (editingRuleId === ruleId) closeSidebar();
     try {
-      await api.deleteOrganizationNotificationRule(organizationId, ruleId);
+      if (teamId) {
+        await api.deleteTeamNotificationRule(organizationId, teamId, ruleId);
+      } else if (projectId) {
+        await api.deleteProjectNotificationRule(organizationId, projectId, ruleId);
+      } else {
+        await api.deleteOrganizationNotificationRule(organizationId, ruleId);
+      }
     } catch (err: any) {
       setRules(previousRules);
       toast({ title: 'Failed to delete', description: err.message || 'Could not delete rule', variant: 'destructive' });

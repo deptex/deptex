@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { useOutletContext, useNavigate, useParams, useLocation, Link } from 'react-router-dom';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useOutletContext, useNavigate, useParams, useLocation, Link, useSearchParams } from 'react-router-dom';
 import { Save, Trash2, Upload, Settings, Plus, X, Edit2, MoreVertical, UserCircle, Users, Bell, Tag, FileCheck, Check, Mail, Webhook, ChevronDown, Loader2, BookOpen } from 'lucide-react';
 import { api, TeamWithRole, TeamPermissions, TeamMember, TeamRole, Organization, type CiCdConnection } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
@@ -42,6 +42,7 @@ const VALID_TEAM_SETTINGS_SECTIONS = new Set(['general', 'notifications', 'roles
 
 // In-memory cache for team roles (stale-while-revalidate, keyed by orgId_teamId)
 const teamRolesCache: Record<string, TeamRole[]> = {};
+const teamRolesFetchPromise: Record<string, Promise<TeamRole[]>> = {};
 const CACHE_KEY_TEAM_ROLES = (orgId: string, teamId: string) => `team_roles_${orgId}_${teamId}`;
 function getCachedTeamRoles(orgId: string, teamId: string): TeamRole[] | null {
   const key = `${orgId}_${teamId}`;
@@ -54,6 +55,20 @@ function getCachedTeamRoles(orgId: string, teamId: string): TeamRole[] | null {
     return parsed;
   } catch {
     return null;
+  }
+}
+
+export function __clearTeamRolesCacheForTesting(orgId?: string, teamId?: string) {
+  if (orgId && teamId) {
+    const key = `${orgId}_${teamId}`;
+    delete teamRolesCache[key];
+    delete teamRolesFetchPromise[key];
+    try {
+      localStorage.removeItem(CACHE_KEY_TEAM_ROLES(orgId, teamId));
+    } catch { /* ignore */ }
+  } else {
+    Object.keys(teamRolesCache).forEach((k) => delete teamRolesCache[k]);
+    Object.keys(teamRolesFetchPromise).forEach((k) => delete teamRolesFetchPromise[k]);
   }
 }
 
@@ -214,6 +229,8 @@ function TeamSettingsTabSkeleton({ section }: { section: string }) {
 export default function TeamSettingsPage() {
   const { orgId, teamId, section: sectionParam } = useParams<{ orgId: string; teamId: string; section?: string }>();
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const integrationCallbackHandledRef = useRef<string | null>(null);
   const { team, organizationId, reloadTeam, updateTeamData, userPermissions, organization } = useOutletContext<TeamContextType>();
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -275,6 +292,7 @@ export default function TeamSettingsPage() {
   const [editingRoleColor, setEditingRoleColor] = useState('');
 
   const [hasVisitedRoles, setHasVisitedRoles] = useState(false);
+  const [hasVisitedNotifications, setHasVisitedNotifications] = useState(false);
 
   // Notification state
   const [notificationActiveTab, setNotificationActiveTab] = useState<'notifications' | 'destinations'>('notifications');
@@ -300,6 +318,14 @@ export default function TeamSettingsPage() {
   const canManageSettings = userPermissions?.view_settings || false;
   // Only users with org-level manage_teams_and_projects permission can delete teams
   const canDeleteTeam = organization?.permissions?.manage_teams_and_projects || false;
+
+  const memberCountByRole = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const m of members) {
+      map.set(m.role, (map.get(m.role) ?? 0) + 1);
+    }
+    return map;
+  }, [members]);
 
   useEffect(() => {
     if (userPermissions && !userPermissions.view_settings) {
@@ -354,6 +380,10 @@ export default function TeamSettingsPage() {
       setDescription(team.description || '');
       setAvatarUrl(team.avatar_url || null);
       setLoadedTeamId(team.id);
+      // Reset tab visit flags and connections so cached content doesn't show wrong team's data
+      setHasVisitedRoles(false);
+      setHasVisitedNotifications(false);
+      setTeamConnections({ inherited: [], team: [] });
     }
   }, [team, loadedTeamId]);
 
@@ -371,39 +401,64 @@ export default function TeamSettingsPage() {
     }
   }, [organizationId, team?.id]);
 
-  // Track when user visits Roles tab so we can keep it mounted when switching away
+  // Track when user visits Roles/Notifications tabs so we can keep them mounted when switching away
   useEffect(() => {
     if (activeSection === 'roles') setHasVisitedRoles(true);
+    if (activeSection === 'notifications') setHasVisitedNotifications(true);
   }, [activeSection]);
+
+  const loadMembers = useCallback(async () => {
+    if (!organizationId || !team?.id) return;
+    try {
+      setLoadingMembers(true);
+      const fetchedMembers = await api.getTeamMembers(organizationId, team.id);
+      setMembers(fetchedMembers);
+    } catch (error: unknown) {
+      console.error('Failed to load members:', error);
+    } finally {
+      setLoadingMembers(false);
+    }
+  }, [organizationId, team?.id]);
+
+  const loadRoles = useCallback(async () => {
+    if (!organizationId || !team?.id) return;
+    const key = `${organizationId}_${team.id}`;
+    const hasCache = !!(getCachedTeamRoles(organizationId, team.id)?.length);
+    if (!hasCache) setLoadingRoles(true);
+    try {
+      let promise = teamRolesFetchPromise[key];
+      if (!promise) {
+        promise = api.getTeamRoles(organizationId, team.id);
+        teamRolesFetchPromise[key] = promise;
+      }
+      const roles = await promise;
+      delete teamRolesFetchPromise[key];
+      const sortedRoles = [...roles].sort((a, b) => a.display_order - b.display_order);
+      setAllRoles(sortedRoles);
+      teamRolesCache[key] = sortedRoles;
+      try {
+        localStorage.setItem(CACHE_KEY_TEAM_ROLES(organizationId, team.id), JSON.stringify(sortedRoles));
+      } catch { /* ignore */ }
+    } catch (error: unknown) {
+      delete teamRolesFetchPromise[key];
+      console.error('Failed to load roles:', error);
+    } finally {
+      setLoadingRoles(false);
+    }
+  }, [organizationId, team?.id]);
 
   useEffect(() => {
     if (team && activeSection === 'roles') {
       loadRoles();
       loadMembers();
     }
-  }, [team, activeSection]);
+  }, [team, activeSection, loadRoles, loadMembers]);
 
   useEffect(() => {
     if (team && activeSection === 'notifications') {
       loadTeamConnections();
     }
   }, [team, activeSection]);
-
-  const loadMembers = async () => {
-    if (!organizationId || !team?.id) return;
-    try {
-      setLoadingMembers(true);
-      const fetchedMembers = await api.getTeamMembers(organizationId, team.id);
-      setMembers(fetchedMembers);
-    } catch (error: any) {
-      console.error('Failed to load members:', error);
-    } finally {
-      setLoadingMembers(false);
-    }
-  };
-
-
-
 
 
   const loadTeamConnections = async () => {
@@ -419,32 +474,59 @@ export default function TeamSettingsPage() {
     }
   };
 
-  // Refetch connections when returning from OAuth (e.g. ?connected=slack)
+  // Handle integration OAuth callbacks (Slack, Discord, Jira, Linear) - refetch + toast + clear URL
   useEffect(() => {
-    if (activeSection === 'notifications' && organizationId && team?.id && location.search?.includes('connected=')) {
-      loadTeamConnections();
-    }
-  }, [location.search, activeSection, organizationId, team?.id]);
+    const connected = searchParams.get('connected');
+    const error = searchParams.get('error');
+    const message = searchParams.get('message');
+    const callbackKey = connected || error ? `${connected || error}-${organizationId}-${team?.id}` : null;
 
-  const loadRoles = async () => {
-    if (!organizationId || !team?.id) return;
-    const hasCache = !!(getCachedTeamRoles(organizationId, team.id)?.length);
-    if (!hasCache) setLoadingRoles(true);
-    try {
-      const roles = await api.getTeamRoles(organizationId, team.id);
-      const sortedRoles = roles.sort((a, b) => a.display_order - b.display_order);
-      setAllRoles(sortedRoles);
-      const key = `${organizationId}_${team.id}`;
-      teamRolesCache[key] = sortedRoles;
-      try {
-        localStorage.setItem(CACHE_KEY_TEAM_ROLES(organizationId, team.id), JSON.stringify(sortedRoles));
-      } catch { /* ignore */ }
-    } catch (error: any) {
-      console.error('Failed to load roles:', error);
-    } finally {
-      setLoadingRoles(false);
+    if (!callbackKey || integrationCallbackHandledRef.current === callbackKey) return;
+    if (activeSection !== 'notifications' || !organizationId || !team?.id) return;
+
+    const providerLabels: Record<string, string> = {
+      slack: 'Slack', discord: 'Discord', jira: 'Jira', linear: 'Linear', asana: 'Asana',
+    };
+    const providerLabel = (connected || error) ? (providerLabels[connected || error || ''] || (connected || error)) : '';
+
+    if (connected) {
+      integrationCallbackHandledRef.current = callbackKey;
+      loadTeamConnections();
+      toast({
+        title: `${providerLabel} Connected`,
+        description: `${providerLabel} has been successfully connected to this team.`,
+      });
+      setSearchParams({});
+    } else if (error && message) {
+      integrationCallbackHandledRef.current = callbackKey;
+      toast({
+        title: `${providerLabel} Connection Failed`,
+        description: decodeURIComponent(message),
+        variant: 'destructive',
+      });
+      setSearchParams({});
     }
-  };
+  }, [searchParams, activeSection, organizationId, team?.id, toast, setSearchParams]);
+
+  const prefetchRoles = useCallback(() => {
+    if (!organizationId || !team?.id) return;
+    const key = `${organizationId}_${team.id}`;
+    if (teamRolesCache[key]?.length || teamRolesFetchPromise[key]) return;
+    const promise = api.getTeamRoles(organizationId, team.id);
+    teamRolesFetchPromise[key] = promise;
+    promise
+      .then((roles) => {
+        delete teamRolesFetchPromise[key];
+        const sorted = [...roles].sort((a, b) => a.display_order - b.display_order);
+        teamRolesCache[key] = sorted;
+        try {
+          localStorage.setItem(CACHE_KEY_TEAM_ROLES(organizationId, team.id), JSON.stringify(sorted));
+        } catch { /* ignore */ }
+      })
+      .catch(() => {
+        delete teamRolesFetchPromise[key];
+      });
+  }, [organizationId, team?.id]);
 
   const handleSave = async () => {
     if (!organizationId || !team?.id || !name.trim()) {
@@ -986,6 +1068,7 @@ export default function TeamSettingsPage() {
                   <button
                     key={section.id}
                     onClick={() => orgId && teamId && navigate(`/organizations/${orgId}/teams/${teamId}/settings/${section.id}`)}
+                    onMouseEnter={section.id === 'roles' ? prefetchRoles : undefined}
                     className={`w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md transition-colors group ${activeSection === section.id
                       ? 'text-foreground'
                       : 'text-foreground-secondary hover:text-foreground'
@@ -1133,8 +1216,9 @@ export default function TeamSettingsPage() {
               </div>
             )}
 
-            {activeSection === 'notifications' && (
-              <div>
+            {/* Keep Notifications mounted after first visit so it doesn't reload when switching tabs (like Roles) */}
+            {(activeSection === 'notifications' || hasVisitedNotifications) && organizationId && team?.id && (
+              <div style={{ display: activeSection === 'notifications' ? undefined : 'none' }}>
                 <div className="flex items-center justify-between mb-6">
                   <h2 className="text-2xl font-bold text-foreground">Notifications</h2>
                   {notificationActiveTab === 'notifications' && organizationId && team?.id && (
@@ -1474,7 +1558,7 @@ export default function TeamSettingsPage() {
                       Manage roles and permissions for your team.
                     </p>
                   </div>
-                  {canManageSettings && (
+                  {canManageSettings && (userPermissions?.edit_roles || organization?.permissions?.manage_teams_and_projects) && (
                     <Button
                       onClick={() => setShowAddRoleSidepanel(true)}
                       className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
@@ -1536,7 +1620,7 @@ export default function TeamSettingsPage() {
                         const canDrag = canManageSettings && !isTopRankedRole && currentRoles.length > 1 &&
                           (hasOrgManagePermission || (isRoleBelowUserRank && !isUserRole));
                         const isDragging = draggedRoleId === role.id;
-                        const memberCount = members.filter(m => m.role === role.name).length;
+                        const memberCount = memberCountByRole.get(role.name) ?? 0;
 
                         return (
                           <div
@@ -2096,7 +2180,7 @@ export default function TeamSettingsPage() {
                           ) : (
                             <>
                               <FileCheck className="h-4 w-4 mr-2" />
-                              {selectedRoleForSettings.display_order === 0 ? 'Save Changes' : 'Save Permissions'}
+                              Save Changes
                             </>
                           )}
                         </Button>
