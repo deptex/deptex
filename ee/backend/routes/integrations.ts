@@ -2457,7 +2457,7 @@ router.get('/slack/install', authenticateUser, async (req: AuthRequest, res) => 
     const statePayload: { userId: string; orgId: string; projectId?: string; teamId?: string; successRedirect?: string } = { userId: req.user!.id, orgId: org_id };
     if (project_id && typeof project_id === 'string') {
       statePayload.projectId = project_id;
-      statePayload.successRedirect = `${frontendUrl}/organizations/${org_id}/projects/${project_id}/settings?connected=slack`;
+      statePayload.successRedirect = `${frontendUrl}/organizations/${org_id}/projects/${project_id}/settings/notifications?connected=slack`;
     } else if (team_id && typeof team_id === 'string') {
       statePayload.teamId = team_id;
       statePayload.successRedirect = `${frontendUrl}/organizations/${org_id}/teams/${team_id}/settings/notifications?connected=slack`;
@@ -2577,7 +2577,7 @@ router.get('/slack/org-callback', async (req, res) => {
 
       if (dbError) {
         console.error('Slack project integration DB error:', dbError);
-        return res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings?error=slack&message=Failed to save integration`);
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings/notifications?error=slack&message=Failed to save integration`);
       }
       res.redirect(redirectOnSuccess);
     } else if (teamId) {

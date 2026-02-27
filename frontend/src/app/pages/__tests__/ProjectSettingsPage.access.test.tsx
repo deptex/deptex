@@ -10,6 +10,8 @@ const mockGetProjectTeams = vi.fn();
 const mockGetProjectMembers = vi.fn();
 const mockGetOrganizationMembers = vi.fn();
 const mockGetTeamMembers = vi.fn();
+const mockAddProjectContributingTeam = vi.fn();
+const mockAddProjectMember = vi.fn();
 const mockRemoveProjectContributingTeam = vi.fn();
 const mockRemoveProjectMember = vi.fn();
 const mockToast = vi.fn();
@@ -44,6 +46,8 @@ vi.mock('../../../lib/api', () => ({
     getProjectMembers: (...args: unknown[]) => mockGetProjectMembers(...args),
     getOrganizationMembers: (...args: unknown[]) => mockGetOrganizationMembers(...args),
     getTeamMembers: (...args: unknown[]) => mockGetTeamMembers(...args),
+    addProjectContributingTeam: (...args: unknown[]) => mockAddProjectContributingTeam(...args),
+    addProjectMember: (...args: unknown[]) => mockAddProjectMember(...args),
     removeProjectContributingTeam: (...args: unknown[]) => mockRemoveProjectContributingTeam(...args),
     removeProjectMember: (...args: unknown[]) => mockRemoveProjectMember(...args),
   },
@@ -73,6 +77,8 @@ describe('ProjectSettingsPage – Access', () => {
     });
     mockGetOrganizationMembers.mockResolvedValue([]);
     mockGetTeamMembers.mockResolvedValue([]);
+    mockAddProjectContributingTeam.mockResolvedValue({});
+    mockAddProjectMember.mockResolvedValue({});
     mockRemoveProjectContributingTeam.mockResolvedValue({});
     mockRemoveProjectMember.mockResolvedValue({});
     mockReloadProject.mockResolvedValue(undefined);
@@ -180,6 +186,47 @@ describe('ProjectSettingsPage – Access', () => {
     await userEvent.click(addTeamBtn);
     await waitFor(() => {
       expect(screen.getByText(/Select teams to give them access/)).toBeInTheDocument();
+    });
+  });
+
+  it('Add Member button opens sidepanel', async () => {
+    mockGetOrganizationMembers.mockResolvedValue([
+      { user_id: 'user-2', full_name: 'Other User', email: 'other@test.com', avatar_url: null },
+    ]);
+    render(<ProjectSettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByText('Additional Members')).toBeInTheDocument();
+    });
+    const addMemberBtn = screen.getByRole('button', { name: /Add Member/ });
+    await userEvent.click(addMemberBtn);
+    await waitFor(() => {
+      expect(screen.getByText(/Select members to give them direct access/)).toBeInTheDocument();
+    });
+  });
+
+  it('remove contributing team calls api and refreshes list', async () => {
+    render(<ProjectSettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByText('Contrib Team')).toBeInTheDocument();
+    });
+    const removeBtn = screen.getByRole('button', { name: /Remove team Contrib Team/i });
+    await userEvent.click(removeBtn);
+
+    await waitFor(() => {
+      expect(mockRemoveProjectContributingTeam).toHaveBeenCalledWith('org-1', 'proj-1', 'team-2');
+    });
+  });
+
+  it('remove direct member calls api and refreshes list', async () => {
+    render(<ProjectSettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByText('Direct Member')).toBeInTheDocument();
+    });
+    const removeBtn = screen.getByRole('button', { name: /Remove member Direct Member/i });
+    await userEvent.click(removeBtn);
+
+    await waitFor(() => {
+      expect(mockRemoveProjectMember).toHaveBeenCalledWith('org-1', 'proj-1', 'user-1');
     });
   });
 });

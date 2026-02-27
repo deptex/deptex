@@ -429,4 +429,86 @@ describe('Project Routes', () => {
       expect(mockInvalidateDependencyVersionsCacheByDependencyId).toHaveBeenCalledWith(dependencyId);
     });
   });
+
+  describe('DELETE /api/organizations/:id/projects/:projectId', () => {
+    const projectId = 'proj-1';
+
+    it('returns 200 and deletes project when user is org owner', async () => {
+      // checkProjectAccess: org owner with manage permission
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: { role: 'owner' }, error: null })
+        .mockResolvedValueOnce({ data: { permissions: { manage_teams_and_projects: true } }, error: null });
+      queryBuilder.then.mockImplementationOnce((resolve: any) => resolve({ data: null, error: null }));
+
+      const res = await request(app)
+        .delete(`/api/organizations/${orgId}/projects/${projectId}`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ message: 'Project deleted' });
+      expect(queryBuilder.delete).toHaveBeenCalled();
+    });
+
+    it('returns 403 when user lacks access or permission', async () => {
+      // checkProjectAccess: org member without manage permission, no project access
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: { role: 'member' }, error: null })
+        .mockResolvedValueOnce({ data: { permissions: { manage_teams_and_projects: false } }, error: null })
+        .mockResolvedValueOnce({ data: null, error: { message: 'Not found' } });
+      queryBuilder.then.mockImplementationOnce((resolve: any) => resolve({ data: [], error: null }));
+
+      const res = await request(app)
+        .delete(`/api/organizations/${orgId}/projects/${projectId}`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/permission|delete|access/i);
+    });
+  });
+
+  describe('POST /api/organizations/:id/projects/:projectId/transfer-ownership', () => {
+    const projectId = 'proj-1';
+    const newOwnerTeamId = 'team-2';
+
+    it('returns 200 and transfers project ownership when user has permission', async () => {
+      // checkProjectAccess
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: { role: 'owner' }, error: null })
+        .mockResolvedValueOnce({ data: { permissions: { manage_teams_and_projects: true } }, error: null })
+        .mockResolvedValueOnce({ data: { id: projectId, name: 'Test Project' }, error: null })
+        .mockResolvedValueOnce({ data: { id: newOwnerTeamId, name: 'Team B', description: null, avatar_url: null }, error: null })
+        .mockResolvedValueOnce({ data: { id: 'pt-1', team_id: 'team-1' }, error: null })
+        .mockResolvedValueOnce({ data: { name: 'Team A' }, error: null })
+        .mockResolvedValueOnce({ data: null, error: { code: 'PGRST116' } }); // new owner not yet contributor
+      queryBuilder.then.mockImplementation((resolve: any) => resolve({ data: null, error: null }));
+
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects/${projectId}/transfer-ownership`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ new_owner_team_id: newOwnerTeamId });
+
+      expect(res.status).toBe(200);
+      expect(res.body.message).toBe('Project ownership transferred successfully');
+      expect(res.body.owner_team).toEqual({
+        id: newOwnerTeamId,
+        name: 'Team B',
+        description: null,
+        avatar_url: null,
+      });
+    });
+
+    it('returns 400 when new_owner_team_id is missing', async () => {
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: { role: 'owner' }, error: null })
+        .mockResolvedValueOnce({ data: { permissions: { manage_teams_and_projects: true } }, error: null });
+
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects/${projectId}/transfer-ownership`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({});
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/new_owner_team_id|required/i);
+    });
+  });
 });

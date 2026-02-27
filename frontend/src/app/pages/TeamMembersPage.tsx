@@ -173,14 +173,27 @@ export default function TeamMembersPage({ isSettingsSubpage = false }: TeamMembe
 
     try {
       setLoading(true);
-      const [membersData, rolesData, orgMembersData] = await Promise.all([
+      // Load members and roles first (primary data) - show list as soon as ready
+      const [membersData, rolesData] = await Promise.all([
         api.getTeamMembers(organizationId, team.id),
         api.getTeamRoles(organizationId, team.id),
-        api.getOrganizationMembers(organizationId),
       ]);
       setMembers(membersData);
       setRoles(rolesData);
-      setOrgMembers(orgMembersData);
+      setLoading(false);
+
+      // Load org members in background (needed for Add Member panel and empty-state "Join" check)
+      api.getOrganizationMembers(organizationId)
+        .then(setOrgMembers)
+        .catch((err: any) => {
+          console.error('Failed to load org members:', err);
+          toast({
+            title: 'Warning',
+            description: 'Could not load organization members for adding.',
+            variant: 'destructive',
+          });
+          setOrgMembers([]);
+        });
     } catch (error: any) {
       console.error('Failed to load data:', error);
       toast({

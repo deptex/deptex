@@ -13,7 +13,7 @@ const allTabs = [
   { id: 'vulnerabilities', label: 'Vulnerabilities', path: 'vulnerabilities', icon: ShieldAlert, requiredPermission: null },
   { id: 'projects', label: 'Projects', path: 'projects', icon: FolderKanban, requiredPermission: null },
   { id: 'teams', label: 'Teams', path: 'teams', icon: Users, requiredPermission: null },
-  { id: 'compliance', label: 'Compliance', path: 'compliance', icon: ClipboardCheck, requiredPermission: 'manage_compliance' as const },
+  { id: 'compliance', label: 'Compliance', path: 'compliance', icon: ClipboardCheck, requiredPermission: null },
   { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: 'view_settings' as const },
 ];
 

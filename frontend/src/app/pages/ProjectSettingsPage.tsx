@@ -68,10 +68,260 @@ function formatConnectedAgo(dateStr: string | null | undefined): string {
 
 const VALID_PROJECT_SETTINGS_SECTIONS = new Set(['general', 'repository', 'access', 'notifications', 'policies']);
 
+/** Renders a tab-specific content skeleton for the project settings loading state. */
+function ProjectSettingsTabSkeleton({ section }: { section: string }) {
+  const pulse = 'bg-muted animate-pulse rounded';
+  switch (section) {
+    case 'general':
+      return (
+        <div className="space-y-6">
+          <div>
+            <div className={`h-8 w-48 ${pulse}`} />
+          </div>
+          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+            <div className="p-6">
+              <div className={`h-4 w-40 ${pulse} mb-2`} />
+              <div className={`h-3 w-full max-w-md ${pulse} mb-4`} />
+              <div className={`h-10 w-full max-w-md ${pulse}`} />
+            </div>
+            <div className="p-6 pt-0">
+              <div className={`h-4 w-36 ${pulse} mb-2`} />
+              <div className={`h-3 w-full max-w-sm ${pulse} mb-4`} />
+              <div className={`h-10 w-full max-w-md ${pulse}`} />
+            </div>
+            <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
+              <div className={`h-3 w-48 ${pulse}`} />
+              <div className={`h-8 w-16 ${pulse}`} />
+            </div>
+          </div>
+          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+            <div className="p-6">
+              <div className={`h-4 w-36 ${pulse} mb-2`} />
+              <div className={`h-3 w-full max-w-sm ${pulse} mb-4`} />
+              <div className={`h-10 w-full max-w-md ${pulse}`} />
+            </div>
+          </div>
+          <div className="border border-destructive/30 rounded-lg overflow-hidden bg-destructive/5">
+            <div className="px-6 py-3 border-b border-destructive/30 bg-destructive/10">
+              <div className={`h-4 w-24 ${pulse}`} />
+            </div>
+            <div className="p-6 flex items-start justify-between gap-4">
+              <div className="flex-1">
+                <div className={`h-4 w-32 ${pulse} mb-2`} />
+                <div className={`h-3 w-72 ${pulse}`} />
+              </div>
+              <div className={`h-8 w-20 ${pulse}`} />
+            </div>
+          </div>
+        </div>
+      );
+    case 'repository':
+      return (
+        <div className="space-y-8">
+          <div>
+            <div className={`h-8 w-40 ${pulse}`} />
+          </div>
+          <div className="space-y-4">
+            <div>
+              <div className={`h-5 w-48 ${pulse} mb-2`} />
+              <div className={`h-3 w-72 ${pulse}`} />
+            </div>
+            <div className="flex items-center gap-4 py-5 px-4 rounded-lg border border-border/60 bg-background-content/50 min-h-[80px]">
+              <div className="h-12 w-12 rounded-lg bg-muted animate-pulse shrink-0" />
+              <div className="flex flex-col gap-2 min-w-0 flex-1">
+                <div className={`h-4 w-48 ${pulse}`} />
+                <div className={`h-3 w-28 ${pulse}`} />
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    case 'access':
+      return (
+        <div className="space-y-6">
+          <div>
+            <div className={`h-8 w-32 ${pulse}`} />
+          </div>
+          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+            <div className="p-6">
+              <div className="flex items-center gap-2 mb-4">
+                <div className="h-5 w-5 rounded bg-muted animate-pulse" />
+                <div className={`h-5 w-28 ${pulse}`} />
+              </div>
+              <div className={`h-3 w-72 ${pulse} mb-4`} />
+              <div className="flex items-center gap-3 p-3 bg-background rounded-lg border border-border">
+                <div className="h-10 w-10 bg-muted rounded-full animate-pulse" />
+                <div className="flex-1 min-w-0">
+                  <div className={`h-4 w-32 ${pulse} mb-1`} />
+                  <div className={`h-3 w-48 ${pulse}`} />
+                </div>
+              </div>
+            </div>
+            <div className="px-6 py-3 bg-black/20 border-t border-border">
+              <div className={`h-3 w-56 ${pulse}`} />
+            </div>
+          </div>
+          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+            <div className="px-4 py-2.5 border-b border-border bg-black/20 flex items-center justify-between">
+              <div className={`h-4 w-32 ${pulse}`} />
+              <div className={`h-7 w-24 ${pulse}`} />
+            </div>
+            <div className="divide-y divide-border">
+              {[1, 2].map((i) => (
+                <div key={i} className="px-4 py-3 flex items-center justify-between">
+                  <div className="flex items-center gap-3 flex-1">
+                    <div className="h-10 w-10 bg-muted rounded-full animate-pulse" />
+                    <div className="flex-1 min-w-0">
+                      <div className={`h-4 w-28 ${pulse} mb-1`} />
+                      <div className={`h-3 w-40 ${pulse}`} />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+            <div className="px-4 py-2.5 border-b border-border bg-black/20 flex items-center justify-between">
+              <div className={`h-4 w-36 ${pulse}`} />
+              <div className={`h-7 w-28 ${pulse}`} />
+            </div>
+            <div className="divide-y divide-border">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="px-4 py-3 flex items-center justify-between">
+                  <div className="flex items-center gap-3 flex-1">
+                    <div className="h-10 w-10 bg-muted rounded-full animate-pulse" />
+                    <div className="flex-1 min-w-0">
+                      <div className={`h-4 w-32 ${pulse} mb-1`} />
+                      <div className={`h-3 w-44 ${pulse}`} />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    case 'notifications':
+      return (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div className={`h-8 w-36 ${pulse}`} />
+            <div className={`h-9 w-24 ${pulse}`} />
+          </div>
+          <div className="flex items-center border-b border-border pb-px">
+            <div className="flex items-center gap-6">
+              <div className={`h-4 w-24 ${pulse} pb-3`} />
+              <div className={`h-4 w-20 ${pulse} pb-3`} />
+            </div>
+          </div>
+          <div className="pt-6 space-y-8">
+            <div>
+              <div className={`h-5 w-48 ${pulse} mb-3`} />
+              <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                <div className="px-4 py-2.5 bg-background-card-header border-b border-border">
+                  <div className={`h-4 w-16 ${pulse}`} />
+                </div>
+                <table className="w-full">
+                  <thead className="bg-background-subtle/30 border-b border-border">
+                    <tr>
+                      <th className="text-left px-4 py-2.5"><div className={`h-3 w-16 ${pulse}`} /></th>
+                      <th className="text-left px-4 py-2.5"><div className={`h-3 w-20 ${pulse}`} /></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {[1, 2, 3].map((i) => (
+                      <tr key={i}>
+                        <td className="px-4 py-3"><div className={`h-4 w-20 ${pulse}`} /></td>
+                        <td className="px-4 py-3"><div className={`h-4 w-28 ${pulse}`} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div>
+              <div className={`h-5 w-40 ${pulse} mb-3`} />
+              <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                <table className="w-full">
+                  <thead className="bg-background-subtle/30 border-b border-border">
+                    <tr>
+                      <th className="text-left px-4 py-2.5"><div className={`h-3 w-16 ${pulse}`} /></th>
+                      <th className="text-left px-4 py-2.5"><div className={`h-3 w-20 ${pulse}`} /></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {[1, 2].map((i) => (
+                      <tr key={i}>
+                        <td className="px-4 py-3"><div className={`h-4 w-20 ${pulse}`} /></td>
+                        <td className="px-4 py-3"><div className={`h-4 w-28 ${pulse}`} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    case 'policies':
+      return (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className={`h-8 w-24 ${pulse}`} />
+            </div>
+            <div className="flex items-center gap-2">
+              <div className={`h-8 w-24 ${pulse}`} />
+              <div className={`h-8 w-16 ${pulse}`} />
+            </div>
+          </div>
+          <div className="flex items-center border-b border-border pb-px">
+            <div className="flex items-center gap-6">
+              <div className={`h-4 w-20 ${pulse} pb-3`} />
+              <div className={`h-4 w-24 ${pulse} pb-3`} />
+            </div>
+          </div>
+          <div className="pt-6 space-y-6">
+            <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+              <div className="px-4 py-2 border-b border-border bg-background-subtle/30">
+                <div className={`h-4 w-20 ${pulse}`} />
+              </div>
+              <div className="p-6">
+                <div className={`h-4 w-full max-w-lg ${pulse} mb-3`} />
+                <div className={`h-3 w-full max-w-md ${pulse} mb-4`} />
+                <div className={`h-24 w-full ${pulse}`} />
+              </div>
+            </div>
+            <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+              <div className="px-4 py-2 border-b border-border bg-background-subtle/30">
+                <div className={`h-4 w-24 ${pulse}`} />
+              </div>
+              <div className="divide-y divide-border">
+                {[1, 2].map((i) => (
+                  <div key={i} className="px-4 py-3 flex items-center justify-between">
+                    <div className={`h-4 w-32 ${pulse}`} />
+                    <div className={`h-5 w-16 ${pulse}`} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    default:
+      return (
+        <div className="space-y-6">
+          <div className={`h-8 w-48 ${pulse}`} />
+          <div className={`h-64 w-full ${pulse}`} />
+        </div>
+      );
+  }
+}
+
 export default function ProjectSettingsPage() {
   const { project, reloadProject, organizationId, userPermissions } = useOutletContext<ProjectContextType>();
   const { projectId, section: sectionParam } = useParams<{ projectId: string; section?: string }>();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
   const activeSection = (sectionParam && VALID_PROJECT_SETTINGS_SECTIONS.has(sectionParam) ? sectionParam : 'general');
@@ -157,6 +407,8 @@ export default function ProjectSettingsPage() {
   const [policyCancellingId, setPolicyCancellingId] = useState<string | null>(null);
   const [policyActiveTab, setPolicyActiveTab] = useState<'policies' | 'exceptions'>('policies');
   const [notificationActiveTab, setNotificationActiveTab] = useState<'notifications' | 'destinations'>('notifications');
+  const [hasVisitedNotifications, setHasVisitedNotifications] = useState(false);
+  const [hasVisitedPolicies, setHasVisitedPolicies] = useState(false);
   const [projectConnections, setProjectConnections] = useState<{ inherited: CiCdConnection[]; team: CiCdConnection[]; project: CiCdConnection[] }>({ inherited: [], team: [], project: [] });
   const [projectConnectionsLoading, setProjectConnectionsLoading] = useState(false);
   const [showJiraPatDialog, setShowJiraPatDialog] = useState(false);
@@ -299,6 +551,7 @@ export default function ProjectSettingsPage() {
       setComplianceBody(eComp);
       setPullRequestBody(ePR);
       setHasSyncedPolicies(true);
+      policiesDataLoadedForRef.current = `${organizationId}:${projectId}`;
     } catch (e) {
       console.error('Failed to load policies:', e);
     } finally {
@@ -306,11 +559,13 @@ export default function ProjectSettingsPage() {
     }
   }, [organizationId, projectId]);
 
+  // Load policies when policies section is active; skip if already loaded for this project (cache)
   useEffect(() => {
-    if (activeSection === 'policies') {
-      loadPoliciesSection();
-    }
-  }, [activeSection, loadPoliciesSection]);
+    if (activeSection !== 'policies' || !organizationId || !projectId) return;
+    const key = `${organizationId}:${projectId}`;
+    if (policiesDataLoadedForRef.current === key) return;
+    loadPoliciesSection();
+  }, [activeSection, organizationId, projectId, loadPoliciesSection]);
 
   const complianceDirty = hasSyncedPolicies && complianceBody !== effectiveComplianceBody;
   const pullRequestDirty = hasSyncedPolicies && pullRequestBody !== effectivePullRequestBody;
@@ -425,6 +680,25 @@ export default function ProjectSettingsPage() {
     }
   }, [organizationId]);
 
+  // Track which project we've loaded access data for (skip refetch when returning to tab)
+  const accessDataLoadedForRef = useRef<string | null>(null);
+  const notificationsDataLoadedForRef = useRef<string | null>(null);
+  const policiesDataLoadedForRef = useRef<string | null>(null);
+  const integrationCallbackHandledRef = useRef<string | null>(null);
+
+  // Clear access state when project or org changes
+  useEffect(() => {
+    if (!organizationId || !projectId) return;
+    const key = `${organizationId}:${projectId}`;
+    if (accessDataLoadedForRef.current && accessDataLoadedForRef.current !== key) {
+      setProjectTeams(null);
+      setDirectMembers([]);
+      setOrgMembers([]);
+      setTeamMemberIds(new Set());
+      accessDataLoadedForRef.current = null;
+    }
+  }, [organizationId, projectId]);
+
   // Load project teams on mount for transfer functionality
   useEffect(() => {
     if (organizationId && projectId) {
@@ -433,48 +707,51 @@ export default function ProjectSettingsPage() {
   }, [organizationId, projectId]);
 
   // Load project teams and members when access section is active
-  const loadProjectTeams = async () => {
+  const loadProjectTeams = async (opts?: { skipLoadingState?: boolean }) => {
     if (!organizationId || !projectId) return;
     try {
-      setLoadingProjectTeams(true);
+      if (!opts?.skipLoadingState) setLoadingProjectTeams(true);
       const teamsData = await api.getProjectTeams(organizationId, projectId);
       setProjectTeams(teamsData);
 
-      // Fetch members of all teams with access to build exclusion list
+      // Fetch members of all teams with access to build exclusion list (parallelized)
       const teamIds: string[] = [];
       if (teamsData.owner_team) {
         teamIds.push(teamsData.owner_team.id);
       }
       teamsData.contributing_teams.forEach(t => teamIds.push(t.id));
 
-      // Get members for each team
       const memberIds = new Set<string>();
-      for (const teamId of teamIds) {
-        try {
-          const teamMembers = await api.getTeamMembers(organizationId, teamId);
-          teamMembers.forEach(m => memberIds.add(m.user_id));
-        } catch (error) {
-          console.error(`Failed to load members for team ${teamId}:`, error);
-        }
+      if (teamIds.length > 0) {
+        const results = await Promise.allSettled(
+          teamIds.map((teamId) => api.getTeamMembers(organizationId, teamId))
+        );
+        results.forEach((result, i) => {
+          if (result.status === 'fulfilled') {
+            result.value.forEach((m) => memberIds.add(m.user_id));
+          } else {
+            console.error(`Failed to load members for team ${teamIds[i]}:`, result.reason);
+          }
+        });
       }
       setTeamMemberIds(memberIds);
     } catch (error: any) {
       console.error('Failed to load project teams:', error);
     } finally {
-      setLoadingProjectTeams(false);
+      if (!opts?.skipLoadingState) setLoadingProjectTeams(false);
     }
   };
 
-  const loadProjectMembers = async () => {
+  const loadProjectMembers = async (opts?: { skipLoadingState?: boolean }) => {
     if (!organizationId || !projectId) return;
     try {
-      setLoadingMembers(true);
+      if (!opts?.skipLoadingState) setLoadingMembers(true);
       const membersData = await api.getProjectMembers(organizationId, projectId);
       setDirectMembers(membersData.direct_members);
     } catch (error: any) {
       console.error('Failed to load project members:', error);
     } finally {
-      setLoadingMembers(false);
+      if (!opts?.skipLoadingState) setLoadingMembers(false);
     }
   };
 
@@ -488,12 +765,29 @@ export default function ProjectSettingsPage() {
     }
   };
 
+  // Load access data when access section is active; skip if already loaded for this project (cache)
   useEffect(() => {
-    if (activeSection === 'access' && organizationId && projectId) {
-      loadProjectTeams();
-      loadProjectMembers();
-      loadOrgMembers();
+    if (activeSection !== 'access' || !organizationId || !projectId) return;
+    const key = `${organizationId}:${projectId}`;
+    if (accessDataLoadedForRef.current === key) {
+      return; // Already have cached data for this project
     }
+    const loadAccessData = async () => {
+      setLoadingProjectTeams(true);
+      setLoadingMembers(true);
+      try {
+        await Promise.all([
+          loadProjectTeams({ skipLoadingState: true }),
+          loadProjectMembers({ skipLoadingState: true }),
+          loadOrgMembers(),
+        ]);
+        accessDataLoadedForRef.current = key;
+      } finally {
+        setLoadingProjectTeams(false);
+        setLoadingMembers(false);
+      }
+    };
+    loadAccessData();
   }, [activeSection, organizationId, projectId]);
 
   const loadProjectConnections = useCallback(async () => {
@@ -502,6 +796,7 @@ export default function ProjectSettingsPage() {
     try {
       const data = await api.getProjectConnections(organizationId, projectId);
       setProjectConnections(data);
+      notificationsDataLoadedForRef.current = `${organizationId}:${projectId}`;
     } catch (err: any) {
       toast({ title: 'Failed to load connections', description: err.message, variant: 'destructive' });
     } finally {
@@ -509,18 +804,83 @@ export default function ProjectSettingsPage() {
     }
   }, [organizationId, projectId, toast]);
 
+  // Clear notifications cache and visit flag when project or org changes
   useEffect(() => {
-    if (activeSection === 'notifications' && organizationId && projectId) {
-      loadProjectConnections();
+    if (!organizationId || !projectId) return;
+    const key = `${organizationId}:${projectId}`;
+    if (notificationsDataLoadedForRef.current && notificationsDataLoadedForRef.current !== key) {
+      setProjectConnections({ inherited: [], team: [], project: [] });
+      setHasVisitedNotifications(false);
+      notificationsDataLoadedForRef.current = null;
     }
+  }, [organizationId, projectId]);
+
+  // Clear policies cache and visit flag when project or org changes
+  useEffect(() => {
+    if (!organizationId || !projectId) return;
+    const key = `${organizationId}:${projectId}`;
+    if (policiesDataLoadedForRef.current && policiesDataLoadedForRef.current !== key) {
+      setProjectPolicies(null);
+      setHasSyncedPolicies(false);
+      setHasVisitedPolicies(false);
+      policiesDataLoadedForRef.current = null;
+    }
+  }, [organizationId, projectId]);
+
+  // Track when user visits Notifications/Policies tabs so we can keep them mounted when switching away (like Access)
+  useEffect(() => {
+    if (activeSection === 'notifications') setHasVisitedNotifications(true);
+    if (activeSection === 'policies') setHasVisitedPolicies(true);
+  }, [activeSection]);
+
+  // Load project connections when notifications section is active; skip if already loaded (cache)
+  useEffect(() => {
+    if (activeSection !== 'notifications' || !organizationId || !projectId) return;
+    const key = `${organizationId}:${projectId}`;
+    if (notificationsDataLoadedForRef.current === key) return;
+    loadProjectConnections();
   }, [activeSection, organizationId, projectId, loadProjectConnections]);
 
-  // Refetch connections when returning from OAuth (e.g. ?connected=slack)
+  // Handle integration OAuth callbacks (Slack, Discord, Jira, Linear, Asana) - toast + switch to destinations + refetch + clear URL
   useEffect(() => {
-    if (activeSection === 'notifications' && organizationId && projectId && location.search?.includes('connected=')) {
-      loadProjectConnections();
+    const connected = searchParams.get('connected');
+    const error = searchParams.get('error');
+    const message = searchParams.get('message');
+    const callbackKey = connected || error ? `${connected || error}-${organizationId}-${projectId}` : null;
+
+    if (!callbackKey || integrationCallbackHandledRef.current === callbackKey) return;
+    if (!organizationId || !projectId) return;
+
+    // If we landed on General (e.g. old redirect URL), navigate to notifications first so we handle in context
+    if (activeSection !== 'notifications') {
+      navigate(`/organizations/${organizationId}/projects/${projectId}/settings/notifications?${searchParams.toString()}`, { replace: true });
+      return;
     }
-  }, [location.search, activeSection, organizationId, projectId, loadProjectConnections]);
+
+    const providerLabels: Record<string, string> = {
+      slack: 'Slack', discord: 'Discord', jira: 'Jira', linear: 'Linear', asana: 'Asana',
+    };
+    const providerLabel = (connected || error) ? (providerLabels[connected || error || ''] || (connected || error)) : '';
+
+    if (connected) {
+      integrationCallbackHandledRef.current = callbackKey;
+      setNotificationActiveTab('destinations');
+      loadProjectConnections();
+      toast({
+        title: `${providerLabel} Connected`,
+        description: `${providerLabel} has been successfully connected to this project.`,
+      });
+      setSearchParams({});
+    } else if (error && message) {
+      integrationCallbackHandledRef.current = callbackKey;
+      toast({
+        title: `${providerLabel} Connection Failed`,
+        description: decodeURIComponent(message),
+        variant: 'destructive',
+      });
+      setSearchParams({});
+    }
+  }, [searchParams, activeSection, organizationId, projectId, navigate, toast, setSearchParams, loadProjectConnections]);
 
   // Available teams for adding (exclude owner and already contributing teams)
   const availableTeamsForAdding = useMemo(() => {
@@ -769,15 +1129,33 @@ export default function ProjectSettingsPage() {
     }
   }, [project, projectId, userPermissions, navigate, organizationId]);
 
-  // Show loading until project is available
+  // Don't render if project not loaded yet — show full-page settings skeleton with tab-specific content
   if (!project) {
+    const loadingSection = sectionParam && VALID_PROJECT_SETTINGS_SECTIONS.has(sectionParam) ? sectionParam : 'general';
     return (
-      <main className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
-        <div className="animate-pulse space-y-6">
-          <div className="h-8 bg-muted rounded w-48"></div>
-          <div className="h-64 bg-muted rounded"></div>
+      <div className="bg-background">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
+          <div className="flex gap-8 items-start">
+            {/* Sidebar skeleton */}
+            <aside className="w-64 flex-shrink-0">
+              <div className="sticky top-24 pt-8 bg-background z-10">
+                <nav className="space-y-1">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <div key={i} className="flex items-center gap-3 px-3 py-2">
+                      <div className="h-4 w-4 bg-muted animate-pulse rounded" />
+                      <div className="h-4 bg-muted animate-pulse rounded flex-1" style={{ maxWidth: i === 2 ? 90 : i === 4 ? 100 : 70 }} />
+                    </div>
+                  ))}
+                </nav>
+              </div>
+            </aside>
+            {/* Tab-specific content skeleton */}
+            <div className="flex-1 no-scrollbar">
+              <ProjectSettingsTabSkeleton section={loadingSection} />
+            </div>
+          </div>
         </div>
-      </main>
+      </div>
     );
   }
 
@@ -994,7 +1372,7 @@ export default function ProjectSettingsPage() {
                           value={projectName}
                           onChange={(e) => setProjectName(e.target.value)}
                           placeholder="Enter project name"
-                          className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                          className="w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                         />
                       </div>
                     </div>
@@ -1005,7 +1383,7 @@ export default function ProjectSettingsPage() {
                       </p>
                       <div className="max-w-md">
                         <Select value={assetTier} onValueChange={(v) => setAssetTier(v as AssetTier)}>
-                          <SelectTrigger className="w-full px-3 py-2.5 h-auto bg-background">
+                          <SelectTrigger className="w-full px-3 py-2.5 h-auto bg-background-content">
                             <SelectValue placeholder="Select asset tier" />
                           </SelectTrigger>
                           <SelectContent>
@@ -1046,7 +1424,7 @@ export default function ProjectSettingsPage() {
                         <div className="space-y-2">
                           <label className="text-sm font-medium text-foreground">Owner Team</label>
                           {loadingTeams ? (
-                            <div className="max-w-md w-full px-3 py-2.5 bg-background border border-border rounded-lg flex items-center gap-2">
+                            <div className="max-w-md w-full px-3 py-2.5 bg-background-content border border-border rounded-lg flex items-center gap-2">
                               <div className="h-5 w-5 rounded bg-muted animate-pulse flex-shrink-0" />
                               <div className="h-4 w-36 bg-muted rounded animate-pulse" />
                             </div>
@@ -1058,7 +1436,7 @@ export default function ProjectSettingsPage() {
                                 teams={teams}
                                 placeholder="Select a team"
                                 showNoTeamOption={false}
-                                className="bg-background"
+                                className="bg-background-content"
                               />
                             </div>
                           )}
@@ -1607,6 +1985,7 @@ export default function ProjectSettingsPage() {
                                 size="sm"
                                 className="h-8 text-foreground-secondary hover:text-destructive hover:bg-destructive/10"
                                 disabled={removingTeamId === team.id}
+                                aria-label={`Remove team ${team.name}`}
                               >
                                 {removingTeamId === team.id ? (
                                   <span className="animate-spin h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full" />
@@ -1687,6 +2066,7 @@ export default function ProjectSettingsPage() {
                                 size="sm"
                                 className="h-8 text-foreground-secondary hover:text-destructive hover:bg-destructive/10"
                                 disabled={removingMemberId === member.user_id}
+                                aria-label={`Remove member ${member.full_name || member.email}`}
                               >
                                 {removingMemberId === member.user_id ? (
                                   <span className="animate-spin h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full" />
@@ -1711,8 +2091,9 @@ export default function ProjectSettingsPage() {
               </div>
             )}
 
-            {activeSection === 'notifications' && (
-              <div>
+            {/* Keep Notifications mounted after first visit so it doesn't reload when switching tabs (like Access) */}
+            {(activeSection === 'notifications' || hasVisitedNotifications) && organizationId && projectId && (
+              <div style={{ display: activeSection === 'notifications' ? undefined : 'none' }}>
                 <div className="flex items-center justify-between mb-6">
                   <h2 className="text-2xl font-bold text-foreground">Notifications</h2>
                   {notificationActiveTab === 'notifications' && organizationId && projectId && (
@@ -2105,8 +2486,9 @@ export default function ProjectSettingsPage() {
               </div>
             )}
 
-            {activeSection === 'policies' && (
-              <div>
+            {/* Keep Policies mounted after first visit so it doesn't reload when switching tabs (like Notifications) */}
+            {(activeSection === 'policies' || hasVisitedPolicies) && (
+              <div style={{ display: activeSection === 'policies' ? undefined : 'none' }}>
                 <div className="sticky top-0 z-10 bg-background pb-2">
                   <div className="mb-6 flex items-start justify-between">
                     <h2 className="text-2xl font-bold text-foreground">Policies</h2>

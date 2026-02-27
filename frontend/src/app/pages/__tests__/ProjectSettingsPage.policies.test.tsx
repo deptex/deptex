@@ -7,6 +7,9 @@ const mockGetProjectRepositories = vi.fn();
 const mockGetCachedProjectRepositories = vi.fn();
 const mockGetTeams = vi.fn();
 const mockGetProjectTeams = vi.fn();
+const mockGetProjectMembers = vi.fn();
+const mockGetOrganizationMembers = vi.fn();
+const mockGetTeamMembers = vi.fn();
 const mockGetOrganizationPolicies = vi.fn();
 const mockGetProjectPolicies = vi.fn();
 const mockToast = vi.fn();
@@ -27,11 +30,14 @@ const defaultProjectPolicies = {
   accepted_exceptions: [],
 };
 
+let mockSection = 'policies';
+const mockUseParams = vi.fn(() => ({ orgId: 'org-1', projectId: 'proj-1', section: mockSection }));
+
 vi.mock('react-router-dom', async (importOriginal) => {
   const mod = await importOriginal<typeof import('react-router-dom')>();
   return {
     ...mod,
-    useParams: vi.fn(() => ({ orgId: 'org-1', projectId: 'proj-1', section: 'policies' })),
+    useParams: mockUseParams,
     useNavigate: () => mockNavigate,
     useSearchParams: () => [new URLSearchParams(), mockSetSearchParams],
     useOutletContext: vi.fn(() => mockProjectContext),
@@ -44,6 +50,9 @@ vi.mock('../../../lib/api', () => ({
     getCachedProjectRepositories: () => mockGetCachedProjectRepositories() ?? null,
     getTeams: (...args: unknown[]) => mockGetTeams(...args),
     getProjectTeams: (...args: unknown[]) => mockGetProjectTeams(...args),
+    getProjectMembers: (...args: unknown[]) => mockGetProjectMembers(...args),
+    getOrganizationMembers: (...args: unknown[]) => mockGetOrganizationMembers(...args),
+    getTeamMembers: (...args: unknown[]) => mockGetTeamMembers(...args),
     getOrganizationPolicies: (...args: unknown[]) => mockGetOrganizationPolicies(...args),
     getProjectPolicies: (...args: unknown[]) => mockGetProjectPolicies(...args),
   },
@@ -70,10 +79,14 @@ vi.mock('../../components/PolicyExceptionSidebar', () => ({
 describe('ProjectSettingsPage – Policies', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSection = 'policies';
     mockGetProjectRepositories.mockResolvedValue({ repositories: [], connectedRepository: null });
     mockGetCachedProjectRepositories.mockReturnValue(null);
     mockGetTeams.mockResolvedValue([]);
     mockGetProjectTeams.mockResolvedValue({ owner_team: null, contributing_teams: [] });
+    mockGetProjectMembers.mockResolvedValue({ direct_members: [], team_members: [] });
+    mockGetOrganizationMembers.mockResolvedValue([]);
+    mockGetTeamMembers.mockResolvedValue([]);
     mockGetOrganizationPolicies.mockResolvedValue({ policy_code: '' });
     mockGetProjectPolicies.mockResolvedValue(defaultProjectPolicies);
     mockReloadProject.mockResolvedValue(undefined);
@@ -147,5 +160,26 @@ describe('ProjectSettingsPage – Policies', () => {
       expect(screen.getByText('Type')).toBeInTheDocument();
       expect(screen.getByText('Reason')).toBeInTheDocument();
     });
+  });
+
+  it('does not refetch policies when navigating away and back (cached)', async () => {
+    const { rerender } = render(<ProjectSettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByText('Project Compliance')).toBeInTheDocument();
+    });
+    expect(mockGetProjectPolicies).toHaveBeenCalledTimes(1);
+
+    mockSection = 'access';
+    rerender(<ProjectSettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Access' })).toBeInTheDocument();
+    });
+
+    mockSection = 'policies';
+    rerender(<ProjectSettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByText('Project Compliance')).toBeInTheDocument();
+    });
+    expect(mockGetProjectPolicies).toHaveBeenCalledTimes(1);
   });
 });
