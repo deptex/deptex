@@ -879,7 +879,8 @@ export default function ProjectSettingsPage() {
         title: `${providerLabel} Connected`,
         description: `${providerLabel} has been successfully connected to this project.`,
       });
-      setSearchParams({});
+      // Defer clearing URL so the toast has time to render before the re-render from setSearchParams
+      setTimeout(() => setSearchParams({}), 100);
     } else if (error && message) {
       integrationCallbackHandledRef.current = callbackKey;
       toast({
@@ -887,9 +888,9 @@ export default function ProjectSettingsPage() {
         description: decodeURIComponent(message),
         variant: 'destructive',
       });
-      setSearchParams({});
+      setTimeout(() => setSearchParams({}), 100);
     }
-  }, [searchParams, activeSection, organizationId, projectId, navigate, toast, setSearchParams, loadProjectConnections]);
+  }, [searchParams, activeSection, organizationId, projectId, navigate, toast, setSearchParams, loadProjectConnections, location.search]);
 
   // Available teams for adding (exclude owner and already contributing teams)
   const availableTeamsForAdding = useMemo(() => {
