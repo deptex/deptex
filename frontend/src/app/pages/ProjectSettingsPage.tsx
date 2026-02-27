@@ -167,6 +167,7 @@ export default function ProjectSettingsPage() {
   const [projectEmailToAdd, setProjectEmailToAdd] = useState('');
   const [projectEmailSaving, setProjectEmailSaving] = useState(false);
   const [showProjectCustomDialog, setShowProjectCustomDialog] = useState(false);
+  const [projectCustomType, setProjectCustomType] = useState<'notification' | 'ticketing'>('notification');
   const [projectCustomName, setProjectCustomName] = useState('');
   const [projectCustomWebhookUrl, setProjectCustomWebhookUrl] = useState('');
   const [projectCustomSaving, setProjectCustomSaving] = useState(false);
@@ -1996,10 +1997,19 @@ export default function ProjectSettingsPage() {
                             variant="outline"
                             size="sm"
                             className="text-xs"
-                            onClick={() => { setProjectCustomName(''); setProjectCustomWebhookUrl(''); setShowProjectCustomDialog(true); }}
+                            onClick={() => { setProjectCustomType('notification'); setProjectCustomName(''); setProjectCustomWebhookUrl(''); setShowProjectCustomDialog(true); }}
                           >
                             <Webhook className="h-3.5 w-3.5 mr-1.5" />
-                            Add Custom
+                            Add Custom Notifications
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs"
+                            onClick={() => { setProjectCustomType('ticketing'); setProjectCustomName(''); setProjectCustomWebhookUrl(''); setShowProjectCustomDialog(true); }}
+                          >
+                            <Webhook className="h-3.5 w-3.5 mr-1.5" />
+                            Add Custom Ticketing
                           </Button>
                         </div>
                       )}
@@ -2803,8 +2813,12 @@ export default function ProjectSettingsPage() {
           <div className="px-6 pt-6 pb-4 border-b border-border">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <DialogTitle>Add custom integration</DialogTitle>
-                <DialogDescription className="mt-1">Set up a custom webhook endpoint for notifications.</DialogDescription>
+                <DialogTitle>Add custom {projectCustomType === 'notification' ? 'notifications' : 'ticketing'}</DialogTitle>
+                <DialogDescription className="mt-1">
+                  {projectCustomType === 'notification'
+                    ? 'Set up a custom webhook endpoint for notifications.'
+                    : 'Set up a custom webhook endpoint for ticketing (e.g. create issues).'}
+                </DialogDescription>
               </div>
               <Link to="/docs/integrations" target="_blank" rel="noopener noreferrer">
                 <Button variant="outline" size="sm" className="text-xs shrink-0">
@@ -2847,7 +2861,7 @@ export default function ProjectSettingsPage() {
                 try {
                   await api.createProjectCustomIntegration(organizationId, projectId, {
                     name: projectCustomName.trim(),
-                    type: 'notification',
+                    type: projectCustomType,
                     webhook_url: projectCustomWebhookUrl.trim(),
                   });
                   toast({ title: 'Created', description: 'Custom integration created.' });

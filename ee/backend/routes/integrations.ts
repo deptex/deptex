@@ -302,7 +302,7 @@ router.get('/discord/callback', async (req, res) => {
 // ============================================================
 router.get('/discord/install', authenticateUser, async (req: AuthRequest, res) => {
   try {
-    const { org_id, project_id } = req.query;
+    const { org_id, project_id, team_id } = req.query;
     if (!org_id || typeof org_id !== 'string') {
       return res.status(400).json({ error: 'Organization ID is required' });
     }
@@ -323,12 +323,25 @@ router.get('/discord/install', authenticateUser, async (req: AuthRequest, res) =
       const { data: proj } = await supabase.from('projects').select('id').eq('id', project_id).eq('organization_id', org_id).single();
       if (!proj) return res.status(400).json({ error: 'Project not found' });
     }
-    const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`;
+    if (team_id && typeof team_id === 'string') {
+      const { data: team } = await supabase.from('teams').select('id').eq('id', team_id).eq('organization_id', org_id).single();
+      if (!team) return res.status(400).json({ error: 'Team not found' });
+    }
+    const backendUrl = (process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/$/, '');
+    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
     const redirectUri = `${backendUrl}/api/integrations/discord/org-callback`;
     const scopes = 'bot guilds';
     const permissions = '536889104';
-    const statePayload: { userId: string; orgId: string; projectId?: string } = { userId: req.user!.id, orgId: org_id };
-    if (project_id && typeof project_id === 'string') statePayload.projectId = project_id;
+    const statePayload: { userId: string; orgId: string; projectId?: string; teamId?: string; successRedirect?: string } = { userId: req.user!.id, orgId: org_id };
+    if (project_id && typeof project_id === 'string') {
+      statePayload.projectId = project_id;
+      statePayload.successRedirect = `${frontendUrl}/organizations/${org_id}/projects/${project_id}/settings?connected=discord`;
+    } else if (team_id && typeof team_id === 'string') {
+      statePayload.teamId = team_id;
+      statePayload.successRedirect = `${frontendUrl}/organizations/${org_id}/teams/${team_id}/settings/notifications?connected=discord`;
+    } else {
+      statePayload.successRedirect = `${frontendUrl}/organizations/${org_id}/settings/integrations?connected=discord`;
+    }
     const state = Buffer.from(JSON.stringify(statePayload)).toString('base64');
     const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=${permissions}&scope=${encodeURIComponent(scopes)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}&response_type=code`;
     res.json({ redirectUrl: authUrl });
@@ -353,11 +366,21 @@ router.get('/discord/org-callback', async (req, res) => {
     let userId: string;
     let orgId: string;
     let projectId: string | undefined;
+    let teamId: string | undefined;
+    let successRedirect: string | undefined;
     try {
       const stateData = JSON.parse(Buffer.from(state as string, 'base64').toString());
       userId = stateData.userId;
       orgId = stateData.orgId;
       projectId = stateData.projectId;
+      teamId = stateData.teamId;
+      successRedirect = stateData.successRedirect;
+      if (!projectId && !teamId && successRedirect) {
+        const teamMatch = successRedirect.match(/\/organizations\/[^/]+\/teams\/([^/]+)\/settings\/notifications/);
+        const projectMatch = successRedirect.match(/\/organizations\/[^/]+\/projects\/([^/]+)\/settings/);
+        if (teamMatch) teamId = teamMatch[1];
+        else if (projectMatch) projectId = projectMatch[1];
+      }
     } catch {
       return res.redirect(`${frontendUrl}?error=discord&message=Invalid state`);
     }
@@ -372,7 +395,7 @@ router.get('/discord/org-callback', async (req, res) => {
       return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=discord&message=Not authorized`);
     }
 
-    const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`;
+    const backendUrl = (process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/$/, '');
     const redirectUri = `${backendUrl}/api/integrations/discord/org-callback`;
 
     const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
@@ -425,6 +448,8 @@ router.get('/discord/org-callback', async (req, res) => {
       updated_at: new Date().toISOString(),
     } as any;
 
+    const redirectOnSuccess = successRedirect || `${frontendUrl}/organizations/${orgId}/settings/integrations?connected=discord`;
+
     if (projectId) {
       const { data: proj } = await supabase.from('projects').select('id').eq('id', projectId).eq('organization_id', orgId).single();
       if (!proj) {
@@ -435,14 +460,25 @@ router.get('/discord/org-callback', async (req, res) => {
         console.error('Discord project integration DB error:', dbError);
         return res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings?error=discord&message=Failed to save integration`);
       }
-      res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings?connected=discord`);
+      res.redirect(redirectOnSuccess);
+    } else if (teamId) {
+      const { data: team } = await supabase.from('teams').select('id').eq('id', teamId).eq('organization_id', orgId).single();
+      if (!team) {
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=discord&message=Team not found`);
+      }
+      const { error: dbError } = await supabase.from('team_integrations').insert({ team_id: teamId, ...discordInsert });
+      if (dbError) {
+        console.error('Discord team integration DB error:', dbError);
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/teams/${teamId}/settings/notifications?error=discord&message=Failed to save integration`);
+      }
+      res.redirect(redirectOnSuccess);
     } else {
       const { error: dbError } = await supabase.from('organization_integrations').insert({ organization_id: orgId, ...discordInsert });
       if (dbError) {
         console.error('Discord org integration DB error:', dbError);
         return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=discord&message=Failed to save integration`);
       }
-      res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?connected=discord`);
+      res.redirect(redirectOnSuccess);
     }
   } catch (err: any) {
     console.error('Discord org callback error:', err);
@@ -2389,7 +2425,7 @@ router.get('/bitbucket/org-callback', async (req, res) => {
 // ============================================================
 router.get('/slack/install', authenticateUser, async (req: AuthRequest, res) => {
   try {
-    const { org_id, project_id } = req.query;
+    const { org_id, project_id, team_id } = req.query;
     if (!org_id || typeof org_id !== 'string') {
       return res.status(400).json({ error: 'Organization ID is required' });
     }
@@ -2410,11 +2446,24 @@ router.get('/slack/install', authenticateUser, async (req: AuthRequest, res) => 
       const { data: proj } = await supabase.from('projects').select('id').eq('id', project_id).eq('organization_id', org_id).single();
       if (!proj) return res.status(400).json({ error: 'Project not found' });
     }
-    const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`;
+    if (team_id && typeof team_id === 'string') {
+      const { data: team } = await supabase.from('teams').select('id').eq('id', team_id).eq('organization_id', org_id).single();
+      if (!team) return res.status(400).json({ error: 'Team not found' });
+    }
+    const backendUrl = (process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/$/, '');
+    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
     const redirectUri = `${backendUrl}/api/integrations/slack/org-callback`;
     const scopes = 'chat:write,channels:read,channels:history,files:write,incoming-webhook';
-    const statePayload: { userId: string; orgId: string; projectId?: string } = { userId: req.user!.id, orgId: org_id };
-    if (project_id && typeof project_id === 'string') statePayload.projectId = project_id;
+    const statePayload: { userId: string; orgId: string; projectId?: string; teamId?: string; successRedirect?: string } = { userId: req.user!.id, orgId: org_id };
+    if (project_id && typeof project_id === 'string') {
+      statePayload.projectId = project_id;
+      statePayload.successRedirect = `${frontendUrl}/organizations/${org_id}/projects/${project_id}/settings?connected=slack`;
+    } else if (team_id && typeof team_id === 'string') {
+      statePayload.teamId = team_id;
+      statePayload.successRedirect = `${frontendUrl}/organizations/${org_id}/teams/${team_id}/settings/notifications?connected=slack`;
+    } else {
+      statePayload.successRedirect = `${frontendUrl}/organizations/${org_id}/settings/integrations?connected=slack`;
+    }
     const state = Buffer.from(JSON.stringify(statePayload)).toString('base64');
     const authUrl = `https://slack.com/oauth/v2/authorize?client_id=${clientId}&scope=${encodeURIComponent(scopes)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}`;
     res.json({ redirectUrl: authUrl });
@@ -2426,7 +2475,7 @@ router.get('/slack/install', authenticateUser, async (req: AuthRequest, res) => 
 
 router.get('/slack/org-callback', async (req, res) => {
   const { code, state, error } = req.query;
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
 
   if (error) {
     return res.redirect(`${frontendUrl}?error=slack&message=${encodeURIComponent(error as string)}`);
@@ -2439,11 +2488,22 @@ router.get('/slack/org-callback', async (req, res) => {
     let userId: string;
     let orgId: string;
     let projectId: string | undefined;
+    let teamId: string | undefined;
+    let successRedirect: string | undefined;
     try {
       const stateData = JSON.parse(Buffer.from(state as string, 'base64').toString());
       userId = stateData.userId;
       orgId = stateData.orgId;
       projectId = stateData.projectId;
+      teamId = stateData.teamId;
+      successRedirect = stateData.successRedirect;
+      // If projectId/teamId were lost (e.g. state corruption), infer from successRedirect path
+      if (!projectId && !teamId && successRedirect) {
+        const teamMatch = successRedirect.match(/\/organizations\/[^/]+\/teams\/([^/]+)\/settings\/notifications/);
+        const projectMatch = successRedirect.match(/\/organizations\/[^/]+\/projects\/([^/]+)\/settings/);
+        if (teamMatch) teamId = teamMatch[1];
+        else if (projectMatch) projectId = projectMatch[1];
+      }
     } catch {
       return res.redirect(`${frontendUrl}?error=slack&message=Invalid state`);
     }
@@ -2455,10 +2515,10 @@ router.get('/slack/org-callback', async (req, res) => {
       .eq('user_id', userId)
       .single();
     if (!membership) {
-      return res.redirect(`${frontendUrl}?error=slack&message=Not authorized`);
+      return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=slack&message=Not authorized`);
     }
 
-    const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`;
+    const backendUrl = (process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/$/, '');
     const redirectUri = `${backendUrl}/api/integrations/slack/org-callback`;
 
     const tokenRes = await fetch('https://slack.com/api/oauth.v2.access', {
@@ -2504,6 +2564,8 @@ router.get('/slack/org-callback', async (req, res) => {
       updated_at: new Date().toISOString(),
     };
 
+    const redirectOnSuccess = successRedirect || `${frontendUrl}/organizations/${orgId}/settings/integrations?connected=slack`;
+
     if (projectId) {
       const { data: proj } = await supabase.from('projects').select('id').eq('id', projectId).eq('organization_id', orgId).single();
       if (!proj) {
@@ -2517,7 +2579,21 @@ router.get('/slack/org-callback', async (req, res) => {
         console.error('Slack project integration DB error:', dbError);
         return res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings?error=slack&message=Failed to save integration`);
       }
-      res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings?connected=slack`);
+      res.redirect(redirectOnSuccess);
+    } else if (teamId) {
+      const { data: team } = await supabase.from('teams').select('id').eq('id', teamId).eq('organization_id', orgId).single();
+      if (!team) {
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=slack&message=Team not found`);
+      }
+      const { error: dbError } = await supabase
+        .from('team_integrations')
+        .insert({ team_id: teamId, ...insertPayload } as any);
+
+      if (dbError) {
+        console.error('Slack team integration DB error:', dbError);
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/teams/${teamId}/settings/notifications?error=slack&message=Failed to save integration`);
+      }
+      res.redirect(redirectOnSuccess);
     } else {
       const { error: dbError } = await supabase
         .from('organization_integrations')
@@ -2527,7 +2603,7 @@ router.get('/slack/org-callback', async (req, res) => {
         console.error('Slack org integration DB error:', dbError);
         return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=slack&message=Failed to save integration`);
       }
-      res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?connected=slack`);
+      res.redirect(redirectOnSuccess);
     }
   } catch (err: any) {
     console.error('Slack org callback error:', err);
@@ -2542,7 +2618,7 @@ router.get('/slack/org-callback', async (req, res) => {
 
 router.get('/jira/install', authenticateUser, async (req: AuthRequest, res) => {
   try {
-    const { org_id, project_id } = req.query;
+    const { org_id, project_id, team_id } = req.query;
     if (!org_id || typeof org_id !== 'string') {
       return res.status(400).json({ error: 'Organization ID is required' });
     }
@@ -2563,11 +2639,24 @@ router.get('/jira/install', authenticateUser, async (req: AuthRequest, res) => {
       const { data: proj } = await supabase.from('projects').select('id').eq('id', project_id).eq('organization_id', org_id).single();
       if (!proj) return res.status(400).json({ error: 'Project not found' });
     }
+    if (team_id && typeof team_id === 'string') {
+      const { data: team } = await supabase.from('teams').select('id').eq('id', team_id).eq('organization_id', org_id).single();
+      if (!team) return res.status(400).json({ error: 'Team not found' });
+    }
     const backendUrl = getBackendUrl();
+    const frontendUrl = getFrontendUrl();
     const redirectUri = `${backendUrl}/api/integrations/jira/org-callback`;
     const scopes = 'read:jira-work write:jira-work read:jira-user';
-    const statePayload: { userId: string; orgId: string; projectId?: string } = { userId: req.user!.id, orgId: org_id };
-    if (project_id && typeof project_id === 'string') statePayload.projectId = project_id;
+    const statePayload: { userId: string; orgId: string; projectId?: string; teamId?: string; successRedirect?: string } = { userId: req.user!.id, orgId: org_id };
+    if (project_id && typeof project_id === 'string') {
+      statePayload.projectId = project_id;
+      statePayload.successRedirect = `${frontendUrl}/organizations/${org_id}/projects/${project_id}/settings?connected=jira`;
+    } else if (team_id && typeof team_id === 'string') {
+      statePayload.teamId = team_id;
+      statePayload.successRedirect = `${frontendUrl}/organizations/${org_id}/teams/${team_id}/settings/notifications?connected=jira`;
+    } else {
+      statePayload.successRedirect = `${frontendUrl}/organizations/${org_id}/settings/integrations?connected=jira`;
+    }
     const state = Buffer.from(JSON.stringify(statePayload)).toString('base64');
     const authUrl = `https://auth.atlassian.com/authorize?audience=api.atlassian.com&client_id=${clientId}&scope=${encodeURIComponent(scopes)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}&response_type=code&prompt=consent`;
     res.json({ redirectUrl: authUrl });
@@ -2605,11 +2694,21 @@ router.get('/jira/org-callback', async (req, res) => {
     let userId: string;
     let orgId: string;
     let projectId: string | undefined;
+    let teamId: string | undefined;
+    let successRedirect: string | undefined;
     try {
       const stateData = JSON.parse(Buffer.from(state as string, 'base64').toString());
       userId = stateData.userId;
       orgId = stateData.orgId;
       projectId = stateData.projectId;
+      teamId = stateData.teamId;
+      successRedirect = stateData.successRedirect;
+      if (!projectId && !teamId && successRedirect) {
+        const teamMatch = successRedirect.match(/\/organizations\/[^/]+\/teams\/([^/]+)\/settings\/notifications/);
+        const projectMatch = successRedirect.match(/\/organizations\/[^/]+\/projects\/([^/]+)\/settings/);
+        if (teamMatch) teamId = teamMatch[1];
+        else if (projectMatch) projectId = projectMatch[1];
+      }
     } catch {
       return res.redirect(`${frontendUrl}?error=jira&message=Invalid state`);
     }
@@ -2670,6 +2769,8 @@ router.get('/jira/org-callback', async (req, res) => {
       updated_at: new Date().toISOString(),
     } as any;
 
+    const redirectOnSuccess = successRedirect || `${frontendUrl}/organizations/${orgId}/settings/integrations?connected=jira`;
+
     if (projectId) {
       const { data: proj } = await supabase.from('projects').select('id').eq('id', projectId).eq('organization_id', orgId).single();
       if (!proj) {
@@ -2680,14 +2781,25 @@ router.get('/jira/org-callback', async (req, res) => {
         console.error('Jira project integration DB error:', dbError);
         return res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings?error=jira&message=Failed to save integration`);
       }
-      res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings?connected=jira`);
+      res.redirect(redirectOnSuccess);
+    } else if (teamId) {
+      const { data: team } = await supabase.from('teams').select('id').eq('id', teamId).eq('organization_id', orgId).single();
+      if (!team) {
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=jira&message=Team not found`);
+      }
+      const { error: dbError } = await supabase.from('team_integrations').insert({ team_id: teamId, ...jiraInsert });
+      if (dbError) {
+        console.error('Jira team integration DB error:', dbError);
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/teams/${teamId}/settings/notifications?error=jira&message=Failed to save integration`);
+      }
+      res.redirect(redirectOnSuccess);
     } else {
       const { error: dbError } = await supabase.from('organization_integrations').insert({ organization_id: orgId, ...jiraInsert });
       if (dbError) {
         console.error('Jira org integration DB error:', dbError);
         return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=jira&message=Failed to save integration`);
       }
-      res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?connected=jira`);
+      res.redirect(redirectOnSuccess);
     }
   } catch (err: any) {
     console.error('Jira org callback error:', err);
@@ -2698,7 +2810,7 @@ router.get('/jira/org-callback', async (req, res) => {
 
 router.post('/jira/connect-pat', authenticateUser, async (req: AuthRequest, res) => {
   try {
-    const { org_id, project_id, base_url, token } = req.body;
+    const { org_id, project_id, team_id, base_url, token } = req.body;
     if (!org_id || !base_url || !token) {
       return res.status(400).json({ error: 'Organization ID, base URL, and personal access token are required' });
     }
@@ -2714,6 +2826,10 @@ router.post('/jira/connect-pat', authenticateUser, async (req: AuthRequest, res)
     if (project_id && typeof project_id === 'string') {
       const { data: proj } = await supabase.from('projects').select('id').eq('id', project_id).eq('organization_id', org_id).single();
       if (!proj) return res.status(400).json({ error: 'Project not found' });
+    }
+    if (team_id && typeof team_id === 'string') {
+      const { data: team } = await supabase.from('teams').select('id').eq('id', team_id).eq('organization_id', org_id).single();
+      if (!team) return res.status(400).json({ error: 'Team not found' });
     }
 
     const normalizedUrl = (base_url as string).replace(/\/$/, '');
@@ -2747,6 +2863,12 @@ router.post('/jira/connect-pat', authenticateUser, async (req: AuthRequest, res)
         console.error('Jira DC project integration DB error:', dbError);
         return res.status(500).json({ error: 'Failed to save integration' });
       }
+    } else if (team_id && typeof team_id === 'string') {
+      const { error: dbError } = await supabase.from('team_integrations').insert({ team_id, ...jiraPatInsert });
+      if (dbError) {
+        console.error('Jira DC team integration DB error:', dbError);
+        return res.status(500).json({ error: 'Failed to save integration' });
+      }
     } else {
       const { error: dbError } = await supabase.from('organization_integrations').insert({ organization_id: org_id, ...jiraPatInsert });
       if (dbError) {
@@ -2763,7 +2885,7 @@ router.post('/jira/connect-pat', authenticateUser, async (req: AuthRequest, res)
 
 router.get('/linear/install', authenticateUser, async (req: AuthRequest, res) => {
   try {
-    const { org_id, project_id } = req.query;
+    const { org_id, project_id, team_id } = req.query;
     if (!org_id || typeof org_id !== 'string') {
       return res.status(400).json({ error: 'Organization ID is required' });
     }
@@ -2784,10 +2906,23 @@ router.get('/linear/install', authenticateUser, async (req: AuthRequest, res) =>
       const { data: proj } = await supabase.from('projects').select('id').eq('id', project_id).eq('organization_id', org_id).single();
       if (!proj) return res.status(400).json({ error: 'Project not found' });
     }
+    if (team_id && typeof team_id === 'string') {
+      const { data: team } = await supabase.from('teams').select('id').eq('id', team_id).eq('organization_id', org_id).single();
+      if (!team) return res.status(400).json({ error: 'Team not found' });
+    }
     const backendUrl = getBackendUrl();
+    const frontendUrl = getFrontendUrl();
     const redirectUri = `${backendUrl}/api/integrations/linear/org-callback`;
-    const statePayload: { userId: string; orgId: string; projectId?: string } = { userId: req.user!.id, orgId: org_id };
-    if (project_id && typeof project_id === 'string') statePayload.projectId = project_id;
+    const statePayload: { userId: string; orgId: string; projectId?: string; teamId?: string; successRedirect?: string } = { userId: req.user!.id, orgId: org_id };
+    if (project_id && typeof project_id === 'string') {
+      statePayload.projectId = project_id;
+      statePayload.successRedirect = `${frontendUrl}/organizations/${org_id}/projects/${project_id}/settings?connected=linear`;
+    } else if (team_id && typeof team_id === 'string') {
+      statePayload.teamId = team_id;
+      statePayload.successRedirect = `${frontendUrl}/organizations/${org_id}/teams/${team_id}/settings/notifications?connected=linear`;
+    } else {
+      statePayload.successRedirect = `${frontendUrl}/organizations/${org_id}/settings/integrations?connected=linear`;
+    }
     const state = Buffer.from(JSON.stringify(statePayload)).toString('base64');
     const authUrl = `https://linear.app/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}&response_type=code&scope=${encodeURIComponent('read,write,issues:create')}&prompt=consent`;
     res.json({ redirectUrl: authUrl });
@@ -2825,11 +2960,21 @@ router.get('/linear/org-callback', async (req, res) => {
     let userId: string;
     let orgId: string;
     let projectId: string | undefined;
+    let teamId: string | undefined;
+    let successRedirect: string | undefined;
     try {
       const stateData = JSON.parse(Buffer.from(state as string, 'base64').toString());
       userId = stateData.userId;
       orgId = stateData.orgId;
       projectId = stateData.projectId;
+      teamId = stateData.teamId;
+      successRedirect = stateData.successRedirect;
+      if (!projectId && !teamId && successRedirect) {
+        const teamMatch = successRedirect.match(/\/organizations\/[^/]+\/teams\/([^/]+)\/settings\/notifications/);
+        const projectMatch = successRedirect.match(/\/organizations\/[^/]+\/projects\/([^/]+)\/settings/);
+        if (teamMatch) teamId = teamMatch[1];
+        else if (projectMatch) projectId = projectMatch[1];
+      }
     } catch {
       return res.redirect(`${frontendUrl}?error=linear&message=Invalid state`);
     }
@@ -2891,6 +3036,8 @@ router.get('/linear/org-callback', async (req, res) => {
       updated_at: new Date().toISOString(),
     } as any;
 
+    const redirectOnSuccess = successRedirect || `${frontendUrl}/organizations/${orgId}/settings/integrations?connected=linear`;
+
     if (projectId) {
       const { data: proj } = await supabase.from('projects').select('id').eq('id', projectId).eq('organization_id', orgId).single();
       if (!proj) {
@@ -2901,14 +3048,25 @@ router.get('/linear/org-callback', async (req, res) => {
         console.error('Linear project integration DB error:', dbError);
         return res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings?error=linear&message=Failed to save integration`);
       }
-      res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings?connected=linear`);
+      res.redirect(redirectOnSuccess);
+    } else if (teamId) {
+      const { data: team } = await supabase.from('teams').select('id').eq('id', teamId).eq('organization_id', orgId).single();
+      if (!team) {
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=linear&message=Team not found`);
+      }
+      const { error: dbError } = await supabase.from('team_integrations').insert({ team_id: teamId, ...linearInsert });
+      if (dbError) {
+        console.error('Linear team integration DB error:', dbError);
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/teams/${teamId}/settings/notifications?error=linear&message=Failed to save integration`);
+      }
+      res.redirect(redirectOnSuccess);
     } else {
       const { error: dbError } = await supabase.from('organization_integrations').insert({ organization_id: orgId, ...linearInsert });
       if (dbError) {
         console.error('Linear org integration DB error:', dbError);
         return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=linear&message=Failed to save integration`);
       }
-      res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?connected=linear`);
+      res.redirect(redirectOnSuccess);
     }
   } catch (err: any) {
     console.error('Linear org callback error:', err);

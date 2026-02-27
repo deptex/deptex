@@ -6,6 +6,13 @@ import { createActivity } from '../lib/activities';
 const router = express.Router();
 router.use(authenticateUser);
 
+// Sanitize permissions: remove deprecated resolve_alerts and view_members
+function sanitizeRolePermissions(perms: Record<string, boolean> | undefined): Record<string, boolean> | undefined {
+  if (!perms) return perms;
+  const { resolve_alerts: _, view_members: __, ...rest } = perms;
+  return rest;
+}
+
 // Helper function to check if user has access to a team
 // Access is granted if user is a team member OR has org-level permissions
 async function checkTeamAccess(userId: string, organizationId: string, teamId: string): Promise<{
@@ -170,7 +177,6 @@ router.get('/:id/teams', async (req: AuthRequest, res) => {
         let userRank: number | null = null;
         let userPermissions = {
           view_overview: true,
-          resolve_alerts: false,
           manage_projects: false,
           manage_members: false,
           view_settings: false,
@@ -226,7 +232,6 @@ router.get('/:id/teams', async (req: AuthRequest, res) => {
         if (membership.role === 'owner' || membership.role === 'admin' || canViewAllTeams) {
           userPermissions = {
             view_overview: true,
-            resolve_alerts: true,
             manage_projects: true,
             manage_members: true,
             view_settings: true,
@@ -343,7 +348,6 @@ router.post('/:id/teams', async (req: AuthRequest, res) => {
       role_color: null,
       permissions: {
         view_overview: true,
-        resolve_alerts: true,
         manage_projects: true,
         manage_members: true,
         view_settings: true,
@@ -588,9 +592,8 @@ router.get('/:id/teams/:teamId', async (req: AuthRequest, res) => {
     let userRole = 'member';
     let userRoleDisplayName = 'Member';
     let userRoleColor = null;
-    let userPermissions = {
+    let     userPermissions = {
       view_overview: true,
-      resolve_alerts: false,
       manage_projects: false,
       manage_members: false,
       view_settings: false,
@@ -665,7 +668,6 @@ router.get('/:id/teams/:teamId', async (req: AuthRequest, res) => {
     if (orgMembership?.role === 'owner' || orgMembership?.role === 'admin' || canViewAllTeamsAndProjects || canManageTeamsAndProjects) {
       userPermissions = {
         view_overview: true,
-        resolve_alerts: true,
         manage_projects: true,
         manage_members: true,
         view_settings: true,
@@ -735,7 +737,8 @@ router.post('/:id/teams/:teamId/roles', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id, teamId } = req.params;
-    const { name, display_name, permissions, color } = req.body;
+    let { name, display_name, permissions, color } = req.body;
+    permissions = sanitizeRolePermissions(permissions);
 
     if (!name || typeof name !== 'string') {
       return res.status(400).json({ error: 'Role name is required' });
@@ -811,7 +814,6 @@ router.post('/:id/teams/:teamId/roles', async (req: AuthRequest, res) => {
         color: color || null,
         permissions: permissions || {
           view_overview: true,
-          resolve_alerts: false,
           manage_projects: false,
           manage_members: false,
           view_settings: false,
@@ -863,7 +865,8 @@ router.put('/:id/teams/:teamId/roles/:roleId', async (req: AuthRequest, res) => 
   try {
     const userId = req.user!.id;
     const { id, teamId, roleId } = req.params;
-    const { name, display_name, display_order, permissions, color } = req.body;
+    let { name, display_name, display_order, permissions, color } = req.body;
+    permissions = permissions !== undefined ? sanitizeRolePermissions(permissions) : undefined;
 
     // Check if user has access to this team
     const accessCheck = await checkTeamAccess(userId, id, teamId);
@@ -949,7 +952,7 @@ router.put('/:id/teams/:teamId/roles/:roleId', async (req: AuthRequest, res) => 
     if (name !== undefined) updateData.name = name.trim().toLowerCase();
     if (display_name !== undefined) updateData.display_name = display_name;
     if (display_order !== undefined) updateData.display_order = display_order;
-    if (permissions !== undefined) updateData.permissions = permissions;
+    if (permissions !== undefined) updateData.permissions = sanitizeRolePermissions(permissions);
     if (color !== undefined) {
       // Validate color hex code if provided
       if (color && !/^#([0-9A-F]{3}){1,2}$/i.test(color)) {
@@ -1268,12 +1271,9 @@ router.get('/:id/teams/:teamId/members', async (req: AuthRequest, res) => {
           org_rank: orgRank, // Organization-level rank
           permissions: role?.permissions || {
             view_overview: true,
-            resolve_alerts: false,
             manage_projects: false,
+            manage_members: false,
             view_settings: false,
-            view_members: false,
-            add_members: false,
-            kick_members: false,
             view_roles: false,
             edit_roles: false,
           },
@@ -1343,7 +1343,8 @@ router.post('/:id/teams/:teamId/members', async (req: AuthRequest, res) => {
           .eq('id', teamMembership.role_id)
           .single();
 
-        if (!role?.permissions?.add_members) {
+        const perms = role?.permissions || {};
+        if (!perms.manage_members && !perms.add_members) {
           return res.status(403).json({ error: 'You do not have permission to add team members' });
         }
       } else {
@@ -1679,7 +1680,8 @@ router.delete('/:id/teams/:teamId/members/:memberId', async (req: AuthRequest, r
           .eq('id', teamMembership.role_id)
           .single();
 
-        if (!role?.permissions?.kick_members) {
+        const perms = role?.permissions || {};
+        if (!perms.manage_members && !perms.kick_members) {
           return res.status(403).json({ error: 'You do not have permission to remove team members' });
         }
       } else {

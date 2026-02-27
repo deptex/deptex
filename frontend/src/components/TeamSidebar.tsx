@@ -114,7 +114,7 @@ export default memo(TeamSidebar, (prevProps, nextProps) => {
   if (!prevPerms || !nextPerms) return false;
 
   const permissionKeys: (keyof TeamPermissions)[] = [
-    'view_overview', 'resolve_alerts', 'manage_projects',
+    'view_overview', 'manage_projects',
     'manage_members', 'view_settings', 'view_roles', 'edit_roles',
     'manage_notification_settings'
   ];

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useOutletContext, useNavigate, useParams, Link } from 'react-router-dom';
+import { useOutletContext, useNavigate, useParams, useLocation, Link } from 'react-router-dom';
 import { Save, Trash2, Upload, Settings, Plus, X, Edit2, MoreVertical, UserCircle, Users, Bell, Tag, FileCheck, Check, Mail, Webhook, ChevronDown, Loader2, BookOpen } from 'lucide-react';
 import { api, TeamWithRole, TeamPermissions, TeamMember, TeamRole, Organization, type CiCdConnection } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
@@ -40,8 +40,180 @@ interface TeamContextType {
 
 const VALID_TEAM_SETTINGS_SECTIONS = new Set(['general', 'notifications', 'roles']);
 
+// In-memory cache for team roles (stale-while-revalidate, keyed by orgId_teamId)
+const teamRolesCache: Record<string, TeamRole[]> = {};
+const CACHE_KEY_TEAM_ROLES = (orgId: string, teamId: string) => `team_roles_${orgId}_${teamId}`;
+function getCachedTeamRoles(orgId: string, teamId: string): TeamRole[] | null {
+  const key = `${orgId}_${teamId}`;
+  if (teamRolesCache[key]) return teamRolesCache[key];
+  try {
+    const raw = localStorage.getItem(CACHE_KEY_TEAM_ROLES(orgId, teamId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as TeamRole[];
+    teamRolesCache[key] = parsed;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/** Renders a tab-specific content skeleton for the team settings loading state. */
+function TeamSettingsTabSkeleton({ section }: { section: string }) {
+  const pulse = 'bg-muted animate-pulse rounded';
+  switch (section) {
+    case 'general':
+      return (
+        <div className="space-y-6">
+          <div>
+            <div className={`h-8 w-48 ${pulse}`} />
+          </div>
+          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+            <div className="p-6">
+              <div className={`h-4 w-40 ${pulse} mb-2`} />
+              <div className={`h-3 w-full max-w-md ${pulse} mb-4`} />
+              <div className={`h-10 w-full max-w-md ${pulse}`} />
+            </div>
+            <div className="p-6 pt-0">
+              <div className={`h-4 w-36 ${pulse} mb-2`} />
+              <div className={`h-3 w-full max-w-sm ${pulse} mb-4`} />
+              <div className={`h-20 w-full max-w-md ${pulse}`} />
+            </div>
+            <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
+              <div className={`h-3 w-48 ${pulse}`} />
+              <div className={`h-8 w-16 ${pulse}`} />
+            </div>
+          </div>
+          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+            <div className="p-6 flex items-start gap-6">
+              <div className="flex-1">
+                <div className={`h-4 w-36 ${pulse} mb-2`} />
+                <div className={`h-3 w-full max-w-sm ${pulse}`} />
+              </div>
+              <div className="h-20 w-20 rounded-full bg-muted animate-pulse" />
+            </div>
+          </div>
+        </div>
+      );
+    case 'notifications':
+      return (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div className={`h-8 w-36 ${pulse}`} />
+            <div className={`h-9 w-24 ${pulse}`} />
+          </div>
+          <div className="flex items-center border-b border-border pb-px">
+            <div className="flex items-center gap-6">
+              <div className={`h-4 w-24 ${pulse} pb-3`} />
+              <div className={`h-4 w-24 ${pulse} pb-3`} />
+            </div>
+          </div>
+          <div className="pt-6 space-y-8">
+            <div>
+              <div className={`h-5 w-48 ${pulse} mb-3`} />
+              <div className={`h-3 w-72 ${pulse} mb-4`} />
+              <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                <div className="px-4 py-2.5 bg-background-card-header border-b border-border">
+                  <div className={`h-4 w-16 ${pulse}`} />
+                </div>
+                <table className="w-full">
+                  <thead className="bg-background-subtle/30 border-b border-border">
+                    <tr>
+                      <th className="text-left px-4 py-2.5"><div className={`h-3 w-16 ${pulse}`} /></th>
+                      <th className="text-left px-4 py-2.5"><div className={`h-3 w-20 ${pulse}`} /></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {[1, 2, 3].map((i) => (
+                      <tr key={i}>
+                        <td className="px-4 py-3"><div className={`h-4 w-20 ${pulse}`} /></td>
+                        <td className="px-4 py-3"><div className={`h-4 w-28 ${pulse}`} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div>
+              <div className={`h-5 w-32 ${pulse} mb-3`} />
+              <div className={`h-3 w-56 ${pulse} mb-4`} />
+              <div className="flex gap-2 mb-4">
+                <div className={`h-8 w-20 ${pulse}`} />
+                <div className={`h-8 w-24 ${pulse}`} />
+              </div>
+              <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                <div className="px-4 py-2.5 bg-background-card-header border-b border-border">
+                  <div className={`h-4 w-16 ${pulse}`} />
+                </div>
+                <table className="w-full">
+                  <thead className="bg-background-subtle/30 border-b border-border">
+                    <tr>
+                      <th className="text-left px-4 py-2.5"><div className={`h-3 w-16 ${pulse}`} /></th>
+                      <th className="text-left px-4 py-2.5"><div className={`h-3 w-20 ${pulse}`} /></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {[1, 2].map((i) => (
+                      <tr key={i}>
+                        <td className="px-4 py-3"><div className={`h-4 w-20 ${pulse}`} /></td>
+                        <td className="px-4 py-3"><div className={`h-4 w-28 ${pulse}`} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    case 'roles':
+      return (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className={`h-8 w-24 ${pulse}`} />
+              <div className={`h-4 w-48 ${pulse} mt-2`} />
+            </div>
+            <div className={`h-8 w-24 ${pulse}`} />
+          </div>
+          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+            <div className="px-4 py-2 border-b border-border bg-background-subtle/30">
+              <div className={`h-4 w-16 ${pulse}`} />
+            </div>
+            <div className="divide-y divide-border">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="px-4 py-3 flex items-center justify-between">
+                  <div className="flex items-center gap-3 flex-1">
+                    <div className={`h-5 w-28 ${pulse}`} />
+                    <div className={`h-4 w-20 ${pulse}`} />
+                  </div>
+                  <div className={`h-5 w-16 ${pulse}`} />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    default:
+      return (
+        <div className="space-y-6">
+          <div>
+            <div className={`h-8 w-48 ${pulse}`} />
+          </div>
+          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+            <div className="p-6">
+              <div className={`h-4 w-40 ${pulse} mb-2`} />
+              <div className={`h-3 w-full max-w-md ${pulse} mb-4`} />
+              <div className={`h-10 w-full max-w-md ${pulse}`} />
+            </div>
+          </div>
+        </div>
+      );
+  }
+}
+
 export default function TeamSettingsPage() {
   const { orgId, teamId, section: sectionParam } = useParams<{ orgId: string; teamId: string; section?: string }>();
+  const location = useLocation();
   const { team, organizationId, reloadTeam, updateTeamData, userPermissions, organization } = useOutletContext<TeamContextType>();
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -75,11 +247,9 @@ export default function TeamSettingsPage() {
   const [newRoleNameInput, setNewRoleNameInput] = useState('');
   const [newRolePermissions, setNewRolePermissions] = useState<TeamPermissions>({
     view_overview: false,
-    resolve_alerts: false,
     manage_projects: false,
     manage_members: false,
     view_settings: false,
-    view_members: false,
     add_members: false,
     kick_members: false,
     view_roles: false,
@@ -104,6 +274,8 @@ export default function TeamSettingsPage() {
   const [newRoleColor, setNewRoleColor] = useState('');
   const [editingRoleColor, setEditingRoleColor] = useState('');
 
+  const [hasVisitedRoles, setHasVisitedRoles] = useState(false);
+
   // Notification state
   const [notificationActiveTab, setNotificationActiveTab] = useState<'notifications' | 'destinations'>('notifications');
   const [teamConnections, setTeamConnections] = useState<{ inherited: CiCdConnection[]; team: CiCdConnection[] }>({ inherited: [], team: [] });
@@ -113,9 +285,14 @@ export default function TeamSettingsPage() {
   const [teamEmailToAdd, setTeamEmailToAdd] = useState('');
   const [teamEmailSaving, setTeamEmailSaving] = useState(false);
   const [showTeamCustomDialog, setShowTeamCustomDialog] = useState(false);
+  const [teamCustomType, setTeamCustomType] = useState<'notification' | 'ticketing'>('notification');
   const [teamCustomName, setTeamCustomName] = useState('');
   const [teamCustomWebhookUrl, setTeamCustomWebhookUrl] = useState('');
   const [teamCustomSaving, setTeamCustomSaving] = useState(false);
+  const [showTeamJiraPatDialog, setShowTeamJiraPatDialog] = useState(false);
+  const [teamJiraPatBaseUrl, setTeamJiraPatBaseUrl] = useState('');
+  const [teamJiraPatToken, setTeamJiraPatToken] = useState('');
+  const [teamJiraPatSaving, setTeamJiraPatSaving] = useState(false);
 
   // Track the team id to only reset state when switching teams, not on every reload
   const [loadedTeamId, setLoadedTeamId] = useState<string | null>(null);
@@ -182,6 +359,23 @@ export default function TeamSettingsPage() {
 
 
 
+  // Seed roles from cache when team is available so we show data immediately when returning to the tab
+  useEffect(() => {
+    if (!organizationId || !team?.id) return;
+    const cached = getCachedTeamRoles(organizationId, team.id);
+    if (cached?.length) {
+      const sorted = [...cached].sort((a, b) => a.display_order - b.display_order);
+      setAllRoles(sorted);
+    } else {
+      setAllRoles([]); // Clear when switching to a team with no cache
+    }
+  }, [organizationId, team?.id]);
+
+  // Track when user visits Roles tab so we can keep it mounted when switching away
+  useEffect(() => {
+    if (activeSection === 'roles') setHasVisitedRoles(true);
+  }, [activeSection]);
+
   useEffect(() => {
     if (team && activeSection === 'roles') {
       loadRoles();
@@ -225,13 +419,26 @@ export default function TeamSettingsPage() {
     }
   };
 
+  // Refetch connections when returning from OAuth (e.g. ?connected=slack)
+  useEffect(() => {
+    if (activeSection === 'notifications' && organizationId && team?.id && location.search?.includes('connected=')) {
+      loadTeamConnections();
+    }
+  }, [location.search, activeSection, organizationId, team?.id]);
+
   const loadRoles = async () => {
     if (!organizationId || !team?.id) return;
+    const hasCache = !!(getCachedTeamRoles(organizationId, team.id)?.length);
+    if (!hasCache) setLoadingRoles(true);
     try {
-      setLoadingRoles(true);
       const roles = await api.getTeamRoles(organizationId, team.id);
       const sortedRoles = roles.sort((a, b) => a.display_order - b.display_order);
       setAllRoles(sortedRoles);
+      const key = `${organizationId}_${team.id}`;
+      teamRolesCache[key] = sortedRoles;
+      try {
+        localStorage.setItem(CACHE_KEY_TEAM_ROLES(organizationId, team.id), JSON.stringify(sortedRoles));
+      } catch { /* ignore */ }
     } catch (error: any) {
       console.error('Failed to load roles:', error);
     } finally {
@@ -530,6 +737,13 @@ export default function TeamSettingsPage() {
     }));
     setAllRoles(finalRoles);
     setDragPreviewRoles(null);
+    if (organizationId && team?.id) {
+      const key = `${organizationId}_${team.id}`;
+      teamRolesCache[key] = finalRoles;
+      try {
+        localStorage.setItem(CACHE_KEY_TEAM_ROLES(organizationId, team.id), JSON.stringify(finalRoles));
+      } catch { /* ignore */ }
+    }
 
     // Async update backend
     Promise.all(
@@ -562,11 +776,9 @@ export default function TeamSettingsPage() {
       setNewRoleColor('#3b82f6');
       setNewRolePermissions({
         view_overview: false,
-        resolve_alerts: false,
         manage_projects: false,
         manage_members: false,
         view_settings: false,
-        view_members: false,
         add_members: false,
         kick_members: false,
         view_roles: false,
@@ -597,7 +809,6 @@ export default function TeamSettingsPage() {
     setEditingRoleName(role.display_name || role.name);
     setEditingRolePermissions(role.permissions || {
       view_overview: false,
-      resolve_alerts: false,
       manage_projects: false,
       manage_members: false,
       view_settings: false,
@@ -721,20 +932,42 @@ export default function TeamSettingsPage() {
       label: 'Notifications',
       icon: <Bell className="h-4 w-4 tab-icon-shake" />,
     }] : []),
-    // Show Roles section if user can view/edit roles OR has org-level manage permission
-    ...((userPermissions?.view_roles || userPermissions?.edit_roles || hasOrgManagePermission) ? [{
+    // Show Roles section if user can view/edit roles AND has view_settings AND manage_members (or has org-level manage permission)
+    ...((hasOrgManagePermission || (
+      (userPermissions?.view_roles || userPermissions?.edit_roles) &&
+      userPermissions?.view_settings &&
+      userPermissions?.manage_members
+    )) ? [{
       id: 'roles',
       label: 'Roles',
       icon: <Users className="h-4 w-4 tab-icon-shake" />,
     }] : []),
   ];
 
+  // Don't render if team not loaded yet — show full-page settings skeleton with tab-specific content
   if (!team) {
+    const loadingSection = sectionParam && VALID_TEAM_SETTINGS_SECTIONS.has(sectionParam) ? sectionParam : 'general';
     return (
       <div className="bg-background">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
-          <div className="flex items-center justify-center py-12">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+          <div className="flex gap-8 items-start">
+            {/* Sidebar skeleton */}
+            <aside className="w-64 flex-shrink-0">
+              <div className="sticky top-24 pt-8 bg-background z-10">
+                <nav className="space-y-1">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="flex items-center gap-3 px-3 py-2">
+                      <div className="h-4 w-4 bg-muted animate-pulse rounded" />
+                      <div className="h-4 bg-muted animate-pulse rounded flex-1" style={{ maxWidth: i === 2 ? 100 : 80 }} />
+                    </div>
+                  ))}
+                </nav>
+              </div>
+            </aside>
+            {/* Tab-specific content skeleton */}
+            <div className="flex-1 no-scrollbar">
+              <TeamSettingsTabSkeleton section={loadingSection} />
+            </div>
           </div>
         </div>
       </div>
@@ -787,7 +1020,7 @@ export default function TeamSettingsPage() {
                         value={name}
                         onChange={(e) => setName(e.target.value)}
                         placeholder="Enter team name"
-                        className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                        className="w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                       />
                     </div>
 
@@ -800,7 +1033,7 @@ export default function TeamSettingsPage() {
                       onChange={(e) => setDescription(e.target.value)}
                       placeholder="Describe the team's purpose..."
                       rows={3}
-                      className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all resize-none"
+                      className="w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all resize-none"
                     />
                   </div>
                   <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
@@ -1047,10 +1280,95 @@ export default function TeamSettingsPage() {
                             variant="outline"
                             size="sm"
                             className="text-xs"
-                            onClick={() => { setTeamCustomName(''); setTeamCustomWebhookUrl(''); setShowTeamCustomDialog(true); }}
+                            onClick={async () => {
+                              try {
+                                const { redirectUrl } = await api.connectSlackOrg(organizationId!, undefined, team!.id);
+                                window.location.href = redirectUrl;
+                              } catch (err: any) {
+                                toast({ title: 'Error', description: err.message || 'Failed to connect Slack', variant: 'destructive' });
+                              }
+                            }}
+                          >
+                            <img src="/images/integrations/slack.png" alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5" />
+                            Add Slack
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs"
+                            onClick={async () => {
+                              try {
+                                const { redirectUrl } = await api.connectDiscordOrg(organizationId!, undefined, team!.id);
+                                window.location.href = redirectUrl;
+                              } catch (err: any) {
+                                toast({ title: 'Error', description: err.message || 'Failed to connect Discord', variant: 'destructive' });
+                              }
+                            }}
+                          >
+                            <img src="/images/integrations/discord.png" alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5" />
+                            Add Discord
+                          </Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="outline" size="sm" className="text-xs">
+                                <img src="/images/integrations/jira.png" alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5" />
+                                Add Jira
+                                <ChevronDown className="h-3 w-3 ml-1" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={async () => {
+                                try {
+                                  const { redirectUrl } = await api.connectJiraOrg(organizationId!, undefined, team!.id);
+                                  window.location.href = redirectUrl;
+                                } catch (err: any) {
+                                  toast({ title: 'Error', description: err.message || 'Failed to connect Jira', variant: 'destructive' });
+                                }
+                              }}>
+                                Jira Cloud (OAuth)
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => {
+                                setTeamJiraPatBaseUrl('');
+                                setTeamJiraPatToken('');
+                                setShowTeamJiraPatDialog(true);
+                              }}>
+                                Jira Data Center (PAT)
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs"
+                            onClick={async () => {
+                              try {
+                                const { redirectUrl } = await api.connectLinearOrg(organizationId!, undefined, team!.id);
+                                window.location.href = redirectUrl;
+                              } catch (err: any) {
+                                toast({ title: 'Error', description: err.message || 'Failed to connect Linear', variant: 'destructive' });
+                              }
+                            }}
+                          >
+                            <img src="/images/integrations/linear.png" alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5" />
+                            Add Linear
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs"
+                            onClick={() => { setTeamCustomType('notification'); setTeamCustomName(''); setTeamCustomWebhookUrl(''); setShowTeamCustomDialog(true); }}
                           >
                             <Webhook className="h-3.5 w-3.5 mr-1.5" />
-                            Add Custom
+                            Add Custom Notifications
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs"
+                            onClick={() => { setTeamCustomType('ticketing'); setTeamCustomName(''); setTeamCustomWebhookUrl(''); setShowTeamCustomDialog(true); }}
+                          >
+                            <Webhook className="h-3.5 w-3.5 mr-1.5" />
+                            Add Custom Ticketing
                           </Button>
                         </div>
                       )}
@@ -1146,8 +1464,9 @@ export default function TeamSettingsPage() {
               </div>
             )}
 
-            {activeSection === 'roles' && (
-              <div className="space-y-6">
+            {/* Keep Roles mounted after first visit so it doesn't reload when switching tabs (like Org page) */}
+            {(activeSection === 'roles' || hasVisitedRoles) && team && (
+              <div className="space-y-6" style={{ display: activeSection === 'roles' ? undefined : 'none' }}>
                 <div className="flex items-center justify-between">
                   <div>
                     <h2 className="text-2xl font-bold text-foreground">Roles</h2>
@@ -1410,7 +1729,7 @@ export default function TeamSettingsPage() {
                         </label>
                         <input
                           type="text"
-                          placeholder="e.g. Developer, Manager"
+                          placeholder=""
                           value={newRoleNameInput}
                           onChange={(e) => setNewRoleNameInput(e.target.value)}
                           maxLength={24}
@@ -1644,7 +1963,7 @@ export default function TeamSettingsPage() {
                           type="text"
                           value={editingRoleName}
                           onChange={(e) => setEditingRoleName(e.target.value)}
-                          placeholder="e.g. Developer, Manager"
+                          placeholder=""
                           maxLength={24}
                           disabled={!isRoleEditable || isSavingRole}
                           className={`w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all ${!isRoleEditable ? 'opacity-60 cursor-not-allowed' : ''}`}
@@ -1858,8 +2177,12 @@ export default function TeamSettingsPage() {
           <div className="px-6 pt-6 pb-4 border-b border-border">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <DialogTitle>Add custom integration</DialogTitle>
-                <DialogDescription className="mt-1">Set up a custom webhook endpoint for notifications.</DialogDescription>
+                <DialogTitle>Add custom {teamCustomType === 'notification' ? 'notifications' : 'ticketing'}</DialogTitle>
+                <DialogDescription className="mt-1">
+                  {teamCustomType === 'notification'
+                    ? 'Set up a custom webhook endpoint for notifications.'
+                    : 'Set up a custom webhook endpoint for ticketing (e.g. create issues).'}
+                </DialogDescription>
               </div>
               <Link to="/docs/integrations" target="_blank" rel="noopener noreferrer">
                 <Button variant="outline" size="sm" className="text-xs shrink-0">
@@ -1902,7 +2225,7 @@ export default function TeamSettingsPage() {
                 try {
                   await api.createTeamCustomIntegration(organizationId, team.id, {
                     name: teamCustomName.trim(),
-                    type: 'notification',
+                    type: teamCustomType,
                     webhook_url: teamCustomWebhookUrl.trim(),
                   });
                   toast({ title: 'Created', description: 'Custom integration created.' });
@@ -1919,6 +2242,69 @@ export default function TeamSettingsPage() {
             >
               {teamCustomSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
               Create connection
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Team Jira Data Center PAT Dialog */}
+      <Dialog open={showTeamJiraPatDialog} onOpenChange={setShowTeamJiraPatDialog}>
+        <DialogContent hideClose className="sm:max-w-[440px] bg-background p-0 gap-0">
+          <div className="px-6 pt-6 pb-4 border-b border-border">
+            <div className="flex items-center gap-3">
+              <img src="/images/integrations/jira.png" alt="Jira" className="h-7 w-7 rounded object-contain" />
+              <div>
+                <DialogTitle>Jira Data Center</DialogTitle>
+                <DialogDescription>Connect via Personal Access Token</DialogDescription>
+              </div>
+            </div>
+          </div>
+          <div className="px-6 py-6 grid gap-4 bg-background">
+            <div className="grid gap-2">
+              <Label htmlFor="team-jira-url">Server URL</Label>
+              <Input
+                id="team-jira-url"
+                type="url"
+                value={teamJiraPatBaseUrl}
+                onChange={(e) => setTeamJiraPatBaseUrl(e.target.value)}
+                placeholder="https://jira.example.com"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="team-jira-pat">Personal Access Token</Label>
+              <Input
+                id="team-jira-pat"
+                type="password"
+                value={teamJiraPatToken}
+                onChange={(e) => setTeamJiraPatToken(e.target.value)}
+                placeholder=""
+              />
+            </div>
+          </div>
+          <DialogFooter className="px-6 py-4 bg-background">
+            <Button variant="outline" onClick={() => setShowTeamJiraPatDialog(false)}>Cancel</Button>
+            <Button
+              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+              disabled={!teamJiraPatBaseUrl.trim() || !teamJiraPatToken.trim() || teamJiraPatSaving}
+              onClick={async () => {
+                if (!organizationId || !team?.id) return;
+                setTeamJiraPatSaving(true);
+                try {
+                  await api.connectJiraPatOrg(organizationId, teamJiraPatBaseUrl.trim(), teamJiraPatToken.trim(), undefined, team.id);
+                  toast({ title: 'Connected', description: 'Jira Data Center connected successfully.' });
+                  setShowTeamJiraPatDialog(false);
+                  setTeamJiraPatBaseUrl('');
+                  setTeamJiraPatToken('');
+                  loadTeamConnections();
+                } catch (err: any) {
+                  toast({ title: 'Error', description: err.message || 'Failed to connect.', variant: 'destructive' });
+                } finally {
+                  setTeamJiraPatSaving(false);
+                }
+              }}
+            >
+              {teamJiraPatSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
+              Connect
             </Button>
           </DialogFooter>
         </DialogContent>

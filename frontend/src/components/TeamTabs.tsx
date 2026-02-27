@@ -122,7 +122,7 @@ export default memo(TeamTabs, (prevProps, nextProps) => {
 
   // Compare all permission fields
   const permissionKeys: (keyof typeof prevPerms)[] = [
-    'view_overview', 'resolve_alerts', 'manage_projects',
+    'view_overview', 'manage_projects',
     'manage_members', 'view_settings', 'view_roles', 'edit_roles'
   ];
 

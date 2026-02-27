@@ -61,7 +61,7 @@ export default function TeamMembersPage({ isSettingsSubpage = false }: TeamMembe
   const { toast } = useToast();
 
   const canManageMembers = userPermissions?.manage_members || userPermissions?.kick_members || false;
-  const canAddMembers = userPermissions?.add_members || false;
+  const canAddMembers = userPermissions?.manage_members || userPermissions?.add_members || false;
   const canEditRoles = userPermissions?.edit_roles || false;
 
   // Get user's rank from team membership. If user has org-level permissions

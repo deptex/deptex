@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Button } from './ui/button';
 import { TeamPermissions } from '../lib/api';
-import { Save, Settings, Users, FolderKanban, ShieldAlert } from 'lucide-react';
+import { Save, Settings, FolderKanban } from 'lucide-react';
 
 interface TeamPermissionEditorProps {
     permissions: TeamPermissions;
@@ -51,7 +51,12 @@ export function TeamPermissionEditor({
     const [localPermissions, setLocalPermissions] = useState<TeamPermissions>(permissions);
 
     useEffect(() => {
-        setLocalPermissions(permissions);
+        // Normalize legacy roles: derive manage_members from add_members/kick_members if not set
+        const normalized = { ...permissions };
+        if (!normalized.manage_members && (normalized.add_members || normalized.kick_members)) {
+            normalized.manage_members = true;
+        }
+        setLocalPermissions(normalized);
     }, [permissions]);
 
     const handlePermissionChange = (key: keyof TeamPermissions, value: boolean) => {
@@ -64,38 +69,19 @@ export function TeamPermissionEditor({
 
         // Dependency Logic
 
-        // View Settings dependencies
+        // View Settings: when disabled, disable dependents
         if (key === 'view_settings' && !value) {
-            updated.view_members = false;
-            updated.add_members = false; // implied by view/add members
-            updated.edit_roles = false;
-            updated.view_roles = false;
-            // kick_members is usually under view_members/manage members
-            updated.kick_members = false;
             updated.manage_notification_settings = false;
-        }
-
-        // View/Add Members
-        // User structure: Admin -> View Settings -> View/Add Members -> ...
-        if ((key === 'view_members' || key === 'add_members') && !value) {
-            // If unchecking, ensure sub-tasks are off
-            updated.kick_members = false;
             updated.edit_roles = false;
-            updated.view_roles = false;
         }
 
-        // Sync view_members and add_members if they are grouped as "View/Add Members"
-        // The user said "view/add members" is a single item/section?
-        // "subtask of this is view/add members"
-        // I will treat 'view_members' as the toggle for this group, and enabling it enables 'add_members' too?
-        // Or I'll just keep them separate but grouped.
-        // Let's assume 'view_members' is the parent key for the UI group "View/Add Members".
-        if (key === 'view_members') {
-            updated.add_members = value; // Sync add with view for this specific grouping request?
+        // Manage Members: when disabled, disable edit_roles (Manage Roles depends on both)
+        // Sync add_members and kick_members for backend compatibility
+        if (key === 'manage_members') {
+            updated.add_members = value;
+            updated.kick_members = value;
             if (!value) {
-                updated.kick_members = false;
                 updated.edit_roles = false;
-                updated.view_roles = false;
             }
         }
 
@@ -109,27 +95,16 @@ export function TeamPermissionEditor({
         await onSave(localPermissions);
     };
 
-    // User Requested Structure:
-    // Admin: 
-    //   - Resolve Alerts (resolve_alerts)
-    //   - View Settings (view_settings)
-    //       - View/Add Members (view_members + add_members)
-    //           - Manage Members (kick_members)
-    //           - Manage Roles (view_roles + edit_roles - usually edit_roles implies view)
-    // Projects:
-    //   - Manage Projects (manage_projects)
-
+    // Structure: View Settings, Manage Members (top-level). Manage Roles depends on BOTH.
     const permissionGroups = [
         {
             title: 'Admin',
             icon: <Settings className="h-3.5 w-3.5" />,
             permissions: [
-                { key: 'resolve_alerts' as const, label: 'Resolve Alerts' },
                 { key: 'view_settings' as const, label: 'View Settings' },
                 { key: 'manage_notification_settings' as const, label: 'Manage Notification Settings', dependsOn: 'view_settings' as const },
-                { key: 'view_members' as const, label: 'View/Add Members', dependsOn: 'view_settings' as const },
-                { key: 'kick_members' as const, label: 'Remove Members', dependsOn: 'view_members' as const },
-                { key: 'edit_roles' as const, label: 'Manage Roles', dependsOn: 'view_members' as const },
+                { key: 'manage_members' as const, label: 'Manage Members' },
+                { key: 'edit_roles' as const, label: 'Manage Roles', dependsOnAll: ['view_settings', 'manage_members'] as const },
             ],
         },
         {
@@ -141,14 +116,19 @@ export function TeamPermissionEditor({
         },
     ];
 
+    type PermDef = { key: string; dependsOn?: string; dependsOnAll?: readonly string[] };
+
     // Helper to check if a permission should be visible
-    const isPermissionVisible = (perm: { key: string; dependsOn?: string }) => {
+    const isPermissionVisible = (perm: PermDef) => {
+        if (perm.dependsOnAll) {
+            return perm.dependsOnAll.every(k => localPermissions[k as keyof TeamPermissions] === true);
+        }
         if (!perm.dependsOn) return true;
         return localPermissions[perm.dependsOn as keyof TeamPermissions] === true;
     };
 
     // Get visible permissions for calculating "isLast"
-    const getVisiblePermissions = (perms: Array<{ key: string; dependsOn?: string }>) => {
+    const getVisiblePermissions = (perms: PermDef[]) => {
         return perms.filter(p => isPermissionVisible(p));
     };
 
@@ -168,8 +148,14 @@ export function TeamPermissionEditor({
                         <div className="rounded-lg border border-border bg-background overflow-hidden men-box-shadow">
                             {group.permissions.map((perm) => {
                                 const dependsOn = 'dependsOn' in perm ? perm.dependsOn : undefined;
+                                const dependsOnAll = 'dependsOnAll' in perm ? perm.dependsOnAll : undefined;
                                 const isVisible = isPermissionVisible(perm);
-                                let isDisabled = dependsOn ? !localPermissions[dependsOn as keyof TeamPermissions] : false;
+                                let isDisabled = false;
+                                if (dependsOnAll) {
+                                    isDisabled = !dependsOnAll.every(k => localPermissions[k as keyof TeamPermissions] === true);
+                                } else if (dependsOn) {
+                                    isDisabled = !localPermissions[dependsOn as keyof TeamPermissions];
+                                }
 
                                 const userHasPermission = isOwner || (currentUserPermissions ? !!currentUserPermissions[perm.key as keyof TeamPermissions] : false);
 
@@ -212,7 +198,8 @@ export function TeamPermissionEditor({
                                     </div>
                                 );
 
-                                if (!dependsOn) {
+                                const hasDependency = dependsOn || dependsOnAll;
+                                if (!hasDependency) {
                                     return (
                                         <div key={perm.key} className={`${!isLastVisible ? 'border-b border-border' : ''}`}>
                                             {renderRow}

@@ -589,28 +589,37 @@ export const api = {
     return fetchWithAuth(`/api/integrations/organizations/${organizationId}/connections/${connectionId}`, { method: 'DELETE' });
   },
 
-  async connectSlackOrg(organizationId: string, projectId?: string): Promise<{ redirectUrl: string }> {
+  async connectSlackOrg(organizationId: string, projectId?: string, teamId?: string): Promise<{ redirectUrl: string }> {
     const params = new URLSearchParams({ org_id: organizationId });
     if (projectId) params.set('project_id', projectId);
+    if (teamId) params.set('team_id', teamId);
     return fetchWithAuth(`/api/integrations/slack/install?${params}`);
   },
 
-  async connectDiscordOrg(organizationId: string, projectId?: string): Promise<{ redirectUrl: string }> {
+  async connectDiscordOrg(organizationId: string, projectId?: string, teamId?: string): Promise<{ redirectUrl: string }> {
     const params = new URLSearchParams({ org_id: organizationId });
     if (projectId) params.set('project_id', projectId);
+    if (teamId) params.set('team_id', teamId);
     return fetchWithAuth(`/api/integrations/discord/install?${params}`);
   },
 
-  async connectJiraOrg(organizationId: string, projectId?: string): Promise<{ redirectUrl: string }> {
+  async connectJiraOrg(organizationId: string, projectId?: string, teamId?: string): Promise<{ redirectUrl: string }> {
     const params = new URLSearchParams({ org_id: organizationId });
     if (projectId) params.set('project_id', projectId);
+    if (teamId) params.set('team_id', teamId);
     return fetchWithAuth(`/api/integrations/jira/install?${params}`);
   },
 
-  async connectJiraPatOrg(organizationId: string, baseUrl: string, token: string, projectId?: string): Promise<{ success: boolean }> {
+  async connectJiraPatOrg(organizationId: string, baseUrl: string, token: string, projectId?: string, teamId?: string): Promise<{ success: boolean }> {
     return fetchWithAuth(`/api/integrations/jira/connect-pat`, {
       method: 'POST',
-      body: JSON.stringify({ org_id: organizationId, base_url: baseUrl, token, ...(projectId ? { project_id: projectId } : {}) }),
+      body: JSON.stringify({
+        org_id: organizationId,
+        base_url: baseUrl,
+        token,
+        ...(projectId ? { project_id: projectId } : {}),
+        ...(teamId ? { team_id: teamId } : {}),
+      }),
     });
   },
 
@@ -687,9 +696,10 @@ export const api = {
     });
   },
 
-  async connectLinearOrg(organizationId: string, projectId?: string): Promise<{ redirectUrl: string }> {
+  async connectLinearOrg(organizationId: string, projectId?: string, teamId?: string): Promise<{ redirectUrl: string }> {
     const params = new URLSearchParams({ org_id: organizationId });
     if (projectId) params.set('project_id', projectId);
+    if (teamId) params.set('team_id', teamId);
     return fetchWithAuth(`/api/integrations/linear/install?${params}`);
   },
 
@@ -1984,7 +1994,6 @@ export interface Team {
 
 export interface TeamPermissions {
   view_overview: boolean;
-  resolve_alerts: boolean;
   manage_projects: boolean;
   manage_members: boolean;
   view_settings: boolean;
