@@ -302,7 +302,7 @@ router.get('/discord/callback', async (req, res) => {
 // ============================================================
 router.get('/discord/install', authenticateUser, async (req: AuthRequest, res) => {
   try {
-    const { org_id } = req.query;
+    const { org_id, project_id } = req.query;
     if (!org_id || typeof org_id !== 'string') {
       return res.status(400).json({ error: 'Organization ID is required' });
     }
@@ -319,11 +319,17 @@ router.get('/discord/install', authenticateUser, async (req: AuthRequest, res) =
     if (!membership) {
       return res.status(403).json({ error: 'Not a member of this organization' });
     }
+    if (project_id && typeof project_id === 'string') {
+      const { data: proj } = await supabase.from('projects').select('id').eq('id', project_id).eq('organization_id', org_id).single();
+      if (!proj) return res.status(400).json({ error: 'Project not found' });
+    }
     const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`;
     const redirectUri = `${backendUrl}/api/integrations/discord/org-callback`;
     const scopes = 'bot guilds';
-    const permissions = '536889104'; // Send messages, manage messages, embed links, attach files, use external emojis
-    const state = Buffer.from(JSON.stringify({ userId: req.user!.id, orgId: org_id })).toString('base64');
+    const permissions = '536889104';
+    const statePayload: { userId: string; orgId: string; projectId?: string } = { userId: req.user!.id, orgId: org_id };
+    if (project_id && typeof project_id === 'string') statePayload.projectId = project_id;
+    const state = Buffer.from(JSON.stringify(statePayload)).toString('base64');
     const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=${permissions}&scope=${encodeURIComponent(scopes)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}&response_type=code`;
     res.json({ redirectUrl: authUrl });
   } catch (error: any) {
@@ -346,10 +352,12 @@ router.get('/discord/org-callback', async (req, res) => {
   try {
     let userId: string;
     let orgId: string;
+    let projectId: string | undefined;
     try {
       const stateData = JSON.parse(Buffer.from(state as string, 'base64').toString());
       userId = stateData.userId;
       orgId = stateData.orgId;
+      projectId = stateData.projectId;
     } catch {
       return res.redirect(`${frontendUrl}?error=discord&message=Invalid state`);
     }
@@ -402,30 +410,40 @@ router.get('/discord/org-callback', async (req, res) => {
       }
     }
 
-    const { error: dbError } = await supabase
-      .from('organization_integrations')
-      .insert({
-        organization_id: orgId,
-        provider: 'discord',
-        installation_id: guildId,
-        display_name: displayName,
-        access_token: tokenData.access_token,
-        status: 'connected',
-        metadata: {
-          guild_id: guildId,
-          guild_name: displayName,
-          scope: tokenData.scope,
-        },
-        connected_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      } as any);
+    const discordInsert = {
+      provider: 'discord',
+      installation_id: guildId,
+      display_name: displayName,
+      access_token: tokenData.access_token,
+      status: 'connected',
+      metadata: {
+        guild_id: guildId,
+        guild_name: displayName,
+        scope: tokenData.scope,
+      },
+      connected_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as any;
 
-    if (dbError) {
-      console.error('Discord org integration DB error:', dbError);
-      return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=discord&message=Failed to save integration`);
+    if (projectId) {
+      const { data: proj } = await supabase.from('projects').select('id').eq('id', projectId).eq('organization_id', orgId).single();
+      if (!proj) {
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=discord&message=Project not found`);
+      }
+      const { error: dbError } = await supabase.from('project_integrations').insert({ project_id: projectId, ...discordInsert });
+      if (dbError) {
+        console.error('Discord project integration DB error:', dbError);
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings?error=discord&message=Failed to save integration`);
+      }
+      res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings?connected=discord`);
+    } else {
+      const { error: dbError } = await supabase.from('organization_integrations').insert({ organization_id: orgId, ...discordInsert });
+      if (dbError) {
+        console.error('Discord org integration DB error:', dbError);
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=discord&message=Failed to save integration`);
+      }
+      res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?connected=discord`);
     }
-
-    res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?connected=discord`);
   } catch (err: any) {
     console.error('Discord org callback error:', err);
     const f = process.env.FRONTEND_URL || 'http://localhost:3000';
@@ -2371,7 +2389,7 @@ router.get('/bitbucket/org-callback', async (req, res) => {
 // ============================================================
 router.get('/slack/install', authenticateUser, async (req: AuthRequest, res) => {
   try {
-    const { org_id } = req.query;
+    const { org_id, project_id } = req.query;
     if (!org_id || typeof org_id !== 'string') {
       return res.status(400).json({ error: 'Organization ID is required' });
     }
@@ -2388,10 +2406,16 @@ router.get('/slack/install', authenticateUser, async (req: AuthRequest, res) => 
     if (!membership) {
       return res.status(403).json({ error: 'Not a member of this organization' });
     }
+    if (project_id && typeof project_id === 'string') {
+      const { data: proj } = await supabase.from('projects').select('id').eq('id', project_id).eq('organization_id', org_id).single();
+      if (!proj) return res.status(400).json({ error: 'Project not found' });
+    }
     const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`;
     const redirectUri = `${backendUrl}/api/integrations/slack/org-callback`;
     const scopes = 'chat:write,channels:read,channels:history,files:write,incoming-webhook';
-    const state = Buffer.from(JSON.stringify({ userId: req.user!.id, orgId: org_id })).toString('base64');
+    const statePayload: { userId: string; orgId: string; projectId?: string } = { userId: req.user!.id, orgId: org_id };
+    if (project_id && typeof project_id === 'string') statePayload.projectId = project_id;
+    const state = Buffer.from(JSON.stringify(statePayload)).toString('base64');
     const authUrl = `https://slack.com/oauth/v2/authorize?client_id=${clientId}&scope=${encodeURIComponent(scopes)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}`;
     res.json({ redirectUrl: authUrl });
   } catch (error: any) {
@@ -2414,10 +2438,12 @@ router.get('/slack/org-callback', async (req, res) => {
   try {
     let userId: string;
     let orgId: string;
+    let projectId: string | undefined;
     try {
       const stateData = JSON.parse(Buffer.from(state as string, 'base64').toString());
       userId = stateData.userId;
       orgId = stateData.orgId;
+      projectId = stateData.projectId;
     } catch {
       return res.redirect(`${frontendUrl}?error=slack&message=Invalid state`);
     }
@@ -2458,35 +2484,51 @@ router.get('/slack/org-callback', async (req, res) => {
       ? `${tokenData.team?.id}:${channelId}`
       : tokenData.team?.id || null;
 
-    const { error: dbError } = await supabase
-      .from('organization_integrations')
-      .insert({
-        organization_id: orgId,
-        provider: 'slack',
-        installation_id: installationId,
-        display_name: tokenData.team?.name || 'Slack Workspace',
-        access_token: tokenData.access_token,
-        status: 'connected',
-        metadata: {
-          bot_user_id: tokenData.bot_user_id,
-          team_id: tokenData.team?.id,
-          team_name: tokenData.team?.name,
-          channel: webhook?.channel || null,
-          channel_id: channelId || null,
-          authed_user_id: tokenData.authed_user?.id,
-          scope: tokenData.scope,
-          incoming_webhook: webhook,
-        },
-        connected_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      } as any);
+    const insertPayload = {
+      provider: 'slack',
+      installation_id: installationId,
+      display_name: tokenData.team?.name || 'Slack Workspace',
+      access_token: tokenData.access_token,
+      status: 'connected',
+      metadata: {
+        bot_user_id: tokenData.bot_user_id,
+        team_id: tokenData.team?.id,
+        team_name: tokenData.team?.name,
+        channel: webhook?.channel || null,
+        channel_id: channelId || null,
+        authed_user_id: tokenData.authed_user?.id,
+        scope: tokenData.scope,
+        incoming_webhook: webhook,
+      },
+      connected_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
 
-    if (dbError) {
-      console.error('Slack org integration DB error:', dbError);
-      return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=slack&message=Failed to save integration`);
+    if (projectId) {
+      const { data: proj } = await supabase.from('projects').select('id').eq('id', projectId).eq('organization_id', orgId).single();
+      if (!proj) {
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=slack&message=Project not found`);
+      }
+      const { error: dbError } = await supabase
+        .from('project_integrations')
+        .insert({ project_id: projectId, ...insertPayload } as any);
+
+      if (dbError) {
+        console.error('Slack project integration DB error:', dbError);
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings?error=slack&message=Failed to save integration`);
+      }
+      res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings?connected=slack`);
+    } else {
+      const { error: dbError } = await supabase
+        .from('organization_integrations')
+        .insert({ organization_id: orgId, ...insertPayload } as any);
+
+      if (dbError) {
+        console.error('Slack org integration DB error:', dbError);
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=slack&message=Failed to save integration`);
+      }
+      res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?connected=slack`);
     }
-
-    res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?connected=slack`);
   } catch (err: any) {
     console.error('Slack org callback error:', err);
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
@@ -2500,7 +2542,7 @@ router.get('/slack/org-callback', async (req, res) => {
 
 router.get('/jira/install', authenticateUser, async (req: AuthRequest, res) => {
   try {
-    const { org_id } = req.query;
+    const { org_id, project_id } = req.query;
     if (!org_id || typeof org_id !== 'string') {
       return res.status(400).json({ error: 'Organization ID is required' });
     }
@@ -2517,10 +2559,16 @@ router.get('/jira/install', authenticateUser, async (req: AuthRequest, res) => {
     if (!membership) {
       return res.status(403).json({ error: 'Not a member of this organization' });
     }
+    if (project_id && typeof project_id === 'string') {
+      const { data: proj } = await supabase.from('projects').select('id').eq('id', project_id).eq('organization_id', org_id).single();
+      if (!proj) return res.status(400).json({ error: 'Project not found' });
+    }
     const backendUrl = getBackendUrl();
     const redirectUri = `${backendUrl}/api/integrations/jira/org-callback`;
     const scopes = 'read:jira-work write:jira-work read:jira-user';
-    const state = Buffer.from(JSON.stringify({ userId: req.user!.id, orgId: org_id })).toString('base64');
+    const statePayload: { userId: string; orgId: string; projectId?: string } = { userId: req.user!.id, orgId: org_id };
+    if (project_id && typeof project_id === 'string') statePayload.projectId = project_id;
+    const state = Buffer.from(JSON.stringify(statePayload)).toString('base64');
     const authUrl = `https://auth.atlassian.com/authorize?audience=api.atlassian.com&client_id=${clientId}&scope=${encodeURIComponent(scopes)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}&response_type=code&prompt=consent`;
     res.json({ redirectUrl: authUrl });
   } catch (error: any) {
@@ -2533,20 +2581,35 @@ router.get('/jira/org-callback', async (req, res) => {
   const { code, state, error } = req.query;
   const frontendUrl = getFrontendUrl();
 
+  const buildErrorRedirect = (msg: string) => {
+    let target = `${frontendUrl}?error=jira&message=${encodeURIComponent(msg)}`;
+    if (state && typeof state === 'string') {
+      try {
+        const stateData = JSON.parse(Buffer.from(state, 'base64').toString());
+        if (stateData.orgId) {
+          target = `${frontendUrl}/organizations/${stateData.orgId}/settings/integrations?error=jira&message=${encodeURIComponent(msg)}`;
+        }
+      } catch { /* use root fallback */ }
+    }
+    return target;
+  };
+
   if (error) {
-    return res.redirect(`${frontendUrl}?error=jira&message=${encodeURIComponent(error as string)}`);
+    return res.redirect(buildErrorRedirect(error as string));
   }
   if (!code) {
-    return res.redirect(`${frontendUrl}?error=jira&message=No authorization code`);
+    return res.redirect(buildErrorRedirect('No authorization code'));
   }
 
   try {
     let userId: string;
     let orgId: string;
+    let projectId: string | undefined;
     try {
       const stateData = JSON.parse(Buffer.from(state as string, 'base64').toString());
       userId = stateData.userId;
       orgId = stateData.orgId;
+      projectId = stateData.projectId;
     } catch {
       return res.redirect(`${frontendUrl}?error=jira&message=Invalid state`);
     }
@@ -2589,33 +2652,43 @@ router.get('/jira/org-callback', async (req, res) => {
     const primarySite = sites?.[0];
     const displayName = primarySite?.name || 'Jira Cloud';
 
-    const { error: dbError } = await supabase
-      .from('organization_integrations')
-      .insert({
-        organization_id: orgId,
-        provider: 'jira',
-        installation_id: primarySite?.id || null,
-        display_name: displayName,
-        access_token: tokenData.access_token,
-        refresh_token: tokenData.refresh_token || null,
-        status: 'connected',
-        metadata: {
-          cloud_id: primarySite?.id,
-          site_name: primarySite?.name,
-          site_url: primarySite?.url,
-          all_sites: sites,
-          scope: tokenData.scope,
-        },
-        connected_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      } as any);
+    const jiraInsert = {
+      provider: 'jira',
+      installation_id: primarySite?.id || null,
+      display_name: displayName,
+      access_token: tokenData.access_token,
+      refresh_token: tokenData.refresh_token || null,
+      status: 'connected',
+      metadata: {
+        cloud_id: primarySite?.id,
+        site_name: primarySite?.name,
+        site_url: primarySite?.url,
+        all_sites: sites,
+        scope: tokenData.scope,
+      },
+      connected_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as any;
 
-    if (dbError) {
-      console.error('Jira org integration DB error:', dbError);
-      return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=jira&message=Failed to save integration`);
+    if (projectId) {
+      const { data: proj } = await supabase.from('projects').select('id').eq('id', projectId).eq('organization_id', orgId).single();
+      if (!proj) {
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=jira&message=Project not found`);
+      }
+      const { error: dbError } = await supabase.from('project_integrations').insert({ project_id: projectId, ...jiraInsert });
+      if (dbError) {
+        console.error('Jira project integration DB error:', dbError);
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings?error=jira&message=Failed to save integration`);
+      }
+      res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings?connected=jira`);
+    } else {
+      const { error: dbError } = await supabase.from('organization_integrations').insert({ organization_id: orgId, ...jiraInsert });
+      if (dbError) {
+        console.error('Jira org integration DB error:', dbError);
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=jira&message=Failed to save integration`);
+      }
+      res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?connected=jira`);
     }
-
-    res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?connected=jira`);
   } catch (err: any) {
     console.error('Jira org callback error:', err);
     const frontendUrl = getFrontendUrl();
@@ -2625,7 +2698,7 @@ router.get('/jira/org-callback', async (req, res) => {
 
 router.post('/jira/connect-pat', authenticateUser, async (req: AuthRequest, res) => {
   try {
-    const { org_id, base_url, token } = req.body;
+    const { org_id, project_id, base_url, token } = req.body;
     if (!org_id || !base_url || !token) {
       return res.status(400).json({ error: 'Organization ID, base URL, and personal access token are required' });
     }
@@ -2638,6 +2711,10 @@ router.post('/jira/connect-pat', authenticateUser, async (req: AuthRequest, res)
     if (!membership) {
       return res.status(403).json({ error: 'Not a member of this organization' });
     }
+    if (project_id && typeof project_id === 'string') {
+      const { data: proj } = await supabase.from('projects').select('id').eq('id', project_id).eq('organization_id', org_id).single();
+      if (!proj) return res.status(400).json({ error: 'Project not found' });
+    }
 
     const normalizedUrl = (base_url as string).replace(/\/$/, '');
     const verifyRes = await fetch(`${normalizedUrl}/rest/api/2/myself`, {
@@ -2648,28 +2725,34 @@ router.post('/jira/connect-pat', authenticateUser, async (req: AuthRequest, res)
     }
     const userData = await verifyRes.json() as { displayName?: string; name?: string; key?: string };
 
-    const { error: dbError } = await supabase
-      .from('organization_integrations')
-      .insert({
-        organization_id: org_id,
-        provider: 'jira',
-        installation_id: `dc:${Buffer.from(normalizedUrl).toString('base64url').slice(0, 32)}`,
-        display_name: userData.displayName || userData.name || normalizedUrl,
-        access_token: token,
-        status: 'connected',
-        metadata: {
-          type: 'data_center',
-          base_url: normalizedUrl,
-          username: userData.name || userData.key,
-          display_name: userData.displayName,
-        },
-        connected_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      } as any);
+    const jiraPatInsert = {
+      provider: 'jira',
+      installation_id: `dc:${Buffer.from(normalizedUrl).toString('base64url').slice(0, 32)}`,
+      display_name: userData.displayName || userData.name || normalizedUrl,
+      access_token: token,
+      status: 'connected',
+      metadata: {
+        type: 'data_center',
+        base_url: normalizedUrl,
+        username: userData.name || userData.key,
+        display_name: userData.displayName,
+      },
+      connected_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as any;
 
-    if (dbError) {
-      console.error('Jira DC integration DB error:', dbError);
-      return res.status(500).json({ error: 'Failed to save integration' });
+    if (project_id && typeof project_id === 'string') {
+      const { error: dbError } = await supabase.from('project_integrations').insert({ project_id, ...jiraPatInsert });
+      if (dbError) {
+        console.error('Jira DC project integration DB error:', dbError);
+        return res.status(500).json({ error: 'Failed to save integration' });
+      }
+    } else {
+      const { error: dbError } = await supabase.from('organization_integrations').insert({ organization_id: org_id, ...jiraPatInsert });
+      if (dbError) {
+        console.error('Jira DC integration DB error:', dbError);
+        return res.status(500).json({ error: 'Failed to save integration' });
+      }
     }
     res.json({ success: true });
   } catch (error: any) {
@@ -2680,7 +2763,7 @@ router.post('/jira/connect-pat', authenticateUser, async (req: AuthRequest, res)
 
 router.get('/linear/install', authenticateUser, async (req: AuthRequest, res) => {
   try {
-    const { org_id } = req.query;
+    const { org_id, project_id } = req.query;
     if (!org_id || typeof org_id !== 'string') {
       return res.status(400).json({ error: 'Organization ID is required' });
     }
@@ -2697,9 +2780,15 @@ router.get('/linear/install', authenticateUser, async (req: AuthRequest, res) =>
     if (!membership) {
       return res.status(403).json({ error: 'Not a member of this organization' });
     }
+    if (project_id && typeof project_id === 'string') {
+      const { data: proj } = await supabase.from('projects').select('id').eq('id', project_id).eq('organization_id', org_id).single();
+      if (!proj) return res.status(400).json({ error: 'Project not found' });
+    }
     const backendUrl = getBackendUrl();
     const redirectUri = `${backendUrl}/api/integrations/linear/org-callback`;
-    const state = Buffer.from(JSON.stringify({ userId: req.user!.id, orgId: org_id })).toString('base64');
+    const statePayload: { userId: string; orgId: string; projectId?: string } = { userId: req.user!.id, orgId: org_id };
+    if (project_id && typeof project_id === 'string') statePayload.projectId = project_id;
+    const state = Buffer.from(JSON.stringify(statePayload)).toString('base64');
     const authUrl = `https://linear.app/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}&response_type=code&scope=${encodeURIComponent('read,write,issues:create')}&prompt=consent`;
     res.json({ redirectUrl: authUrl });
   } catch (error: any) {
@@ -2712,20 +2801,35 @@ router.get('/linear/org-callback', async (req, res) => {
   const { code, state, error } = req.query;
   const frontendUrl = getFrontendUrl();
 
+  const buildErrorRedirect = (msg: string) => {
+    let target = `${frontendUrl}?error=linear&message=${encodeURIComponent(msg)}`;
+    if (state && typeof state === 'string') {
+      try {
+        const stateData = JSON.parse(Buffer.from(state, 'base64').toString());
+        if (stateData.orgId) {
+          target = `${frontendUrl}/organizations/${stateData.orgId}/settings/integrations?error=linear&message=${encodeURIComponent(msg)}`;
+        }
+      } catch { /* use root fallback */ }
+    }
+    return target;
+  };
+
   if (error) {
-    return res.redirect(`${frontendUrl}?error=linear&message=${encodeURIComponent(error as string)}`);
+    return res.redirect(buildErrorRedirect(error as string));
   }
   if (!code) {
-    return res.redirect(`${frontendUrl}?error=linear&message=No authorization code`);
+    return res.redirect(buildErrorRedirect('No authorization code'));
   }
 
   try {
     let userId: string;
     let orgId: string;
+    let projectId: string | undefined;
     try {
       const stateData = JSON.parse(Buffer.from(state as string, 'base64').toString());
       userId = stateData.userId;
       orgId = stateData.orgId;
+      projectId = stateData.projectId;
     } catch {
       return res.redirect(`${frontendUrl}?error=linear&message=Invalid state`);
     }
@@ -2776,29 +2880,36 @@ router.get('/linear/org-callback', async (req, res) => {
       }
     } catch (_) { /* use defaults */ }
 
-    const { error: dbError } = await supabase
-      .from('organization_integrations')
-      .insert({
-        organization_id: orgId,
-        provider: 'linear',
-        installation_id: orgKey,
-        display_name: displayName,
-        access_token: tokenData.access_token,
-        status: 'connected',
-        metadata: {
-          linear_org_id: orgKey,
-          scope: tokenData.scope,
-        },
-        connected_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      } as any);
+    const linearInsert = {
+      provider: 'linear',
+      installation_id: orgKey,
+      display_name: displayName,
+      access_token: tokenData.access_token,
+      status: 'connected',
+      metadata: { linear_org_id: orgKey, scope: tokenData.scope },
+      connected_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as any;
 
-    if (dbError) {
-      console.error('Linear org integration DB error:', dbError);
-      return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=linear&message=Failed to save integration`);
+    if (projectId) {
+      const { data: proj } = await supabase.from('projects').select('id').eq('id', projectId).eq('organization_id', orgId).single();
+      if (!proj) {
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=linear&message=Project not found`);
+      }
+      const { error: dbError } = await supabase.from('project_integrations').insert({ project_id: projectId, ...linearInsert });
+      if (dbError) {
+        console.error('Linear project integration DB error:', dbError);
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings?error=linear&message=Failed to save integration`);
+      }
+      res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings?connected=linear`);
+    } else {
+      const { error: dbError } = await supabase.from('organization_integrations').insert({ organization_id: orgId, ...linearInsert });
+      if (dbError) {
+        console.error('Linear org integration DB error:', dbError);
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=linear&message=Failed to save integration`);
+      }
+      res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?connected=linear`);
     }
-
-    res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?connected=linear`);
   } catch (err: any) {
     console.error('Linear org callback error:', err);
     const frontendUrl = getFrontendUrl();
@@ -2808,7 +2919,7 @@ router.get('/linear/org-callback', async (req, res) => {
 
 router.get('/asana/install', authenticateUser, async (req: AuthRequest, res) => {
   try {
-    const { org_id } = req.query;
+    const { org_id, project_id } = req.query;
     if (!org_id || typeof org_id !== 'string') {
       return res.status(400).json({ error: 'Organization ID is required' });
     }
@@ -2825,9 +2936,15 @@ router.get('/asana/install', authenticateUser, async (req: AuthRequest, res) => 
     if (!membership) {
       return res.status(403).json({ error: 'Not a member of this organization' });
     }
+    if (project_id && typeof project_id === 'string') {
+      const { data: proj } = await supabase.from('projects').select('id').eq('id', project_id).eq('organization_id', org_id).single();
+      if (!proj) return res.status(400).json({ error: 'Project not found' });
+    }
     const backendUrl = getBackendUrl();
     const redirectUri = `${backendUrl}/api/integrations/asana/org-callback`;
-    const state = Buffer.from(JSON.stringify({ userId: req.user!.id, orgId: org_id })).toString('base64');
+    const statePayload: { userId: string; orgId: string; projectId?: string } = { userId: req.user!.id, orgId: org_id };
+    if (project_id && typeof project_id === 'string') statePayload.projectId = project_id;
+    const state = Buffer.from(JSON.stringify(statePayload)).toString('base64');
     const authUrl = `https://app.asana.com/-/oauth_authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}&response_type=code`;
     res.json({ redirectUrl: authUrl });
   } catch (error: any) {
@@ -2840,20 +2957,35 @@ router.get('/asana/org-callback', async (req, res) => {
   const { code, state, error } = req.query;
   const frontendUrl = getFrontendUrl();
 
+  const buildErrorRedirect = (msg: string) => {
+    let target = `${frontendUrl}?error=asana&message=${encodeURIComponent(msg)}`;
+    if (state && typeof state === 'string') {
+      try {
+        const stateData = JSON.parse(Buffer.from(state, 'base64').toString());
+        if (stateData.orgId) {
+          target = `${frontendUrl}/organizations/${stateData.orgId}/settings/integrations?error=asana&message=${encodeURIComponent(msg)}`;
+        }
+      } catch { /* use root fallback */ }
+    }
+    return target;
+  };
+
   if (error) {
-    return res.redirect(`${frontendUrl}?error=asana&message=${encodeURIComponent(error as string)}`);
+    return res.redirect(buildErrorRedirect(error as string));
   }
   if (!code) {
-    return res.redirect(`${frontendUrl}?error=asana&message=No authorization code`);
+    return res.redirect(buildErrorRedirect('No authorization code'));
   }
 
   try {
     let userId: string;
     let orgId: string;
+    let projectId: string | undefined;
     try {
       const stateData = JSON.parse(Buffer.from(state as string, 'base64').toString());
       userId = stateData.userId;
       orgId = stateData.orgId;
+      projectId = stateData.projectId;
     } catch {
       return res.redirect(`${frontendUrl}?error=asana&message=Invalid state`);
     }
@@ -2903,30 +3035,37 @@ router.get('/asana/org-callback', async (req, res) => {
       }
     } catch (_) { /* use defaults */ }
 
-    const { error: dbError } = await supabase
-      .from('organization_integrations')
-      .insert({
-        organization_id: orgId,
-        provider: 'asana',
-        installation_id: workspaceGid,
-        display_name: displayName,
-        access_token: tokenData.access_token,
-        refresh_token: tokenData.refresh_token || null,
-        status: 'connected',
-        metadata: {
-          workspace_gid: workspaceGid,
-          workspace_name: displayName,
-        },
-        connected_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      } as any);
+    const asanaInsert = {
+      provider: 'asana',
+      installation_id: workspaceGid,
+      display_name: displayName,
+      access_token: tokenData.access_token,
+      refresh_token: tokenData.refresh_token || null,
+      status: 'connected',
+      metadata: { workspace_gid: workspaceGid, workspace_name: displayName },
+      connected_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as any;
 
-    if (dbError) {
-      console.error('Asana org integration DB error:', dbError);
-      return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=asana&message=Failed to save integration`);
+    if (projectId) {
+      const { data: proj } = await supabase.from('projects').select('id').eq('id', projectId).eq('organization_id', orgId).single();
+      if (!proj) {
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=asana&message=Project not found`);
+      }
+      const { error: dbError } = await supabase.from('project_integrations').insert({ project_id: projectId, ...asanaInsert });
+      if (dbError) {
+        console.error('Asana project integration DB error:', dbError);
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings?error=asana&message=Failed to save integration`);
+      }
+      res.redirect(`${frontendUrl}/organizations/${orgId}/projects/${projectId}/settings?connected=asana`);
+    } else {
+      const { error: dbError } = await supabase.from('organization_integrations').insert({ organization_id: orgId, ...asanaInsert });
+      if (dbError) {
+        console.error('Asana org integration DB error:', dbError);
+        return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=asana&message=Failed to save integration`);
+      }
+      res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?connected=asana`);
     }
-
-    res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?connected=asana`);
   } catch (err: any) {
     console.error('Asana org callback error:', err);
     const frontendUrl = getFrontendUrl();

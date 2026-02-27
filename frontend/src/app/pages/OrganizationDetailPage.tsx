@@ -119,7 +119,7 @@ export default function OrganizationDetailPage() {
     if (currentTab === 'aegis') {
       navigate(`/organizations/${id}`, { replace: true });
     }
-    if (currentTab === 'compliance' && !effectivePermissions.view_compliance) {
+    if (currentTab === 'compliance' && !effectivePermissions.manage_compliance) {
       navigate(`/organizations/${id}`, { replace: true });
     }
   }, [effectivePermissions, id, location.pathname, navigate, organization]);
@@ -216,25 +216,27 @@ export default function OrganizationDetailPage() {
           sub={totalVulns === 0 ? 'All clear' : `across ${projects.length} project${projects.length !== 1 ? 's' : ''}`}
           onClick={() => navigate(`/organizations/${id}/vulnerabilities`)}
         />
-        <StatCard
-          icon={
-            hasPolicyDefined ? (
-              <CheckCircle2 className="h-4 w-4" />
-            ) : (
-              <XCircle className="h-4 w-4" />
-            )
-          }
-          iconColor={hasPolicyDefined ? 'text-green-400' : 'text-foreground-secondary'}
-          iconBg={hasPolicyDefined ? 'bg-green-500/10' : 'bg-background-subtle/50'}
-          label="Policy"
-          value={overviewLoading ? '—' : hasPolicyDefined ? 'Configured' : 'Not set'}
-          sub={
-            hasPolicyDefined
-              ? `${compliantProjects}/${projects.length} projects compliant`
-              : 'No policy defined yet'
-          }
-          onClick={() => navigate(`/organizations/${id}/settings/policies`)}
-        />
+        {effectivePermissions.manage_compliance && (
+          <StatCard
+            icon={
+              hasPolicyDefined ? (
+                <CheckCircle2 className="h-4 w-4" />
+              ) : (
+                <XCircle className="h-4 w-4" />
+              )
+            }
+            iconColor={hasPolicyDefined ? 'text-green-400' : 'text-foreground-secondary'}
+            iconBg={hasPolicyDefined ? 'bg-green-500/10' : 'bg-background-subtle/50'}
+            label="Policy"
+            value={overviewLoading ? '—' : hasPolicyDefined ? 'Configured' : 'Not set'}
+            sub={
+              hasPolicyDefined
+                ? `${compliantProjects}/${projects.length} projects compliant`
+                : 'No policy defined yet'
+            }
+            onClick={() => navigate(`/organizations/${id}/settings/policies`)}
+          />
+        )}
       </div>
 
       {/* Bottom two-column layout */}

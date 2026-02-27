@@ -13,7 +13,7 @@ const allTabs = [
   { id: 'vulnerabilities', label: 'Vulnerabilities', path: 'vulnerabilities', icon: ShieldAlert, requiredPermission: null },
   { id: 'projects', label: 'Projects', path: 'projects', icon: FolderKanban, requiredPermission: null },
   { id: 'teams', label: 'Teams', path: 'teams', icon: Users, requiredPermission: null },
-  { id: 'compliance', label: 'Compliance', path: 'compliance', icon: ClipboardCheck, requiredPermission: 'view_compliance' as const },
+  { id: 'compliance', label: 'Compliance', path: 'compliance', icon: ClipboardCheck, requiredPermission: 'manage_compliance' as const },
   { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: 'view_settings' as const },
 ];
 
@@ -49,6 +49,13 @@ function OrganizationTabs({ organizationId, userPermissions }: OrganizationTabsP
       return matchingTab.id;
     }
 
+    // If we're under /organizations/:id/settings or /organizations/:id/settings/:section,
+    // highlight Settings
+    if (pathParts.includes('settings')) {
+      const settingsTab = visibleTabs.find(tab => tab.id === 'settings');
+      if (settingsTab) return 'settings';
+    }
+
     // If we're on the org root (no tab specified)
     if (currentTab === organizationId) {
       // Check if overview is available
@@ -62,7 +69,7 @@ function OrganizationTabs({ organizationId, userPermissions }: OrganizationTabsP
 
     // Default fallback
     return 'overview';
-  }, [currentTab, organizationId, visibleTabs]);
+  }, [currentTab, organizationId, visibleTabs, location.pathname]);
 
   const handleTabClick = (path: string) => {
     if (path === 'overview') {
@@ -122,7 +129,7 @@ export default memo(OrganizationTabs, (prevProps, nextProps) => {
 
   // Compare all permission fields
   const permissionKeys: (keyof typeof prevPerms)[] = [
-    'view_settings', 'view_activity', 'edit_policies', 'view_compliance',
+    'view_settings', 'view_activity', 'manage_compliance',
     'view_members', 'add_members',
     'edit_roles', 'edit_permissions', 'kick_members',
     'manage_teams_and_projects'

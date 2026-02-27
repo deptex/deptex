@@ -1,4 +1,5 @@
 import express from 'express';
+import * as crypto from 'crypto';
 import { authenticateUser, AuthRequest } from '../../../backend/src/middleware/auth';
 import { supabase } from '../../../backend/src/lib/supabase';
 import { sendInvitationEmail } from '../lib/email';
@@ -200,8 +201,7 @@ router.post('/', async (req: AuthRequest, res) => {
             view_settings: true,
             manage_billing: true,
             view_activity: true,
-            view_compliance: true,
-            edit_policies: true,
+            manage_compliance: true,
             interact_with_security_agent: true,
             manage_aegis: true,
             view_members: true,
@@ -211,6 +211,7 @@ router.post('/', async (req: AuthRequest, res) => {
             kick_members: true,
             manage_teams_and_projects: true,
             manage_integrations: true,
+            manage_notifications: true,
           },
         },
         {
@@ -223,8 +224,7 @@ router.post('/', async (req: AuthRequest, res) => {
             view_settings: true,
             manage_billing: true,
             view_activity: true,
-            view_compliance: true,
-            edit_policies: true,
+            manage_compliance: true,
             interact_with_security_agent: true,
             manage_aegis: true,
             view_members: true,
@@ -234,6 +234,7 @@ router.post('/', async (req: AuthRequest, res) => {
             kick_members: true,
             manage_teams_and_projects: true,
             manage_integrations: true,
+            manage_notifications: true,
           },
         },
       ]);
@@ -1815,7 +1816,7 @@ router.post('/:id/roles', async (req: AuthRequest, res) => {
     const defaultPermissions = {
       view_settings: false,
       view_activity: false,
-      edit_policies: false,
+      manage_compliance: false,
       interact_with_security_agent: false,
       view_members: false,
       add_members: false,
@@ -2033,7 +2034,7 @@ router.put('/:id/roles/:roleId', async (req: AuthRequest, res) => {
 
       // Check all permission keys
       const allPermissionKeys = [
-        'view_settings', 'view_activity', 'edit_policies', 'interact_with_security_agent',
+        'view_settings', 'view_activity', 'manage_compliance', 'interact_with_security_agent',
         'view_members', 'add_members', 'edit_roles', 'edit_permissions',
         'kick_members', 'manage_teams_and_projects', 'view_overview'
       ];
@@ -2275,7 +2276,7 @@ router.put('/:id/policies', async (req: AuthRequest, res) => {
         .eq('name', membership.role)
         .single();
 
-      if (!roles?.permissions?.edit_policies) {
+      if (!roles?.permissions?.manage_compliance) {
         return res.status(403).json({ error: 'Only admins and owners can update policies' });
       }
     }
@@ -2352,6 +2353,431 @@ router.put('/:id/policies', async (req: AuthRequest, res) => {
   }
 });
 
+// Helper to check manage_integrations (owner/admin or custom role with permission)
+async function canManageNotificationRules(organizationId: string, userId: string): Promise<boolean> {
+  const { data: membership } = await supabase
+    .from('organization_members')
+    .select('role')
+    .eq('organization_id', organizationId)
+    .eq('user_id', userId)
+    .single();
+
+  if (!membership) return false;
+  if (membership.role === 'owner' || membership.role === 'admin') return true;
+
+  const { data: role } = await supabase
+    .from('organization_roles')
+    .select('permissions')
+    .eq('organization_id', organizationId)
+    .eq('name', membership.role)
+    .single();
+
+  const perms = role?.permissions as Record<string, boolean> | undefined;
+  return !!(perms?.manage_integrations || perms?.manage_notifications);
+}
+
+// GET /api/organizations/:id/notification-rules - List notification rules
+router.get('/:id/notification-rules', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const { data: rules, error } = await supabase
+      .from('organization_notification_rules')
+      .select('*')
+      .eq('organization_id', id)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    const mapped = (rules ?? []).map((r: Record<string, unknown>) => ({
+      id: r.id,
+      name: r.name,
+      triggerType: r.trigger_type,
+      minDepscoreThreshold: r.min_depscore_threshold ?? undefined,
+      customCode: r.custom_code ?? undefined,
+      destinations: r.destinations ?? [],
+      active: r.active ?? true,
+      createdByUserId: r.created_by_user_id ?? undefined,
+      createdByName: r.created_by_name ?? undefined,
+    }));
+
+    res.json(mapped);
+  } catch (error: any) {
+    console.error('Error fetching notification rules:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch notification rules' });
+  }
+});
+
+// POST /api/organizations/:id/notification-rules - Create notification rule
+router.post('/:id/notification-rules', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const { name, triggerType, minDepscoreThreshold, customCode, destinations, createdByName } = req.body;
+
+    if (!(await canManageNotificationRules(id, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage notification rules' });
+    }
+
+    if (!name || typeof name !== 'string') {
+      return res.status(400).json({ error: 'name is required' });
+    }
+    const validTriggers = ['weekly_digest', 'vulnerability_discovered', 'custom_code_pipeline'];
+    if (!triggerType || !validTriggers.includes(triggerType)) {
+      return res.status(400).json({ error: 'triggerType must be one of: weekly_digest, vulnerability_discovered, custom_code_pipeline' });
+    }
+
+    const dests = Array.isArray(destinations) ? destinations : [];
+    const insertData: Record<string, unknown> = {
+      organization_id: id,
+      name: name.trim(),
+      trigger_type: triggerType,
+      destinations: dests,
+      active: true,
+      created_by_user_id: userId,
+      created_by_name: typeof createdByName === 'string' ? createdByName : null,
+    };
+    if (triggerType === 'vulnerability_discovered' && typeof minDepscoreThreshold === 'number') {
+      insertData.min_depscore_threshold = minDepscoreThreshold;
+    }
+    if (triggerType === 'custom_code_pipeline' && typeof customCode === 'string') {
+      insertData.custom_code = customCode;
+    }
+
+    const { data: created, error } = await supabase
+      .from('organization_notification_rules')
+      .insert(insertData)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.status(201).json({
+      id: created.id,
+      name: created.name,
+      triggerType: created.trigger_type,
+      minDepscoreThreshold: created.min_depscore_threshold ?? undefined,
+      customCode: created.custom_code ?? undefined,
+      destinations: created.destinations ?? [],
+      active: created.active ?? true,
+      createdByUserId: created.created_by_user_id ?? undefined,
+      createdByName: created.created_by_name ?? undefined,
+    });
+  } catch (error: any) {
+    console.error('Error creating notification rule:', error);
+    res.status(500).json({ error: error.message || 'Failed to create notification rule' });
+  }
+});
+
+// PUT /api/organizations/:id/notification-rules/:ruleId - Update notification rule
+router.put('/:id/notification-rules/:ruleId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, ruleId } = req.params;
+    const { name, triggerType, minDepscoreThreshold, customCode, destinations } = req.body;
+
+    if (!(await canManageNotificationRules(id, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage notification rules' });
+    }
+
+    const validTriggers = ['weekly_digest', 'vulnerability_discovered', 'custom_code_pipeline'];
+    const updateData: Record<string, unknown> = {};
+    if (typeof name === 'string') updateData.name = name.trim();
+    if (triggerType && validTriggers.includes(triggerType)) updateData.trigger_type = triggerType;
+    if (triggerType === 'vulnerability_discovered') {
+      updateData.min_depscore_threshold = typeof minDepscoreThreshold === 'number' ? minDepscoreThreshold : null;
+    } else {
+      updateData.min_depscore_threshold = null;
+    }
+    if (triggerType === 'custom_code_pipeline') {
+      updateData.custom_code = typeof customCode === 'string' ? customCode : null;
+    } else {
+      updateData.custom_code = null;
+    }
+    if (Array.isArray(destinations)) updateData.destinations = destinations;
+
+    const { data: updated, error } = await supabase
+      .from('organization_notification_rules')
+      .update(updateData)
+      .eq('id', ruleId)
+      .eq('organization_id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    if (!updated) return res.status(404).json({ error: 'Notification rule not found' });
+
+    res.json({
+      id: updated.id,
+      name: updated.name,
+      triggerType: updated.trigger_type,
+      minDepscoreThreshold: updated.min_depscore_threshold ?? undefined,
+      customCode: updated.custom_code ?? undefined,
+      destinations: updated.destinations ?? [],
+      active: updated.active ?? true,
+      createdByUserId: updated.created_by_user_id ?? undefined,
+      createdByName: updated.created_by_name ?? undefined,
+    });
+  } catch (error: any) {
+    console.error('Error updating notification rule:', error);
+    res.status(500).json({ error: error.message || 'Failed to update notification rule' });
+  }
+});
+
+// DELETE /api/organizations/:id/notification-rules/:ruleId - Delete notification rule
+router.delete('/:id/notification-rules/:ruleId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, ruleId } = req.params;
+
+    if (!(await canManageNotificationRules(id, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage notification rules' });
+    }
+
+    const { error } = await supabase
+      .from('organization_notification_rules')
+      .delete()
+      .eq('id', ruleId)
+      .eq('organization_id', id);
+
+    if (error) throw error;
+    res.json({ message: 'Notification rule deleted' });
+  } catch (error: any) {
+    console.error('Error deleting notification rule:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete notification rule' });
+  }
+});
+
+// POST /api/organizations/:id/notifications/ai-assist - AI assistant for notification rule trigger code (SSE streaming)
+router.post('/:id/notifications/ai-assist', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const { message, currentCode, conversationHistory } = req.body;
+
+    if (!message || typeof message !== 'string') {
+      return res.status(400).json({ error: 'message is required' });
+    }
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const NOTIFICATION_TYPEDEFS = `
+type AssetTier = 'CROWN_JEWELS' | 'EXTERNAL' | 'INTERNAL' | 'NON_PRODUCTION';
+type AnalysisStatus = 'pass' | 'warning' | 'fail';
+
+interface NotificationEvent {
+  type: 'vulnerability_discovered' | 'dependency_added' | 'dependency_updated'
+      | 'dependency_removed' | 'compliance_violation' | 'risk_score_changed'
+      | 'license_violation' | 'supply_chain_anomaly' | 'new_version_available'
+      | 'security_analysis_failure';
+}
+
+interface Vulnerability {
+  osv_id: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  cvss_score: number;       // 0.0 - 10.0
+  epss_score: number;       // 0.0 - 1.0
+  depscore: number;         // 0 - 100, composite risk score
+  is_reachable: boolean;
+  cisa_kev: boolean;
+  fixed_versions: string[];
+  summary: string;
+}
+
+interface Dependency {
+  name: string;
+  version: string;
+  license: string;          // SPDX identifier e.g. "MIT"
+  is_direct: boolean;
+  environment: string;      // "production" or "development"
+  score: number;            // Deptex reputation 0-100
+  openssf_score: number;    // OpenSSF Scorecard 0.0-10.0
+  weekly_downloads: number;
+  registry_integrity_status: AnalysisStatus;
+  install_scripts_status: AnalysisStatus;
+  entropy_analysis_status: AnalysisStatus;
+  vulnerabilities: Vulnerability[];
+}
+
+interface Project {
+  name: string;
+  asset_tier: AssetTier;
+  health_score: number;     // 0-100
+  is_compliant: boolean;
+  dependencies_count: number;
+}
+
+interface PreviousState {
+  health_score?: number;
+  is_compliant?: boolean;
+}
+
+interface NotificationContext {
+  event: NotificationEvent;
+  project: Project;
+  dependency: Dependency | null;
+  vulnerability: Vulnerability | null;
+  previous: PreviousState | null;
+}`;
+
+    const NOTIFICATION_EXAMPLES = `
+EXAMPLE 1 - High Depscore vulnerability alert:
+\`\`\`
+if (context.event.type !== 'vulnerability_discovered') return false;
+if (!context.vulnerability) return false;
+return context.vulnerability.depscore > 75;
+\`\`\`
+
+EXAMPLE 2 - Critical reachable vulnerabilities only:
+\`\`\`
+if (context.event.type !== 'vulnerability_discovered') return false;
+if (!context.vulnerability) return false;
+return context.vulnerability.severity === 'critical' && context.vulnerability.is_reachable;
+\`\`\`
+
+EXAMPLE 3 - New dependencies with low OpenSSF score:
+\`\`\`
+if (context.event.type !== 'dependency_added') return false;
+if (!context.dependency) return false;
+return context.dependency.is_direct && context.dependency.openssf_score < 3;
+\`\`\`
+
+EXAMPLE 4 - Supply chain security failures:
+\`\`\`
+if (!context.dependency) return false;
+var types = ['dependency_added', 'dependency_updated', 'security_analysis_failure'];
+if (types.indexOf(context.event.type) === -1) return false;
+return context.dependency.registry_integrity_status === 'fail'
+    || context.dependency.install_scripts_status === 'fail'
+    || context.dependency.entropy_analysis_status === 'fail';
+\`\`\`
+
+EXAMPLE 5 - Crown Jewel projects — any vulnerability:
+\`\`\`
+if (context.event.type !== 'vulnerability_discovered') return false;
+return context.project.asset_tier === 'CROWN_JEWELS';
+\`\`\`
+
+EXAMPLE 6 - License violation for banned licenses:
+\`\`\`
+if (context.event.type !== 'license_violation') return false;
+if (!context.dependency) return false;
+var BANNED = ['AGPL-3.0', 'GPL-3.0', 'SSPL-1.0'];
+return BANNED.some(function(b) { return (context.dependency.license || '').indexOf(b) !== -1; });
+\`\`\``;
+
+    const systemPrompt = `You are an expert AI assistant that helps users write Deptex notification rule trigger functions. You write JavaScript function bodies that decide whether to send a notification.
+
+## Trigger Event Types
+- vulnerability_discovered: New vulnerability found in a dependency
+- dependency_added: New dependency added to a project
+- dependency_updated: Dependency version changed
+- dependency_removed: Dependency removed from a project
+- compliance_violation: Project compliance check failed
+- risk_score_changed: Project health score crossed a threshold
+- license_violation: Dependency with banned/unapproved license detected
+- supply_chain_anomaly: Suspicious commit or anomaly detected
+- new_version_available: Newer version of a dependency published
+- security_analysis_failure: Registry integrity, install scripts, or entropy check failed
+
+## Type Definitions
+${NOTIFICATION_TYPEDEFS}
+
+## Example Trigger Functions
+${NOTIFICATION_EXAMPLES}
+
+## Your Task
+The user is editing the body of a trigger function that receives \`context: NotificationContext\`. You write ONLY the function body — do NOT include the function declaration or wrapping braces. The variable \`context\` is available.
+
+The function must return \`true\` to trigger the notification, or \`false\` to skip it. Use plain JavaScript (no TypeScript, no ES module syntax). You may use var instead of const/let for compatibility.
+
+## Current Code State
+Current trigger function body:
+\`\`\`
+${typeof currentCode === 'string' ? currentCode : '// Return true to trigger notification, false to skip\nreturn false;'}
+\`\`\`
+
+## Response Format
+Respond with a JSON object. ONLY output valid JSON, nothing else:
+{
+  "message": "Brief explanation of what the code does",
+  "code": "the complete function body as a string, or null if just answering a question"
+}
+
+If the user is asking a question (not requesting code), set "code" to null and answer in "message".
+When providing code, always provide the COMPLETE function body, not a partial diff.`;
+
+    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+      { role: 'system', content: systemPrompt },
+    ];
+
+    if (Array.isArray(conversationHistory)) {
+      for (const msg of conversationHistory) {
+        if (msg.role === 'user' || msg.role === 'assistant') {
+          messages.push({ role: msg.role, content: msg.content });
+        }
+      }
+    }
+
+    messages.push({ role: 'user', content: message });
+
+    const openai = getOpenAIClient();
+    const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+
+    const stream = await openai.chat.completions.create({
+      model,
+      messages,
+      stream: true,
+    });
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    let fullContent = '';
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content;
+      if (delta) {
+        fullContent += delta;
+        res.write(`data: ${JSON.stringify({ type: 'chunk', content: delta })}\n\n`);
+      }
+    }
+
+    res.write(`data: ${JSON.stringify({ type: 'done', fullContent })}\n\n`);
+    res.end();
+  } catch (error: any) {
+    console.error('Error in notification AI assist:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: error.message || 'Failed to generate notification trigger code' });
+    } else {
+      res.write(`data: ${JSON.stringify({ type: 'error', error: error.message || 'Failed to generate notification trigger code' })}\n\n`);
+      res.end();
+    }
+  }
+});
 
 // POST /api/organizations/:id/policies/recommend - Recommend policies based on description
 router.post('/:id/policies/recommend', async (req: AuthRequest, res) => {
@@ -2376,7 +2802,7 @@ router.post('/:id/policies/recommend', async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    // Check permissions (owner, admin, or has edit_policies)
+    // Check permissions (owner, admin, or has manage_compliance)
     // First check role directly
     let hasPermission = membership.role === 'owner' || membership.role === 'admin';
 
@@ -2389,7 +2815,7 @@ router.post('/:id/policies/recommend', async (req: AuthRequest, res) => {
         .eq('name', membership.role)
         .single();
 
-      if (role?.permissions?.edit_policies) {
+      if (role?.permissions?.manage_compliance) {
         hasPermission = true;
       }
     }
@@ -2471,6 +2897,246 @@ Return a JSON object with a single key "recommended_licenses" containing an arra
   } catch (error: any) {
     console.error('Error recommending policies:', error);
     res.status(500).json({ error: error.message || 'Failed to generate recommendations' });
+  }
+});
+
+// POST /api/organizations/:id/policies/ai-assist - AI assistant for writing policy code (SSE streaming)
+router.post('/:id/policies/ai-assist', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const { message, targetEditor, currentComplianceCode, currentPullRequestCode, conversationHistory } = req.body;
+
+    if (!message || typeof message !== 'string') {
+      return res.status(400).json({ error: 'message is required' });
+    }
+    if (!targetEditor || (targetEditor !== 'compliance' && targetEditor !== 'pullRequest')) {
+      return res.status(400).json({ error: 'targetEditor must be "compliance" or "pullRequest"' });
+    }
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const POLICY_TYPEDEFS = `
+type AssetTier = 'CROWN_JEWELS' | 'EXTERNAL' | 'INTERNAL' | 'NON_PRODUCTION';
+type AnalysisStatus = 'pass' | 'warning' | 'fail';
+
+interface Vulnerability {
+  osv_id: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  cvss_score: number;       // 0.0 - 10.0
+  epss_score: number;       // 0.0 - 1.0, higher = more likely exploited
+  depscore: number;         // 0 - 100, composite risk score
+  is_reachable: boolean;
+  cisa_kev: boolean;
+  fixed_versions: string[];
+  aliases: string[];
+  summary: string;
+  published_at: string;
+}
+
+interface Dependency {
+  name: string;
+  version: string;
+  license: string;          // SPDX identifier e.g. "MIT"
+  is_direct: boolean;
+  environment: string;      // "production", "development", etc.
+  score: number;            // Deptex reputation 0-100
+  openssf_score: number;    // OpenSSF Scorecard 0.0-10.0
+  weekly_downloads: number;
+  last_published_at: string;
+  releases_last_12_months: number;
+  files_importing_count: number;
+  registry_integrity_status: AnalysisStatus;
+  install_scripts_status: AnalysisStatus;
+  entropy_analysis_status: AnalysisStatus;
+  vulnerabilities: Vulnerability[];
+}
+
+interface UpdatedDependency extends Dependency {
+  from_version: string;
+  to_version: string;
+}
+
+interface RemovedDependency {
+  name: string;
+  version: string;
+}
+
+interface Project {
+  name: string;
+  asset_tier: AssetTier;
+}
+
+// pullRequestCheck receives:
+interface PullRequestCheckContext {
+  project: Project;
+  added: Dependency[];
+  updated: UpdatedDependency[];
+  removed: RemovedDependency[];
+}
+
+// projectCompliance receives:
+interface ProjectComplianceContext {
+  project: Project;
+  dependencies: Dependency[];
+}
+
+// pullRequestCheck must return:
+interface PullRequestCheckResult { passed: boolean; violations: string[]; }
+
+// projectCompliance must return:
+interface ComplianceResult { compliant: boolean; violations: string[]; }`;
+
+    const EXAMPLE_POLICIES = `
+EXAMPLE 1 - License Allowlist (projectCompliance body):
+\`\`\`
+const ALLOWED = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC"];
+const violations = [];
+for (const dep of context.dependencies) {
+  const lic = dep.license || "UNKNOWN";
+  if (!ALLOWED.some(a => lic.includes(a))) {
+    violations.push(\`License \${lic} not allowed on \${dep.name}@\${dep.version}\`);
+  }
+}
+return { compliant: violations.length === 0, violations };
+\`\`\`
+
+EXAMPLE 2 - Block critical reachable vulns (pullRequestCheck body):
+\`\`\`
+const violations = [];
+for (const pkg of [...context.added, ...context.updated]) {
+  for (const v of pkg.vulnerabilities) {
+    if (v.severity === "critical" && v.is_reachable) {
+      violations.push(\`\${v.osv_id} (depscore \${v.depscore}) in \${pkg.name}@\${pkg.version}\`);
+    }
+    if (v.cisa_kev) {
+      violations.push(\`CISA KEV: \${v.osv_id} in \${pkg.name}@\${pkg.version}\`);
+    }
+  }
+}
+return { passed: violations.length === 0, violations };
+\`\`\`
+
+EXAMPLE 3 - Minimum OpenSSF score for new production deps (pullRequestCheck body):
+\`\`\`
+const violations = [];
+for (const pkg of context.added) {
+  if (pkg.is_direct && pkg.environment === "production" && pkg.openssf_score < 3) {
+    violations.push(\`\${pkg.name} has OpenSSF score \${pkg.openssf_score} (min 3 for direct prod deps)\`);
+  }
+}
+return { passed: violations.length === 0, violations };
+\`\`\`
+
+EXAMPLE 4 - Supply chain integrity (pullRequestCheck body):
+\`\`\`
+const violations = [];
+for (const pkg of [...context.added, ...context.updated]) {
+  if (pkg.registry_integrity_status === "fail")
+    violations.push(\`Registry integrity failure: \${pkg.name}@\${pkg.version}\`);
+  if (pkg.install_scripts_status === "fail")
+    violations.push(\`Suspicious install scripts: \${pkg.name}@\${pkg.version}\`);
+  if (pkg.entropy_analysis_status === "fail")
+    violations.push(\`High entropy (obfuscation): \${pkg.name}@\${pkg.version}\`);
+}
+return { passed: violations.length === 0, violations };
+\`\`\``;
+
+    const targetFnName = targetEditor === 'compliance' ? 'projectCompliance' : 'pullRequestCheck';
+    const targetReturnType = targetEditor === 'compliance'
+      ? '{ compliant: boolean, violations: string[] }'
+      : '{ passed: boolean, violations: string[] }';
+    const targetContextType = targetEditor === 'compliance' ? 'ProjectComplianceContext' : 'PullRequestCheckContext';
+
+    const systemPrompt = `You are an expert AI assistant that helps users write Deptex policy-as-code. You write JavaScript function bodies for dependency security policies.
+
+## Type Definitions
+${POLICY_TYPEDEFS}
+
+## Example Policies
+${EXAMPLE_POLICIES}
+
+## Your Task
+The user is editing the body of \`function ${targetFnName}(context: ${targetContextType})\`. You write ONLY the function body — do NOT include the function declaration or wrapping braces. The variable \`context\` is available.
+
+The function must return ${targetReturnType}.
+
+## Current Code State
+Current ${targetEditor === 'compliance' ? 'Project Compliance' : 'Pull Request Check'} body:
+\`\`\`
+${targetEditor === 'compliance' ? (currentComplianceCode || 'return { compliant: true };') : (currentPullRequestCode || 'return { passed: true };')}
+\`\`\`
+
+${targetEditor === 'compliance' && currentPullRequestCode ? `Current Pull Request Check body (for reference):\n\`\`\`\n${currentPullRequestCode}\n\`\`\`` : ''}
+${targetEditor === 'pullRequest' && currentComplianceCode ? `Current Project Compliance body (for reference):\n\`\`\`\n${currentComplianceCode}\n\`\`\`` : ''}
+
+## Response Format
+Respond with a JSON object. ONLY output valid JSON, nothing else:
+{
+  "message": "Brief explanation of what the code does",
+  "code": "the complete function body as a string, or null if just answering a question"
+}
+
+If the user is asking a question (not requesting code), set "code" to null and answer in "message".
+When providing code, always provide the COMPLETE function body, not a partial diff. Use plain JavaScript (no TypeScript syntax).`;
+
+    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+      { role: 'system', content: systemPrompt },
+    ];
+
+    if (Array.isArray(conversationHistory)) {
+      for (const msg of conversationHistory) {
+        if (msg.role === 'user' || msg.role === 'assistant') {
+          messages.push({ role: msg.role, content: msg.content });
+        }
+      }
+    }
+
+    messages.push({ role: 'user', content: message });
+
+    const openai = getOpenAIClient();
+    const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+
+    const stream = await openai.chat.completions.create({
+      model,
+      messages,
+      stream: true,
+    });
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    let fullContent = '';
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content;
+      if (delta) {
+        fullContent += delta;
+        res.write(`data: ${JSON.stringify({ type: 'chunk', content: delta })}\n\n`);
+      }
+    }
+
+    res.write(`data: ${JSON.stringify({ type: 'done', fullContent })}\n\n`);
+    res.end();
+  } catch (error: any) {
+    console.error('Error in policy AI assist:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: error.message || 'Failed to generate policy code' });
+    } else {
+      res.write(`data: ${JSON.stringify({ type: 'error', error: error.message || 'Failed to generate policy code' })}\n\n`);
+      res.end();
+    }
   }
 });
 
@@ -2758,6 +3424,449 @@ router.post('/:id/dismiss-get-started', authenticateUser, async (req: AuthReques
   } catch (error: any) {
     console.error('Error dismissing get started:', error);
     res.status(500).json({ error: error.message || 'Failed to dismiss get started' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Team Notification / Integration routes
+// ---------------------------------------------------------------------------
+
+async function canManageTeamNotifications(orgId: string, teamId: string, userId: string): Promise<boolean> {
+  // Org-level owner/admin can always manage
+  const { data: membership } = await supabase
+    .from('organization_members')
+    .select('role')
+    .eq('organization_id', orgId)
+    .eq('user_id', userId)
+    .single();
+  if (!membership) return false;
+  if (membership.role === 'owner' || membership.role === 'admin') return true;
+
+  // Check org custom role permissions
+  const { data: orgRole } = await supabase
+    .from('organization_roles')
+    .select('permissions')
+    .eq('organization_id', orgId)
+    .eq('name', membership.role)
+    .single();
+  const orgPerms = orgRole?.permissions as Record<string, boolean> | undefined;
+  if (orgPerms?.manage_notifications || orgPerms?.manage_integrations) return true;
+
+  // Check team-level permission
+  const { data: teamMembership } = await supabase
+    .from('team_members')
+    .select('role_id')
+    .eq('team_id', teamId)
+    .eq('user_id', userId)
+    .single();
+  if (!teamMembership?.role_id) return false;
+  const { data: teamRole } = await supabase
+    .from('team_roles')
+    .select('permissions')
+    .eq('id', teamMembership.role_id)
+    .single();
+  const teamPerms = teamRole?.permissions as Record<string, boolean> | undefined;
+  return !!(teamPerms?.manage_notification_settings);
+}
+
+// GET /api/organizations/:id/teams/:teamId/connections
+router.get('/:id/teams/:teamId/connections', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, teamId } = req.params;
+
+    const { data: team } = await supabase
+      .from('teams')
+      .select('id, organization_id')
+      .eq('id', teamId)
+      .eq('organization_id', orgId)
+      .single();
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+    if (!membership) return res.status(403).json({ error: 'Access denied' });
+
+    const NOTIFICATION_PROVIDERS = ['slack', 'discord', 'jira', 'linear', 'asana', 'custom_notification', 'custom_ticketing', 'email'];
+
+    const [{ data: orgConns }, { data: teamConns }] = await Promise.all([
+      supabase
+        .from('organization_integrations')
+        .select('id, organization_id, provider, installation_id, display_name, metadata, status, connected_at, created_at, updated_at')
+        .eq('organization_id', orgId)
+        .eq('status', 'connected')
+        .in('provider', NOTIFICATION_PROVIDERS)
+        .order('created_at', { ascending: true }),
+      supabase
+        .from('team_integrations')
+        .select('id, team_id, provider, installation_id, display_name, metadata, status, connected_at, created_at, updated_at')
+        .eq('team_id', teamId)
+        .eq('status', 'connected')
+        .in('provider', NOTIFICATION_PROVIDERS)
+        .order('created_at', { ascending: true }),
+    ]);
+
+    const inherited = (orgConns || []).map((c: any) => ({ ...c, source: 'organization' }));
+    const teamSpecific = (teamConns || []).map((c: any) => ({ ...c, source: 'team' }));
+    res.json({ inherited, team: teamSpecific });
+  } catch (error: any) {
+    console.error('Error fetching team connections:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch connections' });
+  }
+});
+
+// DELETE /api/organizations/:id/teams/:teamId/connections/:connectionId
+router.delete('/:id/teams/:teamId/connections/:connectionId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, teamId, connectionId } = req.params;
+
+    if (!(await canManageTeamNotifications(orgId, teamId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage team integrations' });
+    }
+
+    const { data: connection } = await supabase
+      .from('team_integrations')
+      .select('*')
+      .eq('id', connectionId)
+      .eq('team_id', teamId)
+      .single();
+    if (!connection) return res.status(404).json({ error: 'Connection not found' });
+
+    const { error: deleteError } = await supabase
+      .from('team_integrations')
+      .delete()
+      .eq('id', connectionId)
+      .eq('team_id', teamId);
+    if (deleteError) throw deleteError;
+
+    res.json({ success: true, message: 'Connection removed' });
+  } catch (error: any) {
+    console.error('Error deleting team connection:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete connection' });
+  }
+});
+
+// POST /api/organizations/:id/teams/:teamId/email-notifications
+router.post('/:id/teams/:teamId/email-notifications', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, teamId } = req.params;
+    const { email } = req.body;
+
+    if (!(await canManageTeamNotifications(orgId, teamId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage team integrations' });
+    }
+
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({ error: 'email is required' });
+    }
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) return res.status(400).json({ error: 'email is required' });
+    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!EMAIL_REGEX.test(normalizedEmail)) {
+      return res.status(400).json({ error: 'Please enter a valid email address' });
+    }
+
+    const { data: team } = await supabase
+      .from('teams')
+      .select('id')
+      .eq('id', teamId)
+      .eq('organization_id', orgId)
+      .single();
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+
+    const { data, error: dbError } = await supabase
+      .from('team_integrations')
+      .insert({
+        team_id: teamId,
+        provider: 'email',
+        installation_id: crypto.randomUUID(),
+        display_name: normalizedEmail,
+        status: 'connected',
+        metadata: { email: normalizedEmail },
+        connected_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as any)
+      .select('id')
+      .single();
+
+    if (dbError) {
+      console.error('Team email notification DB error:', dbError);
+      return res.status(500).json({ error: 'Failed to add email notification' });
+    }
+
+    res.json({ success: true, id: data?.id });
+  } catch (error: any) {
+    console.error('Add team email notification error:', error);
+    res.status(500).json({ error: error.message || 'Failed to add email' });
+  }
+});
+
+// POST /api/organizations/:id/teams/:teamId/custom-integrations
+router.post('/:id/teams/:teamId/custom-integrations', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, teamId } = req.params;
+    const { name, type, webhook_url, icon_url } = req.body;
+
+    if (!(await canManageTeamNotifications(orgId, teamId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage team integrations' });
+    }
+
+    if (!name || !type || !webhook_url) {
+      return res.status(400).json({ error: 'name, type (notification|ticketing), and webhook_url are required' });
+    }
+    const trimmedUrl = String(webhook_url).trim();
+    if (!/^https:\/\/[^\s]+$/i.test(trimmedUrl)) {
+      return res.status(400).json({ error: 'webhook_url must start with https://' });
+    }
+    if (type !== 'notification' && type !== 'ticketing') {
+      return res.status(400).json({ error: 'type must be "notification" or "ticketing"' });
+    }
+
+    const secret = `whsec_${crypto.randomBytes(32).toString('hex')}`;
+    const provider = type === 'notification' ? 'custom_notification' : 'custom_ticketing';
+
+    const { data: team } = await supabase
+      .from('teams')
+      .select('id')
+      .eq('id', teamId)
+      .eq('organization_id', orgId)
+      .single();
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+
+    const { data, error: dbError } = await supabase
+      .from('team_integrations')
+      .insert({
+        team_id: teamId,
+        provider,
+        installation_id: crypto.randomUUID() as string,
+        display_name: name,
+        access_token: secret,
+        status: 'connected',
+        metadata: {
+          webhook_url: trimmedUrl,
+          icon_url: icon_url || null,
+          custom_name: name,
+          type,
+        },
+        connected_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as any)
+      .select('id')
+      .single();
+
+    if (dbError) {
+      console.error('Team custom integration DB error:', dbError);
+      return res.status(500).json({ error: 'Failed to create custom integration' });
+    }
+
+    res.json({ success: true, id: data?.id, secret });
+  } catch (error: any) {
+    console.error('Create team custom integration error:', error);
+    res.status(500).json({ error: error.message || 'Failed to create custom integration' });
+  }
+});
+
+// GET /api/organizations/:id/teams/:teamId/notification-rules
+router.get('/:id/teams/:teamId/notification-rules', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, teamId } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+    if (!membership) return res.status(404).json({ error: 'Organization not found or access denied' });
+
+    const { data: team } = await supabase
+      .from('teams')
+      .select('id')
+      .eq('id', teamId)
+      .eq('organization_id', orgId)
+      .single();
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+
+    const { data: rules, error } = await supabase
+      .from('team_notification_rules')
+      .select('*')
+      .eq('team_id', teamId)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    const mapped = (rules ?? []).map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      triggerType: r.trigger_type,
+      minDepscoreThreshold: r.min_depscore_threshold ?? undefined,
+      customCode: r.custom_code ?? undefined,
+      destinations: r.destinations ?? [],
+      active: r.active ?? true,
+      createdByUserId: r.created_by_user_id ?? undefined,
+      createdByName: r.created_by_name ?? undefined,
+    }));
+
+    res.json(mapped);
+  } catch (error: any) {
+    console.error('Error fetching team notification rules:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch notification rules' });
+  }
+});
+
+// POST /api/organizations/:id/teams/:teamId/notification-rules
+router.post('/:id/teams/:teamId/notification-rules', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, teamId } = req.params;
+    const { name, triggerType, minDepscoreThreshold, customCode, destinations, createdByName } = req.body;
+
+    if (!(await canManageTeamNotifications(orgId, teamId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage notification rules' });
+    }
+
+    if (!name || typeof name !== 'string') {
+      return res.status(400).json({ error: 'name is required' });
+    }
+    const validTriggers = ['weekly_digest', 'vulnerability_discovered', 'custom_code_pipeline'];
+    if (!triggerType || !validTriggers.includes(triggerType)) {
+      return res.status(400).json({ error: 'triggerType must be one of: weekly_digest, vulnerability_discovered, custom_code_pipeline' });
+    }
+
+    const { data: team } = await supabase
+      .from('teams')
+      .select('id')
+      .eq('id', teamId)
+      .eq('organization_id', orgId)
+      .single();
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+
+    const dests = Array.isArray(destinations) ? destinations : [];
+    const insertData: Record<string, unknown> = {
+      team_id: teamId,
+      name: name.trim(),
+      trigger_type: triggerType,
+      destinations: dests,
+      active: true,
+      created_by_user_id: userId,
+      created_by_name: typeof createdByName === 'string' ? createdByName : null,
+    };
+    if (triggerType === 'vulnerability_discovered' && typeof minDepscoreThreshold === 'number') {
+      insertData.min_depscore_threshold = minDepscoreThreshold;
+    }
+    if (triggerType === 'custom_code_pipeline' && typeof customCode === 'string') {
+      insertData.custom_code = customCode;
+    }
+
+    const { data: created, error } = await supabase
+      .from('team_notification_rules')
+      .insert(insertData)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.status(201).json({
+      id: created.id,
+      name: created.name,
+      triggerType: created.trigger_type,
+      minDepscoreThreshold: created.min_depscore_threshold ?? undefined,
+      customCode: created.custom_code ?? undefined,
+      destinations: created.destinations ?? [],
+      active: created.active ?? true,
+      createdByUserId: created.created_by_user_id ?? undefined,
+      createdByName: created.created_by_name ?? undefined,
+    });
+  } catch (error: any) {
+    console.error('Error creating team notification rule:', error);
+    res.status(500).json({ error: error.message || 'Failed to create notification rule' });
+  }
+});
+
+// PUT /api/organizations/:id/teams/:teamId/notification-rules/:ruleId
+router.put('/:id/teams/:teamId/notification-rules/:ruleId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, teamId, ruleId } = req.params;
+    const { name, triggerType, minDepscoreThreshold, customCode, destinations } = req.body;
+
+    if (!(await canManageTeamNotifications(orgId, teamId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage notification rules' });
+    }
+
+    const validTriggers = ['weekly_digest', 'vulnerability_discovered', 'custom_code_pipeline'];
+    const updateData: Record<string, unknown> = {};
+    if (typeof name === 'string') updateData.name = name.trim();
+    if (triggerType && validTriggers.includes(triggerType)) updateData.trigger_type = triggerType;
+    if (triggerType === 'vulnerability_discovered') {
+      updateData.min_depscore_threshold = typeof minDepscoreThreshold === 'number' ? minDepscoreThreshold : null;
+    } else {
+      updateData.min_depscore_threshold = null;
+    }
+    if (triggerType === 'custom_code_pipeline') {
+      updateData.custom_code = typeof customCode === 'string' ? customCode : null;
+    } else {
+      updateData.custom_code = null;
+    }
+    if (Array.isArray(destinations)) updateData.destinations = destinations;
+
+    const { data: updated, error } = await supabase
+      .from('team_notification_rules')
+      .update(updateData)
+      .eq('id', ruleId)
+      .eq('team_id', teamId)
+      .select()
+      .single();
+
+    if (error) throw error;
+    if (!updated) return res.status(404).json({ error: 'Notification rule not found' });
+
+    res.json({
+      id: updated.id,
+      name: updated.name,
+      triggerType: updated.trigger_type,
+      minDepscoreThreshold: updated.min_depscore_threshold ?? undefined,
+      customCode: updated.custom_code ?? undefined,
+      destinations: updated.destinations ?? [],
+      active: updated.active ?? true,
+      createdByUserId: updated.created_by_user_id ?? undefined,
+      createdByName: updated.created_by_name ?? undefined,
+    });
+  } catch (error: any) {
+    console.error('Error updating team notification rule:', error);
+    res.status(500).json({ error: error.message || 'Failed to update notification rule' });
+  }
+});
+
+// DELETE /api/organizations/:id/teams/:teamId/notification-rules/:ruleId
+router.delete('/:id/teams/:teamId/notification-rules/:ruleId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, teamId, ruleId } = req.params;
+
+    if (!(await canManageTeamNotifications(orgId, teamId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage notification rules' });
+    }
+
+    const { error } = await supabase
+      .from('team_notification_rules')
+      .delete()
+      .eq('id', ruleId)
+      .eq('team_id', teamId);
+
+    if (error) throw error;
+    res.json({ message: 'Notification rule deleted' });
+  } catch (error: any) {
+    console.error('Error deleting team notification rule:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete notification rule' });
   }
 });
 

@@ -4,9 +4,9 @@ import { Search, Grid3x3, List, ChevronRight, Bell, Plus, X, Loader2 } from 'luc
 import { api, Project, TeamWithRole, TeamPermissions } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { Button } from '../../components/ui/button';
-import { ProjectTeamSelect } from '../../components/ProjectTeamSelect';
 import { FrameworkIcon } from '../../components/framework-icon';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
+import { CreateProjectSidebar } from '../../components/CreateProjectSidebar';
 
 interface TeamContextType {
   team: TeamWithRole | null;
@@ -55,10 +55,9 @@ export default function TeamProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [projectName, setProjectName] = useState('');
-  const [creating, setCreating] = useState(false);
   const { toast } = useToast();
   const navigate = useNavigate();
 
@@ -80,6 +79,17 @@ export default function TeamProjectsPage() {
       project.name.toLowerCase().includes(query)
     );
   }, [teamProjects, searchQuery]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && searchQuery) {
+        setSearchQuery('');
+        searchInputRef.current?.blur();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [searchQuery]);
 
   useEffect(() => {
     if (organizationId) {
@@ -105,50 +115,8 @@ export default function TeamProjectsPage() {
     }
   };
 
-  const handleCreateProject = async () => {
-    if (!organizationId || !team || !projectName.trim()) {
-      toast({
-        title: 'Error',
-        description: 'Project name is required',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    const trimmedName = projectName.trim();
-
-    setCreating(true);
-    try {
-      await api.createProject(organizationId, {
-        name: trimmedName,
-        team_ids: [team.id],
-      });
-
-      // Close modal and reset form
-      setShowCreateModal(false);
-      setProjectName('');
-
-      // Reload data to get the new project
-      await loadProjects();
-
-      toast({
-        title: 'Success',
-        description: 'Project created successfully',
-      });
-    } catch (error: any) {
-      toast({
-        title: 'Error',
-        description: error.message || 'Failed to create project',
-        variant: 'destructive',
-      });
-    } finally {
-      setCreating(false);
-    }
-  };
-
   const closeModal = () => {
     setShowCreateModal(false);
-    setProjectName('');
   };
 
   const handleProjectClick = (projectId: string) => {
@@ -186,15 +154,33 @@ export default function TeamProjectsPage() {
     <main className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
       {/* Search and View Toggle */}
       <div className="flex items-center justify-between gap-4 mb-4">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-foreground-secondary" />
+        <div className="relative w-80">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-foreground-secondary pointer-events-none" />
           <input
+            ref={searchInputRef}
             type="text"
             placeholder="Filter projects..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-64 pl-9 pr-4 h-8 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && searchQuery) {
+                e.preventDefault();
+                setSearchQuery('');
+                searchInputRef.current?.blur();
+              }
+            }}
+            className={`w-full pl-9 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent ${searchQuery ? 'pr-14' : 'pr-4'}`}
           />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded text-xs font-medium text-foreground-secondary hover:text-foreground bg-transparent border border-border/60 hover:border-border transition-colors"
+              aria-label="Clear search (Esc)"
+            >
+              Esc
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {/* View Toggle */}
@@ -232,10 +218,7 @@ export default function TeamProjectsPage() {
           </div>
           {userPermissions?.manage_projects && (
             <Button
-              onClick={() => {
-                setProjectName('');
-                setShowCreateModal(true);
-              }}
+              onClick={() => setShowCreateModal(true)}
               className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
             >
               <Plus className="h-4 w-4 mr-2" />
@@ -331,10 +314,7 @@ export default function TeamProjectsPage() {
             </p>
             {teamProjects.length === 0 && userPermissions?.manage_projects && (
               <Button
-                onClick={() => {
-                  setProjectName('');
-                  setShowCreateModal(true);
-                }}
+                onClick={() => setShowCreateModal(true)}
                 className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
               >
                 <Plus className="h-4 w-4 mr-2" />
@@ -495,100 +475,15 @@ export default function TeamProjectsPage() {
         </div>
       )}
 
-      {/* Create Project Side Panel */}
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50">
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-            onClick={closeModal}
-          />
-
-          {/* Side Panel */}
-          <div
-            className="fixed right-0 top-0 h-full w-full max-w-lg bg-background border-l border-border shadow-2xl transform transition-transform duration-300 translate-x-0 flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="px-6 py-5 border-b border-border flex-shrink-0 bg-[#141618]">
-              <h2 className="text-xl font-semibold text-foreground">
-                Create Project
-              </h2>
-            </div>
-
-            {/* Content */}
-            <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-6">
-              <div className="space-y-6">
-                {/* Description */}
-                <div className="space-y-2">
-                  <p className="text-sm text-foreground-secondary leading-relaxed">
-                    Create a new project for this team. The project will be owned by{' '}
-                    <span className="font-medium text-foreground">{team?.name}</span>.
-                  </p>
-                </div>
-
-                {/* Form */}
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-foreground mb-2">
-                      Project Name
-                    </label>
-                    <input
-                      type="text"
-                      value={projectName}
-                      onChange={(e) => setProjectName(e.target.value)}
-                      placeholder="My Project"
-                      className="w-full px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          handleCreateProject();
-                        }
-                      }}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-foreground mb-2">
-                      Team
-                    </label>
-                    <ProjectTeamSelect
-                      value={team?.id || null}
-                      onChange={() => {}}
-                      teams={team ? [team] : []}
-                      variant="modal"
-                      locked={true}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="px-6 py-5 flex items-center justify-end gap-3 flex-shrink-0">
-              <Button variant="outline" onClick={closeModal}>
-                Cancel
-              </Button>
-              <Button
-                onClick={handleCreateProject}
-                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-                disabled={creating}
-              >
-                {creating ? (
-                  <>
-                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Creating
-                  </>
-                ) : (
-                  'Create'
-                )}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Create Project Side Panel — same full form as org Projects, with team locked */}
+      <CreateProjectSidebar
+        open={showCreateModal}
+        onClose={closeModal}
+        organizationId={organizationId}
+        teams={team ? [team] : []}
+        lockedTeam={team}
+        onProjectsReload={loadProjects}
+      />
     </main>
   );
 }

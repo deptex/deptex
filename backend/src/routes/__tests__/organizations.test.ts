@@ -131,4 +131,205 @@ describe('Organization Routes', () => {
       }));
     });
   });
+
+  describe('GET /api/organizations/:id/invitations', () => {
+    it('returns 200 with invitations array for org member', async () => {
+      const mockInvitations = [
+        { id: 'inv-1', email: 'a@test.com', role: 'member', status: 'pending', created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 7 * 864e5).toISOString() },
+      ];
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: { role: 'owner' }, error: null });
+      queryBuilder.then
+        .mockImplementationOnce((resolve: any) => resolve({ data: mockInvitations, error: null }));
+      queryBuilder.then
+        .mockImplementationOnce((resolve: any) => resolve({ data: [], error: null }));
+
+      const res = await request(app)
+        .get('/api/organizations/org-1/invitations')
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body).toHaveLength(1);
+      expect(res.body[0].email).toBe('a@test.com');
+      expect(res.body[0].role).toBe('member');
+    });
+
+    it('returns 404 for non-member', async () => {
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: null, error: { message: 'Not found' } });
+
+      const res = await request(app)
+        .get('/api/organizations/org-1/invitations')
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toMatch(/not found|access denied/i);
+    });
+  });
+
+  describe('POST /api/organizations/:id/invitations', () => {
+    beforeEach(() => {
+      (supabase.auth.admin.getUserById as jest.Mock).mockResolvedValue({
+        data: { user: { email: 'admin@test.com', user_metadata: {} } },
+        error: null,
+      });
+    });
+
+    it('returns 400 when email is missing', async () => {
+      queryBuilder.single.mockResolvedValueOnce({ data: { role: 'owner' }, error: null });
+
+      const res = await request(app)
+        .post('/api/organizations/org-1/invitations')
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ role: 'member' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/email is required/i);
+    });
+
+    it('returns 403 when user is not admin or owner', async () => {
+      queryBuilder.single.mockReset();
+      queryBuilder.single.mockResolvedValue({ data: { role: 'member' }, error: null });
+
+      const res = await request(app)
+        .post('/api/organizations/org-1/invitations')
+        .set('Authorization', `Bearer ${mockToken}`)
+        .set('Content-Type', 'application/json')
+        .send({ email: 'new@test.com', role: 'member' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/only admins and owners can invite/i);
+    });
+
+    it('returns 400 when email already has pending invitation', async () => {
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: { role: 'owner' }, error: null });
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: { name: 'Test Org' }, error: null });
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: { id: 'existing-inv' }, error: null });
+
+      const res = await request(app)
+        .post('/api/organizations/org-1/invitations')
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ email: 'already@test.com', role: 'member' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/already invited/i);
+    });
+
+    it('returns 201 with invitation when valid', async () => {
+      const newInvitation = {
+        id: 'inv-new',
+        organization_id: 'org-1',
+        email: 'new@test.com',
+        role: 'member',
+        status: 'pending',
+        created_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 7 * 864e5).toISOString(),
+      };
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: { role: 'owner' }, error: null });
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: { name: 'Test Org' }, error: null });
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: null, error: null });
+      queryBuilder.select.mockReturnThis();
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: newInvitation, error: null });
+
+      const res = await request(app)
+        .post('/api/organizations/org-1/invitations')
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ email: 'new@test.com', role: 'member' });
+
+      expect(res.status).toBe(201);
+      expect(res.body.email).toBe('new@test.com');
+      expect(res.body.role).toBe('member');
+    });
+  });
+
+  describe('DELETE /api/organizations/:id/invitations/:invitationId', () => {
+    it('returns 403 when user is not admin or owner', async () => {
+      queryBuilder.single.mockResolvedValueOnce({ data: { role: 'member' }, error: null });
+
+      const res = await request(app)
+        .delete('/api/organizations/org-1/invitations/inv-1')
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/only admins and owners can cancel/i);
+    });
+
+    it('returns 200 when admin cancels invitation', async () => {
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: { role: 'admin' }, error: null });
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: { email: 'x@test.com', role: 'member', team_id: null }, error: null });
+      queryBuilder.then
+        .mockImplementationOnce((resolve: any) => resolve({ error: null }));
+
+      const res = await request(app)
+        .delete('/api/organizations/org-1/invitations/inv-1')
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.message).toMatch(/cancelled/i);
+    });
+  });
+
+  describe('POST /api/organizations/:id/invitations/:invitationId/resend', () => {
+    it('returns 403 when user is not admin or owner', async () => {
+      queryBuilder.single.mockResolvedValueOnce({ data: { role: 'member' }, error: null });
+
+      const res = await request(app)
+        .post('/api/organizations/org-1/invitations/inv-1/resend')
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/only admins and owners can resend/i);
+    });
+
+    it('returns 404 when invitation not found', async () => {
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: { role: 'owner' }, error: null });
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: null, error: null });
+
+      const res = await request(app)
+        .post('/api/organizations/org-1/invitations/inv-1/resend')
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toMatch(/not found|already used/i);
+    });
+
+    it('returns 200 when admin resends invitation', async () => {
+      (supabase.auth.admin.getUserById as jest.Mock).mockResolvedValue({
+        data: { user: { email: 'admin@test.com' } },
+        error: null,
+      });
+      const mockInvitation = {
+        id: 'inv-1',
+        email: 'x@test.com',
+        role: 'member',
+        organization_id: 'org-1',
+        status: 'pending',
+      };
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: { role: 'admin' }, error: null });
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: mockInvitation, error: null });
+      queryBuilder.single
+        .mockResolvedValueOnce({ data: { name: 'Test Org' }, error: null });
+
+      const res = await request(app)
+        .post('/api/organizations/org-1/invitations/inv-1/resend')
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.message).toMatch(/resent/i);
+    });
+  });
 });

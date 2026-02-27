@@ -1,6 +1,20 @@
 import { useMemo } from 'react';
 import * as Diff from 'diff';
 
+const DIFF_OPTIONS = { ignoreWhitespace: true };
+
+export function getDiffLineCounts(baseCode: string, requestedCode: string): { added: number; removed: number } {
+  const chunks = Diff.diffLines(baseCode || '', requestedCode || '', DIFF_OPTIONS);
+  let added = 0;
+  let removed = 0;
+  for (const chunk of chunks) {
+    const lineCount = (chunk.value?.match(/\n/g) || []).length + (chunk.value && !chunk.value.endsWith('\n') ? 1 : 0);
+    if (chunk.added) added += lineCount;
+    else if (chunk.removed) removed += lineCount;
+  }
+  return { added, removed };
+}
+
 interface PolicyDiffViewerProps {
   baseCode: string;
   requestedCode: string;
@@ -15,7 +29,7 @@ export function PolicyDiffViewer({
   minHeight = '360px',
 }: PolicyDiffViewerProps) {
   const chunks = useMemo(() => {
-    return Diff.diffLines(baseCode || '', requestedCode || '');
+    return Diff.diffLines(baseCode || '', requestedCode || '', DIFF_OPTIONS);
   }, [baseCode, requestedCode]);
 
   const lines = useMemo(() => {
@@ -43,7 +57,7 @@ export function PolicyDiffViewer({
 
   return (
     <div
-      className={`rounded-lg border border-border bg-[#1d1f21] overflow-auto font-mono text-sm ${className}`}
+      className={`rounded-none border-0 bg-[#1d1f21] overflow-auto font-mono text-sm ${className}`}
       style={{ minHeight }}
     >
       <pre className="p-4 m-0">
@@ -62,8 +76,6 @@ export function PolicyDiffViewer({
               {line.type === 'remove' || line.type === 'same' ? line.lineNum : ''}
             </span>
             <span className={line.type === 'add' ? 'pl-2' : ''}>
-              {line.type === 'add' && <span className="text-green-400 mr-2">+</span>}
-              {line.type === 'remove' && <span className="text-red-400 mr-2">-</span>}
               {line.text || ' '}
             </span>
           </div>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useOutletContext } from 'react-router-dom';
-import { Search, Link as LinkIcon, MoreVertical, Mail, Check, Plus, X, Loader2, Send } from 'lucide-react';
+import { Search, Link as LinkIcon, MoreVertical, Mail, Check, Plus, X, Loader2 } from 'lucide-react';
 import { api, OrganizationMember, OrganizationInvitation, Team, Organization, OrganizationRole, RolePermissions } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { useAuth } from '../../contexts/AuthContext';
@@ -38,9 +38,24 @@ interface MembersPageProps {
   isSettingsSubpage?: boolean;
   inviteModalOpen?: boolean;
   onInviteModalOpenChange?: (open: boolean) => void;
+  /** Phase 3: When parent (OrganizationSettingsPage) has loaded members/roles, pass them to avoid duplicate fetches */
+  sharedMembers?: OrganizationMember[];
+  sharedRoles?: OrganizationRole[];
+  sharedDataLoaded?: boolean;
+  onMembersUpdate?: (members: OrganizationMember[]) => void;
+  onRolesUpdate?: (roles: OrganizationRole[]) => void;
 }
 
-export default function MembersPage({ isSettingsSubpage = false, inviteModalOpen, onInviteModalOpenChange }: MembersPageProps) {
+export default function MembersPage({
+  isSettingsSubpage = false,
+  inviteModalOpen,
+  onInviteModalOpenChange,
+  sharedMembers,
+  sharedRoles,
+  sharedDataLoaded = false,
+  onMembersUpdate,
+  onRolesUpdate,
+}: MembersPageProps) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -105,11 +120,24 @@ export default function MembersPage({ isSettingsSubpage = false, inviteModalOpen
     }
   }, [organization, id, navigate, permissionsChecked]);
 
+  // Phase 3: Sync shared data from parent when provided (avoids duplicate fetches)
+  const useSharedData = isSettingsSubpage && sharedDataLoaded && sharedMembers !== undefined && sharedRoles !== undefined;
   useEffect(() => {
-    if (id && permissionsChecked) {
+    if (useSharedData && sharedMembers && sharedRoles) {
+      setMembers(sharedMembers);
+      setCustomRoles(sharedRoles);
+    }
+  }, [useSharedData, sharedMembers, sharedRoles]);
+
+  useEffect(() => {
+    if (!id || !permissionsChecked) return;
+    if (useSharedData) {
+      // Only fetch invitations and teams; use parent's members and roles
+      loadData(true);
+    } else {
       loadData();
     }
-  }, [id, permissionsChecked]);
+  }, [id, permissionsChecked, useSharedData]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -137,21 +165,37 @@ export default function MembersPage({ isSettingsSubpage = false, inviteModalOpen
     }
   }, [customRoles, organization, id, navigate, permissionsChecked]);
 
-  const loadData = async () => {
+  const loadData = async (skipMembersAndRoles = false) => {
     if (!id) return;
 
     try {
       setLoading(true);
-      const [membersData, invitationsData, teamsData, rolesData] = await Promise.all([
-        api.getOrganizationMembers(id),
-        api.getOrganizationInvitations(id),
-        api.getTeams(id).catch(() => []),
-        api.getOrganizationRoles(id).catch(() => []),
-      ]);
-      setMembers(membersData);
-      setInvitations(invitationsData);
-      setTeams(teamsData);
-      setCustomRoles(rolesData);
+      if (skipMembersAndRoles && useSharedData && sharedMembers && sharedRoles) {
+        // Phase 3: Only fetch invitations and teams; use parent's members and roles
+        const [invitationsData, teamsData] = await Promise.all([
+          api.getOrganizationInvitations(id),
+          api.getTeams(id).catch(() => []),
+        ]);
+        setMembers(sharedMembers);
+        setInvitations(invitationsData);
+        setTeams(teamsData);
+        setCustomRoles(sharedRoles);
+      } else {
+        const [membersData, invitationsData, teamsData, rolesData] = await Promise.all([
+          api.getOrganizationMembers(id),
+          api.getOrganizationInvitations(id),
+          api.getTeams(id).catch(() => []),
+          api.getOrganizationRoles(id).catch(() => []),
+        ]);
+        setMembers(membersData);
+        setInvitations(invitationsData);
+        setTeams(teamsData);
+        setCustomRoles(rolesData);
+        if (isSettingsSubpage && onMembersUpdate && onRolesUpdate) {
+          onMembersUpdate(membersData);
+          onRolesUpdate(rolesData);
+        }
+      }
     } catch (error: any) {
       console.error('Failed to load data:', error);
       toast({
@@ -724,6 +768,13 @@ export default function MembersPage({ isSettingsSubpage = false, inviteModalOpen
             placeholder="Filter..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && searchQuery) {
+                e.preventDefault();
+                setSearchQuery('');
+                searchInputRef.current?.blur();
+              }
+            }}
             className={`w-full pl-9 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent ${searchQuery ? 'pr-14' : 'pr-4'}`}
           />
           {searchQuery && (
@@ -783,7 +834,7 @@ export default function MembersPage({ isSettingsSubpage = false, inviteModalOpen
       </div>
 
       {/* Members/Invitations List */}
-      {activeTab === 'members' || (activeTab === 'invitations' && invitations.length > 0) ? (
+      {activeTab === 'members' || activeTab === 'invitations' ? (
         <div className="bg-background-card border border-border rounded-lg overflow-hidden">
           {activeTab === 'members' ? (
             <table className="w-full table-fixed">
@@ -958,7 +1009,7 @@ export default function MembersPage({ isSettingsSubpage = false, inviteModalOpen
               {filteredInvitations.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="px-4 py-8 text-center text-sm text-foreground-secondary">
-                    No invitations matched this search.
+                    {searchQuery ? 'No invitations matched this search.' : 'No pending invitations.'}
                   </td>
                 </tr>
               ) : filteredInvitations.map((invitation) => (
@@ -1017,19 +1068,7 @@ export default function MembersPage({ isSettingsSubpage = false, inviteModalOpen
             </table>
           )}
         </div>
-      ) : (
-        <div className="text-center py-12">
-          {activeTab === 'invitations' && !isSettingsSubpage && (
-            <Button
-              onClick={() => setShowInviteModal(true)}
-              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Invite Member
-            </Button>
-          )}
-        </div>
-      )}
+      ) : null}
 
       {/* Invite Dialog */}
       <Dialog open={showInviteModal} onOpenChange={(open) => {
@@ -1133,7 +1172,7 @@ export default function MembersPage({ isSettingsSubpage = false, inviteModalOpen
               className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
               disabled={inviting}
             >
-              {inviting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
+              {inviting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
               Send Invitation
             </Button>
           </DialogFooter>

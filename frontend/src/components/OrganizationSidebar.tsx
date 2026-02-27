@@ -14,7 +14,7 @@ const allNavItems = [
   { id: 'vulnerabilities', label: 'Vulnerabilities', path: 'vulnerabilities', icon: ShieldAlert, requiredPermission: null },
   { id: 'projects', label: 'Projects', path: 'projects', icon: FolderKanban, requiredPermission: null },
   { id: 'teams', label: 'Teams', path: 'teams', icon: Users, requiredPermission: null },
-  { id: 'compliance', label: 'Compliance', path: 'compliance', icon: ClipboardCheck, requiredPermission: 'view_compliance' as const },
+  { id: 'compliance', label: 'Compliance', path: 'compliance', icon: ClipboardCheck, requiredPermission: 'manage_compliance' as const },
   { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: 'view_settings' as const },
 ];
 
@@ -37,12 +37,18 @@ function OrganizationSidebar({ organizationId, userPermissions }: OrganizationSi
   const activeTab = useMemo(() => {
     const matchingTab = visibleNavItems.find((tab) => tab.path === currentTab);
     if (matchingTab) return matchingTab.id;
+    // If we're under /organizations/:id/settings or /organizations/:id/settings/:section,
+    // highlight Settings in the sidebar
+    if (pathParts.includes('settings')) {
+      const settingsTab = visibleNavItems.find((tab) => tab.id === 'settings');
+      if (settingsTab) return 'settings';
+    }
     if (currentTab === organizationId) {
       const overviewTab = visibleNavItems.find((tab) => tab.id === 'overview');
       return overviewTab ? 'overview' : 'projects';
     }
     return 'overview';
-  }, [currentTab, organizationId, visibleNavItems]);
+  }, [currentTab, organizationId, visibleNavItems, location.pathname]);
 
   const handleNavClick = (path: string) => {
     if (path === 'overview') {
@@ -106,7 +112,7 @@ export default memo(OrganizationSidebar, (prevProps, nextProps) => {
   if (!prevPerms || !nextPerms) return false;
 
   const permissionKeys: (keyof RolePermissions)[] = [
-    'view_settings', 'view_activity', 'edit_policies', 'view_compliance',
+    'view_settings', 'view_activity', 'manage_compliance',
     'view_members', 'add_members',
     'edit_roles', 'edit_permissions', 'kick_members',
     'manage_teams_and_projects'

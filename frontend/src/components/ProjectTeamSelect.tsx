@@ -17,6 +17,8 @@ interface ProjectTeamSelectProps {
   variant?: 'default' | 'modal';
   locked?: boolean;
   placeholder?: string;
+  /** When false, hides the "No team (optional)" option. Default true. */
+  showNoTeamOption?: boolean;
 }
 
 export function ProjectTeamSelect({
@@ -26,7 +28,8 @@ export function ProjectTeamSelect({
   className = '',
   variant = 'default',
   locked = false,
-  placeholder = 'Select a team...'
+  placeholder = 'Select a team...',
+  showNoTeamOption = true,
 }: ProjectTeamSelectProps) {
   const selectedTeam = teams.find(team => team.id === value);
 
@@ -77,22 +80,26 @@ export function ProjectTeamSelect({
           </div>
         ) : (
           <>
-            <DropdownMenuItem
-              onSelect={() => handleSelect(null)}
-              className="rounded-md px-3 py-2.5 text-sm cursor-pointer focus:bg-table-hover flex items-center justify-between gap-2"
-            >
-              <span className="text-foreground-secondary">No team (optional)</span>
-              <div
-                className={cn(
-                  'h-4 w-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors',
-                  value === null ? 'border-foreground bg-foreground text-background' : 'border-foreground-secondary/50 bg-transparent'
-                )}
-                aria-hidden
-              >
-                {value === null && <Check className="h-2.5 w-2.5" />}
-              </div>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator className="my-1" />
+            {showNoTeamOption && (
+              <>
+                <DropdownMenuItem
+                  onSelect={() => handleSelect(null)}
+                  className="rounded-md px-3 py-2.5 text-sm cursor-pointer focus:bg-table-hover flex items-center justify-between gap-2"
+                >
+                  <span className="text-foreground-secondary">No team (optional)</span>
+                  <div
+                    className={cn(
+                      'h-4 w-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors',
+                      value === null ? 'border-foreground bg-foreground text-background' : 'border-foreground-secondary/50 bg-transparent'
+                    )}
+                    aria-hidden
+                  >
+                    {value === null && <Check className="h-2.5 w-2.5" />}
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator className="my-1" />
+              </>
+            )}
             {teams.map((team) => {
               const isSelected = value === team.id;
               return (

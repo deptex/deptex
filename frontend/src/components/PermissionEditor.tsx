@@ -50,15 +50,6 @@ export function PermissionEditor({
 }: PermissionEditorProps) {
   const [localPermissions, setLocalPermissions] = useState<RolePermissions>(permissions);
 
-  // Debugging logs
-  useEffect(() => {
-    console.log('PermissionEditor Debug:', {
-      isOrgOwner,
-      currentUserPermissions,
-      permissions
-    });
-  }, [isOrgOwner, currentUserPermissions, permissions]);
-
   useEffect(() => {
     setLocalPermissions(permissions);
   }, [permissions]);
@@ -80,6 +71,7 @@ export function PermissionEditor({
       updated.kick_members = false;
       updated.view_activity = false;
       updated.manage_integrations = false;
+      updated.manage_notifications = false;
     }
 
     // Combined permission: view_members and add_members are synced together
@@ -113,14 +105,14 @@ export function PermissionEditor({
         { key: 'edit_roles' as const, label: 'View/Edit Roles', dependsOn: 'view_members' as const },
         { key: 'view_activity' as const, label: 'View Audit Logs', dependsOn: 'view_settings' as const },
         { key: 'manage_integrations' as const, label: 'Manage Integrations', dependsOn: 'view_settings' as const },
+        { key: 'manage_notifications' as const, label: 'Manage Notifications', dependsOn: 'view_settings' as const },
       ],
     },
     {
       title: 'Security & Policies',
       icon: <Shield className="h-3.5 w-3.5" />,
       permissions: [
-        { key: 'view_compliance' as const, label: 'View Compliance' },
-        { key: 'edit_policies' as const, label: 'Edit Policies' },
+        { key: 'manage_compliance' as const, label: 'Manage Compliance' },
       ],
     },
     {

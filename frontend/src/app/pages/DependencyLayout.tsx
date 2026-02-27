@@ -265,7 +265,7 @@ export default function DependencyLayout() {
                             </a>
                           </DropdownMenuItem>
                           <DropdownMenuItem asChild>
-                            <a href="/support" target="_blank" rel="noopener noreferrer" className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary transition-colors">
+                            <a href="/docs/help" target="_blank" rel="noopener noreferrer" className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary transition-colors">
                               <Mail className="h-4 w-4" />
                               Contact Support
                             </a>

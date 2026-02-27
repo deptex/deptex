@@ -12,7 +12,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info } from 'lucide-react';
+import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
@@ -125,7 +125,7 @@ const orgRolesCache: Record<string, OrganizationRole[]> = {};
 const CACHE_KEY_MEMBERS = (orgId: string) => `org_members_${orgId}`;
 const CACHE_KEY_ROLES = (orgId: string) => `org_roles_${orgId}`;
 
-const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'integrations', 'notifications', 'policies', 'audit_logs', 'usage', 'plan']);
+const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'integrations', 'notifications', 'policies', 'audit_logs', 'sso', 'mfa', 'legal_documents', 'usage', 'plan']);
 
 /** Renders a tab-specific content skeleton for the org settings loading state. */
 function OrgSettingsTabSkeleton({ section }: { section: string }) {
@@ -324,11 +324,30 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
     case 'notifications':
       return (
         <div className="space-y-6">
-          <div>
-            <div className={`h-8 w-48 ${pulse}`} />
+          <div className="flex items-center justify-between">
+            <div className={`h-8 w-36 ${pulse}`} />
+            <div className={`h-9 w-28 ${pulse}`} />
           </div>
-          <div className="bg-background-card border border-border rounded-lg overflow-hidden min-h-[320px] p-12 flex items-center justify-center">
-            <div className={`h-4 w-56 ${pulse}`} />
+          <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+            <div className="px-4 py-2.5 bg-background-card-header border-b border-border">
+              <div className={`h-4 w-28 ${pulse}`} />
+            </div>
+            <div className="divide-y divide-border">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="px-4 py-3 flex items-center gap-3 animate-pulse">
+                  <div className="flex items-center gap-1.5">
+                    <div className="h-5 w-5 rounded-sm bg-muted flex-shrink-0" />
+                    <div className="h-5 w-5 rounded-sm bg-muted flex-shrink-0" />
+                  </div>
+                  <div className="flex-1 min-w-0 space-y-1.5">
+                    <div className={`h-4 w-32 ${pulse}`} />
+                    <div className={`h-3 w-48 ${pulse}`} />
+                  </div>
+                  <div className="h-6 w-6 rounded-full bg-muted flex-shrink-0 hidden sm:block" />
+                  <div className="h-6 w-6 rounded bg-muted flex-shrink-0" />
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       );
@@ -402,6 +421,23 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
             <div className={`h-5 w-28 ${pulse} mb-2`} />
             <div className={`h-4 w-full max-w-md ${pulse} mb-4`} />
             <div className={`h-4 w-48 ${pulse}`} />
+          </div>
+        </div>
+      );
+    case 'sso':
+    case 'mfa':
+    case 'legal_documents':
+      return (
+        <div className="space-y-6">
+          <div>
+            <div className={`h-8 w-48 ${pulse}`} />
+          </div>
+          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+            <div className="p-6">
+              <div className={`h-4 w-40 ${pulse} mb-2`} />
+              <div className={`h-3 w-full max-w-md ${pulse} mb-4`} />
+              <div className={`h-10 w-full max-w-md ${pulse}`} />
+            </div>
           </div>
         </div>
       );
@@ -540,6 +576,8 @@ export default function OrganizationSettingsPage() {
   const [membersInviteModalOpen, setMembersInviteModalOpen] = useState(false);
   const [hasVisitedMembers, setHasVisitedMembers] = useState(false);
   const [hasVisitedIntegrations, setHasVisitedIntegrations] = useState(false);
+  const [hasVisitedNotifications, setHasVisitedNotifications] = useState(false);
+  const [hasVisitedPolicies, setHasVisitedPolicies] = useState(false);
   const [selectedRoleForSettings, setSelectedRoleForSettings] = useState<OrganizationRole | null>(null);
   const [newRoleNameInput, setNewRoleNameInput] = useState('');
   const [newRoleColor, setNewRoleColor] = useState(''); // No default color (plain gray)
@@ -548,8 +586,7 @@ export default function OrganizationSettingsPage() {
     view_settings: false,
     manage_billing: false,
     view_activity: false,
-    view_compliance: false,
-    edit_policies: false,
+    manage_compliance: false,
     interact_with_security_agent: false,
     manage_aegis: false,
     view_members: false,
@@ -641,8 +678,7 @@ export default function OrganizationSettingsPage() {
     view_settings: true,
     manage_billing: true,
     view_activity: true,
-    view_compliance: true,
-    edit_policies: true,
+    manage_compliance: true,
     interact_with_security_agent: true,
     manage_aegis: true,
     view_members: true,
@@ -652,7 +688,9 @@ export default function OrganizationSettingsPage() {
     kick_members: true,
     manage_teams_and_projects: true,
     manage_integrations: true,
+    manage_notifications: true,
   } : basePermissions;
+  const canManageCompliance = effectivePermissions?.manage_compliance ?? (effectivePermissions as { view_compliance?: boolean; edit_policies?: boolean } | undefined)?.view_compliance ?? (effectivePermissions as { view_compliance?: boolean; edit_policies?: boolean } | undefined)?.edit_policies;
 
   // Permission check - redirect if user doesn't have view_settings
   useEffect(() => {
@@ -683,6 +721,13 @@ export default function OrganizationSettingsPage() {
       navigate(`/organizations/${id}/settings/general`, { replace: true });
     }
   }, [id, sectionParam, navigate]);
+
+  // Redirect away from policies when user lacks manage_compliance
+  useEffect(() => {
+    if (id && sectionParam === 'policies' && permissionsChecked && !canManageCompliance) {
+      navigate(`/organizations/${id}/settings/general`, { replace: true });
+    }
+  }, [id, sectionParam, permissionsChecked, canManageCompliance, navigate]);
 
   // Add role sidebar: animate in on open, animate out before unmount
   useEffect(() => {
@@ -796,10 +841,12 @@ export default function OrganizationSettingsPage() {
     }
   }, [activeSection, id]);
 
-  // Track when user visits Members/Integrations tabs so we can keep them mounted (cached) when switching away
+  // Track when user visits Members/Integrations/Notifications/Policies tabs so we can keep them mounted (cached) when switching away
   useEffect(() => {
     if (activeSection === 'members') setHasVisitedMembers(true);
     if (activeSection === 'integrations') setHasVisitedIntegrations(true);
+    if (activeSection === 'notifications') setHasVisitedNotifications(true);
+    if (activeSection === 'policies') setHasVisitedPolicies(true);
   }, [activeSection]);
 
   // Handle integration connection callbacks (GitHub, GitLab, Bitbucket)
@@ -1012,6 +1059,16 @@ export default function OrganizationSettingsPage() {
     e.target.value = '';
   };
 
+  const handleSaveOrganizationDetails = async () => {
+    const hasNameChange = orgName !== organization?.name && orgName.trim();
+    const hasAvatarChange = !!pendingAvatarFile;
+    if (!hasNameChange && !hasAvatarChange) return;
+    if (isSavingOrgName || isUploadingAvatar) return;
+
+    if (hasNameChange) await handleUpdateOrgName();
+    if (hasAvatarChange) await handleSaveAvatar();
+  };
+
   const handleSaveAvatar = async () => {
     if (!id || !pendingAvatarFile || isUploadingAvatar) return;
 
@@ -1076,8 +1133,7 @@ export default function OrganizationSettingsPage() {
         view_settings: false,
         manage_billing: false,
         view_activity: false,
-        view_compliance: false,
-        edit_policies: false,
+        manage_compliance: false,
         interact_with_security_agent: false,
         manage_aegis: false,
         view_members: false,
@@ -1286,8 +1342,7 @@ export default function OrganizationSettingsPage() {
       view_settings: false,
       manage_billing: false,
       view_activity: false,
-      view_compliance: false,
-      edit_policies: false,
+      manage_compliance: false,
       interact_with_security_agent: false,
       manage_aegis: false,
       view_members: false,
@@ -1490,8 +1545,8 @@ export default function OrganizationSettingsPage() {
       label: 'Integrations',
       icon: <Plug className="h-4 w-4 tab-icon-shake" />,
     }] : []),
-    // Notifications section (after Integrations)
-    ...(effectivePermissions?.manage_integrations ? [{
+    // Notifications section (after Integrations) - show when manage_integrations OR manage_notifications
+    ...((effectivePermissions?.manage_integrations || effectivePermissions?.manage_notifications) ? [{
       id: 'notifications',
       label: 'Notifications',
       icon: <Bell className="h-4 w-4 tab-icon-shake" />,
@@ -1503,19 +1558,40 @@ export default function OrganizationSettingsPage() {
       label: 'Security',
       isCategory: true,
     },
-    // Show Policies section - everyone can view, only edit_policies can edit
-    {
+    // Show Policies section only if user has manage_compliance (or legacy view_compliance/edit_policies before migration)
+    ...(canManageCompliance ? [{
       id: 'policies',
       label: 'Policies',
       icon: <Shield className="h-4 w-4 tab-icon-shake" />,
-    },
+    }] : []),
     // Conditionally show Audit Logs section based on view_activity permission
     ...(effectivePermissions?.view_activity ? [{
       id: 'audit_logs',
       label: 'Audit Logs',
       icon: <FileText className="h-4 w-4 tab-icon-shake" />,
     }] : []),
+    {
+      id: 'sso',
+      label: 'Single Sign-On',
+      icon: <LogIn className="h-4 w-4 tab-icon-shake" />,
+    },
+    {
+      id: 'mfa',
+      label: 'Multi-Factor Authentication',
+      icon: <Smartphone className="h-4 w-4 tab-icon-shake" />,
+    },
 
+    // Legal Category
+    {
+      id: 'category_legal',
+      label: 'Legal',
+      isCategory: true,
+    },
+    {
+      id: 'legal_documents',
+      label: 'Legal Documents',
+      icon: <BookOpen className="h-4 w-4 tab-icon-shake" />,
+    },
 
     // Plan Category - only show if user has manage_billing permission
     ...(effectivePermissions?.manage_billing ? [{
@@ -1616,67 +1692,34 @@ export default function OrganizationSettingsPage() {
             {/* Content */}
             <div className="flex-1 no-scrollbar">
               {activeSection === 'general' && (
-                <div className="space-y-6">
+                <div className="space-y-6 pt-8">
                   <div>
                     <h2 className="text-2xl font-bold text-foreground">General</h2>
                   </div>
 
-                  {/* Organization Name Card */}
+                  {/* Organization details - Combined Card */}
                   <div className="bg-background-card border border-border rounded-lg overflow-hidden">
                     <div className="p-6">
-                      <h3 className="text-base font-semibold text-foreground mb-4">Organization Name</h3>
-                      {organization ? (
-                        <div className="max-w-md">
-                          <input
-                            type="text"
-                            value={orgName}
-                            onChange={(e) => isOrgOwner && setOrgName(e.target.value)}
-                            placeholder="Enter organization name"
-                            disabled={!isOrgOwner}
-                            className={`w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${!isOrgOwner ? 'opacity-60 cursor-not-allowed' : ''}`}
-                          />
-                        </div>
-                      ) : (
-                        <div className="max-w-md h-10 bg-muted animate-pulse rounded-lg"></div>
-                      )}
-                    </div>
-                    {isOrgOwner && (
-                      <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                        <p className="text-xs text-foreground-secondary">
-                          Please use 32 characters at maximum.
-                        </p>
-                        <Button
-                          onClick={handleUpdateOrgName}
-                          disabled={isSavingOrgName || orgName === organization?.name}
-                          size="sm"
-                          className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-                        >
-                          {isSavingOrgName ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                      <h3 className="text-base font-semibold text-foreground mb-4">Organization details</h3>
+                      <div className="flex flex-col sm:flex-row items-start gap-6">
+                        {/* Left: Name */}
+                        <div className="flex-1 min-w-0 w-full sm:w-auto">
+                          {organization ? (
+                            <div className="max-w-md">
+                              <input
+                                type="text"
+                                value={orgName}
+                                onChange={(e) => isOrgOwner && setOrgName(e.target.value)}
+                                placeholder="Enter organization name"
+                                disabled={!isOrgOwner}
+                                className={`w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${!isOrgOwner ? 'opacity-60 cursor-not-allowed' : ''}`}
+                              />
+                            </div>
                           ) : (
-                            <FileCheck className="h-3.5 w-3.5 mr-1.5" />
+                            <div className="max-w-md h-10 bg-muted animate-pulse rounded-lg"></div>
                           )}
-                          Save
-                        </Button>
-                      </div>
-                    )}
-                    {!isOrgOwner && (
-                      <div className="px-6 py-3 bg-black/20 border-t border-border">
-                        <p className="text-xs text-foreground-secondary flex items-center gap-1.5">
-                          <Lock className="h-3 w-3" />
-                          Only the organization owner can edit this setting.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Organization Avatar Card */}
-                  <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                    <div className="p-6">
-                      <div className="flex items-start justify-between gap-6">
-                        <div className="flex-1">
-                          <h3 className="text-base font-semibold text-foreground">Organization Avatar</h3>
                         </div>
+                        {/* Right: Avatar */}
                         <div className="flex-shrink-0">
                           {organization ? (
                             isOrgOwner ? (
@@ -1720,31 +1763,30 @@ export default function OrganizationSettingsPage() {
                         </div>
                       </div>
                     </div>
-                    {isOrgOwner && (
-                      <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
+                    {isOrgOwner ? (
+                      <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between gap-4 flex-wrap">
                         <p className="text-xs text-foreground-secondary">
-                          {pendingAvatarFile ? 'New avatar selected. Click Save to apply.' : 'Select an image to change the avatar.'}
+                          {pendingAvatarFile
+                            ? 'New avatar selected. Click Save to apply.'
+                            : 'Please use 32 characters at maximum. Select an image to change the avatar.'}
                         </p>
                         <Button
-                          onClick={handleSaveAvatar}
-                          disabled={isUploadingAvatar || !pendingAvatarFile}
+                          onClick={handleSaveOrganizationDetails}
+                          disabled={isSavingOrgName || isUploadingAvatar || (orgName === organization?.name && !pendingAvatarFile)}
                           size="sm"
                           className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
                         >
-                          {isUploadingAvatar ? (
+                          {(isSavingOrgName || isUploadingAvatar) && (
                             <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
-                          ) : (
-                            <FileCheck className="h-3.5 w-3.5 mr-1.5" />
                           )}
                           Save
                         </Button>
                       </div>
-                    )}
-                    {!isOrgOwner && (
+                    ) : (
                       <div className="px-6 py-3 bg-black/20 border-t border-border">
                         <p className="text-xs text-foreground-secondary flex items-center gap-1.5">
                           <Lock className="h-3 w-3" />
-                          Only the organization owner can change the avatar.
+                          Only the organization owner can edit these settings.
                         </p>
                       </div>
                     )}
@@ -2038,16 +2080,11 @@ export default function OrganizationSettingsPage() {
                                 className="h-8"
                               >
                                 {isDeletingOrg ? (
-                                  <>
-                                    <span className="animate-spin h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full mr-2" />
-                                    Deleting
-                                  </>
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
                                 ) : (
-                                  <>
-                                    <Trash2 className="h-3.5 w-3.5 mr-2" />
-                                    Delete Forever
-                                  </>
+                                  <Trash2 className="h-3.5 w-3.5 mr-2" />
                                 )}
+                                Delete Forever
                               </Button>
                               <Button
                                 onClick={() => {
@@ -2070,7 +2107,7 @@ export default function OrganizationSettingsPage() {
               )}
 
               {activeSection === 'plan' && (
-                <div className="space-y-6">
+                <div className="space-y-6 pt-8">
                   <div>
                     <h2 className="text-2xl font-bold text-foreground">Plan & Billing</h2>
                   </div>
@@ -2089,8 +2126,88 @@ export default function OrganizationSettingsPage() {
                 </div>
               )}
 
+              {activeSection === 'sso' && (
+                <div className="space-y-6 pt-8">
+                  <div>
+                    <h2 className="text-2xl font-bold text-foreground">Single Sign-On</h2>
+                  </div>
+                  <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                    <div className="p-6">
+                      <div className="flex items-center gap-3 text-foreground-secondary">
+                        <Lock className="h-5 w-5 flex-shrink-0" />
+                        <p className="text-sm">
+                          Not available on free plan. Upgrade to Pro or Enterprise to enable SAML 2.0 SSO with your identity provider (Okta, Azure AD, Google Workspace, etc.).
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeSection === 'mfa' && (
+                <div className="space-y-6 pt-8">
+                  <div>
+                    <h2 className="text-2xl font-bold text-foreground">Multi-Factor Authentication</h2>
+                  </div>
+                  <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                    <div className="p-6">
+                      <div className="flex items-center gap-3 text-foreground-secondary">
+                        <Lock className="h-5 w-5 flex-shrink-0" />
+                        <p className="text-sm">
+                          Not available on free plan. Upgrade to Pro or Enterprise to require multi-factor authentication for your organization.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeSection === 'legal_documents' && (
+                <div className="space-y-6 pt-8">
+                  <div>
+                    <h2 className="text-2xl font-bold text-foreground">Legal Documents</h2>
+                  </div>
+                  <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                    <div className="p-6 space-y-4">
+                      <p className="text-sm text-foreground-secondary">
+                        Access legal documents and policies for your organization.
+                      </p>
+                      <div className="flex flex-col gap-3">
+                        <Link
+                          to="/terms"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-3 px-4 py-3 rounded-lg border border-border bg-background hover:bg-background-subtle/50 transition-colors text-sm font-medium text-foreground"
+                        >
+                          <BookOpen className="h-4 w-4 text-foreground-secondary" />
+                          Terms of Service
+                        </Link>
+                        <Link
+                          to="/privacy"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-3 px-4 py-3 rounded-lg border border-border bg-background hover:bg-background-subtle/50 transition-colors text-sm font-medium text-foreground"
+                        >
+                          <BookOpen className="h-4 w-4 text-foreground-secondary" />
+                          Privacy Policy
+                        </Link>
+                        <Link
+                          to="/security"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-3 px-4 py-3 rounded-lg border border-border bg-background hover:bg-background-subtle/50 transition-colors text-sm font-medium text-foreground"
+                        >
+                          <BookOpen className="h-4 w-4 text-foreground-secondary" />
+                          Security
+                        </Link>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {activeSection === 'roles' && (
-                <div className="space-y-6">
+                <div className="space-y-6 pt-8">
                   <div className="flex items-center justify-between">
                     <div>
                       <h2 className="text-2xl font-bold text-foreground">Roles</h2>
@@ -2300,7 +2417,7 @@ export default function OrganizationSettingsPage() {
               {/* Keep Integrations mounted after first visit so it doesn't reload when switching tabs (like Members) */}
               {(activeSection === 'integrations' || hasVisitedIntegrations) && (
                 <div
-                  className="space-y-8"
+                  className="space-y-8 pt-8"
                   style={{ display: activeSection === 'integrations' ? undefined : 'none' }}
                 >
                   <div className="flex items-start justify-between">
@@ -2964,12 +3081,17 @@ export default function OrganizationSettingsPage() {
                 </div>
               )}
 
-              {activeSection === 'notifications' && <NotificationRulesSection />}
+              {/* Keep Notifications mounted after first visit so it doesn't reload when switching tabs (like Integrations) */}
+              {(activeSection === 'notifications' || hasVisitedNotifications) && id && (
+                <div className="pt-8" style={{ display: activeSection === 'notifications' ? undefined : 'none' }}>
+                  <NotificationRulesSection organizationId={id} />
+                </div>
+              )}
 
               {/* Keep Members mounted after first visit so it doesn't reload when switching tabs (like Roles) */}
               {(activeSection === 'members' || hasVisitedMembers) && (
                 <div
-                  className="space-y-8"
+                  className="space-y-8 pt-8"
                   style={{ display: activeSection === 'members' ? undefined : 'none' }}
                 >
                   <div className="flex items-center justify-between">
@@ -2994,20 +3116,21 @@ export default function OrganizationSettingsPage() {
 
 
 
-              {activeSection === 'policies' && (
-                <div className="h-full">
+              {/* Keep Policies mounted after first visit so it doesn't reload when switching tabs (like Integrations) */}
+              {(activeSection === 'policies' || hasVisitedPolicies) && (
+                <div style={{ display: activeSection === 'policies' ? undefined : 'none' }}>
                   <PoliciesPage isSettingsSubpage={true} />
                 </div>
               )}
 
               {activeSection === 'audit_logs' && (
-                <div className="h-full">
+                <div className="h-full pt-8">
                   <AuditLogsSection />
                 </div>
               )}
 
               {activeSection === 'usage' && (
-                <div className="space-y-6">
+                <div className="space-y-6 pt-8">
                   <div>
                     <h2 className="text-2xl font-bold text-foreground">Usage</h2>
                   </div>
@@ -3039,7 +3162,7 @@ export default function OrganizationSettingsPage() {
                   {/* Right-side popup panel – Vercel style: rounded corners, floating feel */}
                   <div
                     className={cn(
-                      'fixed right-4 top-4 bottom-4 w-full max-w-[420px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
+                      'fixed right-4 top-4 bottom-4 w-full max-w-[680px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
                       addRolePanelVisible ? 'translate-x-0' : 'translate-x-full'
                     )}
                     onClick={(e) => e.stopPropagation()}
@@ -3269,7 +3392,7 @@ export default function OrganizationSettingsPage() {
                     {/* Side Panel – matches Create New Role style */}
                     <div
                       className={cn(
-                        'fixed right-4 top-4 bottom-4 w-full max-w-[420px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
+                        'fixed right-4 top-4 bottom-4 w-full max-w-[680px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
                         roleSettingsPanelVisible ? 'translate-x-0' : 'translate-x-full'
                       )}
                       onClick={(e) => e.stopPropagation()}

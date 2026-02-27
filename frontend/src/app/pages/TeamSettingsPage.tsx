@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { useOutletContext, useNavigate } from 'react-router-dom';
-import { Save, Trash2, Upload, Settings, Plus, X, Edit2, MoreVertical, UserCircle, Users, Bell, Tag } from 'lucide-react';
-import { api, TeamWithRole, TeamPermissions, TeamMember, TeamRole, Organization } from '../../lib/api';
+import { useOutletContext, useNavigate, useParams, Link } from 'react-router-dom';
+import { Save, Trash2, Upload, Settings, Plus, X, Edit2, MoreVertical, UserCircle, Users, Bell, Tag, FileCheck, Check, Mail, Webhook, ChevronDown, Loader2, BookOpen } from 'lucide-react';
+import { api, TeamWithRole, TeamPermissions, TeamMember, TeamRole, Organization, type CiCdConnection } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { Button } from '../../components/ui/button';
@@ -12,10 +12,21 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '../../components/ui/dialog';
+import { Label } from '../../components/ui/label';
+import { Input } from '../../components/ui/input';
 import TeamMembersPage from './TeamMembersPage';
+import NotificationRulesSection from './NotificationRulesSection';
 import { TeamPermissionEditor } from '../../components/TeamPermissionEditor';
 import { RoleBadge } from '../../components/RoleBadge';
 import { Palette, GripVertical } from 'lucide-react';
+import { cn } from '../../lib/utils';
 
 
 interface TeamContextType {
@@ -27,13 +38,16 @@ interface TeamContextType {
   organization: Organization | null;
 }
 
+const VALID_TEAM_SETTINGS_SECTIONS = new Set(['general', 'notifications', 'roles']);
+
 export default function TeamSettingsPage() {
+  const { orgId, teamId, section: sectionParam } = useParams<{ orgId: string; teamId: string; section?: string }>();
   const { team, organizationId, reloadTeam, updateTeamData, userPermissions, organization } = useOutletContext<TeamContextType>();
   const { user } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  const [activeSection, setActiveSection] = useState('general');
+  const activeSection = (sectionParam && VALID_TEAM_SETTINGS_SECTIONS.has(sectionParam) ? sectionParam : 'general');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
@@ -56,6 +70,8 @@ export default function TeamSettingsPage() {
   const [editingRoleName, setEditingRoleName] = useState('');
   const [isSavingRole, setIsSavingRole] = useState(false);
   const [showAddRoleSidepanel, setShowAddRoleSidepanel] = useState(false);
+  const [addRolePanelVisible, setAddRolePanelVisible] = useState(false);
+  const addRoleCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [newRoleNameInput, setNewRoleNameInput] = useState('');
   const [newRolePermissions, setNewRolePermissions] = useState<TeamPermissions>({
     view_overview: false,
@@ -72,6 +88,9 @@ export default function TeamSettingsPage() {
   });
   const [isCreatingRole, setIsCreatingRole] = useState(false);
   const [showRoleSettingsModal, setShowRoleSettingsModal] = useState(false);
+  const [roleSettingsPanelVisible, setRoleSettingsPanelVisible] = useState(false);
+  const [roleSettingsClosing, setRoleSettingsClosing] = useState(false);
+  const roleSettingsCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [selectedRoleForSettings, setSelectedRoleForSettings] = useState<TeamRole | null>(null);
   const [editingRolePermissions, setEditingRolePermissions] = useState<TeamPermissions | null>(null);
   const [deletingRoleId, setDeletingRoleId] = useState<string | null>(null);
@@ -85,6 +104,19 @@ export default function TeamSettingsPage() {
   const [newRoleColor, setNewRoleColor] = useState('');
   const [editingRoleColor, setEditingRoleColor] = useState('');
 
+  // Notification state
+  const [notificationActiveTab, setNotificationActiveTab] = useState<'notifications' | 'destinations'>('notifications');
+  const [teamConnections, setTeamConnections] = useState<{ inherited: CiCdConnection[]; team: CiCdConnection[] }>({ inherited: [], team: [] });
+  const [teamConnectionsLoading, setTeamConnectionsLoading] = useState(false);
+  const notificationCreateRef = useRef<(() => void) | null>(null);
+  const [showTeamEmailDialog, setShowTeamEmailDialog] = useState(false);
+  const [teamEmailToAdd, setTeamEmailToAdd] = useState('');
+  const [teamEmailSaving, setTeamEmailSaving] = useState(false);
+  const [showTeamCustomDialog, setShowTeamCustomDialog] = useState(false);
+  const [teamCustomName, setTeamCustomName] = useState('');
+  const [teamCustomWebhookUrl, setTeamCustomWebhookUrl] = useState('');
+  const [teamCustomSaving, setTeamCustomSaving] = useState(false);
+
   // Track the team id to only reset state when switching teams, not on every reload
   const [loadedTeamId, setLoadedTeamId] = useState<string | null>(null);
 
@@ -97,6 +129,46 @@ export default function TeamSettingsPage() {
       navigate(`/organizations/${organizationId}/teams/${team?.id}/projects`, { replace: true });
     }
   }, [userPermissions, navigate, organizationId, team?.id]);
+
+  // Redirect to settings/general when section param is invalid
+  useEffect(() => {
+    if (orgId && teamId && sectionParam && !VALID_TEAM_SETTINGS_SECTIONS.has(sectionParam)) {
+      navigate(`/organizations/${orgId}/teams/${teamId}/settings/general`, { replace: true });
+    }
+  }, [orgId, teamId, sectionParam, navigate]);
+
+  // Add role sidebar: animate in on open, animate out before unmount
+  useEffect(() => {
+    if (showAddRoleSidepanel) {
+      setAddRolePanelVisible(false);
+      const raf = requestAnimationFrame(() => {
+        requestAnimationFrame(() => setAddRolePanelVisible(true));
+      });
+      return () => cancelAnimationFrame(raf);
+    } else {
+      setAddRolePanelVisible(false);
+    }
+  }, [showAddRoleSidepanel]);
+
+  // Role Settings sidebar: animate in on open, animate out before unmount
+  useEffect(() => {
+    if (showRoleSettingsModal) {
+      setRoleSettingsPanelVisible(false);
+      const raf = requestAnimationFrame(() => {
+        requestAnimationFrame(() => setRoleSettingsPanelVisible(true));
+      });
+      return () => cancelAnimationFrame(raf);
+    } else {
+      setRoleSettingsPanelVisible(false);
+      setRoleSettingsClosing(false);
+    }
+  }, [showRoleSettingsModal]);
+
+  // Cleanup timeouts on unmount
+  useEffect(() => () => {
+    if (addRoleCloseTimeoutRef.current) clearTimeout(addRoleCloseTimeoutRef.current);
+    if (roleSettingsCloseTimeoutRef.current) clearTimeout(roleSettingsCloseTimeoutRef.current);
+  }, []);
 
   // Only sync team data to local state when switching to a different team (not on reload)
   useEffect(() => {
@@ -117,6 +189,12 @@ export default function TeamSettingsPage() {
     }
   }, [team, activeSection]);
 
+  useEffect(() => {
+    if (team && activeSection === 'notifications') {
+      loadTeamConnections();
+    }
+  }, [team, activeSection]);
+
   const loadMembers = async () => {
     if (!organizationId || !team?.id) return;
     try {
@@ -133,6 +211,19 @@ export default function TeamSettingsPage() {
 
 
 
+
+  const loadTeamConnections = async () => {
+    if (!organizationId || !team?.id) return;
+    setTeamConnectionsLoading(true);
+    try {
+      const conns = await api.getTeamConnections(organizationId, team.id);
+      setTeamConnections(conns);
+    } catch {
+      setTeamConnections({ inherited: [], team: [] });
+    } finally {
+      setTeamConnectionsLoading(false);
+    }
+  };
 
   const loadRoles = async () => {
     if (!organizationId || !team?.id) return;
@@ -320,19 +411,7 @@ export default function TeamSettingsPage() {
         color: newRoleColor || null,
       });
       await loadRoles();
-      setNewRoleNameInput('');
-      setNewRoleColor('');
-      setNewRolePermissions({
-        view_overview: false,
-        resolve_alerts: false,
-        manage_projects: false,
-        manage_members: false,
-        view_settings: false,
-        view_roles: false,
-        edit_roles: false,
-        manage_notification_settings: false,
-      });
-      setShowAddRoleSidepanel(false);
+      closeAddRolePanel();
       toast({
         title: 'Role created',
         description: `The role "${newRoleNameInput.trim()}" has been created.`,
@@ -473,6 +552,44 @@ export default function TeamSettingsPage() {
     setEditingRoleName(role.display_name || role.name);
   };
 
+  const closeAddRolePanel = () => {
+    setAddRolePanelVisible(false);
+    if (addRoleCloseTimeoutRef.current) clearTimeout(addRoleCloseTimeoutRef.current);
+    addRoleCloseTimeoutRef.current = setTimeout(() => {
+      addRoleCloseTimeoutRef.current = null;
+      setShowAddRoleSidepanel(false);
+      setNewRoleNameInput('');
+      setNewRoleColor('#3b82f6');
+      setNewRolePermissions({
+        view_overview: false,
+        resolve_alerts: false,
+        manage_projects: false,
+        manage_members: false,
+        view_settings: false,
+        view_members: false,
+        add_members: false,
+        kick_members: false,
+        view_roles: false,
+        edit_roles: false,
+        manage_notification_settings: false,
+      });
+    }, 150);
+  };
+
+  const closeRoleSettingsPanel = () => {
+    setRoleSettingsPanelVisible(false);
+    setRoleSettingsClosing(true);
+    if (roleSettingsCloseTimeoutRef.current) clearTimeout(roleSettingsCloseTimeoutRef.current);
+    roleSettingsCloseTimeoutRef.current = setTimeout(() => {
+      roleSettingsCloseTimeoutRef.current = null;
+      setShowRoleSettingsModal(false);
+      setSelectedRoleForSettings(null);
+      setEditingRolePermissions(null);
+      setEditingRoleName('');
+      setRoleSettingsClosing(false);
+    }, 150);
+  };
+
   const handleEditRolePermissions = (role: TeamRole, editable: boolean = true) => {
     if (!role.id) return;
     setSelectedRoleForSettings(role);
@@ -563,9 +680,7 @@ export default function TeamSettingsPage() {
         )
       );
 
-      setShowRoleSettingsModal(false);
-      setSelectedRoleForSettings(null);
-      setEditingRolePermissions(null);
+      closeRoleSettingsPanel();
 
       toast({
         title: 'Role updated',
@@ -637,7 +752,7 @@ export default function TeamSettingsPage() {
                 {teamSettingsSections.map((section) => (
                   <button
                     key={section.id}
-                    onClick={() => setActiveSection(section.id)}
+                    onClick={() => orgId && teamId && navigate(`/organizations/${orgId}/teams/${teamId}/settings/${section.id}`)}
                     className={`w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md transition-colors group ${activeSection === section.id
                       ? 'text-foreground'
                       : 'text-foreground-secondary hover:text-foreground'
@@ -656,10 +771,7 @@ export default function TeamSettingsPage() {
             {activeSection === 'general' && (
               <div className="space-y-6">
                 <div>
-                  <h2 className="text-2xl font-bold text-foreground">General Settings</h2>
-                  <p className="text-foreground-secondary mt-1">
-                    Manage your team's profile and settings.
-                  </p>
+                  <h2 className="text-2xl font-bold text-foreground">General</h2>
                 </div>
 
                 {/* Team Name & Description Card */}
@@ -699,16 +811,12 @@ export default function TeamSettingsPage() {
                       onClick={handleSave}
                       disabled={saving || (name === team?.name && description === (team?.description || ''))}
                       size="sm"
-                      className="h-8"
+                      className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
                     >
-                      {saving ? (
-                        <>
-                          <span className="animate-spin h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full mr-2" />
-                          Saving
-                        </>
-                      ) : (
-                        'Save'
+                      {saving && (
+                        <span className="animate-spin h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full mr-2" />
                       )}
+                      Save
                     </Button>
                   </div>
                 </div>
@@ -793,26 +901,250 @@ export default function TeamSettingsPage() {
             )}
 
             {activeSection === 'notifications' && (
-              <div className="space-y-6">
-                <div>
+              <div>
+                <div className="flex items-center justify-between mb-6">
                   <h2 className="text-2xl font-bold text-foreground">Notifications</h2>
-                  <p className="text-foreground-secondary mt-1">
-                    Manage notification settings for your team.
-                  </p>
+                  {notificationActiveTab === 'notifications' && organizationId && team?.id && (
+                    <Button
+                      onClick={() => notificationCreateRef.current?.()}
+                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
+                    >
+                      <Plus className="h-4 w-4 mr-2" />
+                      Create Rule
+                    </Button>
+                  )}
                 </div>
 
-                {/* Placeholder Card */}
-                <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                  <div className="p-12 flex flex-col items-center justify-center text-center">
-                    <div className="h-16 w-16 rounded-full bg-background-subtle flex items-center justify-center mb-4">
-                      <Bell className="h-8 w-8 text-foreground-secondary" />
-                    </div>
-                    <h3 className="text-lg font-semibold text-foreground mb-2">Team level notifications coming soon</h3>
-                    <p className="text-sm text-foreground-secondary max-w-md">
-                      Configure where team notifications are sent and manage notification preferences for your team members.
-                    </p>
+                <div className="flex items-center justify-between border-b border-border pb-px">
+                  <div className="flex items-center gap-6">
+                    <button
+                      type="button"
+                      onClick={() => setNotificationActiveTab('notifications')}
+                      className={`pb-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                        notificationActiveTab === 'notifications' ? 'text-foreground border-foreground' : 'text-foreground-secondary hover:text-foreground border-transparent'
+                      }`}
+                    >
+                      Notifications
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNotificationActiveTab('destinations')}
+                      className={`pb-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                        notificationActiveTab === 'destinations' ? 'text-foreground border-foreground' : 'text-foreground-secondary hover:text-foreground border-transparent'
+                      }`}
+                    >
+                      Destinations
+                    </button>
                   </div>
                 </div>
+
+                {notificationActiveTab === 'notifications' && organizationId && team?.id && (
+                  <div className="pt-6">
+                    <NotificationRulesSection
+                      organizationId={organizationId}
+                      teamId={team.id}
+                      hideTitle
+                      createHandlerRef={notificationCreateRef}
+                      connections={[...(teamConnections.inherited || []), ...(teamConnections.team || [])]}
+                    />
+                  </div>
+                )}
+
+                {notificationActiveTab === 'destinations' && (
+                  <div className="pt-6 space-y-8">
+                    {/* Inherited from organization */}
+                    <div>
+                      <h3 className="text-lg font-semibold text-foreground mb-3">Inherited from organization</h3>
+                      <p className="text-sm text-foreground-secondary mb-4">
+                        Integrations connected at the organization level are available for this team.
+                      </p>
+                      <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                        <table className="w-full table-fixed">
+                          <colgroup>
+                            <col className="w-[200px]" />
+                            <col />
+                            <col className="w-[120px]" />
+                          </colgroup>
+                          <thead className="bg-background-card-header border-b border-border">
+                            <tr>
+                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
+                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
+                              <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border">
+                            {teamConnectionsLoading ? (
+                              [1, 2, 3].map((i) => (
+                                <tr key={i}>
+                                  <td className="px-4 py-3"><div className="h-4 w-20 bg-muted animate-pulse rounded" /></td>
+                                  <td className="px-4 py-3"><div className="h-4 w-28 bg-muted animate-pulse rounded" /></td>
+                                  <td className="px-4 py-3" />
+                                </tr>
+                              ))
+                            ) : teamConnections.inherited.length === 0 ? (
+                              <tr>
+                                <td colSpan={3} className="px-4 py-6 text-center text-sm text-foreground-secondary">
+                                  No inherited integrations. Connect integrations in Organization Settings.
+                                </td>
+                              </tr>
+                            ) : (
+                              teamConnections.inherited.map((conn: CiCdConnection) => (
+                                <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
+                                  <td className="px-4 py-3">
+                                    <div className="flex items-center gap-2.5">
+                                      {(conn.provider === 'slack' || conn.provider === 'discord') && (
+                                        <img src={`/images/integrations/${conn.provider}.png`} alt="" className="h-5 w-5 rounded-sm" />
+                                      )}
+                                      {conn.provider === 'email' && <Mail className="h-5 w-5 text-foreground-secondary" />}
+                                      {(conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing') && (
+                                        conn.metadata?.icon_url ? <img src={conn.metadata.icon_url} alt="" className="h-5 w-5 rounded-sm" /> : <Webhook className="h-5 w-5 text-foreground-secondary" />
+                                      )}
+                                      {!['slack', 'discord', 'email', 'custom_notification', 'custom_ticketing'].includes(conn.provider) && (
+                                        conn.provider === 'jira' ? <img src="/images/integrations/jira.png" alt="" className="h-5 w-5 rounded-sm" /> :
+                                        conn.provider === 'linear' ? <img src="/images/integrations/linear.png" alt="" className="h-5 w-5 rounded-sm" /> :
+                                        conn.provider === 'asana' ? <img src="/images/integrations/asana.png" alt="" className="h-5 w-5 rounded-sm" /> :
+                                        <Webhook className="h-5 w-5 text-foreground-secondary" />
+                                      )}
+                                      <span className="text-sm font-medium text-foreground">
+                                        {conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing' ? 'Custom' :
+                                          conn.provider === 'email' ? 'Email' :
+                                          conn.provider === 'jira' ? (conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira') :
+                                          conn.provider === 'slack' ? 'Slack' : conn.provider === 'discord' ? 'Discord' : conn.provider === 'linear' ? 'Linear' : 'Asana'}
+                                      </span>
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <span className="text-sm text-foreground truncate block">{conn.display_name || '-'}</span>
+                                  </td>
+                                  <td className="px-4 py-3 text-right">
+                                    <span className="text-xs text-foreground-secondary px-2 py-1 rounded border border-border bg-transparent">Inherited</span>
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* Team-specific */}
+                    <div>
+                      <h3 className="text-lg font-semibold text-foreground mb-3">Team-specific</h3>
+                      <p className="text-sm text-foreground-secondary mb-4">
+                        Add integrations that are specific to this team.
+                      </p>
+                      {canManageSettings && (
+                        <div className="flex items-center gap-2 mb-4 flex-wrap">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs"
+                            onClick={() => { setTeamEmailToAdd(''); setShowTeamEmailDialog(true); }}
+                          >
+                            <Mail className="h-3.5 w-3.5 mr-1.5" />
+                            Add Email
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs"
+                            onClick={() => { setTeamCustomName(''); setTeamCustomWebhookUrl(''); setShowTeamCustomDialog(true); }}
+                          >
+                            <Webhook className="h-3.5 w-3.5 mr-1.5" />
+                            Add Custom
+                          </Button>
+                        </div>
+                      )}
+                      <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                        <table className="w-full table-fixed">
+                          <colgroup>
+                            <col className="w-[200px]" />
+                            <col />
+                            <col className="w-[140px]" />
+                          </colgroup>
+                          <thead className="bg-background-card-header border-b border-border">
+                            <tr>
+                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
+                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
+                              <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border">
+                            {teamConnectionsLoading ? (
+                              [1, 2].map((i) => (
+                                <tr key={i}>
+                                  <td className="px-4 py-3"><div className="h-4 w-20 bg-muted animate-pulse rounded" /></td>
+                                  <td className="px-4 py-3"><div className="h-4 w-28 bg-muted animate-pulse rounded" /></td>
+                                  <td className="px-4 py-3" />
+                                </tr>
+                              ))
+                            ) : teamConnections.team.length === 0 ? (
+                              <tr>
+                                <td colSpan={3} className="px-4 py-6 text-center text-sm text-foreground-secondary">
+                                  No team-specific integrations. Add one above.
+                                </td>
+                              </tr>
+                            ) : (
+                              teamConnections.team.map((conn: CiCdConnection) => (
+                                <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
+                                  <td className="px-4 py-3">
+                                    <div className="flex items-center gap-2.5">
+                                      {(conn.provider === 'slack' || conn.provider === 'discord') && (
+                                        <img src={`/images/integrations/${conn.provider}.png`} alt="" className="h-5 w-5 rounded-sm" />
+                                      )}
+                                      {conn.provider === 'email' && <Mail className="h-5 w-5 text-foreground-secondary" />}
+                                      {(conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing') && (
+                                        conn.metadata?.icon_url ? <img src={conn.metadata.icon_url} alt="" className="h-5 w-5 rounded-sm" /> : <Webhook className="h-5 w-5 text-foreground-secondary" />
+                                      )}
+                                      {!['slack', 'discord', 'email', 'custom_notification', 'custom_ticketing'].includes(conn.provider) && (
+                                        conn.provider === 'jira' ? <img src="/images/integrations/jira.png" alt="" className="h-5 w-5 rounded-sm" /> :
+                                        conn.provider === 'linear' ? <img src="/images/integrations/linear.png" alt="" className="h-5 w-5 rounded-sm" /> :
+                                        conn.provider === 'asana' ? <img src="/images/integrations/asana.png" alt="" className="h-5 w-5 rounded-sm" /> :
+                                        <Webhook className="h-5 w-5 text-foreground-secondary" />
+                                      )}
+                                      <span className="text-sm font-medium text-foreground">
+                                        {conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing' ? 'Custom' :
+                                          conn.provider === 'email' ? 'Email' :
+                                          conn.provider === 'jira' ? (conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira') :
+                                          conn.provider === 'slack' ? 'Slack' : conn.provider === 'discord' ? 'Discord' : conn.provider === 'linear' ? 'Linear' : 'Asana'}
+                                      </span>
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <span className="text-sm text-foreground truncate block">
+                                      {conn.provider === 'email' ? conn.metadata?.email || conn.display_name : conn.display_name || '-'}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-3 text-right">
+                                    {canManageSettings && (
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="text-xs hover:bg-destructive/10 hover:border-destructive/30 opacity-0 group-hover:opacity-100 transition-opacity"
+                                        onClick={async () => {
+                                          if (!confirm('Remove this integration?')) return;
+                                          try {
+                                            await api.deleteTeamConnection(organizationId, team!.id, conn.id);
+                                            toast({ title: 'Removed', description: 'Integration removed.' });
+                                            loadTeamConnections();
+                                          } catch (err: any) {
+                                            toast({ title: 'Failed to remove', description: err.message, variant: 'destructive' });
+                                          }
+                                        }}
+                                      >
+                                        Remove
+                                      </Button>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -828,7 +1160,7 @@ export default function TeamSettingsPage() {
                   {canManageSettings && (
                     <Button
                       onClick={() => setShowAddRoleSidepanel(true)}
-                      className="bg-primary text-primary-foreground hover:bg-primary/90 h-8 text-sm"
+                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
                     >
                       <Plus className="h-4 w-4 mr-2" />
                       Add Role
@@ -1046,33 +1378,23 @@ export default function TeamSettingsPage() {
             {showAddRoleSidepanel && (
               <div className="fixed inset-0 z-50">
                 <div
-                  className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-                  onClick={() => {
-                    setShowAddRoleSidepanel(false);
-                    setNewRoleNameInput('');
-                    setNewRolePermissions({
-                      view_overview: false,
-                      resolve_alerts: false,
-                      manage_projects: false,
-                      manage_members: false,
-                      view_settings: false,
-                      view_members: false,
-                      add_members: false,
-                      kick_members: false,
-                      view_roles: false,
-                      edit_roles: false,
-                      manage_notification_settings: false,
-                    });
-                  }}
+                  className={cn(
+                    'fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150',
+                    addRolePanelVisible ? 'opacity-100' : 'opacity-0'
+                  )}
+                  onClick={closeAddRolePanel}
                 />
 
                 {/* Right-side popup panel – Vercel style: rounded corners, floating feel */}
                 <div
-                  className="fixed right-4 top-4 bottom-4 w-full max-w-[420px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden"
+                  className={cn(
+                    'fixed right-4 top-4 bottom-4 w-full max-w-[680px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
+                    addRolePanelVisible ? 'translate-x-0' : 'translate-x-full'
+                  )}
                   onClick={(e) => e.stopPropagation()}
                 >
                   {/* Header – no X, no border */}
-                  <div className="px-6 py-5 flex-shrink-0">
+                  <div className="px-6 pt-5 pb-3 flex-shrink-0">
                     <h2 className="text-xl font-semibold text-foreground">Create New Role</h2>
                     <p className="text-sm text-foreground-secondary mt-0.5">
                       Define a custom role with specific permissions for your team.
@@ -1080,11 +1402,12 @@ export default function TeamSettingsPage() {
                   </div>
 
                   {/* Content */}
-                  <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-6">
+                  <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4">
                     <div className="space-y-6">
                       {/* Role Name Input */}
-                      <div className="space-y-2">
-                        <label className="block text-sm font-medium text-foreground">
+                      <div className="space-y-3">
+                        <label className="flex items-center gap-2 text-base font-semibold text-foreground">
+                          <Tag className="h-5 w-5 text-foreground-secondary" />
                           Role Name
                         </label>
                         <input
@@ -1093,7 +1416,7 @@ export default function TeamSettingsPage() {
                           value={newRoleNameInput}
                           onChange={(e) => setNewRoleNameInput(e.target.value)}
                           maxLength={24}
-                          className="w-full px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                          className="w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
                           autoFocus
                           disabled={isCreatingRole}
                         />
@@ -1135,7 +1458,7 @@ export default function TeamSettingsPage() {
                               style={{ backgroundColor: color }}
                             >
                               {newRoleColor === color && (
-                                <div className="h-4 w-4 text-white drop-shadow-md" />
+                                <Check className="h-4 w-4 text-white drop-shadow-md" />
                               )}
                             </button>
                           ))}
@@ -1224,26 +1547,10 @@ export default function TeamSettingsPage() {
                   </div>
 
                   {/* Footer */}
-                  <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border">
+                  <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
                     <Button
                       variant="outline"
-                      onClick={() => {
-                        setShowAddRoleSidepanel(false);
-                        setNewRoleNameInput('');
-                        setNewRolePermissions({
-                          view_overview: false,
-                          resolve_alerts: false,
-                          manage_projects: false,
-                          manage_members: false,
-                          view_settings: false,
-                          view_members: false,
-                          add_members: false,
-                          kick_members: false,
-                          view_roles: false,
-                          edit_roles: false,
-                          manage_notification_settings: false,
-                        });
-                      }}
+                      onClick={closeAddRolePanel}
                       disabled={isCreatingRole}
                     >
                       Cancel
@@ -1253,16 +1560,16 @@ export default function TeamSettingsPage() {
                         await handleCreateRole(newRolePermissions);
                       }}
                       disabled={isCreatingRole || !newRoleNameInput.trim()}
-                      className="bg-primary/90 text-primary-foreground hover:bg-primary/80 border border-primary-foreground/10 hover:border-primary-foreground/20"
+                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
                     >
                       {isCreatingRole ? (
                         <>
                           <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                          Creating
+                          Create Role
                         </>
                       ) : (
                         <>
-                          <Save className="h-4 w-4 mr-2" />
+                          <FileCheck className="h-4 w-4 mr-2" />
                           Create Role
                         </>
                       )}
@@ -1273,25 +1580,27 @@ export default function TeamSettingsPage() {
             )}
 
             {/* Role Settings Side Panel */}
-            {showRoleSettingsModal && selectedRoleForSettings && editingRolePermissions && (
+            {(showRoleSettingsModal || roleSettingsClosing) && selectedRoleForSettings && editingRolePermissions && (
               <div className="fixed inset-0 z-50">
                 {/* Backdrop */}
                 <div
-                  className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-                  onClick={() => {
-                    setShowRoleSettingsModal(false);
-                    setSelectedRoleForSettings(null);
-                    setEditingRolePermissions(null);
-                  }}
+                  className={cn(
+                    'fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150',
+                    roleSettingsPanelVisible ? 'opacity-100' : 'opacity-0'
+                  )}
+                  onClick={closeRoleSettingsPanel}
                 />
 
-                {/* Side Panel */}
+                {/* Side Panel – matches Create New Role style */}
                 <div
-                  className="fixed right-0 top-0 h-full w-full max-w-lg bg-background border-l border-border shadow-2xl transform transition-transform duration-300 translate-x-0 flex flex-col"
+                  className={cn(
+                    'fixed right-4 top-4 bottom-4 w-full max-w-[680px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
+                    roleSettingsPanelVisible ? 'translate-x-0' : 'translate-x-full'
+                  )}
                   onClick={(e) => e.stopPropagation()}
                 >
                   {/* Header */}
-                  <div className="px-6 py-5 border-b border-border flex-shrink-0 bg-[#141618]">
+                  <div className="px-6 pt-5 pb-3 flex-shrink-0">
                     <div className="flex items-center gap-2">
                       <h2 className="text-xl font-semibold text-foreground">
                         {selectedRoleForSettings.display_name || selectedRoleForSettings.name.charAt(0).toUpperCase() + selectedRoleForSettings.name.slice(1)} Settings
@@ -1305,7 +1614,7 @@ export default function TeamSettingsPage() {
                   </div>
 
                   {/* Content */}
-                  <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-6">
+                  <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4">
                     <div className="space-y-6">
                       {/* Read-only notice */}
                       {!isRoleEditable && (
@@ -1377,7 +1686,7 @@ export default function TeamSettingsPage() {
                               style={{ backgroundColor: color }}
                             >
                               {editingRoleColor === color && (
-                                <div className="h-4 w-4 text-white drop-shadow-md" />
+                                <Check className="h-4 w-4 text-white drop-shadow-md" />
                               )}
                             </button>
                           ))}
@@ -1443,41 +1752,46 @@ export default function TeamSettingsPage() {
                           />
                         </div>
                       )}
-
-                      <div className="flex items-center justify-end gap-3 pt-6">
-                        <Button
-                          onClick={() => {
-                            setShowRoleSettingsModal(false);
-                            setSelectedRoleForSettings(null);
-                            setEditingRolePermissions(null);
-                          }}
-                          variant="ghost"
-                          disabled={isSavingRole}
-                          className="px-4"
-                        >
-                          {isRoleEditable ? 'Cancel' : 'Close'}
-                        </Button>
-                        {isRoleEditable && (
-                          <Button
-                            onClick={() => handleSaveRolePermissions(selectedRoleForSettings, editingRolePermissions)}
-                            disabled={isSavingRole}
-                            className="px-6 bg-primary text-primary-foreground hover:bg-primary/90"
-                          >
-                            {isSavingRole ? (
-                              <>
-                                <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                                Saving
-                              </>
-                            ) : (
-                              <>
-                                <Save className="h-4 w-4 mr-2" />
-                                {selectedRoleForSettings.display_order === 0 ? 'Save Changes' : 'Save Permissions'}
-                              </>
-                            )}
-                          </Button>
-                        )}
-                      </div>
                     </div>
+                  </div>
+
+                  {/* Footer */}
+                  <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
+                    {isRoleEditable ? (
+                      <>
+                        <Button
+                          variant="outline"
+                          onClick={closeRoleSettingsPanel}
+                          disabled={isSavingRole}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          onClick={() => handleSaveRolePermissions(selectedRoleForSettings, editingRolePermissions)}
+                          disabled={isSavingRole || !editingRoleName.trim()}
+                          className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                        >
+                          {isSavingRole ? (
+                            <>
+                              <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
+                              Save Changes
+                            </>
+                          ) : (
+                            <>
+                              <FileCheck className="h-4 w-4 mr-2" />
+                              {selectedRoleForSettings.display_order === 0 ? 'Save Changes' : 'Save Permissions'}
+                            </>
+                          )}
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        onClick={closeRoleSettingsPanel}
+                      >
+                        Close
+                      </Button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1485,6 +1799,132 @@ export default function TeamSettingsPage() {
           </div>
         </div>
       </div>
+
+      {/* Team Email Notification Dialog */}
+      <Dialog open={showTeamEmailDialog} onOpenChange={setShowTeamEmailDialog}>
+        <DialogContent hideClose className="sm:max-w-[440px] bg-background p-0 gap-0">
+          <div className="px-6 pt-6 pb-4 border-b border-border">
+            <div className="flex items-center gap-3">
+              <div className="h-7 w-7 rounded flex items-center justify-center text-foreground-secondary">
+                <Mail className="h-7 w-7" />
+              </div>
+              <div>
+                <DialogTitle>Add Email</DialogTitle>
+                <DialogDescription>Add an email address to receive notification alerts.</DialogDescription>
+              </div>
+            </div>
+          </div>
+          <div className="px-6 py-6 grid gap-4 bg-background">
+            <div className="grid gap-2">
+              <Label htmlFor="team-email-to-add">Email address</Label>
+              <Input
+                id="team-email-to-add"
+                type="email"
+                value={teamEmailToAdd}
+                onChange={(e) => setTeamEmailToAdd(e.target.value)}
+                placeholder="alerts@example.com"
+              />
+            </div>
+          </div>
+          <DialogFooter className="px-6 py-4 bg-background">
+            <Button variant="outline" onClick={() => setShowTeamEmailDialog(false)}>Cancel</Button>
+            <Button
+              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+              disabled={!teamEmailToAdd.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(teamEmailToAdd.trim()) || teamEmailSaving}
+              onClick={async () => {
+                if (!organizationId || !team?.id) return;
+                setTeamEmailSaving(true);
+                try {
+                  await api.createTeamEmailNotification(organizationId, team.id, teamEmailToAdd.trim());
+                  toast({ title: 'Added', description: 'Email notification added successfully.' });
+                  setShowTeamEmailDialog(false);
+                  setTeamEmailToAdd('');
+                  loadTeamConnections();
+                } catch (err: any) {
+                  toast({ title: 'Error', description: err.message || 'Failed to add email.', variant: 'destructive' });
+                } finally {
+                  setTeamEmailSaving(false);
+                }
+              }}
+            >
+              {teamEmailSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
+              Add
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Team Custom Integration Dialog */}
+      <Dialog open={showTeamCustomDialog} onOpenChange={setShowTeamCustomDialog}>
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-hidden">
+          <div className="px-6 pt-6 pb-4 border-b border-border">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <DialogTitle>Add custom integration</DialogTitle>
+                <DialogDescription className="mt-1">Set up a custom webhook endpoint for notifications.</DialogDescription>
+              </div>
+              <Link to="/docs/integrations" target="_blank" rel="noopener noreferrer">
+                <Button variant="outline" size="sm" className="text-xs shrink-0">
+                  <BookOpen className="h-3.5 w-3.5 mr-1.5" />
+                  Docs
+                </Button>
+              </Link>
+            </div>
+          </div>
+          <div className="px-6 py-4 grid gap-4 bg-background">
+            <div className="grid gap-2">
+              <Label htmlFor="team-custom-name">Name</Label>
+              <Input
+                id="team-custom-name"
+                value={teamCustomName}
+                onChange={(e) => setTeamCustomName(e.target.value)}
+                placeholder=""
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="team-custom-webhook">Webhook URL</Label>
+              <Input
+                id="team-custom-webhook"
+                type="url"
+                value={teamCustomWebhookUrl}
+                onChange={(e) => setTeamCustomWebhookUrl(e.target.value)}
+                placeholder=""
+                className={teamCustomWebhookUrl.trim() && !teamCustomWebhookUrl.trim().toLowerCase().startsWith('https://') ? 'border-destructive focus-visible:ring-destructive/50' : undefined}
+              />
+            </div>
+          </div>
+          <DialogFooter className="px-6 py-4 bg-background">
+            <Button variant="outline" onClick={() => setShowTeamCustomDialog(false)}>Cancel</Button>
+            <Button
+              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+              disabled={!teamCustomName.trim() || !teamCustomWebhookUrl.trim() || teamCustomSaving || !/^https:\/\/[^\s]+$/i.test(teamCustomWebhookUrl.trim())}
+              onClick={async () => {
+                if (!organizationId || !team?.id) return;
+                setTeamCustomSaving(true);
+                try {
+                  await api.createTeamCustomIntegration(organizationId, team.id, {
+                    name: teamCustomName.trim(),
+                    type: 'notification',
+                    webhook_url: teamCustomWebhookUrl.trim(),
+                  });
+                  toast({ title: 'Created', description: 'Custom integration created.' });
+                  setShowTeamCustomDialog(false);
+                  setTeamCustomName('');
+                  setTeamCustomWebhookUrl('');
+                  loadTeamConnections();
+                } catch (err: any) {
+                  toast({ title: 'Error', description: err.message || 'Failed to save.', variant: 'destructive' });
+                } finally {
+                  setTeamCustomSaving(false);
+                }
+              }}
+            >
+              {teamCustomSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
+              Create connection
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

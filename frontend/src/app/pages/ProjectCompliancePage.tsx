@@ -543,7 +543,7 @@ export default function ProjectCompliancePage() {
                   variant="outline"
                   size="sm"
                   className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 h-7 text-xs px-2"
-                  onClick={() => navigate(`/organizations/${organizationId}/projects/${projectId}/settings`, { state: { section: 'policies' } })}
+                  onClick={() => navigate(`/organizations/${organizationId}/projects/${projectId}/settings/policies`)}
                   title="Go to Settings → Policies to request an exception"
                 >
                   Request Exception
@@ -970,8 +970,7 @@ export default function ProjectCompliancePage() {
                                         className="h-7 text-xs px-2"
                                         onClick={() =>
                                           navigate(
-                                            `/organizations/${organizationId}/projects/${projectId}/settings`,
-                                            { state: { section: 'policies' } }
+                                            `/organizations/${organizationId}/projects/${projectId}/settings/policies`
                                           )
                                         }
                                       >

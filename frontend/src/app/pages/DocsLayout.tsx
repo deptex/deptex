@@ -58,9 +58,11 @@ export default function DocsLayout() {
         </div>
       </aside>
 
-      {/* Content - offset for fixed sidebar on lg+ */}
-      <main className="flex-1 min-w-0 px-8 pt-12 pb-10 max-w-3xl lg:ml-64">
-        <DocsPage section={section} />
+      {/* Content - offset for fixed sidebar on lg+, centered in remaining space */}
+      <main className="flex-1 min-w-0 flex justify-center lg:ml-64">
+        <div className="w-full max-w-5xl px-8 pt-12 pb-10">
+          <DocsPage section={section} />
+        </div>
       </main>
     </div>
   );

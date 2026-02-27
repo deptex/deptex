@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useOutletContext, useNavigate } from 'react-router-dom';
-import { Search, Plus, Users, MoreVertical, Check } from 'lucide-react';
+import { Search, Plus, Users, MoreVertical, Check, Loader2, Shield } from 'lucide-react';
 import { api, TeamWithRole, TeamPermissions, TeamMember, TeamRole, OrganizationMember } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { Button } from '../../components/ui/button';
@@ -10,9 +10,17 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogTitle,
+} from '../../components/ui/dialog';
 import { RoleDropdown } from '../../components/RoleDropdown';
 import { RoleBadge } from '../../components/RoleBadge';
 import { useAuth } from '../../contexts/AuthContext';
+import { cn } from '../../lib/utils';
 
 interface TeamContextType {
   team: TeamWithRole | null;
@@ -35,7 +43,10 @@ export default function TeamMembersPage({ isSettingsSubpage = false }: TeamMembe
   const [orgMembers, setOrgMembers] = useState<OrganizationMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [addMemberPanelVisible, setAddMemberPanelVisible] = useState(false);
+  const addMemberCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [addSearchQuery, setAddSearchQuery] = useState('');
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
   const [selectedRoleId, setSelectedRoleId] = useState<string>('member');
@@ -95,6 +106,17 @@ export default function TeamMembersPage({ isSettingsSubpage = false }: TeamMembe
     return result;
   }, [members, searchQuery]);
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && searchQuery) {
+        setSearchQuery('');
+        searchInputRef.current?.blur();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [searchQuery]);
+
   // Filter org members for adding (exclude current team members)
   const availableOrgMembers = useMemo(() => {
     const teamMemberIds = new Set(members.map(m => m.user_id));
@@ -127,6 +149,24 @@ export default function TeamMembersPage({ isSettingsSubpage = false }: TeamMembe
       loadData();
     }
   }, [organizationId, team?.id]);
+
+  // Add member sidebar: animate in on open, animate out before unmount
+  useEffect(() => {
+    if (showAddModal) {
+      setAddMemberPanelVisible(false);
+      const raf = requestAnimationFrame(() => {
+        requestAnimationFrame(() => setAddMemberPanelVisible(true));
+      });
+      return () => cancelAnimationFrame(raf);
+    } else {
+      setAddMemberPanelVisible(false);
+    }
+  }, [showAddModal]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => () => {
+    if (addMemberCloseTimeoutRef.current) clearTimeout(addMemberCloseTimeoutRef.current);
+  }, []);
 
   const loadData = async () => {
     if (!organizationId || !team?.id) return;
@@ -170,10 +210,7 @@ export default function TeamMembersPage({ isSettingsSubpage = false }: TeamMembe
         title: 'Success',
         description: selectedUserIds.length === 1 ? 'Member added to team' : 'Members added to team',
       });
-      setShowAddModal(false);
-      setSelectedUserIds([]);
-      setSelectedRoleId('member');
-      setAddSearchQuery('');
+      closeAddMemberPanel();
       loadData();
       reloadTeam();
     } catch (error: any) {
@@ -278,31 +315,54 @@ export default function TeamMembersPage({ isSettingsSubpage = false }: TeamMembe
     }
   };
 
-  const closeModal = () => {
-    setShowAddModal(false);
-    setSelectedUserIds([]);
-    setSelectedRoleId('member');
-    setAddSearchQuery('');
-  };
+  const closeAddMemberPanel = useCallback(() => {
+    setAddMemberPanelVisible(false);
+    if (addMemberCloseTimeoutRef.current) clearTimeout(addMemberCloseTimeoutRef.current);
+    addMemberCloseTimeoutRef.current = setTimeout(() => {
+      addMemberCloseTimeoutRef.current = null;
+      setShowAddModal(false);
+      setSelectedUserIds([]);
+      setSelectedRoleId('member');
+      setAddSearchQuery('');
+    }, 150);
+  }, []);
 
   return (
     <main className={isSettingsSubpage ? "w-full" : "mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8"}>
       {/* Header */}
       <div className="flex items-center justify-between gap-4 mb-4">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-foreground-secondary" />
+        <div className="relative w-80">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-foreground-secondary pointer-events-none" />
           <input
+            ref={searchInputRef}
             type="text"
             placeholder="Filter members..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-64 pl-9 pr-4 h-8 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && searchQuery) {
+                e.preventDefault();
+                setSearchQuery('');
+                searchInputRef.current?.blur();
+              }
+            }}
+            className={`w-full pl-9 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent ${searchQuery ? 'pr-14' : 'pr-4'}`}
           />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded text-xs font-medium text-foreground-secondary hover:text-foreground bg-transparent border border-border/60 hover:border-border transition-colors"
+              aria-label="Clear search (Esc)"
+            >
+              Esc
+            </button>
+          )}
         </div>
         {(canAddMembers || hasOrgManagePermission) && (
           <Button
             onClick={() => setShowAddModal(true)}
-            className="bg-primary text-primary-foreground hover:bg-primary/90 h-8 text-sm"
+            className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
           >
             <Plus className="h-4 w-4 mr-2" />
             Add Member
@@ -379,26 +439,21 @@ export default function TeamMembersPage({ isSettingsSubpage = false }: TeamMembe
                       }
                     }}
                     disabled={addingMember}
-                    className="bg-primary text-primary-foreground hover:bg-primary/90"
+                    className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
                   >
                     {addingMember ? (
-                      <>
-                        <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                        Joining
-                      </>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                     ) : (
-                      <>
-                        <Users className="h-4 w-4 mr-2" />
-                        Join this team
-                      </>
+                      <Users className="h-4 w-4 mr-2" />
                     )}
+                    Join this team
                   </Button>
                 )}
                 {(canAddMembers || hasOrgManagePermission) && (
                   <Button
                     onClick={() => setShowAddModal(true)}
                     variant={user && availableOrgMembers.some(m => m.user_id === user.id) ? "outline" : "default"}
-                    className={user && availableOrgMembers.some(m => m.user_id === user.id) ? "" : "bg-primary text-primary-foreground hover:bg-primary/90"}
+                    className={user && availableOrgMembers.some(m => m.user_id === user.id) ? "" : "bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"}
                   >
                     <Plus className="h-4 w-4 mr-2" />
                     Add members
@@ -415,14 +470,7 @@ export default function TeamMembersPage({ isSettingsSubpage = false }: TeamMembe
             // Has members but search returned no results
             <>
               <h3 className="text-lg font-semibold text-foreground mb-2">No members found</h3>
-              <p className="text-foreground-secondary">No members match your search criteria.</p>
-              <Button
-                variant="ghost"
-                onClick={() => setSearchQuery('')}
-                className="mt-4 text-primary hover:text-primary/90"
-              >
-                Clear search
-              </Button>
+              <p className="text-foreground-secondary">No members match your search criteria. Press Esc to clear.</p>
             </>
           )}
         </div>
@@ -569,25 +617,32 @@ export default function TeamMembersPage({ isSettingsSubpage = false }: TeamMembe
         </div>
       )}
 
-      {/* Add Member Modal */}
+      {/* Add Member Sidebar */}
       {showAddModal && (
         <div className="fixed inset-0 z-50">
           <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm"
-            onClick={closeModal}
+            className={cn(
+              'fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150',
+              addMemberPanelVisible ? 'opacity-100' : 'opacity-0'
+            )}
+            onClick={closeAddMemberPanel}
           />
           <div
-            className="fixed right-0 top-0 h-full w-full max-w-lg bg-background border-l border-border shadow-2xl flex flex-col"
+            className={cn(
+              'fixed right-4 top-4 bottom-4 w-full max-w-[420px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
+              addMemberPanelVisible ? 'translate-x-0' : 'translate-x-full'
+            )}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-6 py-5 border-b border-border flex-shrink-0 bg-[#141618]">
+            <div className="px-6 pt-5 pb-3 flex-shrink-0">
               <h2 className="text-xl font-semibold text-foreground">Add Team Member</h2>
             </div>
 
-            <div className="flex-1 overflow-y-auto px-6 py-6">
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-2">
+            <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4">
+              <div className="space-y-6">
+                <div className="space-y-3">
+                  <label className="flex items-center gap-2 text-base font-semibold text-foreground">
+                    <Users className="h-5 w-5 text-foreground-secondary" />
                     Select Member
                   </label>
                   <div className="relative mb-2">
@@ -646,8 +701,11 @@ export default function TeamMembersPage({ isSettingsSubpage = false }: TeamMembe
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-2">
+                <div className="border-t border-border" />
+
+                <div className="space-y-3">
+                  <label className="flex items-center gap-2 text-base font-semibold text-foreground">
+                    <Shield className="h-5 w-5 text-foreground-secondary" />
                     Role
                   </label>
                   <RoleDropdown
@@ -663,66 +721,67 @@ export default function TeamMembersPage({ isSettingsSubpage = false }: TeamMembe
               </div>
             </div>
 
-            <div className="px-6 py-5 flex items-center justify-end gap-3">
-              <Button variant="outline" onClick={closeModal}>
+            <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
+              <Button variant="outline" onClick={closeAddMemberPanel} disabled={addingMember}>
                 Cancel
               </Button>
               <Button
                 onClick={handleAddMember}
                 disabled={selectedUserIds.length === 0 || addingMember}
-                className="bg-primary text-primary-foreground hover:bg-primary/90"
+                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
               >
                 {addingMember ? (
-                  <>
-                    <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                    Adding
-                  </>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 ) : (
-                  selectedUserIds.length <= 1 ? 'Add Member' : `Add ${selectedUserIds.length} Members`
+                  <Plus className="h-4 w-4 mr-2" />
                 )}
+                {selectedUserIds.length <= 1 ? 'Add Member' : `Add ${selectedUserIds.length} Members`}
               </Button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Change Role Modal */}
-      {showRoleChangeModal && memberToChangeRole && (
-        <div className="fixed inset-0 z-50">
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-            onClick={() => {
-              setShowRoleChangeModal(false);
-              setMemberToChangeRole(null);
-            }}
-          />
+      {/* Change Role Dialog */}
+      <Dialog open={!!(showRoleChangeModal && memberToChangeRole)} onOpenChange={(open) => {
+        if (!open) {
+          setShowRoleChangeModal(false);
+          setMemberToChangeRole(null);
+        }
+      }}>
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
+          {memberToChangeRole && (
+            <>
+              <div className="px-6 pt-6 pb-4 border-b border-border flex-shrink-0">
+                <DialogTitle>Change Role</DialogTitle>
+                <DialogDescription className="mt-1">
+                  Select a new role for {memberToChangeRole.full_name || memberToChangeRole.email?.split('@')[0] || 'this member'}.
+                </DialogDescription>
+              </div>
 
-          {/* Modal */}
-          <div
-            className="fixed right-0 top-0 h-full w-full max-w-lg bg-background border-l border-border shadow-2xl transform transition-transform duration-300 translate-x-0 flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="px-6 py-5 border-b border-border flex-shrink-0 bg-[#141618]">
-              <h2 className="text-xl font-semibold text-foreground">
-                Change Role
-              </h2>
-            </div>
-
-            {/* Content */}
-            <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-6">
-              <div className="space-y-6">
-                <div>
-                  <p className="text-sm text-foreground-secondary mb-4">
-                    Change the role for <strong>{memberToChangeRole.full_name || memberToChangeRole.email}</strong>
-                  </p>
+              <div className="px-6 py-4 grid gap-4 bg-background overflow-y-auto max-h-[60vh] min-h-0">
+                <div className="flex items-center gap-3 p-3 bg-background-card border border-border rounded-md">
+                  <img
+                    src={memberToChangeRole.avatar_url || '/images/blank_profile_image.png'}
+                    alt={memberToChangeRole.full_name || memberToChangeRole.email}
+                    className="h-10 w-10 rounded-full object-cover border border-border"
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      e.currentTarget.src = '/images/blank_profile_image.png';
+                    }}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-foreground truncate">
+                      {memberToChangeRole.full_name || memberToChangeRole.email.split('@')[0]}
+                    </div>
+                    <div className="text-xs text-foreground-secondary truncate">
+                      {memberToChangeRole.email}
+                    </div>
+                  </div>
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-2">
-                    Role
-                  </label>
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium text-foreground">Role</label>
                   <RoleDropdown
                     value={newRole}
                     onChange={(value) => setNewRole(value)}
@@ -734,37 +793,34 @@ export default function TeamMembersPage({ isSettingsSubpage = false }: TeamMembe
                   />
                 </div>
               </div>
-            </div>
 
-            {/* Footer */}
-            <div className="px-6 py-5 flex items-center justify-end gap-3 flex-shrink-0">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setShowRoleChangeModal(false);
-                  setMemberToChangeRole(null);
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={handleUpdateRole}
-                disabled={updatingRole}
-                className="bg-primary text-primary-foreground hover:bg-primary/90"
-              >
-                {updatingRole ? (
-                  <>
-                    <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                    Updating
-                  </>
-                ) : (
-                  'Update Role'
-                )}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+              <DialogFooter className="px-6 py-4 bg-background">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setShowRoleChangeModal(false);
+                    setMemberToChangeRole(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleUpdateRole}
+                  disabled={updatingRole}
+                  className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                >
+                  {updatingRole ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Check className="h-4 w-4 mr-2" />
+                  )}
+                  Update Role
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Leave/Remove Confirmation Modal */}
       {showLeaveConfirmModal && memberToRemove && (

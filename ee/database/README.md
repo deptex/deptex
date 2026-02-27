@@ -24,5 +24,10 @@ EE migrations (in `backend/database/`) typically cover:
 - `organization_watchlist`, `organization_watchlist_cleared_commits`
 - `banned_versions`, `team_banned_versions`
 - Policy tables used by org/team scoping
+- `organization_notification_rules` (notification rule triggers and destinations)
+- `project_integrations` (project-scoped Slack, Discord, Jira, etc.)
+- `project_notification_rules` (project-scoped notification rules)
+- `team_integrations` (team-scoped Slack, Discord, Jira, etc.)
+- `team_notification_rules` (team-scoped notification rules)
 
 Core tables (projects, dependencies, vulnerabilities, etc.) remain in `backend/database/` and are part of the open-source release.

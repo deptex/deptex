@@ -1,4 +1,4 @@
-import { createBrowserRouter, Navigate, useParams } from "react-router-dom";
+import { createBrowserRouter, Navigate, useParams, useLocation } from "react-router-dom";
 import App from "./App";
 import DocsApp from "./DocsApp";
 import DocsLayout from "./pages/DocsLayout";
@@ -25,7 +25,6 @@ import VulnerabilityIntelligencePage from "./pages/VulnerabilityIntelligencePage
 import SBOMCompliancePage from "./pages/SBOMCompliancePage";
 import ProjectHealthPage from "./pages/ProjectHealthPage";
 import IntegrationsPage from "./pages/IntegrationsPage";
-import SupportPage from "./pages/SupportPage";
 import OpenSourcePage from "./pages/OpenSourcePage";
 import EngineeringTeamsPage from "./pages/solutions/EngineeringTeamsPage";
 import SecurityTeamsPage from "./pages/solutions/SecurityTeamsPage";
@@ -51,6 +50,12 @@ import TeamProjectsPage from "./pages/TeamProjectsPage";
 import TeamMembersPage from "./pages/TeamMembersPage";
 import TeamAlertsPage from "./pages/TeamAlertsPage";
 import TeamSettingsPage from "./pages/TeamSettingsPage";
+// Redirect /settings to /settings/general while preserving search params (for OAuth callbacks)
+function SettingsRedirect() {
+  const { search } = useLocation();
+  return <Navigate to={`/settings/general${search}`} replace />;
+}
+
 // Redirect old dependency detail URL (no tab) to project dependencies with overview tab
 function RedirectDependencyToOverview() {
   const { orgId, projectId, dependencyId } = useParams<{ orgId: string; projectId: string; dependencyId: string }>();
@@ -174,6 +179,10 @@ export const router = createBrowserRouter([
         element: <ProjectSettingsPage />,
       },
       {
+        path: "settings/:section",
+        element: <ProjectSettingsPage />,
+      },
+      {
         path: ":tab",
         element: <ProjectOverviewPage />,
       },
@@ -220,6 +229,10 @@ export const router = createBrowserRouter([
         element: <TeamSettingsPage />,
       },
       {
+        path: "settings/:section",
+        element: <TeamSettingsPage />,
+      },
+      {
         path: ":tab",
         element: <TeamOverviewPage />,
       },
@@ -243,6 +256,22 @@ export const router = createBrowserRouter([
   },
   {
     path: "/settings",
+    element: (
+      <ProtectedRoute>
+        <SettingsRedirect />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: "/settings/general",
+    element: (
+      <ProtectedRoute>
+        <SettingsPage />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: "/settings/general/connected-accounts",
     element: (
       <ProtectedRoute>
         <SettingsPage />
@@ -332,11 +361,7 @@ export const router = createBrowserRouter([
       },
       {
         path: "support",
-        element: (
-          <PublicRoute>
-            <SupportPage />
-          </PublicRoute>
-        ),
+        element: <Navigate to="/docs/help" replace />,
       },
       {
         path: "open-source",

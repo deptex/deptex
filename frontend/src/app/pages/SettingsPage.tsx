@@ -7,12 +7,13 @@ import { Button } from '../../components/ui/button';
 import { Toaster } from '../../components/ui/toaster';
 import { useToast } from '../../hooks/use-toast';
 import { Save, Edit2 } from 'lucide-react';
-import { api, Integration } from '../../lib/api';
-import { useSearchParams } from 'react-router-dom';
+import { api } from '../../lib/api';
+import { useSearchParams, useLocation } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 
 export default function SettingsPage() {
-  const [activeSection, setActiveSection] = useState('general');
+  const { pathname } = useLocation();
+  const isConnectedAccounts = pathname === '/settings/general/connected-accounts';
   const { user, signInWithGitHub, signInWithGoogle } = useAuth();
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -25,7 +26,6 @@ export default function SettingsPage() {
     github: false,
     google: false,
   });
-  const [stripeConnected, setStripeConnected] = useState(false);
 
   // Sync display name from hook
   useEffect(() => {
@@ -37,7 +37,6 @@ export default function SettingsPage() {
   // Load integrations on mount and check GitHub login
   useEffect(() => {
     loadIntegrations();
-    loadStripeConnection();
     // Check if user logged in with GitHub via Supabase
     if (user?.identities?.some((identity: any) => identity.provider === 'github')) {
       setIntegrations(prev => ({ ...prev, github: true }));
@@ -84,16 +83,6 @@ export default function SettingsPage() {
     }
   };
   
-  const loadStripeConnection = async () => {
-    try {
-      const data = await api.getIntegrations();
-      const stripeIntegration = data.find((integration: Integration) => integration.provider === 'stripe');
-      setStripeConnected(!!stripeIntegration);
-    } catch (error: any) {
-      console.error('Failed to load Stripe connection:', error);
-    }
-  };
-
   // Handle OAuth callback
   useEffect(() => {
     const connected = searchParams.get('connected');
@@ -106,9 +95,6 @@ export default function SettingsPage() {
           description: `${connected.charAt(0).toUpperCase() + connected.slice(1)} has been connected successfully.`,
         });
         loadIntegrations();
-        if (connected === 'stripe') {
-          loadStripeConnection();
-        }
         // Clean up URL
         setSearchParams({});
       } else if (error) {
@@ -191,64 +177,39 @@ export default function SettingsPage() {
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
           <div className="flex gap-8">
             {/* Sidebar */}
-            <SettingsSidebar
-              activeSection={activeSection}
-              onSectionChange={setActiveSection}
-            />
+            <SettingsSidebar />
 
             {/* Content */}
             <div className="flex-1">
-              {activeSection === 'general' && (
+              {!isConnectedAccounts && (
                 <div className="space-y-6">
                   <div>
-                    <h2 className="text-2xl font-bold text-foreground">General Settings</h2>
+                    <h2 className="text-2xl font-bold text-foreground">General</h2>
                     <p className="text-foreground-secondary mt-1">
                       Manage your profile and account settings.
                     </p>
                   </div>
 
-                  {/* Display Name Card */}
+                  {/* Profile Card: Display Name + Avatar */}
                   <div className="bg-background-card border border-border rounded-lg overflow-hidden">
                     <div className="p-6">
-                      <h3 className="text-base font-semibold text-foreground mb-1">Display Name</h3>
-                      <p className="text-sm text-foreground-secondary mb-4">
-                        This is your display name. It will be shown throughout the dashboard.
-                      </p>
-                      <div className="max-w-md">
-                        <input
-                          type="text"
-                          value={displayName}
-                          onChange={(e) => setDisplayName(e.target.value)}
-                          placeholder="Enter your display name"
-                          className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                        />
-                      </div>
-                    </div>
-                    <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                      <p className="text-xs text-foreground-secondary">
-                        Please use 32 characters at maximum.
-                      </p>
-                      <Button
-                        onClick={handleSaveGeneral}
-                        size="sm"
-                        className="h-8"
-                      >
-                        Save
-                      </Button>
-                    </div>
-                  </div>
-
-                  {/* Avatar Card */}
-                  <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                    <div className="p-6">
-                      <div className="flex items-start justify-between gap-6">
-                        <div className="flex-1">
-                          <h3 className="text-base font-semibold text-foreground mb-1">Avatar</h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] items-start gap-6">
+                        <div className="space-y-3 min-w-0">
+                          <h3 className="text-base font-semibold text-foreground">Display Name</h3>
                           <p className="text-sm text-foreground-secondary">
-                            This is your avatar. Click on the avatar to upload a custom one from your files.
+                            This is your display name. It will be shown throughout the dashboard.
                           </p>
+                          <div className="max-w-md">
+                            <input
+                              type="text"
+                              value={displayName}
+                              onChange={(e) => setDisplayName(e.target.value)}
+                              placeholder="Enter your display name"
+                              className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                            />
+                          </div>
                         </div>
-                        <div className="flex-shrink-0">
+                        <div className="flex-shrink-0 sm:justify-self-end self-end">
                           <input
                             type="file"
                             accept="image/*"
@@ -258,7 +219,6 @@ export default function SettingsPage() {
                               const file = e.target.files?.[0];
                               if (!file) return;
                               
-                              // Validate file size (max 5MB)
                               if (file.size > 5 * 1024 * 1024) {
                                 toast({
                                   title: 'File too large',
@@ -268,7 +228,6 @@ export default function SettingsPage() {
                                 return;
                               }
                               
-                              // Validate file type
                               if (!file.type.startsWith('image/')) {
                                 toast({
                                   title: 'Invalid file type',
@@ -280,13 +239,10 @@ export default function SettingsPage() {
                               
                               try {
                                 setIsUploadingAvatar(true);
-                                
-                                // Create a unique filename with user ID
                                 const fileExt = file.name.split('.').pop();
                                 const fileName = `${user?.id}-${Date.now()}.${fileExt}`;
                                 const filePath = `${user?.id}/${fileName}`;
                                 
-                                // Upload to Supabase Storage
                                 const { error: uploadError } = await supabase.storage
                                   .from('avatars')
                                   .upload(filePath, file, {
@@ -294,28 +250,22 @@ export default function SettingsPage() {
                                     upsert: true,
                                   });
                                 
-                                if (uploadError) {
-                                  throw uploadError;
-                                }
+                                if (uploadError) throw uploadError;
                                 
-                                // Get public URL
                                 const { data: { publicUrl } } = supabase.storage
                                   .from('avatars')
                                   .getPublicUrl(filePath);
                                 
-                                // Update user profile in database (persists across OAuth logins)
                                 await api.updateUserProfile({ avatar_url: publicUrl });
                                 
-                                // Clear cache to force refresh
                                 if (user?.id) {
                                   localStorage.removeItem(`user_profile_${user.id}`);
                                 }
                                 
-                                // Preload the new image before reloading (prevents flash of blank image)
                                 await new Promise<void>((resolve) => {
                                   const img = new Image();
                                   img.onload = () => resolve();
-                                  img.onerror = () => resolve(); // Resolve even on error to not block
+                                  img.onerror = () => resolve();
                                   img.src = publicUrl;
                                 });
                                 
@@ -324,8 +274,6 @@ export default function SettingsPage() {
                                   description: 'Your avatar has been updated successfully.',
                                 });
                                 
-                                // Reload the page to show updated avatar everywhere
-                                // Image is now cached so it won't flash blank
                                 window.location.reload();
                               } catch (error: any) {
                                 console.error('Error uploading avatar:', error);
@@ -337,7 +285,6 @@ export default function SettingsPage() {
                                 });
                               }
                               
-                              // Reset input
                               e.target.value = '';
                             }}
                           />
@@ -365,110 +312,70 @@ export default function SettingsPage() {
                         </div>
                       </div>
                     </div>
-                  </div>
-
-                </div>
-              )}
-
-              {activeSection === 'billing' && (
-                <div className="space-y-8">
-                  <h2 className="text-2xl font-bold text-foreground">Billing Information</h2>
-
-                  {/* Stripe Connection Section */}
-                  <div className="bg-background border border-border rounded-lg p-6">
-                    <h3 className="text-lg font-semibold text-foreground mb-2">Stripe Account</h3>
-                    <p className="text-sm text-foreground-secondary mb-6">
-                      {stripeConnected 
-                        ? 'Your Stripe account is connected. You can use this account to set up billing for your organizations.'
-                        : 'Connect your Stripe account to enable billing for your organizations. This account will be used when you add a plan to an organization.'}
-                    </p>
-                    {stripeConnected ? (
-                      <div className="flex items-center gap-4">
-                        <Button
-                          variant="outline"
-                          onClick={async () => {
-                            try {
-                              await api.disconnectIntegration('stripe');
-                              setStripeConnected(false);
-                              toast({
-                                title: 'Disconnected',
-                                description: 'Stripe account has been disconnected.',
-                              });
-                            } catch (error: any) {
-                              toast({
-                                title: 'Error',
-                                description: error.message || 'Failed to disconnect Stripe.',
-                                variant: 'destructive',
-                              });
-                            }
-                          }}
-                        >
-                          Disconnect Stripe
-                        </Button>
-                      </div>
-                    ) : (
+                    <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
+                      <p className="text-xs text-foreground-secondary">
+                        Please use 32 characters at maximum.
+                      </p>
                       <Button
-                        onClick={async () => {
-                          try {
-                            const { data: { session } } = await supabase.auth.getSession();
-                            if (!session?.access_token) {
-                              toast({
-                                title: 'Error',
-                                description: 'Please log in to connect Stripe.',
-                                variant: 'destructive',
-                              });
-                              return;
-                            }
-
-                            const data = await api.connectIntegration('stripe');
-                            window.location.href = data.redirectUrl;
-                          } catch (error: any) {
-                            toast({
-                              title: 'Error',
-                              description: error.message || 'Failed to connect Stripe.',
-                              variant: 'destructive',
-                            });
-                          }
-                        }}
+                        onClick={handleSaveGeneral}
+                        size="sm"
+                        className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
                       >
-                        Connect Stripe Account
+                        Save
                       </Button>
-                    )}
+                    </div>
                   </div>
                 </div>
               )}
 
-              {activeSection === 'authentication' && (
-                <div className="space-y-8">
+              {isConnectedAccounts && (
+                <div className="space-y-6">
                   <div>
-                    <h2 className="text-2xl font-bold text-foreground mb-2">Connected Accounts</h2>
-                    <p className="text-foreground-secondary">
+                    <h2 className="text-2xl font-bold text-foreground">Connected Accounts</h2>
+                    <p className="text-foreground-secondary mt-1">
                       Manage your login providers. These accounts are used for authentication and sign-in only.
                     </p>
                   </div>
 
-                  <div className="bg-background border border-border rounded-lg divide-y divide-border">
-                    {integrationList.map((integration) => {
-                      const isConnected = integrations[integration.id];
-
-                      return (
-                        <div
-                          key={integration.id}
-                          className="flex items-center justify-between p-4"
-                        >
-                          <div className="flex items-center gap-4 flex-1">
-                            <div className="flex-shrink-0">
-                              <img
-                                src={integration.image}
-                                alt={integration.name}
-                                className={`h-8 w-8 rounded object-contain ${isConnected ? 'opacity-100' : 'opacity-60'}`}
-                              />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-3">
-                                <h3 className="text-sm font-semibold text-foreground">
-                                  {integration.name}
-                                </h3>
+                  <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                    <table className="w-full">
+                      <thead className="bg-background-card-header border-b border-border">
+                        <tr>
+                          <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                            Provider
+                          </th>
+                          <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                            Status
+                          </th>
+                          <th className="w-24"></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {integrationList.map((integration) => {
+                          const isConnected = integrations[integration.id];
+                          return (
+                            <tr key={integration.id} className="hover:bg-table-hover transition-colors">
+                              <td className="px-4 py-3 min-w-0">
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <img
+                                    src={integration.image}
+                                    alt={integration.name}
+                                    className={`h-8 w-8 rounded object-contain flex-shrink-0 ${isConnected ? 'opacity-100' : 'opacity-60'}`}
+                                  />
+                                  <div className="flex-1 min-w-0">
+                                    <div className="text-sm font-medium text-foreground">
+                                      {integration.name}
+                                    </div>
+                                    <div className="text-xs text-foreground-secondary truncate">
+                                      {isConnected
+                                        ? `You can sign in using your ${integration.name} account`
+                                        : integration.description
+                                      }
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3">
                                 {isConnected ? (
                                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-500/10 text-green-500 border border-green-500/20">
                                     Connected
@@ -478,33 +385,27 @@ export default function SettingsPage() {
                                     Not Connected
                                   </span>
                                 )}
-                              </div>
-                              <p className="text-xs text-foreground-secondary mt-1">
-                                {isConnected 
-                                  ? `You can sign in using your ${integration.name} account`
-                                  : integration.description
-                                }
-                              </p>
-                            </div>
-                          </div>
-                          {!isConnected && (
-                            <div className="flex-shrink-0">
-                              <Button
-                                size="sm"
-                                onClick={() => handleConnectProvider(integration.id as 'github' | 'google')}
-                              >
-                                Connect
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
+                              </td>
+                              <td className="px-4 py-3">
+                                {!isConnected && (
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleConnectProvider(integration.id as 'github' | 'google')}
+                                  >
+                                    Connect
+                                  </Button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
-                  
-                  <div className="mt-4 p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-                    <p className="text-sm text-foreground">
-                      <strong className="text-blue-400">Note:</strong> You can add additional login methods by clicking "Connect" above. 
+
+                  <div className="p-4 bg-background-subtle/50 border border-border rounded-lg">
+                    <p className="text-sm text-foreground-secondary">
+                      <strong className="text-foreground font-medium">Note:</strong> You can add additional login methods by clicking &quot;Connect&quot; above.
                       Once connected, login methods cannot be removed from this page to prevent account lockout.
                     </p>
                   </div>

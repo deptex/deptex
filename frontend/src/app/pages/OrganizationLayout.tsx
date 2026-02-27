@@ -74,40 +74,41 @@ export default function OrganizationLayout() {
     return null;
   }, [organization?.permissions, cachedPermissions, dbPermissions]);
 
-  // Load permissions from database when organization loads
+  // Load permissions from database when organization loads (Phase 2: skip if org API already returned permissions)
   useEffect(() => {
-    const loadDbPermissions = async () => {
-      if (!organization?.id || !organization?.role) {
-        setDbPermissions(null);
-        setPermissionsLoading(false);
-        return;
-      }
+    if (!organization?.id || !organization?.role) {
+      setDbPermissions(null);
+      setPermissionsLoading(false);
+      return;
+    }
 
+    // Org API already returns permissions; avoid duplicate getOrganizationRoles fetch
+    if (organization.permissions != null && typeof organization.permissions === 'object') {
+      setDbPermissions(organization.permissions);
+      return;
+    }
+
+    const loadDbPermissions = async () => {
       setPermissionsLoading(true);
       try {
         const roles = await api.getOrganizationRoles(organization.id);
         const userRole = roles.find(r => r.name === organization.role);
 
         if (userRole?.permissions) {
-          // Use permissions from database
           setDbPermissions(userRole.permissions);
-          // Update the permissions cache for instant display on next visit
           localStorage.setItem(`org_permissions_${organization.id}`, JSON.stringify(userRole.permissions));
         } else {
-          // Role exists but has no permissions defined - this shouldn't happen
-          // but keep whatever we have from cache/organization object
           console.warn(`Role ${organization.role} has no permissions defined in database`);
         }
       } catch (error) {
         console.error('Failed to load permissions:', error);
-        // On error, keep using cached permissions (don't override with null)
       } finally {
         setPermissionsLoading(false);
       }
     };
 
     loadDbPermissions();
-  }, [organization?.id, organization?.role]);
+  }, [organization?.id, organization?.role, organization?.permissions]);
 
 
 
@@ -225,7 +226,7 @@ export default function OrganizationLayout() {
                             </a>
                           </DropdownMenuItem>
                           <DropdownMenuItem asChild>
-                            <a href="/support" target="_blank" rel="noopener noreferrer" className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary transition-colors">
+                            <a href="/docs/help" target="_blank" rel="noopener noreferrer" className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary transition-colors">
                               <Mail className="h-4 w-4" />
                               Contact Support
                             </a>

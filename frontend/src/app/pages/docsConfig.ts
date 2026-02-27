@@ -48,6 +48,7 @@ export const docNavGroups: DocNavGroup[] = [
       { label: "Teams", slug: "teams", description: "Organize members with scoped visibility." },
       { label: "Policies", slug: "policies", description: "Define security and compliance policies." },
       { label: "Integrations", slug: "integrations", description: "Connect with GitHub, Slack, CI/CD, and more." },
+      { label: "Notification Rules", slug: "notification-rules", description: "Configure automated alerts and notification triggers." },
     ],
   },
 ];

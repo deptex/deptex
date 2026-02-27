@@ -1,4 +1,5 @@
 import express from 'express';
+import * as crypto from 'crypto';
 import semver from 'semver';
 import { supabase } from '../../../backend/src/lib/supabase';
 import { authenticateUser, AuthRequest } from '../../../backend/src/middleware/auth';
@@ -884,10 +885,11 @@ router.get('/:id/repositories', async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
+    const GIT_PROVIDERS = ['github', 'gitlab', 'bitbucket'] as const;
     let integrations: OrgIntegration[];
     if (integration_id) {
       const single = await getIntegrationById(id, integration_id);
-      integrations = single ? [single] : [];
+      integrations = single && GIT_PROVIDERS.includes(single.provider as any) ? [single] : [];
     } else {
       integrations = await getOrgIntegrations(id);
     }
@@ -1553,6 +1555,407 @@ router.get('/:id/projects/:projectId', async (req: AuthRequest, res) => {
   }
 });
 
+// GET /api/organizations/:id/projects/:projectId/connections - Merged org + team + project connections
+router.get('/:id/projects/:projectId/connections', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, projectId } = req.params;
+
+    const accessCheck = await checkProjectAccess(userId, orgId, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const { data: project } = await supabase
+      .from('projects')
+      .select('organization_id')
+      .eq('id', projectId)
+      .eq('organization_id', orgId)
+      .single();
+
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const NOTIFICATION_PROVIDERS = ['slack', 'discord', 'jira', 'linear', 'asana', 'custom_notification', 'custom_ticketing', 'email'];
+
+    // Find the owner team for this project
+    const { data: ownerEntry } = await supabase
+      .from('project_teams')
+      .select('team_id')
+      .eq('project_id', projectId)
+      .eq('is_owner', true)
+      .single();
+    const ownerTeamId = ownerEntry?.team_id || null;
+
+    const queries: Promise<any>[] = [
+      supabase
+        .from('organization_integrations')
+        .select('id, organization_id, provider, installation_id, display_name, metadata, status, connected_at, created_at, updated_at')
+        .eq('organization_id', orgId)
+        .eq('status', 'connected')
+        .in('provider', NOTIFICATION_PROVIDERS)
+        .order('created_at', { ascending: true }),
+      supabase
+        .from('project_integrations')
+        .select('id, project_id, provider, installation_id, display_name, metadata, status, connected_at, created_at, updated_at')
+        .eq('project_id', projectId)
+        .eq('status', 'connected')
+        .in('provider', NOTIFICATION_PROVIDERS)
+        .order('created_at', { ascending: true }),
+    ];
+
+    if (ownerTeamId) {
+      queries.push(
+        supabase
+          .from('team_integrations')
+          .select('id, team_id, provider, installation_id, display_name, metadata, status, connected_at, created_at, updated_at')
+          .eq('team_id', ownerTeamId)
+          .eq('status', 'connected')
+          .in('provider', NOTIFICATION_PROVIDERS)
+          .order('created_at', { ascending: true })
+      );
+    }
+
+    const results = await Promise.all(queries);
+    const orgConns = results[0].data || [];
+    const projConns = results[1].data || [];
+    const teamConns = ownerTeamId ? (results[2]?.data || []) : [];
+
+    const inherited = orgConns.map((c: any) => ({ ...c, source: 'organization' }));
+    const teamSpecific = teamConns.map((c: any) => ({ ...c, source: 'team' }));
+    const projectSpecific = projConns.map((c: any) => ({ ...c, source: 'project' }));
+    res.json({ inherited, team: teamSpecific, project: projectSpecific });
+  } catch (error: any) {
+    console.error('Error fetching project connections:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch connections' });
+  }
+});
+
+// DELETE /api/organizations/:id/projects/:projectId/connections/:connectionId - Delete project connection only
+router.delete('/:id/projects/:projectId/connections/:connectionId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, projectId, connectionId } = req.params;
+
+    if (!(await checkWatchtowerManagePermission(userId, orgId, projectId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage project integrations' });
+    }
+
+    const { data: connection } = await supabase
+      .from('project_integrations')
+      .select('*')
+      .eq('id', connectionId)
+      .eq('project_id', projectId)
+      .single();
+
+    if (!connection) return res.status(404).json({ error: 'Connection not found' });
+
+    const { error: deleteError } = await supabase
+      .from('project_integrations')
+      .delete()
+      .eq('id', connectionId)
+      .eq('project_id', projectId);
+
+    if (deleteError) throw deleteError;
+
+    res.json({ success: true, message: 'Connection removed' });
+  } catch (error: any) {
+    console.error('Error deleting project connection:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete connection' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/notification-rules
+router.get('/:id/projects/:projectId/notification-rules', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, projectId } = req.params;
+
+    const accessCheck = await checkProjectAccess(userId, orgId, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const { data: rules, error } = await supabase
+      .from('project_notification_rules')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    const mapped = (rules ?? []).map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      triggerType: r.trigger_type,
+      minDepscoreThreshold: r.min_depscore_threshold ?? undefined,
+      customCode: r.custom_code ?? undefined,
+      destinations: r.destinations ?? [],
+      active: r.active ?? true,
+      createdByUserId: r.created_by_user_id ?? undefined,
+      createdByName: r.created_by_name ?? undefined,
+    }));
+
+    res.json(mapped);
+  } catch (error: any) {
+    console.error('Error fetching project notification rules:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch notification rules' });
+  }
+});
+
+// POST /api/organizations/:id/projects/:projectId/notification-rules
+router.post('/:id/projects/:projectId/notification-rules', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, projectId } = req.params;
+    const { name, triggerType, minDepscoreThreshold, customCode, destinations, createdByName } = req.body;
+
+    if (!(await checkWatchtowerManagePermission(userId, orgId, projectId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage notification rules' });
+    }
+
+    if (!name || typeof name !== 'string') {
+      return res.status(400).json({ error: 'name is required' });
+    }
+    const validTriggers = ['weekly_digest', 'vulnerability_discovered', 'custom_code_pipeline'];
+    if (!triggerType || !validTriggers.includes(triggerType)) {
+      return res.status(400).json({ error: 'triggerType must be one of: weekly_digest, vulnerability_discovered, custom_code_pipeline' });
+    }
+
+    const dests = Array.isArray(destinations) ? destinations : [];
+    const insertData: Record<string, unknown> = {
+      project_id: projectId,
+      name: name.trim(),
+      trigger_type: triggerType,
+      destinations: dests,
+      active: true,
+      created_by_user_id: userId,
+      created_by_name: typeof createdByName === 'string' ? createdByName : null,
+    };
+    if (triggerType === 'vulnerability_discovered' && typeof minDepscoreThreshold === 'number') {
+      insertData.min_depscore_threshold = minDepscoreThreshold;
+    }
+    if (triggerType === 'custom_code_pipeline' && typeof customCode === 'string') {
+      insertData.custom_code = customCode;
+    }
+
+    const { data: created, error } = await supabase
+      .from('project_notification_rules')
+      .insert(insertData)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.status(201).json({
+      id: created.id,
+      name: created.name,
+      triggerType: created.trigger_type,
+      minDepscoreThreshold: created.min_depscore_threshold ?? undefined,
+      customCode: created.custom_code ?? undefined,
+      destinations: created.destinations ?? [],
+      active: created.active ?? true,
+      createdByUserId: created.created_by_user_id ?? undefined,
+      createdByName: created.created_by_name ?? undefined,
+    });
+  } catch (error: any) {
+    console.error('Error creating project notification rule:', error);
+    res.status(500).json({ error: error.message || 'Failed to create notification rule' });
+  }
+});
+
+// PUT /api/organizations/:id/projects/:projectId/notification-rules/:ruleId
+router.put('/:id/projects/:projectId/notification-rules/:ruleId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, projectId, ruleId } = req.params;
+    const { name, triggerType, minDepscoreThreshold, customCode, destinations } = req.body;
+
+    if (!(await checkWatchtowerManagePermission(userId, orgId, projectId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage notification rules' });
+    }
+
+    const validTriggers = ['weekly_digest', 'vulnerability_discovered', 'custom_code_pipeline'];
+    const updateData: Record<string, unknown> = {};
+    if (typeof name === 'string') updateData.name = name.trim();
+    if (triggerType && validTriggers.includes(triggerType)) updateData.trigger_type = triggerType;
+    if (triggerType === 'vulnerability_discovered') {
+      updateData.min_depscore_threshold = typeof minDepscoreThreshold === 'number' ? minDepscoreThreshold : null;
+    } else {
+      updateData.min_depscore_threshold = null;
+    }
+    if (triggerType === 'custom_code_pipeline') {
+      updateData.custom_code = typeof customCode === 'string' ? customCode : null;
+    } else {
+      updateData.custom_code = null;
+    }
+    if (Array.isArray(destinations)) updateData.destinations = destinations;
+
+    const { data: updated, error } = await supabase
+      .from('project_notification_rules')
+      .update(updateData)
+      .eq('id', ruleId)
+      .eq('project_id', projectId)
+      .select()
+      .single();
+
+    if (error) throw error;
+    if (!updated) return res.status(404).json({ error: 'Notification rule not found' });
+
+    res.json({
+      id: updated.id,
+      name: updated.name,
+      triggerType: updated.trigger_type,
+      minDepscoreThreshold: updated.min_depscore_threshold ?? undefined,
+      customCode: updated.custom_code ?? undefined,
+      destinations: updated.destinations ?? [],
+      active: updated.active ?? true,
+      createdByUserId: updated.created_by_user_id ?? undefined,
+      createdByName: updated.created_by_name ?? undefined,
+    });
+  } catch (error: any) {
+    console.error('Error updating project notification rule:', error);
+    res.status(500).json({ error: error.message || 'Failed to update notification rule' });
+  }
+});
+
+// DELETE /api/organizations/:id/projects/:projectId/notification-rules/:ruleId
+router.delete('/:id/projects/:projectId/notification-rules/:ruleId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, projectId, ruleId } = req.params;
+
+    if (!(await checkWatchtowerManagePermission(userId, orgId, projectId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage notification rules' });
+    }
+
+    const { error } = await supabase
+      .from('project_notification_rules')
+      .delete()
+      .eq('id', ruleId)
+      .eq('project_id', projectId);
+
+    if (error) throw error;
+    res.json({ message: 'Notification rule deleted' });
+  } catch (error: any) {
+    console.error('Error deleting project notification rule:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete notification rule' });
+  }
+});
+
+// POST /api/organizations/:id/projects/:projectId/email-notifications
+router.post('/:id/projects/:projectId/email-notifications', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, projectId } = req.params;
+    const { email } = req.body;
+
+    if (!(await checkWatchtowerManagePermission(userId, orgId, projectId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage project integrations' });
+    }
+
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({ error: 'email is required' });
+    }
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) return res.status(400).json({ error: 'email is required' });
+    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!EMAIL_REGEX.test(normalizedEmail)) {
+      return res.status(400).json({ error: 'Please enter a valid email address' });
+    }
+
+    const { data: project } = await supabase
+      .from('projects')
+      .select('id')
+      .eq('id', projectId)
+      .eq('organization_id', orgId)
+      .single();
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const { data, error: dbError } = await supabase
+      .from('project_integrations')
+      .insert({
+        project_id: projectId,
+        provider: 'email',
+        installation_id: crypto.randomUUID(),
+        display_name: normalizedEmail,
+        status: 'connected',
+        metadata: { email: normalizedEmail },
+        connected_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as any)
+      .select('id')
+      .single();
+
+    if (dbError) {
+      console.error('Project email notification DB error:', dbError);
+      return res.status(500).json({ error: 'Failed to add email notification' });
+    }
+
+    res.json({ success: true, id: data?.id });
+  } catch (error: any) {
+    console.error('Add project email notification error:', error);
+    res.status(500).json({ error: error.message || 'Failed to add email' });
+  }
+});
+
+// POST /api/organizations/:id/projects/:projectId/custom-integrations
+router.post('/:id/projects/:projectId/custom-integrations', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, projectId } = req.params;
+    const { name, type, webhook_url, icon_url } = req.body;
+
+    if (!(await checkWatchtowerManagePermission(userId, orgId, projectId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage project integrations' });
+    }
+
+    if (!name || !type || !webhook_url) {
+      return res.status(400).json({ error: 'name, type (notification|ticketing), and webhook_url are required' });
+    }
+    const trimmedUrl = String(webhook_url).trim();
+    if (!/^https:\/\/[^\s]+$/i.test(trimmedUrl)) {
+      return res.status(400).json({ error: 'webhook_url must start with https://' });
+    }
+    if (type !== 'notification' && type !== 'ticketing') {
+      return res.status(400).json({ error: 'type must be "notification" or "ticketing"' });
+    }
+
+    const secret = `whsec_${crypto.randomBytes(32).toString('hex')}`;
+    const provider = type === 'notification' ? 'custom_notification' : 'custom_ticketing';
+
+    const { data, error: dbError } = await supabase
+      .from('project_integrations')
+      .insert({
+        project_id: projectId,
+        provider,
+        installation_id: crypto.randomUUID() as string,
+        display_name: name,
+        access_token: secret,
+        status: 'connected',
+        metadata: {
+          webhook_url: trimmedUrl,
+          icon_url: icon_url || null,
+          custom_name: name,
+          type,
+        },
+        connected_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as any)
+      .select('id')
+      .single();
+
+    if (dbError) {
+      console.error('Project custom integration DB error:', dbError);
+      return res.status(500).json({ error: 'Failed to create custom integration' });
+    }
+
+    res.json({ success: true, id: data?.id, secret });
+  } catch (error: any) {
+    console.error('Create project custom integration error:', error);
+    res.status(500).json({ error: error.message || 'Failed to create custom integration' });
+  }
+});
+
 // GET /api/organizations/:id/projects/:projectId/roles - Get project roles
 router.get('/:id/projects/:projectId/roles', async (req: AuthRequest, res) => {
   try {
@@ -2068,13 +2471,14 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
     // Get all exceptions for this project (accepted and pending)
     const { data: exceptions } = await supabase
       .from('project_policy_exceptions')
-      .select('id, status, requested_policy_code, base_policy_code, reason, requested_by, created_at, updated_at')
+      .select('id, status, requested_policy_code, base_policy_code, reason, requested_by, policy_type, created_at, updated_at')
       .eq('organization_id', id)
       .eq('project_id', projectId)
       .order('created_at', { ascending: false });
 
     const acceptedList = (exceptions || []).filter((e: any) => e.status === 'accepted');
     const pendingList = (exceptions || []).filter((e: any) => e.status === 'pending');
+    const revokedList = (exceptions || []).filter((e: any) => e.status === 'revoked');
     const latestAccepted = acceptedList[0] || null;
     const effectivePolicyCode = latestAccepted?.requested_policy_code != null && latestAccepted.requested_policy_code !== ''
       ? latestAccepted.requested_policy_code
@@ -2099,7 +2503,10 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
       requested_by: e.requested_by,
       status: e.status,
       reason: e.reason,
+      policy_type: e.policy_type ?? 'full',
       additional_licenses: [] as string[],
+      requested_policy_code: e.requested_policy_code ?? null,
+      base_policy_code: e.base_policy_code ?? null,
       created_at: e.created_at,
       updated_at: e.updated_at,
     }));
@@ -2110,7 +2517,24 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
       requested_by: e.requested_by,
       status: e.status,
       reason: e.reason,
+      policy_type: e.policy_type ?? 'full',
       additional_licenses: [] as string[],
+      requested_policy_code: e.requested_policy_code ?? null,
+      base_policy_code: e.base_policy_code ?? null,
+      created_at: e.created_at,
+      updated_at: e.updated_at,
+    }));
+    const revokedExceptionsLegacy = revokedList.map((e: any) => ({
+      id: e.id,
+      project_id: projectId,
+      organization_id: id,
+      requested_by: e.requested_by,
+      status: e.status,
+      reason: e.reason,
+      policy_type: e.policy_type ?? 'full',
+      additional_licenses: [] as string[],
+      requested_policy_code: e.requested_policy_code ?? null,
+      base_policy_code: e.base_policy_code ?? null,
       created_at: e.created_at,
       updated_at: e.updated_at,
     }));
@@ -2121,6 +2545,7 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
       pending_exception: pendingException
         ? {
             id: pendingException.id,
+            policy_type: pendingException.policy_type ?? 'full',
             requested_policy_code: pendingException.requested_policy_code ?? '',
             base_policy_code: pendingException.base_policy_code ?? '',
             reason: pendingException.reason,
@@ -2133,6 +2558,7 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
       inherited,
       effective,
       pending_exceptions: pendingExceptionsLegacy,
+      revoked_exceptions: revokedExceptionsLegacy,
     });
   } catch (error: any) {
     console.error('Error fetching project policies:', error);
@@ -2145,7 +2571,7 @@ router.post('/:id/projects/:projectId/policy-exceptions', async (req: AuthReques
   try {
     const userId = req.user!.id;
     const { id, projectId } = req.params;
-    const { reason, requested_policy_code, additional_licenses, slsa_enforcement, slsa_level } = req.body;
+    const { reason, requested_policy_code, additional_licenses, slsa_enforcement, slsa_level, policy_type: policyTypeParam } = req.body;
 
     if (!reason || typeof reason !== 'string' || reason.trim().length === 0) {
       return res.status(400).json({ error: 'Reason is required for exception request' });
@@ -2156,6 +2582,8 @@ router.post('/:id/projects/:projectId/policy-exceptions', async (req: AuthReques
     if (requestedCode === '' && (!additional_licenses || additional_licenses.length === 0) && !slsa_enforcement && (slsa_level == null || slsa_level === undefined)) {
       return res.status(400).json({ error: 'requested_policy_code is required for policy exception request' });
     }
+
+    const policyType = ['compliance', 'pull_request', 'full'].includes(policyTypeParam) ? policyTypeParam : 'full';
 
     // Check if user has access to this project
     const accessCheck = await checkProjectAccess(userId, id, projectId);
@@ -2175,17 +2603,28 @@ router.post('/:id/projects/:projectId/policy-exceptions', async (req: AuthReques
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    // One pending per project: reject if already pending
-    const { data: existingPending } = await supabase
+    // One pending per (project, policy_type): reject if already pending for this type
+    // 'full' blocks both sections; compliance/pull_request block only their section
+    const { data: allPending } = await supabase
       .from('project_policy_exceptions')
-      .select('id')
+      .select('id, policy_type')
       .eq('organization_id', id)
       .eq('project_id', projectId)
-      .eq('status', 'pending')
-      .maybeSingle();
+      .eq('status', 'pending');
 
-    if (existingPending) {
+    const pendingList = (allPending || []) as Array<{ id: string; policy_type?: string }>;
+    const hasFull = pendingList.some((p) => (p.policy_type ?? 'full') === 'full');
+    const hasCompliance = pendingList.some((p) => (p.policy_type ?? 'full') === 'compliance');
+    const hasPullRequest = pendingList.some((p) => (p.policy_type ?? 'full') === 'pull_request');
+
+    if (policyType === 'full' && pendingList.length > 0) {
       return res.status(409).json({ error: 'Project already has a pending exception request. Cancel it before submitting a new one.' });
+    }
+    if (policyType === 'compliance' && (hasFull || hasCompliance)) {
+      return res.status(409).json({ error: 'Compliance exception request already pending. Cancel it before submitting a new one.' });
+    }
+    if (policyType === 'pull_request' && (hasFull || hasPullRequest)) {
+      return res.status(409).json({ error: 'Pull request exception request already pending. Cancel it before submitting a new one.' });
     }
 
     // Base = current effective (org or latest accepted exception's requested_policy_code)
@@ -2235,6 +2674,7 @@ router.post('/:id/projects/:projectId/policy-exceptions', async (req: AuthReques
         reason: reason.trim(),
         requested_policy_code: requestedCode || null,
         base_policy_code: basePolicyCode || null,
+        policy_type: policyType,
         additional_licenses: Array.isArray(additional_licenses) ? additional_licenses : [],
         slsa_enforcement: slsa_enforcement || null,
         slsa_level: slsa_level || null,
@@ -2308,46 +2748,94 @@ router.get('/:id/policy-exceptions', async (req: AuthRequest, res) => {
     const projectIds = [...new Set((exceptions || []).map((e: any) => e.project_id))];
     const userIds = [...new Set((exceptions || []).map((e: any) => e.requested_by))];
 
-    let projectsMap: Record<string, string> = {};
-    let usersMap: Record<string, { email: string; full_name: string | null }> = {};
-
+    let projectsMap: Record<string, { name: string; framework?: string | null }> = {};
+    let usersMap: Record<string, { email: string; full_name: string | null; avatar_url?: string | null; role?: string; role_display_name?: string | null; role_color?: string | null }> = {};
     if (projectIds.length > 0) {
       const { data: projects } = await supabase
         .from('projects')
-        .select('id, name')
+        .select('id, name, framework')
         .in('id', projectIds);
 
       projects?.forEach((p: any) => {
-        projectsMap[p.id] = p.name;
+        projectsMap[p.id] = { name: p.name, framework: p.framework ?? null };
       });
     }
 
     if (userIds.length > 0) {
-      // Get user profiles
+      // Get user profiles (including avatar for display)
       const { data: profiles } = await supabase
         .from('user_profiles')
-        .select('user_id, full_name')
+        .select('user_id, full_name, avatar_url')
         .in('user_id', userIds);
 
-      // Get emails
-      const { data: authUsers } = await supabase.auth.admin.listUsers();
+      // Get auth user details (email, metadata) - fetch only requesters, not all users
+      const authUserResults = await Promise.all(
+        userIds.map((uid) => supabase.auth.admin.getUserById(uid))
+      );
+      const authUserMap = new Map(
+        authUserResults
+          .filter((r) => r.data?.user)
+          .map((r) => [(r.data as any).user.id, (r.data as any).user])
+      );
+
+      // Get organization roles for requesters
+      const { data: orgMembers } = await supabase
+        .from('organization_members')
+        .select('user_id, role')
+        .eq('organization_id', id)
+        .in('user_id', userIds);
+
+      const uniqueRoles = [...new Set((orgMembers || []).map((m: any) => m.role).filter(Boolean))];
+      let roleInfoMap: Record<string, { display_name: string | null; color: string | null }> = {};
+      if (uniqueRoles.length > 0) {
+        const { data: roles } = await supabase
+          .from('organization_roles')
+          .select('name, display_name, color')
+          .eq('organization_id', id)
+          .in('name', uniqueRoles);
+        roles?.forEach((r: any) => {
+          roleInfoMap[r.name] = { display_name: r.display_name ?? null, color: r.color ?? null };
+        });
+      }
+
+      const memberRoleMap: Record<string, string> = {};
+      orgMembers?.forEach((m: any) => {
+        memberRoleMap[m.user_id] = m.role;
+      });
 
       userIds.forEach(uid => {
         const profile = profiles?.find((p: any) => p.user_id === uid);
-        const authUser = authUsers?.users?.find((u: any) => u.id === uid);
+        const authUser = authUserMap.get(uid);
+        const fullName = profile?.full_name
+          || (authUser?.user_metadata as any)?.full_name
+          || (authUser?.user_metadata as any)?.name
+          || (authUser?.user_metadata as any)?.user_name
+          || (authUser?.user_metadata as any)?.preferred_username
+          || (authUser?.email ? authUser.email.split('@')[0] : null);
+        const role = memberRoleMap[uid];
+        const roleInfo = role ? roleInfoMap[role] : undefined;
         usersMap[uid] = {
           email: authUser?.email || '',
-          full_name: profile?.full_name || null,
+          full_name: fullName || null,
+          avatar_url: profile?.avatar_url ?? (authUser?.user_metadata as any)?.avatar_url ?? (authUser?.user_metadata as any)?.picture ?? null,
+          role: role || undefined,
+          role_display_name: roleInfo?.display_name ?? null,
+          role_color: roleInfo?.color ?? null,
         };
       });
     }
 
     // Enrich exceptions with project and user info
-    const enrichedExceptions = (exceptions || []).map((exception: any) => ({
-      ...exception,
-      project_name: projectsMap[exception.project_id] || 'Unknown Project',
-      requester: usersMap[exception.requested_by] || { email: '', full_name: null },
-    }));
+    const enrichedExceptions = (exceptions || []).map((exception: any) => {
+      const proj = projectsMap[exception.project_id];
+      const requesterData = usersMap[exception.requested_by];
+      return {
+        ...exception,
+        project_name: proj?.name || 'Unknown Project',
+        project_framework: proj?.framework ?? null,
+        requester: requesterData || { email: '', full_name: null, avatar_url: null },
+      };
+    });
 
     res.json(enrichedExceptions);
   } catch (error: any) {
@@ -2379,7 +2867,7 @@ router.put('/:id/policy-exceptions/:exceptionId', async (req: AuthRequest, res) 
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    // Check for edit_policies permission
+    // Check for manage_compliance permission
     const { data: roleData } = await supabase
       .from('organization_roles')
       .select('permissions')
@@ -2389,7 +2877,7 @@ router.put('/:id/policy-exceptions/:exceptionId', async (req: AuthRequest, res) 
 
     const canEditPolicies = membership.role === 'owner' ||
       membership.role === 'admin' ||
-      roleData?.permissions?.edit_policies === true;
+      roleData?.permissions?.manage_compliance === true;
 
     if (!canEditPolicies) {
       return res.status(403).json({ error: 'You do not have permission to review policy exceptions' });
@@ -2451,6 +2939,89 @@ router.put('/:id/policy-exceptions/:exceptionId', async (req: AuthRequest, res) 
   }
 });
 
+// PUT /api/organizations/:id/policy-exceptions/:exceptionId/revoke - Revoke an accepted exception
+router.put('/:id/policy-exceptions/:exceptionId/revoke', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, exceptionId } = req.params;
+
+    const { data: membership, error: membershipError } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (membershipError || !membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const { data: roleData } = await supabase
+      .from('organization_roles')
+      .select('permissions')
+      .eq('organization_id', id)
+      .eq('name', membership.role)
+      .single();
+
+    const canEditPolicies = membership.role === 'owner' ||
+      membership.role === 'admin' ||
+      roleData?.permissions?.manage_compliance === true;
+
+    if (!canEditPolicies) {
+      return res.status(403).json({ error: 'You do not have permission to revoke policy exceptions' });
+    }
+
+    const { data: exception, error: exceptionError } = await supabase
+      .from('project_policy_exceptions')
+      .select('*, projects!inner(name)')
+      .eq('id', exceptionId)
+      .eq('organization_id', id)
+      .single();
+
+    if (exceptionError || !exception) {
+      return res.status(404).json({ error: 'Exception not found' });
+    }
+
+    if (exception.status !== 'accepted') {
+      return res.status(400).json({ error: 'Only accepted exceptions can be revoked' });
+    }
+
+    const { data: updatedException, error: updateError } = await supabase
+      .from('project_policy_exceptions')
+      .update({
+        status: 'revoked',
+        revoked_by: userId,
+        revoked_at: new Date().toISOString(),
+      })
+      .eq('id', exceptionId)
+      .select()
+      .single();
+
+    if (updateError) {
+      throw updateError;
+    }
+
+    await createActivity({
+      organization_id: id,
+      user_id: userId,
+      activity_type: 'policy_exception_revoked',
+      description: `revoked policy exception for project "${(exception as any).projects?.name}"`,
+      metadata: {
+        project_id: exception.project_id,
+        project_name: (exception as any).projects?.name,
+        exception_id: exceptionId,
+      },
+    });
+
+    await updateProjectCompliance(id, exception.project_id);
+
+    res.json(updatedException);
+  } catch (error: any) {
+    console.error('Error revoking policy exception:', error);
+    res.status(500).json({ error: error.message || 'Failed to revoke policy exception' });
+  }
+});
+
 // DELETE /api/organizations/:id/policy-exceptions/:exceptionId - Cancel/remove exception (pending only)
 router.delete('/:id/policy-exceptions/:exceptionId', async (req: AuthRequest, res) => {
   try {
@@ -2477,7 +3048,7 @@ router.delete('/:id/policy-exceptions/:exceptionId', async (req: AuthRequest, re
 
     const canEditPolicies = membership.role === 'owner' ||
       membership.role === 'admin' ||
-      roleData?.permissions?.edit_policies === true;
+      roleData?.permissions?.manage_compliance === true;
 
     const { data: exception } = await supabase
       .from('project_policy_exceptions')
@@ -3106,10 +3677,11 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
       .eq('project_id', projectId)
       .single();
 
+    const GIT_PROVIDERS = ['github', 'gitlab', 'bitbucket'] as const;
     let integrations: OrgIntegration[];
     if (integration_id) {
       const single = await getIntegrationById(id, integration_id);
-      integrations = single ? [single] : [];
+      integrations = single && GIT_PROVIDERS.includes(single.provider as any) ? [single] : [];
     } else {
       integrations = await getOrgIntegrations(id);
     }
@@ -3166,6 +3738,8 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
           extraction_step: (repoRecord as { extraction_step?: string }).extraction_step ?? null,
           extraction_error: (repoRecord as { extraction_error?: string }).extraction_error ?? null,
           provider: (repoRecord as any).provider ?? 'github',
+          pull_request_comments_enabled: (repoRecord as { pull_request_comments_enabled?: boolean }).pull_request_comments_enabled !== false,
+          connected_at: (repoRecord as { created_at?: string }).created_at ?? null,
         }
         : null,
       repositories: allRepos,
@@ -3375,6 +3949,63 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
   } catch (error: any) {
     console.error('Error connecting repository:', error);
     res.status(500).json({ error: error.message || 'Failed to connect repository' });
+  }
+});
+
+// PATCH /api/organizations/:id/projects/:projectId/repositories/settings - Update repository settings (e.g. pull request comments)
+router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+    const { pull_request_comments_enabled } = req.body || {};
+
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const hasEditSettings = accessCheck.projectPermissions?.edit_settings === true;
+    const isOrgOwner = accessCheck.orgMembership?.role === 'owner';
+    const hasOrgPermission = accessCheck.orgRole?.permissions?.manage_teams_and_projects === true;
+    if (!hasEditSettings && !isOrgOwner && !hasOrgPermission) {
+      return res.status(403).json({ error: 'You do not have permission to update repository settings' });
+    }
+
+    const { data: repoRecord, error: fetchError } = await supabase
+      .from('project_repositories')
+      .select('id')
+      .eq('project_id', projectId)
+      .single();
+
+    if (fetchError || !repoRecord) {
+      return res.status(404).json({ error: 'No repository connected to this project' });
+    }
+
+    const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (typeof pull_request_comments_enabled === 'boolean') {
+      updates.pull_request_comments_enabled = pull_request_comments_enabled;
+    }
+
+    const { data: updated, error: updateError } = await supabase
+      .from('project_repositories')
+      .update(updates)
+      .eq('project_id', projectId)
+      .select('repo_full_name, default_branch, status, pull_request_comments_enabled')
+      .single();
+
+    if (updateError) {
+      throw updateError;
+    }
+
+    res.json({
+      repo_full_name: updated.repo_full_name,
+      default_branch: updated.default_branch,
+      status: updated.status,
+      pull_request_comments_enabled: (updated as { pull_request_comments_enabled?: boolean }).pull_request_comments_enabled !== false,
+    });
+  } catch (error: any) {
+    console.error('Error updating repository settings:', error);
+    res.status(500).json({ error: error.message || 'Failed to update repository settings' });
   }
 });
 

@@ -34,8 +34,14 @@ function TeamSidebar({ organizationId, teamId, userPermissions }: TeamSidebarPro
 
   const pathParts = location.pathname.split('/');
   const currentTab = pathParts[pathParts.length - 1];
+  const parentSegment = pathParts[pathParts.length - 2];
 
   const activeTab = useMemo(() => {
+    // Settings sub-paths (e.g. settings/notifications, settings/roles) - parent is 'settings'
+    if (parentSegment === 'settings') {
+      const settingsTab = visibleNavItems.find((tab) => tab.id === 'settings');
+      return settingsTab ? 'settings' : 'overview';
+    }
     const matchingTab = visibleNavItems.find((tab) => tab.path === currentTab);
     if (matchingTab) return matchingTab.id;
     if (currentTab === teamId) {
@@ -43,7 +49,7 @@ function TeamSidebar({ organizationId, teamId, userPermissions }: TeamSidebarPro
       return overviewTab ? 'overview' : 'projects';
     }
     return 'overview';
-  }, [currentTab, teamId, visibleNavItems]);
+  }, [currentTab, parentSegment, teamId, visibleNavItems]);
 
   const handleNavClick = (path: string) => {
     if (path === 'overview') {

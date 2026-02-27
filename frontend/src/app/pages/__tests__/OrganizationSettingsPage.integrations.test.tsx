@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '../../../test/utils';
 import userEvent from '@testing-library/user-event';
+import { useOutletContext } from 'react-router-dom';
+import { api } from '../../../lib/api';
 import OrganizationSettingsPage from '../OrganizationSettingsPage';
 
 const mockGetOrganizationConnections = vi.fn();
 const mockDeleteOrganizationConnection = vi.fn();
+const mockConnectJiraOrg = vi.fn();
+const mockConnectLinearOrg = vi.fn();
+const mockConnectAsanaOrg = vi.fn();
 const mockToast = vi.fn();
 const mockNavigate = vi.fn();
 const mockSetSearchParams = vi.fn();
@@ -38,6 +43,10 @@ vi.mock('../../../lib/api', () => ({
     deleteOrganizationConnection: (...args: unknown[]) => mockDeleteOrganizationConnection(...args),
     connectSlackOrg: vi.fn().mockResolvedValue({ redirectUrl: 'https://slack.com/oauth' }),
     connectDiscordOrg: vi.fn().mockResolvedValue({ redirectUrl: 'https://discord.com/oauth' }),
+    connectJiraOrg: (...args: unknown[]) => mockConnectJiraOrg(...args),
+    connectJiraPatOrg: vi.fn().mockResolvedValue({ success: true }),
+    connectLinearOrg: (...args: unknown[]) => mockConnectLinearOrg(...args),
+    connectAsanaOrg: (...args: unknown[]) => mockConnectAsanaOrg(...args),
     getOrganizationRoles: vi.fn().mockResolvedValue([
       {
         id: 'r1',
@@ -78,8 +87,12 @@ vi.mock('../../../lib/supabase', () => ({
 describe('OrganizationSettingsPage – Integrations', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(useOutletContext).mockReturnValue(stableOrgContext as never);
     mockGetOrganizationConnections.mockResolvedValue([]);
     mockDeleteOrganizationConnection.mockResolvedValue({ success: true, provider: 'github' });
+    mockConnectJiraOrg.mockResolvedValue({ redirectUrl: 'https://atlassian.com/oauth' });
+    mockConnectLinearOrg.mockResolvedValue({ redirectUrl: 'https://linear.app/oauth' });
+    mockConnectAsanaOrg.mockResolvedValue({ redirectUrl: 'https://asana.com/oauth' });
     Object.defineProperty(window, 'open', { value: mockWindowOpen, writable: true });
     window.confirm = vi.fn(() => true);
   });
@@ -90,9 +103,8 @@ describe('OrganizationSettingsPage – Integrations', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Integrations' })).toBeInTheDocument();
     });
-    expect(screen.getByText('Connect external tools and services to your organization.')).toBeInTheDocument();
     expect(screen.getByText('CI/CD')).toBeInTheDocument();
-    expect(screen.getByText('Source code & repositories')).toBeInTheDocument();
+    expect(screen.getByText(/Source code|repositories/)).toBeInTheDocument();
   });
 
   it('when connections are loading, shows table with column headers and skeleton rows', async () => {
@@ -112,11 +124,11 @@ describe('OrganizationSettingsPage – Integrations', () => {
     resolveConnections!([]);
   });
 
-  it('when connections loaded empty, shows No source code connections and Add buttons', async () => {
+  it('when connections loaded empty, shows No source code integrations and Add buttons', async () => {
     mockGetOrganizationConnections.mockResolvedValue([]);
     render(<OrganizationSettingsPage />);
     await waitFor(() => {
-      expect(screen.getByText('No source code connections')).toBeInTheDocument();
+      expect(screen.getByText(/No source code integrations/)).toBeInTheDocument();
     });
     expect(screen.getByRole('button', { name: /Add GitHub/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Add GitLab/i })).toBeInTheDocument();
@@ -219,5 +231,168 @@ describe('OrganizationSettingsPage – Integrations', () => {
       expect(mockDeleteOrganizationConnection).toHaveBeenCalledWith('org-1', 'conn-3');
     });
     expect(mockWindowOpen).toHaveBeenCalledWith('https://bitbucket.org/account/settings/applications/', '_blank');
+  });
+
+  it('integrations skeleton shows CI/CD, Notifications, and Ticketing sections when loading', async () => {
+    vi.mocked(useOutletContext).mockReturnValue({
+      organization: null,
+      reloadOrganization: mockReloadOrganization,
+    } as never);
+    render(<OrganizationSettingsPage />);
+    expect(screen.getByRole('heading', { name: 'Integrations' })).toBeInTheDocument();
+    expect(screen.getByText('CI/CD')).toBeInTheDocument();
+    expect(screen.getByText('Notifications')).toBeInTheDocument();
+    expect(screen.getByText('Ticketing')).toBeInTheDocument();
+  });
+
+  it('when connections loaded empty, Ticketing shows No ticketing integrations message', async () => {
+    mockGetOrganizationConnections.mockResolvedValue([]);
+    render(<OrganizationSettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByText(/No ticketing integrations/)).toBeInTheDocument();
+    });
+  });
+
+  it('Ticketing section has Add Jira dropdown with Jira Cloud and Jira Data Center options', async () => {
+    mockGetOrganizationConnections.mockResolvedValue([]);
+    mockConnectJiraOrg.mockResolvedValue({ redirectUrl: 'https://atlassian.com/oauth' });
+    render(<OrganizationSettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByText('Add Jira')).toBeInTheDocument();
+    });
+    const addJiraButton = screen.getByRole('button', { name: /Add Jira/i });
+    await userEvent.click(addJiraButton);
+    await waitFor(() => {
+      expect(screen.getByRole('menuitem', { name: 'Jira Cloud (OAuth)' })).toBeInTheDocument();
+    });
+    expect(screen.getByRole('menuitem', { name: 'Jira Data Center (PAT)' })).toBeInTheDocument();
+  });
+
+  it('Add Linear triggers OAuth redirect', async () => {
+    mockGetOrganizationConnections.mockResolvedValue([]);
+    const mockLocation = { href: '', assign: vi.fn() };
+    Object.defineProperty(window, 'location', { value: mockLocation, writable: true });
+    render(<OrganizationSettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Add Linear/i })).toBeInTheDocument();
+    });
+    await userEvent.click(screen.getByRole('button', { name: /Add Linear/i }));
+    await waitFor(() => {
+      expect(mockConnectLinearOrg).toHaveBeenCalledWith('org-1');
+    });
+    expect(mockLocation.href).toBe('https://linear.app/oauth');
+  });
+
+  it('Add Asana triggers OAuth redirect', async () => {
+    mockGetOrganizationConnections.mockResolvedValue([]);
+    const mockLocation = { href: '', assign: vi.fn() };
+    Object.defineProperty(window, 'location', { value: mockLocation, writable: true });
+    render(<OrganizationSettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Add Asana/i })).toBeInTheDocument();
+    });
+    await userEvent.click(screen.getByRole('button', { name: /Add Asana/i }));
+    await waitFor(() => {
+      expect(mockConnectAsanaOrg).toHaveBeenCalledWith('org-1');
+    });
+    expect(mockLocation.href).toBe('https://asana.com/oauth');
+  });
+
+  it('when ticketing connections exist, shows provider labels and Disconnect', async () => {
+    mockGetOrganizationConnections.mockResolvedValue([
+      {
+        id: 'conn-jira',
+        provider: 'jira',
+        display_name: 'My Jira',
+        status: 'connected',
+        metadata: {},
+      },
+      {
+        id: 'conn-linear',
+        provider: 'linear',
+        display_name: 'Linear Workspace',
+        status: 'connected',
+        metadata: {},
+      },
+    ]);
+    render(<OrganizationSettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByText('Jira')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Linear')).toBeInTheDocument();
+    const disconnectButtons = screen.getAllByRole('button', { name: 'Disconnect' });
+    expect(disconnectButtons.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('Disconnect ticketing integration calls deleteOrganizationConnection', async () => {
+    mockGetOrganizationConnections.mockResolvedValue([
+      {
+        id: 'conn-jira',
+        provider: 'jira',
+        display_name: 'My Jira',
+        status: 'connected',
+        metadata: {},
+      },
+    ]);
+    mockDeleteOrganizationConnection.mockResolvedValue({ success: true, provider: 'jira' });
+    render(<OrganizationSettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByText('Jira')).toBeInTheDocument();
+    });
+    const disconnectBtn = screen.getByRole('button', { name: 'Disconnect' });
+    await userEvent.click(disconnectBtn);
+    await waitFor(() => {
+      expect(mockDeleteOrganizationConnection).toHaveBeenCalledWith('org-1', 'conn-jira');
+    });
+  });
+
+  it('Notifications section has Add Email, Add Slack, Add Discord, Add Custom buttons', async () => {
+    mockGetOrganizationConnections.mockResolvedValue([]);
+    render(<OrganizationSettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Add Slack/i })).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /Add Email/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Add Discord/i })).toBeInTheDocument();
+    const addCustomButtons = screen.getAllByRole('button', { name: /Add Custom/i });
+    expect(addCustomButtons.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('user without manage_integrations sees Access Denied on integrations tab', async () => {
+    vi.mocked(useOutletContext).mockReturnValue({
+      organization: {
+        id: 'org-1',
+        name: 'Test Org',
+        role: 'member',
+        permissions: { view_settings: true, manage_integrations: false },
+      },
+      reloadOrganization: mockReloadOrganization,
+    } as never);
+    vi.mocked(api.getOrganizationRoles).mockResolvedValueOnce([
+      {
+        id: 'r2',
+        name: 'member',
+        display_name: 'Member',
+        display_order: 1,
+        permissions: { view_settings: true, manage_integrations: false },
+      },
+    ]);
+    mockGetOrganizationConnections.mockResolvedValue([]);
+    render(<OrganizationSettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByText('Access Denied')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/don't have permission to manage integrations/i)).toBeInTheDocument();
+  });
+
+  it('API error on getOrganizationConnections shows empty state without crash', async () => {
+    mockGetOrganizationConnections.mockRejectedValue(new Error('Network error'));
+    render(<OrganizationSettingsPage />);
+    await waitFor(() => {
+      expect(mockGetOrganizationConnections).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/No source code integrations/)).toBeInTheDocument();
+    });
   });
 });

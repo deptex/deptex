@@ -193,6 +193,14 @@
   animation: scan 3s linear infinite;
 }
 
+@keyframes thinking-whole {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+.animate-thinking-whole {
+  animation: thinking-whole 1.5s ease-in-out infinite;
+}
+
 .flow-dot {
   left: -8px;
   animation-play-state: paused;
@@ -265,4 +273,10 @@
   padding: 0 !important;
 }
 
+/* Monaco editor: force dark background to match app theme (#1A1C1E) */
+.monaco-editor,
+.monaco-editor .overflowingContentWidgets,
+.monaco-editor .margin {
+  background-color: #1A1C1E !important;
+}
 

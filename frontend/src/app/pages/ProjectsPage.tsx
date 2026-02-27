@@ -1,22 +1,18 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useOutletContext, useNavigate } from 'react-router-dom';
-import { Plus, Search, Grid3x3, List, ChevronRight, Bell, Check, Lock, Loader2, Save, Globe, Building2, FlaskConical, Crown, HelpCircle, ChevronDown } from 'lucide-react';
-import { api, Project, Team, Organization, RolePermissions, type AssetTier, type CiCdConnection, type RepoWithProvider } from '../../lib/api';
+import { Plus, Search, Grid3x3, List, ChevronRight, Bell, Check, Lock, Loader2, Save } from 'lucide-react';
+import { api, Project, Team, Organization, RolePermissions } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { Button } from '../../components/ui/button';
+import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
 import { ProjectTeamSelect } from '../../components/ProjectTeamSelect';
 import { FrameworkIcon } from '../../components/framework-icon';
-import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
+import { SlideInSidebar } from '../../components/SlideInSidebar';
+import { CreateProjectSidebar } from '../../components/CreateProjectSidebar';
 
 interface OrganizationContextType {
   organization: Organization | null;
   reloadOrganization: () => Promise<void>;
-}
-
-// Repo name without account prefix: "owner/repo" -> "repo"
-function repoNameOnly(fullName: string): string {
-  const parts = fullName.split('/');
-  return parts.length > 1 ? parts[parts.length - 1] : fullName;
 }
 
 // Short extraction status label for project cards
@@ -65,43 +61,12 @@ export default function ProjectsPage() {
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [projectName, setProjectName] = useState('');
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
-  const [assetTier, setAssetTier] = useState<AssetTier>('EXTERNAL');
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [userPermissions, setUserPermissions] = useState<RolePermissions | null>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
   const searchInputRef = useRef<HTMLInputElement>(null);
-
-  // Stage 2: repo connection after project creation
-  const [createdProjectId, setCreatedProjectId] = useState<string | null>(null);
-  const [createdProjectName, setCreatedProjectName] = useState('');
-  const [sidebarRepos, setSidebarRepos] = useState<RepoWithProvider[]>([]);
-  const [sidebarReposLoading, setSidebarReposLoading] = useState(false);
-  const [sidebarReposError, setSidebarReposError] = useState<string | null>(null);
-  const [sidebarRepoSearch, setSidebarRepoSearch] = useState('');
-  const [sidebarRepoToConnect, setSidebarRepoToConnect] = useState<RepoWithProvider | null>(null);
-  const [sidebarConnections, setSidebarConnections] = useState<CiCdConnection[]>([]);
-  const [sidebarSelectedIntegration, setSidebarSelectedIntegration] = useState<string | null>(null);
-  const [sidebarRepoScanLoading, setSidebarRepoScanLoading] = useState<string | null>(null); // repo full_name when scanning
-  type SidebarScanResult = {
-    full_name: string;
-    isMonorepo: boolean;
-    potentialProjects: Array<{ name: string; path: string; ecosystem?: string; isLinked: boolean; linkedByProjectId?: string; linkedByProjectName?: string }>;
-  };
-  const [sidebarRepoScanResult, setSidebarRepoScanResult] = useState<SidebarScanResult | null>(null);
-  const [sidebarRepoScanResultsByRepo, setSidebarRepoScanResultsByRepo] = useState<Record<string, SidebarScanResult>>({});
-  const [sidebarScanLoading, setSidebarScanLoading] = useState(false);
-  const [sidebarScanResult, setSidebarScanResult] = useState<{
-    isMonorepo: boolean;
-    potentialProjects: Array<{ name: string; path: string; ecosystem?: string; isLinked: boolean; linkedByProjectId?: string; linkedByProjectName?: string }>;
-  } | null>(null);
-  const [sidebarSelectedPath, setSidebarSelectedPath] = useState('');
-  const [sidebarConnecting, setSidebarConnecting] = useState(false);
-  const [sidebarRepoScanError, setSidebarRepoScanError] = useState<string | null>(null);
-  const [sidebarGitHubDropdownOpen, setSidebarGitHubDropdownOpen] = useState(false);
-  const sidebarGitHubDropdownRef = useRef<HTMLDivElement>(null);
-  const [sidebarGitHubInstallLoading, setSidebarGitHubInstallLoading] = useState(false);
 
   // Get cached permissions
   const getCachedPermissions = (): RolePermissions | null => {
@@ -206,16 +171,6 @@ export default function ProjectsPage() {
   }, [searchQuery]);
 
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (sidebarGitHubDropdownRef.current && !sidebarGitHubDropdownRef.current.contains(e.target as Node)) {
-        setSidebarGitHubDropdownOpen(false);
-      }
-    };
-    if (sidebarGitHubDropdownOpen) document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [sidebarGitHubDropdownOpen]);
-
-  useEffect(() => {
     if (id) {
       loadData();
     }
@@ -250,217 +205,11 @@ export default function ProjectsPage() {
     }
   };
 
-  const handleCreateProject = async () => {
-    if (!id || !projectName.trim()) {
-      toast({ title: 'Error', description: 'Project name is required', variant: 'destructive' });
-      return;
-    }
-
-    setCreating(true);
-    try {
-      const newProject = await api.createProject(id, {
-        name: projectName.trim(),
-        team_ids: selectedTeamId ? [selectedTeamId] : undefined,
-        asset_tier: assetTier,
-      });
-
-      loadData(); // refresh list in background
-
-      if (sidebarRepoToConnect) {
-        // Use cached preview scan if we have it for this repo; otherwise scan now (needs projectId for link-status)
-        const cachedScan = sidebarRepoToConnect ? sidebarRepoScanResultsByRepo[sidebarRepoToConnect.full_name] : null;
-        const useCachedScan = !!(cachedScan && cachedScan.potentialProjects.length > 0);
-        const potentialProjects = useCachedScan ? cachedScan.potentialProjects : null;
-
-        if (useCachedScan && potentialProjects) {
-          const unlinked = potentialProjects.filter((p) => !p.isLinked);
-          const pathToConnect = sidebarSelectedPath || unlinked[0]?.path || potentialProjects[0]?.path || '';
-          const selectedProject = potentialProjects.find((p) => p.path === pathToConnect) || unlinked[0];
-          if (unlinked.length === 0) {
-            toast({ title: 'No path available', description: 'All package paths in this repo are already linked to other projects.', variant: 'destructive' });
-            closeModal();
-            navigate(`/organizations/${id}/projects/${newProject.id}`);
-          } else {
-            try {
-              await api.connectProjectRepository(id, newProject.id, {
-                repo_id: sidebarRepoToConnect.id,
-                repo_full_name: sidebarRepoToConnect.full_name,
-                default_branch: sidebarRepoToConnect.default_branch,
-                framework: sidebarRepoToConnect.framework,
-                package_json_path: pathToConnect || undefined,
-                ecosystem: selectedProject?.ecosystem || sidebarRepoToConnect.ecosystem,
-                provider: sidebarRepoToConnect.provider,
-                integration_id: sidebarRepoToConnect.integration_id,
-              });
-              toast({ title: 'Repository connected', description: 'Extraction has started.' });
-              closeModal();
-              navigate(`/organizations/${id}/projects/${newProject.id}`);
-            } catch (err: any) {
-              toast({ title: 'Connection failed', description: err.message || 'Failed to connect repository', variant: 'destructive' });
-              closeModal();
-              navigate(`/organizations/${id}/projects/${newProject.id}`);
-            }
-          }
-        } else {
-          setSidebarScanLoading(true);
-          try {
-            const scanData = await api.getRepositoryScan(id, newProject.id, sidebarRepoToConnect.full_name, sidebarRepoToConnect.default_branch, sidebarRepoToConnect.integration_id ?? '');
-            if (scanData.potentialProjects.length === 0) {
-              toast({ title: 'No manifest file found', description: 'No supported manifest file found in this repository.', variant: 'destructive' });
-              closeModal();
-              navigate(`/organizations/${id}/projects/${newProject.id}`);
-            } else {
-              const unlinked = scanData.potentialProjects.filter((p) => !p.isLinked);
-              if (unlinked.length <= 1) {
-                await api.connectProjectRepository(id, newProject.id, {
-                  repo_id: sidebarRepoToConnect.id,
-                  repo_full_name: sidebarRepoToConnect.full_name,
-                  default_branch: sidebarRepoToConnect.default_branch,
-                  framework: sidebarRepoToConnect.framework,
-                  package_json_path: (unlinked[0]?.path) || undefined,
-                  ecosystem: unlinked[0]?.ecosystem || sidebarRepoToConnect.ecosystem,
-                  provider: sidebarRepoToConnect.provider,
-                  integration_id: sidebarRepoToConnect.integration_id,
-                });
-                toast({ title: 'Repository connected', description: 'Extraction has started.' });
-                closeModal();
-                navigate(`/organizations/${id}/projects/${newProject.id}`);
-              } else {
-                setCreatedProjectId(newProject.id);
-                setCreatedProjectName(projectName.trim());
-                setSidebarScanResult(scanData);
-                const firstUnlinked = scanData.potentialProjects.find((p) => !p.isLinked);
-                setSidebarSelectedPath(firstUnlinked ? firstUnlinked.path : scanData.potentialProjects[0]?.path ?? '');
-              }
-            }
-          } catch (err: any) {
-            toast({ title: 'Scan failed', description: err.message || 'Failed to scan repository', variant: 'destructive' });
-            closeModal();
-            navigate(`/organizations/${id}/projects/${newProject.id}`);
-          } finally {
-            setSidebarScanLoading(false);
-          }
-        }
-      } else {
-        closeModal();
-        navigate(`/organizations/${id}/projects/${newProject.id}`);
-      }
-    } catch (error: any) {
-      toast({ title: 'Error', description: error.message || 'Failed to create project', variant: 'destructive' });
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  const handleSidebarRepoClick = async (repo: RepoWithProvider) => {
-    if (sidebarRepoToConnect?.full_name === repo.full_name) {
-      setSidebarRepoToConnect(null);
-      setSidebarSelectedPath('');
-      return;
-    }
-    setSidebarRepoToConnect(repo);
-    setSidebarRepoScanResult(null);
-    setSidebarRepoScanError(null);
-    setSidebarSelectedPath('');
-    if (!id) return;
-    setSidebarRepoScanLoading(repo.full_name);
-    try {
-      const scanData = await api.getOrganizationRepositoryScan(id, repo.full_name, repo.default_branch, repo.integration_id ?? '');
-      if (scanData.potentialProjects.length === 0) {
-        setSidebarRepoScanError('No projects found in this repository.');
-      } else {
-        const result: SidebarScanResult = {
-          full_name: repo.full_name,
-          isMonorepo: scanData.isMonorepo,
-          potentialProjects: scanData.potentialProjects,
-        };
-        setSidebarRepoScanResult(result);
-        setSidebarRepoScanResultsByRepo((prev) => ({ ...prev, [repo.full_name]: result }));
-        const firstUnlinked = scanData.potentialProjects.find((p) => !p.isLinked);
-        if (firstUnlinked) setSidebarSelectedPath(firstUnlinked.path);
-      }
-    } catch (err: any) {
-      setSidebarRepoScanError(err.message || 'Failed to scan repository');
-    } finally {
-      setSidebarRepoScanLoading(null);
-    }
-  };
-
-  const loadSidebarConnections = async () => {
-    if (!id) return;
-    try {
-      const connections = await api.getOrganizationConnections(id);
-      setSidebarConnections(connections);
-      const gitConnections = connections.filter((c) => c.provider !== 'slack');
-      if (gitConnections.length > 0) {
-        const currentValid = sidebarSelectedIntegration && gitConnections.some((c) => c.id === sidebarSelectedIntegration);
-        const effectiveId = currentValid ? sidebarSelectedIntegration! : gitConnections[0].id;
-        if (!currentValid) setSidebarSelectedIntegration(gitConnections[0].id);
-        // Load repos for the effective provider only (first by default, or current selection)
-        loadSidebarRepos(effectiveId);
-      }
-    } catch { /* ignore */ }
-  };
-
-  const loadSidebarRepos = async (integrationId?: string) => {
-    if (!id) return;
-    setSidebarReposLoading(true);
-    setSidebarReposError(null);
-    try {
-      const targetIntegration = integrationId || sidebarSelectedIntegration || undefined;
-      const repoData = await api.getOrganizationRepositories(id, targetIntegration);
-      setSidebarRepos(repoData.repositories);
-    } catch (err: any) {
-      setSidebarReposError(err.message || 'Failed to load repositories');
-    } finally {
-      setSidebarReposLoading(false);
-    }
-  };
-
   const openCreateModal = () => {
     setEditingProject(null);
     setProjectName('');
     setSelectedTeamId(null);
-    setAssetTier('EXTERNAL');
     setShowCreateModal(true);
-    if (id) {
-      loadSidebarConnections(); // loads connections and first provider's repos (no separate loadSidebarRepos)
-    }
-  };
-
-  const handleSidebarConnect = async (packagePath: string) => {
-    if (!id || !createdProjectId || !sidebarRepoToConnect) return;
-
-    const matchedProject = sidebarScanResult?.potentialProjects?.find((p) => p.path === packagePath);
-    setSidebarConnecting(true);
-    try {
-      await api.connectProjectRepository(id, createdProjectId, {
-        repo_id: sidebarRepoToConnect.id,
-        repo_full_name: sidebarRepoToConnect.full_name,
-        default_branch: sidebarRepoToConnect.default_branch,
-        framework: sidebarRepoToConnect.framework,
-        package_json_path: packagePath || undefined,
-        ecosystem: matchedProject?.ecosystem || sidebarRepoToConnect.ecosystem,
-        provider: sidebarRepoToConnect.provider,
-        integration_id: sidebarRepoToConnect.integration_id,
-      });
-      const projectId = createdProjectId;
-      closeModal();
-      navigate(`/organizations/${id}/projects/${projectId}`);
-      toast({ title: 'Repository connected', description: 'Extraction has started. This may take a few minutes.' });
-    } catch (err: any) {
-      toast({ title: 'Connection failed', description: err.message || 'Failed to connect repository', variant: 'destructive' });
-    } finally {
-      setSidebarConnecting(false);
-    }
-  };
-
-  const handleSkipRepo = () => {
-    const projectId = createdProjectId;
-    closeModal();
-    if (projectId) {
-      navigate(`/organizations/${id}/projects/${projectId}`);
-    }
   };
 
   const handleUpdateProject = async () => {
@@ -468,6 +217,7 @@ export default function ProjectsPage() {
       return;
     }
 
+    setCreating(true);
     try {
       const updatedProject = await api.updateProject(id, editingProject.id, {
         name: projectName.trim(),
@@ -488,6 +238,8 @@ export default function ProjectsPage() {
         description: error.message || 'Failed to update project',
         variant: 'destructive',
       });
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -526,21 +278,6 @@ export default function ProjectsPage() {
     setEditingProject(null);
     setProjectName('');
     setSelectedTeamId(null);
-    setAssetTier('EXTERNAL');
-    setCreatedProjectId(null);
-    setCreatedProjectName('');
-    setSidebarRepos([]);
-    setSidebarReposLoading(false);
-    setSidebarReposError(null);
-    setSidebarRepoSearch('');
-    setSidebarRepoToConnect(null);
-    setSidebarRepoScanLoading(null);
-    setSidebarRepoScanResult(null);
-    setSidebarRepoScanError(null);
-    setSidebarScanLoading(false);
-    setSidebarScanResult(null);
-    setSidebarSelectedPath('');
-    setSidebarConnecting(false);
   };
 
   // Prefetch project data on hover
@@ -587,6 +324,13 @@ export default function ProjectsPage() {
             placeholder="Filter..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && searchQuery) {
+                e.preventDefault();
+                setSearchQuery('');
+                searchInputRef.current?.blur();
+              }
+            }}
             className={`w-full pl-9 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent ${searchQuery ? 'pr-14' : 'pr-4'}`}
           />
           {searchQuery && (
@@ -895,489 +639,79 @@ export default function ProjectsPage() {
         </div>
       )}
 
-      {/* Create/Edit Side Panel */}
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50">
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={closeModal} />
+      {/* Create Project Side Panel — shared full form with asset tier, repo connector, team */}
+      {showCreateModal && !editingProject && id && (
+        <CreateProjectSidebar
+          open={showCreateModal}
+          onClose={closeModal}
+          organizationId={id}
+          teams={teams}
+          onProjectsReload={loadData}
+        />
+      )}
 
-          <div
-            className="fixed right-0 top-0 h-full w-full max-w-lg bg-background border-l border-border shadow-2xl flex flex-col font-sans text-sm"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header — same style as other sidebars (DeprecateSidebar, BanVersionSidebar) */}
-            <div className="px-6 py-5 border-b border-border flex-shrink-0 bg-[#141618]">
-              <h2 className="text-lg font-semibold text-foreground">
-                {editingProject ? 'Edit Project' : createdProjectId ? 'Select a package' : 'New Project'}
-              </h2>
-              <p className="text-sm text-foreground-secondary mt-0.5">
-                {editingProject
-                  ? 'Update the project details below.'
-                  : createdProjectId
-                    ? `${sidebarRepoToConnect?.full_name} — choose which package to track.`
-                    : 'Configure your project and connect a repository.'}
-              </p>
+      {/* Edit Project Side Panel */}
+      {showCreateModal && editingProject && (
+        <SlideInSidebar
+          open={showCreateModal}
+          onClose={closeModal}
+          title="Edit Project"
+          description="Update the project details below."
+          maxWidth="max-w-[560px]"
+          footer={
+            <>
+              <Button variant="outline" onClick={closeModal}>Cancel</Button>
+              <Button
+                onClick={handleUpdateProject}
+                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                disabled={creating || !projectName.trim()}
+              >
+                {creating ? (
+                  <><Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />Save Changes</>
+                ) : (
+                  <>
+                    <Save className="h-3.5 w-3.5 mr-2" />
+                    Save Changes
+                  </>
+                )}
+              </Button>
+            </>
+          }
+        >
+          <div className="space-y-6">
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-foreground-secondary mb-2">
+                Project Name
+              </label>
+              <input
+                type="text"
+                value={projectName}
+                onChange={(e) => setProjectName(e.target.value)}
+                placeholder="Project Name"
+                className="w-full px-3 py-2.5 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                onKeyDown={(e) => { if (e.key === 'Enter') handleUpdateProject(); }}
+                autoFocus
+              />
             </div>
 
-            {/* Content */}
-            <div className="flex-1 overflow-y-auto no-scrollbar">
+            <div className="border-t border-border" />
 
-              {/* ── Normal form (not monorepo picker mode) ── */}
-              {!createdProjectId && (
-                <div className="px-6 py-6 space-y-6">
-
-                  {/* Project name */}
-                  <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-foreground-secondary mb-2">
-                      Project Name
-                    </label>
-                    <input
-                      type="text"
-                      value={projectName}
-                      onChange={(e) => setProjectName(e.target.value)}
-                      placeholder="Project Name"
-                      className="w-full px-3 py-2.5 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                      onKeyDown={(e) => { if (e.key === 'Enter') editingProject ? handleUpdateProject() : handleCreateProject(); }}
-                      autoFocus
-                    />
-                  </div>
-
-                  <div className="border-t border-border" />
-
-                  {/* Asset tier (create only) — 4-tier Depscore criticality */}
-                  {!editingProject && (
-                    <div>
-                      <div className="flex items-center gap-1.5 mb-2">
-                        <label className="block text-xs font-semibold uppercase tracking-wider text-foreground-secondary">
-                          Asset tier
-                        </label>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="inline-flex cursor-help text-foreground-secondary hover:text-foreground" aria-label="What is asset tier?">
-                              <HelpCircle className="h-3.5 w-3.5" />
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="max-w-[260px]">
-                            Used by Depscore to weight vulnerability scores and blast radius (e.g. Crown Jewels vs non-production).
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
-                      <div className="space-y-2" role="radiogroup" aria-label="Asset tier">
-                        {[
-                          { value: 'CROWN_JEWELS' as const, label: 'Crown Jewels', icon: Crown, desc: 'Mission-critical, highest blast radius' },
-                          { value: 'EXTERNAL' as const, label: 'External', icon: Globe, desc: 'Public-facing services' },
-                          { value: 'INTERNAL' as const, label: 'Internal', icon: Building2, desc: 'Internal apps & services' },
-                          { value: 'NON_PRODUCTION' as const, label: 'Non-production', icon: FlaskConical, desc: 'Dev & test environments' },
-                        ].map(({ value, label, icon: Icon, desc }) => {
-                          const isSelected = assetTier === value;
-                          return (
-                            <button
-                              key={value}
-                              type="button"
-                              role="radio"
-                              aria-checked={isSelected}
-                              onClick={() => setAssetTier(value)}
-                              className={`w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all ${
-                                isSelected
-                                  ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20'
-                                  : 'bg-background-card border-border hover:border-foreground-secondary/30'
-                              }`}
-                            >
-                              <div
-                                className={`h-4 w-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors ${
-                                  isSelected ? 'border-foreground bg-foreground text-background' : 'border-foreground-secondary/50 bg-transparent'
-                                }`}
-                                aria-hidden
-                              >
-                                {isSelected && <Check className="h-2.5 w-2.5" />}
-                              </div>
-                              <Icon className="h-4 w-4 flex-shrink-0 text-foreground-secondary" />
-                              <div className="min-w-0 flex-1">
-                                <div className="font-medium text-foreground">{label}</div>
-                                <div className="text-xs text-foreground-secondary mt-0.5">{desc}</div>
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Repository section (only for create, not edit) */}
-                  {!editingProject && (
-                    <>
-                      <div className="border-t border-border" />
-
-                      <div>
-                        <div className="mb-4">
-                          <div className="text-xs font-semibold uppercase tracking-wider text-foreground-secondary mb-0.5">
-                            Connect a Repository
-                          </div>
-                          <div className="text-xs text-foreground-secondary">
-                            You can also connect later from the overview.
-                          </div>
-                        </div>
-
-                        {sidebarReposError && (sidebarReposError.includes('integration') || sidebarReposError.includes('GitHub App') || sidebarReposError.includes('No source')) ? (
-                          <div className="bg-background-card border border-border rounded-lg overflow-hidden p-4 text-center">
-                            <p className="text-sm font-semibold text-foreground mb-1">No source code connections</p>
-                            <p className="text-xs text-foreground-secondary mb-3">
-                              Connect a Git provider in Organization Settings to start importing repositories.
-                            </p>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => navigate(`/organizations/${id}/settings/integrations`)}
-                            >
-                              Go to Integrations
-                            </Button>
-                          </div>
-                        ) : sidebarReposError ? (
-                          <p className="text-sm text-foreground-secondary">{sidebarReposError}</p>
-                        ) : (
-                          <div className="space-y-2">
-                            {/* Top bar: Source dropdown (left) + Search (right) — always shown so it doesn't refresh when switching provider */}
-                            <div className="flex items-center gap-1.5">
-                              <div className="relative flex-1 min-w-0" ref={sidebarGitHubDropdownRef}>
-                                {(() => {
-                                  const gitConnections = sidebarConnections.filter((c) => c.provider !== 'slack');
-                                  const selectedConn = gitConnections.find((c) => c.id === sidebarSelectedIntegration) ?? gitConnections[0] ?? null;
-                                  const providerLogo = (p: string) => p === 'github' ? '/images/integrations/github.png' : p === 'gitlab' ? '/images/integrations/gitlab.png' : '/images/integrations/bitbucket.png';
-                                  const connectionIcon = (conn: CiCdConnection) => {
-                                    const avatar = conn.provider === 'github' ? (conn.metadata as { account_avatar_url?: string } | undefined)?.account_avatar_url : undefined;
-                                    if (avatar) return avatar;
-                                    return providerLogo(conn.provider);
-                                  };
-                                  const connectionIconClass = (conn: CiCdConnection) => (conn.provider === 'github' && (conn.metadata as { account_avatar_url?: string } | undefined)?.account_avatar_url) ? 'h-4 w-4 flex-shrink-0 rounded-full' : 'h-4 w-4 flex-shrink-0 rounded-sm';
-                                  return (
-                                    <>
-                                      <button
-                                        type="button"
-                                        onClick={() => setSidebarGitHubDropdownOpen((o) => !o)}
-                                        className="w-full px-3 py-2 border border-border rounded-lg bg-background-card hover:border-foreground-secondary/30 flex items-center justify-between gap-2 text-sm text-foreground transition-all"
-                                      >
-                                        <div className="flex items-center gap-2 min-w-0">
-                                          {selectedConn ? (
-                                            <>
-                                              <img src={connectionIcon(selectedConn)} alt="" className={connectionIconClass(selectedConn)} />
-                                              <span className="truncate">{selectedConn.display_name || selectedConn.provider}</span>
-                                            </>
-                                          ) : (
-                                            <span className="truncate text-foreground-secondary">No sources</span>
-                                          )}
-                                        </div>
-                                        <ChevronDown className={`h-4 w-4 flex-shrink-0 text-foreground-secondary transition-transform ${sidebarGitHubDropdownOpen ? 'rotate-180' : ''}`} />
-                                      </button>
-                                      {sidebarGitHubDropdownOpen && (
-                                        <div className="absolute z-50 left-0 right-0 mt-1 py-0.5 bg-background-card border border-border rounded-lg shadow-xl overflow-hidden animate-in fade-in-0 zoom-in-95 duration-100">
-                                          {gitConnections.map((conn) => (
-                                            <button
-                                              key={conn.id}
-                                              type="button"
-                                              className="w-full px-3 py-1.5 flex items-center justify-between gap-2 hover:bg-table-hover transition-colors"
-                                              onClick={() => {
-                                                setSidebarSelectedIntegration(conn.id);
-                                                loadSidebarRepos(conn.id);
-                                              }}
-                                            >
-                                              <div className="flex items-center gap-2 min-w-0">
-                                                <img src={connectionIcon(conn)} alt="" className={connectionIconClass(conn)} />
-                                                <span className="text-sm font-medium text-foreground truncate">{conn.display_name || conn.provider}</span>
-                                              </div>
-                                              {sidebarSelectedIntegration === conn.id && (
-                                                <div className="h-4 w-4 rounded-full border-2 border-foreground bg-foreground flex-shrink-0 flex items-center justify-center">
-                                                  <Check className="h-2.5 w-2.5 text-background" />
-                                                </div>
-                                              )}
-                                            </button>
-                                          ))}
-                                        </div>
-                                      )}
-                                    </>
-                                  );
-                                })()}
-                              </div>
-                              <div className="relative flex-1 min-w-0">
-                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-foreground-secondary pointer-events-none" />
-                                <input
-                                  type="text"
-                                  placeholder="Search..."
-                                  value={sidebarRepoSearch}
-                                  onChange={(e) => setSidebarRepoSearch(e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Escape' && sidebarRepoSearch) {
-                                      setSidebarRepoSearch('');
-                                      (e.target as HTMLInputElement).blur();
-                                    }
-                                  }}
-                                  className={`w-full pl-9 py-2 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${sidebarRepoSearch ? 'pr-14' : 'pr-3'}`}
-                                />
-                                {sidebarRepoSearch && (
-                                  <button
-                                    type="button"
-                                    onClick={() => setSidebarRepoSearch('')}
-                                    className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded text-xs font-medium text-foreground-secondary hover:text-foreground bg-transparent border border-border/60 hover:border-border transition-colors"
-                                    aria-label="Clear search (Esc)"
-                                  >
-                                    Esc
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                            {sidebarReposLoading ? (
-                              <div className="space-y-2">
-                                {[1, 2, 3, 4, 5].map((i) => (
-                                  <div
-                                    key={i}
-                                    className="rounded-lg border border-border bg-background-card"
-                                    aria-hidden
-                                  >
-                                    <div className="w-full px-4 py-3 flex items-center gap-3 text-left">
-                                      <div className="h-4 w-4 flex-shrink-0 rounded-full bg-muted animate-pulse" />
-                                      <div className="min-w-0 flex-1 space-y-1">
-                                        <div
-                                          className="h-3.5 rounded bg-muted animate-pulse"
-                                          style={{ width: `${52 + (i % 3) * 20}%` }}
-                                        />
-                                        <div className="h-3 rounded bg-muted/80 animate-pulse w-10" />
-                                      </div>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : sidebarRepos.length === 0 ? (
-                              <p className="text-sm text-foreground-secondary">No repositories available.</p>
-                            ) : (
-                            <div className="space-y-2">
-                              {(() => {
-                                const filteredSidebarRepos = sidebarRepos.filter(
-                                  (r) => !sidebarRepoSearch.trim() || r.full_name.toLowerCase().includes(sidebarRepoSearch.toLowerCase())
-                                );
-                                if (sidebarRepoSearch.trim() && filteredSidebarRepos.length === 0) {
-                                  return (
-                                    <p className="text-sm text-foreground-secondary py-4 text-center">
-                                      No repositories match your search.
-                                    </p>
-                                  );
-                                }
-                                return (
-                                  <>
-                                    {filteredSidebarRepos
-                                      .slice(0, sidebarRepoSearch.trim() ? undefined : 5)
-                                      .map((repo) => {
-                                        const isSelected = sidebarRepoToConnect?.full_name === repo.full_name;
-                                        const isLoading = sidebarRepoScanLoading === repo.full_name;
-                                  const scanResult = sidebarRepoScanResultsByRepo[repo.full_name] ?? (isSelected ? sidebarRepoScanResult : null);
-                                  const showResult = !!scanResult;
-                                  return (
-                                    <div key={repo.id} className="space-y-0">
-                                      <div
-                                        className={`rounded-lg border bg-background-card transition-colors ${
-                                          isSelected ? 'border-foreground/30 ring-1 ring-foreground/10' : 'border-border hover:border-border/80'
-                                        }`}
-                                      >
-                                        <button
-                                          type="button"
-                                          onClick={() => handleSidebarRepoClick(repo)}
-                                          className="w-full px-4 py-3 flex items-center justify-between gap-3 text-left"
-                                        >
-                                          <div className="flex items-center gap-3 min-w-0">
-                                            <div className="h-4 w-4 flex-shrink-0 flex items-center justify-center">
-                                              {isLoading ? (
-                                                <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" />
-                                              ) : (
-                                                <div className={`h-4 w-4 rounded-full border-2 flex items-center justify-center transition-colors ${
-                                                  isSelected ? 'border-foreground bg-foreground text-background' : 'border-foreground-secondary bg-transparent'
-                                                }`}>
-                                                  {isSelected ? <Check className="h-2.5 w-2.5" /> : null}
-                                                </div>
-                                              )}
-                                            </div>
-                                            <div className="min-w-0">
-                                              <div className="flex items-center gap-1.5">
-                                                {repo.provider && (
-                                                  <img
-                                                    src={repo.provider === 'github' ? '/images/integrations/github.png' : repo.provider === 'gitlab' ? '/images/integrations/gitlab.png' : '/images/integrations/bitbucket.png'}
-                                                    alt=""
-                                                    className="h-3.5 w-3.5 rounded-sm flex-shrink-0"
-                                                  />
-                                                )}
-                                                <span className="text-sm font-medium text-foreground truncate">{repo.full_name}</span>
-                                              </div>
-                                              <div className="text-xs text-foreground-secondary font-mono">{repo.default_branch}</div>
-                                            </div>
-                                          </div>
-                                        </button>
-                                      </div>
-                                      <div className="space-y-0">
-                                        <div
-                                          className="grid transition-[grid-template-rows] duration-200 ease-out"
-                                          style={{ gridTemplateRows: isSelected && showResult && scanResult && !isLoading ? '1fr' : '0fr' }}
-                                        >
-                                          <div className="min-h-0 overflow-hidden">
-                                            {showResult && scanResult ? (
-                                              <div className="space-y-2 pl-5 pt-3">
-                                          {scanResult.potentialProjects.map((p) => {
-                                            const isChosen = sidebarSelectedPath === p.path;
-                                            const isDisabled = p.isLinked;
-                                            return (
-                                              <button
-                                                key={p.path || '(root)'}
-                                                type="button"
-                                                disabled={isDisabled}
-                                                onClick={(e) => { e.stopPropagation(); !isDisabled && setSidebarSelectedPath(p.path); }}
-                                                className={`w-full rounded-lg border px-4 py-3 flex items-center justify-between gap-3 text-left transition-colors ${
-                                                  isDisabled
-                                                    ? 'opacity-50 cursor-not-allowed border-border bg-background'
-                                                    : isChosen
-                                                      ? 'border-foreground/30 ring-1 ring-foreground/10 bg-background-subtle/30'
-                                                      : 'border-border bg-background hover:border-border/80 hover:bg-background-subtle/30'
-                                                }`}
-                                              >
-                                                <div className="flex items-center gap-3 min-w-0">
-                                                  <div className={`h-4 w-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors ${isChosen ? 'border-foreground bg-foreground text-background' : 'border-foreground-secondary bg-transparent'}`}>
-                                                    {isChosen && <Check className="h-2.5 w-2.5" />}
-                                                  </div>
-                                                  <FrameworkIcon frameworkId={repo.framework} />
-                                                  <div className="min-w-0">
-                                                    <div className="text-sm font-medium text-foreground truncate">{p.path === '' ? repoNameOnly(repo.full_name) : p.name}</div>
-                                                    <div className="text-xs text-foreground-secondary font-mono">{p.path === '' ? 'Root' : p.path}</div>
-                                                  </div>
-                                                </div>
-                                                {p.isLinked ? (
-                                                  <span className="flex items-center gap-1 text-xs text-foreground-secondary flex-shrink-0">
-                                                    <Lock className="h-3.5 w-3.5" />
-                                                    {p.linkedByProjectName || 'Linked'}
-                                                  </span>
-                                                ) : null}
-                                              </button>
-                                            );
-                                          })}
-                                            </div>
-                                          ) : null}
-                                          </div>
-                                        </div>
-                                        {isSelected && sidebarRepoScanError && !isLoading && (
-                                          <div className="pl-5 pt-3">
-                                            <div className="rounded-lg border border-border bg-background px-4 py-3 text-sm text-foreground-secondary">
-                                              {sidebarRepoScanError}
-                                            </div>
-                                          </div>
-                                        )}
-                                      </div>
-                                    </div>
-                                  );
-                                      })}
-                                  </>
-                                );
-                              })()}
-                            </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </>
-                  )}
-
-                  {!editingProject && <div className="border-t border-border" />}
-
-                  {/* Team selector — at bottom of form */}
-                  <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-foreground-secondary mb-2">
-                      Team
-                    </label>
-                    <ProjectTeamSelect
-                      value={selectedTeamId}
-                      onChange={setSelectedTeamId}
-                      teams={teams}
-                      variant="modal"
-                      placeholder="Select a team"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* ── Monorepo picker (shown after create when multiple packages found) ── */}
-              {createdProjectId && !editingProject && sidebarScanResult && (
-                <div className="px-6 py-6 space-y-4">
-                  <div className="flex items-center gap-2 text-sm text-success">
-                    <Check className="h-4 w-4 flex-shrink-0" />
-                    <span>"{createdProjectName}" created</span>
-                  </div>
-                  <div className="divide-y divide-border rounded-lg border border-border overflow-hidden">
-                    {sidebarScanResult.potentialProjects.map((p) => {
-                      const isChosen = sidebarSelectedPath === p.path;
-                      const isDisabled = p.isLinked;
-                      return (
-                        <button
-                          key={p.path || '(root)'}
-                          type="button"
-                          disabled={isDisabled}
-                          onClick={() => !isDisabled && setSidebarSelectedPath(p.path)}
-                          className={`w-full px-4 py-3 flex items-center justify-between gap-3 text-left transition-colors ${
-                            isDisabled ? 'opacity-50 cursor-not-allowed bg-background' : isChosen ? 'bg-primary/5' : 'bg-background hover:bg-background-subtle/50'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <div className={`h-2 w-2 rounded-full flex-shrink-0 ${isChosen ? 'bg-primary' : 'bg-border'}`} />
-                            <div className="min-w-0">
-                              <div className="text-sm font-medium text-foreground truncate">{p.path === '' ? (sidebarRepoToConnect ? repoNameOnly(sidebarRepoToConnect.full_name) : 'Root') : p.name}</div>
-                              <div className="text-xs text-foreground-secondary font-mono">{p.path === '' ? 'Root' : p.path}</div>
-                            </div>
-                          </div>
-                          {p.isLinked && (
-                            <span className="flex items-center gap-1 text-xs text-foreground-secondary flex-shrink-0">
-                              <Lock className="h-3.5 w-3.5" />
-                              {p.linkedByProjectName || 'Linked'}
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Footer — Cancel beside primary, both right-aligned */}
-            <div className={`px-6 py-4 flex items-center gap-3 flex-shrink-0 border-t border-border ${createdProjectId && !editingProject ? 'justify-between' : 'justify-end'}`}>
-              {createdProjectId && !editingProject ? (
-                <>
-                  <button onClick={handleSkipRepo} className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                    Skip for now
-                  </button>
-                  <Button
-                    className="bg-primary text-primary-foreground hover:bg-primary/90"
-                    disabled={sidebarConnecting || !!sidebarScanResult?.potentialProjects.find((p) => p.path === sidebarSelectedPath)?.isLinked}
-                    onClick={() => handleSidebarConnect(sidebarSelectedPath)}
-                  >
-                    {sidebarConnecting ? (
-                      <><Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />Connect & Go to Project</>
-                    ) : 'Connect & Go to Project'}
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <Button variant="outline" onClick={closeModal}>Cancel</Button>
-                  <Button
-                    onClick={editingProject ? handleUpdateProject : handleCreateProject}
-                    className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-                    disabled={creating || !projectName.trim() || (!!sidebarRepoToConnect && !!sidebarRepoScanLoading)}
-                  >
-                    {creating ? (
-                      <><Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />{editingProject ? 'Save Changes' : 'Create'}</>
-                    ) : (
-                      <>
-                        {editingProject ? <Save className="h-3.5 w-3.5 mr-2" /> : <Plus className="h-3.5 w-3.5 mr-2" />}
-                        {editingProject ? 'Save Changes' : 'Create'}
-                      </>
-                    )}
-                  </Button>
-                </>
-              )}
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-foreground-secondary mb-2">
+                Team
+              </label>
+              <ProjectTeamSelect
+                value={selectedTeamId}
+                onChange={setSelectedTeamId}
+                teams={teams}
+                variant="modal"
+                placeholder="Select a team"
+              />
             </div>
           </div>
-        </div>
+        </SlideInSidebar>
       )}
+
     </main>
   );
 }

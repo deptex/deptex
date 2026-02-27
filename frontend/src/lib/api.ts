@@ -26,8 +26,7 @@ export interface RolePermissions {
   view_settings: boolean;
   manage_billing: boolean;
   view_activity: boolean;
-  view_compliance: boolean;
-  edit_policies: boolean;
+  manage_compliance: boolean;
   interact_with_security_agent: boolean;
   manage_aegis: boolean;
   view_members: boolean;
@@ -37,6 +36,7 @@ export interface RolePermissions {
   kick_members: boolean;
   manage_teams_and_projects: boolean;
   manage_integrations: boolean;
+  manage_notifications?: boolean;
   view_overview?: boolean;
   view_all_teams_and_projects?: boolean;
 }
@@ -83,7 +83,8 @@ export type CiCdProvider = 'github' | 'gitlab' | 'bitbucket' | 'slack' | 'discor
 
 export interface CiCdConnection {
   id: string;
-  organization_id: string;
+  organization_id?: string;
+  project_id?: string;
   provider: CiCdProvider;
   installation_id?: string | null;
   display_name?: string | null;
@@ -447,6 +448,64 @@ export const api = {
     });
   },
 
+  // Team Notifications / Integrations API
+  async getTeamConnections(organizationId: string, teamId: string): Promise<{ inherited: CiCdConnection[]; team: CiCdConnection[] }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/connections`);
+  },
+
+  async deleteTeamConnection(organizationId: string, teamId: string, connectionId: string): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/connections/${connectionId}`, { method: 'DELETE' });
+  },
+
+  async createTeamEmailNotification(organizationId: string, teamId: string, email: string): Promise<{ success: boolean; id: string }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/email-notifications`, {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  },
+
+  async createTeamCustomIntegration(
+    organizationId: string,
+    teamId: string,
+    data: { name: string; type: 'notification' | 'ticketing'; webhook_url: string; icon_url?: string }
+  ): Promise<{ success: boolean; id: string; secret: string }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/custom-integrations`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async getTeamNotificationRules(organizationId: string, teamId: string): Promise<OrganizationNotificationRule[]> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/notification-rules`);
+  },
+
+  async createTeamNotificationRule(
+    organizationId: string,
+    teamId: string,
+    data: { name: string; triggerType: string; minDepscoreThreshold?: number; customCode?: string; destinations: any[]; createdByName?: string }
+  ): Promise<OrganizationNotificationRule> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/notification-rules`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async updateTeamNotificationRule(
+    organizationId: string,
+    teamId: string,
+    ruleId: string,
+    data: Partial<{ name: string; triggerType: string; minDepscoreThreshold?: number; customCode?: string; destinations: any[] }>
+  ): Promise<OrganizationNotificationRule> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/notification-rules/${ruleId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async deleteTeamNotificationRule(organizationId: string, teamId: string, ruleId: string): Promise<{ message: string }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/notification-rules/${ruleId}`, { method: 'DELETE' });
+  },
+
   // Projects API
   _projectDataCache: new Map<string, ProjectWithRole>(),
 
@@ -529,31 +588,114 @@ export const api = {
     return fetchWithAuth(`/api/integrations/organizations/${organizationId}/connections/${connectionId}`, { method: 'DELETE' });
   },
 
-  async connectSlackOrg(organizationId: string): Promise<{ redirectUrl: string }> {
-    return fetchWithAuth(`/api/integrations/slack/install?org_id=${organizationId}`);
+  async connectSlackOrg(organizationId: string, projectId?: string): Promise<{ redirectUrl: string }> {
+    const params = new URLSearchParams({ org_id: organizationId });
+    if (projectId) params.set('project_id', projectId);
+    return fetchWithAuth(`/api/integrations/slack/install?${params}`);
   },
 
-  async connectDiscordOrg(organizationId: string): Promise<{ redirectUrl: string }> {
-    return fetchWithAuth(`/api/integrations/discord/install?org_id=${organizationId}`);
+  async connectDiscordOrg(organizationId: string, projectId?: string): Promise<{ redirectUrl: string }> {
+    const params = new URLSearchParams({ org_id: organizationId });
+    if (projectId) params.set('project_id', projectId);
+    return fetchWithAuth(`/api/integrations/discord/install?${params}`);
   },
 
-  async connectJiraOrg(organizationId: string): Promise<{ redirectUrl: string }> {
-    return fetchWithAuth(`/api/integrations/jira/install?org_id=${organizationId}`);
+  async connectJiraOrg(organizationId: string, projectId?: string): Promise<{ redirectUrl: string }> {
+    const params = new URLSearchParams({ org_id: organizationId });
+    if (projectId) params.set('project_id', projectId);
+    return fetchWithAuth(`/api/integrations/jira/install?${params}`);
   },
 
-  async connectJiraPatOrg(organizationId: string, baseUrl: string, token: string): Promise<{ success: boolean }> {
+  async connectJiraPatOrg(organizationId: string, baseUrl: string, token: string, projectId?: string): Promise<{ success: boolean }> {
     return fetchWithAuth(`/api/integrations/jira/connect-pat`, {
       method: 'POST',
-      body: JSON.stringify({ org_id: organizationId, base_url: baseUrl, token }),
+      body: JSON.stringify({ org_id: organizationId, base_url: baseUrl, token, ...(projectId ? { project_id: projectId } : {}) }),
     });
   },
 
-  async connectLinearOrg(organizationId: string): Promise<{ redirectUrl: string }> {
-    return fetchWithAuth(`/api/integrations/linear/install?org_id=${organizationId}`);
+  async getProjectConnections(organizationId: string, projectId: string): Promise<{ inherited: CiCdConnection[]; team: CiCdConnection[]; project: CiCdConnection[] }> {
+    const result = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/connections`);
+    return { inherited: result.inherited || [], team: result.team || [], project: result.project || [] };
   },
 
-  async connectAsanaOrg(organizationId: string): Promise<{ redirectUrl: string }> {
-    return fetchWithAuth(`/api/integrations/asana/install?org_id=${organizationId}`);
+  async deleteProjectConnection(organizationId: string, projectId: string, connectionId: string): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/connections/${connectionId}`, { method: 'DELETE' });
+  },
+
+  async getProjectNotificationRules(organizationId: string, projectId: string): Promise<OrganizationNotificationRule[]> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/notification-rules`);
+  },
+
+  async createProjectNotificationRule(
+    organizationId: string,
+    projectId: string,
+    data: {
+      name: string;
+      triggerType: 'weekly_digest' | 'vulnerability_discovered' | 'custom_code_pipeline';
+      minDepscoreThreshold?: number;
+      customCode?: string;
+      destinations: Array<{ integrationType: string; targetId: string }>;
+      createdByName?: string;
+    }
+  ): Promise<OrganizationNotificationRule> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/notification-rules`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async updateProjectNotificationRule(
+    organizationId: string,
+    projectId: string,
+    ruleId: string,
+    data: {
+      name?: string;
+      triggerType?: 'weekly_digest' | 'vulnerability_discovered' | 'custom_code_pipeline';
+      minDepscoreThreshold?: number;
+      customCode?: string;
+      destinations?: Array<{ integrationType: string; targetId: string }>;
+    }
+  ): Promise<OrganizationNotificationRule> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/notification-rules/${ruleId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async deleteProjectNotificationRule(organizationId: string, projectId: string, ruleId: string): Promise<{ message: string }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/notification-rules/${ruleId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  async createProjectEmailNotification(organizationId: string, projectId: string, email: string): Promise<{ success: boolean; id: string }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/email-notifications`, {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  },
+
+  async createProjectCustomIntegration(
+    organizationId: string,
+    projectId: string,
+    data: { name: string; type: 'notification' | 'ticketing'; webhook_url: string; icon_url?: string }
+  ): Promise<{ success: boolean; id: string; secret: string }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/custom-integrations`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async connectLinearOrg(organizationId: string, projectId?: string): Promise<{ redirectUrl: string }> {
+    const params = new URLSearchParams({ org_id: organizationId });
+    if (projectId) params.set('project_id', projectId);
+    return fetchWithAuth(`/api/integrations/linear/install?${params}`);
+  },
+
+  async connectAsanaOrg(organizationId: string, projectId?: string): Promise<{ redirectUrl: string }> {
+    const params = new URLSearchParams({ org_id: organizationId });
+    if (projectId) params.set('project_id', projectId);
+    return fetchWithAuth(`/api/integrations/asana/install?${params}`);
   },
 
   async createEmailNotification(organizationId: string, email: string): Promise<{ success: boolean; id: string }> {
@@ -641,6 +783,50 @@ export const api = {
     });
   },
 
+  async getOrganizationNotificationRules(organizationId: string): Promise<OrganizationNotificationRule[]> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/notification-rules`);
+  },
+
+  async createOrganizationNotificationRule(
+    organizationId: string,
+    data: {
+      name: string;
+      triggerType: 'weekly_digest' | 'vulnerability_discovered' | 'custom_code_pipeline';
+      minDepscoreThreshold?: number;
+      customCode?: string;
+      destinations: Array<{ integrationType: string; targetId: string }>;
+      createdByName?: string;
+    }
+  ): Promise<OrganizationNotificationRule> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/notification-rules`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async updateOrganizationNotificationRule(
+    organizationId: string,
+    ruleId: string,
+    data: {
+      name?: string;
+      triggerType?: 'weekly_digest' | 'vulnerability_discovered' | 'custom_code_pipeline';
+      minDepscoreThreshold?: number;
+      customCode?: string;
+      destinations?: Array<{ integrationType: string; targetId: string }>;
+    }
+  ): Promise<OrganizationNotificationRule> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/notification-rules/${ruleId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async deleteOrganizationNotificationRule(organizationId: string, ruleId: string): Promise<{ message: string }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/notification-rules/${ruleId}`, {
+      method: 'DELETE',
+    });
+  },
+
   async getOrganizationPolicies(organizationId: string): Promise<OrganizationPolicies> {
     return fetchWithAuth(`/api/organizations/${organizationId}/policies`);
   },
@@ -657,6 +843,69 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ description }),
     });
+  },
+
+  async policyAIAssistStream(
+    organizationId: string,
+    params: {
+      message: string;
+      targetEditor: 'compliance' | 'pullRequest';
+      currentComplianceCode: string;
+      currentPullRequestCode: string;
+      conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>;
+    },
+  ): Promise<Response> {
+    const token = await getAuthToken();
+    if (!token) throw new Error('Not authenticated');
+
+    const response = await fetch(`${API_BASE_URL}/api/organizations/${organizationId}/policies/ai-assist`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
+      },
+      body: JSON.stringify(params),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(error.error || `HTTP error! status: ${response.status}`);
+    }
+
+    return response;
+  },
+
+  async notificationRuleAIAssistStream(
+    organizationId: string,
+    params: {
+      message: string;
+      currentCode: string;
+      conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>;
+    },
+  ): Promise<Response> {
+    const token = await getAuthToken();
+    if (!token) throw new Error('Not authenticated');
+
+    const response = await fetch(
+      `${API_BASE_URL}/api/organizations/${organizationId}/notifications/ai-assist`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+        },
+        body: JSON.stringify(params),
+      },
+    );
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(error.error || `HTTP error! status: ${response.status}`);
+    }
+
+    return response;
   },
 
   async getActivities(
@@ -984,6 +1233,19 @@ export const api = {
     });
     const scanKey = `${organizationId}:${data.repo_full_name}:${data.default_branch}`;
     this._organizationRepositoryScanCache.delete(scanKey);
+    return result;
+  },
+
+  async updateProjectRepositorySettings(
+    organizationId: string,
+    projectId: string,
+    data: { pull_request_comments_enabled?: boolean }
+  ): Promise<ProjectRepository> {
+    const result = await fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/repositories/settings`,
+      { method: 'PATCH', body: JSON.stringify(data) }
+    );
+    this.invalidateProjectRepositoriesCache(organizationId, projectId);
     return result;
   },
 
@@ -1354,6 +1616,7 @@ export const api = {
     data: {
       reason: string;
       requested_policy_code?: string;
+      policy_type?: 'compliance' | 'pull_request' | 'full';
       additional_licenses?: string[];
       slsa_enforcement?: string | null;
       slsa_level?: number | null;
@@ -1376,6 +1639,12 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/policy-exceptions/${exceptionId}`, {
       method: 'PUT',
       body: JSON.stringify({ status }),
+    });
+  },
+
+  async revokePolicyException(organizationId: string, exceptionId: string): Promise<ProjectPolicyException> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/policy-exceptions/${exceptionId}/revoke`, {
+      method: 'PUT',
     });
   },
 
@@ -1798,6 +2067,8 @@ export interface ProjectRepository {
   package_json_path?: string;
   extraction_step?: string | null;
   extraction_error?: string | null;
+  pull_request_comments_enabled?: boolean;
+  connected_at?: string | null;
 }
 
 export interface OpenssfCheck {
@@ -2156,6 +2427,18 @@ export interface ProjectTeamsResponse {
   contributing_teams: ProjectContributingTeam[];
 }
 
+export interface OrganizationNotificationRule {
+  id: string;
+  name: string;
+  triggerType: 'weekly_digest' | 'vulnerability_discovered' | 'custom_code_pipeline';
+  minDepscoreThreshold?: number;
+  customCode?: string;
+  destinations: Array<{ integrationType: string; targetId: string }>;
+  active: boolean;
+  createdByUserId?: string;
+  createdByName?: string;
+}
+
 export interface OrganizationPolicies {
   policy_code: string;
   /** @deprecated Policy is defined as code; kept for backward compat. */
@@ -2244,8 +2527,9 @@ export interface ProjectPolicyException {
   project_id: string;
   organization_id: string;
   requested_by: string;
-  status: 'pending' | 'accepted' | 'rejected';
+  status: 'pending' | 'accepted' | 'rejected' | 'revoked';
   reason: string;
+  policy_type?: 'compliance' | 'pull_request' | 'full';
   additional_licenses: string[];
   requested_policy_code?: string | null;
   base_policy_code?: string | null;
@@ -2253,18 +2537,26 @@ export interface ProjectPolicyException {
   slsa_level?: number | null;
   reviewed_by?: string | null;
   reviewed_at?: string | null;
+  revoked_by?: string | null;
+  revoked_at?: string | null;
   created_at: string;
   updated_at: string;
   project_name?: string;
+  project_framework?: string | null;
   requester?: {
     email: string;
     full_name: string | null;
+    avatar_url?: string | null;
+    role?: string;
+    role_display_name?: string | null;
+    role_color?: string | null;
   };
 }
 
 /** Pending exception for project policies (policy-as-code). */
 export interface ProjectPolicyPendingException {
   id: string;
+  policy_type?: 'compliance' | 'pull_request' | 'full';
   requested_policy_code: string;
   base_policy_code: string;
   reason: string;
@@ -2289,6 +2581,7 @@ export interface ProjectEffectivePolicies {
   };
   accepted_exceptions: ProjectPolicyException[];
   pending_exceptions: ProjectPolicyException[];
+  revoked_exceptions?: ProjectPolicyException[];
 }
 
 export interface ProjectPRGuardrails {
