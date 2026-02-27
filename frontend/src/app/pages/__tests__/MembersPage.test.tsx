@@ -13,19 +13,26 @@ const mockCancelInvitation = vi.fn();
 const mockResendInvitation = vi.fn();
 const mockUpdateMemberRole = vi.fn();
 const mockRemoveMember = vi.fn();
+const mockAddTeamMember = vi.fn();
 const mockToast = vi.fn();
 const mockNavigate = vi.fn();
 
-const stableOrgContext = {
-  organization: {
-    id: 'org-1',
-    name: 'Test Org',
-    role: 'owner',
-    user_rank: 0,
-    permissions: { view_members: true, add_members: true },
-  },
-  reloadOrganization: vi.fn().mockResolvedValue(undefined),
-};
+const { stableOrgContext, mockUseOutletContext } = vi.hoisted(() => {
+  const ctx = {
+    organization: {
+      id: 'org-1',
+      name: 'Test Org',
+      role: 'owner' as const,
+      user_rank: 0,
+      permissions: { view_members: true, add_members: true },
+    },
+    reloadOrganization: vi.fn().mockResolvedValue(undefined),
+  };
+  return {
+    stableOrgContext: ctx,
+    mockUseOutletContext: vi.fn(() => ctx),
+  };
+});
 
 vi.mock('react-router-dom', async (importOriginal) => {
   const mod = await importOriginal<typeof import('react-router-dom')>();
@@ -33,7 +40,7 @@ vi.mock('react-router-dom', async (importOriginal) => {
     ...mod,
     useParams: vi.fn(() => ({ id: 'org-1' })),
     useNavigate: () => mockNavigate,
-    useOutletContext: vi.fn(() => stableOrgContext),
+    useOutletContext: mockUseOutletContext,
   };
 });
 
@@ -48,6 +55,7 @@ vi.mock('../../../lib/api', () => ({
     resendInvitation: (...args: unknown[]) => mockResendInvitation(...args),
     updateMemberRole: (...args: unknown[]) => mockUpdateMemberRole(...args),
     removeMember: (...args: unknown[]) => mockRemoveMember(...args),
+    addTeamMember: (...args: unknown[]) => mockAddTeamMember(...args),
   },
 }));
 
@@ -80,6 +88,7 @@ describe('MembersPage', () => {
     mockResendInvitation.mockReset();
     mockUpdateMemberRole.mockReset();
     mockRemoveMember.mockReset();
+    mockAddTeamMember.mockReset();
     mockGetOrganizationMembers.mockResolvedValue(defaultMembers);
     mockGetOrganizationInvitations.mockResolvedValue(defaultInvitations);
     mockGetTeams.mockResolvedValue([]);
@@ -210,6 +219,178 @@ describe('MembersPage', () => {
           expect(screen.getByRole('menuitem', { name: /Leave Organization/i })).toBeInTheDocument();
         });
       }
+    });
+  });
+
+  describe('Change Role', () => {
+    it('calls updateMemberRole when Change Role is selected and Update Role is clicked', async () => {
+      const membersWithMultiple = [
+        { user_id: 'user-1', email: 'owner@example.com', role: 'owner', full_name: 'Owner User', created_at: new Date().toISOString(), rank: 0 },
+        { user_id: 'user-2', email: 'member@example.com', role: 'member', full_name: 'Member User', created_at: new Date().toISOString(), rank: 1 },
+      ];
+      mockGetOrganizationMembers.mockResolvedValue(membersWithMultiple);
+      mockUpdateMemberRole.mockResolvedValue({});
+      render(<MembersPage />);
+      await waitFor(() => expect(screen.getByText('member@example.com')).toBeInTheDocument());
+      const memberRow = screen.getByText('member@example.com').closest('tr')!;
+      const menuTrigger = within(memberRow).getByRole('button');
+      await userEvent.click(menuTrigger);
+      await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Change Role' })).toBeInTheDocument());
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Change Role' }));
+      await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
+      const updateBtn = screen.getByRole('button', { name: /Update Role/i });
+      await userEvent.click(updateBtn);
+      await waitFor(() => {
+        expect(mockUpdateMemberRole).toHaveBeenCalledWith('org-1', 'user-2', 'member');
+      });
+    });
+  });
+
+  describe('Remove Member', () => {
+    it('calls removeMember when Remove Member is selected and Remove is confirmed', async () => {
+      const membersWithMultiple = [
+        { user_id: 'user-1', email: 'owner@example.com', role: 'owner', full_name: 'Owner User', created_at: new Date().toISOString(), rank: 0 },
+        { user_id: 'user-2', email: 'member@example.com', role: 'member', full_name: 'Member User', created_at: new Date().toISOString(), rank: 1 },
+      ];
+      mockGetOrganizationMembers.mockResolvedValue(membersWithMultiple);
+      mockRemoveMember.mockResolvedValue({});
+      render(<MembersPage />);
+      await waitFor(() => expect(screen.getByText('member@example.com')).toBeInTheDocument());
+      const memberRow = screen.getByText('member@example.com').closest('tr')!;
+      const menuTrigger = within(memberRow).getByRole('button');
+      await userEvent.click(menuTrigger);
+      await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Remove Member' })).toBeInTheDocument());
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Remove Member' }));
+      await waitFor(() => expect(screen.getByText(/Are you sure you want to remove/)).toBeInTheDocument());
+      const removeBtn = screen.getByRole('button', { name: 'Remove' });
+      await userEvent.click(removeBtn);
+      await waitFor(() => {
+        expect(mockRemoveMember).toHaveBeenCalledWith('org-1', 'user-2');
+      });
+    });
+  });
+
+  describe('Add to Team', () => {
+    it('shows Add to Team option when teams exist and member is not in all teams', async () => {
+      const membersWithMultiple = [
+        { user_id: 'user-1', email: 'owner@example.com', role: 'owner', created_at: new Date().toISOString(), rank: 0 },
+        { user_id: 'user-2', email: 'member@example.com', role: 'member', created_at: new Date().toISOString(), rank: 1, teams: [] },
+      ];
+      mockGetOrganizationMembers.mockResolvedValue(membersWithMultiple);
+      mockGetTeams.mockResolvedValue([{ id: 'team-1', name: 'Team A', description: '', created_at: new Date().toISOString() }]);
+      render(<MembersPage />);
+      await waitFor(() => expect(screen.getByText('member@example.com')).toBeInTheDocument());
+      const memberRow = screen.getByText('member@example.com').closest('tr')!;
+      const menuTrigger = within(memberRow).getByRole('button');
+      await userEvent.click(menuTrigger);
+      await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Add to Team' })).toBeInTheDocument());
+    });
+
+    it('calls addTeamMember when Add to Team is selected, team chosen, and Add to Team clicked', async () => {
+      const membersWithMultiple = [
+        { user_id: 'user-1', email: 'owner@example.com', role: 'owner', created_at: new Date().toISOString(), rank: 0 },
+        { user_id: 'user-2', email: 'member@example.com', role: 'member', full_name: 'Member User', created_at: new Date().toISOString(), rank: 1, teams: [] },
+      ];
+      mockGetOrganizationMembers.mockResolvedValue(membersWithMultiple);
+      mockGetTeams.mockResolvedValue([{ id: 'team-1', name: 'Team A', description: '', created_at: new Date().toISOString() }]);
+      mockAddTeamMember.mockResolvedValue({ id: 'tm-1', team_id: 'team-1', user_id: 'user-2' });
+      render(<MembersPage />);
+      await waitFor(() => expect(screen.getByText('member@example.com')).toBeInTheDocument());
+      const memberRow = screen.getByText('member@example.com').closest('tr')!;
+      const menuTrigger = within(memberRow).getByRole('button');
+      await userEvent.click(menuTrigger);
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Add to Team' }));
+      await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
+      // Open team dropdown and select Team A
+      const selectTeamsBtn = screen.getByRole('button', { name: /Select teams/i });
+      await userEvent.click(selectTeamsBtn);
+      const teamOption = await screen.findByRole('button', { name: /Team A/i });
+      await userEvent.click(teamOption);
+      const addBtn = screen.getByRole('button', { name: /^Add to Team$/i });
+      await userEvent.click(addBtn);
+      await waitFor(() => {
+        expect(mockAddTeamMember).toHaveBeenCalledWith('org-1', 'team-1', 'user-2');
+      });
+    });
+  });
+
+  describe('Invite flow', () => {
+    it('does not call createInvitation when invite submitted with empty email', async () => {
+      render(<MembersPage />);
+      await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
+      await userEvent.click(screen.getByRole('button', { name: /Invite/i }));
+      await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
+      const dialog = screen.getByRole('dialog');
+      const sendBtn = within(dialog).getByRole('button', { name: /Send Invitation/i });
+      await userEvent.click(sendBtn);
+      await waitFor(() => {
+        expect(mockCreateInvitation).not.toHaveBeenCalled();
+      });
+    });
+
+    it('calls createInvitation when valid email is entered and Send Invitation is clicked', async () => {
+      mockCreateInvitation.mockResolvedValue({ id: 'inv-1', email: 'new@example.com', role: 'member', status: 'pending' });
+      render(<MembersPage />);
+      await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
+      await userEvent.click(screen.getByRole('button', { name: /Invite/i }));
+      await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
+      const emailInput = screen.getByLabelText('Email Address');
+      await userEvent.type(emailInput, 'new@example.com');
+      const sendBtn = screen.getByRole('button', { name: /Send Invitation/i });
+      await userEvent.click(sendBtn);
+      await waitFor(() => {
+        expect(mockCreateInvitation).toHaveBeenCalledWith('org-1', 'new@example.com', 'member', undefined);
+      });
+    });
+  });
+
+  describe('Member search filter', () => {
+    it('filters members by email when typing in search', async () => {
+      const membersWithMultiple = [
+        { user_id: 'user-1', email: 'owner@example.com', role: 'owner', full_name: 'Owner', created_at: new Date().toISOString(), rank: 0 },
+        { user_id: 'user-2', email: 'alice@example.com', role: 'member', full_name: 'Alice', created_at: new Date().toISOString(), rank: 1 },
+        { user_id: 'user-3', email: 'bob@example.com', role: 'member', full_name: 'Bob', created_at: new Date().toISOString(), rank: 2 },
+      ];
+      mockGetOrganizationMembers.mockResolvedValue(membersWithMultiple);
+      render(<MembersPage />);
+      await waitFor(() => expect(screen.getByText('bob@example.com')).toBeInTheDocument());
+      const filterInput = screen.getByPlaceholderText('Filter...');
+      await userEvent.type(filterInput, 'alice');
+      await waitFor(() => {
+        expect(screen.getByText('alice@example.com')).toBeInTheDocument();
+        expect(screen.queryByText('bob@example.com')).not.toBeInTheDocument();
+      });
+    });
+
+    it('shows No members matched when filter matches nothing', async () => {
+      const membersWithMultiple = [
+        { user_id: 'user-1', email: 'owner@example.com', role: 'owner', created_at: new Date().toISOString(), rank: 0 },
+      ];
+      mockGetOrganizationMembers.mockResolvedValue(membersWithMultiple);
+      render(<MembersPage />);
+      await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
+      const filterInput = screen.getByPlaceholderText('Filter...');
+      await userEvent.type(filterInput, 'nonexistent');
+      await waitFor(() => {
+        expect(screen.getByText('No members matched this search.')).toBeInTheDocument();
+      });
+    });
+  });
+
+  describe('Permission redirect', () => {
+    it('redirects to projects when user lacks view_members permission', async () => {
+      mockUseOutletContext.mockReturnValue({
+        ...stableOrgContext,
+        organization: {
+          ...stableOrgContext.organization,
+          permissions: { view_members: false, add_members: false },
+        },
+      });
+      render(<MembersPage />);
+      await waitFor(() => {
+        expect(mockNavigate).toHaveBeenCalledWith('/organizations/org-1/projects', { replace: true });
+      });
+      mockUseOutletContext.mockReturnValue(stableOrgContext);
     });
   });
 });

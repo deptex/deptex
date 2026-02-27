@@ -1822,7 +1822,7 @@ export default function TeamSettingsPage() {
                 type="email"
                 value={teamEmailToAdd}
                 onChange={(e) => setTeamEmailToAdd(e.target.value)}
-                placeholder="alerts@example.com"
+                placeholder=""
               />
             </div>
           </div>

@@ -2784,7 +2784,7 @@ export default function ProjectSettingsPage() {
                 type="email"
                 value={projectEmailToAdd}
                 onChange={(e) => setProjectEmailToAdd(e.target.value)}
-                placeholder="alerts@example.com"
+                placeholder=""
               />
             </div>
           </div>

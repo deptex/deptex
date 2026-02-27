@@ -364,6 +364,18 @@ export const router = createBrowserRouter([
         element: <Navigate to="/docs/help" replace />,
       },
       {
+        path: "terms",
+        element: <Navigate to="/docs/terms" replace />,
+      },
+      {
+        path: "privacy",
+        element: <Navigate to="/docs/privacy" replace />,
+      },
+      {
+        path: "security",
+        element: <Navigate to="/docs/security" replace />,
+      },
+      {
         path: "open-source",
         element: (
           <PublicRoute>

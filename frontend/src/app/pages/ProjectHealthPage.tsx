@@ -67,7 +67,7 @@ export default function ProjectHealthPage() {
                   variant="outline"
                   className="text-base px-8 py-6 border-border hover:bg-background-subtle"
                 >
-                  <Link to="/docs">
+                  <Link to="/docs" target="_blank" rel="noopener noreferrer">
                     <Book className="h-5 w-5 mr-2" />
                     See documentation
                   </Link>

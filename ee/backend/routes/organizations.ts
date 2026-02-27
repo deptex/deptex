@@ -200,6 +200,7 @@ router.post('/', async (req: AuthRequest, res) => {
           permissions: {
             view_settings: true,
             manage_billing: true,
+            manage_security: true,
             view_activity: true,
             manage_compliance: true,
             interact_with_security_agent: true,
@@ -223,6 +224,7 @@ router.post('/', async (req: AuthRequest, res) => {
           permissions: {
             view_settings: true,
             manage_billing: true,
+            manage_security: true,
             view_activity: true,
             manage_compliance: true,
             interact_with_security_agent: true,
@@ -2034,9 +2036,9 @@ router.put('/:id/roles/:roleId', async (req: AuthRequest, res) => {
 
       // Check all permission keys
       const allPermissionKeys = [
-        'view_settings', 'view_activity', 'manage_compliance', 'interact_with_security_agent',
+        'view_settings', 'manage_billing', 'manage_security', 'view_activity', 'manage_compliance', 'interact_with_security_agent',
         'view_members', 'add_members', 'edit_roles', 'edit_permissions',
-        'kick_members', 'manage_teams_and_projects', 'view_overview'
+        'kick_members', 'manage_teams_and_projects', 'manage_integrations', 'manage_notifications', 'view_overview'
       ];
 
       for (const key of allPermissionKeys) {

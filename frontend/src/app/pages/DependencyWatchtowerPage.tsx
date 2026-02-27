@@ -669,7 +669,7 @@ export function WatchtowerContent({
                 className="gap-2 border-border text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50"
                 asChild
               >
-                <a href="/docs/watchtower">Read our study</a>
+                <a href="/docs/watchtower" target="_blank" rel="noopener noreferrer">Read our study</a>
               </Button>
             </div>
           </div>

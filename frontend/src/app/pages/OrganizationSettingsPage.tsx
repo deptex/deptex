@@ -12,7 +12,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone } from 'lucide-react';
+import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
@@ -319,6 +319,45 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
               </table>
             </div>
           </div>
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <h3 className="text-lg font-semibold text-foreground">Ticketing</h3>
+            </div>
+            <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+              <table className="w-full table-fixed">
+                <colgroup>
+                  <col className="w-[200px]" />
+                  <col />
+                  <col className="w-[120px]" />
+                </colgroup>
+                <thead className="bg-background-subtle/30 border-b border-border">
+                  <tr>
+                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
+                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
+                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {[1, 2, 3].map((i) => (
+                    <tr key={i}>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="h-5 w-5 rounded-sm bg-muted animate-pulse flex-shrink-0" />
+                          <div className={`h-4 w-20 ${pulse}`} />
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className={`h-4 w-28 ${pulse}`} />
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <div className={`h-8 w-20 ${pulse} ml-auto`} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       );
     case 'notifications':
@@ -354,19 +393,42 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
     case 'policies':
       return (
         <div className="space-y-6 h-full">
-          <div>
-            <div className={`h-8 w-24 ${pulse}`} />
+          <div className="mb-6 flex items-start justify-between">
+            <div>
+              <div className={`h-8 w-24 ${pulse}`} />
+            </div>
+            <div className="flex items-center gap-2">
+              <div className={`h-9 w-20 ${pulse} rounded-md`} />
+              <div className={`h-9 w-14 ${pulse} rounded-md`} />
+            </div>
           </div>
-          <div className="bg-background-card border border-border rounded-lg overflow-hidden flex flex-col flex-1 min-h-[320px]">
-            <div className="px-4 py-2 border-b border-border flex gap-4">
-              <div className={`h-8 w-20 ${pulse}`} />
-              <div className={`h-8 w-20 ${pulse}`} />
+          <div className="flex items-center border-b border-border pb-px">
+            <div className="flex items-center gap-6">
+              <div className={`h-4 w-12 ${pulse} pb-3`} />
+              <div className={`h-4 w-32 ${pulse} pb-3`} />
             </div>
-            <div className="p-4 flex-1 font-mono text-sm">
-              {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
-                <div key={i} className={`h-4 ${pulse} mb-1`} style={{ width: i % 3 === 0 ? '70%' : i % 3 === 1 ? '90%' : '50%' }} />
-              ))}
-            </div>
+          </div>
+          <div className="space-y-6 pt-2">
+            {[0, 1].map((i) => (
+              <div key={i} className="rounded-lg border border-border bg-background-card overflow-hidden">
+                <div className="px-4 py-2.5 bg-background-card-header border-b border-border">
+                  <div className={`h-3.5 w-32 ${pulse} rounded`} />
+                </div>
+                <div className="bg-[#1d1f21] px-4 py-3 font-mono text-[13px] leading-6" style={{ minHeight: '180px' }}>
+                  <div className="space-y-1.5 animate-pulse">
+                    <div className="h-3 bg-white/[0.06] rounded w-[70%]" />
+                    <div className="h-3 bg-white/[0.06] rounded w-[55%] ml-4" />
+                    <div className="h-3 bg-white/[0.06] rounded w-[80%] ml-4" />
+                    <div className="h-3 bg-white/[0.06] rounded w-[40%] ml-8" />
+                    <div className="h-3 bg-white/[0.06] rounded w-[60%] ml-4" />
+                    <div className="h-3 bg-white/[0.06] rounded w-[30%]" />
+                    <div className="h-3" />
+                    <div className="h-3 bg-white/[0.06] rounded w-[50%] ml-4" />
+                    <div className="h-3 bg-white/[0.06] rounded w-[45%] ml-4" />
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       );
@@ -585,6 +647,7 @@ export default function OrganizationSettingsPage() {
   const [newRolePermissions, setNewRolePermissions] = useState<RolePermissions>({
     view_settings: false,
     manage_billing: false,
+    manage_security: false,
     view_activity: false,
     manage_compliance: false,
     interact_with_security_agent: false,
@@ -646,6 +709,9 @@ export default function OrganizationSettingsPage() {
   const [emailToAdd, setEmailToAdd] = useState('');
   const [emailSaving, setEmailSaving] = useState(false);
 
+  // Usage screen state
+  const [usageData, setUsageData] = useState<{ teamMembers: number; projectsCreated: number } | null>(null);
+  const [loadingUsage, setLoadingUsage] = useState(false);
 
   // Get cached or organization permissions
   const getCachedPermissions = (): RolePermissions | null => {
@@ -677,6 +743,7 @@ export default function OrganizationSettingsPage() {
     ...basePermissions,
     view_settings: true,
     manage_billing: true,
+    manage_security: true,
     view_activity: true,
     manage_compliance: true,
     interact_with_security_agent: true,
@@ -728,6 +795,14 @@ export default function OrganizationSettingsPage() {
       navigate(`/organizations/${id}/settings/general`, { replace: true });
     }
   }, [id, sectionParam, permissionsChecked, canManageCompliance, navigate]);
+
+  // Redirect away from security sections when user lacks manage_security
+  const securitySections = ['sso', 'mfa', 'legal_documents'];
+  useEffect(() => {
+    if (id && sectionParam && securitySections.includes(sectionParam) && permissionsChecked && !effectivePermissions?.manage_security) {
+      navigate(`/organizations/${id}/settings/general`, { replace: true });
+    }
+  }, [id, sectionParam, permissionsChecked, effectivePermissions?.manage_security, navigate]);
 
   // Add role sidebar: animate in on open, animate out before unmount
   useEffect(() => {
@@ -848,6 +923,38 @@ export default function OrganizationSettingsPage() {
     if (activeSection === 'notifications') setHasVisitedNotifications(true);
     if (activeSection === 'policies') setHasVisitedPolicies(true);
   }, [activeSection]);
+
+  const loadUsage = async () => {
+    if (!id) return;
+    setLoadingUsage(true);
+    try {
+      let teamMembers = organization?.member_count ?? 0;
+      try {
+        const membersData = await api.getOrganizationMembers(id);
+        teamMembers = membersData.length;
+      } catch {
+        // Fallback to org.member_count if user lacks view_members
+      }
+      const projectsData = await api.getProjects(id);
+      setUsageData({
+        teamMembers,
+        projectsCreated: projectsData.length,
+      });
+    } catch {
+      setUsageData({
+        teamMembers: organization?.member_count ?? 0,
+        projectsCreated: 0,
+      });
+    } finally {
+      setLoadingUsage(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeSection === 'usage' && id) {
+      loadUsage();
+    }
+  }, [activeSection, id]);
 
   // Handle integration connection callbacks (GitHub, GitLab, Bitbucket)
   useEffect(() => {
@@ -1132,6 +1239,7 @@ export default function OrganizationSettingsPage() {
       setNewRolePermissions({
         view_settings: false,
         manage_billing: false,
+        manage_security: false,
         view_activity: false,
         manage_compliance: false,
         interact_with_security_agent: false,
@@ -1341,6 +1449,7 @@ export default function OrganizationSettingsPage() {
     setEditingRolePermissions(role.permissions || {
       view_settings: false,
       manage_billing: false,
+      manage_security: false,
       view_activity: false,
       manage_compliance: false,
       interact_with_security_agent: false,
@@ -1552,12 +1661,12 @@ export default function OrganizationSettingsPage() {
       icon: <Bell className="h-4 w-4 tab-icon-shake" />,
     }] : []),
 
-    // Security Category
-    {
+    // Security Category - only show when user has access to at least one security section
+    ...(canManageCompliance || effectivePermissions?.view_activity || effectivePermissions?.manage_security ? [{
       id: 'category_security',
       label: 'Security',
-      isCategory: true,
-    },
+      isCategory: true as const,
+    }] : []),
     // Show Policies section only if user has manage_compliance (or legacy view_compliance/edit_policies before migration)
     ...(canManageCompliance ? [{
       id: 'policies',
@@ -1570,28 +1679,13 @@ export default function OrganizationSettingsPage() {
       label: 'Audit Logs',
       icon: <FileText className="h-4 w-4 tab-icon-shake" />,
     }] : []),
-    {
-      id: 'sso',
-      label: 'Single Sign-On',
-      icon: <LogIn className="h-4 w-4 tab-icon-shake" />,
-    },
-    {
-      id: 'mfa',
-      label: 'Multi-Factor Authentication',
-      icon: <Smartphone className="h-4 w-4 tab-icon-shake" />,
-    },
-
-    // Legal Category
-    {
-      id: 'category_legal',
-      label: 'Legal',
-      isCategory: true,
-    },
-    {
-      id: 'legal_documents',
-      label: 'Legal Documents',
-      icon: <BookOpen className="h-4 w-4 tab-icon-shake" />,
-    },
+    // Security sections - only show if user has manage_security permission
+    ...(effectivePermissions?.manage_security ? [
+      { id: 'sso', label: 'Single Sign-On', icon: <LogIn className="h-4 w-4 tab-icon-shake" /> },
+      { id: 'mfa', label: 'Multi-Factor Authentication', icon: <Smartphone className="h-4 w-4 tab-icon-shake" /> },
+      { id: 'category_legal', label: 'Legal', isCategory: true as const },
+      { id: 'legal_documents', label: 'Legal Documents', icon: <BookOpen className="h-4 w-4 tab-icon-shake" /> },
+    ] : []),
 
     // Plan Category - only show if user has manage_billing permission
     ...(effectivePermissions?.manage_billing ? [{
@@ -1712,7 +1806,7 @@ export default function OrganizationSettingsPage() {
                                 onChange={(e) => isOrgOwner && setOrgName(e.target.value)}
                                 placeholder="Enter organization name"
                                 disabled={!isOrgOwner}
-                                className={`w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${!isOrgOwner ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                className={`w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${!isOrgOwner ? 'opacity-60 cursor-not-allowed' : ''}`}
                               />
                             </div>
                           ) : (
@@ -1806,7 +1900,7 @@ export default function OrganizationSettingsPage() {
                                   <button
                                     type="button"
                                     onClick={() => setShowMemberDropdown(!showMemberDropdown)}
-                                    className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary flex items-center justify-between hover:border-foreground-secondary/50 transition-all"
+                                    className="w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary flex items-center justify-between hover:border-foreground-secondary/50 transition-all"
                                   >
                                     <div className="flex items-center gap-2 flex-1 min-w-0 text-left">
                                       {selectedTransferMemberId && !loadingMembers ? (
@@ -1859,7 +1953,7 @@ export default function OrganizationSettingsPage() {
                                               value={memberSearchTerm}
                                               onChange={(e) => setMemberSearchTerm(e.target.value)}
                                               placeholder="Search members..."
-                                              className="w-full pl-9 pr-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                                              className="w-full pl-9 pr-3 py-2 bg-background-content border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
                                               autoFocus
                                             />
                                           </div>
@@ -1925,7 +2019,7 @@ export default function OrganizationSettingsPage() {
                                   <button
                                     type="button"
                                     onClick={() => setShowRoleDropdown(!showRoleDropdown)}
-                                    className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary flex items-center justify-between hover:border-foreground-secondary/50 transition-all"
+                                    className="w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary flex items-center justify-between hover:border-foreground-secondary/50 transition-all"
                                   >
                                     <div className="flex items-center gap-2">
                                       {(() => {
@@ -2107,21 +2201,24 @@ export default function OrganizationSettingsPage() {
               )}
 
               {activeSection === 'plan' && (
-                <div className="space-y-6 pt-8">
+                <div className="space-y-8 pt-8">
                   <div>
                     <h2 className="text-2xl font-bold text-foreground">Plan & Billing</h2>
                   </div>
 
-                  {/* Current Plan */}
-                  <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                    <div className="px-5 py-3.5 rounded-t-lg bg-background-card-header border-b border-border">
-                      <span className="text-sm font-semibold text-foreground">Current Plan</span>
-                    </div>
-                    <div className="p-6">
-                      <p className="text-sm text-foreground-secondary">
-                        Your organization is currently on the <strong className="text-foreground capitalize">{organization?.plan || 'free'}</strong> plan.
+                  <div className="space-y-6">
+                    <div>
+                      <h3 className="text-base font-semibold text-foreground mb-2">Subscription Plan</h3>
+                      <p className="text-sm text-foreground">
+                        Each organization has its own subscription plan and usage quotas.
                       </p>
                     </div>
+                    <p className="text-sm text-foreground">
+                      You are currently on the <strong className="text-primary">Free Plan</strong>.
+                    </p>
+                    <p className="text-sm text-foreground">
+                      <strong>Pro Plan</strong> coming soon.
+                    </p>
                   </div>
                 </div>
               )}
@@ -2131,13 +2228,22 @@ export default function OrganizationSettingsPage() {
                   <div>
                     <h2 className="text-2xl font-bold text-foreground">Single Sign-On</h2>
                   </div>
-                  <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                    <div className="p-6">
-                      <div className="flex items-center gap-3 text-foreground-secondary">
-                        <Lock className="h-5 w-5 flex-shrink-0" />
-                        <p className="text-sm">
-                          Not available on free plan. Upgrade to Pro or Enterprise to enable SAML 2.0 SSO with your identity provider (Okta, Azure AD, Google Workspace, etc.).
+                  <div className="rounded-lg border border-border bg-background-card p-6">
+                    <div className="flex gap-3">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
+                        <Info className="h-4 w-4 text-foreground-secondary" />
+                      </div>
+                      <div className="flex-1 space-y-2">
+                        <h3 className="text-sm font-semibold text-foreground">Upgrade to unlock Single Sign-On</h3>
+                        <p className="text-sm text-foreground-secondary">
+                          Connect your identity provider (Okta, Azure AD, Google Workspace, etc.) to enable SAML 2.0 SSO for your organization.
                         </p>
+                        <Button
+                          onClick={() => id && navigate(`/organizations/${id}/settings/plan`)}
+                          className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm px-4"
+                        >
+                          Upgrade to Pro
+                        </Button>
                       </div>
                     </div>
                   </div>
@@ -2149,13 +2255,22 @@ export default function OrganizationSettingsPage() {
                   <div>
                     <h2 className="text-2xl font-bold text-foreground">Multi-Factor Authentication</h2>
                   </div>
-                  <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                    <div className="p-6">
-                      <div className="flex items-center gap-3 text-foreground-secondary">
-                        <Lock className="h-5 w-5 flex-shrink-0" />
-                        <p className="text-sm">
-                          Not available on free plan. Upgrade to Pro or Enterprise to require multi-factor authentication for your organization.
+                  <div className="rounded-lg border border-border bg-background-card p-6">
+                    <div className="flex gap-3">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
+                        <Info className="h-4 w-4 text-foreground-secondary" />
+                      </div>
+                      <div className="flex-1 space-y-2">
+                        <h3 className="text-sm font-semibold text-foreground">Upgrade to unlock Multi-Factor Authentication</h3>
+                        <p className="text-sm text-foreground-secondary">
+                          Require MFA for your organization to add an extra layer of security to user sign-ins.
                         </p>
+                        <Button
+                          onClick={() => id && navigate(`/organizations/${id}/settings/plan`)}
+                          className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm px-4"
+                        >
+                          Upgrade to Pro
+                        </Button>
                       </div>
                     </div>
                   </div>
@@ -2163,44 +2278,108 @@ export default function OrganizationSettingsPage() {
               )}
 
               {activeSection === 'legal_documents' && (
-                <div className="space-y-6 pt-8">
-                  <div>
-                    <h2 className="text-2xl font-bold text-foreground">Legal Documents</h2>
-                  </div>
-                  <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                    <div className="p-6 space-y-4">
-                      <p className="text-sm text-foreground-secondary">
-                        Access legal documents and policies for your organization.
-                      </p>
-                      <div className="flex flex-col gap-3">
-                        <Link
-                          to="/terms"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-3 px-4 py-3 rounded-lg border border-border bg-background hover:bg-background-subtle/50 transition-colors text-sm font-medium text-foreground"
-                        >
-                          <BookOpen className="h-4 w-4 text-foreground-secondary" />
-                          Terms of Service
-                        </Link>
-                        <Link
-                          to="/privacy"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-3 px-4 py-3 rounded-lg border border-border bg-background hover:bg-background-subtle/50 transition-colors text-sm font-medium text-foreground"
-                        >
-                          <BookOpen className="h-4 w-4 text-foreground-secondary" />
-                          Privacy Policy
-                        </Link>
-                        <Link
-                          to="/security"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-3 px-4 py-3 rounded-lg border border-border bg-background hover:bg-background-subtle/50 transition-colors text-sm font-medium text-foreground"
-                        >
-                          <BookOpen className="h-4 w-4 text-foreground-secondary" />
-                          Security
-                        </Link>
+                <div className="pt-8">
+                  <h2 className="text-2xl font-bold text-foreground">Legal Documents</h2>
+                  <div className="mt-8 divide-y divide-border">
+                    {/* Terms & Policies - available now */}
+                    <div className="py-6 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 first:pt-0">
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-base font-semibold text-foreground">Terms &amp; Policies</h3>
+                        <p className="mt-1 text-sm text-foreground-secondary">
+                          Terms of Service, Privacy Policy, and our Security overview.
+                        </p>
                       </div>
+                      <div className="flex shrink-0 flex-wrap gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 px-4 border border-border bg-background-card hover:bg-background-subtle hover:border-foreground-secondary/40 transition-colors"
+                          asChild
+                        >
+                          <Link to="/docs/terms" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2">
+                            <ExternalLink className="h-4 w-4" />
+                            Terms
+                          </Link>
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 px-4 border border-border bg-background-card hover:bg-background-subtle hover:border-foreground-secondary/40 transition-colors"
+                          asChild
+                        >
+                          <Link to="/docs/privacy" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2">
+                            <ExternalLink className="h-4 w-4" />
+                            Privacy
+                          </Link>
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 px-4 border border-border bg-background-card hover:bg-background-subtle hover:border-foreground-secondary/40 transition-colors"
+                          asChild
+                        >
+                          <Link to="/docs/security" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2">
+                            <ExternalLink className="h-4 w-4" />
+                            Security
+                          </Link>
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* SOC2 Type 2 - coming soon */}
+                    <div className="py-6 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-base font-semibold text-foreground">SOC2 Type 2</h3>
+                        <p className="mt-1 text-sm text-foreground-secondary">
+                          Our SOC2 Type 2 report for security-conscious organizations evaluating Deptex.
+                        </p>
+                      </div>
+                      <span className="shrink-0 inline-flex h-8 items-center px-4 rounded-md border border-border bg-background-card text-sm text-foreground-secondary">
+                        Coming soon
+                      </span>
+                    </div>
+
+                    {/* Data Processing Addendum (DPA) - coming soon */}
+                    <div className="py-6 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-base font-semibold text-foreground">Data Processing Addendum (DPA)</h3>
+                        <p className="mt-1 text-sm text-foreground-secondary">
+                          A DPA for customers who need GDPR-compliant data processing terms.
+                        </p>
+                      </div>
+                      <span className="shrink-0 inline-flex h-8 items-center px-4 rounded-md border border-border bg-background-card text-sm text-foreground-secondary">
+                        Coming soon
+                      </span>
+                    </div>
+
+                    {/* Transfer Impact Assessment (TIA) - coming soon */}
+                    <div className="py-6 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-base font-semibold text-foreground">Transfer Impact Assessment (TIA)</h3>
+                        <p className="mt-1 text-sm text-foreground-secondary">
+                          Our TIA for GDPR-compliant international data transfers.
+                        </p>
+                      </div>
+                      <span className="shrink-0 inline-flex h-8 items-center px-4 rounded-md border border-border bg-background-card text-sm text-foreground-secondary">
+                        Coming soon
+                      </span>
+                    </div>
+
+                    {/* Footer note */}
+                    <div className="pt-6">
+                      <p className="text-sm text-foreground-secondary">
+                        Need other documents, such as a W-9 or tax forms? Reach out and we&apos;ll help.
+                      </p>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="mt-3 h-8 text-sm text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
+                        asChild
+                      >
+                        <a href="mailto:deptex.app@gmail.com?subject=Document%20Request" target="_blank" rel="noopener noreferrer">
+                          Contact Support
+                        </a>
+                      </Button>
                     </div>
                   </div>
                 </div>
@@ -2424,7 +2603,7 @@ export default function OrganizationSettingsPage() {
                     <div>
                       <h2 className="text-2xl font-bold text-foreground">Integrations</h2>
                     </div>
-                    <Link to="/docs/integrations">
+                    <Link to="/docs/integrations" target="_blank" rel="noopener noreferrer">
                       <Button variant="outline" size="sm" className="text-xs">
                         <BookOpen className="h-3.5 w-3.5 mr-1.5" />
                         Docs
@@ -3084,7 +3263,7 @@ export default function OrganizationSettingsPage() {
               {/* Keep Notifications mounted after first visit so it doesn't reload when switching tabs (like Integrations) */}
               {(activeSection === 'notifications' || hasVisitedNotifications) && id && (
                 <div className="pt-8" style={{ display: activeSection === 'notifications' ? undefined : 'none' }}>
-                  <NotificationRulesSection organizationId={id} />
+                  <NotificationRulesSection organizationId={id} connections={cicdConnections} />
                 </div>
               )}
 
@@ -3109,6 +3288,28 @@ export default function OrganizationSettingsPage() {
                       isSettingsSubpage={true}
                       inviteModalOpen={membersInviteModalOpen}
                       onInviteModalOpenChange={setMembersInviteModalOpen}
+                      sharedMembers={members}
+                      sharedRoles={allRoles}
+                      sharedDataLoaded={!loadingMembers && !loadingRoles}
+                      onMembersUpdate={(newMembers) => {
+                        setMembers(newMembers);
+                        if (id) {
+                          orgMembersCache[id] = newMembers;
+                          try {
+                            localStorage.setItem(CACHE_KEY_MEMBERS(id), JSON.stringify(newMembers));
+                          } catch { /* ignore */ }
+                        }
+                      }}
+                      onRolesUpdate={(newRoles) => {
+                        const sorted = [...newRoles].sort((a, b) => a.display_order - b.display_order);
+                        setAllRoles(sorted);
+                        if (id) {
+                          orgRolesCache[id] = sorted;
+                          try {
+                            localStorage.setItem(CACHE_KEY_ROLES(id), JSON.stringify(sorted));
+                          } catch { /* ignore */ }
+                        }
+                      }}
                     />
                   </div>
                 </div>
@@ -3130,20 +3331,55 @@ export default function OrganizationSettingsPage() {
               )}
 
               {activeSection === 'usage' && (
-                <div className="space-y-6 pt-8">
+                <div className="space-y-8 pt-8">
                   <div>
                     <h2 className="text-2xl font-bold text-foreground">Usage</h2>
                   </div>
 
-                  <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                    <div className="px-5 py-3.5 rounded-t-lg bg-background-card-header border-b border-border">
-                      <span className="text-sm font-semibold text-foreground">Usage</span>
-                    </div>
-                    <div className="p-6">
-                      <p className="text-sm text-foreground-secondary">
-                        You are on the free plan. You are not over your limit yet.
+                  <div className="space-y-8">
+                    <div>
+                      <h3 className="text-base font-semibold text-foreground mb-2">Usage Summary</h3>
+                      <p className="text-sm text-foreground">
+                        Your plan includes a limited amount of usage. If exceeded, you may experience restrictions. It may take up to 1 hour to refresh.
                       </p>
                     </div>
+
+                    {loadingUsage ? (
+                      <div className="space-y-6">
+                        <div className="h-4 w-80 bg-muted animate-pulse rounded" />
+                        <div className="grid gap-6 sm:grid-cols-2">
+                          {[1, 2].map((i) => (
+                            <div key={i}>
+                              <div className="h-3 w-24 bg-muted animate-pulse rounded mb-2" />
+                              <div className="h-5 w-20 bg-muted animate-pulse rounded" />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : usageData ? (
+                      <div className="space-y-6">
+                        <p className="text-sm text-foreground">
+                          You have not exceeded your Free Plan quota for this billing cycle.
+                        </p>
+                        <div className="grid gap-6 sm:grid-cols-2">
+                          {[
+                            { label: 'Team members', value: usageData.teamMembers },
+                            { label: 'Projects created', value: usageData.projectsCreated },
+                          ].map(({ label, value }) => (
+                            <div key={label}>
+                              <p className="text-xs font-medium uppercase tracking-wider text-foreground-secondary">
+                                {label}
+                              </p>
+                              <p className="mt-1 text-base font-medium text-foreground">
+                                {value} <span className="font-normal text-foreground-secondary">/ Unlimited</span>
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-foreground-secondary">Unable to load usage data.</p>
+                    )}
                   </div>
                 </div>
               )}
@@ -3183,7 +3419,7 @@ export default function OrganizationSettingsPage() {
                           </label>
                           <input
                             type="text"
-                            placeholder="e.g. Developer, Manager"
+                            placeholder=""
                             value={newRoleNameInput}
                             onChange={(e) => setNewRoleNameInput(e.target.value)}
                             maxLength={24}
@@ -4275,7 +4511,7 @@ export default function OrganizationSettingsPage() {
                         type="email"
                         value={emailToAdd}
                         onChange={(e) => setEmailToAdd(e.target.value)}
-                        placeholder="alerts@example.com"
+                        placeholder=""
                       />
                     </div>
                   </div>

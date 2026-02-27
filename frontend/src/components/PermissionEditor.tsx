@@ -65,6 +65,7 @@ export function PermissionEditor({
     // If view_settings is disabled, disable dependent permissions
     if (key === 'view_settings' && !value) {
       updated.manage_billing = false;
+      updated.manage_security = false;
       updated.view_members = false;
       updated.add_members = false;
       updated.edit_roles = false;
@@ -100,6 +101,7 @@ export function PermissionEditor({
       permissions: [
         { key: 'view_settings' as const, label: 'View Settings' },
         { key: 'manage_billing' as const, label: 'Manage Plan & Billing', dependsOn: 'view_settings' as const },
+        { key: 'manage_security' as const, label: 'Manage Security', dependsOn: 'view_settings' as const },
         { key: 'view_members' as const, label: 'View/Add Members', dependsOn: 'view_settings' as const },
         { key: 'kick_members' as const, label: 'Kick Members', dependsOn: 'view_members' as const },
         { key: 'edit_roles' as const, label: 'View/Edit Roles', dependsOn: 'view_members' as const },

@@ -51,4 +51,13 @@ export const docNavGroups: DocNavGroup[] = [
       { label: "Notification Rules", slug: "notification-rules", description: "Configure automated alerts and notification triggers." },
     ],
   },
+  {
+    title: "Legal",
+    icon: "FileCheck",
+    items: [
+      { label: "Terms of Service", slug: "terms", description: "Terms governing your use of Deptex." },
+      { label: "Privacy Policy", slug: "privacy", description: "How we collect, use, and protect your data." },
+      { label: "Security", slug: "security", description: "Our security practices and commitment." },
+    ],
+  },
 ];

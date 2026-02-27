@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Github, GitBranch, Slack, Mail, Webhook, FileCode, Code, BookOpen, Settings } from "lucide-react";
+import { Github, GitBranch, Slack, Mail, Webhook, FileCode, Code, BookOpen, Settings, MessageCircle } from "lucide-react";
 import { Button } from "../../components/ui/button";
 
 interface DocMeta {
@@ -84,6 +84,18 @@ const docMeta: Record<string, DocMeta> = {
   help: {
     title: "Help & Support",
     description: "Get help, contact support, and find answers to common questions.",
+  },
+  terms: {
+    title: "Terms of Service",
+    description: "Terms governing your use of Deptex.",
+  },
+  privacy: {
+    title: "Privacy Policy",
+    description: "How we collect, use, and protect your data.",
+  },
+  security: {
+    title: "Security",
+    description: "Our security practices and commitment.",
   },
 };
 
@@ -291,26 +303,6 @@ function verifySignature(payload, signature, secret) {
         </div>
       </div>
 
-      {/* API Endpoints Table */}
-      <div>
-        <h2 className="text-lg font-semibold text-foreground mb-3">API Endpoints</h2>
-        <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-background-card-header border-b border-border">
-              <tr>
-                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-24">Method</th>
-                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Endpoint</th>
-                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Description</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              <tr className="hover:bg-table-hover transition-colors"><td className="px-4 py-3 font-mono text-foreground">POST</td><td className="px-4 py-3 font-mono text-xs text-foreground-secondary break-all">/api/integrations/organizations/:orgId/custom-integrations</td><td className="px-4 py-3 text-foreground-secondary">Create (returns secret)</td></tr>
-              <tr className="hover:bg-table-hover transition-colors"><td className="px-4 py-3 font-mono text-foreground">PUT</td><td className="px-4 py-3 font-mono text-xs text-foreground-secondary break-all">/api/integrations/organizations/:orgId/custom-integrations/:id</td><td className="px-4 py-3 text-foreground-secondary">Update or regenerate secret</td></tr>
-              <tr className="hover:bg-table-hover transition-colors"><td className="px-4 py-3 font-mono text-foreground">DELETE</td><td className="px-4 py-3 font-mono text-xs text-foreground-secondary break-all">/api/integrations/organizations/:orgId/connections/:id</td><td className="px-4 py-3 text-foreground-secondary">Remove</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
     </div>
   );
 }
@@ -973,34 +965,35 @@ return BANNED.some(b => (context.dependency.license || '').includes(b));`}
       </div>
 
       {/* Destinations */}
-      <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-        <div className="px-4 py-3 border-b border-border bg-background-card-header">
-          <h2 className="text-lg font-semibold text-foreground">Destinations</h2>
-        </div>
-        <div className="p-6 space-y-4">
-          <p className="text-foreground-secondary leading-relaxed">
-            Each notification rule can send alerts to one or more destinations. Destinations are configured through your organization&apos;s connected integrations in{" "}
-            <strong className="text-foreground">Settings &rarr; Integrations</strong>.
-          </p>
-          <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-background-card-header border-b border-border">
-                <tr>
-                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[160px]">Destination</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">How it works</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                <tr className="hover:bg-table-hover transition-colors"><td className="px-4 py-3 text-sm font-medium text-foreground">Slack</td><td className="px-4 py-3 text-foreground-secondary">Posts a formatted message to the configured channel.</td></tr>
-                <tr className="hover:bg-table-hover transition-colors"><td className="px-4 py-3 text-sm font-medium text-foreground">Discord</td><td className="px-4 py-3 text-foreground-secondary">Sends a rich embed to the configured Discord channel.</td></tr>
-                <tr className="hover:bg-table-hover transition-colors"><td className="px-4 py-3 text-sm font-medium text-foreground">Email</td><td className="px-4 py-3 text-foreground-secondary">Sends an email notification to the configured address.</td></tr>
-                <tr className="hover:bg-table-hover transition-colors"><td className="px-4 py-3 text-sm font-medium text-foreground">Jira</td><td className="px-4 py-3 text-foreground-secondary">Creates a Jira issue in the configured project.</td></tr>
-                <tr className="hover:bg-table-hover transition-colors"><td className="px-4 py-3 text-sm font-medium text-foreground">Linear</td><td className="px-4 py-3 text-foreground-secondary">Creates a Linear issue in the configured team.</td></tr>
-                <tr className="hover:bg-table-hover transition-colors"><td className="px-4 py-3 text-sm font-medium text-foreground">Asana</td><td className="px-4 py-3 text-foreground-secondary">Creates an Asana task in the configured project.</td></tr>
-                <tr className="hover:bg-table-hover transition-colors"><td className="px-4 py-3 text-sm font-medium text-foreground">Custom Webhook</td><td className="px-4 py-3 text-foreground-secondary">Sends a signed HTTP POST to your custom webhook endpoint.</td></tr>
-              </tbody>
-            </table>
-          </div>
+      <div>
+        <h2 className="text-lg font-semibold text-foreground mb-3">Destinations</h2>
+        <p className="text-foreground-secondary leading-relaxed mb-4">
+          Each notification rule can send alerts to one or more destinations. Destinations are configured through your organization&apos;s connected integrations in{" "}
+          <strong className="text-foreground">Settings &rarr; Integrations</strong>.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {[
+            { name: "Slack", icon: Slack, desc: "Posts a formatted message to the configured channel." },
+            { name: "Discord", icon: MessageCircle, desc: "Sends a rich embed to the configured Discord channel." },
+            { name: "Email", icon: Mail, desc: "Sends an email notification to the configured address." },
+            { name: "Jira", icon: FileCode, desc: "Creates a Jira issue in the configured project." },
+            { name: "Linear", icon: Code, desc: "Creates a Linear issue in the configured team." },
+            { name: "Asana", icon: FileCode, desc: "Creates an Asana task in the configured project." },
+            { name: "Custom Webhook", icon: Webhook, desc: "Sends a signed HTTP POST to your custom webhook endpoint." },
+          ].map(({ name, icon: Icon, desc }) => (
+            <div
+              key={name}
+              className="rounded-lg border border-border bg-background-card p-4 hover:border-foreground-secondary/30 transition-colors"
+            >
+              <div className="flex items-center gap-3 mb-2">
+                <div className="h-9 w-9 rounded-lg bg-background-subtle flex items-center justify-center">
+                  <Icon className="h-4 w-4 text-foreground-secondary" />
+                </div>
+                <span className="font-medium text-foreground text-sm">{name}</span>
+              </div>
+              <p className="text-xs text-foreground-secondary leading-relaxed">{desc}</p>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -1036,7 +1029,104 @@ const helpDocLinks = [
   { label: "Integrations", slug: "integrations", description: "Connect GitHub, Slack, CI/CD, and more." },
   { label: "Notification Rules", slug: "notification-rules", description: "Configure automated alerts." },
   { label: "Organizations", slug: "organizations", description: "Manage your organization and settings." },
+  { label: "Terms of Service", slug: "terms", description: "Terms governing your use of Deptex." },
+  { label: "Privacy Policy", slug: "privacy", description: "How we collect, use, and protect your data." },
+  { label: "Security", slug: "security", description: "Our security practices and commitment." },
 ];
+
+function TermsContent() {
+  return (
+    <div className="space-y-8">
+      <p className="text-foreground-secondary leading-relaxed">
+        These Terms of Service govern your use of Deptex. By using our platform, you agree to these terms.
+      </p>
+      <div>
+        <h2 className="text-lg font-semibold text-foreground mb-3">Acceptance of Terms</h2>
+        <p className="text-foreground-secondary leading-relaxed">
+          By accessing or using Deptex, you agree to be bound by these Terms. If you do not agree, please do not use our services.
+        </p>
+      </div>
+      <div>
+        <h2 className="text-lg font-semibold text-foreground mb-3">Use of the Service</h2>
+        <p className="text-foreground-secondary leading-relaxed">
+          Deptex provides dependency tracking, vulnerability monitoring, and compliance tools for software development teams. You agree to use the service in compliance with applicable laws and not to misuse or abuse the platform.
+        </p>
+      </div>
+      <div>
+        <h2 className="text-lg font-semibold text-foreground mb-3">Contact</h2>
+        <p className="text-foreground-secondary leading-relaxed">
+          Questions about these terms? Reach out at{" "}
+          <a href="mailto:deptex.app@gmail.com" className="text-primary hover:underline">deptex.app@gmail.com</a>.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function PrivacyContent() {
+  return (
+    <div className="space-y-8">
+      <p className="text-foreground-secondary leading-relaxed">
+        We take your privacy seriously. This policy describes how Deptex collects, uses, and protects your information.
+      </p>
+      <div>
+        <h2 className="text-lg font-semibold text-foreground mb-3">Information We Collect</h2>
+        <p className="text-foreground-secondary leading-relaxed">
+          We collect information you provide (e.g., account details, organization data) and usage data necessary to operate the service, including repository metadata and dependency information from your connected projects.
+        </p>
+      </div>
+      <div>
+        <h2 className="text-lg font-semibold text-foreground mb-3">How We Use It</h2>
+        <p className="text-foreground-secondary leading-relaxed">
+          Your data is used to deliver Deptex features: dependency scanning, vulnerability alerts, compliance reporting, and integrations you configure. We do not sell your personal information.
+        </p>
+      </div>
+      <div>
+        <h2 className="text-lg font-semibold text-foreground mb-3">Data Security</h2>
+        <p className="text-foreground-secondary leading-relaxed">
+          We use industry-standard practices to protect your data. For more details, see our{" "}
+          <Link to="/docs/security" className="text-primary hover:underline">Security</Link> page.
+        </p>
+      </div>
+      <div>
+        <h2 className="text-lg font-semibold text-foreground mb-3">Contact</h2>
+        <p className="text-foreground-secondary leading-relaxed">
+          Privacy questions? Email us at{" "}
+          <a href="mailto:deptex.app@gmail.com" className="text-primary hover:underline">deptex.app@gmail.com</a>.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function SecurityContent() {
+  return (
+    <div className="space-y-8">
+      <p className="text-foreground-secondary leading-relaxed">
+        Security is at the core of Deptex. We help you secure your dependency supply chain and take our own security practices seriously.
+      </p>
+      <div>
+        <h2 className="text-lg font-semibold text-foreground mb-3">What We Protect</h2>
+        <p className="text-foreground-secondary leading-relaxed">
+          Deptex safeguards your account data, organization settings, and the dependency and vulnerability information we process. We use encryption in transit and at rest, and follow secure development practices.
+        </p>
+      </div>
+      <div>
+        <h2 className="text-lg font-semibold text-foreground mb-3">Access Control</h2>
+        <p className="text-foreground-secondary leading-relaxed">
+          Organizations can define roles, permissions, and team-scoped access. SSO and MFA (on Pro+) add extra layers for enterprise customers.
+        </p>
+      </div>
+      <div>
+        <h2 className="text-lg font-semibold text-foreground mb-3">Compliance & Transparency</h2>
+        <p className="text-foreground-secondary leading-relaxed">
+          We are working toward SOC2 and other compliance certifications. For security questionnaires or specific documentation requests, contact us at{" "}
+          <a href="mailto:deptex.app@gmail.com" className="text-primary hover:underline">deptex.app@gmail.com</a>.
+        </p>
+      </div>
+    </div>
+  );
+}
 
 function HelpContent() {
   return (
@@ -1051,6 +1141,8 @@ function HelpContent() {
             <Link
               key={item.slug}
               to={`/docs/${item.slug}`}
+              target="_blank"
+              rel="noopener noreferrer"
               className="flex gap-3 rounded-lg border border-border bg-background-card p-4 hover:bg-table-hover hover:border-foreground-secondary/30 transition-colors text-left group"
             >
               <BookOpen className="h-5 w-5 text-foreground-secondary shrink-0 mt-0.5 group-hover:text-foreground transition-colors" />
@@ -1148,6 +1240,12 @@ export default function DocsPage({ section }: DocsPageProps) {
         return <NotificationRulesContent />;
       case "help":
         return <HelpContent />;
+      case "terms":
+        return <TermsContent />;
+      case "privacy":
+        return <PrivacyContent />;
+      case "security":
+        return <SecurityContent />;
       default:
         return (
           <div className="rounded-lg border border-border bg-background-card p-6">

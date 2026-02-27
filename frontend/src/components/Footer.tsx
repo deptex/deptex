@@ -95,7 +95,7 @@ export default function Footer() {
             <h3 className="text-sm font-semibold text-foreground mb-4">Developers</h3>
             <ul className="space-y-3">
               <li>
-                <Link to="/docs" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
+                <Link to="/docs" target="_blank" rel="noopener noreferrer" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
                   Documentation
                 </Link>
               </li>

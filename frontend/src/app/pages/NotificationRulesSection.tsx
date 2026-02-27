@@ -113,7 +113,7 @@ function DestinationIcons({
 }
 
 const DEFAULT_CUSTOM_CODE = `// Return true to trigger notification, false to skip
-return context.depscore > 75;
+return false;
 `;
 
 /** Connection dropdown with icon */
@@ -251,9 +251,16 @@ export default function NotificationRulesSection({ organizationId = '', projectI
     }
     let cancelled = false;
     setLoading(true);
+
+    // Use pre-loaded connections when provided (e.g. from parent OrganizationSettingsPage) to avoid duplicate fetches
+    const connectionsPromise =
+      externalConnections && externalConnections.length > 0
+        ? Promise.resolve(externalConnections)
+        : api.getOrganizationConnections(organizationId).catch(() => [] as CiCdConnection[]);
+
     Promise.all([
       api.getOrganizationNotificationRules(organizationId),
-      api.getOrganizationConnections(organizationId).catch(() => [] as CiCdConnection[]),
+      connectionsPromise,
       api.getOrganizationMembers(organizationId).catch(() => [] as OrganizationMember[]),
     ])
       .then(([rulesData, conns, membersData]) => {
@@ -275,6 +282,13 @@ export default function NotificationRulesSection({ organizationId = '', projectI
       cancelled = true;
     };
   }, [organizationId, toast]);
+
+  // When parent passes pre-loaded connections (e.g. from Integrations tab), use them so we stay in sync
+  useEffect(() => {
+    if (externalConnections && externalConnections.length > 0) {
+      setConnections(externalConnections);
+    }
+  }, [externalConnections]);
 
   useEffect(() => {
     if (sidebarOpen) {

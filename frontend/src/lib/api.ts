@@ -25,6 +25,7 @@ export interface Organization {
 export interface RolePermissions {
   view_settings: boolean;
   manage_billing: boolean;
+  manage_security?: boolean;
   view_activity: boolean;
   manage_compliance: boolean;
   interact_with_security_agent: boolean;

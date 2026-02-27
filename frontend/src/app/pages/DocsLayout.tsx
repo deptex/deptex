@@ -1,5 +1,5 @@
 import { Link, useParams } from "react-router-dom";
-import { Rocket, BookOpen, Sparkles, Settings } from "lucide-react";
+import { Rocket, BookOpen, Sparkles, Settings, FileCheck } from "lucide-react";
 import { cn } from "../../lib/utils";
 import DocsPage from "./DocsPage";
 import { docNavGroups } from "./docsConfig";
@@ -9,6 +9,7 @@ const groupIcons: Record<string, React.ComponentType<{ className?: string }>> = 
   BookOpen,
   Sparkles,
   Settings,
+  FileCheck,
 };
 
 export default function DocsLayout() {
