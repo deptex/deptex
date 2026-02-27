@@ -1002,14 +1002,13 @@ export default function TeamSettingsPage() {
                                       {!['slack', 'discord', 'email', 'custom_notification', 'custom_ticketing'].includes(conn.provider) && (
                                         conn.provider === 'jira' ? <img src="/images/integrations/jira.png" alt="" className="h-5 w-5 rounded-sm" /> :
                                         conn.provider === 'linear' ? <img src="/images/integrations/linear.png" alt="" className="h-5 w-5 rounded-sm" /> :
-                                        conn.provider === 'asana' ? <img src="/images/integrations/asana.png" alt="" className="h-5 w-5 rounded-sm" /> :
                                         <Webhook className="h-5 w-5 text-foreground-secondary" />
                                       )}
                                       <span className="text-sm font-medium text-foreground">
                                         {conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing' ? 'Custom' :
                                           conn.provider === 'email' ? 'Email' :
                                           conn.provider === 'jira' ? (conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira') :
-                                          conn.provider === 'slack' ? 'Slack' : conn.provider === 'discord' ? 'Discord' : conn.provider === 'linear' ? 'Linear' : 'Asana'}
+                                          conn.provider === 'slack' ? 'Slack' : conn.provider === 'discord' ? 'Discord' : conn.provider === 'linear' ? 'Linear' : conn.provider}
                                       </span>
                                     </div>
                                   </td>
@@ -1099,14 +1098,13 @@ export default function TeamSettingsPage() {
                                       {!['slack', 'discord', 'email', 'custom_notification', 'custom_ticketing'].includes(conn.provider) && (
                                         conn.provider === 'jira' ? <img src="/images/integrations/jira.png" alt="" className="h-5 w-5 rounded-sm" /> :
                                         conn.provider === 'linear' ? <img src="/images/integrations/linear.png" alt="" className="h-5 w-5 rounded-sm" /> :
-                                        conn.provider === 'asana' ? <img src="/images/integrations/asana.png" alt="" className="h-5 w-5 rounded-sm" /> :
                                         <Webhook className="h-5 w-5 text-foreground-secondary" />
                                       )}
                                       <span className="text-sm font-medium text-foreground">
                                         {conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing' ? 'Custom' :
                                           conn.provider === 'email' ? 'Email' :
                                           conn.provider === 'jira' ? (conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira') :
-                                          conn.provider === 'slack' ? 'Slack' : conn.provider === 'discord' ? 'Discord' : conn.provider === 'linear' ? 'Linear' : 'Asana'}
+                                          conn.provider === 'slack' ? 'Slack' : conn.provider === 'discord' ? 'Discord' : conn.provider === 'linear' ? 'Linear' : conn.provider}
                                       </span>
                                     </div>
                                   </td>

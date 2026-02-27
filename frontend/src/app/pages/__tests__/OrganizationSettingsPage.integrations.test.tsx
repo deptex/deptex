@@ -9,7 +9,6 @@ const mockGetOrganizationConnections = vi.fn();
 const mockDeleteOrganizationConnection = vi.fn();
 const mockConnectJiraOrg = vi.fn();
 const mockConnectLinearOrg = vi.fn();
-const mockConnectAsanaOrg = vi.fn();
 const mockToast = vi.fn();
 const mockNavigate = vi.fn();
 const mockSetSearchParams = vi.fn();
@@ -46,7 +45,7 @@ vi.mock('../../../lib/api', () => ({
     connectJiraOrg: (...args: unknown[]) => mockConnectJiraOrg(...args),
     connectJiraPatOrg: vi.fn().mockResolvedValue({ success: true }),
     connectLinearOrg: (...args: unknown[]) => mockConnectLinearOrg(...args),
-    connectAsanaOrg: (...args: unknown[]) => mockConnectAsanaOrg(...args),
+    connectAsanaOrg: vi.fn(),
     getOrganizationRoles: vi.fn().mockResolvedValue([
       {
         id: 'r1',
@@ -92,7 +91,6 @@ describe('OrganizationSettingsPage – Integrations', () => {
     mockDeleteOrganizationConnection.mockResolvedValue({ success: true, provider: 'github' });
     mockConnectJiraOrg.mockResolvedValue({ redirectUrl: 'https://atlassian.com/oauth' });
     mockConnectLinearOrg.mockResolvedValue({ redirectUrl: 'https://linear.app/oauth' });
-    mockConnectAsanaOrg.mockResolvedValue({ redirectUrl: 'https://asana.com/oauth' });
     Object.defineProperty(window, 'open', { value: mockWindowOpen, writable: true });
     window.confirm = vi.fn(() => true);
   });
@@ -281,21 +279,6 @@ describe('OrganizationSettingsPage – Integrations', () => {
       expect(mockConnectLinearOrg).toHaveBeenCalledWith('org-1');
     });
     expect(mockLocation.href).toBe('https://linear.app/oauth');
-  });
-
-  it('Add Asana triggers OAuth redirect', async () => {
-    mockGetOrganizationConnections.mockResolvedValue([]);
-    const mockLocation = { href: '', assign: vi.fn() };
-    Object.defineProperty(window, 'location', { value: mockLocation, writable: true });
-    render(<OrganizationSettingsPage />);
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Add Asana/i })).toBeInTheDocument();
-    });
-    await userEvent.click(screen.getByRole('button', { name: /Add Asana/i }));
-    await waitFor(() => {
-      expect(mockConnectAsanaOrg).toHaveBeenCalledWith('org-1');
-    });
-    expect(mockLocation.href).toBe('https://asana.com/oauth');
   });
 
   it('when ticketing connections exist, shows provider labels and Disconnect', async () => {

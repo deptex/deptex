@@ -568,7 +568,7 @@ export default function OrganizationSettingsPage() {
     [cicdConnections]
   );
   const ticketingConnections = useMemo(
-    () => cicdConnections.filter(c => c.provider === 'jira' || c.provider === 'linear' || c.provider === 'asana' || c.provider === 'custom_ticketing'),
+    () => cicdConnections.filter(c => c.provider === 'jira' || c.provider === 'linear' || c.provider === 'custom_ticketing'),
     [cicdConnections]
   );
   // Initialize isOwner/isAdmin from cached permissions
@@ -3065,7 +3065,6 @@ export default function OrganizationSettingsPage() {
                             </DropdownMenu>
                             {([
                               { label: 'Linear', icon: '/images/integrations/linear.png', getRedirect: api.connectLinearOrg },
-                              { label: 'Asana', icon: '/images/integrations/asana.png', getRedirect: api.connectAsanaOrg },
                             ]).map(({ label, icon, getRedirect }) => (
                               <Button
                                 key={label}
@@ -3156,7 +3155,7 @@ export default function OrganizationSettingsPage() {
                                 {ticketingConnections.length === 0 ? (
                                   <tr>
                                     <td colSpan={3} className="px-4 py-6 text-center text-sm text-foreground-secondary">
-                                      No ticketing integrations. Add Jira, Linear, or Asana above to create issues automatically.
+                                      No ticketing integrations. Add Jira or Linear above to create issues automatically.
                                     </td>
                                   </tr>
                                 ) : ticketingConnections.map((conn) => {
@@ -3166,11 +3165,11 @@ export default function OrganizationSettingsPage() {
                                         ? 'Custom'
                                         : conn.provider === 'jira'
                                           ? (conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira')
-                                          : conn.provider === 'linear' ? 'Linear' : 'Asana';
+                                          : conn.provider === 'linear' ? 'Linear' : conn.provider;
                                       const providerIconSrc = !isCustom
                                         ? (conn.provider === 'jira' ? '/images/integrations/jira.png'
                                           : conn.provider === 'linear' ? '/images/integrations/linear.png'
-                                          : '/images/integrations/asana.png')
+                                          : null)
                                         : (hasCustomIcon ? conn.metadata?.icon_url : null);
 
                                       const connectionDisplay = isCustom
