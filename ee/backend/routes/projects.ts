@@ -1586,7 +1586,7 @@ router.get('/:id/projects/:projectId/connections', async (req: AuthRequest, res)
       .single();
     const ownerTeamId = ownerEntry?.team_id || null;
 
-    const queries: Promise<any>[] = [
+    const [orgResult, projResult, teamResult] = await Promise.all([
       supabase
         .from('organization_integrations')
         .select('id, organization_id, provider, installation_id, display_name, metadata, status, connected_at, created_at, updated_at')
@@ -1601,21 +1601,18 @@ router.get('/:id/projects/:projectId/connections', async (req: AuthRequest, res)
         .eq('status', 'connected')
         .in('provider', NOTIFICATION_PROVIDERS)
         .order('created_at', { ascending: true }),
-    ];
+      ownerTeamId
+        ? supabase
+            .from('team_integrations')
+            .select('id, team_id, provider, installation_id, display_name, metadata, status, connected_at, created_at, updated_at')
+            .eq('team_id', ownerTeamId)
+            .eq('status', 'connected')
+            .in('provider', NOTIFICATION_PROVIDERS)
+            .order('created_at', { ascending: true })
+        : Promise.resolve({ data: [] as any[], error: null }),
+    ]);
 
-    if (ownerTeamId) {
-      queries.push(
-        supabase
-          .from('team_integrations')
-          .select('id, team_id, provider, installation_id, display_name, metadata, status, connected_at, created_at, updated_at')
-          .eq('team_id', ownerTeamId)
-          .eq('status', 'connected')
-          .in('provider', NOTIFICATION_PROVIDERS)
-          .order('created_at', { ascending: true })
-      );
-    }
-
-    const results = await Promise.all(queries);
+    const results = [orgResult, projResult, teamResult];
     const orgConns = results[0].data || [];
     const projConns = results[1].data || [];
     const teamConns = ownerTeamId ? (results[2]?.data || []) : [];
@@ -3964,9 +3961,44 @@ router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthR
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
-    const hasEditSettings = accessCheck.projectPermissions?.edit_settings === true;
     const isOrgOwner = accessCheck.orgMembership?.role === 'owner';
     const hasOrgPermission = accessCheck.orgRole?.permissions?.manage_teams_and_projects === true;
+    let hasEditSettings = false;
+    if (!isOrgOwner && !hasOrgPermission) {
+      if (accessCheck.projectMembership) {
+        const { data: projectRole } = await supabase
+          .from('project_roles')
+          .select('permissions')
+          .eq('id', accessCheck.projectMembership.role_id)
+          .single();
+        hasEditSettings = (projectRole?.permissions as any)?.edit_settings === true;
+      }
+      if (!hasEditSettings && accessCheck.isInProjectTeam) {
+        const { data: projectTeams } = await supabase
+          .from('project_teams')
+          .select('team_id, is_owner')
+          .eq('project_id', projectId);
+        const ownerEntry = projectTeams?.find((pt: any) => pt.is_owner);
+        const ownerTeamId = ownerEntry?.team_id;
+        if (ownerTeamId) {
+          const { data: ownerTeamMembership } = await supabase
+            .from('team_members')
+            .select('role')
+            .eq('team_id', ownerTeamId)
+            .eq('user_id', userId)
+            .single();
+          if (ownerTeamMembership) {
+            const { data: teamRole } = await supabase
+              .from('team_roles')
+              .select('permissions')
+              .eq('team_id', ownerTeamId)
+              .eq('name', ownerTeamMembership.role)
+              .single();
+            hasEditSettings = (teamRole?.permissions as any)?.manage_projects === true;
+          }
+        }
+      }
+    }
     if (!hasEditSettings && !isOrgOwner && !hasOrgPermission) {
       return res.status(403).json({ error: 'You do not have permission to update repository settings' });
     }

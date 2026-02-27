@@ -8,7 +8,7 @@ import { NotificationAIAssistant } from '../../components/NotificationAIAssistan
 import { useAuth } from '../../contexts/AuthContext';
 import { useUserProfile } from '../../hooks/useUserProfile';
 import { useToast } from '../../hooks/use-toast';
-import { api, type OrganizationNotificationRule, type CiCdConnection, type OrganizationMember } from '../../lib/api';
+import { api, type OrganizationNotificationRule, type CiCdConnection, type CiCdProvider, type OrganizationMember } from '../../lib/api';
 import { Avatar, AvatarImage, AvatarFallback } from '../../components/ui/avatar';
 import {
   DropdownMenu,
@@ -211,6 +211,7 @@ function ConnectionDropdown({
 interface NotificationRulesSectionProps {
   organizationId?: string;
   projectId?: string;
+  teamId?: string;
   /** When true, hide the header (title + Create Rule button) for use in Project Settings where they appear above the tabs */
   hideTitle?: boolean;
   /** Ref to register the create-rule handler so the parent can trigger it (e.g. button above tabs) */
@@ -219,7 +220,7 @@ interface NotificationRulesSectionProps {
   connections?: CiCdConnection[];
 }
 
-export default function NotificationRulesSection({ organizationId = '', projectId, hideTitle, createHandlerRef, connections: externalConnections }: NotificationRulesSectionProps) {
+export default function NotificationRulesSection({ organizationId = '', projectId, teamId, hideTitle, createHandlerRef, connections: externalConnections }: NotificationRulesSectionProps) {
   const { user } = useAuth();
   const { fullName } = useUserProfile();
   const { toast } = useToast();
@@ -357,7 +358,7 @@ export default function NotificationRulesSection({ organizationId = '', projectI
         const conn = destinationConnections.find((c) => c.id === d.connectionId);
         return conn ? { integrationType: conn.provider, targetId: conn.id } : null;
       })
-      .filter((x): x is { integrationType: string; targetId: string } => !!x);
+      .filter((x): x is { integrationType: CiCdProvider; targetId: string } => x !== null);
     if (dests.length === 0) {
       toast({ title: 'Add a destination', description: 'Select at least one integration to receive notifications.', variant: 'destructive' });
       return;

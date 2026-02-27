@@ -48,6 +48,7 @@ interface ViewModeProps {
 }
 
 type PolicyExceptionSidebarProps = ApplyModeProps | ReviewModeProps | ViewModeProps;
+type ReviewOrViewProps = ReviewModeProps | ViewModeProps;
 
 export function PolicyExceptionSidebar(props: PolicyExceptionSidebarProps) {
   const { mode, baseCode, requestedCode, onClose } = props;
@@ -146,14 +147,14 @@ export function PolicyExceptionSidebar(props: PolicyExceptionSidebarProps) {
               ? 'Submit a request to use a different policy for this project.'
               : (
                 <span className="flex items-center gap-2 flex-wrap">
-                  {(props as ReviewModeProps & ViewModeProps).projectName && (
-                    <span>{(props as ReviewModeProps & ViewModeProps).projectName}</span>
+                  {(props as ReviewOrViewProps).projectName && (
+                    <span>{(props as ReviewOrViewProps).projectName}</span>
                   )}
-                  {(props as ReviewModeProps & ViewModeProps).projectName && (props as ReviewModeProps & ViewModeProps).requester && (
+                  {(props as ReviewOrViewProps).projectName && (props as ReviewOrViewProps).requester && (
                     <span> — </span>
                   )}
-                  {(props as ReviewModeProps & ViewModeProps).requester && (() => {
-                    const r = (props as ReviewModeProps & ViewModeProps).requester!;
+                  {(props as ReviewOrViewProps).requester && (() => {
+                    const r = (props as ReviewOrViewProps).requester!;
                     const name = r.full_name || r.email || 'Unknown';
                     return (
                       <span className="inline-flex items-center gap-2">
@@ -198,14 +199,14 @@ export function PolicyExceptionSidebar(props: PolicyExceptionSidebarProps) {
                   disabled={submitting}
                 />
               </div>
-            ) : ((props as ReviewModeProps & ViewModeProps).reason) ? (
+            ) : ((props as ReviewOrViewProps).reason) ? (
                 <div className="space-y-3">
                   <label className="flex items-center gap-2 text-base font-semibold text-foreground">
                     <FileText className="h-5 w-5 text-foreground-secondary" />
                     Reason
                   </label>
                   <div className="px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground-secondary">
-                    {(props as ReviewModeProps & ViewModeProps).reason}
+                    {(props as ReviewOrViewProps).reason}
                   </div>
                 </div>
               ) : null}

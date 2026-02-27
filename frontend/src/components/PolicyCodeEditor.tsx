@@ -1,13 +1,13 @@
 import { useRef, useEffect } from 'react';
 import MonacoEditor, { type OnMount, type BeforeMount } from '@monaco-editor/react';
-import type { editor, languages, IDisposable } from 'monaco-editor';
+import type { editor, languages, IDisposable, IRange } from 'monaco-editor';
 
 /** Monaco theme extending vs-dark to match Deptex dark UI. */
 const DEPTEX_THEME: editor.IStandaloneThemeData = {
   base: 'vs-dark',
   inherit: true,
   rules: [],
-  colors: {},
+  colors: { 'editor.background': '#1A1C1E' },
 };
 
 const POLICY_TYPEDEFS = `
@@ -217,7 +217,7 @@ export function PolicyCodeEditor({
 
     const completionProvider = monaco.languages.registerCompletionItemProvider('javascript', {
       triggerCharacters: ['.'],
-      provideCompletionItems: (model, position) => {
+      provideCompletionItems: (model: editor.ITextModel, position: { lineNumber: number; column: number }) => {
         const textUntilPosition = model.getValueInRange({
           startLineNumber: position.lineNumber,
           startColumn: 1,
@@ -226,7 +226,7 @@ export function PolicyCodeEditor({
         });
 
         const word = model.getWordUntilPosition(position);
-        const range: languages.IRange = {
+        const range: IRange = {
           startLineNumber: position.lineNumber,
           endLineNumber: position.lineNumber,
           startColumn: word.startColumn,
@@ -397,7 +397,7 @@ export function PolicyCodeEditor({
         onMount={handleMount}
         options={{
           readOnly,
-          backgroundColor: '#1A1C1E',
+          theme: 'deptex',
           minimap: { enabled: false },
           fontSize: 13,
           fontFamily: "Consolas, 'Courier New', monospace",
@@ -407,7 +407,7 @@ export function PolicyCodeEditor({
           automaticLayout: true,
           tabSize: 2,
           wordWrap: 'off',
-          padding: { top: 10, bottom: 10, left: 4, right: 8 },
+          padding: { top: 10, bottom: 10 },
         }}
       />
     </div>

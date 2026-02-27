@@ -2917,7 +2917,7 @@ export default function OrganizationSettingsPage() {
                                         : isEmail ? 'Email' : conn.provider === 'slack' ? 'Slack' : 'Discord';
                                       const providerIconSrc = !isCustom && !isEmail
                                         ? (conn.provider === 'slack' ? '/images/integrations/slack.png' : '/images/integrations/discord.png')
-                                        : (hasCustomIcon ? conn.metadata.icon_url : null);
+                                        : (hasCustomIcon ? conn.metadata?.icon_url : null);
 
                                       const channelRaw = conn.metadata?.channel || conn.metadata?.incoming_webhook?.channel || null;
                                       const channelFormatted = channelRaw ? (channelRaw.startsWith('#') ? channelRaw : `#${channelRaw}`) : null;
@@ -3171,7 +3171,7 @@ export default function OrganizationSettingsPage() {
                                         ? (conn.provider === 'jira' ? '/images/integrations/jira.png'
                                           : conn.provider === 'linear' ? '/images/integrations/linear.png'
                                           : '/images/integrations/asana.png')
-                                        : (hasCustomIcon ? conn.metadata.icon_url : null);
+                                        : (hasCustomIcon ? conn.metadata?.icon_url : null);
 
                                       const connectionDisplay = isCustom
                                         ? (conn.metadata?.custom_name || conn.display_name || (conn.metadata?.webhook_url ? conn.metadata.webhook_url.replace(/^https?:\/\//, '').slice(0, 45) : 'Webhook'))
@@ -4204,7 +4204,16 @@ export default function OrganizationSettingsPage() {
                             setCustomIntegrationSecret(result.secret);
                             setShowCustomIntegrationSidepanel(false);
                             setEditingCustomIntegration(null);
-                            const newConn: CiCdConnection = { id: result.id, display_name: customIntegrationName.trim(), metadata: { custom_name: customIntegrationName.trim(), webhook_url: customIntegrationWebhookUrl.trim(), icon_url: iconUrl }, provider: customIntegrationType === 'notification' ? 'custom_notification' : 'custom_ticketing' } as CiCdConnection;
+                            const newConn: CiCdConnection = {
+                              id: result.id,
+                              display_name: customIntegrationName.trim(),
+                              metadata: { custom_name: customIntegrationName.trim(), webhook_url: customIntegrationWebhookUrl.trim(), icon_url: iconUrl },
+                              provider: customIntegrationType === 'notification' ? 'custom_notification' : 'custom_ticketing',
+                              status: 'connected',
+                              connected_at: new Date().toISOString(),
+                              created_at: new Date().toISOString(),
+                              updated_at: new Date().toISOString(),
+                            };
                             setCustomIntegrationDetailsConn(newConn);
                             setShowCustomIntegrationDetailsSidebar(true);
                             toast({ title: 'Created', description: 'Custom integration created. Copy the signing secret below.' });

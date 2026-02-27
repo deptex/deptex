@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '../../../test/utils';
 import userEvent from '@testing-library/user-event';
 import { useOutletContext } from 'react-router-dom';
-import { api } from '../../../lib/api';
+import { api, type RolePermissions, type OrganizationRole } from '../../../lib/api';
 import OrganizationSettingsPage from '../OrganizationSettingsPage';
 
 const mockGetOrganizationConnections = vi.fn();
@@ -374,8 +374,12 @@ describe('OrganizationSettingsPage – Integrations', () => {
         name: 'member',
         display_name: 'Member',
         display_order: 1,
-        permissions: { view_settings: true, manage_integrations: false },
-      },
+        organization_id: 'org-1',
+        is_default: false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        permissions: { view_settings: true, manage_integrations: false } as RolePermissions,
+      } as OrganizationRole,
     ]);
     mockGetOrganizationConnections.mockResolvedValue([]);
     render(<OrganizationSettingsPage />);
