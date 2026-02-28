@@ -45,6 +45,7 @@ export function CreateProjectSidebar({
   const [creating, setCreating] = useState(false);
   const [sidebarRepos, setSidebarRepos] = useState<RepoWithProvider[]>([]);
   const [sidebarReposLoading, setSidebarReposLoading] = useState(false);
+  const [sidebarReposLoadAttempted, setSidebarReposLoadAttempted] = useState(false);
   const [sidebarReposError, setSidebarReposError] = useState<string | null>(null);
   const [sidebarRepoSearch, setSidebarRepoSearch] = useState('');
   const [sidebarRepoToConnect, setSidebarRepoToConnect] = useState<RepoWithProvider | null>(null);
@@ -103,6 +104,7 @@ export function CreateProjectSidebar({
     setCreatedProjectName('');
     setSidebarRepos([]);
     setSidebarReposLoading(false);
+    setSidebarReposLoadAttempted(false);
     setSidebarReposError(null);
     setSidebarRepoSearch('');
     setSidebarRepoToConnect(null);
@@ -126,8 +128,13 @@ export function CreateProjectSidebar({
         const effectiveId = currentValid ? sidebarSelectedIntegration! : gitConnections[0].id;
         if (!currentValid) setSidebarSelectedIntegration(gitConnections[0].id);
         loadSidebarRepos(effectiveId);
+      } else {
+        setSidebarReposLoadAttempted(true);
       }
-    } catch { /* ignore */ }
+    } catch {
+      setSidebarReposLoadAttempted(true);
+      /* ignore */
+    }
   };
 
   const loadSidebarRepos = async (integrationId?: string) => {
@@ -141,6 +148,7 @@ export function CreateProjectSidebar({
     } catch (err: any) {
       setSidebarReposError(err.message || 'Failed to load repositories');
     } finally {
+      setSidebarReposLoadAttempted(true);
       setSidebarReposLoading(false);
     }
   };
@@ -331,6 +339,7 @@ export function CreateProjectSidebar({
     (r) => !sidebarRepoSearch.trim() || r.full_name.toLowerCase().includes(sidebarRepoSearch.toLowerCase())
   );
   const displayRepos = sidebarRepoSearch.trim() ? filteredSidebarRepos : filteredSidebarRepos.slice(0, 5);
+  const repoListLoading = sidebarReposLoading || (open && organizationId && !sidebarReposLoadAttempted && !sidebarReposError);
 
   return (
     <SlideInSidebar
@@ -550,7 +559,7 @@ export function CreateProjectSidebar({
                     )}
                   </div>
                 </div>
-                {sidebarReposLoading ? (
+                {repoListLoading ? (
                   <div className="space-y-2">
                     {[1, 2, 3, 4, 5].map((i) => (
                       <div key={i} className="rounded-lg border border-border bg-background-card" aria-hidden>
