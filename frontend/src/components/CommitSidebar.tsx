@@ -47,9 +47,6 @@ export function CommitSidebar({
     const issueRepo = githubUrl ? repoFullNameFromGithubUrl(githubUrl) : null;
     /** Prefer repo from dependency.github_url; fall back to repoFullName so the link is always shown. */
     const repoForIssue = issueRepo ?? (repoFullName || 'owner/repo');
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/abaca787-5416-40c4-b6fe-aea97fa8dfd8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'CommitSidebar.tsx:repoForIssue', message: 'GitHub issue repo resolution', data: { githubUrl: githubUrl ?? null, issueRepo, repoFullName, repoForIssue }, timestamp: Date.now(), sessionId: 'debug-session', hypothesisId: 'A' }) }).catch(() => { });
-    // #endregion
     const [analyzing, setAnalyzing] = useState(false);
     const [analysis, setAnalysis] = useState<string | null>(null);
 

@@ -394,17 +394,10 @@ export default function DependencyNotesSidebar({
                           urlTransform={(url) => url}
                           components={{
                             a: ({ href, children, ...props }) => {
-                              // #region agent log
-                              const _rawHref = href;
                               const isAbsolute = href?.startsWith('http://') || href?.startsWith('https://') || href?.startsWith('//') || href?.startsWith('mailto:') || href?.startsWith('tel:');
                               const targetUrl = href && !isAbsolute ? `https://${href.replace(/^\/+/, '')}` : (href ?? '#');
                               const isWebUrl = targetUrl.startsWith('http://') || targetUrl.startsWith('https://');
-                              fetch('http://127.0.0.1:7243/ingest/abaca787-5416-40c4-b6fe-aea97fa8dfd8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'05fb5b'},body:JSON.stringify({sessionId:'05fb5b',location:'DependencyNotesSidebar.tsx:link-render',message:'Link render',data:{rawHref:_rawHref,targetUrl,isWebUrl,propsHasHref:'href' in props,propsHasOnClick:'onClick' in props},timestamp:Date.now(),hypothesisId:'H1-H5'})}).catch(()=>{});
-                              // #endregion
                               const handleClick = isWebUrl ? (e: React.MouseEvent<HTMLAnchorElement>) => {
-                                // #region agent log
-                                fetch('http://127.0.0.1:7243/ingest/abaca787-5416-40c4-b6fe-aea97fa8dfd8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'05fb5b'},body:JSON.stringify({sessionId:'05fb5b',location:'DependencyNotesSidebar.tsx:link-click',message:'Link click handler',data:{targetUrl,isWebUrl},timestamp:Date.now(),hypothesisId:'H4',runId:'post-fix'})}).catch(()=>{});
-                                // #endregion
                                 e.preventDefault();
                                 e.stopPropagation();
                                 window.open(targetUrl, '_blank', 'noopener,noreferrer');

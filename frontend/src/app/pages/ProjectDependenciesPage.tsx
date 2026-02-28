@@ -436,20 +436,12 @@ export default function ProjectDependenciesPage() {
         depsNeedingSuggestions.push(dep.id);
       }
     }
-    // #region agent log
-    const bannedDirect = directDeps.filter((d) => d.is_current_version_banned);
-    fetch('http://127.0.0.1:7243/ingest/abaca787-5416-40c4-b6fe-aea97fa8dfd8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f5b3f7'},body:JSON.stringify({sessionId:'f5b3f7',hypothesisId:'A',location:'ProjectDependenciesPage.tsx:suggestions-effect',message:'Suggestions load: direct deps with banned version',data:{bannedCount:bannedDirect.length,bannedIds:bannedDirect.map(d=>d.id),bannedNames:bannedDirect.map(d=>d.name),depsNeedingSuggestions,depsNeedingSuggestionsLength:depsNeedingSuggestions.length,zeroImportGetsRemove:directDeps.filter(d=>(d.files_importing_count??0)===0).length},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     setSuggestionByDepId(initial);
 
     if (depsNeedingSuggestions.length === 0) return;
 
     api.getProjectDependencySuggestionsBatch(organizationId, projectId, depsNeedingSuggestions)
       .then((batch) => {
-        // #region agent log
-        const batchEntries = Object.keys(batch).map((id)=>({id,action:(batch as any)[id]?.action,hasSafeVersion:!!(batch as any)[id]?.safeVersion}));
-        fetch('http://127.0.0.1:7243/ingest/abaca787-5416-40c4-b6fe-aea97fa8dfd8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f5b3f7'},body:JSON.stringify({sessionId:'f5b3f7',hypothesisId:'B',location:'ProjectDependenciesPage.tsx:batch-then',message:'Suggestions batch response',data:{batchKeys:Object.keys(batch),entries:batchEntries},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
         setSuggestionByDepId((prev) => {
           const next = { ...prev };
           for (const depId of depsNeedingSuggestions) {
@@ -469,9 +461,6 @@ export default function ProjectDependenciesPage() {
         });
       })
       .catch((err) => {
-        // #region agent log
-        fetch('http://127.0.0.1:7243/ingest/abaca787-5416-40c4-b6fe-aea97fa8dfd8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f5b3f7'},body:JSON.stringify({sessionId:'f5b3f7',hypothesisId:'C',location:'ProjectDependenciesPage.tsx:batch-catch',message:'Suggestions batch failed',data:{error:String(err?.message||err),depsNeedingSuggestionsLength:depsNeedingSuggestions.length},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
         setSuggestionByDepId((prev) => {
           const next = { ...prev };
           depsNeedingSuggestions.forEach((id) => { next[id] = { action: 'current' }; });
@@ -1336,9 +1325,6 @@ export default function ProjectDependenciesPage() {
                           <TooltipContent side="right">{suggestion.removePrUrl ? 'Open removal PR' : 'Create removal PR'}</TooltipContent>
                         </Tooltip>
                       )}
-                      {/* #region agent log */}
-                      {dep.is_current_version_banned && (()=>{ fetch('http://127.0.0.1:7243/ingest/abaca787-5416-40c4-b6fe-aea97fa8dfd8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f5b3f7'},body:JSON.stringify({sessionId:'f5b3f7',hypothesisId:'D',location:'ProjectDependenciesPage.tsx:render-banned-row',message:'Rendering row for banned-version dep',data:{depId:dep.id,depName:dep.name,is_direct:dep.is_direct,suggestion:suggestion===undefined?'undefined':suggestion==='loading'?'loading':suggestion?.action,showBumpIcon:dep.is_direct&&suggestion!==undefined&&suggestion!=='loading'&&suggestion?.action==='bump'},timestamp:Date.now()})}).catch(()=>{}); return null; })()}
-                      {/* #endregion */}
                     </div>
                     {/* Expandable sub-nav: Overview, Supply chain, Watchtower (tab selection only) */}
                     <div
