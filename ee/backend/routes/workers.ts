@@ -844,10 +844,13 @@ function classifyVulnerabilitySeverity(vuln: OsvVulnerability): string {
  */
 async function fetchSlsaLevel(packageName: string, version: string): Promise<number | null> {
   try {
+    await waitForNpmRateLimit();
     const encoded = encodeURIComponent(`${packageName}@${version}`);
-    const res = await fetch(`https://registry.npmjs.org/-/npm/v1/attestations/${encoded}`, {
+    const attestUrl = `https://registry.npmjs.org/-/npm/v1/attestations/${encoded}`;
+    const res = await fetch(attestUrl, {
       headers: { 'User-Agent': 'Deptex-App' },
     });
+    recordNpmCall();
     if (!res.ok) return null;
 
     const data = (await res.json()) as {
@@ -878,6 +881,7 @@ async function fetchSlsaLevel(packageName: string, version: string): Promise<num
     // Has provenance but can't determine exact level — assume level 1
     return 1;
   } catch {
+    recordNpmCall();
     return null;
   }
 }
