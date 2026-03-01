@@ -18,7 +18,7 @@ import {
 } from '../lib/github';
 import { detectMonorepo } from '../../../backend/src/lib/detect-monorepo';
 import { createProvider, GitHubProvider, type GitProvider, type OrgIntegration } from '../lib/git-provider';
-import { queueExtractionJob } from '../lib/redis';
+import { queueExtractionJob, cancelExtractionJob } from '../lib/redis';
 import { MANIFEST_FILES, detectFrameworkForEcosystem, ECOSYSTEM_DEFAULTS } from '../../../backend/src/lib/ecosystems';
 import { queueWatchtowerJob } from '../lib/watchtower-queue';
 import { createBumpPrForProject } from '../lib/create-bump-pr';
@@ -3876,6 +3876,17 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
       });
     }
 
+    const { data: activeJob } = await supabase
+      .from('extraction_jobs')
+      .select('id')
+      .eq('project_id', projectId)
+      .in('status', ['queued', 'processing'])
+      .maybeSingle();
+
+    if (activeJob) {
+      return res.status(409).json({ error: 'Extraction already in progress for this project' });
+    }
+
     const { data: repoRecord, error: repoError } = await supabase
       .from('project_repositories')
       .upsert(
@@ -3947,6 +3958,103 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
   } catch (error: any) {
     console.error('Error connecting repository:', error);
     res.status(500).json({ error: error.message || 'Failed to connect repository' });
+  }
+});
+
+// POST /api/organizations/:id/projects/:projectId/extraction/cancel - Cancel an active extraction
+router.post('/:id/projects/:projectId/extraction/cancel', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const isOrgOwner = accessCheck.orgMembership?.role === 'owner';
+    const hasOrgPermission = accessCheck.orgRole?.permissions?.manage_teams_and_projects === true;
+    if (!isOrgOwner && !hasOrgPermission) {
+      return res.status(403).json({ error: 'You do not have permission to cancel extractions' });
+    }
+
+    const result = await cancelExtractionJob(projectId);
+    if (!result.success) {
+      return res.status(409).json({ error: result.error });
+    }
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Error cancelling extraction:', error);
+    res.status(500).json({ error: error.message || 'Failed to cancel extraction' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/extraction/logs - Get extraction logs
+router.get('/:id/projects/:projectId/extraction/logs', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+    const runId = req.query.run_id as string | undefined;
+
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    let query = supabase
+      .from('extraction_logs')
+      .select('id, project_id, run_id, step, level, message, duration_ms, metadata, created_at')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: true });
+
+    if (runId) {
+      query = query.eq('run_id', runId);
+    } else {
+      const { data: latestJob } = await supabase
+        .from('extraction_jobs')
+        .select('run_id')
+        .eq('project_id', projectId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (latestJob?.run_id) {
+        query = query.eq('run_id', latestJob.run_id);
+      }
+    }
+
+    const { data, error } = await query.limit(500);
+    if (error) throw error;
+    res.json(data ?? []);
+  } catch (error: any) {
+    console.error('Error fetching extraction logs:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch extraction logs' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/extraction/runs - Get extraction run history
+router.get('/:id/projects/:projectId/extraction/runs', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const { data, error } = await supabase
+      .from('extraction_jobs')
+      .select('run_id, status, attempts, created_at, completed_at, error')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false })
+      .limit(20);
+
+    if (error) throw error;
+    res.json(data ?? []);
+  } catch (error: any) {
+    console.error('Error fetching extraction runs:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch extraction runs' });
   }
 });
 

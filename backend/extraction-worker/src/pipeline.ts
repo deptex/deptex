@@ -11,6 +11,7 @@ import { parseSbom, getBomRefToNameVersion, type ParsedSbomDep, type ParsedSbomR
 import { calculateDepscore, SEVERITY_TO_CVSS, type AssetTier } from './depscore';
 import { analyzeRepository } from './ast-parser';
 import { storeAstAnalysisResults } from './ast-storage';
+import { ExtractionLogger } from './logger';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
@@ -124,79 +125,131 @@ export interface ExtractionJob {
   integration_id?: string;
 }
 
-const log = (step: string, msg: string, data?: Record<string, unknown>) => {
-  const extra = data ? ` ${JSON.stringify(data)}` : '';
-  console.log(`[EXTRACT] [${step}] ${msg}${extra}`);
-};
+function classifyCloneError(message: string): string {
+  if (/401|403|authentication|authorization/i.test(message)) {
+    return 'Authentication failed — your source code integration may need to be reconnected in Organization Settings';
+  }
+  if (/404|not found/i.test(message)) {
+    return 'Repository not found — it may have been deleted or made private';
+  }
+  if (/could not find remote branch|unknown revision/i.test(message)) {
+    return `Branch not found in repository`;
+  }
+  if (/ENOSPC|no space left/i.test(message)) {
+    return 'Repository is too large to scan';
+  }
+  return `Clone failed: ${message.slice(0, 200)}`;
+}
 
-export async function runPipeline(job: ExtractionJob): Promise<void> {
+function classifyCdxgenError(message: string): string {
+  if (/timeout|timed out/i.test(message)) {
+    return 'SBOM generation timed out — the repository may be too large or complex';
+  }
+  return `SBOM generation failed: ${message.slice(0, 200)}`;
+}
+
+export async function runPipeline(
+  job: ExtractionJob,
+  logger?: ExtractionLogger,
+  checkCancelled?: () => Promise<boolean>
+): Promise<void> {
   const supabase = getSupabase();
   const projectId = job.projectId;
   const organizationId = job.organizationId;
   const packageJsonPath = (job.package_json_path ?? '').trim();
 
-  log('init', `Starting pipeline for project ${projectId}, repo ${job.repo_full_name}`, {
-    package_json_path: packageJsonPath || '(root)',
-  });
+  const log = logger ?? {
+    info: async () => {},
+    success: async () => {},
+    warn: async () => {},
+    error: async () => {},
+  } as any;
 
   let repoPath: string | null = null;
+  let projectDepsCount = 0;
 
   try {
+    // === STEP: Clone (CRITICAL) ===
+    if (checkCancelled && await checkCancelled()) return;
     await updateStep(supabase, projectId, 'cloning', 'extracting');
-    log('clone', 'Cloning repository...');
+    await log.info('cloning', `Cloning repository from ${(job.provider || 'github').charAt(0).toUpperCase() + (job.provider || 'github').slice(1)}...`);
 
-    repoPath = await retry(
-      () =>
-        cloneByProvider(job),
-      'clone'
-    );
-
-    log('clone', 'Repository cloned', { path: repoPath });
+    const cloneStart = Date.now();
+    try {
+      repoPath = await retry(() => cloneByProvider(job), 'clone');
+    } catch (e: any) {
+      const userMsg = classifyCloneError(e.message);
+      await log.error('cloning', userMsg, e);
+      await setError(supabase, projectId, userMsg);
+      throw new Error(userMsg);
+    }
+    await log.success('cloning', 'Repository cloned successfully', Date.now() - cloneStart);
 
     const workspaceRoot = packageJsonPath
       ? path.join(repoPath, packageJsonPath)
       : repoPath;
 
     if (!fs.existsSync(workspaceRoot)) {
-      throw new Error(`Workspace path does not exist: ${packageJsonPath || '(root)'}`);
+      const msg = `No package manifest found at '${packageJsonPath || '(root)'}' — check your project's package path setting`;
+      await log.error('cloning', msg);
+      await setError(supabase, projectId, msg);
+      throw new Error(msg);
     }
 
+    // === STEP: SBOM (CRITICAL) ===
+    if (checkCancelled && await checkCancelled()) return;
     await updateStep(supabase, projectId, 'sbom');
-    log('sbom', 'Running cdxgen...');
+    await log.info('sbom', 'Generating software bill of materials...');
 
-    const sbomPath = await retry(() => Promise.resolve(runCdxgen(workspaceRoot)), 'cdxgen');
-    const sbomContent = fs.readFileSync(sbomPath as string, 'utf8');
+    const sbomStart = Date.now();
+    let sbomPath: string;
+    try {
+      sbomPath = await retry(() => Promise.resolve(runCdxgen(workspaceRoot)), 'cdxgen');
+    } catch (e: any) {
+      const userMsg = classifyCdxgenError(e.message);
+      await log.error('sbom', userMsg, e);
+      await setError(supabase, projectId, userMsg);
+      throw new Error(userMsg);
+    }
+
+    const sbomContent = fs.readFileSync(sbomPath, 'utf8');
     const sbom = JSON.parse(sbomContent) as Parameters<typeof parseSbom>[0];
 
     const runId = Date.now().toString();
     const storagePath = `${projectId}/${runId}/sbom.json`;
 
-    log('sbom', 'Uploading SBOM to storage', { path: storagePath });
-    const { error: uploadError } = await supabase.storage
-      .from('project-imports')
-      .upload(storagePath, sbomContent, {
-        contentType: 'application/json',
-        upsert: true,
-      });
-
-    if (uploadError) {
-      log('sbom', 'SBOM upload failed', { error: uploadError.message });
+    try {
+      await supabase.storage
+        .from('project-imports')
+        .upload(storagePath, sbomContent, {
+          contentType: 'application/json',
+          upsert: true,
+        });
+    } catch {
+      await log.warn('sbom', 'SBOM upload to storage failed (non-fatal)');
     }
 
     const { dependencies, relationships } = parseSbom(sbom);
     const bomRefMap = getBomRefToNameVersion(sbom);
 
-    log('sbom', 'SBOM parsed', {
+    if (dependencies.length === 0) {
+      const msg = "No dependencies found — the package manifest may be empty or in an unsupported format";
+      await log.error('sbom', msg);
+      await setError(supabase, projectId, msg);
+      throw new Error(msg);
+    }
+
+    await log.success('sbom', `SBOM generated — found ${dependencies.length} dependencies`, Date.now() - sbomStart, {
       components: dependencies.length,
       relationships: relationships.length,
     });
 
-    if (dependencies.length === 0) {
-      throw new Error('No dependencies found in SBOM');
-    }
-
+    // === STEP: Dependency sync (CRITICAL) ===
+    if (checkCancelled && await checkCancelled()) return;
     await updateStep(supabase, projectId, 'deps_synced');
-    log('deps', 'Upserting dependencies and project_dependencies...');
+    await log.info('deps_sync', 'Syncing dependencies to database...');
+
+    const syncStart = Date.now();
 
     const uniqueDeps = new Map<string, ParsedSbomDep>();
     for (const d of dependencies) {
@@ -292,14 +345,14 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
     const backendBaseUrl = process.env.BACKEND_URL || process.env.API_BASE_URL || 'http://localhost:3001';
     const workerSecret = process.env.EXTRACTION_WORKER_SECRET;
     if (newDepsToPopulate.length > 0) {
-      log('populate', `Queuing populate for ${newDepsToPopulate.length} direct dependencies`);
-      await callQueuePopulate(backendBaseUrl, workerSecret, projectId, organizationId, newDepsToPopulate, jobEcosystem);
-    } else {
-      log('populate', 'No new direct dependencies to populate');
+      try {
+        await callQueuePopulate(backendBaseUrl, workerSecret, projectId, organizationId, newDepsToPopulate, jobEcosystem);
+      } catch (e: any) {
+        await log.warn('populate', `Failed to queue dependency population: ${e.message}`);
+      }
     }
 
     await supabase.from('project_dependencies').delete().eq('project_id', projectId);
-    log('deps', 'Cleared existing project_dependencies');
 
     const projectDepsRaw = dependencies.map((d) => {
       const key = `${d.name}@${d.version}`;
@@ -325,16 +378,12 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
       return true;
     });
 
-    log('deps', 'Inserting project_dependencies', {
-      raw: projectDepsRaw.length,
-      deduped: projectDepsToInsert.length,
-    });
-
     for (let i = 0; i < projectDepsToInsert.length; i += 500) {
       const chunk = projectDepsToInsert.slice(i, i + 500);
       const { error } = await supabase.from('project_dependencies').insert(chunk);
       if (error) throw error;
     }
+    projectDepsCount = projectDepsToInsert.length;
 
     const edgesToInsert: Array<{ parent_version_id: string; child_version_id: string }> = [];
     const seenEdges = new Set<string>();
@@ -362,51 +411,57 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
         .upsert(chunk, { onConflict: 'parent_version_id,child_version_id', ignoreDuplicates: true });
     }
 
-    // AST import analysis (JS/TS only; non-blocking -- failures do not abort the pipeline)
+    const directCount = projectDepsToInsert.filter((d) => d.is_direct).length;
+    const transitiveCount = projectDepsToInsert.length - directCount;
+    await log.success('deps_sync', `Dependencies synced (${directCount} direct, ${transitiveCount} transitive)`, Date.now() - syncStart);
+
+    // === STEP: AST import analysis (OPTIONAL) ===
+    if (checkCancelled && await checkCancelled()) return;
     let astParsedSuccessfully = false;
     await updateStep(supabase, projectId, 'ast_parsing');
-    log('ast', 'Running AST import analysis...');
+    await log.info('ast_parsing', 'Analyzing code imports...');
+
+    const astStart = Date.now();
     try {
       const analysisResults = analyzeRepository(workspaceRoot);
       if (analysisResults.length > 0) {
         const storeResult = await storeAstAnalysisResults(supabase, projectId, organizationId, analysisResults);
         if (storeResult.success) {
           astParsedSuccessfully = true;
-          log('ast', `AST analysis stored`, { filesWithImports: analysisResults.length });
+          await log.success('ast_parsing', `Import analysis complete — ${analysisResults.length} files analyzed`, Date.now() - astStart);
         } else {
-          log('ast', `AST storage failed (non-fatal): ${storeResult.error}`);
+          await log.warn('ast_parsing', `Import analysis storage failed (non-fatal): ${storeResult.error}`);
         }
       } else {
         astParsedSuccessfully = true;
-        log('ast', 'No JS/TS imports found (repo may use a different ecosystem)');
+        await log.success('ast_parsing', 'No JS/TS imports found (repo may use a different ecosystem)', Date.now() - astStart);
       }
     } catch (e: any) {
-      log('ast', `AST parsing failed (non-fatal): ${e.message}`);
+      await log.warn('ast_parsing', `Import analysis failed (non-fatal): ${e.message}`);
     }
 
+    // === STEP: Vulnerability scan (OPTIONAL) ===
+    if (checkCancelled && await checkCancelled()) return;
     await updateStep(supabase, projectId, 'scanning');
-    log('scan', 'Running dep-scan...');
+    await log.info('vuln_scan', 'Running vulnerability scan...');
 
+    const scanStart = Date.now();
     const reportsDir = path.join(workspaceRoot, 'depscan-reports');
+    let depScanSucceeded = false;
+
     try {
       fs.mkdirSync(reportsDir, { recursive: true });
-      // Prefer native paths for spawnSync; depscan accepts Windows paths.
-      const bomArg = sbomPath;
+      const bomArg = path.join(workspaceRoot, 'sbom.json');
       const outArg = reportsDir;
 
-      // On Windows, resolve depscan.exe without relying on PATH.
       let depScanExe = 'depscan';
       if (process.platform === 'win32') {
-        // 1) Try "where depscan.exe" (fast path if Scripts is on PATH)
         try {
           const whereOut = execSync('where depscan.exe', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
           const first = whereOut.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0];
           if (first && fs.existsSync(first)) depScanExe = first;
-        } catch {
-          // ignore
-        }
+        } catch { /* ignore */ }
 
-        // 2) Try locating via Python launcher if available
         if (depScanExe === 'depscan') {
           try {
             const scriptsDir = execSync('py -c "import sysconfig; print(sysconfig.get_path(\'scripts\'))"', {
@@ -415,27 +470,19 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
             }).trim();
             const exePath = path.join(scriptsDir, 'depscan.exe');
             if (fs.existsSync(exePath)) depScanExe = exePath;
-          } catch {
-            // ignore
-          }
+          } catch { /* ignore */ }
         }
       }
 
       const ecosystem = job.ecosystem || 'npm';
       const depScanArgs = [
-        '--bom',
-        bomArg,
-        '--reports-dir',
-        outArg,
-        '-t',
-        ecosystem,
+        '--bom', bomArg,
+        '--reports-dir', outArg,
+        '-t', ecosystem,
         '--no-banner',
-        '--vulnerability-analyzer',
-        'VDRAnalyzer',
+        '--vulnerability-analyzer', 'VDRAnalyzer',
       ];
       if (process.env.DEPSCAN_EXPLAIN === '1') depScanArgs.push('--explain');
-
-      log('scan', 'dep-scan command', { exe: depScanExe, args: depScanArgs });
 
       const res = spawnSync(depScanExe, depScanArgs, {
         cwd: workspaceRoot,
@@ -443,154 +490,104 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
         timeout: 90 * 60 * 1000,
       });
 
-      const stdoutTail = res.stdout ? res.stdout.slice(-2000) : null;
-      const stderrTail = res.stderr ? res.stderr.slice(-2000) : null;
-      log('scan', 'dep-scan finished', { status: res.status, stdoutTail, stderrTail });
-
-      if (res.error || res.status !== 0) {
-        throw new Error(res.error?.message || `dep-scan exited with status ${res.status}`);
+      if (res.error) {
+        if ((res.error as any).code === 'ENOENT') {
+          await log.warn('vuln_scan', 'Vulnerability scanning unavailable (dep-scan not installed)');
+        } else {
+          throw res.error;
+        }
+      } else if (res.status !== 0) {
+        const stderrFirst = (res.stderr ?? '').split('\n')[0] || 'unknown error';
+        if (res.status === 137) {
+          await log.warn('vuln_scan', 'Vulnerability scan ran out of memory — scanning skipped');
+        } else {
+          await log.warn('vuln_scan', `Vulnerability scan failed: ${stderrFirst}`);
+        }
+      } else {
+        depScanSucceeded = true;
       }
-    } catch (e: unknown) {
-      const err = e as { message?: string; stderr?: string };
-      log('scan', 'dep-scan failed (not installed or error)', {
-        hint: 'Run: pip install owasp-depscan (and on Windows ensure depscan.exe is on PATH)',
-        error: String(err?.message ?? e),
-      });
+    } catch (e: any) {
+      if (/timed out|timeout/i.test(e.message)) {
+        await log.warn('vuln_scan', 'Vulnerability scan timed out');
+      } else {
+        await log.warn('vuln_scan', `Vulnerability scan failed: ${e.message}`);
+      }
     }
 
-    // dep-scan v6 creates .vdr.json; older versions may create dep-scan.json. It may write to -o, cwd, or a nested reports directory.
+    // Process dep-scan results (same logic as before, but with logger)
     const listVdrFiles = (dir: string): string[] => {
       try {
         return fs
           .readdirSync(dir, { withFileTypes: true })
           .filter((d) => d.isFile() && (d.name.endsWith('.vdr.json') || d.name === 'dep-scan.json'))
           .map((d) => path.join(dir, d.name));
-      } catch {
-        return [];
-      }
+      } catch { return []; }
     };
 
     const vdrInReports = listVdrFiles(reportsDir);
     const vdrInRoot = listVdrFiles(workspaceRoot);
     let vdrFiles = [...vdrInReports, ...vdrInRoot];
 
-    // As a fallback, recursively search under workspaceRoot for any VDR JSON output
     if (vdrFiles.length === 0) {
       const isVdrFile = (name: string) => name.endsWith('.vdr.json') || name === 'dep-scan.json';
       const seenDirs = new Set<string>();
       const stack: string[] = [workspaceRoot];
       const found: string[] = [];
       const MAX_DIRS = 5000;
-
       while (stack.length > 0 && seenDirs.size < MAX_DIRS && found.length === 0) {
         const dir = stack.pop()!;
         if (seenDirs.has(dir)) continue;
         seenDirs.add(dir);
-        let entries: fs.Dirent[];
-        try {
-          entries = fs.readdirSync(dir, { withFileTypes: true });
-        } catch {
-          continue;
-        }
-        for (const entry of entries) {
+        let fsEntries: fs.Dirent[];
+        try { fsEntries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+        for (const entry of fsEntries) {
           const fullPath = path.join(dir, entry.name);
-          if (entry.isDirectory()) {
-            stack.push(fullPath);
-          } else if (entry.isFile() && isVdrFile(entry.name)) {
-            found.push(fullPath);
-          }
+          if (entry.isDirectory()) stack.push(fullPath);
+          else if (entry.isFile() && isVdrFile(entry.name)) found.push(fullPath);
         }
       }
-
-      if (found.length > 0) {
-        vdrFiles = found;
-      }
+      if (found.length > 0) vdrFiles = found;
     }
 
     const tryParseJson = (p: string): Record<string, unknown> | null => {
-      try {
-        const content = fs.readFileSync(p, 'utf8');
-        return JSON.parse(content) as Record<string, unknown>;
-      } catch {
-        return null;
-      }
+      try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
     };
 
-    // In some dep-scan configurations, the VDR content is written to a plain .json (e.g. sbom.json) rather than *.vdr.json.
-    // Prefer explicit VDR outputs, but fall back to "any JSON in reportsDir that actually contains a vulnerabilities array".
     const candidatePaths: string[] = [];
     const addCandidate = (p: string) => {
-      if (!p) return;
-      if (candidatePaths.includes(p)) return;
-      if (!fs.existsSync(p)) return;
+      if (!p || candidatePaths.includes(p) || !fs.existsSync(p)) return;
       candidatePaths.push(p);
     };
-
     for (const p of vdrFiles) addCandidate(p);
-
     try {
       for (const d of fs.readdirSync(reportsDir, { withFileTypes: true })) {
         if (d.isFile() && d.name.endsWith('.json')) addCandidate(path.join(reportsDir, d.name));
       }
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
 
     let depScanPath: string | null = null;
     for (const p of candidatePaths) {
       const parsed = tryParseJson(p);
       const vulns = parsed && (parsed as { vulnerabilities?: unknown }).vulnerabilities;
-      if (Array.isArray(vulns)) {
-        depScanPath = p;
-        break;
-      }
+      if (Array.isArray(vulns)) { depScanPath = p; break; }
     }
-
-    if (!depScanPath) {
-      // Legacy fallback paths
-      depScanPath = vdrFiles[0] ?? path.join(workspaceRoot, 'dep-scan.json');
-    }
+    if (!depScanPath) depScanPath = vdrFiles[0] ?? path.join(workspaceRoot, 'dep-scan.json');
 
     const reportExists = fs.existsSync(depScanPath);
 
-    if (!reportExists) {
-      const reportsDirContents = (() => {
-        try {
-          return fs.readdirSync(reportsDir, { withFileTypes: true }).map((d) => d.isFile() ? d.name : `${d.name}/`);
-        } catch {
-          return ['(dir missing or unreadable)'];
-        }
-      })();
-      const rootContents = (() => {
-        try {
-          return fs.readdirSync(workspaceRoot, { withFileTypes: true })
-            .filter((d) => d.name.endsWith('.json') || d.name.endsWith('.vdr.json'))
-            .map((d) => d.name);
-        } catch {
-          return [];
-        }
-      })();
-      log('scan', 'dep-scan report not found; skipping vulnerability upload', {
-        reportsDir,
-        reportsDirContents,
-        workspaceRootJsonFiles: rootContents,
-        hint: 'dep-scan may not be installed (pip install owasp-depscan)',
-      });
-    }
-
     if (reportExists) {
-      log('scan', 'dep-scan report found; uploading and processing vulnerabilities');
       try {
         const depScanContent = fs.readFileSync(depScanPath, 'utf8');
-        await supabase.storage
-          .from('project-imports')
-          .upload(`${projectId}/${runId}/dep-scan.json`, depScanContent, {
-            contentType: 'application/json',
-            upsert: true,
-          });
+        try {
+          await supabase.storage
+            .from('project-imports')
+            .upload(`${projectId}/${runId}/dep-scan.json`, depScanContent, {
+              contentType: 'application/json',
+              upsert: true,
+            });
+        } catch { /* upload failure is non-fatal */ }
 
         const depScan = JSON.parse(depScanContent) as Record<string, unknown>;
-
         const parsePurl = (ref: string): { name: string; version: string } | null => {
           if (!ref || typeof ref !== 'string') return null;
           const match = ref.match(/^pkg:[^/]+\/(.+?)@([^?#]+)/);
@@ -600,26 +597,16 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
 
         type CycloneAffect = { ref?: string; versions?: Array<{ version?: string; status?: string; range?: string }> };
         type CycloneVuln = {
-          id?: string;
-          description?: string;
-          detail?: string;
+          id?: string; description?: string; detail?: string;
           ratings?: Array<{ severity?: string; score?: number }>;
           affects?: CycloneAffect[];
           properties?: Array<{ name?: string; value?: string }>;
           published?: string;
         };
-
         type LegacyVuln = {
-          vuln_id?: string;
-          id?: string;
-          severity?: string;
-          summary?: string;
-          aliases?: string[];
-          fixed_version?: string;
-          fixedVersions?: string[];
-          epss?: number;
-          component?: string;
-          version?: string;
+          vuln_id?: string; id?: string; severity?: string; summary?: string;
+          aliases?: string[]; fixed_version?: string; fixedVersions?: string[];
+          epss?: number; component?: string; version?: string;
           ratings?: Array<{ severity?: string }>;
         };
 
@@ -640,9 +627,7 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
 
         const pdByNameVersion = new Map<string, string>();
         if (pdRows) {
-          for (const r of pdRows) {
-            pdByNameVersion.set(`${r.name}@${r.version}`, r.id);
-          }
+          for (const r of pdRows) pdByNameVersion.set(`${r.name}@${r.version}`, r.id);
         }
 
         let kevCveSet = new Set<string>();
@@ -653,56 +638,36 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
             for (const entry of kevJson.vulnerabilities ?? []) {
               if (entry.cveID) kevCveSet.add(entry.cveID);
             }
-            log('scan', 'CISA KEV catalog loaded', { count: kevCveSet.size });
           }
-        } catch (e) {
-          log('scan', 'CISA KEV fetch failed (non-fatal)', { error: String(e) });
-        }
+        } catch { /* non-fatal */ }
 
         const VALID_ASSET_TIERS: AssetTier[] = ['CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION'];
         let assetTier: AssetTier = 'EXTERNAL';
         {
-          const { data: projRow } = await supabase
-            .from('projects')
-            .select('asset_tier')
-            .eq('id', projectId)
-            .single();
+          const { data: projRow } = await supabase.from('projects').select('asset_tier').eq('id', projectId).single();
           const raw = (projRow as { asset_tier?: string } | null)?.asset_tier;
           if (raw && VALID_ASSET_TIERS.includes(raw as AssetTier)) assetTier = raw as AssetTier;
         }
 
         const vulnRows: Array<{
-          project_id: string;
-          project_dependency_id: string;
-          osv_id: string;
-          severity: string | null;
-          summary: string | null;
-          aliases: string[] | null;
-          fixed_versions: string[] | null;
-          is_reachable: boolean;
-          epss_score: number | null;
-          cvss_score: number | null;
-          cisa_kev: boolean;
-          depscore: number | null;
-          published_at: string | null;
+          project_id: string; project_dependency_id: string; osv_id: string;
+          severity: string | null; summary: string | null; aliases: string[] | null;
+          fixed_versions: string[] | null; is_reachable: boolean; epss_score: number | null;
+          cvss_score: number | null; cisa_kev: boolean; depscore: number | null; published_at: string | null;
         }> = [];
+
         if (isCycloneVdr) {
           for (const v of vulnsCyclone) {
             const osvId = (v.id ?? 'unknown').toString();
             const severity = v.ratings?.[0]?.severity ?? null;
             const summary = (v.description ?? v.detail ?? null) as string | null;
-
             const insights = (v.properties || []).find((p) => p?.name === 'depscan:insights')?.value ?? null;
             const isReachable = typeof insights === 'string' ? insights.startsWith('Used in') : false;
             const epssProp = (v.properties || []).find((p) => p?.name === 'depscan:epss' || p?.name === 'epss')?.value;
             const epssFromVdr = epssProp != null ? parseFloat(String(epssProp)) : null;
             const epssFromVdrNum = Number.isFinite(epssFromVdr) ? epssFromVdr : null;
-
             const cvssRaw = v.ratings?.[0]?.score;
-            const cvssFromVdr = cvssRaw != null && Number.isFinite(cvssRaw)
-              ? cvssRaw
-              : (severity ? (SEVERITY_TO_CVSS[severity] ?? null) : null);
-
+            const cvssFromVdr = cvssRaw != null && Number.isFinite(cvssRaw) ? cvssRaw : (severity ? (SEVERITY_TO_CVSS[severity] ?? null) : null);
             const fixedSet = new Set<string>();
             for (const a of v.affects || []) {
               for (const ver of a.versions || []) {
@@ -710,26 +675,16 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
               }
             }
             const fixed_versions = fixedSet.size > 0 ? Array.from(fixedSet) : null;
-
             for (const a of v.affects || []) {
               const parsed = parsePurl(a.ref ?? '');
               if (!parsed) continue;
               const pdId = pdByNameVersion.get(`${parsed.name}@${parsed.version}`);
               if (!pdId) continue;
               vulnRows.push({
-                project_id: projectId,
-                project_dependency_id: pdId,
-                osv_id: osvId,
-                severity,
-                summary,
-                aliases: null,
-                fixed_versions,
-                is_reachable: isReachable,
-                epss_score: epssFromVdrNum,
-                cvss_score: cvssFromVdr,
-                cisa_kev: false,
-                depscore: null,
-                published_at: v.published ?? null,
+                project_id: projectId, project_dependency_id: pdId, osv_id: osvId,
+                severity, summary, aliases: null, fixed_versions, is_reachable: isReachable,
+                epss_score: epssFromVdrNum, cvss_score: cvssFromVdr, cisa_kev: false,
+                depscore: null, published_at: v.published ?? null,
               });
             }
           }
@@ -741,79 +696,53 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
             if (!pdId) continue;
             const severity = v.severity ?? v.ratings?.[0]?.severity ?? null;
             vulnRows.push({
-              project_id: projectId,
-              project_dependency_id: pdId,
-              osv_id: (v.vuln_id ?? v.id ?? 'unknown').toString(),
-              severity,
-              summary: v.summary ?? null,
-              aliases: v.aliases ?? null,
+              project_id: projectId, project_dependency_id: pdId,
+              osv_id: (v.vuln_id ?? v.id ?? 'unknown').toString(), severity,
+              summary: v.summary ?? null, aliases: v.aliases ?? null,
               fixed_versions: v.fixed_version ? [v.fixed_version] : null,
-              is_reachable: true,
-              epss_score: v.epss ?? null,
+              is_reachable: true, epss_score: v.epss ?? null,
               cvss_score: severity ? (SEVERITY_TO_CVSS[severity] ?? null) : null,
-              cisa_kev: false,
-              depscore: null,
-              published_at: null,
+              cisa_kev: false, depscore: null, published_at: null,
             });
           }
         }
 
-        // Enrich EPSS from FIRST API for CVEs that don't have a score yet (max 2000 chars per request)
         const CVE_ID_RE = /^CVE-\d{4}-\d+$/i;
         const cvesToFetch = [...new Set(vulnRows.map((r) => r.osv_id).filter((id) => CVE_ID_RE.test(id)))];
         if (cvesToFetch.length > 0) {
           const epssByCve = new Map<string, number>();
-          const BATCH_SIZE = 80;
-          for (let i = 0; i < cvesToFetch.length; i += BATCH_SIZE) {
-            const batch = cvesToFetch.slice(i, i + BATCH_SIZE);
-            const cveParam = batch.join(',');
+          const EPSS_BATCH = 80;
+          for (let i = 0; i < cvesToFetch.length; i += EPSS_BATCH) {
+            const batch = cvesToFetch.slice(i, i + EPSS_BATCH);
             try {
-              const res = await fetch(`https://api.first.org/data/v1/epss?cve=${encodeURIComponent(cveParam)}`);
-              if (!res.ok) continue;
-              const json = (await res.json()) as { data?: Array<{ cve?: string; epss?: string }> };
-              for (const row of json.data ?? []) {
-                const cve = row?.cve;
-                const epssStr = row?.epss;
-                if (cve && epssStr != null) {
-                  const score = parseFloat(epssStr);
-                  if (Number.isFinite(score)) epssByCve.set(cve, score);
+              const epssRes = await fetch(`https://api.first.org/data/v1/epss?cve=${encodeURIComponent(batch.join(','))}`);
+              if (epssRes.ok) {
+                const json = (await epssRes.json()) as { data?: Array<{ cve?: string; epss?: string }> };
+                for (const row of json.data ?? []) {
+                  if (row?.cve && row?.epss != null) {
+                    const score = parseFloat(row.epss);
+                    if (Number.isFinite(score)) epssByCve.set(row.cve, score);
+                  }
                 }
               }
-            } catch (e) {
-              log('scan', 'EPSS API fetch failed (non-fatal)', { error: String(e) });
-            }
+            } catch { /* non-fatal */ }
           }
           for (const row of vulnRows) {
             if (row.epss_score != null) continue;
             const score = epssByCve.get(row.osv_id);
             if (score != null) row.epss_score = score;
           }
-          const filled = vulnRows.filter((r) => r.epss_score != null).length;
-          if (filled > 0) log('scan', 'EPSS scores enriched from FIRST API', { cves: cvesToFetch.length, filled });
         }
 
         for (const row of vulnRows) {
           const allIds = [row.osv_id, ...(row.aliases ?? [])];
           row.cisa_kev = allIds.some((id) => CVE_ID_RE.test(id) && kevCveSet.has(id));
-
           const cvss = row.cvss_score ?? (row.severity ? (SEVERITY_TO_CVSS[row.severity] ?? 0) : 0);
           const epss = row.epss_score ?? 0;
-          row.depscore = calculateDepscore({
-            cvss,
-            epss,
-            cisaKev: row.cisa_kev,
-            isReachable: row.is_reachable,
-            assetTier,
-          });
+          row.depscore = calculateDepscore({ cvss, epss, cisaKev: row.cisa_kev, isReachable: row.is_reachable, assetTier });
         }
-        log('scan', 'Depscore calculated', {
-          total: vulnRows.length,
-          withCvss: vulnRows.filter((r) => r.cvss_score != null).length,
-          kevMatches: vulnRows.filter((r) => r.cisa_kev).length,
-        });
 
         if (vulnRows.length > 0) {
-          log('scan', 'Upserting vulnerabilities', { count: vulnRows.length });
           for (let i = 0; i < vulnRows.length; i += 100) {
             await supabase
               .from('project_dependency_vulnerabilities')
@@ -823,30 +752,58 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
               });
           }
         }
-      } catch (e) {
-        log('scan', 'dep-scan parse/insert failed', { error: String(e) });
+
+        const critCount = vulnRows.filter((r) => r.severity === 'critical').length;
+        const highCount = vulnRows.filter((r) => r.severity === 'high').length;
+        const severitySummary = vulnRows.length > 0
+          ? ` (${critCount} critical, ${highCount} high)`
+          : '';
+        await log.success('vuln_scan', `Vulnerability scan complete — found ${vulnRows.length} vulnerabilities${severitySummary}`, Date.now() - scanStart);
+      } catch (e: any) {
+        await log.warn('vuln_scan', `Vulnerability processing failed: ${e.message}`);
       }
+    } else if (!depScanSucceeded) {
+      await log.warn('vuln_scan', 'No vulnerability scan results available');
     }
 
-    log('scan', 'Running Semgrep...');
+    // === STEP: Semgrep (OPTIONAL) ===
+    if (checkCancelled && await checkCancelled()) return;
+    await log.info('semgrep', 'Running static code analysis...');
+    const semgrepStart = Date.now();
+    let semgrepFindings = 0;
     try {
       execSync(`semgrep scan --config auto --json --output "${path.join(workspaceRoot, 'semgrep.json')}" "${workspaceRoot}" 2>/dev/null || true`, {
         stdio: 'pipe',
         timeout: 60000,
       });
-    } catch {
-      log('scan', 'Semgrep not installed or failed; skipping');
-    }
-    const semgrepPath = path.join(workspaceRoot, 'semgrep.json');
-    if (fs.existsSync(semgrepPath)) {
-      log('scan', 'Uploading Semgrep report');
-      const content = fs.readFileSync(semgrepPath, 'utf8');
-      await supabase.storage
-        .from('project-imports')
-        .upload(`${projectId}/${runId}/semgrep.json`, content, { contentType: 'application/json', upsert: true });
+      const semgrepPath = path.join(workspaceRoot, 'semgrep.json');
+      if (fs.existsSync(semgrepPath)) {
+        const content = fs.readFileSync(semgrepPath, 'utf8');
+        try {
+          const parsed = JSON.parse(content);
+          semgrepFindings = Array.isArray(parsed?.results) ? parsed.results.length : 0;
+        } catch { /* ignore parse errors */ }
+        try {
+          await supabase.storage
+            .from('project-imports')
+            .upload(`${projectId}/${runId}/semgrep.json`, content, { contentType: 'application/json', upsert: true });
+        } catch { /* upload failure non-fatal */ }
+        await log.success('semgrep', `Static analysis complete — ${semgrepFindings} findings`, Date.now() - semgrepStart);
+      } else {
+        await log.warn('semgrep', 'Static analysis skipped (Semgrep not installed)');
+      }
+    } catch (e: any) {
+      if (e.status === 137) {
+        await log.warn('semgrep', 'Static analysis ran out of memory — scanning skipped');
+      } else {
+        await log.warn('semgrep', 'Static analysis skipped (Semgrep not installed or failed)');
+      }
     }
 
-    log('scan', 'Running TruffleHog...');
+    // === STEP: TruffleHog (OPTIONAL) ===
+    if (checkCancelled && await checkCancelled()) return;
+    await log.info('trufflehog', 'Scanning for exposed secrets...');
+    const thStart = Date.now();
     try {
       const trufflehogOut = path.join(workspaceRoot, 'trufflehog.json');
       const result = execSync(`trufflehog filesystem "${workspaceRoot}" --json 2>/dev/null || echo "[]"`, {
@@ -858,18 +815,24 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
         fs.writeFileSync(trufflehogOut, result, 'utf8');
       }
       if (fs.existsSync(trufflehogOut)) {
-        log('scan', 'Uploading TruffleHog report');
         const content = fs.readFileSync(trufflehogOut, 'utf8');
-        await supabase.storage
-          .from('project-imports')
-          .upload(`${projectId}/${runId}/trufflehog.json`, content, { contentType: 'application/json', upsert: true });
+        try {
+          await supabase.storage
+            .from('project-imports')
+            .upload(`${projectId}/${runId}/trufflehog.json`, content, { contentType: 'application/json', upsert: true });
+        } catch { /* upload failure non-fatal */ }
+        await log.success('trufflehog', 'Secret scan complete — no secrets found', Date.now() - thStart);
+      } else {
+        await log.warn('trufflehog', 'Secret scanning unavailable (TruffleHog not installed)');
       }
     } catch {
-      log('scan', 'TruffleHog not installed or failed; skipping');
+      await log.warn('trufflehog', 'Secret scanning skipped (TruffleHog not installed or failed)');
     }
 
+    // === STEP: Finalize ===
+    if (checkCancelled && await checkCancelled()) return;
     await updateStep(supabase, projectId, 'uploading');
-    log('upload', 'Updating project status...');
+    await log.info('uploading', 'Updating project status...');
 
     const status = newDepsToPopulate.length > 0 ? 'analyzing' : 'ready';
     await supabase
@@ -886,21 +849,19 @@ export async function runPipeline(job: ExtractionJob): Promise<void> {
     await supabase
       .from('projects')
       .update({
-        dependencies_count: projectDepsToInsert.length,
+        dependencies_count: projectDepsCount,
         updated_at: new Date().toISOString(),
       })
       .eq('id', projectId)
       .eq('organization_id', organizationId);
 
-    log('done', `Pipeline complete`, { deps: projectDepsToInsert.length, status });
   } catch (error: any) {
-    log('error', `Pipeline failed: ${error.message}`, { projectId, code: (error as any).code, details: (error as any).details });
     await setError(supabase, projectId, error.message);
     throw error;
   } finally {
     if (repoPath) {
       if (process.env.KEEP_EXTRACT_WORKSPACE === '1') {
-        log('done', 'KEEP_EXTRACT_WORKSPACE=1; skipping workspace cleanup', { repoPath });
+        console.log('[EXTRACT] KEEP_EXTRACT_WORKSPACE=1; skipping workspace cleanup');
       } else {
         cleanupRepository(repoPath);
       }

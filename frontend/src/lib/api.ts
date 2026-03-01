@@ -1591,6 +1591,28 @@ export const api = {
     });
   },
 
+  async cancelExtraction(organizationId: string, projectId: string): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/extraction/cancel`, {
+      method: 'POST',
+    });
+  },
+
+  async getExtractionLogs(
+    organizationId: string,
+    projectId: string,
+    runId?: string
+  ): Promise<ExtractionLog[]> {
+    const params = runId ? `?run_id=${runId}` : '';
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/extraction/logs${params}`);
+  },
+
+  async getExtractionRuns(
+    organizationId: string,
+    projectId: string
+  ): Promise<ExtractionRun[]> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/extraction/runs`);
+  },
+
   async getProjectVulnerabilities(
     organizationId: string,
     projectId: string
@@ -2350,6 +2372,27 @@ export interface ProjectImportStatus {
   error: number;
   extraction_step?: string | null;
   extraction_error?: string | null;
+}
+
+export interface ExtractionLog {
+  id: string;
+  project_id: string;
+  run_id: string;
+  step: string;
+  level: 'info' | 'success' | 'warning' | 'error';
+  message: string;
+  duration_ms: number | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface ExtractionRun {
+  run_id: string;
+  status: string;
+  attempts: number;
+  created_at: string;
+  completed_at: string | null;
+  error: string | null;
 }
 
 export interface ProjectVulnerability {

@@ -1,68 +1,117 @@
 import 'dotenv/config';
-import { Redis } from '@upstash/redis';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { runPipeline } from './pipeline';
+import { ExtractionLogger } from './logger';
+import {
+  claimJob,
+  updateJobStatus,
+  sendHeartbeat,
+  isJobCancelled,
+  type ExtractionJobRow,
+} from './job-db';
 
-const redisUrl = process.env.UPSTASH_REDIS_URL;
-const redisToken = process.env.UPSTASH_REDIS_TOKEN;
+const IDLE_TIMEOUT_MS = 60_000;
+const POLL_INTERVAL_MS = 5_000;
+const HEARTBEAT_INTERVAL_MS = 60_000;
 
-if (!redisUrl || !redisToken) {
-  throw new Error('UPSTASH_REDIS_URL and UPSTASH_REDIS_TOKEN must be set');
+const MACHINE_ID = process.env.FLY_MACHINE_ID || `local-${process.pid}`;
+
+function getSupabase(): SupabaseClient {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set');
+  return createClient(url, key);
 }
 
-const redis = new Redis({ url: redisUrl, token: redisToken });
-const QUEUE_NAME =
-  process.env.EXTRACTION_QUEUE_NAME ||
-  (process.env.NODE_ENV === 'production' ? 'extraction-jobs' : 'extraction-jobs-local');
+async function processJob(supabase: SupabaseClient, job: ExtractionJobRow): Promise<void> {
+  const payload = job.payload as {
+    repo_full_name: string;
+    installation_id: string;
+    default_branch: string;
+    package_json_path?: string;
+    ecosystem?: string;
+    provider?: string;
+    integration_id?: string;
+  };
 
-// Diagnostics: backend and worker must use same Redis + same queue name (check NODE_ENV matches)
-console.log(`[EXTRACT] NODE_ENV=${process.env.NODE_ENV ?? '(not set)'} → queue: ${QUEUE_NAME}`);
-console.log(`[EXTRACT] Redis URL: ${redisUrl.substring(0, 50)}...`);
+  const logger = new ExtractionLogger(supabase, job.project_id, job.run_id);
 
-interface ExtractionJob {
-  projectId: string;
-  organizationId: string;
-  repo_full_name: string;
-  installation_id: string;
-  default_branch: string;
-  package_json_path?: string;
-  ecosystem?: string;
-}
+  const heartbeatInterval = setInterval(async () => {
+    try {
+      await sendHeartbeat(supabase, job.id);
+    } catch {
+      // non-fatal
+    }
+  }, HEARTBEAT_INTERVAL_MS);
 
-async function processJob(job: ExtractionJob): Promise<void> {
-  await runPipeline(job);
+  try {
+    await logger.info('cloning', 'Extraction started');
+
+    await runPipeline(
+      {
+        projectId: job.project_id,
+        organizationId: job.organization_id,
+        repo_full_name: payload.repo_full_name,
+        installation_id: payload.installation_id,
+        default_branch: payload.default_branch,
+        package_json_path: payload.package_json_path,
+        ecosystem: payload.ecosystem,
+        provider: payload.provider,
+        integration_id: payload.integration_id,
+      },
+      logger,
+      async () => isJobCancelled(supabase, job.id)
+    );
+
+    if (await isJobCancelled(supabase, job.id)) {
+      await logger.warn('complete', 'Extraction cancelled by user');
+      await updateJobStatus(supabase, job.id, 'failed', 'Cancelled by user');
+    } else {
+      await logger.success('complete', 'Extraction complete');
+      await updateJobStatus(supabase, job.id, 'completed');
+    }
+  } catch (e: any) {
+    const message = e.message || 'Unknown error';
+    await logger.error('complete', `Extraction failed: ${message}`, e);
+    await updateJobStatus(supabase, job.id, 'failed', message);
+  } finally {
+    clearInterval(heartbeatInterval);
+  }
 }
 
 async function runWorker(): Promise<void> {
-  console.log(`[EXTRACT] Worker starting, queue: ${QUEUE_NAME}`);
-  let pollCount = 0;
+  const supabase = getSupabase();
+  console.log(`[EXTRACT] Worker starting, machine: ${MACHINE_ID}`);
+
+  let lastJobTime = Date.now();
 
   while (true) {
     try {
-      pollCount++;
-      const raw = await redis.lpop(QUEUE_NAME);
-      if (raw) {
-        let job: ExtractionJob;
-        if (typeof raw === 'string') {
-          job = JSON.parse(raw) as ExtractionJob;
-        } else if (typeof raw === 'object' && raw !== null) {
-          job = raw as ExtractionJob;
-        } else {
-          console.error('[EXTRACT] Unexpected job format');
-          continue;
-        }
-        console.log(`[EXTRACT] Processing job for project ${job.projectId}, repo ${job.repo_full_name}`);
+      const job = await claimJob(supabase, MACHINE_ID);
+
+      if (job) {
+        lastJobTime = Date.now();
+        console.log(`[EXTRACT] Claimed job ${job.id} for project ${job.project_id} (attempt ${job.attempts})`);
+
         try {
-          await processJob(job);
-          console.log(`[EXTRACT] Job complete for project ${job.projectId}`);
+          await processJob(supabase, job);
+          console.log(`[EXTRACT] Job ${job.id} complete`);
         } catch (e: any) {
-          console.error(`[EXTRACT] Job failed for project ${job.projectId}:`, e.message);
+          console.error(`[EXTRACT] Job ${job.id} failed:`, e.message);
         }
-      } else {
-        await new Promise((r) => setTimeout(r, 5000));
+
+        continue;
       }
+
+      if (Date.now() - lastJobTime > IDLE_TIMEOUT_MS) {
+        console.log('[EXTRACT] No jobs for 60s, shutting down');
+        process.exit(0);
+      }
+
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
     } catch (e: any) {
-      console.error('[EXTRACT] Worker error:', e);
-      await new Promise((r) => setTimeout(r, 5000));
+      console.error('[EXTRACT] Worker error:', e.message);
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
     }
   }
 }
@@ -75,6 +124,16 @@ process.on('SIGINT', () => {
   console.log('SIGINT received, shutting down');
   process.exit(0);
 });
+
+const memoryWatcher = setInterval(() => {
+  const usage = process.memoryUsage();
+  const heapUsedMB = Math.round(usage.heapUsed / 1024 / 1024);
+  const rssMB = Math.round(usage.rss / 1024 / 1024);
+  if (rssMB > 51200) {
+    console.warn(`[EXTRACT] High memory usage: RSS=${rssMB}MB, Heap=${heapUsedMB}MB (>80% of 64GB)`);
+  }
+}, 30_000);
+memoryWatcher.unref();
 
 runWorker().catch((e) => {
   console.error('Fatal:', e);

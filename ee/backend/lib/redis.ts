@@ -98,8 +98,12 @@ export function getQueueName(): string {
 }
 
 // ============================================================================
-// Extraction job queue (async repo extraction: clone, cdxgen, dep-scan, etc.)
+// Extraction job queue — Phase 2: Supabase-based job persistence
+// Jobs stored in extraction_jobs table instead of Redis. Survives machine crashes.
 // ============================================================================
+
+import { supabase } from '../../../backend/src/lib/supabase';
+import { startExtractionMachine } from './fly-machines';
 
 export interface ExtractionJob {
   projectId: string;
@@ -107,23 +111,15 @@ export interface ExtractionJob {
   repo_full_name: string;
   installation_id: string;
   default_branch: string;
-  /** Directory containing the manifest file ('' = repo root). */
   package_json_path?: string;
-  /** Ecosystem identifier (npm, pypi, maven, etc.). Defaults to 'npm'. */
   ecosystem?: string;
-  /** Git provider: github, gitlab, bitbucket. Defaults to 'github'. */
   provider?: string;
-  /** Integration ID for non-GitHub providers (GitLab/Bitbucket token lookup). */
   integration_id?: string;
 }
 
-const EXTRACTION_QUEUE_NAME =
-  process.env.EXTRACTION_QUEUE_NAME ||
-  (process.env.NODE_ENV === 'production' ? 'extraction-jobs' : 'extraction-jobs-local');
-
 /**
- * Queue an extraction job for the extraction worker.
- * Called by connect endpoint when user connects a repo.
+ * Queue an extraction job by inserting into Supabase extraction_jobs table
+ * and starting a Fly.io machine to process it.
  */
 export async function queueExtractionJob(
   projectId: string,
@@ -137,38 +133,114 @@ export async function queueExtractionJob(
     provider?: string;
     integration_id?: string;
   }
-): Promise<{ success: boolean; error?: string }> {
-  const client = getRedisClient();
-  if (!client) {
-    console.warn('[EXTRACT] Redis not configured - extraction job NOT queued.');
-    return { success: false, error: 'Redis not configured' };
-  }
-
-  const job: ExtractionJob = {
-    projectId,
-    organizationId,
-    repo_full_name: repoRecord.repo_full_name,
-    installation_id: repoRecord.installation_id,
-    default_branch: repoRecord.default_branch,
-    package_json_path: repoRecord.package_json_path ?? '',
-    ecosystem: repoRecord.ecosystem ?? 'npm',
-    provider: repoRecord.provider ?? 'github',
-    integration_id: repoRecord.integration_id,
-  };
-
+): Promise<{ success: boolean; error?: string; run_id?: string }> {
   try {
-    await client.rpush(EXTRACTION_QUEUE_NAME, JSON.stringify(job));
-    const queueLength = await client.llen(EXTRACTION_QUEUE_NAME);
+    const runId = crypto.randomUUID();
+
+    const { data: existingJob } = await supabase
+      .from('extraction_jobs')
+      .select('id, status')
+      .eq('project_id', projectId)
+      .in('status', ['queued', 'processing'])
+      .maybeSingle();
+
+    if (existingJob) {
+      return { success: false, error: 'Extraction already in progress for this project' };
+    }
+
+    const { error: insertError } = await supabase.from('extraction_jobs').insert({
+      project_id: projectId,
+      organization_id: organizationId,
+      status: 'queued',
+      run_id: runId,
+      payload: {
+        repo_full_name: repoRecord.repo_full_name,
+        installation_id: repoRecord.installation_id,
+        default_branch: repoRecord.default_branch,
+        package_json_path: repoRecord.package_json_path ?? '',
+        ecosystem: repoRecord.ecosystem ?? 'npm',
+        provider: repoRecord.provider ?? 'github',
+        integration_id: repoRecord.integration_id,
+      },
+    });
+
+    if (insertError) {
+      console.error('[EXTRACT] Failed to insert extraction job:', insertError);
+      return { success: false, error: insertError.message };
+    }
+
     console.log(
-      `[${new Date().toISOString()}] Queued extraction job for project ${projectId}, repo ${repoRecord.repo_full_name} (queue: ${EXTRACTION_QUEUE_NAME}, length: ${queueLength})`
+      `[${new Date().toISOString()}] Queued extraction job for project ${projectId}, repo ${repoRecord.repo_full_name} (run_id: ${runId})`
     );
-    return { success: true };
+
+    // Start a Fly machine (best-effort — job is safe in Supabase if this fails)
+    try {
+      await startExtractionMachine();
+    } catch (e: any) {
+      console.warn(`[EXTRACT] Failed to start Fly machine (job stays queued for recovery): ${e.message}`);
+    }
+
+    return { success: true, run_id: runId };
   } catch (error: any) {
     console.error('Failed to queue extraction job:', error);
     return { success: false, error: error.message };
   }
 }
 
-export function getExtractionQueueName(): string {
-  return EXTRACTION_QUEUE_NAME;
+/**
+ * Cancel an active extraction job for a project.
+ */
+export async function cancelExtractionJob(
+  projectId: string
+): Promise<{ success: boolean; error?: string }> {
+  const { data: job } = await supabase
+    .from('extraction_jobs')
+    .select('id, status')
+    .eq('project_id', projectId)
+    .in('status', ['queued', 'processing'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!job) {
+    const { data: latest } = await supabase
+      .from('extraction_jobs')
+      .select('status')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (latest?.status === 'completed') {
+      return { success: false, error: 'Extraction already completed' };
+    }
+    if (latest?.status === 'cancelled') {
+      return { success: false, error: 'Extraction already cancelled' };
+    }
+    return { success: false, error: 'No active extraction found' };
+  }
+
+  const { error } = await supabase
+    .from('extraction_jobs')
+    .update({
+      status: 'cancelled',
+      completed_at: new Date().toISOString(),
+    })
+    .eq('id', job.id);
+
+  if (error) {
+    return { success: false, error: error.message };
+  }
+
+  await supabase
+    .from('project_repositories')
+    .update({
+      status: 'cancelled',
+      extraction_step: null,
+      extraction_error: 'Cancelled by user',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('project_id', projectId);
+
+  return { success: true };
 }

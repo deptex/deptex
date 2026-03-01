@@ -378,6 +378,7 @@ export default function ProjectSettingsPage() {
   const [pullRequestCommentsEnabled, setPullRequestCommentsEnabled] = useState(true);
   const [autoFixVulnerabilitiesEnabled, setAutoFixVulnerabilitiesEnabled] = useState(false);
   const [selectedSyncLog, setSelectedSyncLog] = useState<SyncLogEntry | null>(null);
+  const [showExtractionLogs, setShowExtractionLogs] = useState(false);
   // Transfer project state
   const [teams, setTeams] = useState<Team[]>([]);
   const [loadingTeams, setLoadingTeams] = useState(false);
@@ -1651,24 +1652,39 @@ export default function ProjectSettingsPage() {
                             </div>
                           </div>
                         </div>
-                        {(connectedRepository.status === 'ready' && importStatus?.status !== 'finalizing') ? (
+                        <div className="flex items-center gap-1 shrink-0">
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <button
                                 type="button"
-                                className="h-9 w-9 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors shrink-0"
-                                aria-label="Sync repository"
+                                className="h-9 w-9 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
+                                aria-label="View extraction logs"
+                                onClick={() => setShowExtractionLogs(true)}
                               >
-                                <RefreshCw className="h-4 w-4" />
+                                <Eye className="h-4 w-4" />
                               </button>
                             </TooltipTrigger>
-                            <TooltipContent>Sync</TooltipContent>
+                            <TooltipContent>View logs</TooltipContent>
                           </Tooltip>
-                        ) : (
-                          <div className="h-9 w-9 rounded-md flex items-center justify-center shrink-0">
-                            <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" />
-                          </div>
-                        )}
+                          {(connectedRepository.status === 'ready' && importStatus?.status !== 'finalizing') ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <button
+                                  type="button"
+                                  className="h-9 w-9 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
+                                  aria-label="Sync repository"
+                                >
+                                  <RefreshCw className="h-4 w-4" />
+                                </button>
+                              </TooltipTrigger>
+                              <TooltipContent>Sync</TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            <div className="h-9 w-9 rounded-md flex items-center justify-center">
+                              <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" />
+                            </div>
+                          )}
+                        </div>
                       </div>
                       {importStatus && importStatus.total > 0 && (connectedRepository?.status === 'analyzing' || importStatus?.status === 'analyzing') && (
                         <div className="px-5 pb-5 pt-0">
@@ -1798,11 +1814,14 @@ export default function ProjectSettingsPage() {
                   </div>
                 )}
 
-                {/* Sync detail sidebar */}
-                {selectedSyncLog && (
+                {/* Sync detail sidebar — live extraction logs */}
+                {(selectedSyncLog || showExtractionLogs) && (
                   <SyncDetailSidebar
-                    entry={selectedSyncLog}
-                    onClose={() => setSelectedSyncLog(null)}
+                    entry={selectedSyncLog ?? undefined}
+                    projectId={projectId!}
+                    organizationId={organizationId}
+                    onClose={() => { setSelectedSyncLog(null); setShowExtractionLogs(false); }}
+                    onCancelled={() => reloadProject?.()}
                   />
                 )}
               </div>

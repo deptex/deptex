@@ -25,7 +25,7 @@ Deptex is an AI-powered open-core dependency security platform. It combines depe
 | Vuln scanning | dep-scan (VDR analysis), Semgrep, TruffleHog |
 | AST parsing | oxc-parser (JS/TS import extraction) |
 | Queues | Upstash QStash (async jobs, cron schedules) |
-| Cache | Upstash Redis (caching, job queues for workers) |
+| Cache | Upstash Redis (caching, ast-parsing-jobs, watchtower-jobs). Extraction jobs use Supabase `extraction_jobs` table. |
 | AI - Tier 1 | Google Gemini Flash (platform features -- we pay, ~$0.0001/call) |
 | AI - Tier 2 | BYOK OpenAI/Anthropic/Google (Aegis + Aider -- org pays via their own API keys) |
 | Deployment | Fly.io (workers, scale-to-zero), Supabase (DB + auth), Vercel-style frontend |
@@ -42,6 +42,7 @@ backend/
     routes/
       userProfile.ts            GET/PUT /api/user-profile (avatar, full_name)
       docs-assistant.ts         POST /api/docs-assistant (Gemini-powered docs Q&A, no auth, IP rate limited)
+      recovery.ts               POST /api/internal/recovery/extraction-jobs (CE, X-Internal-Api-Key: requeue stuck jobs, fail exhausted, start machines for orphans)
     lib/
       supabase.ts               Lazy-init Supabase client (service role). createUserClient(jwt) for user-scoped
       features.ts               getEdition(), isEeEdition() -- CE vs EE toggle
@@ -54,7 +55,7 @@ backend/
       detect-monorepo.ts        Monorepo detection (pnpm-workspace, package.json workspaces, tree scan). Provider-agnostic via MonorepoGitProvider interface
     middleware/
       auth.ts                   authenticateUser (required JWT), optionalAuth. Sets req.user = { id, email }
-  extraction-worker/            Clone + cdxgen SBOM + dep-scan + AST + Semgrep + TruffleHog pipeline
+  extraction-worker/            Clone + cdxgen SBOM + dep-scan + AST + Semgrep + TruffleHog. Polls Supabase extraction_jobs (atomic claim). Deployed to Fly.io scale-to-zero. See fly.md.
   parser-worker/                Standalone AST import analysis (oxc-parser)
   watchtower-worker/            Supply-chain forensic analysis (registry integrity, scripts, entropy, commits, contributors, anomalies)
   watchtower-poller/            Daily cron: dependency refresh (npm latest, GHSA batch), new commit detection for watched packages
@@ -65,7 +66,7 @@ ee/backend/
   routes/
     organizations.ts            Org CRUD, members, invitations, roles, policies, notification rules, deprecations, join link
     teams.ts                    Team CRUD, roles, members, transfer ownership
-    projects.ts                 Project CRUD, repos, dependencies (list/overview/versions/supply-chain/safe-version), vulnerabilities, policies, exceptions, PR guardrails, Watchtower actions (bump/decrease/remove PRs), notes, contributing teams, AST import status
+    projects.ts                 Project CRUD, repos, dependencies (list/overview/versions/supply-chain/safe-version), vulnerabilities, policies, exceptions, PR guardrails, Watchtower actions (bump/decrease/remove PRs), notes, contributing teams, AST import status. Extraction: POST extraction/cancel, GET extraction/logs, GET extraction/runs
     activities.ts               GET activities with date/type/team filters
     integrations.ts             OAuth flows + webhooks for GitHub App, GitLab, Bitbucket, Slack, Discord, Jira, Linear, Stripe, Asana. Org connections CRUD, custom integrations, email notifications
     aegis.ts                    Aegis AI: enable/status, chat (handle message with tool execution), threads, automations CRUD + run, inbox, activity logs
@@ -89,7 +90,8 @@ ee/backend/
     bitbucket-api.ts            Bitbucket OAuth: repo listing, file content
     git-provider.ts             GitHubProvider, GitLabProvider, BitbucketProvider implementing GitProvider interface. createProvider(integration) factory
     qstash.ts                   QStash helpers: signature verification, queuePopulateDependencyBatch, queueBackfillDependencyTrees, queueDependencyAnalysis
-    redis.ts                    Redis helpers: queueASTParsingJob, queueExtractionJob, queue names (extraction-jobs, ast-parsing-jobs)
+    redis.ts                    Redis: queueASTParsingJob. Supabase: queueExtractionJob (inserts extraction_jobs, calls startExtractionMachine), cancelExtractionJob
+    fly-machines.ts             Fly Machines API: startExtractionMachine() — start from pool or create burst machine
     cache.ts                    Redis cache: getCached/setCached/invalidateCache, TTL constants, cache key helpers for projects/deps/versions/safe-versions/watchtower
     openai.ts                   Lazy-init OpenAI client
     email.ts                    sendEmail, sendInvitationEmail (nodemailer/Gmail)
@@ -189,7 +191,7 @@ Docs sections: introduction, quick-start, projects, dependencies, vulnerabilitie
 - **VersionSidebar** -- version details with vuln counts
 - **DeprecateSidebar** -- mark package as deprecated
 - **CommitSidebar** -- watchtower commit details
-- **SyncDetailSidebar** -- extraction sync details
+- **SyncDetailSidebar** -- live extraction logs (Supabase Realtime), terminal-style UI, cancel button, historical run selector
 - **DependencyNotesSidebar** -- dependency notes (collaborative)
 - **PolicyExceptionSidebar / PolicyExceptionSidepanel** -- policy exception management
 - **ComplianceSidepanel** -- compliance details
@@ -211,7 +213,9 @@ button, input, label, checkbox, switch, slider, progress, badge, avatar, card, d
 ## Worker Pipelines
 
 ### Extraction Worker (extraction-worker/)
-**Trigger:** `queueExtractionJob()` pushes to Redis `extraction-jobs` queue when a repo is connected.
+**Trigger:** `queueExtractionJob()` inserts into Supabase `extraction_jobs` table and calls `startExtractionMachine()` to start a Fly.io machine. Worker polls Supabase via atomic `claim_extraction_job` RPC (FOR UPDATE SKIP LOCKED). Machines scale-to-zero: 60s idle shutdown.
+
+**Fault tolerance:** Heartbeat every 60s; stuck detection after 5 min no heartbeat; recovery cron (`POST /api/internal/recovery/extraction-jobs`) requeues stuck jobs, fails exhausted (max 3 attempts), starts machines for orphaned queued jobs. 4-hour machine watchdog.
 
 **Pipeline:**
 1. **Clone** -- clone repo via GitHub App / GitLab OAuth / Bitbucket OAuth token
@@ -225,6 +229,8 @@ button, input, label, checkbox, switch, slider, progress, badge, avatar, card, d
 9. **TruffleHog** -- secret scanning (optional)
 10. **Upload** -- store sbom.json, dep-scan.json, semgrep.json, trufflehog.json to Supabase storage `project-imports/{projectId}/{runId}/`
 11. **Status** -- set `project_repositories.status = 'ready'`, `extraction_step = 'completed'`
+
+**Live logs:** `ExtractionLogger` writes to `extraction_logs` (Supabase Realtime). Frontend SyncDetailSidebar subscribes for live streaming.
 
 **Populate callback** (`POST /api/workers/populate-dependencies` via QStash):
 - Fetch npm registry (versions, downloads, GitHub URL)
@@ -297,6 +303,8 @@ button, input, label, checkbox, switch, slider, progress, badge, avatar, card, d
 ### Core Tables
 | Table | Purpose | Key Relations |
 |-------|---------|---------------|
+| `extraction_jobs` | Job queue for extraction worker (Supabase-based, survives crashes). status: queued/processing/completed/failed/cancelled. RPC: claim_extraction_job, recover_stuck_extraction_jobs, fail_exhausted_extraction_jobs | FK project_id, organization_id |
+| `extraction_logs` | Live extraction log stream. Supabase Realtime enabled. | FK project_id (via run_id) |
 | `projects` | Projects with health_score, asset_tier, status, framework, auto_bump | FK organization_id, team_id |
 | `project_repositories` | One repo per project: provider, repo_full_name, status, extraction_progress | FK project_id (1:1) |
 | `dependencies` | Global package registry: name, license, score, openssf, downloads, latest_version, ecosystem | UNIQUE(name) |
@@ -386,6 +394,8 @@ organizations
        |-- team_banned_versions, team_deprecations, team_integrations, team_notification_rules
        |-- project_teams (-> projects)
   |-- projects
+       |-- extraction_jobs (job queue, RPC claim)
+       |-- extraction_logs (live logs, Realtime)
        |-- project_repositories (1:1)
        |-- project_dependencies (-> dependencies, dependency_versions)
        |     |-- project_dependency_functions
@@ -421,9 +431,10 @@ dependencies (global)
 ```
 User connects repo (ProjectSettingsPage)
   -> POST /api/organizations/:id/projects/:pid/repositories/connect
-  -> queueExtractionJob() to Redis extraction-jobs queue
-  -> Extraction worker picks up job
+  -> queueExtractionJob() inserts into extraction_jobs, calls startExtractionMachine() (Fly Machines API)
+  -> Fly machine boots, worker claims job via claim_extraction_job RPC (atomic)
   -> Clone -> cdxgen SBOM -> parse -> upsert deps -> AST analysis -> dep-scan vulns -> Semgrep -> TruffleHog
+  -> Logs stream to extraction_logs (Realtime) -> SyncDetailSidebar
   -> POST /api/workers/queue-populate (QStash async)
   -> QStash calls POST /api/workers/populate-dependencies
   -> npm registry + GHSA vulns + OpenSSF scorecard -> upsert
@@ -471,10 +482,10 @@ User views dependency supply chain (DependencySupplyChainPage)
 
 | Service | How It's Used | Config |
 |---------|--------------|--------|
-| **Supabase** | Postgres DB (all tables), Auth (JWT, OAuth), Realtime (extraction progress), Storage (SBOM/scan artifacts, avatars, icons) | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` |
-| **Fly.io** | Extraction worker, parser worker, watchtower workers (scale-to-zero machines) | `fly.toml` per worker |
-| **Upstash QStash** | Async job dispatch: populate-dependencies, backfill-trees. Cron for automations | `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY` |
-| **Upstash Redis** | Job queues (extraction-jobs, ast-parsing-jobs, watchtower-jobs), caching (deps, versions, safe versions, watchtower summaries) | `UPSTASH_REDIS_URL`, `UPSTASH_REDIS_TOKEN` |
+| **Supabase** | Postgres DB (all tables), Auth (JWT, OAuth), Realtime (extraction_logs), Storage (SBOM/scan artifacts, avatars, icons). Extraction jobs in `extraction_jobs` table. | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` |
+| **Fly.io** | Extraction worker (scale-to-zero via Machines API), parser worker, watchtower workers | `fly.toml` per worker. Backend: `FLY_API_TOKEN`, `FLY_EXTRACTION_APP`, `FLY_MAX_BURST_MACHINES` |
+| **Upstash QStash** | Async job dispatch: populate-dependencies, backfill-trees. Cron for automations and extraction recovery (optional) | `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY` |
+| **Upstash Redis** | ast-parsing-jobs, watchtower-jobs, caching. Extraction jobs use Supabase. | `UPSTASH_REDIS_URL`, `UPSTASH_REDIS_TOKEN` |
 | **GitHub App** | Repo access, file content, tree, branch/PR ops, commit diffs, webhook | `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` |
 | **GitLab** | OAuth repo access, file content, tree | `GITLAB_CLIENT_ID`, `GITLAB_CLIENT_SECRET` |
 | **Bitbucket** | OAuth repo access, file content | `BITBUCKET_CLIENT_ID`, `BITBUCKET_CLIENT_SECRET` |
@@ -491,6 +502,8 @@ User views dependency supply chain (DependencySupplyChainPage)
 | **Google AI (Gemini)** | Docs assistant, policy AI, notification AI, usage analysis (Tier 1) | `GOOGLE_AI_API_KEY` |
 | **OpenAI** | Aegis chat, Watchtower commit analysis (Tier 2 BYOK) | `OPENAI_API_KEY` |
 | **Nodemailer/Gmail** | Email notifications and invitations | `GMAIL_USER`, `GMAIL_APP_PASSWORD` |
+
+**Internal API:** `INTERNAL_API_KEY` — protects recovery endpoint (`/api/internal/recovery/extraction-jobs`), create-bump-pr.
 
 ---
 
@@ -548,6 +561,6 @@ User views dependency supply chain (DependencySupplyChainPage)
 - CE must never import from `ee/`. EE imports from `backend/src/` via relative paths
 - DB migrations: `backend/database/` for both CE and EE. Document EE-only tables in `ee/database/README.md`
 - UI components: Radix primitives + Tailwind (shadcn pattern). Add new components via `npx shadcn@latest`
-- See `DEVELOPERS.md` for full setup, `CONTRIBUTING.md` for PR flow
+- See `DEVELOPERS.md` for full setup, `CONTRIBUTING.md` for PR flow. See `fly.md` for extraction worker Fly.io deployment.
 - See `.cursor/skills/add-new-features/SKILL.md` for CE vs EE placement decisions
 - See `.cursor/skills/frontend-design/SKILL.md` and `.cursor/skills/ui-principles/SKILL.md` for UI standards
