@@ -7,7 +7,7 @@ import * as path from 'path';
 import { execSync, spawnSync } from 'child_process';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { cloneRepository, cleanupRepository, cloneByProvider } from './clone';
-import { parseSbom, getBomRefToNameVersion, type ParsedSbomDep, type ParsedSbomRelationship } from './sbom';
+import { parseSbom, getBomRefToNameVersion, patchDevDependencies, type ParsedSbomDep, type ParsedSbomRelationship } from './sbom';
 import { calculateDepscore, SEVERITY_TO_CVSS, type AssetTier } from './depscore';
 import { analyzeRepository } from './ast-parser';
 import { storeAstAnalysisResults } from './ast-storage';
@@ -232,6 +232,14 @@ export async function runPipeline(
     const { dependencies, relationships } = parseSbom(sbom);
     const bomRefMap = getBomRefToNameVersion(sbom);
 
+    // Patch devDependency detection by cross-referencing with manifest files
+    const jobEcosystem = job.ecosystem || 'npm';
+    try {
+      patchDevDependencies(dependencies, workspaceRoot, jobEcosystem);
+    } catch (e: any) {
+      await log.warn('sbom', `devDependency detection failed (non-fatal): ${e.message}`);
+    }
+
     if (dependencies.length === 0) {
       const msg = "No dependencies found — the package manifest may be empty or in an unsupported format";
       await log.error('sbom', msg);
@@ -271,8 +279,6 @@ export async function runPipeline(
     for (const [, d] of uniqueDeps) {
       if (!nameToLicense.has(d.name)) nameToLicense.set(d.name, d.license);
     }
-
-    const jobEcosystem = job.ecosystem || 'npm';
 
     for (let i = 0; i < namesToCreate.length; i += 100) {
       const batch = namesToCreate.slice(i, i + 100);

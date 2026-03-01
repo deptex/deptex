@@ -1,6 +1,6 @@
 /**
  * Depscore: context-aware vulnerability score (0–100).
- * Uses 4-tier asset criticality (CROWN_JEWELS, EXTERNAL, INTERNAL, NON_PRODUCTION).
+ * Uses 4-tier asset criticality + dependency context (directness, environment, malicious, reputation).
  */
 
 export type AssetTier = 'CROWN_JEWELS' | 'EXTERNAL' | 'INTERNAL' | 'NON_PRODUCTION';
@@ -11,6 +11,10 @@ export interface DepscoreContext {
   cisaKev: boolean;
   isReachable: boolean;
   assetTier: AssetTier;
+  isDirect?: boolean;
+  isDevDependency?: boolean;
+  isMalicious?: boolean;
+  packageScore?: number | null;
 }
 
 export const SEVERITY_TO_CVSS: Record<string, number> = {
@@ -34,6 +38,13 @@ const REACHABILITY_WEIGHT_UNREACHABLE: Record<AssetTier, number> = {
   NON_PRODUCTION: 0.1,
 };
 
+function packageReputationWeight(score: number | null | undefined): number {
+  if (score == null) return 1.0;
+  if (score < 30) return 1.15;
+  if (score > 70) return 0.95;
+  return 1.0;
+}
+
 export function calculateDepscore(ctx: DepscoreContext): number {
   const cvss = Math.max(0, Math.min(10, ctx.cvss));
   const epss = Math.max(0, Math.min(1, ctx.epss));
@@ -50,6 +61,13 @@ export function calculateDepscore(ctx: DepscoreContext): number {
     : REACHABILITY_WEIGHT_UNREACHABLE[ctx.assetTier];
   const environmentalMultiplier = tierWeight * reachabilityWeight;
 
-  const score = baseImpact * threatMultiplier * environmentalMultiplier;
+  // Dependency context multiplier (new fields are optional for backward compat)
+  const directnessWeight = ctx.isDirect === false ? 0.75 : 1.0;
+  const envWeight = ctx.isDevDependency === true ? 0.4 : 1.0;
+  const maliciousWeight = ctx.isMalicious === true ? 1.3 : 1.0;
+  const reputationWeight = packageReputationWeight(ctx.packageScore);
+  const dependencyContextMultiplier = directnessWeight * envWeight * maliciousWeight * reputationWeight;
+
+  const score = baseImpact * threatMultiplier * environmentalMultiplier * dependencyContextMultiplier;
   return Math.min(100, Math.round(score));
 }

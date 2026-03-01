@@ -696,39 +696,38 @@ interface ScoreBreakdown {
   openssfPenalty: number;
   popularityPenalty: number;
   maintenancePenalty: number;
+  slsaMultiplier: number;
+  maliciousMultiplier: number;
 }
 
 function calculateDependencyScore(data: {
   openssfScore: number | null;
   weeklyDownloads: number | null;
   releasesLast12Months: number | null;
+  slsaLevel: number | null;
+  isMalicious: boolean;
 }): ScoreBreakdown {
   // Reputation score = 100 - penalties from three components (~33 pts each)
-  // No vulnerability component — vulns are version-specific and shown separately.
+  // Then multiplied by SLSA bonus and malicious penalty.
 
   // OpenSSF Scorecard penalty (~33 pts max)
-  // Score is 0-10; multiplier 3.3 gives max 33 penalty for score=0
   let openssfPenalty = 0;
   if (data.openssfScore !== null) {
     openssfPenalty = (10 - data.openssfScore) * 3.3;
   } else {
-    openssfPenalty = 11; // no GitHub repo / no scorecard — moderate penalty
+    openssfPenalty = 11;
   }
 
   // Popularity penalty (~33 pts max)
-  // Continuous curve from log10(weeklyDownloads)
-  // 0–50 downloads ≈ 33 penalty, 500 ≈ 19, 5k ≈ 10, 50k+ → 0
   let popularityPenalty = 0;
   if (data.weeklyDownloads !== null) {
     const logDownloads = Math.log10(data.weeklyDownloads + 1);
     popularityPenalty = Math.max(0, Math.min(33, 34 - logDownloads * 7));
   } else {
-    popularityPenalty = 16; // unknown — moderate penalty
+    popularityPenalty = 16;
   }
 
   // Maintenance penalty (~33 pts max)
-  // Based on number of releases in the last 12 months
-  // 12+ releases: 0, 6-11: 8, 3-5: 16, 1-2: 24, 0: 33
   let maintenancePenalty = 0;
   if (data.releasesLast12Months !== null) {
     const releases = data.releasesLast12Months;
@@ -738,19 +737,29 @@ function calculateDependencyScore(data: {
     else if (releases >= 1) maintenancePenalty = 24;
     else maintenancePenalty = 33;
   } else {
-    maintenancePenalty = 16; // unknown — moderate penalty
+    maintenancePenalty = 16;
   }
 
-  const totalPenalty = openssfPenalty + popularityPenalty + maintenancePenalty;
-  const rawScore = 100 - totalPenalty;
-  // Round only at the end so small input differences produce different integer scores
-  const score = Math.max(0, Math.round(rawScore));
+  const baseScore = 100 - openssfPenalty - popularityPenalty - maintenancePenalty;
+
+  // SLSA bonus: reward packages with provenance attestations (no penalty for missing)
+  const slsaMultiplier = data.slsaLevel != null
+    ? (data.slsaLevel >= 3 ? 1.1 : data.slsaLevel >= 1 ? 1.05 : 1.0)
+    : 1.0;
+
+  // Malicious penalty: confirmed GHSA MALWARE classification
+  const maliciousMultiplier = data.isMalicious ? 0.15 : 1.0;
+
+  const score = Math.max(0, Math.min(100,
+    Math.round(baseScore * slsaMultiplier * maliciousMultiplier)));
 
   return {
     score,
     openssfPenalty: Math.round(openssfPenalty * 10) / 10,
     popularityPenalty: Math.round(popularityPenalty * 10) / 10,
     maintenancePenalty: Math.round(maintenancePenalty * 10) / 10,
+    slsaMultiplier,
+    maliciousMultiplier,
   };
 }
 
@@ -828,6 +837,88 @@ function classifyVulnerabilitySeverity(vuln: OsvVulnerability): string {
 
 // GHSA functions imported from ../lib/ghsa (fetchGhsaVulnerabilitiesBatch,
 // filterGhsaVulnsByVersion, ghsaSeverityToLevel, ghsaVulnToRow, GhsaVuln, getGitHubToken)
+
+/**
+ * Fetch SLSA provenance level from npm attestations API.
+ * Only works for npm packages. Returns null for non-npm or packages without provenance.
+ */
+async function fetchSlsaLevel(packageName: string, version: string): Promise<number | null> {
+  try {
+    const encoded = encodeURIComponent(`${packageName}@${version}`);
+    const res = await fetch(`https://registry.npmjs.org/-/npm/v1/attestations/${encoded}`, {
+      headers: { 'User-Agent': 'Deptex-App' },
+    });
+    if (!res.ok) return null;
+
+    const data = (await res.json()) as {
+      attestations?: Array<{
+        predicateType?: string;
+        bundle?: { dsseEnvelope?: { payload?: string } };
+      }>;
+    };
+
+    const slsaAttestation = data.attestations?.find((a) =>
+      a.predicateType?.includes('slsa') || a.predicateType?.includes('provenance')
+    );
+    if (!slsaAttestation) return null;
+
+    // Try to extract build level from the payload
+    try {
+      const payload = slsaAttestation.bundle?.dsseEnvelope?.payload;
+      if (payload) {
+        const decoded = JSON.parse(Buffer.from(payload, 'base64').toString('utf8'));
+        const buildLevel = decoded?.predicate?.buildDefinition?.buildType;
+        if (typeof buildLevel === 'string') {
+          const levelMatch = buildLevel.match(/L(\d)/i);
+          if (levelMatch) return parseInt(levelMatch[1], 10);
+        }
+      }
+    } catch { /* payload parse failure is non-fatal */ }
+
+    // Has provenance but can't determine exact level — assume level 1
+    return 1;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Update is_outdated and versions_behind for all project_dependencies using this dependency.
+ */
+async function updateOutdatedStatus(
+  dependencyId: string,
+  latestVersion: string | null,
+  allVersions: string[]
+): Promise<void> {
+  if (!latestVersion) return;
+
+  const { data: projDeps } = await supabase
+    .from('project_dependencies')
+    .select('id, version')
+    .eq('dependency_id', dependencyId);
+  if (!projDeps || projDeps.length === 0) return;
+
+  for (const pd of projDeps) {
+    const current = semver.valid(semver.coerce(pd.version));
+    const latest = semver.valid(semver.coerce(latestVersion));
+    if (!current || !latest) continue;
+
+    const isOutdated = semver.lt(current, latest);
+    let versionsBehind = 0;
+    if (isOutdated && allVersions.length > 0) {
+      const stableVersions = allVersions.filter((v) => {
+        const parsed = semver.valid(semver.coerce(v));
+        return parsed && semver.gt(parsed, current) && semver.lte(parsed, latest);
+      });
+      versionsBehind = stableVersions.length;
+    }
+
+    await supabase
+      .from('project_dependencies')
+      .update({ is_outdated: isOutdated, versions_behind: versionsBehind })
+      .eq('id', pd.id);
+  }
+}
 
 interface OpenssfScorecardResult {
   score: number | null;
@@ -1110,16 +1201,41 @@ async function populateSingleDependency(
         .upsert(vulnInserts, { onConflict: 'dependency_id,osv_id' });
     }
 
+    // 5b. Check if any advisory has MALWARE classification -> flag dependency
+    const isMalicious = ghsaVulnsForPackage.some((v) => v.classification === 'MALWARE');
+
     // 6. Fetch OpenSSF scorecard
     const openssfResult = await fetchOpenssfScorecardForRepo(npmInfo.github_url);
     const openssfScore = openssfResult.score;
     const openssfData = openssfResult.data;
 
-    // 7. Calculate reputation score (OpenSSF + popularity + maintenance)
+    // 6b. Fetch SLSA provenance for latest version (npm only)
+    let latestSlsaLevel: number | null = null;
+    if (eco === 'npm' && npmInfo.latest_version) {
+      latestSlsaLevel = await fetchSlsaLevel(name, npmInfo.latest_version);
+      if (latestSlsaLevel != null) {
+        await supabase
+          .from('dependency_versions')
+          .update({ slsa_level: latestSlsaLevel })
+          .eq('dependency_id', dependencyId)
+          .eq('version', npmInfo.latest_version);
+      }
+    }
+
+    // 6c. Update outdated status for all project_dependencies using this package
+    try {
+      await updateOutdatedStatus(dependencyId, npmInfo.latest_version, npmInfo.versions);
+    } catch (e: any) {
+      console.warn(`[POPULATE] Failed to update outdated status for ${name}:`, e.message);
+    }
+
+    // 7. Calculate reputation score (OpenSSF + popularity + maintenance + SLSA + malicious)
     const scoreBreakdown = calculateDependencyScore({
       openssfScore,
       weeklyDownloads: npmInfo.weeklyDownloads,
       releasesLast12Months: npmInfo.releasesLast12Months,
+      slsaLevel: latestSlsaLevel,
+      isMalicious,
     });
 
     // 8. Update dependencies with all package-level data
@@ -1128,6 +1244,7 @@ async function populateSingleDependency(
       .update({
         status: 'ready',
         score: scoreBreakdown.score,
+        is_malicious: isMalicious,
         openssf_score: openssfScore,
         openssf_data: openssfData,
         weekly_downloads: npmInfo.weeklyDownloads,
@@ -1140,6 +1257,8 @@ async function populateSingleDependency(
         openssf_penalty: Math.round(scoreBreakdown.openssfPenalty),
         popularity_penalty: Math.round(scoreBreakdown.popularityPenalty),
         maintenance_penalty: Math.round(scoreBreakdown.maintenancePenalty),
+        slsa_multiplier: Math.round((scoreBreakdown.slsaMultiplier ?? 1) * 100) / 100,
+        malicious_multiplier: Math.round((scoreBreakdown.maliciousMultiplier ?? 1) * 100) / 100,
         analyzed_at: new Date().toISOString(),
         error_message: null,
         updated_at: new Date().toISOString(),

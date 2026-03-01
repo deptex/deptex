@@ -1,4 +1,4 @@
-import { FileCheck, TrendingUp, Calendar } from 'lucide-react';
+import { FileCheck, TrendingUp, Calendar, Shield, AlertTriangle } from 'lucide-react';
 import { ProjectDependency } from '../lib/api';
 
 interface ScoreBreakdownSidebarProps {
@@ -8,11 +8,20 @@ interface ScoreBreakdownSidebarProps {
   onClose: () => void;
 }
 
+function formatMultiplier(value: number | null | undefined): string {
+  if (value == null || value === 1) return '—';
+  return value > 1 ? `+${Math.round((value - 1) * 100)}%` : `${Math.round((value - 1) * 100)}%`;
+}
+
 export function ScoreBreakdownSidebar({ dependency, onClose }: ScoreBreakdownSidebarProps) {
   const analysis = dependency.analysis;
   const openssfScore = analysis?.openssf_score ?? null;
   const weeklyDownloads = analysis?.weekly_downloads ?? null;
   const releasesLast12Months = analysis?.releases_last_12_months ?? null;
+  const slsaMultiplier = analysis?.score_breakdown?.slsa_multiplier ?? null;
+  const maliciousMultiplier = analysis?.score_breakdown?.malicious_multiplier ?? null;
+  const isMalicious = analysis?.is_malicious === true;
+  const isAnalyzing = analysis?.status === 'pending' || analysis?.status === 'analyzing';
 
   return (
     <div className="fixed inset-0 z-50">
@@ -35,7 +44,7 @@ export function ScoreBreakdownSidebar({ dependency, onClose }: ScoreBreakdownSid
               <FileCheck className="h-4 w-4 text-foreground-secondary" />
               <h3 className="text-sm font-medium text-foreground">OpenSSF Scorecard</h3>
             </div>
-            {analysis?.status === 'pending' || analysis?.status === 'analyzing' ? (
+            {isAnalyzing ? (
               <p className="text-sm text-foreground-secondary">Analysis in progress.</p>
             ) : (
               <div className="rounded-lg border border-border bg-background-card px-4 py-3 space-y-2">
@@ -55,7 +64,7 @@ export function ScoreBreakdownSidebar({ dependency, onClose }: ScoreBreakdownSid
               <TrendingUp className="h-4 w-4 text-foreground-secondary" />
               <h3 className="text-sm font-medium text-foreground">Popularity</h3>
             </div>
-            {analysis?.status === 'pending' || analysis?.status === 'analyzing' ? (
+            {isAnalyzing ? (
               <p className="text-sm text-foreground-secondary">Analysis in progress.</p>
             ) : (
               <div className="rounded-lg border border-border bg-background-card px-4 py-3 space-y-2">
@@ -81,7 +90,7 @@ export function ScoreBreakdownSidebar({ dependency, onClose }: ScoreBreakdownSid
               <Calendar className="h-4 w-4 text-foreground-secondary" />
               <h3 className="text-sm font-medium text-foreground">Maintenance</h3>
             </div>
-            {analysis?.status === 'pending' || analysis?.status === 'analyzing' ? (
+            {isAnalyzing ? (
               <p className="text-sm text-foreground-secondary">Analysis in progress.</p>
             ) : (
               <div className="rounded-lg border border-border bg-background-card px-4 py-3 space-y-2">
@@ -94,6 +103,55 @@ export function ScoreBreakdownSidebar({ dependency, onClose }: ScoreBreakdownSid
               </div>
             )}
           </section>
+
+          {/* SLSA Provenance */}
+          <section>
+            <div className="flex items-center gap-2 mb-3">
+              <Shield className="h-4 w-4 text-foreground-secondary" />
+              <h3 className="text-sm font-medium text-foreground">SLSA Provenance</h3>
+            </div>
+            {isAnalyzing ? (
+              <p className="text-sm text-foreground-secondary">Analysis in progress.</p>
+            ) : (
+              <div className="rounded-lg border border-border bg-background-card px-4 py-3 space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-foreground-secondary">Score multiplier</span>
+                  <span className={`font-mono tabular-nums ${slsaMultiplier != null && slsaMultiplier > 1 ? 'text-emerald-400' : 'text-foreground'}`}>
+                    {formatMultiplier(slsaMultiplier)}
+                  </span>
+                </div>
+                {analysis?.slsa_level != null && (
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-foreground-secondary">SLSA level</span>
+                    <span className="font-mono text-foreground tabular-nums">
+                      L{analysis.slsa_level}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+
+          {/* Malicious Detection */}
+          {isMalicious && (
+            <section>
+              <div className="flex items-center gap-2 mb-3">
+                <AlertTriangle className="h-4 w-4 text-red-400" />
+                <h3 className="text-sm font-medium text-red-400">Malicious Package</h3>
+              </div>
+              <div className="rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-foreground-secondary">Score multiplier</span>
+                  <span className="font-mono text-red-400 tabular-nums">
+                    {formatMultiplier(maliciousMultiplier)}
+                  </span>
+                </div>
+                <p className="text-xs text-foreground-secondary">
+                  This package has been flagged as malicious by the GitHub Advisory Database.
+                </p>
+              </div>
+            </section>
+          )}
         </div>
       </div>
     </div>

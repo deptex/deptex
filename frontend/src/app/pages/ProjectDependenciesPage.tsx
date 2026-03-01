@@ -1263,6 +1263,20 @@ export default function ProjectDependenciesPage() {
                           <TooltipContent side="right">This version is banned by org policy</TooltipContent>
                         </Tooltip>
                       )}
+                      {dep.is_outdated && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/30 cursor-default">
+                              {dep.versions_behind && dep.versions_behind > 0 ? `${dep.versions_behind} behind` : 'Outdated'}
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent side="right">
+                            {dep.versions_behind && dep.versions_behind > 0
+                              ? `${dep.versions_behind} version${dep.versions_behind > 1 ? 's' : ''} behind latest`
+                              : 'A newer version is available'}
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
                       {dep.is_direct && suggestion !== undefined && suggestion !== 'loading' && suggestion.action === 'bump' && (
                         <Tooltip>
                           <TooltipTrigger asChild>

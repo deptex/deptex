@@ -2,6 +2,9 @@
  * Parse CycloneDX SBOM and extract dependencies for project_dependencies, dependency_version_edges, etc.
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
+
 export interface SbomComponent {
   'bom-ref'?: string;
   type?: string;
@@ -180,4 +183,88 @@ function extractLicense(licenses: unknown): string | null {
     return l?.id ?? l?.name ?? null;
   }
   return null;
+}
+
+/**
+ * Cross-reference parsed SBOM deps with actual manifest files to correctly identify devDependencies.
+ * CycloneDX SBOMs from cdxgen don't reliably distinguish dev from prod deps.
+ */
+export function patchDevDependencies(deps: ParsedSbomDep[], repoRoot: string, ecosystem: string): void {
+  const devNames = collectDevDependencyNames(repoRoot, ecosystem);
+  if (devNames.size === 0) return;
+
+  for (const dep of deps) {
+    if (dep.is_direct && devNames.has(dep.name)) {
+      dep.source = 'devDependencies';
+    }
+  }
+}
+
+function collectDevDependencyNames(repoRoot: string, ecosystem: string): Set<string> {
+  const devNames = new Set<string>();
+
+  if (ecosystem === 'npm') {
+    collectNpmDevDeps(repoRoot, devNames);
+  } else if (ecosystem === 'pypi') {
+    collectPypiDevDeps(repoRoot, devNames);
+  } else if (ecosystem === 'maven') {
+    collectMavenDevDeps(repoRoot, devNames);
+  }
+
+  return devNames;
+}
+
+function collectNpmDevDeps(repoRoot: string, devNames: Set<string>): void {
+  const pkgPath = path.join(repoRoot, 'package.json');
+  try {
+    const raw = fs.readFileSync(pkgPath, 'utf8');
+    const pkg = JSON.parse(raw) as { devDependencies?: Record<string, string> };
+    if (pkg.devDependencies) {
+      for (const name of Object.keys(pkg.devDependencies)) devNames.add(name);
+    }
+  } catch { /* no package.json or parse error */ }
+}
+
+function collectPypiDevDeps(repoRoot: string, devNames: Set<string>): void {
+  // pyproject.toml: [tool.poetry.dev-dependencies] or [project.optional-dependencies]
+  const pyprojectPath = path.join(repoRoot, 'pyproject.toml');
+  try {
+    const content = fs.readFileSync(pyprojectPath, 'utf8');
+    // Simple heuristic: lines under [tool.poetry.dev-dependencies] until next section
+    const devSection = content.match(
+      /\[tool\.poetry\.dev-dependencies\]([\s\S]*?)(?=\n\[|\n$)/
+    );
+    if (devSection) {
+      const lines = devSection[1].split('\n');
+      for (const line of lines) {
+        const match = line.match(/^(\S+)\s*=/);
+        if (match && match[1] !== 'python') devNames.add(match[1]);
+      }
+    }
+  } catch { /* ignore */ }
+
+  // requirements-dev.txt
+  const reqDevPath = path.join(repoRoot, 'requirements-dev.txt');
+  try {
+    const content = fs.readFileSync(reqDevPath, 'utf8');
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('-')) continue;
+      const name = trimmed.split(/[=<>!~[\s]/)[0];
+      if (name) devNames.add(name.toLowerCase());
+    }
+  } catch { /* ignore */ }
+}
+
+function collectMavenDevDeps(repoRoot: string, devNames: Set<string>): void {
+  const pomPath = path.join(repoRoot, 'pom.xml');
+  try {
+    const content = fs.readFileSync(pomPath, 'utf8');
+    // Match dependencies with <scope>test</scope> or <scope>provided</scope>
+    const depRegex = /<dependency>\s*<groupId>([^<]+)<\/groupId>\s*<artifactId>([^<]+)<\/artifactId>[\s\S]*?<scope>(test|provided)<\/scope>[\s\S]*?<\/dependency>/g;
+    let match;
+    while ((match = depRegex.exec(content)) !== null) {
+      devNames.add(`${match[1]}:${match[2]}`);
+    }
+  } catch { /* ignore */ }
 }

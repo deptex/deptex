@@ -17,6 +17,7 @@ export interface GhsaVuln {
   summary: string | null;
   description: string | null;
   severity: string | null; // CRITICAL, HIGH, MODERATE, LOW
+  classification: string | null; // GENERAL or MALWARE
   vulnerableVersionRange: string;
   firstPatchedVersion: string | null;
   publishedAt: string | null;
@@ -55,7 +56,7 @@ export async function fetchGhsaVulnerabilitiesBatch(packageNames: string[], ecos
   const buildQuery = (): string => {
     const parts = names.map((name, i) => {
       const escaped = JSON.stringify(name);
-      return `p${i}: securityVulnerabilities(package: ${escaped}, ecosystem: ${ghsaEcosystem}, first: ${firstPerPackage}) { nodes { advisory { ghsaId summary description severity publishedAt updatedAt identifiers { type value } } vulnerableVersionRange firstPatchedVersion { identifier } } }`;
+      return `p${i}: securityVulnerabilities(package: ${escaped}, ecosystem: ${ghsaEcosystem}, first: ${firstPerPackage}) { nodes { advisory { ghsaId summary description severity classification publishedAt updatedAt identifiers { type value } } vulnerableVersionRange firstPatchedVersion { identifier } } }`;
     });
     return `query { ${parts.join(' ')} }`;
   };
@@ -79,7 +80,7 @@ export async function fetchGhsaVulnerabilitiesBatch(packageNames: string[], ecos
       return result;
     }
     const json = (await res.json()) as { errors?: unknown; data?: Record<string, { nodes: Array<{
-      advisory: { ghsaId: string; summary: string | null; description: string | null; severity: string | null; publishedAt: string | null; updatedAt: string | null; identifiers: Array<{ type: string; value: string }> };
+      advisory: { ghsaId: string; summary: string | null; description: string | null; severity: string | null; classification: string | null; publishedAt: string | null; updatedAt: string | null; identifiers: Array<{ type: string; value: string }> };
       vulnerableVersionRange: string;
       firstPatchedVersion: { identifier: string } | null;
     }> }> };
@@ -93,6 +94,7 @@ export async function fetchGhsaVulnerabilitiesBatch(packageNames: string[], ecos
         summary: string | null;
         description: string | null;
         severity: string | null;
+        classification: string | null;
         publishedAt: string | null;
         updatedAt: string | null;
         identifiers: Array<{ type: string; value: string }>;
@@ -107,6 +109,7 @@ export async function fetchGhsaVulnerabilitiesBatch(packageNames: string[], ecos
         summary: n.advisory.summary ?? null,
         description: n.advisory.description ?? null,
         severity: n.advisory.severity ?? null,
+        classification: n.advisory.classification ?? null,
         vulnerableVersionRange: n.vulnerableVersionRange || '',
         firstPatchedVersion: n.firstPatchedVersion?.identifier ?? null,
         publishedAt: n.advisory.publishedAt ?? null,
@@ -158,6 +161,7 @@ export function ghsaVulnToRow(dependencyId: string, v: GhsaVuln): Record<string,
     dependency_id: dependencyId,
     osv_id: v.ghsaId,
     severity: ghsaSeverityToLevel(v.severity),
+    classification: v.classification || 'GENERAL',
     summary: v.summary || null,
     details: v.description || null,
     aliases,

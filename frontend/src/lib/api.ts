@@ -2117,7 +2117,11 @@ export interface ProjectDependencyAnalysis {
     openssf_penalty: number | null;
     popularity_penalty: number | null;
     maintenance_penalty: number | null;
+    slsa_multiplier?: number | null;
+    malicious_multiplier?: number | null;
   };
+  is_malicious?: boolean;
+  slsa_level?: number | null;
   critical_vulns: number;
   high_vulns: number;
   medium_vulns: number;
@@ -2175,6 +2179,8 @@ export interface ProjectDependency {
     entropy_analysis_reason: string | null;
   } | null;
   is_current_version_banned?: boolean;
+  is_outdated?: boolean;
+  versions_behind?: number;
 }
 
 export interface DependencyVersionVulnerability {
