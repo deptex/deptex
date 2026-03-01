@@ -9,6 +9,7 @@ import express from 'express';
 import cors from 'cors';
 import { isEeEdition } from './lib/features';
 import userProfileRouter from './routes/userProfile';
+import docsAssistantRouter from './routes/docs-assistant';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -64,6 +65,7 @@ app.get('/health', (req, res) => {
 
 // API Routes - CE (always mounted)
 app.use('/api/user-profile', userProfileRouter);
+app.use('/api/docs-assistant', docsAssistantRouter);
 
 // API Routes - EE (mounted only when DEPTEX_EDITION=ee, loaded from ee/backend/routes/)
 if (isEeEdition()) {

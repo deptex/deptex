@@ -1,7 +1,14 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Github, GitBranch, Slack, Mail, Webhook, FileCode, Code, BookOpen, Settings, MessageCircle } from "lucide-react";
-import { Button } from "../../components/ui/button";
+import { Github, GitBranch, Slack, Mail, Webhook, FileCode, Code, Settings, MessageCircle } from "lucide-react";
+import VulnerabilitiesContent from "./docs/VulnerabilitiesContent";
+import ProjectsContent from "./docs/ProjectsContent";
+import DependenciesContent from "./docs/DependenciesContent";
+import ComplianceContent from "./docs/ComplianceContent";
+import QuickStartContent from "./docs/QuickStartContent";
+import OrganizationsContent from "./docs/OrganizationsContent";
+import SBOMComplianceContent from "./docs/SBOMComplianceContent";
+import TeamsContent from "./docs/TeamsContent";
 
 interface DocMeta {
   title: string;
@@ -15,75 +22,47 @@ const docMeta: Record<string, DocMeta> = {
   },
   "quick-start": {
     title: "Quick Start",
-    description: "Get up and running with Deptex in minutes.",
+    description: "Get up and running with Deptex in minutes with this step-by-step setup guide.",
   },
   projects: {
     title: "Projects",
-    description: "Understand how Deptex models your repositories as projects and tracks their dependency graphs.",
+    description: "How Deptex models your repositories as projects, runs extraction pipelines, and tracks status.",
   },
   dependencies: {
     title: "Dependencies",
-    description: "Explore how Deptex resolves, indexes, and monitors your project's dependency tree.",
+    description: "Dependency resolution, scoring, supply chain signals, malicious detection, and version management.",
   },
   vulnerabilities: {
     title: "Vulnerabilities",
-    description: "See how Deptex surfaces CVEs and advisories affecting your dependencies.",
+    description: "Vulnerability discovery, Depscore risk scoring, reachability analysis, EPSS, CISA KEV, and AI fixing.",
   },
   compliance: {
     title: "Compliance",
-    description: "Learn how Deptex maps your dependencies against compliance frameworks and license policies.",
-  },
-  "dependency-tracking": {
-    title: "Dependency Tracking",
-    description: "Deep dependency tracking across repositories with real-time drift detection.",
-  },
-  "vulnerability-intelligence": {
-    title: "Vulnerability Intelligence",
-    description: "CVE monitoring, enrichment, and prioritization powered by Deptex intelligence.",
+    description: "Custom statuses, policy evaluation flow, SBOM exports, license tracking, and policy versioning.",
   },
   "sbom-compliance": {
     title: "SBOM Compliance",
-    description: "Generate and track Software Bills of Materials (SBOMs) for your projects.",
-  },
-  "anomaly-detection": {
-    title: "Anomaly Detection",
-    description: "Detect suspicious changes in your supply chain with behavioral analysis.",
-  },
-  "security-agent": {
-    title: "Security Agent (Aegis)",
-    description: "Let Deptex's autonomous AI security engineer monitor and respond to threats on your behalf.",
+    description: "Software Bill of Materials generation, CycloneDX and SPDX formats, legal notices, and compliance frameworks.",
   },
   organizations: {
     title: "Organizations",
-    description: "Manage your organization, members, and settings in Deptex.",
+    description: "Organization settings, custom statuses, roles and permissions, members, and integrations.",
   },
   teams: {
     title: "Teams",
-    description: "Organize members into teams with scoped project visibility and alerting.",
+    description: "Team-scoped project visibility, membership, dashboards, and permission model.",
   },
   policies: {
     title: "Policies",
-    description: "Define and enforce security and compliance policies across your organization.",
+    description: "Define and enforce security and compliance policies across your organization with policy-as-code.",
   },
   integrations: {
     title: "Integrations",
-    description: "Connect Deptex with your existing tools including GitHub, Slack, and CI/CD pipelines.",
+    description: "Connect Deptex with GitHub, GitLab, Bitbucket, Slack, and more.",
   },
   "notification-rules": {
     title: "Notification Rules",
     description: "Configure automated alerts that trigger when specific events occur across your projects and dependencies.",
-  },
-  api: {
-    title: "API Reference",
-    description: "REST API documentation and endpoints for integrating with Deptex.",
-  },
-  learn: {
-    title: "Learn",
-    description: "Tutorials, guides, and resources to get the most out of Deptex.",
-  },
-  help: {
-    title: "Help & Support",
-    description: "Get help, contact support, and find answers to common questions.",
   },
   terms: {
     title: "Terms of Service",
@@ -1022,18 +1001,6 @@ return BANNED.some(b => (context.dependency.license || '').includes(b));`}
   );
 }
 
-const helpDocLinks = [
-  { label: "Quick Start", slug: "quick-start", description: "Get up and running in minutes." },
-  { label: "Introduction", slug: "introduction", description: "Overview of Deptex and its capabilities." },
-  { label: "Policies", slug: "policies", description: "Define and enforce security and compliance policies." },
-  { label: "Integrations", slug: "integrations", description: "Connect GitHub, Slack, CI/CD, and more." },
-  { label: "Notification Rules", slug: "notification-rules", description: "Configure automated alerts." },
-  { label: "Organizations", slug: "organizations", description: "Manage your organization and settings." },
-  { label: "Terms of Service", slug: "terms", description: "Terms governing your use of Deptex." },
-  { label: "Privacy Policy", slug: "privacy", description: "How we collect, use, and protect your data." },
-  { label: "Security", slug: "security", description: "Our security practices and commitment." },
-];
-
 function TermsContent() {
   return (
     <div className="space-y-8">
@@ -1128,56 +1095,6 @@ function SecurityContent() {
   );
 }
 
-function HelpContent() {
-  return (
-    <div className="space-y-12">
-      <div>
-        <h2 className="text-lg font-semibold text-foreground mb-3">Find what you need</h2>
-        <p className="text-foreground-secondary leading-relaxed mb-6">
-          Start with our documentation to learn how Deptex works. These guides cover the most common tasks and questions.
-        </p>
-        <div className="grid gap-3 sm:grid-cols-2">
-          {helpDocLinks.map((item) => (
-            <Link
-              key={item.slug}
-              to={`/docs/${item.slug}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex gap-3 rounded-lg border border-border bg-background-card p-4 hover:bg-table-hover hover:border-foreground-secondary/30 transition-colors text-left group"
-            >
-              <BookOpen className="h-5 w-5 text-foreground-secondary shrink-0 mt-0.5 group-hover:text-foreground transition-colors" />
-              <div>
-                <p className="text-sm font-medium text-foreground group-hover:text-primary transition-colors">{item.label}</p>
-                <p className="text-xs text-foreground-secondary mt-0.5">{item.description}</p>
-              </div>
-            </Link>
-          ))}
-        </div>
-      </div>
-
-      <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-        <div className="px-4 py-3 border-b border-border bg-background-card-header flex items-center gap-2">
-          <Settings className="h-4 w-4 text-foreground-secondary" />
-          <h2 className="text-lg font-semibold text-foreground">Still need help?</h2>
-        </div>
-        <div className="p-6 space-y-4">
-          <p className="text-foreground-secondary leading-relaxed">
-            Can&apos;t find what you&apos;re looking for? Reach out to our support team and we&apos;ll get back to you as soon as possible.
-          </p>
-          <Button
-            size="lg"
-            className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-            onClick={() => { window.location.href = "mailto:deptex.app@gmail.com?subject=Support Request"; }}
-          >
-            <Mail className="h-5 w-5" />
-            Contact Support
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function IntroductionContent() {
   const [screenshotError, setScreenshotError] = useState(false);
 
@@ -1232,14 +1149,28 @@ export default function DocsPage({ section }: DocsPageProps) {
     switch (section) {
       case "introduction":
         return <IntroductionContent />;
+      case "quick-start":
+        return <QuickStartContent />;
+      case "projects":
+        return <ProjectsContent />;
+      case "dependencies":
+        return <DependenciesContent />;
+      case "vulnerabilities":
+        return <VulnerabilitiesContent />;
+      case "compliance":
+        return <ComplianceContent />;
+      case "sbom-compliance":
+        return <SBOMComplianceContent />;
+      case "organizations":
+        return <OrganizationsContent />;
+      case "teams":
+        return <TeamsContent />;
       case "integrations":
         return <IntegrationsContent />;
       case "policies":
         return <PoliciesContent />;
       case "notification-rules":
         return <NotificationRulesContent />;
-      case "help":
-        return <HelpContent />;
       case "terms":
         return <TermsContent />;
       case "privacy":
@@ -1250,7 +1181,7 @@ export default function DocsPage({ section }: DocsPageProps) {
         return (
           <div className="rounded-lg border border-border bg-background-card p-6">
             <p className="text-sm text-foreground-secondary">
-              This page is coming soon. Check back later for full documentation.
+              This documentation page doesn&apos;t exist yet.
             </p>
           </div>
         );

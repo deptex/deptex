@@ -3,6 +3,9 @@ import { AuthProvider } from "../contexts/AuthContext";
 import App from "./App";
 import DocsApp from "./DocsApp";
 import DocsLayout from "./pages/DocsLayout";
+import LearnPage from "./pages/docs/LearnPage";
+import LearnTutorialPage from "./pages/docs/LearnTutorialPage";
+import HelpCenterPage from "./pages/docs/HelpCenterPage";
 import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/LoginPage";
 import OrganizationsPage from "./pages/OrganizationsPage";
@@ -458,6 +461,18 @@ export const router = createBrowserRouter([
       {
         index: true,
         element: <Navigate to="/docs/introduction" replace />,
+      },
+      {
+        path: "learn",
+        element: <LearnPage />,
+      },
+      {
+        path: "learn/:tutorial",
+        element: <LearnTutorialPage />,
+      },
+      {
+        path: "help",
+        element: <HelpCenterPage />,
       },
       {
         path: ":section",

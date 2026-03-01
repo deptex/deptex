@@ -17,12 +17,12 @@ import {
   DialogContent,
 } from "./ui/dialog";
 import { docNavGroups } from "../app/pages/docsConfig";
+import { docsSearchIndex } from "../app/pages/docs/docsSearchIndex";
 
 const HEADER_HEIGHT = "h-14";
 
 const docTabs = [
   { label: "Docs", path: "/docs", slug: null },
-  { label: "API", path: "/docs/api", slug: "api" },
   { label: "Learn", path: "/docs/learn", slug: "learn" },
   { label: "Help", path: "/docs/help", slug: "help" },
 ];
@@ -47,14 +47,18 @@ export default function DocsHeader() {
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
-  const filteredItems = searchQuery.trim()
-    ? docNavGroups.flatMap((g) =>
-        g.items.filter(
-          (item) =>
-            item.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            item.slug.toLowerCase().includes(searchQuery.toLowerCase())
-        )
+  const query = searchQuery.trim().toLowerCase();
+  const searchResults = query
+    ? docsSearchIndex.filter(
+        (entry) =>
+          entry.heading.toLowerCase().includes(query) ||
+          entry.content.toLowerCase().includes(query) ||
+          entry.keywords.some((k) => k.includes(query))
       )
+    : [];
+
+  const navItems = query
+    ? []
     : docNavGroups.flatMap((g) => g.items);
 
   return (
@@ -78,10 +82,10 @@ export default function DocsHeader() {
             {docTabs.map((tab) => {
               const path = location.pathname;
               const isDocsTab = tab.path === "/docs";
-              const isTopLevelSection = ["api", "learn", "help"].includes(path.split("/")[2] || "");
+              const isTopLevelSection = ["learn", "help"].includes(path.split("/")[2] || "");
               const isActive = isDocsTab
                 ? path === "/docs" || (path.startsWith("/docs/") && !isTopLevelSection)
-                : path === tab.path;
+                : path.startsWith(tab.path);
               return (
                 <Link
                   key={tab.label}
@@ -213,21 +217,41 @@ export default function DocsHeader() {
             </button>
           </div>
           <div className="max-h-[60vh] overflow-y-auto custom-scrollbar py-3">
-            {filteredItems.map((item) => (
-              <Link
-                key={item.slug}
-                to={`/docs/${item.slug}`}
-                onClick={() => setSearchOpen(false)}
-                className="flex flex-col gap-0.5 px-4 py-2.5 mx-2 rounded-md hover:bg-table-hover transition-colors text-left"
-              >
-                <span className="text-sm font-medium text-foreground">{item.label}</span>
-                {item.description && (
-                  <span className="text-xs text-foreground-secondary">{item.description}</span>
+            {query ? (
+              <>
+                {searchResults.length > 0 ? (
+                  searchResults.map((entry, i) => (
+                    <Link
+                      key={`${entry.slug}-${i}`}
+                      to={`/docs/${entry.slug}`}
+                      onClick={() => { setSearchOpen(false); setSearchQuery(""); }}
+                      className="flex flex-col gap-1 px-4 py-3 mx-2 rounded-md hover:bg-table-hover transition-colors text-left"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-foreground">{entry.heading}</span>
+                        <span className="text-[10px] text-foreground-muted bg-white/[0.06] px-1.5 py-0.5 rounded">{entry.section}</span>
+                      </div>
+                      <span className="text-xs text-foreground-secondary line-clamp-2">{entry.content}</span>
+                    </Link>
+                  ))
+                ) : (
+                  <p className="px-4 py-4 text-sm text-foreground-secondary">No results found.</p>
                 )}
-              </Link>
-            ))}
-            {filteredItems.length === 0 && (
-              <p className="px-4 py-4 text-sm text-foreground-secondary">No results found.</p>
+              </>
+            ) : (
+              navItems.map((item) => (
+                <Link
+                  key={item.slug}
+                  to={`/docs/${item.slug}`}
+                  onClick={() => setSearchOpen(false)}
+                  className="flex flex-col gap-0.5 px-4 py-2.5 mx-2 rounded-md hover:bg-table-hover transition-colors text-left"
+                >
+                  <span className="text-sm font-medium text-foreground">{item.label}</span>
+                  {item.description && (
+                    <span className="text-xs text-foreground-secondary">{item.description}</span>
+                  )}
+                </Link>
+              ))
             )}
           </div>
         </DialogContent>

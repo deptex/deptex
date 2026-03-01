@@ -27,17 +27,7 @@ export const docNavGroups: DocNavGroup[] = [
       { label: "Dependencies", slug: "dependencies", description: "Explore dependency resolution and monitoring." },
       { label: "Vulnerabilities", slug: "vulnerabilities", description: "See how Deptex surfaces CVEs and advisories." },
       { label: "Compliance", slug: "compliance", description: "Learn compliance frameworks and license policies." },
-    ],
-  },
-  {
-    title: "Features",
-    icon: "Sparkles",
-    items: [
-      { label: "Dependency Tracking", slug: "dependency-tracking", description: "Deep tracking with real-time drift detection." },
-      { label: "Vulnerability Intelligence", slug: "vulnerability-intelligence", description: "CVE monitoring and prioritization." },
-      { label: "SBOM Compliance", slug: "sbom-compliance", description: "Generate and track SBOMs." },
-      { label: "Anomaly Detection", slug: "anomaly-detection", description: "Detect suspicious supply chain changes." },
-      { label: "Security Agent", slug: "security-agent", description: "Autonomous AI security engineer (Aegis)." },
+      { label: "SBOM Compliance", slug: "sbom-compliance", description: "Generate and track Software Bills of Materials." },
     ],
   },
   {
