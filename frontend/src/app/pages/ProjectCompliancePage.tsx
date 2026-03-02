@@ -443,7 +443,7 @@ export default function ProjectCompliancePage() {
   } | null>(null);
   const [confirming, setConfirming] = useState(false);
 
-  const canManageSettings = userPermissions?.manage_settings === true || userPermissions?.view_settings === true;
+  const canManageSettings = userPermissions?.edit_settings === true || userPermissions?.view_settings === true;
   const isExtracting = (project as any)?.extraction_status === 'processing';
 
   const loadData = useCallback(async () => {

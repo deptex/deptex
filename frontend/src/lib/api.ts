@@ -81,6 +81,32 @@ export interface OrganizationIntegration {
   updated_at: string;
 }
 
+export interface OrganizationStatus {
+  id: string;
+  organization_id: string;
+  name: string;
+  color: string;
+  rank: number;
+  description?: string | null;
+  is_system: boolean;
+  is_passing: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OrganizationAssetTier {
+  id: string;
+  organization_id: string;
+  name: string;
+  color: string;
+  rank: number;
+  description?: string | null;
+  is_system: boolean;
+  environmental_multiplier: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export type CiCdProvider = 'github' | 'gitlab' | 'bitbucket' | 'slack' | 'discord' | 'jira' | 'linear' | 'asana' | 'custom_notification' | 'custom_ticketing' | 'email';
 
 export interface CiCdConnection {

@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
-import { useToast } from '@/components/ui/use-toast';
+import { useToast } from '@/hooks/use-toast';
 import { PolicyCodeEditor } from '@/components/PolicyCodeEditor';
 
 type SubTab = 'statuses' | 'asset_tiers' | 'status_code' | 'change_history';

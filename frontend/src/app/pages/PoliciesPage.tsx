@@ -453,12 +453,12 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
           )}>
             <PolicyAIAssistant
               variant="edge"
+              organizationId={id || ''}
               complianceBody={packagePolicyCode}
               pullRequestBody={prCheckCode}
               onUpdateCompliance={(code: string) => setPackagePolicyCode(code)}
               onUpdatePullRequest={(code: string) => setPrCheckCode(code)}
               onClose={closeAIPanel}
-              orgId={id || ''}
             />
           </div>
         </div>,

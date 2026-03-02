@@ -220,7 +220,9 @@ router.post('/', async (req: Request, res: Response) => {
       return res.status(502).json({ error: 'Failed to get a response from the AI service.' });
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
     const rawText: string =
       data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
 
