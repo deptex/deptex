@@ -59,14 +59,14 @@ backend/
   parser-worker/                Standalone AST import analysis (oxc-parser)
   watchtower-worker/            Supply-chain forensic analysis (registry integrity, scripts, entropy, commits, contributors, anomalies)
   watchtower-poller/            Daily cron: dependency refresh (npm latest, GHSA batch), new commit detection for watched packages
-  database/                     ~140 SQL migration files (CE + EE tables)
+  database/                     ~140 SQL migration files (CE + EE tables). data/spdx-obligations.json for license seed reference.
   load-ee-routes.js             Plain JS loader so tsc doesn't compile ee/
 
 ee/backend/
   routes/
-    organizations.ts            Org CRUD, members, invitations, roles, policies, notification rules, deprecations, join link
+    organizations.ts            Org CRUD, members, invitations, roles, policies, notification rules, deprecations, join link. Phase 4: statuses CRUD, asset tiers CRUD, split policy code (package_policy, project_status, pr_check) PUT/GET, policy-changes (GET org history), revert (POST). Seed statuses and tiers on org creation.
     teams.ts                    Team CRUD, roles, members, transfer ownership
-    projects.ts                 Project CRUD, repos, dependencies (list/overview/versions/supply-chain/safe-version), vulnerabilities, policies, exceptions, PR guardrails, Watchtower actions (bump/decrease/remove PRs), notes, contributing teams, AST import status. Extraction: POST extraction/cancel, GET extraction/logs, GET extraction/runs
+    projects.ts                 Project CRUD, repos, dependencies (list/overview/versions/supply-chain/safe-version), vulnerabilities, policies, exceptions, PR guardrails, Watchtower actions (bump/decrease/remove PRs), notes, contributing teams, AST import status. Extraction: POST extraction/cancel, GET extraction/logs, GET extraction/runs. Phase 5 compliance: GET sbom (real cdxgen from storage), GET legal-notice (grouped by license, Redis-cached), GET registry-search (proxy to npm/Maven/Cargo/RubyGems/PyPI/Go), POST apply-exception (Gemini AI policy exception), GET license-obligations. Policy engine: POST evaluate-policy, POST preflight-check (ecosystem param), POST validate-policy, policy-changes CRUD, revert-policy.
     activities.ts               GET activities with date/type/team filters
     integrations.ts             OAuth flows + webhooks for GitHub App, GitLab, Bitbucket, Slack, Discord, Jira, Linear, Stripe, Asana. Org connections CRUD, custom integrations, email notifications
     aegis.ts                    Aegis AI: enable/status, chat (handle message with tool execution), threads, automations CRUD + run, inbox, activity logs
@@ -92,7 +92,8 @@ ee/backend/
     qstash.ts                   QStash helpers: signature verification, queuePopulateDependencyBatch, queueBackfillDependencyTrees, queueDependencyAnalysis
     redis.ts                    Redis: queueASTParsingJob. Supabase: queueExtractionJob (inserts extraction_jobs, calls startExtractionMachine), cancelExtractionJob
     fly-machines.ts             Fly Machines API: startExtractionMachine() — start from pool or create burst machine
-    cache.ts                    Redis cache: getCached/setCached/invalidateCache, TTL constants, cache key helpers for projects/deps/versions/safe-versions/watchtower
+    rate-limit.ts               checkRateLimit(key, maxRequests, windowSeconds) — Redis-backed, fail-open. Used by evaluate-policy, preflight-check, validate-policy, legal-notice, apply-exception
+    cache.ts                    Redis cache: getCached/setCached/invalidateCache, TTL constants, cache key helpers for projects/deps/versions/safe-versions/watchtower/legal-notice
     openai.ts                   Lazy-init OpenAI client
     email.ts                    sendEmail, sendInvitationEmail (nodemailer/Gmail)
     activities.ts               createActivity() -- insert activity log
@@ -100,6 +101,9 @@ ee/backend/
     create-remove-pr.ts         Create package removal PR
     latest-safe-version.ts      Calculate latest safe version (vuln checks + cache)
     project-policies.ts         isLicenseAllowed(), getEffectivePolicies() (org policy_code for a project)
+    policy-engine.ts            Sandboxed policy execution (isolated-vm or Function fallback). evaluateProjectPolicies(), validatePolicyCode(), preflightCheck(). Runs packagePolicy() per dep, projectStatus(), pullRequestCheck().
+    policy-defaults.ts          DEFAULT_PACKAGE_POLICY_CODE, DEFAULT_PROJECT_STATUS_CODE, DEFAULT_PR_CHECK_CODE
+    policy-seed.ts              Seeds statuses and asset tiers on org creation
     watchtower-queue.ts         queueWatchtowerJob() to Redis watchtower-jobs queue
 
 frontend/src/
@@ -125,8 +129,8 @@ frontend/src/
 | `/organizations/:id/teams` | TeamsPage |
 | `/organizations/:id/vulnerabilities` | OrganizationVulnerabilitiesPage |
 | `/organizations/:id/projects` | ProjectsPage |
-| `/organizations/:id/settings` | OrganizationSettingsPage (general, roles, integrations) |
-| `/organizations/:id/policies` | PoliciesPage (Monaco editor for policy-as-code) |
+| `/organizations/:id/settings` | OrganizationSettingsPage (general, members, roles, integrations, notifications, statuses, policies, audit_logs, etc.) |
+| `/organizations/:id/policies` | PoliciesPage (Package Policy, PR Check Monaco editors; Change History sub-tab) |
 | `/organizations/:id/compliance` | CompliancePage |
 | `/organizations/:orgId/projects/:projectId/overview` | ProjectOverviewPage |
 | `/organizations/:orgId/projects/:projectId/vulnerabilities` | ProjectVulnerabilitiesPage |
@@ -134,8 +138,8 @@ frontend/src/
 | `/organizations/:orgId/projects/:projectId/dependencies/:dependencyId/overview` | DependencyOverviewPage |
 | `/organizations/:orgId/projects/:projectId/dependencies/:dependencyId/watchtower` | DependencyWatchtowerPage |
 | `/organizations/:orgId/projects/:projectId/dependencies/:dependencyId/supply-chain` | DependencySupplyChainPage |
-| `/organizations/:orgId/projects/:projectId/compliance` | ProjectCompliancePage |
-| `/organizations/:orgId/projects/:projectId/settings` | ProjectSettingsPage |
+| `/organizations/:orgId/projects/:projectId/compliance` | ProjectCompliancePage. Sub-routes: /compliance/project (status overview), /compliance/policy-results, /compliance/updates |
+| `/organizations/:orgId/projects/:projectId/settings` | ProjectSettingsPage (asset tier dropdown uses dynamic tiers from organization_asset_tiers) |
 | `/organizations/:orgId/teams/:teamId/overview` | TeamOverviewPage |
 | `/organizations/:orgId/teams/:teamId/projects` | TeamProjectsPage |
 | `/organizations/:orgId/teams/:teamId/members` | TeamMembersPage |
@@ -194,10 +198,16 @@ Docs sections: introduction, quick-start, projects, dependencies, vulnerabilitie
 - **SyncDetailSidebar** -- live extraction logs (Supabase Realtime), terminal-style UI, cancel button, historical run selector
 - **DependencyNotesSidebar** -- dependency notes (collaborative)
 - **PolicyExceptionSidebar / PolicyExceptionSidepanel** -- policy exception management
-- **ComplianceSidepanel** -- compliance details
+- **ComplianceSidepanel** -- compliance nav (legacy; ProjectCompliancePage uses top tabs)
+- **PreflightSidebar** -- Phase 5: check hypothetical package against policy before adding (ProjectCompliancePage, inline)
+- **ExceptionDiffDialog** -- Phase 5: review AI-generated policy exception before applying
 - **PRGuardrailsSidepanel** -- PR merge blocking config
 - **ScoreBreakdownSidebar** -- reputation score breakdown
 - **CreateProjectSidebar** -- project creation flow
+
+### Org Settings (Phase 4 Policy Engine)
+- **StatusesSection** -- Org Settings > Statuses tab. Sub-tabs: Statuses (CRUD), Asset Tiers (CRUD), Status Code (Monaco editor), Change History (org-level status code version list)
+- **PoliciesPage** -- Org Policies tab. Sub-tabs: Package Policy (Monaco), Pull Request Check (Monaco), Change History (org-level package_policy + pr_check version list). API: revertOrganizationPolicyCode exists; UI shows list only (no revert buttons or diff viewer yet)
 
 ### AI & Policy
 - **PolicyAIAssistant** -- AI-powered policy code helper (Gemini)
@@ -237,7 +247,10 @@ button, input, label, checkbox, switch, slider, progress, badge, avatar, card, d
 - Fetch GHSA vulnerabilities (batch GraphQL)
 - Fetch OpenSSF scorecard
 - Compute reputation score (OpenSSF + popularity + maintenance penalties)
+- **Policy evaluation** (Phase 4): After batch populated, run `evaluateProjectPolicies()` — packagePolicy() per dep (stores `policy_result`), projectStatus() (sets `projects.status_id`, `status_violations`), then `status = 'ready'`
 - Queue `backfill-dependency-trees` for transitive edge resolution
+
+**Depscore**: Uses `tierMultiplier` from `organization_asset_tiers` (project's `asset_tier_id`); pipeline fetches from DB and passes to `calculateDepscore()`.
 
 ### Parser Worker (parser-worker/)
 **Trigger:** `queueASTParsingJob()` pushes to Redis `ast-parsing-jobs` (standalone re-parse without full extraction).
@@ -305,17 +318,18 @@ button, input, label, checkbox, switch, slider, progress, badge, avatar, card, d
 |-------|---------|---------------|
 | `extraction_jobs` | Job queue for extraction worker (Supabase-based, survives crashes). status: queued/processing/completed/failed/cancelled. RPC: claim_extraction_job, recover_stuck_extraction_jobs, fail_exhausted_extraction_jobs | FK project_id, organization_id |
 | `extraction_logs` | Live extraction log stream. Supabase Realtime enabled. | FK project_id (via run_id) |
-| `projects` | Projects with health_score, asset_tier, status, framework, auto_bump | FK organization_id, team_id |
+| `projects` | Projects with health_score, status_id, asset_tier_id, framework, auto_bump, policy_evaluated_at, status_violations, effective_package_policy_code, effective_project_status_code, effective_pr_check_code (Phase 4 overrides) | FK organization_id, team_id, status_id (organization_statuses), asset_tier_id (organization_asset_tiers) |
 | `project_repositories` | One repo per project: provider, repo_full_name, status, extraction_progress | FK project_id (1:1) |
-| `dependencies` | Global package registry: name, license, score, openssf, downloads, latest_version, ecosystem | UNIQUE(name) |
-| `dependency_versions` | Versions per dependency: vuln counts, watchtower analysis statuses | FK dependency_id, UNIQUE(dependency_id, version) |
-| `project_dependencies` | Project-level deps: version, is_direct, source, environment, files_importing_count, ai_usage_summary | FK project_id, dependency_id, dependency_version_id |
+| `dependencies` | Global package registry: name, license, score, openssf, downloads, latest_version, ecosystem, is_malicious (Phase 3) | UNIQUE(name) |
+| `dependency_versions` | Versions per dependency: vuln counts, watchtower analysis statuses, slsa_level (0-4, Phase 3) | FK dependency_id, UNIQUE(dependency_id, version) |
+| `project_dependencies` | Project-level deps: version, is_direct, source, environment, files_importing_count, ai_usage_summary, policy_result (JSONB: { allowed, reasons } from packagePolicy), is_outdated, versions_behind (Phase 3) | FK project_id, dependency_id, dependency_version_id |
 | `dependency_vulnerabilities` | Global vuln data from OSV/GHSA: osv_id, severity, affected_versions, fixed_versions | FK dependency_id, UNIQUE(dependency_id, osv_id) |
 | `project_dependency_vulnerabilities` | Project-specific vulns: is_reachable, epss_score, cvss_score, cisa_kev, depscore | FK project_id, project_dependency_id |
 | `dependency_version_edges` | Global dependency graph (parent -> child version) | FK parent_version_id, child_version_id |
 | `project_dependency_functions` | AST: imported functions per project dependency | FK project_dependency_id |
 | `project_dependency_files` | AST: files importing each dependency | FK project_dependency_id |
 | `user_profiles` | User avatar_url, full_name | FK auth.users |
+| `license_obligations` | SPDX license reference: requires_attribution, requires_notice_file, requires_source_disclosure, requires_license_text, is_copyleft, is_weak_copyleft, summary, full_text. Seeded with ~50 common licenses (phase5_license_obligations.sql, seed_license_obligations.sql). Used by legal-notice export and License Obligations UI. | UNIQUE(license_spdx_id) |
 
 ### EE Organization Tables
 | Table | Purpose | Key Relations |
@@ -324,7 +338,13 @@ button, input, label, checkbox, switch, slider, progress, badge, avatar, card, d
 | `organization_members` | Membership: role (owner/admin/member) | FK organization_id, user_id |
 | `organization_roles` | Custom roles with JSONB permissions, color, display_order | FK organization_id |
 | `organization_integrations` | Connected providers: access_token, refresh_token, webhook_secret, metadata | FK organization_id, UNIQUE(org, provider) |
-| `organization_policies` | Policy-as-code: policy_code (JavaScript) | FK organization_id (1:1) |
+| `organization_statuses` | Org-defined project statuses (Compliant, Non-Compliant, Under Review, etc.). name, color, rank, is_system, is_passing. Seeded on org creation. | FK organization_id |
+| `organization_asset_tiers` | Org-defined tiers (Crown Jewels, External, Internal, Non-Production). environmental_multiplier for depscore. Seeded on org creation. | FK organization_id |
+| `organization_package_policies` | package_policy_code (packagePolicy function). Runs per-dep. | FK organization_id (1:1) |
+| `organization_status_codes` | project_status_code (projectStatus function). Assigns status to projects. | FK organization_id (1:1) |
+| `organization_pr_checks` | pr_check_code (pullRequestCheck function). PR blocking. | FK organization_id (1:1) |
+| `organization_policy_changes` | Org-level version history. previous_code, new_code, message, code_type (package_policy \| project_status \| pr_check). Revert API available. | FK organization_id, parent_id (self) |
+| `organization_policies` | Legacy: policy_code (JavaScript). Deprecated; split into package/status/pr tables above. | FK organization_id (1:1) |
 | `organization_notification_rules` | Notification rules: trigger_type, min_depscore, custom_code, destinations | FK organization_id |
 | `organization_watchlist` | Watched packages: quarantine_until, latest_allowed_version | FK organization_id, dependency_id |
 | `organization_watchlist_cleared_commits` | Cleared commits per org per package | FK organization_id |
@@ -350,7 +370,8 @@ button, input, label, checkbox, switch, slider, progress, badge, avatar, card, d
 | `project_integrations` | Project-scoped integrations |
 | `project_notification_rules` | Project notification rules |
 | `project_pr_guardrails` | PR merge blocking (vuln thresholds, score minimums) |
-| `project_policy_exceptions` | License/SLSA policy exceptions |
+| `project_policy_exceptions` | License/SLSA policy exceptions (legacy) |
+| `project_policy_changes` | Git-like project-level policy overrides. code_type, base_code, proposed_code, status (pending/accepted/rejected), has_conflict, ai_merged_code. API: create, review (accept/reject), get, revert. UI for Policy Source Card not yet built. |
 | `dependency_notes` | Collaborative notes on dependencies |
 | `dependency_note_reactions` | Reactions on notes |
 | `dependency_prs` | Tracked PRs: type (bump/decrease/remove), target_version, pr_url |
@@ -381,7 +402,10 @@ organizations
   |-- organization_members (-> auth.users)
   |-- organization_roles
   |-- organization_integrations
-  |-- organization_policies (1:1)
+  |-- organization_statuses, organization_asset_tiers
+  |-- organization_package_policies, organization_status_codes, organization_pr_checks (1:1 each)
+  |-- organization_policy_changes (version history)
+  |-- organization_policies (1:1, legacy)
   |-- organization_notification_rules
   |-- organization_watchlist (-> dependencies)
   |-- banned_versions
@@ -402,7 +426,7 @@ organizations
        |     |-- project_dependency_files
        |     |-- project_dependency_vulnerabilities
        |-- project_integrations, project_notification_rules
-       |-- project_pr_guardrails, project_policy_exceptions
+       |-- project_pr_guardrails, project_policy_exceptions, project_policy_changes
        |-- dependency_notes, dependency_prs
 
 dependencies (global)
@@ -438,6 +462,8 @@ User connects repo (ProjectSettingsPage)
   -> POST /api/workers/queue-populate (QStash async)
   -> QStash calls POST /api/workers/populate-dependencies
   -> npm registry + GHSA vulns + OpenSSF scorecard -> upsert
+  -> evaluateProjectPolicies(): packagePolicy() per dep -> policy_result, projectStatus() -> status_id
+  -> Set status = 'ready'
   -> QStash calls POST /api/workers/backfill-dependency-trees
   -> Transitive edge resolution via pacote
 ```
@@ -476,6 +502,22 @@ User views dependency supply chain (DependencySupplyChainPage)
   -> BanVersionSidebar / RemoveBanSidebar / SafeVersionCard overlays
 ```
 
+### Policy-as-Code (Phase 4)
+```
+Org-level: Policies tab (Package Policy, PR Check) + Statuses tab (Status Code). Each save -> organization_policy_changes. Revert API: POST /policy-code/:codeType/revert.
+Project-level: projects.effective_*_code overrides. project_policy_changes for request/review flow. API exists; Policy Source Card UI in Compliance tab not yet built.
+Change History: Policies + Statuses tabs show org-level change list. Revert buttons and diff viewer not yet in UI.
+```
+
+### Compliance (Phase 5)
+```
+SBOM Export: GET /api/.../sbom -> fetches sbom.json from Supabase Storage (project-imports/{projectId}/{runId}/)
+Legal Notice: GET /api/.../legal-notice -> generates from project_dependencies + license_obligations, Redis-cached 1h, rate-limited 5/min
+Registry Search: GET /api/.../registry-search?ecosystem=&query= -> proxies to npm/Maven/Cargo/RubyGems/PyPI/Go
+Preflight Check: POST /api/.../preflight-check { packageName, packageVersion?, ecosystem? } -> runs packagePolicy() on hypothetical dep
+Apply for Exception: POST /api/.../apply-exception { packageName, version?, reason? } -> Gemini generates modified policy, validates, creates project_policy_change (accepted if manage_policies, pending otherwise)
+```
+
 ---
 
 ## External Services & Integrations
@@ -499,7 +541,7 @@ User views dependency supply chain (DependencySupplyChainPage)
 | **Socket.dev** | Malicious package detection (free tier 250/mo) | `SOCKET_API_KEY` |
 | **GHSA (GitHub Advisory)** | Batch vulnerability fetch via GraphQL (up to 100 packages) | `GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_PAT` |
 | **OpenSSF Scorecard** | Supply chain security scoring | API (free, no key) |
-| **Google AI (Gemini)** | Docs assistant, policy AI, notification AI, usage analysis (Tier 1) | `GOOGLE_AI_API_KEY` |
+| **Google AI (Gemini)** | Docs assistant, policy AI, notification AI, usage analysis, Apply for Exception (Phase 5) (Tier 1) | `GOOGLE_AI_API_KEY` |
 | **OpenAI** | Aegis chat, Watchtower commit analysis (Tier 2 BYOK) | `OPENAI_API_KEY` |
 | **Nodemailer/Gmail** | Email notifications and invitations | `GMAIL_USER`, `GMAIL_APP_PASSWORD` |
 
@@ -510,7 +552,7 @@ User views dependency supply chain (DependencySupplyChainPage)
 ## RBAC & Permissions
 
 **Organization roles** (`organization_roles.permissions` JSONB):
-- `manage_teams_and_projects`, `view_all_teams_and_projects`, `manage_organization_settings`, `manage_integrations`, `manage_members`, `manage_policies`, `manage_notifications`, `view_activities`
+- `manage_teams_and_projects`, `view_all_teams_and_projects`, `manage_organization_settings`, `manage_integrations`, `manage_members`, `manage_policies`, `manage_notifications`, `manage_statuses`, `view_activities`
 
 **Team roles** (`team_roles.permissions` JSONB):
 - `manage_projects`, `manage_members`, `manage_settings`, `manage_integrations`, `manage_notifications`
