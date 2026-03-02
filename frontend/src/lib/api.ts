@@ -2104,16 +2104,76 @@ export const api = {
     });
   },
 
-  async preflightCheck(orgId: string, projectId: string, packageName: string, packageVersion?: string): Promise<{
+  async preflightCheck(orgId: string, projectId: string, packageName: string, packageVersion?: string, ecosystem?: string): Promise<{
     allowed: boolean;
     reasons: string[];
     tierName: string;
+    ecosystem: string;
     disclaimer: string;
   }> {
     return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/preflight-check`, {
       method: 'POST',
-      body: JSON.stringify({ packageName, packageVersion }),
+      body: JSON.stringify({ packageName, packageVersion, ecosystem }),
     });
+  },
+
+  // ───── Phase 5: Compliance Endpoints ─────
+
+  async reEvaluateProjectPolicy(orgId: string, projectId: string): Promise<{ statusName: string; violations: string[]; depResults: number }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/evaluate-policy`, {
+      method: 'POST',
+    });
+  },
+
+  async searchRegistry(orgId: string, projectId: string, ecosystem: string, query: string): Promise<{
+    results: RegistrySearchResult[];
+    mode: 'search' | 'exact';
+  }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/registry-search?ecosystem=${encodeURIComponent(ecosystem)}&query=${encodeURIComponent(query)}`);
+  },
+
+  async downloadProjectSBOM(orgId: string, projectId: string): Promise<Blob> {
+    const token = await getAuthToken();
+    if (!token) throw new Error('Not authenticated');
+    const response = await fetch(`${API_BASE_URL}/api/organizations/${orgId}/projects/${projectId}/sbom`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+      credentials: 'include',
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: 'Download failed' }));
+      throw new Error(err.error || 'Failed to download SBOM');
+    }
+    return response.blob();
+  },
+
+  async downloadProjectLegalNotice(orgId: string, projectId: string): Promise<Blob> {
+    const token = await getAuthToken();
+    if (!token) throw new Error('Not authenticated');
+    const response = await fetch(`${API_BASE_URL}/api/organizations/${orgId}/projects/${projectId}/legal-notice`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+      credentials: 'include',
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: 'Download failed' }));
+      throw new Error(err.error || 'Failed to download legal notice');
+    }
+    return response.blob();
+  },
+
+  async applyForException(orgId: string, projectId: string, packageName: string, version?: string, reason?: string): Promise<{
+    change: any;
+    status: 'accepted' | 'pending';
+    originalCode: string;
+    proposedCode: string;
+  }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/apply-exception`, {
+      method: 'POST',
+      body: JSON.stringify({ packageName, version, reason }),
+    });
+  },
+
+  async getLicenseObligations(orgId: string, projectId: string): Promise<LicenseObligationGroup[]> {
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/license-obligations`);
   },
 
   // ───── Phase 4: Project Policy Changes ─────
@@ -2869,6 +2929,32 @@ export interface ProjectPRGuardrails {
   block_transitive_vulns: boolean;
   created_at?: string;
   updated_at?: string;
+}
+
+// Phase 5: Registry search types
+export interface RegistrySearchResult {
+  name: string;
+  version: string;
+  license: string | null;
+  description: string;
+  downloads: number | null;
+}
+
+export interface LicenseObligationGroup {
+  license: string;
+  count: number;
+  packages: string[];
+  obligations: {
+    license_spdx_id: string;
+    requires_attribution: boolean;
+    requires_notice_file: boolean;
+    requires_source_disclosure: boolean;
+    requires_license_text: boolean;
+    is_copyleft: boolean;
+    is_weak_copyleft: boolean;
+    summary: string;
+    full_text: string | null;
+  } | null;
 }
 
 // Banned versions types

@@ -1,14 +1,26 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useOutletContext, useParams, useNavigate } from 'react-router-dom';
 import {
-  useReactTable,
-  getCoreRowModel,
-  getFilteredRowModel,
-  flexRender,
-  createColumnHelper,
-  ColumnDef,
-} from '@tanstack/react-table';
-import { CheckCircle2, AlertTriangle, HelpCircle, Package, GitPullRequest, GitCommit, ChevronDown } from 'lucide-react';
+  CheckCircle2,
+  AlertTriangle,
+  XCircle,
+  Package,
+  Shield,
+  ShieldAlert,
+  ChevronDown,
+  Download,
+  RefreshCw,
+  Search,
+  Loader2,
+  Clock,
+  FileText,
+  AlertCircle,
+  ChevronRight,
+  Sparkles,
+  Info,
+  GitPullRequest,
+  Scale,
+} from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
 import { Input } from '../../components/ui/input';
@@ -16,37 +28,21 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { Avatar, AvatarFallback, AvatarImage } from '../../components/ui/avatar';
-import { ComplianceSidepanel, type ComplianceSection } from '../../components/ComplianceSidepanel';
-import { api, ProjectWithRole, ProjectPermissions, ProjectDependency, ProjectEffectivePolicies } from '../../lib/api';
 import {
-  getComplianceStatus,
-  getIssueLabel,
-  getIssueBadgeVariant,
-  generateSBOM,
-  generateLegalNotice,
-  downloadFile,
-  type ComplianceStatus,
-  type IssueType,
-} from '../../lib/compliance-utils';
+  api,
+  ProjectWithRole,
+  ProjectPermissions,
+  ProjectDependency,
+  ProjectEffectivePolicies,
+  RegistrySearchResult,
+  LicenseObligationGroup,
+} from '../../lib/api';
+import { downloadFile } from '../../lib/compliance-utils';
 import { useToast } from '../../hooks/use-toast';
 import { Toaster } from '../../components/ui/toaster';
 import { cn } from '../../lib/utils';
-
-// Types
-interface ComplianceItem {
-  id: string;
-  name: string;
-  version: string;
-  license: string | null;
-  status: ComplianceStatus;
-  issueType?: IssueType;
-  manuallyAssignedLicense?: string | null;
-  originalDependency: ProjectDependency;
-}
 
 interface ProjectContextType {
   project: ProjectWithRole | null;
@@ -55,272 +51,414 @@ interface ProjectContextType {
   userPermissions: ProjectPermissions | null;
 }
 
-type PullRequestStatus = 'OPEN' | 'BLOCKED' | 'MERGED';
+type ComplianceTab = 'project' | 'policy-results' | 'updates';
 
-type CommitComplianceStatus = 'COMPLIANT' | 'NON_COMPLIANT' | 'UNKNOWN';
-
-interface CompliancePullRequest {
-  id: string;
-  title: string;
-  branch: string;
-  author: {
-    name: string;
-    avatarUrl: string;
-    handle: string;
-  };
-  status: PullRequestStatus;
-  packageChanges: {
-    added: number;
-    removed: number;
-    updated: number;
-  };
-  complianceImpact: string;
-  updatedAt: string;
+const VALID_SECTIONS: ComplianceTab[] = ['project', 'policy-results', 'updates'];
+function isValidSection(s: string | undefined): s is ComplianceTab {
+  return !!s && VALID_SECTIONS.includes(s as ComplianceTab);
 }
 
-interface ComplianceCommit {
-  id: string;
-  message: string;
-  shortSha: string;
-  committer: {
-    name: string;
-    avatarUrl: string;
-    handle: string;
-  };
-  status: CommitComplianceStatus;
-  packageChanges: {
-    added: number;
-    removed: number;
-    updated: number;
-  };
-  committedAt: string;
+function formatTimeAgo(dateString: string | null | undefined): string {
+  if (!dateString) return 'Never';
+  const diff = Date.now() - new Date(dateString).getTime();
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }
 
-const getInitials = (name: string) => {
-  const parts = name.split(' ').filter(Boolean);
-  if (parts.length === 0) return '??';
-  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
-  return (parts[0]![0] + parts[1]![0]).toUpperCase();
-};
-
-const formatDateTime = (dateString: string) => {
-  const d = new Date(dateString);
-  return d.toLocaleString(undefined, {
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-};
-
-const formatDate = (dateString: string) => {
-  const d = new Date(dateString);
-  return d.toLocaleDateString(undefined, {
-    month: 'short',
-    day: '2-digit',
-    year: 'numeric',
-  });
-};
-
-// Column helper
-const columnHelper = createColumnHelper<ComplianceItem>();
-
-const VALID_SECTIONS: ComplianceSection[] = ['project', 'updates', 'export-notice', 'export-sbom'];
-function isValidSection(s: string | undefined): s is ComplianceSection {
-  return !!s && VALID_SECTIONS.includes(s as ComplianceSection);
+function getReasonCategory(reason: string): string {
+  const lower = reason.toLowerCase();
+  if (lower.includes('license') || lower.includes('gpl') || lower.includes('agpl') || lower.includes('copyleft')) return 'License Violation';
+  if (lower.includes('malicious') || lower.includes('malware')) return 'Malicious Package';
+  if (lower.includes('score') || lower.includes('reputation')) return 'Low Score';
+  if (lower.includes('slsa') || lower.includes('provenance')) return 'SLSA';
+  if (lower.includes('supply') || lower.includes('chain') || lower.includes('anomal')) return 'Supply Chain';
+  return 'Other';
 }
+
+function getReasonBadgeColor(category: string): string {
+  switch (category) {
+    case 'License Violation': return 'bg-red-500/15 text-red-400 border-red-500/20';
+    case 'Malicious Package': return 'bg-red-600/15 text-red-300 border-red-600/20';
+    case 'Low Score': return 'bg-orange-500/15 text-orange-400 border-orange-500/20';
+    case 'SLSA': return 'bg-yellow-500/15 text-yellow-400 border-yellow-500/20';
+    case 'Supply Chain': return 'bg-purple-500/15 text-purple-400 border-purple-500/20';
+    default: return 'bg-zinc-500/15 text-zinc-400 border-zinc-500/20';
+  }
+}
+
+// ─── Preflight Sidebar ───
+
+function PreflightSidebar({
+  open,
+  onClose,
+  organizationId,
+  projectId,
+  projectEcosystems,
+}: {
+  open: boolean;
+  onClose: () => void;
+  organizationId: string;
+  projectId: string;
+  projectEcosystems: string[];
+}) {
+  const [panelVisible, setPanelVisible] = useState(false);
+  const [ecosystem, setEcosystem] = useState(projectEcosystems[0] || 'npm');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState<RegistrySearchResult[]>([]);
+  const [searchMode, setSearchMode] = useState<'search' | 'exact'>('search');
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [checkResult, setCheckResult] = useState<{ allowed: boolean; reasons: string[]; tierName: string; packageInfo: RegistrySearchResult } | null>(null);
+  const { toast } = useToast();
+
+  useEffect(() => {
+    setPanelVisible(false);
+    const raf = requestAnimationFrame(() => {
+      requestAnimationFrame(() => setPanelVisible(true));
+    });
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  const handleClose = useCallback(() => {
+    setPanelVisible(false);
+    setTimeout(onClose, 150);
+  }, [onClose]);
+
+  const isExactLookup = ['pypi', 'golang', 'go'].includes(ecosystem.toLowerCase());
+
+  const handleSearch = useCallback(async () => {
+    if (!searchQuery.trim()) return;
+    setSearching(true);
+    setSearchError(null);
+    setCheckResult(null);
+    try {
+      const result = await api.searchRegistry(organizationId, projectId, ecosystem, searchQuery.trim());
+      setSearchResults(result.results);
+      setSearchMode(result.mode);
+    } catch (err: any) {
+      setSearchError(err.message || 'Search failed');
+      setSearchResults([]);
+    } finally {
+      setSearching(false);
+    }
+  }, [organizationId, projectId, ecosystem, searchQuery]);
+
+  const handleCheck = useCallback(async (pkg: RegistrySearchResult) => {
+    setChecking(true);
+    try {
+      const result = await api.preflightCheck(organizationId, projectId, pkg.name, pkg.version || undefined, ecosystem);
+      setCheckResult({
+        allowed: result.allowed,
+        reasons: result.reasons,
+        tierName: result.tierName,
+        packageInfo: pkg,
+      });
+    } catch (err: any) {
+      toast({ title: 'Preflight check failed', description: err.message, variant: 'destructive' });
+    } finally {
+      setChecking(false);
+    }
+  }, [organizationId, projectId, ecosystem, toast]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <div
+        className={cn(
+          'fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150',
+          panelVisible ? 'opacity-100' : 'opacity-0'
+        )}
+        onClick={handleClose}
+      />
+      <div
+        className={cn(
+          'fixed right-4 top-4 bottom-4 w-full max-w-[480px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
+          panelVisible ? 'translate-x-0' : 'translate-x-full'
+        )}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-6 pt-5 pb-3 flex-shrink-0">
+          <h2 className="text-xl font-semibold text-foreground">Preflight Check</h2>
+          <p className="text-sm text-foreground-secondary mt-1">Test if adding a package would affect compliance</p>
+        </div>
+
+        <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4">
+          {!checkResult ? (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground-secondary">Ecosystem</label>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="w-full justify-between h-9 text-sm">
+                      {ecosystem}
+                      <ChevronDown className="h-3.5 w-3.5 text-foreground-secondary" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-[200px]">
+                    {projectEcosystems.map((eco) => (
+                      <DropdownMenuItem key={eco} onClick={() => { setEcosystem(eco); setSearchResults([]); setSearchError(null); }}>
+                        {eco}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground-secondary">
+                  {isExactLookup ? 'Package name' : 'Search packages'}
+                </label>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder={isExactLookup ? 'Enter package name...' : 'Search packages...'}
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                    className="h-9"
+                  />
+                  <Button size="sm" onClick={handleSearch} disabled={searching || !searchQuery.trim()} className="h-9 px-3">
+                    {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+
+              {searchError && (
+                <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  {searchError}
+                </div>
+              )}
+
+              {searchResults.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs text-foreground-secondary">{searchResults.length} result{searchResults.length !== 1 ? 's' : ''}</p>
+                  <div className="space-y-1.5 max-h-[400px] overflow-y-auto custom-scrollbar">
+                    {searchResults.map((pkg, i) => (
+                      <div key={`${pkg.name}-${i}`} className="bg-background-card border border-border rounded-lg p-3 hover:border-foreground/20 transition-colors">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-foreground truncate">{pkg.name}</span>
+                              <Badge variant="secondary" className="text-[10px] shrink-0">{pkg.version}</Badge>
+                            </div>
+                            {pkg.description && (
+                              <p className="text-xs text-foreground-secondary mt-1 line-clamp-2">{pkg.description}</p>
+                            )}
+                            <div className="flex items-center gap-3 mt-1.5 text-xs text-foreground-secondary">
+                              {pkg.license && <span>{pkg.license}</span>}
+                              {pkg.downloads != null && <span>{pkg.downloads.toLocaleString()} downloads</span>}
+                            </div>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs shrink-0"
+                            onClick={() => handleCheck(pkg)}
+                            disabled={checking}
+                          >
+                            {checking ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Check'}
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {!searching && searchResults.length === 0 && searchQuery && !searchError && (
+                <p className="text-sm text-foreground-secondary text-center py-4">No results found</p>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className={cn(
+                'rounded-lg border p-4',
+                checkResult.allowed
+                  ? 'bg-emerald-500/10 border-emerald-500/20'
+                  : 'bg-red-500/10 border-red-500/20'
+              )}>
+                <div className="flex items-center gap-2 mb-2">
+                  {checkResult.allowed ? (
+                    <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+                  ) : (
+                    <XCircle className="h-5 w-5 text-red-400" />
+                  )}
+                  <span className={cn('text-lg font-semibold', checkResult.allowed ? 'text-emerald-400' : 'text-red-400')}>
+                    {checkResult.allowed ? 'Allowed' : 'Blocked'}
+                  </span>
+                </div>
+                {checkResult.reasons.length > 0 && (
+                  <div className="space-y-1 mt-2">
+                    {checkResult.reasons.map((reason, i) => (
+                      <p key={i} className="text-sm text-foreground-secondary flex items-start gap-1.5">
+                        <span className="text-red-400 mt-0.5">•</span>
+                        {reason}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-background-card border border-border rounded-lg p-4 space-y-2">
+                <h4 className="text-sm font-medium text-foreground">{checkResult.packageInfo.name}</h4>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <span className="text-foreground-secondary">Version:</span>{' '}
+                    <span className="text-foreground">{checkResult.packageInfo.version}</span>
+                  </div>
+                  <div>
+                    <span className="text-foreground-secondary">License:</span>{' '}
+                    <span className="text-foreground">{checkResult.packageInfo.license || 'Unknown'}</span>
+                  </div>
+                  <div>
+                    <span className="text-foreground-secondary">Tier:</span>{' '}
+                    <span className="text-foreground">{checkResult.tierName}</span>
+                  </div>
+                  {checkResult.packageInfo.downloads != null && (
+                    <div>
+                      <span className="text-foreground-secondary">Downloads:</span>{' '}
+                      <span className="text-foreground">{checkResult.packageInfo.downloads.toLocaleString()}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs text-foreground-secondary bg-background-card border border-border rounded-lg px-3 py-2">
+                <Info className="h-3.5 w-3.5 shrink-0" />
+                Reachability analysis and import count are not available in preflight checks.
+              </div>
+
+              <Button variant="outline" size="sm" onClick={() => { setCheckResult(null); setSearchQuery(''); setSearchResults([]); }} className="w-full">
+                Check Another Package
+              </Button>
+            </div>
+          )}
+        </div>
+
+        <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
+          <Button variant="outline" onClick={handleClose}>Close</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Exception Diff Dialog ───
+
+function ExceptionDiffDialog({
+  open,
+  onClose,
+  onConfirm,
+  originalCode,
+  proposedCode,
+  packageName,
+  confirming,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  originalCode: string;
+  proposedCode: string;
+  packageName: string;
+  confirming: boolean;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-background border border-border rounded-xl shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="px-6 pt-5 pb-3">
+          <h3 className="text-lg font-semibold text-foreground">Review AI-Generated Exception</h3>
+          <p className="text-sm text-foreground-secondary mt-1">Exception for <span className="font-medium text-foreground">{packageName}</span></p>
+        </div>
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+          <div className="space-y-2">
+            <h4 className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Original Policy</h4>
+            <pre className="bg-background-card border border-border rounded-lg p-3 text-xs text-foreground-secondary overflow-x-auto max-h-40">
+              {originalCode}
+            </pre>
+          </div>
+          <div className="space-y-2">
+            <h4 className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Proposed Policy (AI-Modified)</h4>
+            <pre className="bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-3 text-xs text-foreground overflow-x-auto max-h-40">
+              {proposedCode}
+            </pre>
+          </div>
+        </div>
+        <div className="px-6 py-4 flex items-center justify-end gap-3 border-t border-border bg-background-card-header">
+          <Button variant="outline" onClick={onClose} disabled={confirming}>Cancel</Button>
+          <Button onClick={onConfirm} disabled={confirming}>
+            {confirming ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Sparkles className="h-4 w-4 mr-2" />}
+            Confirm Exception
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main Page ───
 
 export default function ProjectCompliancePage() {
-  const { project, organizationId, userPermissions } = useOutletContext<ProjectContextType>();
+  const { project, organizationId, userPermissions, reloadProject } = useOutletContext<ProjectContextType>();
   const { projectId, section: urlSection } = useParams<{ projectId: string; section?: string }>();
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  // Section derived from URL; default to 'project'
-  const activeSection = isValidSection(urlSection) ? urlSection : 'project';
-  const [projectTab, setProjectTab] = useState<'issues' | 'all'>('issues');
-  const [updatesTab, setUpdatesTab] = useState<'pull-requests' | 'commits'>('pull-requests');
+  const activeTab = isValidSection(urlSection) ? urlSection : 'project';
+  const [policyResultsTab, setPolicyResultsTab] = useState<'issues' | 'all'>('issues');
+  const [policyResultFilter, setPolicyResultFilter] = useState<string>('all');
+  const [directFilter, setDirectFilter] = useState<'all' | 'direct' | 'transitive'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
 
-  const [prStatusFilter, setPrStatusFilter] = useState<'ALL' | PullRequestStatus>('ALL');
-  const [prTimeframe, setPrTimeframe] = useState<'24H' | '7D' | '30D' | 'ALL'>('7D');
-  const [prSearch, setPrSearch] = useState('');
-
-  const [commitStatusFilter, setCommitStatusFilter] = useState<'ALL' | CommitComplianceStatus>('ALL');
-  const [commitTimeframe, setCommitTimeframe] = useState<'24H' | '7D' | '30D' | 'ALL'>('30D');
-  const [commitSearch, setCommitSearch] = useState('');
-
-  // Data state
   const [dependencies, setDependencies] = useState<ProjectDependency[]>([]);
   const [policies, setPolicies] = useState<ProjectEffectivePolicies | null>(null);
+  const [obligations, setObligations] = useState<LicenseObligationGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const canViewSettings = userPermissions?.view_settings === true;
+  const [reevaluating, setReevaluating] = useState(false);
+  const [reevalDisabledUntil, setReevalDisabledUntil] = useState(0);
+  const [showPreflight, setShowPreflight] = useState(false);
+  const [exporting, setExporting] = useState<'sbom' | 'notice' | null>(null);
+  const [obligationsOpen, setObligationsOpen] = useState(false);
 
-  // Mock PR data
-  const mockPullRequests: CompliancePullRequest[] = useMemo(
-    () => [
-      {
-        id: '1',
-        title: 'Add GPL-3.0 licensed dependency',
-        branch: 'feature/add-gpl-lib',
-        author: {
-          name: 'Alex Rivera',
-          avatarUrl: 'https://avatars.githubusercontent.com/u/000001?v=4',
-          handle: '@alex',
-        },
-        status: 'BLOCKED',
-        packageChanges: { added: 2, removed: 0, updated: 1 },
-        complianceImpact: 'Introduces GPL-3.0 · 1 violation',
-        updatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-      },
-      {
-        id: '2',
-        title: 'Bump dependencies for security patch',
-        branch: 'chore/deps-bump',
-        author: {
-          name: 'Jordan Lee',
-          avatarUrl: 'https://avatars.githubusercontent.com/u/000002?v=4',
-          handle: '@jordan',
-        },
-        status: 'OPEN',
-        packageChanges: { added: 0, removed: 0, updated: 5 },
-        complianceImpact: 'Resolves 2 high severity CVEs',
-        updatedAt: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
-      },
-      {
-        id: '3',
-        title: 'Refactor build pipeline',
-        branch: 'refactor/build-pipeline',
-        author: {
-          name: 'Samira Patel',
-          avatarUrl: 'https://avatars.githubusercontent.com/u/000003?v=4',
-          handle: '@samira',
-        },
-        status: 'MERGED',
-        packageChanges: { added: 0, removed: 0, updated: 2 },
-        complianceImpact: 'No license changes',
-        updatedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-      },
-      {
-        id: '4',
-        title: 'Introduce internal logging package',
-        branch: 'feature/internal-logging',
-        author: {
-          name: 'Chris Young',
-          avatarUrl: 'https://avatars.githubusercontent.com/u/000004?v=4',
-          handle: '@chris',
-        },
-        status: 'OPEN',
-        packageChanges: { added: 1, removed: 0, updated: 0 },
-        complianceImpact: 'Internal package · no external license impact',
-        updatedAt: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
-      },
-      {
-        id: '5',
-        title: 'Remove unsupported license',
-        branch: 'fix/remove-unsupported-license',
-        author: {
-          name: 'Taylor Kim',
-          avatarUrl: 'https://avatars.githubusercontent.com/u/000005?v=4',
-          handle: '@taylor',
-        },
-        status: 'MERGED',
-        packageChanges: { added: 0, removed: 1, updated: 1 },
-        complianceImpact: 'Removes GPL-3.0 dependency',
-        updatedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
-      },
-    ],
-    []
-  );
+  const [exceptionLoading, setExceptionLoading] = useState<string | null>(null);
+  const [diffDialog, setDiffDialog] = useState<{
+    open: boolean;
+    packageName: string;
+    version: string;
+    originalCode: string;
+    proposedCode: string;
+    changeId?: string;
+    status?: string;
+  } | null>(null);
+  const [confirming, setConfirming] = useState(false);
 
-  // Mock commit data
-  const mockCommits: ComplianceCommit[] = useMemo(
-    () => [
-      {
-        id: '8f3c2a1b9d',
-        shortSha: '8f3c2a1',
-        message: 'Add gpl-utils helper and wire into build',
-        committer: {
-          name: 'Alex Rivera',
-          avatarUrl: 'https://avatars.githubusercontent.com/u/000001?v=4',
-          handle: '@alex',
-        },
-        status: 'NON_COMPLIANT',
-        packageChanges: { added: 1, removed: 0, updated: 0 },
-        committedAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
-      },
-      {
-        id: '1b9d4e2c7a',
-        shortSha: '1b9d4e2',
-        message: 'Bump openssl dependency to patched version',
-        committer: {
-          name: 'Jordan Lee',
-          avatarUrl: 'https://avatars.githubusercontent.com/u/000002?v=4',
-          handle: '@jordan',
-        },
-        status: 'COMPLIANT',
-        packageChanges: { added: 0, removed: 0, updated: 2 },
-        committedAt: new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString(),
-      },
-      {
-        id: 'c7a2b1d9f4',
-        shortSha: 'c7a2b1d',
-        message: 'Refactor dependency injection for SBOM generator',
-        committer: {
-          name: 'Samira Patel',
-          avatarUrl: 'https://avatars.githubusercontent.com/u/000003?v=4',
-          handle: '@samira',
-        },
-        status: 'COMPLIANT',
-        packageChanges: { added: 0, removed: 0, updated: 1 },
-        committedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-      },
-      {
-        id: 'd4f9a2c7b1',
-        shortSha: 'd4f9a2c',
-        message: 'Introduce experimental analytics package',
-        committer: {
-          name: 'Chris Young',
-          avatarUrl: 'https://avatars.githubusercontent.com/u/000004?v=4',
-          handle: '@chris',
-        },
-        status: 'UNKNOWN',
-        packageChanges: { added: 1, removed: 0, updated: 0 },
-        committedAt: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString(),
-      },
-      {
-        id: 'aa3e9b7c2d',
-        shortSha: 'aa3e9b7',
-        message: 'Remove deprecated crypto library',
-        committer: {
-          name: 'Taylor Kim',
-          avatarUrl: 'https://avatars.githubusercontent.com/u/000005?v=4',
-          handle: '@taylor',
-        },
-        status: 'COMPLIANT',
-        packageChanges: { added: 0, removed: 1, updated: 0 },
-        committedAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
-      },
-    ],
-    []
-  );
+  const canManageSettings = userPermissions?.manage_settings === true || userPermissions?.view_settings === true;
+  const isExtracting = (project as any)?.extraction_status === 'processing';
 
-  // Load data
   const loadData = useCallback(async () => {
     if (!organizationId || !projectId) return;
-
     try {
       setLoading(true);
       setError(null);
-
-      const [depsData, policiesData] = await Promise.all([
+      const [depsData, policiesData, obligationsData] = await Promise.all([
         api.getProjectDependencies(organizationId, projectId),
         api.getProjectPolicies(organizationId, projectId),
+        api.getLicenseObligations(organizationId, projectId).catch(() => []),
       ]);
-
       setDependencies(depsData);
       setPolicies(policiesData);
+      setObligations(obligationsData);
     } catch (err: any) {
       setError(err.message || 'Failed to load compliance data');
     } finally {
@@ -334,846 +472,735 @@ export default function ProjectCompliancePage() {
     }
   }, [project, organizationId, projectId, loadData]);
 
-  // Redirect /compliance, /compliance/policies, or export-only to /compliance/project
   useEffect(() => {
     if (!organizationId || !projectId) return;
-    if (!urlSection || !isValidSection(urlSection) || urlSection === 'export-notice' || urlSection === 'export-sbom') {
+    if (!urlSection || !isValidSection(urlSection)) {
       navigate(`/organizations/${organizationId}/projects/${projectId}/compliance/project`, { replace: true });
     }
   }, [urlSection, navigate, organizationId, projectId]);
 
-  // Transform dependencies into compliance items (must be before export handlers that use it)
-  const complianceData = useMemo<ComplianceItem[]>(() => {
-    return dependencies.map((dep) => {
-      const { status, issueType } = getComplianceStatus(dep, policies);
-      return {
-        id: dep.id,
-        name: dep.name,
-        version: dep.version,
-        license: dep.license,
-        status,
-        issueType,
-        manuallyAssignedLicense: null,
-        originalDependency: dep,
-      };
-    });
-  }, [dependencies, policies]);
+  const handleTabChange = useCallback((tab: ComplianceTab) => {
+    navigate(`/organizations/${organizationId}/projects/${projectId}/compliance/${tab}`, { replace: true });
+  }, [navigate, organizationId, projectId]);
 
-  // Dedupe by package name for display - same package can appear as direct + transitive. Keep worst status.
-  const statusRank = (s: ComplianceStatus) => (s === 'VIOLATION' ? 2 : s === 'UNKNOWN' ? 1 : 0);
-  const complianceDataDeduped = useMemo<ComplianceItem[]>(() => {
-    const byName = new Map<string, ComplianceItem>();
-    for (const item of complianceData) {
-      const existing = byName.get(item.name);
-      if (!existing || statusRank(item.status) > statusRank(existing.status)) {
-        byName.set(item.name, item);
+  // Derived data
+  const violatedDeps = useMemo(() =>
+    dependencies.filter((d) => d.policy_result && d.policy_result.allowed === false),
+    [dependencies]
+  );
+
+  const allViolationReasons = useMemo(() => {
+    const reasons = new Set<string>();
+    for (const dep of violatedDeps) {
+      for (const r of dep.policy_result?.reasons || []) {
+        reasons.add(r);
       }
     }
-    return Array.from(byName.values());
-  }, [complianceData]);
+    return [...reasons];
+  }, [violatedDeps]);
 
-  // Export handlers
-  const handleExportSBOM = useCallback(() => {
-    if (!project) return;
-    const sbom = generateSBOM(complianceData, project.name || 'Project');
-    downloadFile(sbom, `${project.name || 'project'}-sbom.json`, 'application/json');
-    toast({ title: 'SBOM Exported', description: 'CycloneDX SBOM has been downloaded.' });
-  }, [project, complianceData, toast]);
+  const projectEcosystems = useMemo(() => {
+    const ecos = new Set<string>();
+    for (const dep of dependencies) {
+      const source = dep.source;
+      if (source === 'dependencies' || source === 'devDependencies') ecos.add('npm');
+    }
+    if (ecos.size === 0) ecos.add('npm');
+    return [...ecos];
+  }, [dependencies]);
 
-  const handleExportNotice = useCallback(() => {
-    if (!project) return;
-    const notice = generateLegalNotice(complianceData, project.name || 'Project');
-    downloadFile(notice, `${project.name || 'project'}-NOTICE.txt`, 'text/plain');
-    toast({ title: 'Notice Exported', description: 'Legal attribution notice has been downloaded.' });
-  }, [project, complianceData, toast]);
+  const policyEvaluatedAt = (project as any)?.policy_evaluated_at as string | null;
+  const isStale = policyEvaluatedAt ? (Date.now() - new Date(policyEvaluatedAt).getTime()) > 24 * 60 * 60 * 1000 : false;
+  const statusName = (project as any)?.status_name || (violatedDeps.length > 0 ? 'Non-Compliant' : 'Compliant');
+  const statusColor = violatedDeps.length > 0 ? '#ef4444' : '#22c55e';
+  const statusViolations = (project as any)?.status_violations as string[] || [];
 
-  // Navigate for Project/Policies; Export Notice/SBOM just trigger download without changing tab
-  const handleSectionSelect = useCallback(
-    (section: ComplianceSection) => {
-      if (section === 'export-notice') {
-        handleExportNotice();
-        return;
-      }
-      if (section === 'export-sbom') {
-        handleExportSBOM();
-        return;
-      }
-      navigate(`/organizations/${organizationId}/projects/${projectId}/compliance/${section}`, { replace: true });
-    },
-    [navigate, organizationId, projectId, handleExportNotice, handleExportSBOM]
-  );
+  // Filtered deps for Policy Results tab
+  const filteredPolicyDeps = useMemo(() => {
+    let filtered = [...dependencies];
 
-  // Filter deduped data based on tab
-  const filteredData = useMemo(() => {
-    if (projectTab === 'all') return complianceDataDeduped;
-    return complianceDataDeduped.filter((item) => item.status === 'VIOLATION' || item.status === 'UNKNOWN');
-  }, [complianceDataDeduped, projectTab]);
+    if (policyResultsTab === 'issues') {
+      filtered = filtered.filter((d) => d.policy_result && d.policy_result.allowed === false);
+    }
 
-  const violationCount = complianceDataDeduped.filter((item) => item.status === 'VIOLATION').length;
-  const unknownCount = complianceDataDeduped.filter((item) => item.status === 'UNKNOWN').length;
-  const issueCount = violationCount + unknownCount;
-
-  const now = useMemo(() => new Date(), []);
-
-  const isWithinTimeframe = useCallback(
-    (dateString: string, timeframe: '24H' | '7D' | '30D' | 'ALL') => {
-      if (timeframe === 'ALL') return true;
-      const date = new Date(dateString);
-      const diffMs = now.getTime() - date.getTime();
-      const oneHour = 60 * 60 * 1000;
-      if (timeframe === '24H') return diffMs <= 24 * oneHour;
-      if (timeframe === '7D') return diffMs <= 7 * 24 * oneHour;
-      return diffMs <= 30 * 24 * oneHour;
-    },
-    [now]
-  );
-
-  const filteredPullRequests = useMemo(() => {
-    const statusRank: Record<PullRequestStatus, number> = {
-      BLOCKED: 2,
-      OPEN: 1,
-      MERGED: 0,
-    };
-
-    return mockPullRequests
-      .filter((pr) => (prStatusFilter === 'ALL' ? true : pr.status === prStatusFilter))
-      .filter((pr) => isWithinTimeframe(pr.updatedAt, prTimeframe))
-      .filter((pr) => {
-        if (!prSearch.trim()) return true;
-        const query = prSearch.toLowerCase();
-        return (
-          pr.title.toLowerCase().includes(query) ||
-          pr.author.name.toLowerCase().includes(query) ||
-          pr.author.handle.toLowerCase().includes(query)
-        );
-      })
-      .sort((a, b) => {
-        const statusDiff = statusRank[b.status] - statusRank[a.status];
-        if (statusDiff !== 0) return statusDiff;
-        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+    if (policyResultFilter !== 'all') {
+      filtered = filtered.filter((d) => {
+        if (!d.policy_result?.reasons?.length) return policyResultFilter === 'all';
+        return d.policy_result.reasons.some((r) => getReasonCategory(r) === policyResultFilter);
       });
-  }, [mockPullRequests, prStatusFilter, prTimeframe, prSearch, isWithinTimeframe]);
+    }
 
-  const filteredCommits = useMemo(() => {
-    const statusRank: Record<CommitComplianceStatus, number> = {
-      NON_COMPLIANT: 2,
-      UNKNOWN: 1,
-      COMPLIANT: 0,
-    };
+    if (directFilter === 'direct') filtered = filtered.filter((d) => d.is_direct);
+    else if (directFilter === 'transitive') filtered = filtered.filter((d) => !d.is_direct);
 
-    return mockCommits
-      .filter((commit) => (commitStatusFilter === 'ALL' ? true : commit.status === commitStatusFilter))
-      .filter((commit) => isWithinTimeframe(commit.committedAt, commitTimeframe))
-      .filter((commit) => {
-        if (!commitSearch.trim()) return true;
-        const query = commitSearch.toLowerCase();
-        return (
-          commit.message.toLowerCase().includes(query) ||
-          commit.committer.name.toLowerCase().includes(query) ||
-          commit.committer.handle.toLowerCase().includes(query)
-        );
-      })
-      .sort((a, b) => new Date(b.committedAt).getTime() - new Date(a.committedAt).getTime())
-      .slice(0, 50);
-  }, [mockCommits, commitStatusFilter, commitTimeframe, commitSearch, isWithinTimeframe]);
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      filtered = filtered.filter((d) => d.name.toLowerCase().includes(q));
+    }
 
-  // Table columns
-  const columns = useMemo<ColumnDef<ComplianceItem, any>[]>(
-    () => [
-      columnHelper.accessor('name', {
-        id: 'package',
-        header: 'Package',
-        cell: ({ row }) => (
-          <div className="flex items-center gap-2 min-w-0">
-            <Package className="h-4 w-4 text-foreground-secondary shrink-0" />
-            <span className="text-sm font-medium text-foreground truncate">{row.original.name}</span>
-          </div>
-        ),
-      }),
-      columnHelper.accessor((row) => row.originalDependency.parent_package ?? null, {
-        id: 'parent',
-        header: 'Parent',
-        cell: ({ row }) => {
-          const parent = row.original.originalDependency.parent_package;
-          if (row.original.originalDependency.is_direct || !parent) {
-            return <span className="text-sm text-foreground-secondary">—</span>;
-          }
-          return (
-            <span className="text-sm text-foreground-secondary truncate block" title={parent}>
-              {parent}
-            </span>
-          );
-        },
-      }),
-      columnHelper.accessor('issueType', {
-        header: 'Issue',
-        cell: ({ row }) => {
-          const { status, issueType } = row.original;
-          if (status === 'COMPLIANT') {
-            return (
-              <Badge variant="success" className="gap-1">
-                <CheckCircle2 className="h-3 w-3" />
-                Compliant
-              </Badge>
-            );
-          }
-          return (
-            <Badge variant={getIssueBadgeVariant(issueType)} className="gap-1">
-              {status === 'UNKNOWN' ? <HelpCircle className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
-              {getIssueLabel(issueType)}
-            </Badge>
-          );
-        },
-      }),
-      columnHelper.accessor('license', {
-        header: 'License',
-        cell: ({ row }) => {
-          const item = row.original;
-          const { license, manuallyAssignedLicense } = item;
-          const displayLicense = manuallyAssignedLicense || license;
-          const showRequestException = canViewSettings && item.status === 'VIOLATION';
-          return (
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-foreground-secondary min-w-0 truncate">
-                {displayLicense || <span className="italic">None</span>}
-                {manuallyAssignedLicense && <span className="ml-1 text-xs text-primary">(assigned)</span>}
-              </span>
-              {showRequestException && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 h-7 text-xs px-2"
-                  onClick={() => navigate(`/organizations/${organizationId}/projects/${projectId}/settings/policies`)}
-                  title="Go to Settings → Policies to request an exception"
-                >
-                  Request Exception
-                </Button>
-              )}
-            </div>
-          );
-        },
-      }),
-    ],
-    [navigate, organizationId, projectId, canViewSettings]
+    return filtered;
+  }, [dependencies, policyResultsTab, policyResultFilter, directFilter, searchQuery]);
+
+  // Quick stats
+  const licenseIssueCount = useMemo(() =>
+    dependencies.filter((d) => d.policy_result?.reasons?.some((r) => getReasonCategory(r) === 'License Violation')).length,
+    [dependencies]
   );
+  const vulnDepCount = useMemo(() =>
+    dependencies.filter((d) => d.analysis && (d.analysis as any).vuln_critical > 0 || (d.analysis as any).vuln_high > 0).length,
+    [dependencies]
+  );
+  const avgScore = useMemo(() => {
+    const scored = dependencies.filter((d) => (d.analysis as any)?.dependency_score != null);
+    if (scored.length === 0) return null;
+    const sum = scored.reduce((acc, d) => acc + ((d.analysis as any)?.dependency_score || 0), 0);
+    return Math.round(sum / scored.length);
+  }, [dependencies]);
 
-  const table = useReactTable({
-    data: filteredData,
-    columns,
-    getCoreRowModel: getCoreRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-  });
+  // Handlers
+  const handleReevaluate = useCallback(async () => {
+    if (!organizationId || !projectId || reevaluating || Date.now() < reevalDisabledUntil) return;
+    setReevaluating(true);
+    try {
+      const result = await api.reEvaluateProjectPolicy(organizationId, projectId);
+      toast({ title: 'Policy Re-evaluated', description: `Status: ${result.statusName}. ${result.depResults} dependencies evaluated.` });
+      setReevalDisabledUntil(Date.now() + 5000);
+      await loadData();
+      await reloadProject();
+    } catch (err: any) {
+      if (err.message?.includes('409') || err.message?.includes('extraction')) {
+        toast({ title: 'Cannot re-evaluate', description: 'Extraction is currently in progress.', variant: 'destructive' });
+      } else if (err.message?.includes('429') || err.message?.includes('rate limit')) {
+        toast({ title: 'Rate limited', description: 'Please wait before re-evaluating.', variant: 'destructive' });
+      } else {
+        toast({ title: 'Re-evaluation failed', description: err.message, variant: 'destructive' });
+      }
+    } finally {
+      setReevaluating(false);
+    }
+  }, [organizationId, projectId, reevaluating, reevalDisabledUntil, toast, loadData, reloadProject]);
 
-  const loadingSection: ComplianceSection = isValidSection(urlSection) ? urlSection : 'project';
+  const handleExportSBOM = useCallback(async () => {
+    if (!organizationId || !projectId) return;
+    setExporting('sbom');
+    try {
+      const blob = await api.downloadProjectSBOM(organizationId, projectId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${project?.name || 'project'}-sbom.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast({ title: 'SBOM Downloaded', description: 'CycloneDX SBOM has been downloaded.' });
+    } catch (err: any) {
+      toast({ title: 'SBOM Download Failed', description: err.message, variant: 'destructive' });
+    } finally {
+      setExporting(null);
+    }
+  }, [organizationId, projectId, project, toast]);
 
-  // Loading state
+  const handleExportNotice = useCallback(async () => {
+    if (!organizationId || !projectId) return;
+    setExporting('notice');
+    try {
+      const blob = await api.downloadProjectLegalNotice(organizationId, projectId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${project?.name || 'project'}-THIRD-PARTY-NOTICES.txt`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast({ title: 'Legal Notice Downloaded', description: 'Third-party notice has been downloaded.' });
+    } catch (err: any) {
+      toast({ title: 'Legal Notice Download Failed', description: err.message, variant: 'destructive' });
+    } finally {
+      setExporting(null);
+    }
+  }, [organizationId, projectId, project, toast]);
+
+  const handleApplyException = useCallback(async (dep: ProjectDependency) => {
+    if (!organizationId || !projectId) return;
+    setExceptionLoading(dep.id);
+    try {
+      const reasons = dep.policy_result?.reasons?.join(', ') || dep.name;
+      const result = await api.applyForException(organizationId, projectId, dep.name, dep.version, reasons);
+      setDiffDialog({
+        open: true,
+        packageName: dep.name,
+        version: dep.version,
+        originalCode: result.originalCode,
+        proposedCode: result.proposedCode,
+        changeId: result.change?.id,
+        status: result.status,
+      });
+    } catch (err: any) {
+      toast({ title: 'Exception Failed', description: err.message, variant: 'destructive' });
+    } finally {
+      setExceptionLoading(null);
+    }
+  }, [organizationId, projectId, toast]);
+
+  const handleConfirmException = useCallback(async () => {
+    if (!diffDialog) return;
+    setConfirming(true);
+    try {
+      if (diffDialog.status === 'accepted') {
+        toast({ title: 'Exception Applied', description: `Exception for ${diffDialog.packageName} has been applied. Re-evaluating...` });
+        await loadData();
+      } else {
+        toast({ title: 'Exception Requested', description: `Exception for ${diffDialog.packageName} is awaiting admin approval.` });
+      }
+      setDiffDialog(null);
+    } finally {
+      setConfirming(false);
+    }
+  }, [diffDialog, toast, loadData]);
+
+  // Loading
   if (!project || loading) {
     return (
-      <div className="flex min-h-[calc(100vh-3rem)]">
-        <ComplianceSidepanel
-          activeSection={loadingSection}
-          onSelect={handleSectionSelect}
-          canViewSettings={canViewSettings}
-          disabledExports
-        />
-        <div className="flex-1 min-w-0 px-6 py-6 overflow-auto">
-          <div className="mx-auto max-w-7xl">
-            <>
-              <div className="mb-4">
-                <h1 className="text-2xl font-bold text-foreground">Licenses</h1>
-              </div>
-              <div className="flex gap-6 border-b border-border mb-4">
-                <button
-                  onClick={() => setProjectTab('issues')}
-                  className={cn(
-                    'pb-3 text-sm font-medium border-b-2 -mb-px transition-colors',
-                    projectTab === 'issues'
-                      ? 'text-foreground border-foreground'
-                      : 'text-foreground-secondary border-transparent hover:text-foreground'
-                  )}
-                >
-                  Issues
-                </button>
-                <button
-                  onClick={() => setProjectTab('all')}
-                  className={cn(
-                    'pb-3 text-sm font-medium border-b-2 -mb-px transition-colors',
-                    projectTab === 'all'
-                      ? 'text-foreground border-foreground'
-                      : 'text-foreground-secondary border-transparent hover:text-foreground'
-                  )}
-                >
-                  All packages
-                </button>
-              </div>
-              <div className="bg-background-card border border-border rounded-lg max-h-[600px] overflow-hidden">
-                <table className="w-full table-fixed">
-                  <colgroup>
-                    <col style={{ width: '32%' }} />
-                    <col style={{ width: '22%' }} />
-                    <col style={{ width: '22%' }} />
-                    <col style={{ width: '24%' }} />
-                  </colgroup>
-                  <thead className="bg-[#141618] border-b border-border">
-                    <tr>
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Package</th>
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Parent</th>
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Issue</th>
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">License</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {[1, 2, 3, 4, 5].map((i) => (
-                      <tr key={i} className="animate-pulse">
-                        <td className="px-4 py-2"><div className="h-4 w-28 bg-muted rounded" /></td>
-                        <td className="px-4 py-2"><div className="h-4 w-16 bg-muted rounded" /></td>
-                        <td className="px-4 py-2"><div className="h-5 w-20 bg-muted rounded" /></td>
-                        <td className="px-4 py-2"><div className="h-4 w-14 bg-muted rounded" /></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
+      <div className="min-h-[calc(100vh-3rem)] px-6 py-6">
+        <div className="mx-auto max-w-7xl">
+          <div className="h-8 w-48 bg-muted rounded animate-pulse mb-6" />
+          <div className="grid grid-cols-4 gap-4 mb-6">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="h-20 bg-muted rounded-lg animate-pulse" />
+            ))}
           </div>
+          <div className="h-64 bg-muted rounded-lg animate-pulse" />
         </div>
         <Toaster position="bottom-right" />
       </div>
     );
   }
 
-  // Error state
+  // Error
   if (error) {
     return (
-      <div className="flex min-h-[calc(100vh-3rem)]">
-        <ComplianceSidepanel
-          activeSection={loadingSection}
-          onSelect={handleSectionSelect}
-          canViewSettings={canViewSettings}
-          disabledExports={complianceData.length === 0}
-        />
-        <div className="flex-1 min-w-0 px-6 py-6 overflow-auto">
-          <div className="mx-auto max-w-7xl">
-            <h1 className="text-2xl font-bold text-foreground">Compliance</h1>
-            <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4 text-sm text-destructive mt-4">
-              {error}
-            </div>
-          </div>
+      <div className="min-h-[calc(100vh-3rem)] px-6 py-6">
+        <div className="mx-auto max-w-7xl">
+          <h1 className="text-2xl font-bold text-foreground mb-4">Compliance</h1>
+          <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4 text-sm text-destructive">{error}</div>
         </div>
         <Toaster position="bottom-right" />
       </div>
     );
   }
+
+  const noExtraction = dependencies.length === 0;
+  const noPolicy = !policies?.effective_policy_code && !policies?.inherited_policy_code;
 
   return (
     <>
-      <div className="flex min-h-[calc(100vh-3rem)]">
-        <ComplianceSidepanel
-          activeSection={activeSection}
-          onSelect={handleSectionSelect}
-          canViewSettings={canViewSettings}
-          disabledExports={complianceData.length === 0}
-        />
+      <div className="min-h-[calc(100vh-3rem)] px-6 py-6 overflow-auto">
+        <div className="mx-auto max-w-7xl">
+          {/* Page header with export dropdown */}
+          <div className="flex items-center justify-between mb-6">
+            <h1 className="text-2xl font-bold text-foreground">Compliance</h1>
+            <div className="flex items-center gap-2">
+              {canManageSettings && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleReevaluate}
+                  disabled={reevaluating || isExtracting || Date.now() < reevalDisabledUntil}
+                  className="h-8 text-xs"
+                >
+                  {reevaluating ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
+                  Re-evaluate
+                </Button>
+              )}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className="h-8 text-xs" disabled={!!exporting}>
+                    {exporting ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Download className="h-3.5 w-3.5 mr-1.5" />}
+                    Export
+                    <ChevronDown className="h-3 w-3 ml-1" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={handleExportSBOM} disabled={noExtraction}>
+                    <FileText className="h-4 w-4 mr-2" />
+                    Export SBOM (CycloneDX)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleExportNotice} disabled={noExtraction}>
+                    <Scale className="h-4 w-4 mr-2" />
+                    Export Legal Notice
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
 
-        <div className="flex-1 min-w-0 px-6 py-6 overflow-auto">
-          <div className="mx-auto max-w-7xl">
-            {activeSection === 'project' && (
-              <>
-                <div className="mb-4">
-                  <h1 className="text-2xl font-bold text-foreground">Licenses</h1>
+          {/* Top tabs */}
+          <div className="flex gap-6 border-b border-border mb-6">
+            {(['project', 'policy-results', 'updates'] as ComplianceTab[]).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => handleTabChange(tab)}
+                className={cn(
+                  'pb-3 text-sm font-medium border-b-2 -mb-px transition-colors',
+                  activeTab === tab
+                    ? 'text-foreground border-foreground'
+                    : 'text-foreground-secondary border-transparent hover:text-foreground'
+                )}
+              >
+                {tab === 'project' ? 'Project' : tab === 'policy-results' ? 'Policy Results' : 'Updates'}
+              </button>
+            ))}
+          </div>
+
+          {/* ─── PROJECT TAB ─── */}
+          {activeTab === 'project' && (
+            <div className="space-y-6">
+              {noExtraction ? (
+                <div className="bg-background-card border border-border rounded-lg p-8 text-center">
+                  <Package className="h-10 w-10 text-foreground-secondary mx-auto mb-3" />
+                  <h3 className="text-lg font-semibold text-foreground mb-1">No scan data available</h3>
+                  <p className="text-sm text-foreground-secondary mb-4">Run your first extraction to see compliance status.</p>
+                  <Button size="sm" onClick={() => navigate(`/organizations/${organizationId}/projects/${projectId}/settings`)}>
+                    Go to Settings
+                  </Button>
                 </div>
+              ) : (
+                <>
+                  {/* Status Card */}
+                  <div className="bg-background-card border border-border rounded-lg p-5">
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-center gap-3">
+                        <div
+                          className="w-3 h-3 rounded-full shrink-0"
+                          style={{ backgroundColor: statusColor }}
+                        />
+                        <div>
+                          <h2 className="text-xl font-semibold text-foreground">{statusName}</h2>
+                          {violatedDeps.length > 0 ? (
+                            <p className="text-sm text-foreground-secondary mt-0.5">
+                              {violatedDeps.length} violation{violatedDeps.length !== 1 ? 's' : ''} detected in the latest scan
+                            </p>
+                          ) : (
+                            <p className="text-sm text-foreground-secondary mt-0.5">
+                              {noPolicy
+                                ? 'No policy rules defined — all packages allowed by default.'
+                                : 'All dependencies comply with the current policy.'}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-foreground-secondary">
+                        <Clock className="h-3.5 w-3.5" />
+                        {policyEvaluatedAt ? `Last evaluated ${formatTimeAgo(policyEvaluatedAt)}` : 'Not yet evaluated'}
+                      </div>
+                    </div>
 
-                <div className="flex gap-6 border-b border-border mb-4">
+                    {allViolationReasons.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-3">
+                        {allViolationReasons.slice(0, 8).map((reason, i) => {
+                          const cat = getReasonCategory(reason);
+                          return (
+                            <span key={i} className={cn('text-[11px] px-2 py-0.5 rounded-full border', getReasonBadgeColor(cat))}>
+                              {reason.length > 40 ? reason.slice(0, 40) + '...' : reason}
+                            </span>
+                          );
+                        })}
+                        {allViolationReasons.length > 8 && (
+                          <span className="text-[11px] px-2 py-0.5 rounded-full border bg-zinc-500/15 text-zinc-400 border-zinc-500/20">
+                            +{allViolationReasons.length - 8} more
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {isExtracting && (
+                      <div className="mt-3 flex items-center gap-2 text-xs text-yellow-400">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        Extraction running...
+                      </div>
+                    )}
+                    {isStale && !isExtracting && (
+                      <div className="mt-3 flex items-center gap-2 text-xs text-yellow-400">
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        Policy data may be out of date. Consider re-evaluating.
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Quick Stats */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="bg-background-card border border-border rounded-lg px-4 py-3">
+                      <p className="text-xs text-foreground-secondary">License Issues</p>
+                      <p className="text-lg font-semibold text-foreground mt-0.5">{licenseIssueCount}</p>
+                    </div>
+                    <div className="bg-background-card border border-border rounded-lg px-4 py-3">
+                      <p className="text-xs text-foreground-secondary">Vulnerable Deps</p>
+                      <p className="text-lg font-semibold text-foreground mt-0.5">{vulnDepCount}</p>
+                    </div>
+                    <div className="bg-background-card border border-border rounded-lg px-4 py-3">
+                      <p className="text-xs text-foreground-secondary">Avg Score</p>
+                      <p className="text-lg font-semibold text-foreground mt-0.5">{avgScore ?? 'N/A'}</p>
+                    </div>
+                    <div className="bg-background-card border border-border rounded-lg px-4 py-3">
+                      <p className="text-xs text-foreground-secondary">Total Dependencies</p>
+                      <p className="text-lg font-semibold text-foreground mt-0.5">{dependencies.length}</p>
+                    </div>
+                  </div>
+
+                  {/* Active Violations */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-base font-semibold text-foreground">Active Violations</h3>
+                        {violatedDeps.length > 0 && (
+                          <Badge variant="destructive" className="text-[10px]">{violatedDeps.length} items</Badge>
+                        )}
+                      </div>
+                      <Button variant="outline" size="sm" onClick={() => setShowPreflight(true)} className="h-8 text-xs">
+                        <Shield className="h-3.5 w-3.5 mr-1.5" />
+                        Check a Package
+                      </Button>
+                    </div>
+                    {violatedDeps.length === 0 ? (
+                      <div className="bg-background-card border border-border rounded-lg p-6 text-center">
+                        <CheckCircle2 className="h-8 w-8 text-emerald-400 mx-auto mb-2" />
+                        <p className="text-sm text-foreground-secondary">No active violations</p>
+                      </div>
+                    ) : (
+                      <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                        <div className="divide-y divide-border">
+                          {violatedDeps.slice(0, 20).map((dep) => (
+                            <div
+                              key={dep.id}
+                              className="flex items-center gap-3 px-4 py-2.5 hover:bg-table-hover transition-colors cursor-pointer"
+                              onClick={() => navigate(`/organizations/${organizationId}/projects/${projectId}/dependencies/${dep.dependency_id}/overview`)}
+                            >
+                              <Package className="h-4 w-4 text-foreground-secondary shrink-0" />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-medium text-foreground truncate">{dep.name}</span>
+                                  <Badge variant="secondary" className="text-[10px]">{dep.version}</Badge>
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap gap-1 justify-end max-w-[50%]">
+                                {(dep.policy_result?.reasons || []).slice(0, 2).map((reason, i) => (
+                                  <span key={i} className={cn('text-[10px] px-1.5 py-0.5 rounded border', getReasonBadgeColor(getReasonCategory(reason)))}>
+                                    {reason.length > 30 ? reason.slice(0, 30) + '...' : reason}
+                                  </span>
+                                ))}
+                              </div>
+                              <ChevronRight className="h-4 w-4 text-foreground-secondary shrink-0" />
+                            </div>
+                          ))}
+                        </div>
+                        {violatedDeps.length > 20 && (
+                          <div className="px-4 py-2 text-xs text-foreground-secondary border-t border-border">
+                            Showing 20 of {violatedDeps.length} violations.{' '}
+                            <button onClick={() => handleTabChange('policy-results')} className="text-primary hover:underline">
+                              View all in Policy Results
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Blocked PRs placeholder */}
+                  <div>
+                    <h3 className="text-base font-semibold text-foreground mb-3">Blocked Pull Requests</h3>
+                    <div className="bg-background-card border border-border rounded-lg p-6 text-center">
+                      <GitPullRequest className="h-8 w-8 text-foreground-secondary mx-auto mb-2" />
+                      <p className="text-sm text-foreground-secondary">PR checks not configured</p>
+                      <p className="text-xs text-foreground-secondary mt-1">Enable webhooks in organization settings to see blocked PRs.</p>
+                    </div>
+                  </div>
+
+                  {/* Policy Source Card */}
+                  <div>
+                    <h3 className="text-base font-semibold text-foreground mb-3">Policy Source</h3>
+                    <div className="bg-background-card border border-border rounded-lg divide-y divide-border">
+                      {(['Package Policy', 'Status Code', 'PR Check'] as const).map((label) => {
+                        const isInherited = true;
+                        return (
+                          <div key={label} className="flex items-center justify-between px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <ShieldAlert className="h-4 w-4 text-foreground-secondary" />
+                              <span className="text-sm text-foreground">{label}</span>
+                            </div>
+                            <Badge variant={isInherited ? 'secondary' : 'default'} className="text-[10px]">
+                              {isInherited ? 'Inherited' : 'Custom'}
+                            </Badge>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* ─── POLICY RESULTS TAB ─── */}
+          {activeTab === 'policy-results' && (
+            <div className="space-y-4">
+              {/* Sub-tabs */}
+              <div className="flex items-center justify-between">
+                <div className="flex gap-4">
                   <button
-                    onClick={() => setProjectTab('issues')}
+                    onClick={() => setPolicyResultsTab('issues')}
                     className={cn(
-                      'pb-3 text-sm font-medium border-b-2 -mb-px transition-colors',
-                      projectTab === 'issues'
-                        ? 'text-foreground border-foreground'
-                        : 'text-foreground-secondary border-transparent hover:text-foreground'
+                      'text-sm font-medium transition-colors pb-1 border-b-2',
+                      policyResultsTab === 'issues' ? 'text-foreground border-foreground' : 'text-foreground-secondary border-transparent hover:text-foreground'
                     )}
                   >
                     Issues
+                    {violatedDeps.length > 0 && (
+                      <span className="ml-1.5 text-[10px] bg-destructive/20 text-destructive px-1.5 py-0.5 rounded-full">
+                        {violatedDeps.length}
+                      </span>
+                    )}
                   </button>
                   <button
-                    onClick={() => setProjectTab('all')}
+                    onClick={() => setPolicyResultsTab('all')}
                     className={cn(
-                      'pb-3 text-sm font-medium border-b-2 -mb-px transition-colors',
-                      projectTab === 'all'
-                        ? 'text-foreground border-foreground'
-                        : 'text-foreground-secondary border-transparent hover:text-foreground'
+                      'text-sm font-medium transition-colors pb-1 border-b-2',
+                      policyResultsTab === 'all' ? 'text-foreground border-foreground' : 'text-foreground-secondary border-transparent hover:text-foreground'
                     )}
                   >
-                    All packages
+                    All Packages
                   </button>
                 </div>
+              </div>
 
-                <div className="bg-background-card border border-border rounded-lg max-h-[600px] overflow-y-auto custom-scrollbar">
-                  <table className="w-full table-fixed">
-                    <colgroup>
-                      <col style={{ width: '32%' }} />
-                      <col style={{ width: '22%' }} />
-                      <col style={{ width: '22%' }} />
-                      <col style={{ width: '24%' }} />
-                    </colgroup>
-                    <thead className="sticky top-0 bg-[#141618] z-10">
-                      {table.getHeaderGroups().map((headerGroup) => (
-                        <tr key={headerGroup.id} className="border-b border-border">
-                          {headerGroup.headers.map((header) => (
-                            <th
-                              key={header.id}
-                              className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"
-                            >
-                              {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                            </th>
-                          ))}
-                        </tr>
-                      ))}
+              {/* Filters */}
+              <div className="flex flex-wrap items-center gap-2">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-8 text-xs">
+                      Category: {policyResultFilter === 'all' ? 'All' : policyResultFilter}
+                      <ChevronDown className="h-3 w-3 ml-1" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    {['all', 'License Violation', 'Malicious Package', 'Low Score', 'SLSA', 'Supply Chain', 'Other'].map((cat) => (
+                      <DropdownMenuItem key={cat} onClick={() => setPolicyResultFilter(cat)}>
+                        {cat === 'all' ? 'All Categories' : cat}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-8 text-xs">
+                      {directFilter === 'all' ? 'All deps' : directFilter === 'direct' ? 'Direct' : 'Transitive'}
+                      <ChevronDown className="h-3 w-3 ml-1" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuItem onClick={() => setDirectFilter('all')}>All</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setDirectFilter('direct')}>Direct</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setDirectFilter('transitive')}>Transitive</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <div className="flex-1 max-w-xs">
+                  <Input
+                    placeholder="Search by package name..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="h-8 text-xs"
+                  />
+                </div>
+              </div>
+
+              {/* Table */}
+              <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-background-card-header border-b border-border">
+                      <tr>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[30%]">Package</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[12%]">Version</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[14%]">License</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[12%]">Status</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[22%]">Reasons</th>
+                        <th className="text-right px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[10%]"></th>
+                      </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {complianceData.length === 0 ? (
+                      {filteredPolicyDeps.length === 0 ? (
                         <tr>
-                          <td colSpan={4} className="px-4 py-6 text-sm text-foreground-secondary">
-                            No dependencies found yet.
-                          </td>
-                        </tr>
-                      ) : table.getRowModel().rows.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="px-4 py-6 text-center">
-                            <p className="text-sm text-foreground-secondary">
-                              {issueCount === 0 ? 'No compliance issues found.' : 'No items to display.'}
-                            </p>
+                          <td colSpan={6} className="px-4 py-8 text-center text-sm text-foreground-secondary">
+                            {policyResultsTab === 'issues' ? 'No policy violations found.' : 'No dependencies to display.'}
                           </td>
                         </tr>
                       ) : (
-                        table.getRowModel().rows.map((row) => (
-                          <tr key={row.id} className="group hover:bg-table-hover transition-colors">
-                            {row.getVisibleCells().map((cell) => (
-                              <td key={cell.id} className="px-4 py-2">
-                                {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        filteredPolicyDeps.map((dep) => {
+                          const isAllowed = dep.policy_result?.allowed !== false;
+                          return (
+                            <tr key={dep.id} className="group hover:bg-table-hover transition-colors">
+                              <td className="px-4 py-2.5">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <Package className="h-4 w-4 text-foreground-secondary shrink-0" />
+                                  <span className="text-sm font-medium text-foreground truncate">{dep.name}</span>
+                                  {dep.is_direct && <Badge variant="secondary" className="text-[9px] shrink-0">direct</Badge>}
+                                </div>
                               </td>
-                            ))}
-                          </tr>
-                        ))
+                              <td className="px-4 py-2.5">
+                                <Badge variant="secondary" className="text-[10px]">{dep.version}</Badge>
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <span className="text-sm text-foreground-secondary">{dep.license || 'Unknown'}</span>
+                              </td>
+                              <td className="px-4 py-2.5">
+                                {isAllowed ? (
+                                  <Badge variant="success" className="gap-1 text-[10px]">
+                                    <CheckCircle2 className="h-3 w-3" />
+                                    Allowed
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="destructive" className="gap-1 text-[10px]">
+                                    <XCircle className="h-3 w-3" />
+                                    Blocked
+                                  </Badge>
+                                )}
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <div className="flex flex-wrap gap-1">
+                                  {(dep.policy_result?.reasons || []).slice(0, 3).map((reason, i) => (
+                                    <span key={i} className={cn('text-[10px] px-1.5 py-0.5 rounded border', getReasonBadgeColor(getReasonCategory(reason)))}>
+                                      {reason.length > 25 ? reason.slice(0, 25) + '...' : reason}
+                                    </span>
+                                  ))}
+                                </div>
+                              </td>
+                              <td className="px-4 py-2.5 text-right">
+                                {!isAllowed && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="opacity-0 group-hover:opacity-100 transition-opacity h-7 text-[11px] px-2"
+                                    onClick={() => handleApplyException(dep)}
+                                    disabled={exceptionLoading === dep.id}
+                                  >
+                                    {exceptionLoading === dep.id ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      <>
+                                        <Sparkles className="h-3 w-3 mr-1" />
+                                        Exception
+                                      </>
+                                    )}
+                                  </Button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>
                 </div>
-              </>
-            )}
+              </div>
 
-            {activeSection === 'updates' && (
-              <>
-                <div className="mb-4">
-                  <h1 className="text-2xl font-bold text-foreground">Updates</h1>
-                </div>
-
-                <div className="flex gap-6 border-b border-border mb-4">
+              {/* License Obligations collapsible */}
+              {obligations.length > 0 && (
+                <div className="bg-background-card border border-border rounded-lg overflow-hidden">
                   <button
-                    onClick={() => setUpdatesTab('pull-requests')}
-                    className={cn(
-                      'pb-3 text-sm font-medium border-b-2 -mb-px transition-colors',
-                      updatesTab === 'pull-requests'
-                        ? 'text-foreground border-foreground'
-                        : 'text-foreground-secondary border-transparent hover:text-foreground'
-                    )}
+                    onClick={() => setObligationsOpen(!obligationsOpen)}
+                    className="w-full flex items-center justify-between px-4 py-3 hover:bg-table-hover transition-colors"
                   >
-                    Pull Requests
+                    <div className="flex items-center gap-2">
+                      <Scale className="h-4 w-4 text-foreground-secondary" />
+                      <span className="text-sm font-medium text-foreground">License Obligations</span>
+                      <Badge variant="secondary" className="text-[10px]">{obligations.length} licenses</Badge>
+                    </div>
+                    <ChevronDown className={cn('h-4 w-4 text-foreground-secondary transition-transform', obligationsOpen && 'rotate-180')} />
                   </button>
-                  <button
-                    onClick={() => setUpdatesTab('commits')}
-                    className={cn(
-                      'pb-3 text-sm font-medium border-b-2 -mb-px transition-colors',
-                      updatesTab === 'commits'
-                        ? 'text-foreground border-foreground'
-                        : 'text-foreground-secondary border-transparent hover:text-foreground'
-                    )}
-                  >
-                    Commits
-                  </button>
+                  {obligationsOpen && (
+                    <div className="border-t border-border divide-y divide-border">
+                      {obligations.map((group) => (
+                        <div key={group.license} className="px-4 py-3">
+                          <div className="flex items-center justify-between mb-1.5">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-foreground">{group.license}</span>
+                              <span className="text-xs text-foreground-secondary">{group.count} package{group.count !== 1 ? 's' : ''}</span>
+                            </div>
+                            <div className="flex gap-1">
+                              {group.obligations?.requires_attribution && (
+                                <Badge variant="secondary" className="text-[9px]">Attribution</Badge>
+                              )}
+                              {group.obligations?.requires_source_disclosure && (
+                                <Badge variant="secondary" className="text-[9px]">Source Disclosure</Badge>
+                              )}
+                              {group.obligations?.is_copyleft && (
+                                <Badge variant="destructive" className="text-[9px]">Copyleft</Badge>
+                              )}
+                              {group.obligations?.is_weak_copyleft && (
+                                <Badge variant="warning" className="text-[9px]">Weak Copyleft</Badge>
+                              )}
+                              {group.obligations?.requires_notice_file && (
+                                <Badge variant="secondary" className="text-[9px]">NOTICE File</Badge>
+                              )}
+                            </div>
+                          </div>
+                          {group.obligations?.summary && (
+                            <p className="text-xs text-foreground-secondary">{group.obligations.summary}</p>
+                          )}
+                          {!group.obligations && group.license !== 'Unknown' && (
+                            <p className="text-xs text-foreground-secondary italic">Obligation details not available for this license.</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
+              )}
+            </div>
+          )}
 
-                {updatesTab === 'pull-requests' && (
-                  <div className="space-y-4">
-                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-9 px-3 text-xs font-medium text-foreground-secondary flex items-center gap-2"
-                            >
-                              <span>Status</span>
-                              <span className="text-foreground">
-                                {prStatusFilter === 'ALL'
-                                  ? 'All'
-                                  : prStatusFilter === 'OPEN'
-                                  ? 'Open'
-                                  : prStatusFilter === 'BLOCKED'
-                                  ? 'Blocked'
-                                  : 'Merged'}
-                              </span>
-                              <ChevronDown className="h-3.5 w-3.5 text-foreground-secondary" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="start" className="w-40">
-                            <DropdownMenuLabel className="text-xs">Status</DropdownMenuLabel>
-                            <DropdownMenuItem onClick={() => setPrStatusFilter('ALL')}>All</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => setPrStatusFilter('OPEN')}>Open</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => setPrStatusFilter('BLOCKED')}>Blocked</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => setPrStatusFilter('MERGED')}>Merged</DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-9 px-3 text-xs font-medium text-foreground-secondary flex items-center gap-2"
-                            >
-                              <span>Timeframe</span>
-                              <span className="text-foreground">
-                                {prTimeframe === '24H'
-                                  ? 'Last 24h'
-                                  : prTimeframe === '7D'
-                                  ? 'Last 7 days'
-                                  : prTimeframe === '30D'
-                                  ? 'Last 30 days'
-                                  : 'All time'}
-                              </span>
-                              <ChevronDown className="h-3.5 w-3.5 text-foreground-secondary" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="start" className="w-44">
-                            <DropdownMenuLabel className="text-xs">Timeframe</DropdownMenuLabel>
-                            <DropdownMenuItem onClick={() => setPrTimeframe('24H')}>Last 24 hours</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => setPrTimeframe('7D')}>Last 7 days</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => setPrTimeframe('30D')}>Last 30 days</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => setPrTimeframe('ALL')}>All time</DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-
-                      <div className="w-full md:w-64">
-                        <Input
-                          placeholder="Search by title or author..."
-                          value={prSearch}
-                          onChange={(e) => setPrSearch(e.target.value)}
-                          className="h-9"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                      <table className="w-full table-fixed">
-                        <colgroup>
-                          <col style={{ width: '34%' }} />
-                          <col style={{ width: '22%' }} />
-                          <col style={{ width: '14%' }} />
-                          <col style={{ width: '16%' }} />
-                          <col style={{ width: '14%' }} />
-                        </colgroup>
-                        <thead className="bg-background-card-header border-b border-border">
-                          <tr>
-                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
-                              Pull Request
-                            </th>
-                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
-                              Author
-                            </th>
-                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
-                              Status
-                            </th>
-                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
-                              Packages
-                            </th>
-                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
-                              Updated
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border">
-                          {filteredPullRequests.length === 0 ? (
-                            <tr>
-                              <td colSpan={5} className="px-4 py-6 text-sm text-foreground-secondary text-center">
-                                No pull requests match the current filters.
-                              </td>
-                            </tr>
-                          ) : (
-                            filteredPullRequests.map((pr) => (
-                              <tr key={pr.id} className="hover:bg-table-hover transition-colors">
-                                <td className="px-4 py-3 align-top">
-                                  <div className="flex flex-col gap-1 min-w-0">
-                                    <div className="flex items-center gap-2 min-w-0">
-                                      <GitPullRequest className="h-4 w-4 text-foreground-secondary shrink-0" />
-                                      <span className="text-sm font-medium text-foreground truncate">{pr.title}</span>
-                                    </div>
-                                    <div className="flex items-center gap-2 text-xs text-foreground-secondary">
-                                      <span className="px-1.5 py-0.5 rounded-full border border-border/80 bg-background-subtle/60 truncate max-w-[180px]">
-                                        {pr.branch}
-                                      </span>
-                                      <span className="text-foreground-muted">#{pr.id}</span>
-                                    </div>
-                                    <p className="text-xs text-foreground-secondary truncate">
-                                      {pr.complianceImpact}
-                                    </p>
-                                  </div>
-                                </td>
-                                <td className="px-4 py-3 align-top">
-                                  <div className="flex items-center gap-2 min-w-0">
-                                    <Avatar className="h-7 w-7">
-                                      <AvatarImage src={pr.author.avatarUrl} alt={pr.author.name} />
-                                      <AvatarFallback>{getInitials(pr.author.name)}</AvatarFallback>
-                                    </Avatar>
-                                    <div className="min-w-0">
-                                      <div className="text-sm text-foreground truncate">{pr.author.name}</div>
-                                      <div className="text-xs text-foreground-secondary truncate">
-                                        {pr.author.handle}
-                                      </div>
-                                    </div>
-                                  </div>
-                                </td>
-                                <td className="px-4 py-3 align-top">
-                                  <Badge
-                                    variant={
-                                      pr.status === 'BLOCKED'
-                                        ? 'destructive'
-                                        : pr.status === 'MERGED'
-                                        ? 'success'
-                                        : 'outline'
-                                    }
-                                  >
-                                    {pr.status === 'BLOCKED'
-                                      ? 'Blocked'
-                                      : pr.status === 'MERGED'
-                                      ? 'Merged'
-                                      : 'Open'}
-                                  </Badge>
-                                </td>
-                                <td className="px-4 py-3 align-top">
-                                  <div className="text-sm text-foreground-secondary">
-                                    <span className="text-foreground">+{pr.packageChanges.added}</span> / -
-                                    {pr.packageChanges.removed} / {pr.packageChanges.updated} updated
-                                  </div>
-                                </td>
-                                <td className="px-4 py-3 align-top">
-                                  <div className="flex flex-col gap-1 items-start">
-                                    <span className="text-sm text-foreground-secondary">
-                                      {formatDateTime(pr.updatedAt)}
-                                    </span>
-                                    {pr.status === 'BLOCKED' && (
-                                      <Button
-                                        variant="outline"
-                                        size="sm"
-                                        className="h-7 text-xs px-2"
-                                        onClick={() =>
-                                          navigate(
-                                            `/organizations/${organizationId}/projects/${projectId}/settings/policies`
-                                          )
-                                        }
-                                      >
-                                        Allow exception
-                                      </Button>
-                                    )}
-                                  </div>
-                                </td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                {updatesTab === 'commits' && (
-                  <div className="space-y-4">
-                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-9 px-3 text-xs font-medium text-foreground-secondary flex items-center gap-2"
-                            >
-                              <span>Status</span>
-                              <span className="text-foreground">
-                                {commitStatusFilter === 'ALL'
-                                  ? 'All'
-                                  : commitStatusFilter === 'COMPLIANT'
-                                  ? 'Compliant'
-                                  : commitStatusFilter === 'NON_COMPLIANT'
-                                  ? 'Non-compliant'
-                                  : 'Unknown'}
-                              </span>
-                              <ChevronDown className="h-3.5 w-3.5 text-foreground-secondary" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="start" className="w-44">
-                            <DropdownMenuLabel className="text-xs">Status</DropdownMenuLabel>
-                            <DropdownMenuItem onClick={() => setCommitStatusFilter('ALL')}>All</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => setCommitStatusFilter('COMPLIANT')}>
-                              Compliant
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => setCommitStatusFilter('NON_COMPLIANT')}>
-                              Non-compliant
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => setCommitStatusFilter('UNKNOWN')}>
-                              Unknown
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-9 px-3 text-xs font-medium text-foreground-secondary flex items-center gap-2"
-                            >
-                              <span>Timeframe</span>
-                              <span className="text-foreground">
-                                {commitTimeframe === '24H'
-                                  ? 'Last 24h'
-                                  : commitTimeframe === '7D'
-                                  ? 'Last 7 days'
-                                  : commitTimeframe === '30D'
-                                  ? 'Last 30 days'
-                                  : 'All time'}
-                              </span>
-                              <ChevronDown className="h-3.5 w-3.5 text-foreground-secondary" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="start" className="w-44">
-                            <DropdownMenuLabel className="text-xs">Timeframe</DropdownMenuLabel>
-                            <DropdownMenuItem onClick={() => setCommitTimeframe('24H')}>Last 24 hours</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => setCommitTimeframe('7D')}>Last 7 days</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => setCommitTimeframe('30D')}>Last 30 days</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => setCommitTimeframe('ALL')}>All time</DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-
-                      <div className="w-full md:w-64">
-                        <Input
-                          placeholder="Search by message or committer..."
-                          value={commitSearch}
-                          onChange={(e) => setCommitSearch(e.target.value)}
-                          className="h-9"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                      <table className="w-full table-fixed">
-                        <colgroup>
-                          <col style={{ width: '40%' }} />
-                          <col style={{ width: '22%' }} />
-                          <col style={{ width: '14%' }} />
-                          <col style={{ width: '12%' }} />
-                          <col style={{ width: '12%' }} />
-                        </colgroup>
-                        <thead className="bg-background-card-header border-b border-border">
-                          <tr>
-                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
-                              Commit
-                            </th>
-                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
-                              Committer
-                            </th>
-                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
-                              Status
-                            </th>
-                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
-                              Packages
-                            </th>
-                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
-                              Date
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border">
-                          {filteredCommits.length === 0 ? (
-                            <tr>
-                              <td colSpan={5} className="px-4 py-6 text-sm text-foreground-secondary text-center">
-                                No commits match the current filters.
-                              </td>
-                            </tr>
-                          ) : (
-                            filteredCommits.map((commit) => (
-                              <tr key={commit.id} className="hover:bg-table-hover transition-colors">
-                                <td className="px-4 py-3 align-top">
-                                  <div className="flex items-start gap-2 min-w-0">
-                                    <GitCommit className="h-4 w-4 text-foreground-secondary shrink-0 mt-0.5" />
-                                    <div className="min-w-0">
-                                      <div className="text-sm font-medium text-foreground truncate">
-                                        {commit.message}
-                                      </div>
-                                      <div className="text-xs text-foreground-secondary mt-0.5">
-                                        {commit.shortSha}
-                                      </div>
-                                    </div>
-                                  </div>
-                                </td>
-                                <td className="px-4 py-3 align-top">
-                                  <div className="flex items-center gap-2 min-w-0">
-                                    <Avatar className="h-7 w-7">
-                                      <AvatarImage src={commit.committer.avatarUrl} alt={commit.committer.name} />
-                                      <AvatarFallback>{getInitials(commit.committer.name)}</AvatarFallback>
-                                    </Avatar>
-                                    <div className="min-w-0">
-                                      <div className="text-sm text-foreground truncate">{commit.committer.name}</div>
-                                      <div className="text-xs text-foreground-secondary truncate">
-                                        {commit.committer.handle}
-                                      </div>
-                                    </div>
-                                  </div>
-                                </td>
-                                <td className="px-4 py-3 align-top">
-                                  <Badge
-                                    variant={
-                                      commit.status === 'NON_COMPLIANT'
-                                        ? 'destructive'
-                                        : commit.status === 'COMPLIANT'
-                                        ? 'success'
-                                        : 'outline'
-                                    }
-                                  >
-                                    {commit.status === 'NON_COMPLIANT'
-                                      ? 'Non-compliant'
-                                      : commit.status === 'COMPLIANT'
-                                      ? 'Compliant'
-                                      : 'Unknown'}
-                                  </Badge>
-                                </td>
-                                <td className="px-4 py-3 align-top">
-                                  <div className="text-sm text-foreground-secondary">
-                                    <span className="text-foreground">+{commit.packageChanges.added}</span> / -
-                                    {commit.packageChanges.removed} / {commit.packageChanges.updated} updated
-                                  </div>
-                                </td>
-                                <td className="px-4 py-3 align-top">
-                                  <span className="text-sm text-foreground-secondary">
-                                    {formatDate(commit.committedAt)}
-                                  </span>
-                                </td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-
-          </div>
+          {/* ─── UPDATES TAB ─── */}
+          {activeTab === 'updates' && (
+            <div className="space-y-4">
+              <div className="bg-background-card border border-border rounded-lg p-8 text-center">
+                <GitPullRequest className="h-10 w-10 text-foreground-secondary mx-auto mb-3" />
+                <h3 className="text-lg font-semibold text-foreground mb-1">PR checks not configured</h3>
+                <p className="text-sm text-foreground-secondary">
+                  Enable webhooks in organization settings to track pull request compliance impact.
+                </p>
+                <p className="text-xs text-foreground-secondary mt-2">Coming in Phase 8: PR Management & Webhooks</p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Preflight Sidebar */}
+      {showPreflight && (
+        <PreflightSidebar
+          open={showPreflight}
+          onClose={() => setShowPreflight(false)}
+          organizationId={organizationId}
+          projectId={projectId!}
+          projectEcosystems={projectEcosystems}
+        />
+      )}
+
+      {/* Exception Diff Dialog */}
+      {diffDialog?.open && (
+        <ExceptionDiffDialog
+          open={diffDialog.open}
+          onClose={() => setDiffDialog(null)}
+          onConfirm={handleConfirmException}
+          originalCode={diffDialog.originalCode}
+          proposedCode={diffDialog.proposedCode}
+          packageName={diffDialog.packageName}
+          confirming={confirming}
+        />
+      )}
 
       <Toaster position="bottom-right" />
     </>

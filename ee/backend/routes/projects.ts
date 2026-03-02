@@ -8851,7 +8851,7 @@ router.post('/:id/projects/:projectId/preflight-check', async (req: AuthRequest,
   try {
     const userId = req.user!.id;
     const { id: organizationId, projectId } = req.params;
-    const { packageName, packageVersion } = req.body;
+    const { packageName, packageVersion, ecosystem } = req.body;
 
     const rl = await checkRateLimit(`preflight:${userId}`, 30, 60);
     if (!rl.allowed) {
@@ -8880,6 +8880,7 @@ router.post('/:id/projects/:projectId/preflight-check', async (req: AuthRequest,
       allowed: result.allowed,
       reasons: result.reasons,
       tierName: result.tierName,
+      ecosystem: ecosystem || 'npm',
       disclaimer: 'Some fields (reachability, filesImportingCount, isOutdated) are unavailable in preflight mode.',
     });
   } catch (error: any) {
@@ -9163,6 +9164,528 @@ router.post('/:id/projects/:projectId/revert-policy', async (req: AuthRequest, r
   } catch (error: any) {
     console.error('Error reverting policy:', error);
     res.status(500).json({ error: error.message || 'Failed to revert policy' });
+  }
+});
+
+// ───── Phase 5: Compliance Endpoints ─────
+
+// GET /api/organizations/:id/projects/:projectId/sbom
+router.get('/:id/projects/:projectId/sbom', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: organizationId, projectId } = req.params;
+
+    const access = await checkProjectAccess(userId, organizationId, projectId);
+    if (!access.hasAccess) {
+      return res.status(access.error?.status ?? 403).json({ error: access.error?.message ?? 'Access denied' });
+    }
+
+    const { data: latestJob } = await supabase
+      .from('extraction_jobs')
+      .select('id, project_id, completed_at')
+      .eq('project_id', projectId)
+      .eq('status', 'completed')
+      .order('completed_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (!latestJob) {
+      return res.status(404).json({ error: 'No SBOM available. Run an extraction first.' });
+    }
+
+    const { data: project } = await supabase
+      .from('projects')
+      .select('name')
+      .eq('id', projectId)
+      .single();
+
+    const storagePath = `project-imports/${projectId}/${latestJob.id}/sbom.json`;
+    const { data: fileData, error: storageError } = await supabase.storage
+      .from('project-imports')
+      .download(`${projectId}/${latestJob.id}/sbom.json`);
+
+    if (storageError || !fileData) {
+      return res.status(404).json({ error: 'SBOM file not found in storage. The extraction may not have completed successfully.' });
+    }
+
+    const sbomText = await fileData.text();
+    const projectName = project?.name || 'project';
+
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="${projectName}-sbom.json"`);
+    res.send(sbomText);
+  } catch (error: any) {
+    console.error('Error downloading SBOM:', error);
+    res.status(500).json({ error: error.message || 'Failed to download SBOM' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/legal-notice
+router.get('/:id/projects/:projectId/legal-notice', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: organizationId, projectId } = req.params;
+
+    const rl = await checkRateLimit(`legal-notice:${userId}:${projectId}`, 5, 60);
+    if (!rl.allowed) {
+      res.set('Retry-After', String(rl.retryAfterSeconds ?? 60));
+      return res.status(429).json({ error: 'Legal notice rate limit exceeded. Try again later.' });
+    }
+
+    const access = await checkProjectAccess(userId, organizationId, projectId);
+    if (!access.hasAccess) {
+      return res.status(access.error?.status ?? 403).json({ error: access.error?.message ?? 'Access denied' });
+    }
+
+    const { getCached, setCached } = await import('../lib/cache');
+    const cacheKey = `legal-notice:${projectId}`;
+    const cached = await getCached<string>(cacheKey);
+    if (cached) {
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="THIRD-PARTY-NOTICES.txt"');
+      return res.send(cached);
+    }
+
+    const { data: project } = await supabase
+      .from('projects')
+      .select('name')
+      .eq('id', projectId)
+      .single();
+
+    const { data: deps } = await supabase
+      .from('project_dependencies')
+      .select('name, version, license')
+      .eq('project_id', projectId);
+
+    if (!deps || deps.length === 0) {
+      return res.status(404).json({ error: 'No dependencies found. Run an extraction first.' });
+    }
+
+    const { data: obligations } = await supabase
+      .from('license_obligations')
+      .select('license_spdx_id, summary, full_text, is_copyleft, is_weak_copyleft, requires_attribution, requires_notice_file, requires_source_disclosure, requires_license_text');
+
+    const obligationMap = new Map<string, any>();
+    if (obligations) {
+      for (const ob of obligations) {
+        obligationMap.set(ob.license_spdx_id, ob);
+      }
+    }
+
+    const projectName = project?.name || 'project';
+    const lines: string[] = [
+      'THIRD-PARTY SOFTWARE NOTICES AND INFORMATION',
+      `Project: ${projectName}`,
+      `Generated: ${new Date().toISOString()}`,
+      `Generated by: Deptex`,
+      '',
+      'This project incorporates components from the projects listed below.',
+      '',
+      '='.repeat(70),
+      '',
+    ];
+
+    const grouped = new Map<string, typeof deps>();
+    for (const dep of deps) {
+      const license = dep.license || 'Unknown';
+      if (!grouped.has(license)) grouped.set(license, []);
+      grouped.get(license)!.push(dep);
+    }
+
+    const sortedLicenses = [...grouped.keys()].sort();
+    for (const license of sortedLicenses) {
+      const pkgs = grouped.get(license)!;
+      const ob = obligationMap.get(license);
+
+      lines.push(`LICENSE: ${license}`);
+      if (ob?.summary) {
+        lines.push(`Obligations: ${ob.summary}`);
+      }
+      lines.push('-'.repeat(70));
+
+      for (const pkg of pkgs.sort((a: any, b: any) => a.name.localeCompare(b.name))) {
+        lines.push(`  - ${pkg.name}@${pkg.version}`);
+        lines.push(`    Copyright: see package metadata`);
+      }
+      lines.push('');
+
+      if (ob?.full_text && (ob.is_copyleft || ob.is_weak_copyleft)) {
+        lines.push(`Full License Text (${license}):`);
+        lines.push(ob.full_text);
+        lines.push('');
+      }
+    }
+
+    lines.push('='.repeat(70));
+    lines.push(`Generated by Deptex at ${new Date().toISOString()}`);
+
+    const notice = lines.join('\n');
+
+    await setCached(cacheKey, notice, 3600);
+
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="THIRD-PARTY-NOTICES.txt"');
+    res.send(notice);
+  } catch (error: any) {
+    console.error('Error generating legal notice:', error);
+    res.status(500).json({ error: error.message || 'Failed to generate legal notice' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/registry-search
+router.get('/:id/projects/:projectId/registry-search', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: organizationId } = req.params;
+    const { ecosystem, query: searchQuery } = req.query as { ecosystem?: string; query?: string };
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', organizationId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    if (!ecosystem || !searchQuery) {
+      return res.status(400).json({ error: 'ecosystem and query are required' });
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+
+    try {
+      let results: any[] = [];
+
+      switch (ecosystem.toLowerCase()) {
+        case 'npm': {
+          const resp = await fetch(`https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(searchQuery)}&size=15`, { signal: controller.signal });
+          if (!resp.ok) throw new Error(`npm registry returned ${resp.status}`);
+          const data = await resp.json();
+          results = (data.objects || []).map((obj: any) => ({
+            name: obj.package.name,
+            version: obj.package.version,
+            license: obj.package.links?.license || null,
+            description: obj.package.description || '',
+            downloads: obj.downloads?.weekly || null,
+          }));
+          break;
+        }
+        case 'maven': {
+          const resp = await fetch(`https://search.maven.org/solrsearch/select?q=${encodeURIComponent(searchQuery)}&rows=15&wt=json`, { signal: controller.signal });
+          if (!resp.ok) throw new Error(`Maven Central returned ${resp.status}`);
+          const data = await resp.json();
+          results = (data.response?.docs || []).map((doc: any) => ({
+            name: `${doc.g}:${doc.a}`,
+            version: doc.latestVersion || doc.v,
+            license: null,
+            description: '',
+            downloads: null,
+          }));
+          break;
+        }
+        case 'cargo': {
+          const resp = await fetch(`https://crates.io/api/v1/crates?q=${encodeURIComponent(searchQuery)}&per_page=15`, {
+            signal: controller.signal,
+            headers: { 'User-Agent': 'Deptex/1.0 (https://deptex.com)' },
+          });
+          if (!resp.ok) throw new Error(`crates.io returned ${resp.status}`);
+          const data = await resp.json();
+          results = (data.crates || []).map((crate: any) => ({
+            name: crate.name,
+            version: crate.newest_version || crate.max_version,
+            license: crate.license || null,
+            description: crate.description || '',
+            downloads: crate.recent_downloads || crate.downloads || null,
+          }));
+          break;
+        }
+        case 'rubygems':
+        case 'gem': {
+          const resp = await fetch(`https://rubygems.org/api/v1/search.json?query=${encodeURIComponent(searchQuery)}`, { signal: controller.signal });
+          if (!resp.ok) throw new Error(`RubyGems returned ${resp.status}`);
+          const data = await resp.json();
+          results = (data || []).slice(0, 15).map((gem: any) => ({
+            name: gem.name,
+            version: gem.version,
+            license: gem.licenses?.[0] || null,
+            description: gem.info || '',
+            downloads: gem.downloads || null,
+          }));
+          break;
+        }
+        case 'pypi': {
+          const resp = await fetch(`https://pypi.org/pypi/${encodeURIComponent(searchQuery)}/json`, { signal: controller.signal });
+          if (!resp.ok) {
+            if (resp.status === 404) return res.json({ results: [], mode: 'exact' });
+            throw new Error(`PyPI returned ${resp.status}`);
+          }
+          const data = await resp.json();
+          results = [{
+            name: data.info?.name || searchQuery,
+            version: data.info?.version,
+            license: data.info?.license || null,
+            description: data.info?.summary || '',
+            downloads: null,
+          }];
+          break;
+        }
+        case 'golang':
+        case 'go': {
+          const resp = await fetch(`https://proxy.golang.org/${encodeURIComponent(searchQuery)}/@latest`, { signal: controller.signal });
+          if (!resp.ok) {
+            if (resp.status === 404) return res.json({ results: [], mode: 'exact' });
+            throw new Error(`Go proxy returned ${resp.status}`);
+          }
+          const data = await resp.json();
+          results = [{
+            name: searchQuery,
+            version: data.Version?.replace(/^v/, '') || 'latest',
+            license: null,
+            description: '',
+            downloads: null,
+          }];
+          break;
+        }
+        default:
+          return res.status(400).json({ error: `Unsupported ecosystem: ${ecosystem}` });
+      }
+
+      const mode = ['pypi', 'golang', 'go'].includes(ecosystem.toLowerCase()) ? 'exact' : 'search';
+      res.json({ results, mode });
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch (error: any) {
+    if (error.name === 'AbortError') {
+      return res.status(504).json({ error: `Could not reach ${req.query.ecosystem} registry (timeout)` });
+    }
+    console.error('Error searching registry:', error);
+    res.status(500).json({ error: error.message || 'Failed to search registry' });
+  }
+});
+
+// POST /api/organizations/:id/projects/:projectId/apply-exception
+router.post('/:id/projects/:projectId/apply-exception', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: organizationId, projectId } = req.params;
+    const { packageName, version, reason } = req.body;
+
+    const rl = await checkRateLimit(`apply-exception:${userId}`, 10, 60);
+    if (!rl.allowed) {
+      res.set('Retry-After', String(rl.retryAfterSeconds ?? 60));
+      return res.status(429).json({ error: 'Rate limit exceeded. Try again later.' });
+    }
+
+    const access = await checkProjectAccess(userId, organizationId, projectId);
+    if (!access.hasAccess) {
+      return res.status(access.error?.status ?? 403).json({ error: access.error?.message ?? 'Access denied' });
+    }
+
+    if (!packageName || typeof packageName !== 'string') {
+      return res.status(400).json({ error: 'packageName is required' });
+    }
+
+    const { data: project } = await supabase
+      .from('projects')
+      .select('effective_package_policy_code')
+      .eq('id', projectId)
+      .single();
+
+    let currentPolicyCode = project?.effective_package_policy_code || null;
+    if (!currentPolicyCode) {
+      const { data: orgPolicy } = await supabase
+        .from('organization_package_policies')
+        .select('package_policy_code')
+        .eq('organization_id', organizationId)
+        .single();
+      currentPolicyCode = orgPolicy?.package_policy_code || null;
+    }
+
+    if (!currentPolicyCode) {
+      return res.status(400).json({ error: 'No policy code configured. All packages are allowed by default.' });
+    }
+
+    const apiKey = process.env.GOOGLE_AI_API_KEY;
+    if (!apiKey) {
+      return res.status(503).json({ error: 'AI service temporarily unavailable - please request the exception manually.' });
+    }
+
+    const prompt = `You are modifying a JavaScript policy function called packagePolicy() used in a dependency security platform.
+
+Current policy code:
+\`\`\`javascript
+${currentPolicyCode}
+\`\`\`
+
+The package "${packageName}"${version ? ` at version "${version}"` : ''} is currently blocked by this policy.
+${reason ? `Reason for exception: ${reason}` : ''}
+
+Modify the policy function to add a specific exception that allows this package${version ? ` at this version` : ''} while keeping all other policy rules intact. Add the exception at the beginning of the function as an early return.
+
+Return ONLY the complete modified function code (the full packagePolicy function), no explanation, no markdown fences.`;
+
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+    const geminiController = new AbortController();
+    const geminiTimeout = setTimeout(() => geminiController.abort(), 30000);
+
+    let aiCode: string;
+    try {
+      const geminiResp = await fetch(geminiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.2, maxOutputTokens: 4096 },
+        }),
+        signal: geminiController.signal,
+      });
+      clearTimeout(geminiTimeout);
+
+      if (!geminiResp.ok) {
+        return res.status(503).json({ error: 'AI service temporarily unavailable - please request the exception manually.' });
+      }
+
+      const geminiData = await geminiResp.json();
+      aiCode = (geminiData?.candidates?.[0]?.content?.parts?.[0]?.text ?? '').trim()
+        .replace(/^```(?:javascript|js)?\n?/, '')
+        .replace(/\n?```$/, '');
+    } catch (geminiErr: any) {
+      clearTimeout(geminiTimeout);
+      if (geminiErr.name === 'AbortError') {
+        return res.status(503).json({ error: 'AI service timed out - please request the exception manually.' });
+      }
+      return res.status(503).json({ error: 'AI service temporarily unavailable - please request the exception manually.' });
+    }
+
+    if (!aiCode || aiCode.length < 20) {
+      return res.status(422).json({ error: 'Could not generate valid exception - please request manually.' });
+    }
+
+    const validationResult = await validatePolicyCode(aiCode, 'package_policy', organizationId);
+    if (!validationResult.valid) {
+      return res.status(422).json({
+        error: 'Could not generate valid exception - please request manually.',
+        validationErrors: validationResult.errors,
+      });
+    }
+
+    const hasManageCompliance = access.orgRole?.permissions?.manage_policies === true
+      || access.orgRole?.permissions?.manage_compliance === true
+      || access.orgMembership?.role === 'owner'
+      || access.orgMembership?.role === 'admin';
+
+    const changeStatus = hasManageCompliance ? 'accepted' : 'pending';
+
+    const { data: lastAccepted } = await supabase
+      .from('project_policy_changes')
+      .select('id')
+      .eq('project_id', projectId)
+      .eq('code_type', 'package_policy')
+      .eq('status', 'accepted')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    const { data: change, error: insertError } = await supabase
+      .from('project_policy_changes')
+      .insert({
+        project_id: projectId,
+        organization_id: organizationId,
+        code_type: 'package_policy',
+        author_id: userId,
+        reviewer_id: hasManageCompliance ? userId : null,
+        parent_id: lastAccepted?.id || null,
+        base_code: currentPolicyCode,
+        proposed_code: aiCode,
+        message: `Allow ${reason || packageName} (for ${packageName}${version ? `@${version}` : ''})`,
+        status: changeStatus,
+        is_ai_generated: true,
+        reviewed_at: hasManageCompliance ? new Date().toISOString() : null,
+      })
+      .select()
+      .single();
+
+    if (insertError) throw insertError;
+
+    if (hasManageCompliance) {
+      await supabase
+        .from('projects')
+        .update({ effective_package_policy_code: aiCode })
+        .eq('id', projectId);
+
+      evaluateProjectPolicies(projectId, organizationId).catch((err) => {
+        console.error('Error re-evaluating after exception:', err);
+      });
+    }
+
+    res.json({
+      change,
+      status: changeStatus,
+      originalCode: currentPolicyCode,
+      proposedCode: aiCode,
+    });
+  } catch (error: any) {
+    console.error('Error applying exception:', error);
+    res.status(500).json({ error: error.message || 'Failed to apply exception' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/license-obligations
+router.get('/:id/projects/:projectId/license-obligations', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: organizationId, projectId } = req.params;
+
+    const access = await checkProjectAccess(userId, organizationId, projectId);
+    if (!access.hasAccess) {
+      return res.status(access.error?.status ?? 403).json({ error: access.error?.message ?? 'Access denied' });
+    }
+
+    const { data: deps } = await supabase
+      .from('project_dependencies')
+      .select('name, version, license')
+      .eq('project_id', projectId);
+
+    const licenses = new Set<string>();
+    const licenseDepCounts = new Map<string, number>();
+    const licenseDepNames = new Map<string, string[]>();
+
+    for (const dep of deps || []) {
+      const license = dep.license || 'Unknown';
+      licenses.add(license);
+      licenseDepCounts.set(license, (licenseDepCounts.get(license) || 0) + 1);
+      if (!licenseDepNames.has(license)) licenseDepNames.set(license, []);
+      licenseDepNames.get(license)!.push(`${dep.name}@${dep.version}`);
+    }
+
+    const { data: obligations } = await supabase
+      .from('license_obligations')
+      .select('*')
+      .in('license_spdx_id', [...licenses]);
+
+    const obligationMap = new Map<string, any>();
+    if (obligations) {
+      for (const ob of obligations) {
+        obligationMap.set(ob.license_spdx_id, ob);
+      }
+    }
+
+    const groups = [...licenses].sort().map((license) => ({
+      license,
+      count: licenseDepCounts.get(license) || 0,
+      packages: licenseDepNames.get(license) || [],
+      obligations: obligationMap.get(license) || null,
+    }));
+
+    res.json(groups);
+  } catch (error: any) {
+    console.error('Error fetching license obligations:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch license obligations' });
   }
 });
 

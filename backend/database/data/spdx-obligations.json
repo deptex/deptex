@@ -1,0 +1,502 @@
+[
+  {
+    "license_spdx_id": "MIT",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Requires copyright notice and license text in distributions. Very permissive."
+  },
+  {
+    "license_spdx_id": "Apache-2.0",
+    "requires_attribution": true,
+    "requires_notice_file": true,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Requires copyright notice, NOTICE file, and license text. Includes patent grant."
+  },
+  {
+    "license_spdx_id": "BSD-2-Clause",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Requires copyright notice and license text. Simplified BSD."
+  },
+  {
+    "license_spdx_id": "BSD-3-Clause",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Requires copyright notice and license text. No endorsement clause."
+  },
+  {
+    "license_spdx_id": "ISC",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Requires copyright notice and license text. Functionally equivalent to MIT."
+  },
+  {
+    "license_spdx_id": "0BSD",
+    "requires_attribution": false,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": false,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "No requirements. Public-domain-equivalent BSD license."
+  },
+  {
+    "license_spdx_id": "Unlicense",
+    "requires_attribution": false,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": false,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "No requirements. Dedicates work to the public domain."
+  },
+  {
+    "license_spdx_id": "CC0-1.0",
+    "requires_attribution": false,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": false,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "No requirements. Creative Commons public domain dedication."
+  },
+  {
+    "license_spdx_id": "CC-BY-4.0",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Requires attribution and license reference. Creative Commons Attribution."
+  },
+  {
+    "license_spdx_id": "CC-BY-SA-4.0",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": true,
+    "is_weak_copyleft": false,
+    "summary": "Requires attribution and share-alike (copyleft). Creative Commons Attribution-ShareAlike."
+  },
+  {
+    "license_spdx_id": "MPL-2.0",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": true,
+    "summary": "File-level copyleft: modified files must remain MPL-2.0. New files can use any license."
+  },
+  {
+    "license_spdx_id": "LGPL-2.1-only",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": true,
+    "summary": "Weak copyleft: modifications to the library must be disclosed. Linking is permitted."
+  },
+  {
+    "license_spdx_id": "LGPL-2.1-or-later",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": true,
+    "summary": "Weak copyleft: modifications to the library must be disclosed. Linking is permitted."
+  },
+  {
+    "license_spdx_id": "LGPL-3.0-only",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": true,
+    "summary": "Weak copyleft: modifications to the library must be disclosed. Linking is permitted."
+  },
+  {
+    "license_spdx_id": "LGPL-3.0-or-later",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": true,
+    "summary": "Weak copyleft: modifications to the library must be disclosed. Linking is permitted."
+  },
+  {
+    "license_spdx_id": "GPL-2.0-only",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": true,
+    "is_weak_copyleft": false,
+    "summary": "Strong copyleft: all derivative works must be GPL-2.0. Source disclosure required."
+  },
+  {
+    "license_spdx_id": "GPL-2.0-or-later",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": true,
+    "is_weak_copyleft": false,
+    "summary": "Strong copyleft: all derivative works must be GPL-2.0+. Source disclosure required."
+  },
+  {
+    "license_spdx_id": "GPL-3.0-only",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": true,
+    "is_weak_copyleft": false,
+    "summary": "Strong copyleft: all derivative works must be GPL-3.0. Source disclosure required. Anti-tivoization."
+  },
+  {
+    "license_spdx_id": "GPL-3.0-or-later",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": true,
+    "is_weak_copyleft": false,
+    "summary": "Strong copyleft: all derivative works must be GPL-3.0+. Source disclosure required."
+  },
+  {
+    "license_spdx_id": "AGPL-3.0-only",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": true,
+    "is_weak_copyleft": false,
+    "summary": "Network copyleft: source must be available to users interacting over a network. Strongest copyleft."
+  },
+  {
+    "license_spdx_id": "AGPL-3.0-or-later",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": true,
+    "is_weak_copyleft": false,
+    "summary": "Network copyleft: source must be available to users interacting over a network."
+  },
+  {
+    "license_spdx_id": "EPL-1.0",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": true,
+    "summary": "Weak copyleft: modifications to EPL files must be disclosed. Compatible with commercial use."
+  },
+  {
+    "license_spdx_id": "EPL-2.0",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": true,
+    "summary": "Weak copyleft: modifications to EPL files must be disclosed. Secondary license option."
+  },
+  {
+    "license_spdx_id": "CDDL-1.0",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": true,
+    "summary": "File-level copyleft similar to MPL. Not GPL-compatible."
+  },
+  {
+    "license_spdx_id": "CDDL-1.1",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": true,
+    "summary": "File-level copyleft similar to MPL. Not GPL-compatible."
+  },
+  {
+    "license_spdx_id": "EUPL-1.2",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": true,
+    "is_weak_copyleft": false,
+    "summary": "EU copyleft license. Compatible with GPL, LGPL, MPL, AGPL, and others."
+  },
+  {
+    "license_spdx_id": "Artistic-2.0",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Requires attribution and license text. Used primarily by Perl ecosystem."
+  },
+  {
+    "license_spdx_id": "Zlib",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": false,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Requires copyright notice in source. No requirements for binary distributions."
+  },
+  {
+    "license_spdx_id": "BSL-1.0",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Requires copyright notice in source. Very permissive. Used by Boost libraries."
+  },
+  {
+    "license_spdx_id": "WTFPL",
+    "requires_attribution": false,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": false,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "No requirements. Do What The F*** You Want To Public License."
+  },
+  {
+    "license_spdx_id": "PostgreSQL",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Requires copyright notice. Very permissive, similar to BSD/MIT."
+  },
+  {
+    "license_spdx_id": "PSF-2.0",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Python Software Foundation license. Permissive, requires attribution."
+  },
+  {
+    "license_spdx_id": "Python-2.0",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Python 2.0 license. Permissive, requires attribution."
+  },
+  {
+    "license_spdx_id": "Ruby",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Ruby license. Dual-licensed with BSD-2-Clause."
+  },
+  {
+    "license_spdx_id": "BlueOak-1.0.0",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": false,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Modern permissive license. Requires attribution. Includes patent grant."
+  },
+  {
+    "license_spdx_id": "MS-PL",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Microsoft Public License. Permissive, requires license text."
+  },
+  {
+    "license_spdx_id": "MS-RL",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": true,
+    "summary": "Microsoft Reciprocal License. File-level copyleft for modified files."
+  },
+  {
+    "license_spdx_id": "CECILL-2.1",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": true,
+    "is_weak_copyleft": false,
+    "summary": "French copyleft license. Compatible with GPL. Requires source disclosure."
+  },
+  {
+    "license_spdx_id": "OSL-3.0",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": true,
+    "is_weak_copyleft": false,
+    "summary": "Open Software License. Copyleft with network use trigger similar to AGPL."
+  },
+  {
+    "license_spdx_id": "AFL-3.0",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Academic Free License. Permissive with patent grant."
+  },
+  {
+    "license_spdx_id": "NCSA",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "UIUC/NCSA license. Combines MIT and BSD-3 terms."
+  },
+  {
+    "license_spdx_id": "Unicode-DFS-2016",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Unicode data files license. Permissive, requires copyright notice."
+  },
+  {
+    "license_spdx_id": "OFL-1.1",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "SIL Open Font License. Fonts must include license. Cannot sell fonts alone."
+  },
+  {
+    "license_spdx_id": "X11",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "X11 license. Nearly identical to MIT. Requires copyright notice."
+  },
+  {
+    "license_spdx_id": "Vim",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Vim license. Charityware, permissive with attribution requirement."
+  },
+  {
+    "license_spdx_id": "curl",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "curl license. MIT-style, requires copyright notice."
+  },
+  {
+    "license_spdx_id": "IJG",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": false,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Independent JPEG Group license. Permissive, requires acknowledgement."
+  },
+  {
+    "license_spdx_id": "OpenSSL",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "OpenSSL license. Dual Apache/BSD-style. Requires attribution in advertising."
+  },
+  {
+    "license_spdx_id": "SSPL-1.0",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": true,
+    "requires_license_text": true,
+    "is_copyleft": true,
+    "is_weak_copyleft": false,
+    "summary": "Server Side Public License. Strong copyleft: must disclose source of service infrastructure."
+  },
+  {
+    "license_spdx_id": "BUSL-1.1",
+    "requires_attribution": true,
+    "requires_notice_file": false,
+    "requires_source_disclosure": false,
+    "requires_license_text": true,
+    "is_copyleft": false,
+    "is_weak_copyleft": false,
+    "summary": "Business Source License. Source-available, converts to open-source after change date."
+  }
+]
