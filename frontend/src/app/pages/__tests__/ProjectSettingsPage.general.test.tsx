@@ -216,7 +216,10 @@ describe('ProjectSettingsPage – General', () => {
     render(<ProjectSettingsPage />);
     const transferBtn = await screen.findByRole('button', { name: 'Transfer' }, { timeout: 5000 });
 
-    // Team select shows current owner "Team A" - click to open dropdown
+    // Wait for projectTeams to load so Team A appears in the select, then open dropdown
+    await waitFor(() => {
+      expect(screen.getByText('Team A')).toBeInTheDocument();
+    });
     await userEvent.click(screen.getByText('Team A'));
     await waitFor(() => {
       expect(screen.getByText('Team B')).toBeInTheDocument();
@@ -246,7 +249,10 @@ describe('ProjectSettingsPage – General', () => {
     render(<ProjectSettingsPage />);
     const transferBtn = await screen.findByRole('button', { name: 'Transfer' }, { timeout: 5000 });
 
-    // Team select shows current owner "Team A" - click to open dropdown
+    // Wait for projectTeams to load so Team A appears in the select, then open dropdown
+    await waitFor(() => {
+      expect(screen.getByText('Team A')).toBeInTheDocument();
+    });
     await userEvent.click(screen.getByText('Team A'));
     await waitFor(() => {
       expect(screen.getByText('Team B')).toBeInTheDocument();
