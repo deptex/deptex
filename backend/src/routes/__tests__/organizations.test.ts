@@ -20,6 +20,10 @@ jest.mock('../../../../ee/backend/lib/openai', () => ({
   }),
 }));
 
+jest.mock('../../../../ee/backend/lib/policy-seed', () => ({
+  seedOrganizationPolicyDefaults: jest.fn().mockResolvedValue(undefined),
+}));
+
 describe('Organization Routes', () => {
   const mockUser = { id: 'user-123', email: 'test@example.com' };
   const mockToken = 'valid-token';
@@ -113,8 +117,11 @@ describe('Organization Routes', () => {
       queryBuilder.then.mockImplementationOnce((resolve: any) => resolve({ error: null }));
 
       // 3. Create Default Roles
-      // Code: `await supabase.from('organization_roles').insert(...)`
       queryBuilder.then.mockImplementationOnce((resolve: any) => resolve({ error: null }));
+
+      // 4-10. Statuses, tiers, policy tables (Phase 4), seedOrganizationPolicyDefaults is mocked
+      // Provide default so all remaining .then() calls resolve (avoids hang/timeout)
+      queryBuilder.then.mockImplementation((resolve: any) => resolve({ data: {}, error: null }));
 
       const res = await request(app)
         .post('/api/organizations')

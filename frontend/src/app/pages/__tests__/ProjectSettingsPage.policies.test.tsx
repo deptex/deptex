@@ -5,6 +5,7 @@ import ProjectSettingsPage from '../ProjectSettingsPage';
 
 const mockGetProjectRepositories = vi.fn();
 const mockGetCachedProjectRepositories = vi.fn();
+const mockGetOrganizationAssetTiers = vi.fn();
 const mockGetTeams = vi.fn();
 const mockGetProjectTeams = vi.fn();
 const mockGetProjectMembers = vi.fn();
@@ -30,14 +31,16 @@ const defaultProjectPolicies = {
   accepted_exceptions: [],
 };
 
-let mockSection = 'policies';
-const mockUseParams = vi.fn(() => ({ orgId: 'org-1', projectId: 'proj-1', section: mockSection }));
+const hoisted = vi.hoisted(() => ({
+  mockSectionRef: { current: 'policies' },
+  mockUseParams: vi.fn(() => ({ orgId: 'org-1', projectId: 'proj-1', section: 'policies' })),
+}));
 
 vi.mock('react-router-dom', async (importOriginal) => {
   const mod = await importOriginal<typeof import('react-router-dom')>();
   return {
     ...mod,
-    useParams: mockUseParams,
+    useParams: hoisted.mockUseParams,
     useNavigate: () => mockNavigate,
     useSearchParams: () => [new URLSearchParams(), mockSetSearchParams],
     useOutletContext: vi.fn(() => mockProjectContext),
@@ -48,6 +51,7 @@ vi.mock('../../../lib/api', () => ({
   api: {
     getProjectRepositories: (...args: unknown[]) => mockGetProjectRepositories(...args),
     getCachedProjectRepositories: () => mockGetCachedProjectRepositories() ?? null,
+    getOrganizationAssetTiers: (...args: unknown[]) => mockGetOrganizationAssetTiers(...args),
     getTeams: (...args: unknown[]) => mockGetTeams(...args),
     getProjectTeams: (...args: unknown[]) => mockGetProjectTeams(...args),
     getProjectMembers: (...args: unknown[]) => mockGetProjectMembers(...args),
@@ -79,9 +83,13 @@ vi.mock('../../components/PolicyExceptionSidebar', () => ({
 describe('ProjectSettingsPage – Policies', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSection = 'policies';
+    hoisted.mockSectionRef.current = 'policies';
+    hoisted.mockUseParams.mockReturnValue({ orgId: 'org-1', projectId: 'proj-1', section: 'policies' });
     mockGetProjectRepositories.mockResolvedValue({ repositories: [], connectedRepository: null });
     mockGetCachedProjectRepositories.mockReturnValue(null);
+    mockGetOrganizationAssetTiers.mockResolvedValue([
+      { id: 't1', organization_id: 'org-1', name: 'External', color: '#888', rank: 0, environmental_multiplier: 1, is_default: true },
+    ]);
     mockGetTeams.mockResolvedValue([]);
     mockGetProjectTeams.mockResolvedValue({ owner_team: null, contributing_teams: [] });
     mockGetProjectMembers.mockResolvedValue({ direct_members: [], team_members: [] });
@@ -169,13 +177,15 @@ describe('ProjectSettingsPage – Policies', () => {
     });
     expect(mockGetProjectPolicies).toHaveBeenCalledTimes(1);
 
-    mockSection = 'access';
+    hoisted.mockSectionRef.current = 'access';
+    hoisted.mockUseParams.mockReturnValue({ orgId: 'org-1', projectId: 'proj-1', section: 'access' });
     rerender(<ProjectSettingsPage />);
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Access' })).toBeInTheDocument();
     });
 
-    mockSection = 'policies';
+    hoisted.mockSectionRef.current = 'policies';
+    hoisted.mockUseParams.mockReturnValue({ orgId: 'org-1', projectId: 'proj-1', section: 'policies' });
     rerender(<ProjectSettingsPage />);
     await waitFor(() => {
       expect(screen.getByText('Project Compliance')).toBeInTheDocument();

@@ -7,11 +7,14 @@ import app from '../../index';
 import { supabase, queryBuilder } from '../../test/mocks/supabaseSingleton';
 
 jest.mock('../../lib/supabase');
-jest.mock('../../lib/cache', () => ({
+jest.mock('../../../../ee/backend/lib/cache', () => ({
   getWatchtowerSummaryCacheKey: jest.fn((name: string, depId?: string) => `watchtower-summary:${name}:${depId || 'none'}`),
   getCached: jest.fn().mockResolvedValue(null),
   setCached: jest.fn().mockResolvedValue(undefined),
   CACHE_TTL_SECONDS: { WATCHTOWER_SUMMARY: 300 },
+  invalidateWatchtowerSummaryCache: jest.fn().mockResolvedValue(undefined),
+  invalidateAllProjectCachesInOrg: jest.fn().mockResolvedValue(undefined),
+  invalidateProjectCachesForTeam: jest.fn().mockResolvedValue(undefined),
 }));
 
 const mockUser = { id: 'user-123', email: 'test@example.com' };

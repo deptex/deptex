@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '../../test/utils';
+import { render as rtlRender, screen } from '@testing-library/react';
 import ProtectedRoute from '../ProtectedRoute';
 import { useAuth } from '../../contexts/AuthContext';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -20,7 +20,11 @@ describe('ProtectedRoute', () => {
       loading: true,
     });
 
-    render(<ProtectedRoute><div>Protected Content</div></ProtectedRoute>);
+    rtlRender(
+      <MemoryRouter>
+        <ProtectedRoute><div>Protected Content</div></ProtectedRoute>
+      </MemoryRouter>
+    );
 
     // It should render the spinner container (checking for class or structure could be fragile, but let's check for "min-h-screen" div or similar)
     // Actually, looking at the code:
@@ -43,7 +47,11 @@ describe('ProtectedRoute', () => {
       loading: false,
     });
 
-    render(<ProtectedRoute><div>Protected Content</div></ProtectedRoute>);
+    rtlRender(
+      <MemoryRouter>
+        <ProtectedRoute><div>Protected Content</div></ProtectedRoute>
+      </MemoryRouter>
+    );
 
     expect(screen.getByText('Protected Content')).toBeInTheDocument();
   });
@@ -54,8 +62,9 @@ describe('ProtectedRoute', () => {
       loading: false,
     });
 
-    // To test redirection, we need to wrap in Routes and check where we end up
-    render(
+    // To test redirection, we need to wrap in Routes and check where we end up.
+    // Use rtlRender directly to avoid double MemoryRouter from test/utils wrapper.
+    rtlRender(
       <MemoryRouter initialEntries={['/protected']}>
         <Routes>
           <Route path="/" element={<div>Home Page</div>} />

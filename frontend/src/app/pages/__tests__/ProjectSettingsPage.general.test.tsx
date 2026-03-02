@@ -5,6 +5,7 @@ import ProjectSettingsPage from '../ProjectSettingsPage';
 
 const mockGetProjectRepositories = vi.fn();
 const mockGetCachedProjectRepositories = vi.fn();
+const mockGetOrganizationAssetTiers = vi.fn();
 const mockGetTeams = vi.fn();
 const mockGetProjectTeams = vi.fn();
 const mockGetTeamMembers = vi.fn();
@@ -38,6 +39,7 @@ vi.mock('../../../lib/api', () => ({
   api: {
     getProjectRepositories: (...args: unknown[]) => mockGetProjectRepositories(...args),
     getCachedProjectRepositories: () => mockGetCachedProjectRepositories() ?? null,
+    getOrganizationAssetTiers: (...args: unknown[]) => mockGetOrganizationAssetTiers(...args),
     getTeams: (...args: unknown[]) => mockGetTeams(...args),
     getProjectTeams: (...args: unknown[]) => mockGetProjectTeams(...args),
     getTeamMembers: (...args: unknown[]) => mockGetTeamMembers(...args),
@@ -59,6 +61,9 @@ describe('ProjectSettingsPage – General', () => {
       connectedRepository: null,
     });
     mockGetCachedProjectRepositories.mockReturnValue(null);
+    mockGetOrganizationAssetTiers.mockResolvedValue([
+      { id: 't1', organization_id: 'org-1', name: 'External', color: '#888', rank: 0, environmental_multiplier: 1, is_default: true },
+    ]);
     mockGetTeams.mockResolvedValue([]);
     mockGetProjectTeams.mockResolvedValue({ owner_team: null, contributing_teams: [] });
     mockGetTeamMembers.mockResolvedValue([]);

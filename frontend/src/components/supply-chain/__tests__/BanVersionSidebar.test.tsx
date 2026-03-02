@@ -68,8 +68,9 @@ describe('BanVersionSidebar', () => {
     // "Ban version" appears in heading and button
     const banTexts = screen.getAllByText('Ban version');
     expect(banTexts.length).toBeGreaterThanOrEqual(2);
-    // Check package name displayed in header
-    expect(screen.getByText('test-pkg@1.0.0')).toBeInTheDocument();
+    // Check package name and version displayed in header (format: "Ban v1.0.0 of test-pkg")
+    expect(screen.getByText('test-pkg')).toBeInTheDocument();
+    expect(screen.getByText(/1\.0\.0/)).toBeInTheDocument();
   });
 
   it('disables the ban button when no target version is selected', () => {
@@ -167,6 +168,7 @@ describe('BanVersionSidebar', () => {
         onBanComplete={vi.fn()}
       />
     );
-    expect(screen.getByText('test-pkg@1.0.0')).toBeInTheDocument();
+    expect(screen.getByText('test-pkg')).toBeInTheDocument();
+    expect(screen.getByText(/1\.0\.0/)).toBeInTheDocument();
   });
 });

@@ -24,6 +24,8 @@ vi.mock('../../../lib/api', () => ({
     getSupplyChainForVersion: vi.fn(),
     createWatchtowerBumpPR: vi.fn(),
     bumpAllProjects: vi.fn(),
+    getCachedProject: vi.fn().mockReturnValue(null),
+    getProject: vi.fn().mockResolvedValue({ asset_tier: 'EXTERNAL' }),
   },
 }));
 
