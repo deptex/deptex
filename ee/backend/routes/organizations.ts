@@ -7,8 +7,17 @@ import { createActivity } from '../lib/activities';
 import { getOpenAIClient } from '../lib/openai';
 import { updateAllProjectsCompliance } from './projects';
 import { invalidateAllProjectCachesInOrg, invalidateProjectCachesForTeam } from '../lib/cache';
+import { seedOrganizationPolicyDefaults } from '../lib/policy-seed';
 
 const router = express.Router();
+
+import {
+  DEFAULT_STATUSES,
+  DEFAULT_ASSET_TIERS,
+  DEFAULT_PACKAGE_POLICY_CODE,
+  DEFAULT_PROJECT_STATUS_CODE,
+  DEFAULT_PR_CHECK_CODE,
+} from '../lib/policy-defaults';
 
 // All routes require authentication
 router.use(authenticateUser);
@@ -203,6 +212,7 @@ router.post('/', async (req: AuthRequest, res) => {
             manage_security: true,
             view_activity: true,
             manage_compliance: true,
+            manage_statuses: true,
             interact_with_security_agent: true,
             manage_aegis: true,
             view_members: true,
@@ -227,6 +237,7 @@ router.post('/', async (req: AuthRequest, res) => {
             manage_security: true,
             view_activity: true,
             manage_compliance: true,
+            manage_statuses: false,
             interact_with_security_agent: true,
             manage_aegis: true,
             view_members: true,
@@ -247,6 +258,38 @@ router.post('/', async (req: AuthRequest, res) => {
       await supabase.from('organizations').delete().eq('id', organization.id);
       throw rolesError;
     }
+
+    // Seed default statuses
+    await supabase.from('organization_statuses').insert(
+      DEFAULT_STATUSES.map(s => ({ ...s, organization_id: organization.id }))
+    );
+
+    // Seed default asset tiers
+    await supabase.from('organization_asset_tiers').insert(
+      DEFAULT_ASSET_TIERS.map(t => ({ ...t, organization_id: organization.id }))
+    );
+
+    // Seed default policy code tables
+    await Promise.all([
+      supabase.from('organization_package_policies').insert({
+        organization_id: organization.id,
+        package_policy_code: DEFAULT_PACKAGE_POLICY_CODE,
+        updated_by_id: userId,
+      }),
+      supabase.from('organization_status_codes').insert({
+        organization_id: organization.id,
+        project_status_code: DEFAULT_PROJECT_STATUS_CODE,
+        updated_by_id: userId,
+      }),
+      supabase.from('organization_pr_checks').insert({
+        organization_id: organization.id,
+        pr_check_code: DEFAULT_PR_CHECK_CODE,
+        updated_by_id: userId,
+      }),
+    ]);
+
+    // Seed default statuses, asset tiers, and policy templates
+    await seedOrganizationPolicyDefaults(organization.id);
 
     // Create activity log
     await createActivity({
@@ -2352,6 +2395,728 @@ router.put('/:id/policies', async (req: AuthRequest, res) => {
   } catch (error: any) {
     console.error('Error updating policies:', error);
     res.status(500).json({ error: error.message || 'Failed to update policies' });
+  }
+});
+
+// ───── Phase 4: Organization Statuses CRUD ─────
+
+async function canManageStatuses(organizationId: string, userId: string): Promise<boolean> {
+  const { data: membership } = await supabase
+    .from('organization_members')
+    .select('role')
+    .eq('organization_id', organizationId)
+    .eq('user_id', userId)
+    .single();
+
+  if (!membership) return false;
+  if (membership.role === 'owner' || membership.role === 'admin') return true;
+
+  const { data: role } = await supabase
+    .from('organization_roles')
+    .select('permissions')
+    .eq('organization_id', organizationId)
+    .eq('name', membership.role)
+    .single();
+
+  const perms = role?.permissions as Record<string, boolean> | undefined;
+  return !!(perms?.manage_statuses || perms?.manage_compliance);
+}
+
+// GET /api/organizations/:id/statuses
+router.get('/:id/statuses', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const { data: statuses, error } = await supabase
+      .from('organization_statuses')
+      .select('*')
+      .eq('organization_id', id)
+      .order('rank', { ascending: true });
+
+    if (error) throw error;
+    res.json(statuses ?? []);
+  } catch (error: any) {
+    console.error('Error fetching statuses:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch statuses' });
+  }
+});
+
+// POST /api/organizations/:id/statuses
+router.post('/:id/statuses', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    if (!(await canManageStatuses(id, userId))) {
+      return res.status(403).json({ error: 'Permission denied' });
+    }
+
+    const { name, color, description, is_passing, rank } = req.body;
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'Status name is required' });
+    }
+
+    const { data: status, error } = await supabase
+      .from('organization_statuses')
+      .insert({
+        organization_id: id,
+        name: name.trim(),
+        color: color || '#6b7280',
+        description: description || null,
+        is_passing: is_passing ?? false,
+        rank: rank ?? 50,
+        is_system: false,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === '23505') {
+        return res.status(409).json({ error: 'A status with this name already exists' });
+      }
+      throw error;
+    }
+
+    await createActivity({
+      organization_id: id,
+      user_id: userId,
+      activity_type: 'created_status',
+      description: `created status "${name.trim()}"`,
+      metadata: { status_name: name.trim() },
+    });
+
+    res.status(201).json(status);
+  } catch (error: any) {
+    console.error('Error creating status:', error);
+    res.status(500).json({ error: error.message || 'Failed to create status' });
+  }
+});
+
+// PUT /api/organizations/:id/statuses/:statusId
+router.put('/:id/statuses/:statusId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, statusId } = req.params;
+
+    if (!(await canManageStatuses(id, userId))) {
+      return res.status(403).json({ error: 'Permission denied' });
+    }
+
+    const updates: Record<string, unknown> = {};
+    if (req.body.name !== undefined) updates.name = req.body.name;
+    if (req.body.color !== undefined) updates.color = req.body.color;
+    if (req.body.description !== undefined) updates.description = req.body.description;
+    if (req.body.is_passing !== undefined) updates.is_passing = req.body.is_passing;
+    if (req.body.rank !== undefined) updates.rank = req.body.rank;
+
+    const { data: status, error } = await supabase
+      .from('organization_statuses')
+      .update(updates)
+      .eq('id', statusId)
+      .eq('organization_id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    if (!status) return res.status(404).json({ error: 'Status not found' });
+
+    res.json(status);
+  } catch (error: any) {
+    console.error('Error updating status:', error);
+    res.status(500).json({ error: error.message || 'Failed to update status' });
+  }
+});
+
+// PUT /api/organizations/:id/statuses/reorder - Bulk reorder statuses
+router.put('/:id/statuses/reorder', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    if (!(await canManageStatuses(id, userId))) {
+      return res.status(403).json({ error: 'Permission denied' });
+    }
+
+    const { order } = req.body;
+    if (!Array.isArray(order)) {
+      return res.status(400).json({ error: 'order must be an array of { id, rank }' });
+    }
+
+    for (const item of order) {
+      await supabase
+        .from('organization_statuses')
+        .update({ rank: item.rank })
+        .eq('id', item.id)
+        .eq('organization_id', id);
+    }
+
+    const { data: statuses } = await supabase
+      .from('organization_statuses')
+      .select('*')
+      .eq('organization_id', id)
+      .order('rank', { ascending: true });
+
+    res.json(statuses ?? []);
+  } catch (error: any) {
+    console.error('Error reordering statuses:', error);
+    res.status(500).json({ error: error.message || 'Failed to reorder statuses' });
+  }
+});
+
+// DELETE /api/organizations/:id/statuses/:statusId
+router.delete('/:id/statuses/:statusId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, statusId } = req.params;
+
+    if (!(await canManageStatuses(id, userId))) {
+      return res.status(403).json({ error: 'Permission denied' });
+    }
+
+    const { data: status } = await supabase
+      .from('organization_statuses')
+      .select('is_system, name')
+      .eq('id', statusId)
+      .eq('organization_id', id)
+      .single();
+
+    if (!status) return res.status(404).json({ error: 'Status not found' });
+    if (status.is_system) return res.status(400).json({ error: 'Cannot delete system statuses. You can rename or recolor them.' });
+
+    const { data: projectsUsingStatus } = await supabase
+      .from('projects')
+      .select('id')
+      .eq('organization_id', id)
+      .eq('status_id', statusId);
+
+    if (projectsUsingStatus && projectsUsingStatus.length > 0) {
+      return res.status(400).json({
+        error: `Cannot delete status "${status.name}" because ${projectsUsingStatus.length} project(s) are using it. Reassign them first.`,
+        projects_count: projectsUsingStatus.length,
+      });
+    }
+
+    const { error } = await supabase
+      .from('organization_statuses')
+      .delete()
+      .eq('id', statusId)
+      .eq('organization_id', id);
+
+    if (error) throw error;
+
+    await createActivity({
+      organization_id: id,
+      user_id: userId,
+      activity_type: 'deleted_status',
+      description: `deleted status "${status.name}"`,
+      metadata: { status_name: status.name },
+    });
+
+    res.json({ message: 'Status deleted' });
+  } catch (error: any) {
+    console.error('Error deleting status:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete status' });
+  }
+});
+
+// ───── Phase 4: Organization Asset Tiers CRUD ─────
+
+// GET /api/organizations/:id/asset-tiers
+router.get('/:id/asset-tiers', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const { data: tiers, error } = await supabase
+      .from('organization_asset_tiers')
+      .select('*')
+      .eq('organization_id', id)
+      .order('rank', { ascending: true });
+
+    if (error) throw error;
+    res.json(tiers ?? []);
+  } catch (error: any) {
+    console.error('Error fetching asset tiers:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch asset tiers' });
+  }
+});
+
+// POST /api/organizations/:id/asset-tiers
+router.post('/:id/asset-tiers', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    if (!(await canManageStatuses(id, userId))) {
+      return res.status(403).json({ error: 'Permission denied' });
+    }
+
+    const { name, color, description, environmental_multiplier, rank } = req.body;
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'Tier name is required' });
+    }
+
+    const multiplier = typeof environmental_multiplier === 'number' ? environmental_multiplier : 1.0;
+
+    const { data: tier, error } = await supabase
+      .from('organization_asset_tiers')
+      .insert({
+        organization_id: id,
+        name: name.trim(),
+        color: color || '#6b7280',
+        description: description || null,
+        environmental_multiplier: multiplier,
+        rank: rank ?? 50,
+        is_system: false,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === '23505') {
+        return res.status(409).json({ error: 'A tier with this name already exists' });
+      }
+      throw error;
+    }
+
+    await createActivity({
+      organization_id: id,
+      user_id: userId,
+      activity_type: 'created_asset_tier',
+      description: `created asset tier "${name.trim()}"`,
+      metadata: { tier_name: name.trim() },
+    });
+
+    res.status(201).json(tier);
+  } catch (error: any) {
+    console.error('Error creating asset tier:', error);
+    res.status(500).json({ error: error.message || 'Failed to create asset tier' });
+  }
+});
+
+// PUT /api/organizations/:id/asset-tiers/:tierId
+router.put('/:id/asset-tiers/:tierId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, tierId } = req.params;
+
+    if (!(await canManageStatuses(id, userId))) {
+      return res.status(403).json({ error: 'Permission denied' });
+    }
+
+    const updates: Record<string, unknown> = {};
+    if (req.body.name !== undefined) updates.name = req.body.name;
+    if (req.body.color !== undefined) updates.color = req.body.color;
+    if (req.body.description !== undefined) updates.description = req.body.description;
+    if (req.body.environmental_multiplier !== undefined) updates.environmental_multiplier = req.body.environmental_multiplier;
+    if (req.body.rank !== undefined) updates.rank = req.body.rank;
+
+    const { data: tier, error } = await supabase
+      .from('organization_asset_tiers')
+      .update(updates)
+      .eq('id', tierId)
+      .eq('organization_id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    if (!tier) return res.status(404).json({ error: 'Tier not found' });
+
+    res.json(tier);
+  } catch (error: any) {
+    console.error('Error updating asset tier:', error);
+    res.status(500).json({ error: error.message || 'Failed to update asset tier' });
+  }
+});
+
+// PUT /api/organizations/:id/asset-tiers/reorder
+router.put('/:id/asset-tiers/reorder', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    if (!(await canManageStatuses(id, userId))) {
+      return res.status(403).json({ error: 'Permission denied' });
+    }
+
+    const { order } = req.body;
+    if (!Array.isArray(order)) {
+      return res.status(400).json({ error: 'order must be an array of { id, rank }' });
+    }
+
+    for (const item of order) {
+      await supabase
+        .from('organization_asset_tiers')
+        .update({ rank: item.rank })
+        .eq('id', item.id)
+        .eq('organization_id', id);
+    }
+
+    const { data: tiers } = await supabase
+      .from('organization_asset_tiers')
+      .select('*')
+      .eq('organization_id', id)
+      .order('rank', { ascending: true });
+
+    res.json(tiers ?? []);
+  } catch (error: any) {
+    console.error('Error reordering asset tiers:', error);
+    res.status(500).json({ error: error.message || 'Failed to reorder asset tiers' });
+  }
+});
+
+// DELETE /api/organizations/:id/asset-tiers/:tierId
+router.delete('/:id/asset-tiers/:tierId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, tierId } = req.params;
+
+    if (!(await canManageStatuses(id, userId))) {
+      return res.status(403).json({ error: 'Permission denied' });
+    }
+
+    const { data: tier } = await supabase
+      .from('organization_asset_tiers')
+      .select('is_system, name')
+      .eq('id', tierId)
+      .eq('organization_id', id)
+      .single();
+
+    if (!tier) return res.status(404).json({ error: 'Tier not found' });
+    if (tier.is_system) return res.status(400).json({ error: 'Cannot delete system tiers' });
+
+    const reassignTo = req.body?.reassign_to_id;
+    if (reassignTo) {
+      await supabase
+        .from('projects')
+        .update({ asset_tier_id: reassignTo })
+        .eq('organization_id', id)
+        .eq('asset_tier_id', tierId);
+    }
+
+    const { error } = await supabase
+      .from('organization_asset_tiers')
+      .delete()
+      .eq('id', tierId)
+      .eq('organization_id', id);
+
+    if (error) throw error;
+
+    await createActivity({
+      organization_id: id,
+      user_id: userId,
+      activity_type: 'deleted_asset_tier',
+      description: `deleted asset tier "${tier.name}"`,
+      metadata: { tier_name: tier.name },
+    });
+
+    res.json({ message: 'Tier deleted' });
+  } catch (error: any) {
+    console.error('Error deleting asset tier:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete asset tier' });
+  }
+});
+
+// ───── Phase 4: Split Policy Code CRUD ─────
+
+// GET /api/organizations/:id/policy-code
+router.get('/:id/policy-code', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const [pkgResult, statusResult, prResult] = await Promise.all([
+      supabase.from('organization_package_policies').select('*').eq('organization_id', id).single(),
+      supabase.from('organization_status_codes').select('*').eq('organization_id', id).single(),
+      supabase.from('organization_pr_checks').select('*').eq('organization_id', id).single(),
+    ]);
+
+    res.json({
+      package_policy: pkgResult.data ?? { package_policy_code: null },
+      status_code: statusResult.data ?? { project_status_code: null },
+      pr_check: prResult.data ?? { pr_check_code: null },
+    });
+  } catch (error: any) {
+    console.error('Error fetching policy code:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch policy code' });
+  }
+});
+
+// PUT /api/organizations/:id/policy-code/:codeType
+router.put('/:id/policy-code/:codeType', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, codeType } = req.params;
+    const { code, message } = req.body;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    if (membership.role !== 'owner' && membership.role !== 'admin') {
+      const { data: role } = await supabase
+        .from('organization_roles')
+        .select('permissions')
+        .eq('organization_id', id)
+        .eq('name', membership.role)
+        .single();
+
+      if (!(role?.permissions as Record<string, boolean>)?.manage_compliance) {
+        return res.status(403).json({ error: 'Permission denied' });
+      }
+    }
+
+    if (typeof code !== 'string') {
+      return res.status(400).json({ error: 'code is required' });
+    }
+
+    const MAX_CODE_SIZE = 50_000;
+    if (code.length > MAX_CODE_SIZE) {
+      return res.status(400).json({ error: 'Policy code exceeds 50KB limit' });
+    }
+
+    let tableName: string;
+    let columnName: string;
+    switch (codeType) {
+      case 'package_policy':
+        tableName = 'organization_package_policies';
+        columnName = 'package_policy_code';
+        break;
+      case 'project_status':
+        tableName = 'organization_status_codes';
+        columnName = 'project_status_code';
+        break;
+      case 'pr_check':
+        tableName = 'organization_pr_checks';
+        columnName = 'pr_check_code';
+        break;
+      default:
+        return res.status(400).json({ error: 'Invalid code type. Must be package_policy, project_status, or pr_check' });
+    }
+
+    const { data: existing } = await supabase
+      .from(tableName)
+      .select('*')
+      .eq('organization_id', id)
+      .single();
+
+    const previousCode = existing ? (existing as Record<string, unknown>)[columnName] as string : null;
+
+    if (existing) {
+      const { error: updateError } = await supabase
+        .from(tableName)
+        .update({ [columnName]: code, updated_at: new Date().toISOString(), updated_by_id: userId })
+        .eq('organization_id', id);
+
+      if (updateError) throw updateError;
+    } else {
+      const { error: insertError } = await supabase
+        .from(tableName)
+        .insert({ organization_id: id, [columnName]: code, updated_by_id: userId });
+
+      if (insertError) throw insertError;
+    }
+
+    await supabase.from('organization_policy_changes').insert({
+      organization_id: id,
+      code_type: codeType,
+      author_id: userId,
+      previous_code: previousCode || '',
+      new_code: code,
+      message: message || `Updated ${codeType.replace('_', ' ')}`,
+    });
+
+    await createActivity({
+      organization_id: id,
+      user_id: userId,
+      activity_type: 'updated_policy_code',
+      description: `updated ${codeType.replace('_', ' ')} policy code`,
+      metadata: { code_type: codeType },
+    });
+
+    res.json({ success: true, code_type: codeType });
+  } catch (error: any) {
+    console.error('Error updating policy code:', error);
+    res.status(500).json({ error: error.message || 'Failed to update policy code' });
+  }
+});
+
+// GET /api/organizations/:id/policy-changes - Org-level policy change history
+router.get('/:id/policy-changes', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const codeTypeFilter = req.query.code_type as string | undefined;
+    let query = supabase
+      .from('organization_policy_changes')
+      .select('*')
+      .eq('organization_id', id)
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (codeTypeFilter) {
+      query = query.eq('code_type', codeTypeFilter);
+    }
+
+    const { data: changes, error } = await query;
+    if (error) throw error;
+
+    res.json(changes ?? []);
+  } catch (error: any) {
+    console.error('Error fetching policy changes:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch policy changes' });
+  }
+});
+
+// POST /api/organizations/:id/policy-code/:codeType/revert
+router.post('/:id/policy-code/:codeType/revert', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, codeType } = req.params;
+    const { change_id } = req.body;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    if (membership.role !== 'owner' && membership.role !== 'admin') {
+      const { data: role } = await supabase
+        .from('organization_roles')
+        .select('permissions')
+        .eq('organization_id', id)
+        .eq('name', membership.role)
+        .single();
+
+      if (!(role?.permissions as Record<string, boolean>)?.manage_compliance) {
+        return res.status(403).json({ error: 'Permission denied' });
+      }
+    }
+
+    let revertToCode: string;
+    if (change_id) {
+      const { data: change } = await supabase
+        .from('organization_policy_changes')
+        .select('new_code')
+        .eq('id', change_id)
+        .eq('organization_id', id)
+        .single();
+
+      if (!change) return res.status(404).json({ error: 'Change not found' });
+      revertToCode = change.new_code;
+    } else {
+      const defaults: Record<string, string> = {
+        package_policy: (await import('../lib/policy-defaults')).DEFAULT_PACKAGE_POLICY_CODE,
+        project_status: (await import('../lib/policy-defaults')).DEFAULT_PROJECT_STATUS_CODE,
+        pr_check: (await import('../lib/policy-defaults')).DEFAULT_PR_CHECK_CODE,
+      };
+      revertToCode = defaults[codeType] || '';
+    }
+
+    let tableName: string;
+    let columnName: string;
+    switch (codeType) {
+      case 'package_policy':
+        tableName = 'organization_package_policies';
+        columnName = 'package_policy_code';
+        break;
+      case 'project_status':
+        tableName = 'organization_status_codes';
+        columnName = 'project_status_code';
+        break;
+      case 'pr_check':
+        tableName = 'organization_pr_checks';
+        columnName = 'pr_check_code';
+        break;
+      default:
+        return res.status(400).json({ error: 'Invalid code type' });
+    }
+
+    const { data: existing } = await supabase
+      .from(tableName)
+      .select('*')
+      .eq('organization_id', id)
+      .single();
+
+    const previousCode = existing ? (existing as Record<string, unknown>)[columnName] as string : '';
+
+    await supabase
+      .from(tableName)
+      .update({ [columnName]: revertToCode, updated_at: new Date().toISOString(), updated_by_id: userId })
+      .eq('organization_id', id);
+
+    await supabase.from('organization_policy_changes').insert({
+      organization_id: id,
+      code_type: codeType,
+      author_id: userId,
+      previous_code: previousCode,
+      new_code: revertToCode,
+      message: change_id ? `Reverted to previous version` : 'Reverted to default template',
+    });
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Error reverting policy code:', error);
+    res.status(500).json({ error: error.message || 'Failed to revert policy code' });
   }
 });
 

@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useParams, useOutletContext, useNavigate, Link } from 'react-router-dom';
+import { useParams, useOutletContext, useNavigate } from 'react-router-dom';
 import { cn } from '../../lib/utils';
-import { Check, X, Clock, BookOpen, Sparkles, Eye, Ban, FileQuestion } from 'lucide-react';
-import { api, Organization, OrganizationPolicies, RolePermissions, ProjectPolicyException } from '../../lib/api';
+import { BookOpen, Sparkles, Loader2, Check, X, Clock, Eye, Ban, FileQuestion } from 'lucide-react';
+import { api, Organization, RolePermissions, ProjectPolicyException, OrganizationPolicyChange } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { PolicyCodeEditor } from '../../components/PolicyCodeEditor';
 import { Button } from '../../components/ui/button';
@@ -12,21 +12,8 @@ import { Avatar, AvatarFallback, AvatarImage } from '../../components/ui/avatar'
 import { Toaster } from '../../components/ui/toaster';
 import { PolicyAIAssistant } from '../../components/PolicyAIAssistant';
 import { PolicyExceptionSidebar } from '../../components/PolicyExceptionSidebar';
-import { FrameworkIcon } from '../../components/framework-icon';
-import { RoleBadge } from '../../components/RoleBadge';
 
-/** Minimal default: both return pass/compliant. */
-const DEFAULT_PULL_REQUEST_BODY = 'return { passed: true };';
-const DEFAULT_COMPLIANCE_BODY = 'return { compliant: true };';
-
-/** Assemble full policy code from two function bodies. */
-function assemblePolicyCode(pullRequestBody: string, complianceBody: string): string {
-  const prLines = pullRequestBody.trim().split('\n').map((l) => (l ? `  ${l}` : ''));
-  const compLines = complianceBody.trim().split('\n').map((l) => (l ? `  ${l}` : ''));
-  return `function pullRequestCheck(context) {\n${prLines.join('\n')}\n}\n\nfunction projectCompliance(context) {\n${compLines.join('\n')}\n}`;
-}
-
-/** Extract the body of a named function from full policy code. */
+/** Legacy helpers for backward-compat with old policy_code format. */
 function extractFunctionBody(code: string, fnName: string): string | null {
   const regex = new RegExp(`function\\s+${fnName}\\s*\\([^)]*\\)\\s*\\{`, 'g');
   const match = regex.exec(code);
@@ -42,15 +29,22 @@ function extractFunctionBody(code: string, fnName: string): string | null {
   return code.slice(startIdx, i - 1).trim();
 }
 
-/** Parse full policy code into pullRequestCheck and projectCompliance bodies. */
+function assemblePolicyCode(pullRequestBody: string, complianceBody: string): string {
+  const prLines = pullRequestBody.trim().split('\n').map((l) => (l ? `  ${l}` : ''));
+  const compLines = complianceBody.trim().split('\n').map((l) => (l ? `  ${l}` : ''));
+  return `function pullRequestCheck(context) {\n${prLines.join('\n')}\n}\n\nfunction projectCompliance(context) {\n${compLines.join('\n')}\n}`;
+}
+
 function parsePolicyCode(code: string): { pullRequestBody: string; complianceBody: string } {
   const prBody = extractFunctionBody(code, 'pullRequestCheck');
   const compBody = extractFunctionBody(code, 'projectCompliance');
   return {
-    pullRequestBody: prBody ?? DEFAULT_PULL_REQUEST_BODY,
-    complianceBody: compBody ?? DEFAULT_COMPLIANCE_BODY,
+    pullRequestBody: prBody ?? 'return { passed: true };',
+    complianceBody: compBody ?? 'return { compliant: true };',
   };
 }
+
+type SubTab = 'package_policy' | 'pr_check' | 'change_history';
 
 interface OrganizationContextType {
   organization: Organization | null;
@@ -67,26 +61,53 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
   const { organization } = useOutletContext<OrganizationContextType>();
   const { toast } = useToast();
 
-  const [policies, setPolicies] = useState<OrganizationPolicies | null>(null);
   const [loading, setLoading] = useState(true);
   const [userPermissions, setUserPermissions] = useState<RolePermissions | null>(null);
   const [permissionsLoaded, setPermissionsLoaded] = useState(false);
+  const [subTab, setSubTab] = useState<SubTab>('package_policy');
 
-  const [savedPullRequestBody, setSavedPullRequestBody] = useState('');
-  const [savedComplianceBody, setSavedComplianceBody] = useState('');
-  const [pullRequestBody, setPullRequestBody] = useState('');
-  const [complianceBody, setComplianceBody] = useState('');
+  // Split policy code state
+  const [packagePolicyCode, setPackagePolicyCode] = useState('');
+  const [packagePolicyOriginal, setPackagePolicyOriginal] = useState('');
+  const [prCheckCode, setPrCheckCode] = useState('');
+  const [prCheckOriginal, setPrCheckOriginal] = useState('');
   const [saving, setSaving] = useState(false);
-  const [hasSyncedFromPolicies, setHasSyncedFromPolicies] = useState(false);
+  const [validating, setValidating] = useState(false);
+  const [validationResult, setValidationResult] = useState<any>(null);
 
+  // AI sidebar
   const [showAI, setShowAI] = useState(false);
   const [aiPanelVisible, setAiPanelVisible] = useState(false);
   const aiCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [activeTab, setActiveTab] = useState<'policies' | 'exceptions'>('policies');
+
+  // Change history
+  const [changes, setChanges] = useState<OrganizationPolicyChange[]>([]);
+  const [loadingChanges, setLoadingChanges] = useState(false);
+
+  // Legacy exceptions (backward compat)
   const [exceptions, setExceptions] = useState<ProjectPolicyException[]>([]);
   const [exceptionsLoading, setExceptionsLoading] = useState(false);
   const [reviewingExceptionId, setReviewingExceptionId] = useState<string | null>(null);
   const [viewingExceptionId, setViewingExceptionId] = useState<string | null>(null);
+
+  const loadPolicyCode = useCallback(async () => {
+    if (!id) return;
+    try {
+      setLoading(true);
+      const data = await api.getOrganizationPolicyCode(id);
+      const pkgCode = data.package_policy?.package_policy_code || '';
+      const prCode = data.pr_check?.pr_check_code || '';
+      setPackagePolicyCode(pkgCode);
+      setPackagePolicyOriginal(pkgCode);
+      setPrCheckCode(prCode);
+      setPrCheckOriginal(prCode);
+    } catch (error: any) {
+      console.error('Failed to load policy code:', error);
+      toast({ title: 'Error', description: error.message || 'Failed to load policy code', variant: 'destructive' });
+    } finally {
+      setLoading(false);
+    }
+  }, [id, toast]);
 
   const loadExceptions = useCallback(async () => {
     if (!id) return;
@@ -95,35 +116,38 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
       const list = await api.getOrganizationPolicyExceptions(id);
       setExceptions(list);
     } catch (e: any) {
-      toast({ title: 'Error', description: e.message || 'Failed to load exception applications', variant: 'destructive' });
+      console.error('Failed to load exceptions:', e);
     } finally {
       setExceptionsLoading(false);
     }
-  }, [id, toast]);
+  }, [id]);
 
   useEffect(() => {
-    if (id) loadExceptions();
-  }, [id, loadExceptions]);
-
-  const loadPolicies = useCallback(async () => {
-    if (!id) return;
-    try {
-      setLoading(true);
-      const policiesData = await api.getOrganizationPolicies(id);
-      setPolicies(policiesData);
-    } catch (error: any) {
-      console.error('Failed to load policies:', error);
-      toast({
-        title: 'Error',
-        description: error.message || 'Failed to load policies',
-        variant: 'destructive',
-      });
-    } finally {
-      setLoading(false);
+    if (id) {
+      loadPolicyCode();
+      loadExceptions();
     }
-  }, [id, toast]);
+  }, [id, loadPolicyCode, loadExceptions]);
 
-  // AI sidebar: animate in on open, animate out before unmount
+  useEffect(() => {
+    if (subTab === 'change_history' && id) {
+      setLoadingChanges(true);
+      Promise.all([
+        api.getOrganizationPolicyChanges(id, 'package_policy'),
+        api.getOrganizationPolicyChanges(id, 'pr_check'),
+      ])
+        .then(([pkgChanges, prChanges]) => {
+          const all = [...pkgChanges, ...prChanges].sort(
+            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+          );
+          setChanges(all);
+        })
+        .catch(console.error)
+        .finally(() => setLoadingChanges(false));
+    }
+  }, [subTab, id]);
+
+  // AI sidebar animation
   useEffect(() => {
     if (showAI) {
       setAiPanelVisible(false);
@@ -149,34 +173,23 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
     }, 150);
   }, []);
 
-  const getCachedPermissions = (): RolePermissions | null => {
-    if (organization?.permissions) return organization.permissions;
-    if (id) {
-      const cachedStr = localStorage.getItem(`org_permissions_${id}`);
-      if (cachedStr) {
-        try { return JSON.parse(cachedStr); } catch { return null; }
-      }
-    }
-    return null;
-  };
-
+  // Permissions
   useEffect(() => {
     const loadPermissions = async () => {
       if (!id || !organization?.role) {
         setPermissionsLoaded(true);
         return;
       }
-      const cachedPerms = getCachedPermissions();
-      if (cachedPerms) {
-        setUserPermissions(cachedPerms);
+      if (organization?.permissions) {
+        setUserPermissions(organization.permissions);
         setPermissionsLoaded(true);
+        return;
       }
       try {
         const roles = await api.getOrganizationRoles(id);
-        const userRole = roles.find(r => r.name === organization.role);
+        const userRole = roles.find((r: any) => r.name === organization.role);
         if (userRole?.permissions) {
           setUserPermissions(userRole.permissions);
-          localStorage.setItem(`org_permissions_${id}`, JSON.stringify(userRole.permissions));
         }
       } catch (error) {
         console.error('Failed to load permissions:', error);
@@ -187,65 +200,63 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
     loadPermissions();
   }, [id, organization?.role]);
 
-  useEffect(() => {
-    if (id) loadPolicies();
-  }, [id, loadPolicies]);
+  const hasManageCompliance =
+    userPermissions?.manage_compliance === true ||
+    organization?.role === 'owner' ||
+    organization?.role === 'admin';
 
-  // Sync editors from server when policies load or after save
-  useEffect(() => {
-    if (!policies) return;
-    const code = (policies.policy_code ?? '').trim();
-    const { pullRequestBody: pr, complianceBody: comp } = code
-      ? parsePolicyCode(code)
-      : { pullRequestBody: DEFAULT_PULL_REQUEST_BODY, complianceBody: DEFAULT_COMPLIANCE_BODY };
-    setSavedPullRequestBody(pr);
-    setSavedComplianceBody(comp);
-    setPullRequestBody(pr);
-    setComplianceBody(comp);
-    setHasSyncedFromPolicies(true);
-  }, [policies?.policy_code]);
+  const packagePolicyDirty = packagePolicyCode !== packagePolicyOriginal;
+  const prCheckDirty = prCheckCode !== prCheckOriginal;
 
-  const complianceDirty =
-    hasSyncedFromPolicies && complianceBody !== savedComplianceBody;
-  const pullRequestDirty =
-    hasSyncedFromPolicies && pullRequestBody !== savedPullRequestBody;
-
-  const handleSave = async () => {
+  const handleSave = async (codeType: 'package_policy' | 'pr_check') => {
     if (!id) return;
+    const code = codeType === 'package_policy' ? packagePolicyCode : prCheckCode;
+
+    setSaving(true);
+    setValidating(true);
+    setValidationResult(null);
     try {
-      setSaving(true);
-      const codeToSave = assemblePolicyCode(pullRequestBody, complianceBody);
-      const updated = await api.updateOrganizationPolicies(id, { policy_code: codeToSave });
-      setPolicies(updated);
-      const { pullRequestBody: pr, complianceBody: comp } = parsePolicyCode(updated.policy_code ?? codeToSave);
-      setSavedPullRequestBody(pr);
-      setSavedComplianceBody(comp);
-      setPullRequestBody(pr);
-      setComplianceBody(comp);
-      toast({
-        title: 'Policy saved',
-        description: 'Your organization policy has been updated successfully.',
-      });
+      const validation = await api.validatePolicyCode(id, code, codeType);
+      setValidationResult(validation);
+      setValidating(false);
+
+      if (!validation.allPassed) {
+        toast({
+          title: 'Validation failed',
+          description: validation.syntaxError || validation.shapeError || validation.fetchResilienceError || 'Validation failed',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      await api.updateOrganizationPolicyCode(id, codeType, code, `Updated ${codeType.replace('_', ' ')}`);
+
+      if (codeType === 'package_policy') {
+        setPackagePolicyOriginal(code);
+      } else {
+        setPrCheckOriginal(code);
+      }
+
+      toast({ title: 'Policy saved', description: `${codeType === 'package_policy' ? 'Package policy' : 'PR check'} updated successfully.` });
     } catch (error: any) {
-      console.error('Failed to save policy:', error);
-      toast({
-        title: 'Error',
-        description: error.message || 'Failed to save policy',
-        variant: 'destructive',
-      });
+      toast({ title: 'Error', description: error.message || 'Failed to save policy', variant: 'destructive' });
     } finally {
       setSaving(false);
     }
   };
 
-  const handleDiscardCompliance = () => setComplianceBody(savedComplianceBody);
-  const handleDiscardPullRequest = () => setPullRequestBody(savedPullRequestBody);
-
-  const hasManageCompliance =
-    userPermissions?.manage_compliance === true ||
-    organization?.role === 'owner' ||
-    organization?.role === 'admin';
-  const canEdit = hasManageCompliance;
+  const codeTypeBadge = (codeType: string) => {
+    const labels: Record<string, string> = {
+      package_policy: 'Package Policy',
+      project_status: 'Status Code',
+      pr_check: 'PR Check',
+    };
+    return (
+      <Badge variant="outline" className="text-xs">
+        {labels[codeType] || codeType}
+      </Badge>
+    );
+  };
 
   if (!organization) {
     return (
@@ -263,71 +274,18 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
     return null;
   }
 
-  if (loading) {
-    return (
-      <main className={`${isSettingsSubpage ? '' : 'mx-auto max-w-7xl px-4 sm:px-6 lg:px-8'} py-8`}>
-        <div className="sticky top-0 z-10 bg-background pb-2">
-          <div className="mb-6 flex items-start justify-between">
-            <div>
-              {isSettingsSubpage ? (
-                <h2 className="text-2xl font-bold text-foreground">Policies</h2>
-              ) : (
-                <h1 className="text-3xl font-bold text-foreground">Policies</h1>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" className="text-xs" disabled>
-                <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-                AI Assistant
-              </Button>
-              <Button variant="outline" size="sm" className="text-xs" disabled>
-                <BookOpen className="h-3.5 w-3.5 mr-1.5" />
-                Docs
-              </Button>
-            </div>
-          </div>
-          <div className="flex items-center border-b border-border pb-px">
-            <div className="flex items-center gap-6">
-              <span className="pb-3 text-sm font-medium text-foreground border-b-2 border-foreground -mb-px">Policy</span>
-              <span className="pb-3 text-sm font-medium text-foreground-secondary border-b-2 border-transparent -mb-px">Exception applications</span>
-            </div>
-          </div>
-        </div>
-        <div className="space-y-6 pt-2">
-          {[0, 1].map((i) => (
-            <div key={i} className="rounded-lg border border-border bg-background-card overflow-hidden">
-              <div className="px-4 py-2.5 bg-background-card-header border-b border-border">
-                <div className="h-3.5 bg-muted rounded w-32 animate-pulse" />
-              </div>
-              <div className="bg-[#1d1f21] px-4 py-3 font-mono text-[13px] leading-6" style={{ minHeight: '180px' }}>
-                <div className="space-y-1.5 animate-pulse">
-                  <div className="h-3 bg-white/[0.06] rounded w-[70%]" />
-                  <div className="h-3 bg-white/[0.06] rounded w-[55%] ml-4" />
-                  <div className="h-3 bg-white/[0.06] rounded w-[80%] ml-4" />
-                  <div className="h-3 bg-white/[0.06] rounded w-[40%] ml-8" />
-                  <div className="h-3 bg-white/[0.06] rounded w-[60%] ml-4" />
-                  <div className="h-3 bg-white/[0.06] rounded w-[30%]" />
-                  <div className="h-3" />
-                  <div className="h-3 bg-white/[0.06] rounded w-[50%] ml-4" />
-                  <div className="h-3 bg-white/[0.06] rounded w-[45%] ml-4" />
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </main>
-    );
-  }
-
-  const reviewingException = reviewingExceptionId ? exceptions.find((e) => e.id === reviewingExceptionId) : null;
-  const canReviewExceptions = hasManageCompliance;
+  const subTabs: { id: SubTab; label: string }[] = [
+    { id: 'package_policy', label: 'Package Policy' },
+    { id: 'pr_check', label: 'Pull Request Check' },
+    { id: 'change_history', label: 'Change History' },
+  ];
 
   return (
-    <>
-      <div className="w-full">
-        <main className={`${isSettingsSubpage ? '' : 'mx-auto max-w-7xl px-4 sm:px-6 lg:px-8'} py-8`}>
-        {/* Sticky header so title and tabs stay visible when scrolling */}
-        <div className="sticky top-0 z-10 bg-background pb-2">
+    <main className={`${isSettingsSubpage ? '' : 'mx-auto max-w-7xl px-4 sm:px-6 lg:px-8'} py-8`}>
+      {!isSettingsSubpage && <Toaster />}
+
+      {/* Header */}
+      <div className="sticky top-0 z-10 bg-background pb-2">
         <div className="mb-6 flex items-start justify-between">
           <div>
             {isSettingsSubpage ? (
@@ -335,390 +293,207 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
             ) : (
               <h1 className="text-3xl font-bold text-foreground">Policies</h1>
             )}
+            <p className="text-sm text-muted-foreground mt-1">
+              Define package policy and PR check code for your organization.
+            </p>
           </div>
           <div className="flex items-center gap-2">
-            {canEdit && (
-              <Button variant="outline" size="sm" className="text-xs" onClick={() => setShowAI(true)}>
-                <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-                AI Assistant
-              </Button>
-            )}
-            <Link to="/docs/policies" target="_blank">
-              <Button variant="outline" size="sm" className="text-xs">
-                <BookOpen className="h-3.5 w-3.5 mr-1.5" />
-                Docs
-              </Button>
-            </Link>
+            <Button variant="outline" size="sm" className="text-xs" onClick={() => setShowAI(true)}>
+              <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+              AI Assistant
+            </Button>
+            <Button variant="outline" size="sm" className="text-xs" onClick={() => window.open('/docs/policies', '_blank')}>
+              <BookOpen className="h-3.5 w-3.5 mr-1.5" />
+              Docs
+            </Button>
           </div>
         </div>
 
-        <div className="flex items-center justify-between border-b border-border pb-px">
+        {/* Sub-tabs */}
+        <div className="flex items-center border-b border-border pb-px">
           <div className="flex items-center gap-6">
-            <button
-              type="button"
-              onClick={() => setActiveTab('policies')}
-              className={`pb-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
-                activeTab === 'policies' ? 'text-foreground border-foreground' : 'text-foreground-secondary hover:text-foreground border-transparent'
-              }`}
-            >
-              Policy
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('exceptions')}
-              className={`pb-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
-                activeTab === 'exceptions' ? 'text-foreground border-foreground' : 'text-foreground-secondary hover:text-foreground border-transparent'
-              }`}
-            >
-              Exception applications
-            </button>
+            {subTabs.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setSubTab(tab.id)}
+                className={`pb-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                  subTab === tab.id
+                    ? 'text-foreground border-foreground'
+                    : 'text-foreground-secondary border-transparent hover:text-foreground'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
         </div>
-        </div>
-
-        {activeTab === 'policies' && (
-          <div className="space-y-6 pt-2 pb-8">
-            <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-              <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
-                <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project Compliance</span>
-                {canEdit && complianceDirty && (
-                  <div className="flex items-center gap-1.5">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleDiscardCompliance}
-                      disabled={saving}
-                      className="h-5 min-h-5 px-1.5 py-0 text-[11px] leading-none"
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      size="sm"
-                      onClick={handleSave}
-                      disabled={saving}
-                      className="h-5 min-h-5 px-1.5 py-0 text-[11px] leading-none shadow-sm gap-1"
-                    >
-                      {saving && (
-                        <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-current border-t-transparent shrink-0" />
-                      )}
-                      Save
-                    </Button>
-                  </div>
-                )}
-              </div>
-              <div className="bg-background-card">
-                <PolicyCodeEditor
-                  value={complianceBody}
-                  onChange={setComplianceBody}
-                  readOnly={!canEdit}
-                  fitContent
-                />
-              </div>
-            </div>
-
-            <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-              <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
-                <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Pull Request Check</span>
-                {canEdit && pullRequestDirty && (
-                  <div className="flex items-center gap-1.5">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleDiscardPullRequest}
-                      disabled={saving}
-                      className="h-5 min-h-5 px-1.5 py-0 text-[11px] leading-none"
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      size="sm"
-                      onClick={handleSave}
-                      disabled={saving}
-                      className="h-5 min-h-5 px-1.5 py-0 text-[11px] leading-none shadow-sm gap-1"
-                    >
-                      {saving && (
-                        <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-current border-t-transparent shrink-0" />
-                      )}
-                      Save
-                    </Button>
-                  </div>
-                )}
-              </div>
-              <div className="bg-background-card">
-                <PolicyCodeEditor
-                  value={pullRequestBody}
-                  onChange={setPullRequestBody}
-                  readOnly={!canEdit}
-                  fitContent
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'exceptions' && (
-          <div className="space-y-6 pt-2 pb-8">
-            {exceptionsLoading ? (
-              <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                <table className="w-full table-fixed">
-                  <colgroup>
-                    <col className="w-[200px]" />
-                    <col className="w-[180px]" />
-                    <col className="w-[120px]" />
-                    <col className="w-[120px]" />
-                    <col className="w-[120px]" />
-                  </colgroup>
-                  <thead className="bg-background-card-header border-b border-border">
-                    <tr>
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project</th>
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Requester</th>
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Type</th>
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</th>
-                      <th className="text-right px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {[0, 1, 2].map((i) => (
-                      <tr key={i} className="animate-pulse">
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <div className="h-5 w-5 rounded bg-muted flex-shrink-0" />
-                            <div className="h-4 bg-muted rounded w-24" />
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <div className="h-5 w-5 rounded-full bg-muted flex-shrink-0" />
-                            <div className="h-4 bg-muted rounded w-24" />
-                          </div>
-                        </td>
-                        <td className="px-4 py-3"><div className="h-4 bg-muted rounded w-20" /></td>
-                        <td className="px-4 py-3"><div className="h-5 bg-muted rounded w-16" /></td>
-                        <td className="px-4 py-3 text-right"><div className="h-7 bg-muted rounded w-16 ml-auto" /></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                <table className="w-full table-fixed">
-                  <colgroup>
-                    <col className="w-[200px]" />
-                    <col className="w-[180px]" />
-                    <col className="w-[120px]" />
-                    <col className="w-[120px]" />
-                    <col className="w-[120px]" />
-                  </colgroup>
-                  <thead className="bg-background-card-header border-b border-border">
-                    <tr>
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project</th>
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Requester</th>
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Type</th>
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</th>
-                      <th className="text-right px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {exceptions.length === 0 ? (
-                      <tr>
-                        <td colSpan={5} className="px-4 py-12">
-                          <div className="flex flex-col items-center justify-center gap-3 text-center">
-                            <FileQuestion className="h-10 w-10 text-foreground-muted" />
-                            <div>
-                              <p className="text-sm font-medium text-foreground">No exception applications</p>
-                              <p className="text-sm text-foreground-secondary mt-1 max-w-sm">
-                                Projects can request policy exceptions when they need different rules. Requests will appear here for review.
-                              </p>
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    ) : (
-                      exceptions.map((ex) => (
-                        <tr key={ex.id} className="group hover:bg-table-hover transition-colors">
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <FrameworkIcon frameworkId={ex.project_framework} size={20} />
-                              <span className="text-sm text-foreground">{ex.project_name ?? '\u2014'}</span>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-3 min-w-0">
-                              <Avatar className="h-5 w-5 flex-shrink-0">
-                                <AvatarImage src={ex.requester?.avatar_url ?? undefined} alt="" />
-                                <AvatarFallback className="text-[10px] bg-background-subtle">
-                                  {ex.requester?.full_name ? ex.requester.full_name.charAt(0).toUpperCase() : '?'}
-                                </AvatarFallback>
-                              </Avatar>
-                              <div className="flex-1 min-w-0 flex items-center gap-2">
-                                <span className="text-sm font-medium text-foreground truncate">{ex.requester?.full_name || '\u2014'}</span>
-                                {ex.requester?.role && (
-                                  <RoleBadge
-                                    role={ex.requester.role}
-                                    roleDisplayName={ex.requester.role_display_name}
-                                    roleColor={ex.requester.role_color}
-                                  />
-                                )}
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 text-sm text-foreground">
-                            {ex.policy_type === 'pull_request' ? 'Pull Request' : ex.policy_type === 'compliance' ? 'Compliance' : 'Full'}
-                          </td>
-                          <td className="px-4 py-3">
-                            {ex.status === 'pending' && (
-                              <Badge variant="warning" className="gap-1"><Clock className="h-3 w-3" /> Pending</Badge>
-                            )}
-                            {ex.status === 'accepted' && (
-                              <Badge variant="success" className="gap-1"><Check className="h-3 w-3" /> Accepted</Badge>
-                            )}
-                            {ex.status === 'rejected' && (
-                              <Badge variant="destructive" className="gap-1"><X className="h-3 w-3" /> Rejected</Badge>
-                            )}
-                            {ex.status === 'revoked' && (
-                              <Badge variant="destructive" className="gap-1"><Ban className="h-3 w-3" /> Revoked</Badge>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              {(ex.status === 'accepted' || ex.status === 'rejected' || ex.status === 'revoked') && ex.base_policy_code && ex.requested_policy_code && (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-7 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
-                                  onClick={() => setViewingExceptionId(ex.id)}
-                                >
-                                  <Eye className="h-3.5 w-3.5 mr-1" />
-                                  View
-                                </Button>
-                              )}
-                              {ex.status === 'pending' && canReviewExceptions && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => setReviewingExceptionId(ex.id)}
-                                >
-                                  Review
-                                </Button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* View Exception Sidebar */}
-        {viewingExceptionId && (() => {
-          const ex = exceptions.find((e) => e.id === viewingExceptionId);
-          if (!ex?.base_policy_code || !ex?.requested_policy_code) return null;
-          return (
-            <PolicyExceptionSidebar
-              key={viewingExceptionId}
-              mode="view"
-              baseCode={ex.base_policy_code}
-              requestedCode={ex.requested_policy_code}
-              projectName={ex.project_name ?? 'Project'}
-              requester={ex.requester}
-              reason={ex.reason}
-              status={ex.status}
-              onRevoke={ex.status === 'accepted' && id && canReviewExceptions ? async () => {
-                try {
-                  await api.revokePolicyException(id, ex.id);
-                  toast({ title: 'Exception revoked', description: 'The project will now use the organization policy.' });
-                  setViewingExceptionId(null);
-                  await loadExceptions();
-                } catch (e: any) {
-                  const msg = e?.message?.toLowerCase().includes('already') ? 'This exception was already revoked.' : (e.message || 'Failed to revoke exception');
-                  toast({ title: 'Error', description: msg, variant: 'destructive' });
-                  setViewingExceptionId(null);
-                  await loadExceptions();
-                }
-              } : undefined}
-              onClose={() => setViewingExceptionId(null)}
-            />
-          );
-        })()}
-
-        {/* Review Exception Sidebar */}
-        {reviewingException && reviewingException.status === 'pending' && id && (
-          <PolicyExceptionSidebar
-            mode="review"
-            baseCode={reviewingException.base_policy_code ?? ''}
-            requestedCode={reviewingException.requested_policy_code ?? ''}
-            projectName={reviewingException.project_name ?? 'Project'}
-            requester={reviewingException.requester}
-            reason={reviewingException.reason}
-            onAccept={async () => {
-              try {
-                await api.reviewPolicyException(id, reviewingException.id, 'accepted');
-                toast({ title: 'Exception accepted' });
-                setReviewingExceptionId(null);
-                await loadExceptions();
-              } catch (e: any) {
-                const msg = e?.message?.toLowerCase().includes('already') ? 'This exception was already reviewed by someone else.' : (e.message || 'Failed to accept exception');
-                toast({ title: 'Error', description: msg, variant: 'destructive' });
-                setReviewingExceptionId(null);
-                await loadExceptions();
-              }
-            }}
-            onReject={async () => {
-              try {
-                await api.reviewPolicyException(id, reviewingException.id, 'rejected');
-                toast({ title: 'Exception rejected' });
-                setReviewingExceptionId(null);
-                await loadExceptions();
-              } catch (e: any) {
-                const msg = e?.message?.toLowerCase().includes('already') ? 'This exception was already reviewed by someone else.' : (e.message || 'Failed to reject exception');
-                toast({ title: 'Error', description: msg, variant: 'destructive' });
-                setReviewingExceptionId(null);
-                await loadExceptions();
-              }
-            }}
-            onClose={() => setReviewingExceptionId(null)}
-          />
-        )}
-        </main>
-
-        {showAI && id && createPortal(
-          <div className="fixed inset-0 z-50">
-            <div
-              className={cn(
-                'fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150',
-                aiPanelVisible ? 'opacity-100' : 'opacity-0'
-              )}
-              onClick={closeAIPanel}
-            />
-
-            <div
-              className={cn(
-                'fixed right-4 top-4 bottom-4 w-full max-w-[40rem] bg-background-card-header border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
-                aiPanelVisible ? 'translate-x-0' : 'translate-x-full'
-              )}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <PolicyAIAssistant
-                organizationId={id}
-                complianceBody={complianceBody}
-                pullRequestBody={pullRequestBody}
-                onUpdateCompliance={setComplianceBody}
-                onUpdatePullRequest={setPullRequestBody}
-                onClose={closeAIPanel}
-                variant="edge"
-              />
-            </div>
-          </div>,
-          document.body
-        )}
       </div>
 
-      <Toaster position="bottom-right" />
-    </>
+      {/* Content */}
+      {loading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : (
+        <div className="pt-4">
+          {/* Package Policy editor */}
+          {subTab === 'package_policy' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">
+                  Runs per dependency. Determines whether each package is allowed based on license, score, tier, and other metadata.
+                </p>
+                <div className="flex items-center gap-2">
+                  {packagePolicyDirty && (
+                    <Button size="sm" variant="ghost" onClick={() => setPackagePolicyCode(packagePolicyOriginal)}>
+                      Discard
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    onClick={() => handleSave('package_policy')}
+                    disabled={!packagePolicyDirty || saving}
+                  >
+                    {saving && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
+                    Save
+                  </Button>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-border overflow-hidden">
+                <PolicyCodeEditor
+                  value={packagePolicyCode}
+                  onChange={(val) => setPackagePolicyCode(val || '')}
+                  readOnly={!hasManageCompliance}
+                />
+              </div>
+
+              {validationResult && subTab === 'package_policy' && (
+                <ValidationResultDisplay result={validationResult} />
+              )}
+            </div>
+          )}
+
+          {/* PR Check editor */}
+          {subTab === 'pr_check' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">
+                  Runs on pull requests that modify lockfiles. Determines whether the PR should pass or be blocked.
+                </p>
+                <div className="flex items-center gap-2">
+                  {prCheckDirty && (
+                    <Button size="sm" variant="ghost" onClick={() => setPrCheckCode(prCheckOriginal)}>
+                      Discard
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    onClick={() => handleSave('pr_check')}
+                    disabled={!prCheckDirty || saving}
+                  >
+                    {saving && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
+                    Save
+                  </Button>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-border overflow-hidden">
+                <PolicyCodeEditor
+                  value={prCheckCode}
+                  onChange={(val) => setPrCheckCode(val || '')}
+                  readOnly={!hasManageCompliance}
+                />
+              </div>
+
+              {validationResult && subTab === 'pr_check' && (
+                <ValidationResultDisplay result={validationResult} />
+              )}
+            </div>
+          )}
+
+          {/* Change History */}
+          {subTab === 'change_history' && (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                History of package policy and PR check changes across the organization.
+              </p>
+
+              {loadingChanges ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                </div>
+              ) : changes.length === 0 ? (
+                <div className="text-sm text-muted-foreground text-center py-8 border border-border rounded-lg">
+                  No changes recorded yet.
+                </div>
+              ) : (
+                <div className="border border-border rounded-lg divide-y divide-border">
+                  {changes.map((change) => (
+                    <div key={change.id} className="px-4 py-3 flex items-center gap-3">
+                      {codeTypeBadge(change.code_type)}
+                      <span className="text-sm text-foreground flex-1 truncate">{change.message}</span>
+                      <span className="text-xs text-muted-foreground">{new Date(change.created_at).toLocaleDateString()}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* AI Assistant */}
+      {showAI && createPortal(
+        <div className="fixed inset-0 z-50 flex justify-end">
+          <div className="absolute inset-0 bg-black/40" onClick={closeAIPanel} />
+          <div className={cn(
+            'relative w-full max-w-[40rem] h-full transition-transform duration-150',
+            aiPanelVisible ? 'translate-x-0' : 'translate-x-full',
+          )}>
+            <PolicyAIAssistant
+              variant="edge"
+              complianceBody={packagePolicyCode}
+              pullRequestBody={prCheckCode}
+              onUpdateCompliance={(code: string) => setPackagePolicyCode(code)}
+              onUpdatePullRequest={(code: string) => setPrCheckCode(code)}
+              onClose={closeAIPanel}
+              orgId={id || ''}
+            />
+          </div>
+        </div>,
+        document.body,
+      )}
+    </main>
+  );
+}
+
+function ValidationResultDisplay({ result }: { result: any }) {
+  const items = [
+    { label: 'Syntax', pass: result.syntaxPass, error: result.syntaxError },
+    { label: 'Shape', pass: result.shapePass, error: result.shapeError },
+    { label: 'Fetch resilience', pass: result.fetchResiliencePass, error: result.fetchResilienceError },
+  ];
+
+  return (
+    <div className="border border-border rounded-lg p-3 space-y-1.5 bg-muted/30">
+      {items.map((item) => (
+        <div key={item.label} className="flex items-start gap-2 text-sm">
+          {item.pass ? (
+            <Check className="h-4 w-4 text-green-500 mt-0.5 flex-shrink-0" />
+          ) : (
+            <X className="h-4 w-4 text-red-500 mt-0.5 flex-shrink-0" />
+          )}
+          <span>
+            <span className="font-medium">{item.label}:</span>{' '}
+            {item.pass ? (
+              <span className="text-green-400">Passed</span>
+            ) : (
+              <span className="text-red-400">{item.error || 'Failed'}</span>
+            )}
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }

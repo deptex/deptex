@@ -115,6 +115,7 @@ export function PermissionEditor({
       icon: <Shield className="h-3.5 w-3.5" />,
       permissions: [
         { key: 'manage_compliance' as const, label: 'Manage Compliance' },
+        { key: 'manage_statuses' as const, label: 'Manage Statuses & Tiers' },
       ],
     },
     {

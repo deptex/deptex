@@ -649,10 +649,19 @@ export async function runPipeline(
 
         const VALID_ASSET_TIERS: AssetTier[] = ['CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION'];
         let assetTier: AssetTier = 'EXTERNAL';
+        let tierMultiplier: number | undefined;
         {
-          const { data: projRow } = await supabase.from('projects').select('asset_tier').eq('id', projectId).single();
-          const raw = (projRow as { asset_tier?: string } | null)?.asset_tier;
+          const { data: projRow } = await supabase.from('projects').select('asset_tier, asset_tier_id').eq('id', projectId).single();
+          const raw = (projRow as { asset_tier?: string; asset_tier_id?: string } | null)?.asset_tier;
           if (raw && VALID_ASSET_TIERS.includes(raw as AssetTier)) assetTier = raw as AssetTier;
+
+          const tierIdVal = (projRow as { asset_tier_id?: string } | null)?.asset_tier_id;
+          if (tierIdVal) {
+            const { data: tierData } = await supabase.from('organization_asset_tiers').select('environmental_multiplier').eq('id', tierIdVal).single();
+            if (tierData?.environmental_multiplier != null) {
+              tierMultiplier = Number(tierData.environmental_multiplier);
+            }
+          }
         }
 
         const vulnRows: Array<{
@@ -745,7 +754,7 @@ export async function runPipeline(
           row.cisa_kev = allIds.some((id) => CVE_ID_RE.test(id) && kevCveSet.has(id));
           const cvss = row.cvss_score ?? (row.severity ? (SEVERITY_TO_CVSS[row.severity] ?? 0) : 0);
           const epss = row.epss_score ?? 0;
-          row.depscore = calculateDepscore({ cvss, epss, cisaKev: row.cisa_kev, isReachable: row.is_reachable, assetTier });
+          row.depscore = calculateDepscore({ cvss, epss, cisaKev: row.cisa_kev, isReachable: row.is_reachable, assetTier, tierMultiplier });
         }
 
         if (vulnRows.length > 0) {

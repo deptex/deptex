@@ -8760,6 +8760,392 @@ router.post('/:id/bump-all', async (req: AuthRequest, res) => {
   }
 });
 
+// ───── Phase 4: Policy Engine Endpoints ─────
+
+import { evaluateProjectPolicies, validatePolicyCode, preflightCheck } from '../lib/policy-engine';
+
+// POST /api/organizations/:id/projects/:projectId/evaluate-policy
+router.post('/:id/projects/:projectId/evaluate-policy', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: organizationId, projectId } = req.params;
+
+    const access = await checkProjectAccess(userId, organizationId, projectId);
+    if (!access.hasAccess) {
+      return res.status(access.error?.status ?? 403).json({ error: access.error?.message ?? 'Access denied' });
+    }
+
+    const result = await evaluateProjectPolicies(projectId, organizationId);
+
+    await createActivity({
+      organization_id: organizationId,
+      user_id: userId,
+      activity_type: 'evaluated_policy',
+      description: `re-evaluated policy for project`,
+      metadata: {
+        project_id: projectId,
+        status: result.statusName,
+        violations_count: result.violations.length,
+        deps_evaluated: result.depResults,
+      },
+    });
+
+    res.json(result);
+  } catch (error: any) {
+    console.error('Error evaluating policy:', error);
+    res.status(500).json({ error: error.message || 'Failed to evaluate policy' });
+  }
+});
+
+// POST /api/organizations/:id/validate-policy
+router.post('/:id/validate-policy', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: organizationId } = req.params;
+    const { code, codeType } = req.body;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', organizationId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    if (!code || typeof code !== 'string') {
+      return res.status(400).json({ error: 'code is required' });
+    }
+
+    const validTypes = ['package_policy', 'project_status', 'pr_check'];
+    if (!validTypes.includes(codeType)) {
+      return res.status(400).json({ error: 'codeType must be package_policy, project_status, or pr_check' });
+    }
+
+    const result = await validatePolicyCode(code, codeType, organizationId);
+    res.json(result);
+  } catch (error: any) {
+    console.error('Error validating policy:', error);
+    res.status(500).json({ error: error.message || 'Failed to validate policy' });
+  }
+});
+
+// POST /api/organizations/:id/projects/:projectId/preflight-check
+router.post('/:id/projects/:projectId/preflight-check', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: organizationId, projectId } = req.params;
+    const { packageName, packageVersion } = req.body;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', organizationId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    if (!packageName || typeof packageName !== 'string') {
+      return res.status(400).json({ error: 'packageName is required' });
+    }
+
+    const result = await preflightCheck(organizationId, projectId, packageName, packageVersion || 'latest');
+
+    res.json({
+      allowed: result.allowed,
+      reasons: result.reasons,
+      tierName: result.tierName,
+      disclaimer: 'Some fields (reachability, filesImportingCount, isOutdated) are unavailable in preflight mode.',
+    });
+  } catch (error: any) {
+    console.error('Error running preflight check:', error);
+    res.status(500).json({ error: error.message || 'Failed to run preflight check' });
+  }
+});
+
+// ───── Phase 4: Project Policy Changes (git-like versioning) ─────
+
+// GET /api/organizations/:id/projects/:projectId/policy-changes
+router.get('/:id/projects/:projectId/policy-changes', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: organizationId, projectId } = req.params;
+
+    const access = await checkProjectAccess(userId, organizationId, projectId);
+    if (!access.hasAccess) {
+      return res.status(access.error?.status ?? 403).json({ error: access.error?.message ?? 'Access denied' });
+    }
+
+    const codeTypeFilter = req.query.code_type as string | undefined;
+    let query = supabase
+      .from('project_policy_changes')
+      .select('*')
+      .eq('project_id', projectId)
+      .eq('organization_id', organizationId)
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (codeTypeFilter) {
+      query = query.eq('code_type', codeTypeFilter);
+    }
+
+    const { data: changes, error } = await query;
+    if (error) throw error;
+
+    res.json(changes ?? []);
+  } catch (error: any) {
+    console.error('Error fetching policy changes:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch policy changes' });
+  }
+});
+
+// POST /api/organizations/:id/projects/:projectId/policy-changes
+router.post('/:id/projects/:projectId/policy-changes', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: organizationId, projectId } = req.params;
+    const { code_type, proposed_code, message } = req.body;
+
+    const access = await checkProjectAccess(userId, organizationId, projectId);
+    if (!access.hasAccess) {
+      return res.status(access.error?.status ?? 403).json({ error: access.error?.message ?? 'Access denied' });
+    }
+
+    const validTypes = ['package_policy', 'project_status', 'pr_check'];
+    if (!validTypes.includes(code_type)) {
+      return res.status(400).json({ error: 'code_type must be package_policy, project_status, or pr_check' });
+    }
+
+    // Determine base code (current effective code)
+    const { data: project } = await supabase
+      .from('projects')
+      .select('effective_package_policy_code, effective_project_status_code, effective_pr_check_code')
+      .eq('id', projectId)
+      .single();
+
+    let baseCode: string | null = null;
+    if (code_type === 'package_policy') {
+      baseCode = project?.effective_package_policy_code;
+      if (!baseCode) {
+        const { data: orgPolicy } = await supabase.from('organization_package_policies').select('package_policy_code').eq('organization_id', organizationId).single();
+        baseCode = orgPolicy?.package_policy_code ?? '';
+      }
+    } else if (code_type === 'project_status') {
+      baseCode = project?.effective_project_status_code;
+      if (!baseCode) {
+        const { data: orgStatus } = await supabase.from('organization_status_codes').select('project_status_code').eq('organization_id', organizationId).single();
+        baseCode = orgStatus?.project_status_code ?? '';
+      }
+    } else {
+      baseCode = project?.effective_pr_check_code;
+      if (!baseCode) {
+        const { data: orgPR } = await supabase.from('organization_pr_checks').select('pr_check_code').eq('organization_id', organizationId).single();
+        baseCode = orgPR?.pr_check_code ?? '';
+      }
+    }
+
+    // Check if user has manage_compliance (auto-accept)
+    let hasCompliance = false;
+    if (access.orgMembership?.role === 'owner' || access.orgMembership?.role === 'admin') {
+      hasCompliance = true;
+    } else if (access.orgRole?.permissions?.manage_compliance) {
+      hasCompliance = true;
+    }
+
+    const status = hasCompliance ? 'accepted' : 'pending';
+
+    // Find parent (last accepted change of same type for this project)
+    const { data: parentChange } = await supabase
+      .from('project_policy_changes')
+      .select('id')
+      .eq('project_id', projectId)
+      .eq('code_type', code_type)
+      .eq('status', 'accepted')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    const { data: change, error } = await supabase
+      .from('project_policy_changes')
+      .insert({
+        project_id: projectId,
+        organization_id: organizationId,
+        code_type,
+        author_id: userId,
+        reviewer_id: hasCompliance ? userId : null,
+        parent_id: parentChange?.id || null,
+        base_code: baseCode,
+        proposed_code,
+        message: message || 'Policy change request',
+        status,
+        reviewed_at: hasCompliance ? new Date().toISOString() : null,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    // If auto-accepted, update the effective code on the project
+    if (hasCompliance && change) {
+      const effectiveColumn =
+        code_type === 'package_policy' ? 'effective_package_policy_code'
+        : code_type === 'project_status' ? 'effective_project_status_code'
+        : 'effective_pr_check_code';
+
+      await supabase
+        .from('projects')
+        .update({ [effectiveColumn]: proposed_code })
+        .eq('id', projectId);
+
+      // Trigger re-evaluation
+      evaluateProjectPolicies(projectId, organizationId).catch((err) => {
+        console.error('Error re-evaluating after policy change:', err);
+      });
+    }
+
+    res.status(201).json(change);
+  } catch (error: any) {
+    console.error('Error creating policy change:', error);
+    res.status(500).json({ error: error.message || 'Failed to create policy change' });
+  }
+});
+
+// PUT /api/organizations/:id/policy-changes/:changeId - Accept/reject project policy change
+router.put('/:id/policy-changes/:changeId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: organizationId, changeId } = req.params;
+    const { action, merged_code } = req.body;
+
+    if (!['accept', 'reject'].includes(action)) {
+      return res.status(400).json({ error: 'action must be accept or reject' });
+    }
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', organizationId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    let hasCompliance = membership.role === 'owner' || membership.role === 'admin';
+    if (!hasCompliance) {
+      const { data: roleData } = await supabase
+        .from('organization_roles')
+        .select('permissions')
+        .eq('organization_id', organizationId)
+        .eq('name', membership.role)
+        .single();
+      hasCompliance = !!(roleData?.permissions as any)?.manage_compliance;
+    }
+
+    if (!hasCompliance) {
+      return res.status(403).json({ error: 'Permission denied. Requires manage_compliance.' });
+    }
+
+    const { data: change } = await supabase
+      .from('project_policy_changes')
+      .select('*')
+      .eq('id', changeId)
+      .eq('organization_id', organizationId)
+      .single();
+
+    if (!change) return res.status(404).json({ error: 'Change not found' });
+    if (change.status !== 'pending') return res.status(400).json({ error: 'Change is not pending' });
+
+    const newStatus = action === 'accept' ? 'accepted' : 'rejected';
+    const codeToApply = merged_code || change.proposed_code;
+
+    await supabase
+      .from('project_policy_changes')
+      .update({
+        status: newStatus,
+        reviewer_id: userId,
+        reviewed_at: new Date().toISOString(),
+      })
+      .eq('id', changeId);
+
+    if (action === 'accept') {
+      const effectiveColumn =
+        change.code_type === 'package_policy' ? 'effective_package_policy_code'
+        : change.code_type === 'project_status' ? 'effective_project_status_code'
+        : 'effective_pr_check_code';
+
+      await supabase
+        .from('projects')
+        .update({ [effectiveColumn]: codeToApply })
+        .eq('id', change.project_id);
+
+      evaluateProjectPolicies(change.project_id, organizationId).catch((err) => {
+        console.error('Error re-evaluating after policy change acceptance:', err);
+      });
+    }
+
+    res.json({ success: true, status: newStatus });
+  } catch (error: any) {
+    console.error('Error handling policy change:', error);
+    res.status(500).json({ error: error.message || 'Failed to process policy change' });
+  }
+});
+
+// POST /api/organizations/:id/projects/:projectId/revert-policy
+router.post('/:id/projects/:projectId/revert-policy', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: organizationId, projectId } = req.params;
+    const { code_type, to_org_base } = req.body;
+
+    const access = await checkProjectAccess(userId, organizationId, projectId);
+    if (!access.hasAccess) {
+      return res.status(access.error?.status ?? 403).json({ error: access.error?.message ?? 'Access denied' });
+    }
+
+    const effectiveColumn =
+      code_type === 'package_policy' ? 'effective_package_policy_code'
+      : code_type === 'project_status' ? 'effective_project_status_code'
+      : 'effective_pr_check_code';
+
+    if (to_org_base) {
+      await supabase
+        .from('projects')
+        .update({ [effectiveColumn]: null })
+        .eq('id', projectId);
+    }
+
+    // Record the revert as a policy change
+    await supabase.from('project_policy_changes').insert({
+      project_id: projectId,
+      organization_id: organizationId,
+      code_type,
+      author_id: userId,
+      reviewer_id: userId,
+      base_code: '',
+      proposed_code: null,
+      message: 'Reverted to organization base',
+      status: 'accepted',
+      reviewed_at: new Date().toISOString(),
+    });
+
+    evaluateProjectPolicies(projectId, organizationId).catch((err) => {
+      console.error('Error re-evaluating after revert:', err);
+    });
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Error reverting policy:', error);
+    res.status(500).json({ error: error.message || 'Failed to revert policy' });
+  }
+});
+
 // Export compliance update functions for use in other routes
 export { updateProjectCompliance, updateAllProjectsCompliance };
 

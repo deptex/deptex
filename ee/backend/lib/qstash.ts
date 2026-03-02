@@ -238,7 +238,9 @@ export async function queueDependencyAnalysisBatch(
  * Batch size of 10 (each populate job does more work than the old per-version analysis)
  */
 export async function queuePopulateDependencyBatch(
-  dependencies: Array<{ dependencyId: string; name: string; ecosystem?: string }>
+  dependencies: Array<{ dependencyId: string; name: string; ecosystem?: string }>,
+  projectId?: string,
+  organizationId?: string,
 ): Promise<{ queued: number; failed: number; messages: number }> {
   const token = getQStashToken();
   const apiBaseUrl = getApiBaseUrl();
@@ -279,6 +281,8 @@ export async function queuePopulateDependencyBatch(
         body: JSON.stringify({
           dependencies: batch,
           ecosystem,
+          ...(projectId && { projectId }),
+          ...(organizationId && { organizationId }),
         }),
       });
       batchSizes.push(batch.length);

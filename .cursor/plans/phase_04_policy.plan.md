@@ -7,6 +7,7 @@ todos:
     status: pending
 isProject: false
 ---
+
 ## Phase 4: Policy-as-Code Engine + Custom Statuses
 
 **Goal:** Implement sandboxed policy execution with org-defined custom statuses. Instead of binary compliant/non-compliant, organizations define their own project statuses (e.g., "Safe", "Blocked", "Under Review") and policy code determines which status each project gets.
@@ -46,7 +47,9 @@ Orgs can add unlimited custom statuses between these: "Under Review" (yellow, ra
 
 - Add `projects.status_id` UUID (FK to `organization_statuses`) - replaces both `is_compliant` and the legacy `status` TEXT field
 - Add `projects.status_violations` TEXT[] (array of violation messages from last policy run)
-- Deprecate `projects.is_compliant` (keep for backward compat, derive from `organization_statuses.is_passing`)
+- Deprecate `projects.is_compliant` (keep for backward compat, derive from `organization_statuses.is_passing`):
+  - Updated in the same DB transaction that sets `status_id`: `is_compliant = (SELECT is_passing FROM organization_statuses WHERE id = new_status_id)`
+  - API responses that include `is_compliant` continue to work unchanged for external consumers
 - Add `projects.policy_evaluated_at` TIMESTAMPTZ (when policy was last run)
 
 #### Status badges on project/team cards
@@ -97,6 +100,15 @@ Orgs can add custom tiers (e.g., "Regulatory" with multiplier 1.8, "Sandbox" wit
 - When deleting a custom tier: dialog to reassign projects using that tier to another tier
 - **New permission**: reuse `manage_statuses` for tier management (or add `manage_tiers` if separate control needed)
 
+#### Depscore Formula Refactoring for Custom Tiers
+
+The current `calculateDepscore()` in [depscore.ts](backend/extraction-worker/src/depscore.ts) and [frontend depscore.ts](frontend/src/lib/scoring/depscore.ts) has hardcoded tier weights (`CROWN_JEWELS: 1.3`, `EXTERNAL: 1.1`, `INTERNAL: 0.9`, `NON_PRODUCTION: 0.6`) and tier-specific reachability dampening. This needs refactoring:
+
+- **Replace hardcoded `tierWeight`** with `organization_asset_tiers.environmental_multiplier` from the DB. The multiplier is passed into `calculateDepscore()` as a numeric value instead of a tier enum.
+- **Replace hardcoded reachability dampening** per tier: Instead of tier-name-based lookup, derive from the multiplier. Higher multiplier = less dampening for non-reachable vulns (e.g., `reachabilityDampening = 0.1 + 0.7 * (multiplier / maxMultiplier)`). This scales automatically for custom tiers.
+- **Update `DepscoreContext` interface**: Replace `assetTier: AssetTier` enum with `tierMultiplier: number` and `tierRank: number`. Both frontend and backend copies must be updated in sync.
+- **Pipeline fix**: The current pipeline (`pipeline.ts` line ~512) doesn't pass `isDirect`, `isDevDependency`, `isMalicious`, or `packageScore` to `calculateDepscore()`. Fix this as part of the refactoring -- these fields are available from `project_dependencies` and `dependencies` tables at scan time.
+
 **Tier badges** on project cards: Show the tier name with its color, alongside the status badge.
 
 **Tier filter dropdown**: Add filter-by-tier in project listing screens (same pattern as status filter).
@@ -125,6 +137,8 @@ When a project's asset tier is changed (e.g., Crown Jewels -> Non-Production), t
 2. **Recalculate Depscores** for all vulnerabilities: new `environmental_multiplier` from the new tier
 3. **Re-run Project Status**: deps have updated `policyResult` values + updated depscores
 4. **Update project**: `status_id`, `status_violations`, `policy_evaluated_at`
+5. **Log activity**: Create activity entry with type `tier_changed` including old/new tier names and resulting status change (if any)
+6. **Notify**: If the project status changed as a result (e.g., "Compliant" -> "Blocked"), notify project owner team via the Phase 9 notification system
 
 No git-like versioning conflicts arise from tier changes because the base code is org-wide (not tier-specific).
 
@@ -165,14 +179,27 @@ No git-like versioning conflicts arise from tier changes because the base code i
 - Inject a controlled `fetch()` function that proxies through the host Node.js process
   - The `fetch()` inside the sandbox calls back to the host via `isolated-vm` reference
   - Host performs the actual HTTP request (using Node.js `fetch`)
-  - No URL restrictions (trust the org admin)
+  - **Network blocklist** (SSRF protection): Block requests to private/internal networks before connecting:
+    - RFC 1918 (`10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`), loopback (`127.x.x.x`), link-local (`169.254.x.x` -- includes cloud metadata endpoints like AWS/GCP/Fly.io), IPv6 equivalents (`::1`, `fc00::/7`, `fe80::/10`)
+    - Resolve DNS before connecting and re-check the resolved IP against the blocklist (prevents DNS rebinding attacks where a public domain resolves to a private IP)
+    - All public URLs are allowed -- no allowlist needed. Org admins can call any public API.
+    - On blocked request: throw a clear error inside the sandbox: `"fetch() blocked: cannot connect to private/internal network address (169.254.169.254)"`
   - Individual fetch timeout: 10 seconds
-  - Log all external API calls for audit trail
+  - **Audit logging**: Log all external `fetch()` calls to `activities` table with type `policy_fetch` -- includes URL (with query params redacted), response status code, duration in ms, org_id, code_type. Visible in org activity log to users with `view_activities` permission.
+  - **Policy code size limit**: Max 50KB per code block. Reject on save if exceeded with error: "Policy code exceeds 50KB limit."
 - Inject helper functions available in the sandbox:
   - `isLicenseAllowed(license, allowList)` - license matching utility
   - `isLicenseBanned(license, banList)` - inverse check
   - `semverGt(a, b)` / `semverLt(a, b)` - version comparison
   - `daysSince(dateString)` - age calculation (useful for maintenance checks)
+
+**Isolate management and safety:**
+
+- **Isolate pool**: Reuse isolates across evaluations within the same process. Pool of max 5 warm isolates (each 256MB). Create on demand, destroy after 60s idle or after 100 evaluations (whichever comes first). On the extraction worker (one job per machine), a single isolate suffices.
+- **Concurrency limit**: Max 3 concurrent policy evaluations on the main backend (re-evaluate, validate, preflight). Queue additional requests with a 30s queue timeout. On extraction workers, one evaluation at a time (single pipeline).
+- **Crash protection**: Wrap all `isolated-vm` calls in try/catch. If the isolate crashes (segfault, OOM), log the error, dispose the isolate, remove it from the pool, and return a graceful failure (dep marked as `{ allowed: false, reasons: ["Policy sandbox crashed"] }`). The host Node.js process must not crash.
+- **Rate limiting**: Validation endpoint (`POST /validate-policy`): max 10 calls/min per user. "Re-evaluate Policy" button: max 1 per project per 5 minutes. Preflight "Check a Package": max 30 calls/min per user.
+- `**isolated-vm` on Windows dev**: Requires native compilation (node-gyp, Python, Visual Studio Build Tools). Add to `DEVELOPERS.md` setup instructions. Production on Fly.io (Linux) has no issues. If Windows compilation is problematic, add a fallback that skips policy evaluation locally with a warning.
 
 #### Split policy code storage (3 separate tables)
 
@@ -272,11 +299,14 @@ When a policy code table row exists but the code column is null/empty (or the ro
 #### When the policy chain runs (4 triggers)
 
 1. **After extraction completes** (primary): All data is fresh. Run packagePolicy on every dep, store results, run projectStatus. The policy evaluation itself is fast (ms per dep in isolated-vm) - the expensive part is extraction.
-2. **"Re-evaluate Policy" button click**: Re-runs the policy chain against existing DB data. No re-extraction. Just load -> evaluate -> update.
-3. **Policy change accepted**: Automatically re-runs against existing data so the new policy takes effect immediately.
-4. **Preflight check**: Runs packagePolicy on a single hypothetical dep. Instant. Some fields unavailable (reachability, filesImportingCount, isOutdated) - set to null in preflight context, noted in UI.
+2. **"Re-evaluate Policy" button click** (per-project): Re-runs the policy chain against existing DB data. No re-extraction. Just load -> evaluate -> update. Synchronous (fast enough for a single project).
+3. **Org-wide re-evaluation** (after org policy change is saved): Queued as an async background job. Insert a row into a new `policy_evaluation_jobs` table (or reuse `activities` with a status field). Process projects sequentially (one at a time to limit isolate memory). Show progress in UI: "Re-evaluating project 12/47..." with a progress bar in a toast or banner on the org settings page. Log completion to `activities`. If a project fails mid-evaluation, log the error, skip it, continue with the next. Only one org-wide re-evaluation job at a time per org (subsequent requests wait or are rejected).
+4. **Policy change accepted** (project-level): Automatically re-runs against existing data so the new policy takes effect immediately.
+5. **Preflight check**: Runs packagePolicy on a single hypothetical dep. Data source: if the package exists in the `dependencies` table, use cached data (score, license, openssf, downloads, etc.). If not, do a live registry lookup (npm/pypi/etc.) to fetch metadata -- name, version, license only (skip OpenSSF/GHSA for speed). Some fields unavailable in both cases (reachability, filesImportingCount, isOutdated) - set to null in preflight context, noted in UI with a disclaimer: "Some fields are unavailable in preflight mode."
 
-For triggers 2-4, the underlying data (vuln scan, reachability, scores) is NOT recalculated - only the policy functions re-run against what's already in the DB.
+For triggers 2-5, the underlying data (vuln scan, reachability, scores) is NOT recalculated - only the policy functions re-run against what's already in the DB.
+
+**Partial failure handling**: If `packagePolicy()` throws on a specific dependency (runtime error, timeout, sandbox crash), that dep is marked as `{ allowed: false, reasons: ["Policy execution error: {message}"] }` and evaluation continues with the remaining deps. The `projectStatus()` function then sees these failed deps as disallowed and can factor them into its status decision. This ensures one problematic dep doesn't block the entire project evaluation. If `projectStatus()` itself throws, the project is set to "Non-Compliant" with the error message.
 
 #### Data assembly (no denormalization)
 
@@ -298,6 +328,14 @@ WHERE pd.project_id = $1
 ```
 
 The tier info is the same for all deps in a project (fetched once, passed to each `packagePolicy()` call). Results are cacheable per-org: same package + same tier = same result.
+
+**Cache strategy**: Policy result cache keyed by `org_id + dependency_id + tier_id + policy_code_hash`. Invalidated on:
+
+- Org package policy code change (all cache entries for that org)
+- Project's effective policy code change (entries for that project's org+tier combo)
+- Tier definition change (multiplier or rank change -- entries for that tier)
+- Dependency metadata change (new version, score update -- entries for that dependency)
+- Cache TTL: 1 hour max. Use Redis with the existing `invalidateCache` pattern from [cache.ts](ee/backend/lib/cache.ts).
 
 **For Project Status** (enriched with project-specific data):
 
@@ -474,7 +512,17 @@ Seed on org creation with sensible defaults (one row per table):
 
 #### Wire into extraction pipeline
 
-In [pipeline.ts](backend/extraction-worker/src/pipeline.ts), after dependency upsert and vuln scan:
+**Timing: policy evaluation runs AFTER populate completes** (not during the extraction pipeline itself). This ensures all dependency metadata (scores, OpenSSF, GHSA vulns, SLSA, downloads) is available when policy code runs. Without this, first-extraction policy would see null scores and could incorrectly block packages that simply haven't been populated yet.
+
+**Extraction pipeline** ([pipeline.ts](backend/extraction-worker/src/pipeline.ts)) changes:
+
+- Pipeline steps remain the same: clone -> SBOM -> deps sync -> AST -> dep-scan -> Semgrep -> TruffleHog -> upload
+- At the end of extraction, set `extraction_step = 'completed'` and `status = 'populating'` (new intermediate status, instead of jumping straight to 'ready')
+- Log to `extraction_logs`: "Extraction complete. Waiting for dependency population before policy evaluation..."
+
+**Populate callback** ([workers.ts](ee/backend/routes/workers.ts) `POST /api/workers/populate-dependencies`):
+
+- After ALL dependencies in the batch are populated (registry + GHSA + OpenSSF + SLSA + reputation score):
 
 1. Load project's tier info (`name`, `rank`, `multiplier`) from `organization_asset_tiers` via `projects.asset_tier_id`
 2. Fetch `package_policy_code` from `projects.effective_package_policy_code` (if overridden) or `organization_package_policies`
@@ -484,18 +532,37 @@ In [pipeline.ts](backend/extraction-worker/src/pipeline.ts), after dependency up
 6. Execute `projectStatus()` in sandbox with enriched context
 7. If valid status returned: update `projects.status_id` and `projects.status_violations`
 8. If policy error (syntax, runtime, timeout, invalid status name): set status to "Non-Compliant" with violation message explaining the policy error
-9. Log results to `extraction_logs`
+9. Set `project_repositories.status = 'ready'` (final status -- now policy has run with complete data)
+10. Log results to `extraction_logs`
+
+**Note**: The populate callback runs on the main backend (via QStash), not on the extraction worker. The `isolated-vm` policy engine runs on the main backend process. This is fine for performance since policy evaluation is fast (ms per dep) and the isolate pool handles concurrency.
 
 #### Wire into PR handler
 
+**Replaces the old `project_pr_guardrails` toggle-based system.** PR blocking is now entirely controlled by the `pullRequestCheck()` code function. The old `project_pr_guardrails` table and `PRGuardrailsSidepanel` component are deprecated and removed as part of this phase. If `pr_check_code` exists (it's always seeded with a default), PR checks run automatically on every PR to a connected repo.
+
 In [handlePullRequestEvent](ee/backend/routes/integrations.ts):
 
-1. For each added/updated dependency in the PR: run `packagePolicy()` to get per-dep `policyResult`
+**Step 0 - Lockfile diffing:**
+
+- Fetch the PR's changed files list via the Git provider API (GitHub: `GET /repos/:owner/:repo/pulls/:number/files`)
+- Filter for lockfiles using the existing `MANIFEST_FILES` map from [ecosystems.ts](backend/src/lib/ecosystems.ts): `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `Pipfile.lock`, `poetry.lock`, `Gemfile.lock`, `composer.lock`, `pubspec.lock`, `mix.lock`, `Package.resolved`, `Cargo.lock`, `go.sum`, etc.
+- If no lockfiles changed: skip PR check entirely (no dependency changes = no policy evaluation needed), post a passing check run
+- For each changed lockfile: fetch the base branch version and PR branch version via Git provider, parse both, diff to identify added/updated/removed dependencies
+
+**Steps 1-6 - Policy evaluation:**
+
+1. For each added/updated dependency in the PR diff:
+  a. If the dependency already exists in the `dependencies` table: use cached data (score, license, openssf, etc.)
+   b. If it's a brand-new dependency not in the DB: do a lightweight registry lookup (name, version, license only -- skip OpenSSF/GHSA to keep PR check latency low, target <10s total). Mark `dependencyScore` and `openSsfScore` as null in the context. The default policy templates handle null scores gracefully; custom policies should too (documented in policy docs).
+   c. Run `packagePolicy()` to get per-dep `policyResult`
 2. Build PR context with `policyResult` embedded on each dep
 3. Execute `pullRequestCheck()` with enriched diff context
 4. Map returned status to pass/fail using `is_passing`
-5. Include status name + violations in GitHub Check Run output
+5. Post GitHub Check Run (or GitLab/Bitbucket equivalent) with status name + violation details in the output summary
 6. Show specific status in the PR tab of the compliance page (not just pass/fail)
+
+**Migration**: Drop `project_pr_guardrails` table. Remove `PRGuardrailsSidepanel` component and its references. Any project that had `block_policy_violations = true` already has the behavior covered by the default `pullRequestCheck()` template.
 
 ### 4C: Update Frontend - Code Editors and Org Settings Layout
 
@@ -629,7 +696,8 @@ Meanwhile Status Code and PR Check for the same project can be independently ove
 5. AI generates `ai_merged_code` and stores it on the change record
 6. Admin sees three panels: "Current Code", "Proposed Change", "AI Suggested Merge"
 7. Admin can: Accept AI merge, manually edit the merge, or reject the change
-8. On acceptance, the corresponding effective code column is updated (e.g., `effective_package_policy_code` = accepted code)
+8. **On acceptance**: The accepted code (whether AI merge or manual edit) goes through the same **3-step validation** (syntax, shape, fetch resilience) before being saved. If validation fails, the admin sees the errors inline and must fix them before the acceptance goes through. This prevents AI-generated or manually-edited merge code from bypassing safety checks.
+9. On validation pass, the corresponding effective code column is updated (e.g., `effective_package_policy_code` = accepted code)
 
 **Sequential acceptance (MIT + ISC example - both `code_type = 'package_policy'`):**
 
@@ -710,6 +778,69 @@ When an admin updates any org-level code block (package policy, status code, or 
 5. "Skip" button: leaves custom code unchanged
 6. This only affects the specific code type being edited - if you update the org Package Policy, only projects with custom Package Policy are shown (Status Code and PR Check are unaffected)
 
+#### Org-Level Policy Version History
+
+Org-level policy edits (Package Policy, Status Code, PR Check) also get a git-like commit chain, independent from the project-level chain. This prevents the "admin accidentally breaks the org policy with no undo" scenario.
+
+**New `organization_policy_changes` table:**
+
+- `id` UUID primary key
+- `organization_id` UUID (FK)
+- `code_type` TEXT ('package_policy' | 'project_status' | 'pr_check')
+- `author_id` UUID (FK - who made the change)
+- `parent_id` UUID (nullable FK to self - previous change of same code_type for same org)
+- `previous_code` TEXT (snapshot of the code before this change)
+- `new_code` TEXT (the code after this change)
+- `message` TEXT (reason for the change, e.g., "Add AGPL ban for critical tiers")
+- `created_at` TIMESTAMPTZ
+
+Each code type has its own independent chain per org (same pattern as project-level, but simpler -- no pending/review/conflict flow since org edits are applied immediately by users with `manage_compliance`).
+
+**On every org policy save:**
+
+1. The code goes through the standard 3-step validation (syntax, shape, fetch resilience)
+2. On validation pass: insert a new `organization_policy_changes` row with `previous_code` = current code, `new_code` = saved code
+3. Set `parent_id` to the most recent change of the same `code_type` for this org (or null if first)
+4. Update the corresponding table (`organization_package_policies`, `organization_status_codes`, or `organization_pr_checks`)
+5. Trigger org-wide re-evaluation (async job) and propagation dialog (if projects have overrides)
+
+**Revert flow:**
+
+1. User with `manage_compliance` views org-level Change History (in the Policies tab or Statuses tab)
+2. Clicks "Revert to this version" on any previous change
+3. System saves the reverted code as a NEW change record (with message "Reverted to version from {timestamp}")
+4. Reverted code goes through the same 3-step validation before saving (in case the old code references a now-deleted status, etc.)
+5. Org-wide re-evaluation is triggered (async job)
+
+**UI in Change History tabs:**
+
+- The existing "Change History" sub-tabs in Policies and Statuses tabs show BOTH org-level changes and project-level changes
+- Org-level changes are labeled "Organization" in the source column with an org icon; project-level changes show the project name
+- Filter dropdown: "Source: All / Organization / [specific project]"
+- Org-level changes show a "Revert" button; project-level changes show "View in Project" link
+
+#### Data Migration from Current Schema
+
+**Migration from `organization_policies` to new split tables:**
+
+1. For each existing `organization_policies` row with non-empty `policy_code`:
+  a. Parse the `policy_code` to extract `projectCompliance` function body (using the same `extractFunctionBody` logic from [PoliciesPage.tsx](frontend/src/app/pages/PoliciesPage.tsx)) -> insert into `organization_status_codes.project_status_code`
+   b. Parse to extract `pullRequestCheck` function body -> insert into `organization_pr_checks.pr_check_code`
+   c. The Package Policy concept is new (no existing equivalent in the old `policy_code`) -> seed `organization_package_policies` with the default template
+2. For orgs without `organization_policies` rows or with empty `policy_code`: seed all three tables with default templates
+3. Create one initial `organization_policy_changes` row per migrated code type (with `message` = "Migrated from legacy policy_code") for auditability
+4. Keep `organization_policies` table but stop all reads/writes to it. Drop in a future migration after confirming no references remain.
+
+**Migration from `project_policy_exceptions` to `project_policy_changes`:**
+
+1. For each `project_policy_exceptions` row with `status = 'accepted'` and non-null `requested_policy_code`:
+  a. Create a `project_policy_changes` row with `code_type` derived from `policy_type` ('compliance' -> 'project_status', 'pull_request' -> 'pr_check', 'full' -> 'package_policy'), `status = 'accepted'`, `base_code` = `base_policy_code`, `proposed_code` = `requested_policy_code`
+   b. Set the project's corresponding effective code column from the most recent accepted exception's `requested_policy_code`
+2. For `status = 'pending'`: create as `status = 'pending'` in new table
+3. For `status = 'rejected'` or `status = 'revoked'`: create as `status = 'rejected'`
+4. License-only exceptions (no `requested_policy_code`): These don't map to the new system directly. Convert them into AI-generated package policy changes that add the `additional_licenses` to the allow list. Mark as `is_ai_generated = true`.
+5. Drop `project_policy_exceptions` table after migration is verified
+
 ### 4E: Policy-as-Code Test Suite
 
 #### Edge case scenarios (each becomes a test):
@@ -764,11 +895,34 @@ When an admin updates any org-level code block (package policy, status code, or 
 4. Org status code updated -> only projects with custom status code are shown in propagation (independent from package policy)
 5. Re-aligned project's change history shows a "Reverted to Organization [Code Type]" entry
 
+**Org-level version history:**
+
+1. Org policy saved -> `organization_policy_changes` row created with `previous_code` and `new_code`
+2. Second save -> new row with `parent_id` pointing to first row
+3. Revert to previous version -> new change row created (not deletion of later rows), reverted code goes through 3-step validation
+4. Revert to original default -> new row with `new_code` = default template
+5. Change history shows chronological list with author, timestamp, revert buttons
+6. Org-wide re-evaluation triggered after revert (async job with progress)
+
+**Async re-evaluation:**
+
+1. Org policy changed, 50 projects need re-evaluation -> background job processes sequentially with progress bar
+2. One project fails during re-evaluation -> error logged, project skipped, continues with next
+3. User navigates away during re-evaluation -> job continues in background, completion logged to activities
+4. Re-evaluation rate limited: only one org-wide re-evaluation job at a time per org (second request rejected with "Re-evaluation already in progress")
+
+**Partial failure handling:**
+
+1. packagePolicy throws on dep #50 of 200 -> dep #50 marked as `{ allowed: false, reasons: ["Policy execution error: ..."] }`, deps #51-200 continue evaluating
+2. Sandbox crash on one dep -> isolate disposed, new isolate created from pool, evaluation continues
+3. projectStatus receives failed deps as disallowed -> can factor them into status decision
+4. projectStatus itself throws -> project set to "Non-Compliant" with error message
+
 **Status management:**
 
 1. Status created -> available in policy code `context.statuses` and in policy editor autocomplete
 2. Status renamed -> all projects with that status updated, all references updated
-3. Status deleted (non-system) -> projects with that status re-evaluated by policy
+3. Status deleted (non-system) -> **pre-deletion check**: scan org's `project_status_code`, `pr_check_code`, and all project `effective_project_status_code` / `effective_pr_check_code` overrides for string references to the status name. If found, show warning dialog: "This status is referenced in policy code in N locations. Deleting it may cause policy errors. Update the code first, or proceed and affected projects will be set to Non-Compliant." On confirmation: delete status, re-evaluate all affected projects (async job).
 4. Status rank changed -> UI ordering updates
 5. Status `is_passing` toggled -> compliance metrics recalculated for affected projects
 
@@ -811,12 +965,18 @@ When an admin updates any org-level code block (package policy, status code, or 
 - Tests 44-54 (validation scenarios)
 - Test sandbox isolation (no filesystem, no require, no process access)
 - Test `fetch()` proxying (mock external API)
+- Test `fetch()` SSRF blocklist: verify requests to `127.0.0.1`, `169.254.169.254`, `10.x.x.x`, `192.168.x.x`, `::1` are blocked with clear error message
+- Test `fetch()` DNS rebinding protection: mock DNS resolution to private IP -> request blocked
 - Test memory limit enforcement (policy that allocates too much RAM)
 - Test timeout enforcement (30s production, 5s validation)
 - Test helper functions (isLicenseAllowed, semverGt, daysSince)
 - Test context data completeness (all expected fields present, including `context.tier`)
 - Test effective policy resolution (inherited vs custom)
 - Test null/empty policy defaults (all allowed, default Compliant)
+- Test partial failure: one dep throws runtime error -> marked as `{ allowed: false, reasons: ["Policy execution error: ..."] }`, remaining deps continue
+- Test isolate crash recovery: simulated crash doesn't kill host process, new isolate created
+- Test code size limit: reject code > 50KB with clear error
+- Test rate limiting: validation endpoint respects 10/min per-user limit
 
 `**ee/backend/routes/__tests__/policy-changes.test.ts`:**
 
@@ -824,9 +984,15 @@ When an admin updates any org-level code block (package policy, status code, or 
 - Tests 59-65 (permission enforcement)
 - Test conflict detection accuracy (base_code comparison)
 - Test AI merge endpoint (mock LLM response)
+- Test AI merge acceptance goes through 3-step validation (reject if AI produces invalid code)
 - Test revert chain integrity (parent_id chain is correct after reverts)
 - Test org propagation logic (batch revert for selected projects)
 - Test "Apply for Exception" auto-accept with conflict race condition
+- Org-level version history: save creates `organization_policy_changes` row, revert creates new row, parent_id chain is correct
+- Org-level revert goes through 3-step validation (catch references to deleted statuses)
+- Async re-evaluation: job processes sequentially, skips failed projects, logs completion
+- Data migration: existing `project_policy_exceptions` correctly converted to `project_policy_changes` with correct code_type mapping
+- Data migration: existing `organization_policies.policy_code` split into separate tables correctly
 
 `**ee/backend/routes/__tests__/organization-statuses.test.ts`:**
 
@@ -852,3 +1018,4 @@ When an admin updates any org-level code block (package policy, status code, or 
 - Test revert action creates new change
 - Test conflict badge display on pending changes with `has_conflict = true`
 - Test AI merge panel (three-panel view: current, proposed, AI suggestion)
+

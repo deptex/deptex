@@ -18,7 +18,7 @@ import {
 } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
-import { api, ProjectWithRole, ProjectPermissions, Team, ProjectTeamsResponse, ProjectContributingTeam, ProjectMember, OrganizationMember, ProjectRepository, ProjectImportStatus, type ProjectEffectivePolicies, type ProjectPolicyException, type AssetTier, type RepoWithProvider, type CiCdConnection } from '../../lib/api';
+import { api, ProjectWithRole, ProjectPermissions, Team, ProjectTeamsResponse, ProjectContributingTeam, ProjectMember, OrganizationMember, ProjectRepository, ProjectImportStatus, type ProjectEffectivePolicies, type ProjectPolicyException, type AssetTier, type RepoWithProvider, type CiCdConnection, type OrganizationAssetTier } from '../../lib/api';
 import NotificationRulesSection from './NotificationRulesSection';
 import { useToast } from '../../hooks/use-toast';
 import { Button } from '../../components/ui/button';
@@ -330,6 +330,8 @@ export default function ProjectSettingsPage() {
   const { toast } = useToast();
   const [projectName, setProjectName] = useState(project?.name || '');
   const [assetTier, setAssetTier] = useState<AssetTier>(project?.asset_tier ?? 'EXTERNAL');
+  const [assetTierId, setAssetTierId] = useState<string>(project?.asset_tier_id ?? '');
+  const [orgAssetTiers, setOrgAssetTiers] = useState<OrganizationAssetTier[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
@@ -475,7 +477,16 @@ export default function ProjectSettingsPage() {
     if (project?.asset_tier) {
       setAssetTier(project.asset_tier);
     }
-  }, [project?.name, project?.asset_tier]);
+    if (project?.asset_tier_id) {
+      setAssetTierId(project.asset_tier_id);
+    }
+  }, [project?.name, project?.asset_tier, project?.asset_tier_id]);
+
+  useEffect(() => {
+    if (organizationId) {
+      api.getOrganizationAssetTiers(organizationId).then(setOrgAssetTiers).catch(console.error);
+    }
+  }, [organizationId]);
 
   const loadProjectRepositories = async (integrationId?: string) => {
     if (!organizationId || !projectId) return;
@@ -1175,10 +1186,13 @@ export default function ProjectSettingsPage() {
 
     try {
       setIsSaving(true);
-      await api.updateProject(organizationId, project.id, {
-        name: projectName.trim(),
-        asset_tier: assetTier,
-      });
+      const updatePayload: Record<string, unknown> = { name: projectName.trim() };
+      if (orgAssetTiers.length > 0 && assetTierId) {
+        updatePayload.asset_tier_id = assetTierId;
+      } else {
+        updatePayload.asset_tier = assetTier;
+      }
+      await api.updateProject(organizationId, project.id, updatePayload as any);
       toast({
         title: 'Success',
         description: 'Project settings saved',
@@ -1413,17 +1427,36 @@ export default function ProjectSettingsPage() {
                         Used by Depscore to weight vulnerability scores and blast radius (Crown Jewels vs non-production).
                       </p>
                       <div className="max-w-md">
-                        <Select value={assetTier} onValueChange={(v) => setAssetTier(v as AssetTier)}>
-                          <SelectTrigger className="w-full px-3 py-2.5 h-auto bg-background-content">
-                            <SelectValue placeholder="Select asset tier" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="CROWN_JEWELS">Crown Jewels</SelectItem>
-                            <SelectItem value="EXTERNAL">External</SelectItem>
-                            <SelectItem value="INTERNAL">Internal</SelectItem>
-                            <SelectItem value="NON_PRODUCTION">Non-production</SelectItem>
-                          </SelectContent>
-                        </Select>
+                        {orgAssetTiers.length > 0 ? (
+                          <Select value={assetTierId} onValueChange={(v) => setAssetTierId(v)}>
+                            <SelectTrigger className="w-full px-3 py-2.5 h-auto bg-background-content">
+                              <SelectValue placeholder="Select asset tier" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {orgAssetTiers.map((tier) => (
+                                <SelectItem key={tier.id} value={tier.id}>
+                                  <span className="flex items-center gap-2">
+                                    <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: tier.color }} />
+                                    {tier.name}
+                                    <span className="text-xs text-muted-foreground ml-1">({tier.environmental_multiplier}x)</span>
+                                  </span>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Select value={assetTier} onValueChange={(v) => setAssetTier(v as AssetTier)}>
+                            <SelectTrigger className="w-full px-3 py-2.5 h-auto bg-background-content">
+                              <SelectValue placeholder="Select asset tier" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="CROWN_JEWELS">Crown Jewels</SelectItem>
+                              <SelectItem value="EXTERNAL">External</SelectItem>
+                              <SelectItem value="INTERNAL">Internal</SelectItem>
+                              <SelectItem value="NON_PRODUCTION">Non-production</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1433,7 +1466,7 @@ export default function ProjectSettingsPage() {
                     </p>
                     <Button
                       onClick={handleSave}
-                      disabled={isSaving || (projectName === project?.name && assetTier === (project?.asset_tier ?? 'EXTERNAL'))}
+                      disabled={isSaving || (projectName === project?.name && (orgAssetTiers.length > 0 ? assetTierId === (project?.asset_tier_id ?? '') : assetTier === (project?.asset_tier ?? 'EXTERNAL')))}
                       size="sm"
                       className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
                     >

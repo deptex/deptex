@@ -1315,7 +1315,7 @@ router.post('/queue-populate', verifyWorkerSecret, async (req: express.Request, 
   }
 
   try {
-    const result = await queuePopulateDependencyBatch(deps);
+    const result = await queuePopulateDependencyBatch(deps, projectId, organizationId);
     res.json(result);
   } catch (err: any) {
     console.error('queue-populate failed:', err);
@@ -1326,7 +1326,7 @@ router.post('/queue-populate', verifyWorkerSecret, async (req: express.Request, 
 // POST /api/workers/populate-dependencies - Called by QStash to populate a BATCH of new dependencies
 // Fetches npm info, creates version rows, GHSA vulns, OpenSSF, and calculates reputation score
 router.post('/populate-dependencies', verifyQStash, async (req: express.Request, res: express.Response) => {
-  const { dependencies, ecosystem: batchEcosystem } = req.body || {};
+  const { dependencies, ecosystem: batchEcosystem, projectId, organizationId } = req.body || {};
 
   if (!dependencies || !Array.isArray(dependencies) || dependencies.length === 0) {
     return res.status(400).json({ error: 'dependencies array is required' });
@@ -1390,6 +1390,23 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
             console.error(`Failed to queue backfill for ${dependencies[i].name}:`, err)
           );
         }
+      }
+    }
+
+    // Run policy evaluation after populate completes (Phase 4)
+    if (projectId && organizationId && successful > 0) {
+      try {
+        const { evaluateProjectPolicies } = await import('../lib/policy-engine');
+        console.log(`[Policy] Evaluating policies for project ${projectId} after populate...`);
+        const evalResult = await evaluateProjectPolicies(projectId, organizationId);
+        console.log(`[Policy] Project ${projectId}: status=${evalResult.statusName}, deps evaluated=${evalResult.depResults}, violations=${evalResult.violations.length}`);
+
+        await supabase
+          .from('project_repositories')
+          .update({ status: 'ready' })
+          .eq('project_id', projectId);
+      } catch (policyErr: any) {
+        console.error(`[Policy] Failed to evaluate policies for project ${projectId}:`, policyErr?.message);
       }
     }
 

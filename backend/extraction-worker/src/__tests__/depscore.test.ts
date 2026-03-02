@@ -177,6 +177,51 @@ describe('calculateDepscore', () => {
     });
   });
 
+  describe('tierMultiplier (custom tiers)', () => {
+    it('tierMultiplier overrides legacy assetTier weight', () => {
+      const base: DepscoreContext = {
+        cvss: 7,
+        epss: 0.3,
+        cisaKev: false,
+        isReachable: true,
+        assetTier: 'INTERNAL',
+      };
+      const legacyInternal = calculateDepscore(base);
+      const customHigh = calculateDepscore({ ...base, tierMultiplier: 1.5 });
+      const customLow = calculateDepscore({ ...base, tierMultiplier: 0.3 });
+
+      expect(customHigh).toBeGreaterThan(legacyInternal);
+      expect(customLow).toBeLessThan(legacyInternal);
+    });
+
+    it('tierMultiplier affects unreachable dampening', () => {
+      const base: DepscoreContext = {
+        cvss: 7,
+        epss: 0.3,
+        cisaKev: false,
+        isReachable: false,
+        assetTier: 'INTERNAL',
+      };
+      const highMultiplier = calculateDepscore({ ...base, tierMultiplier: 1.5 });
+      const lowMultiplier = calculateDepscore({ ...base, tierMultiplier: 0.3 });
+
+      expect(highMultiplier).toBeGreaterThan(lowMultiplier);
+    });
+
+    it('tierMultiplier: 1.0 (Internal-equivalent) matches legacy INTERNAL for reachable', () => {
+      const base: DepscoreContext = {
+        cvss: 6,
+        epss: 0.2,
+        cisaKev: false,
+        isReachable: true,
+        assetTier: 'INTERNAL',
+      };
+      const legacy = calculateDepscore(base);
+      const custom = calculateDepscore({ ...base, tierMultiplier: 0.9 });
+      expect(custom).toBe(legacy);
+    });
+  });
+
   describe('score capping', () => {
     it('result never exceeds 100', () => {
       const ctx: DepscoreContext = {

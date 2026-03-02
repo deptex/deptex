@@ -25,6 +25,7 @@ import { UserCircle, FileText } from 'lucide-react';
 import MembersPage from './MembersPage';
 import AuditLogsSection from './AuditLogsSection';
 import PoliciesPage from './PoliciesPage';
+import StatusesSection from '@/components/StatusesSection';
 import NotificationRulesSection from './NotificationRulesSection';
 
 interface OrganizationContextType {
@@ -125,7 +126,7 @@ const orgRolesCache: Record<string, OrganizationRole[]> = {};
 const CACHE_KEY_MEMBERS = (orgId: string) => `org_members_${orgId}`;
 const CACHE_KEY_ROLES = (orgId: string) => `org_roles_${orgId}`;
 
-const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'integrations', 'notifications', 'policies', 'audit_logs', 'sso', 'mfa', 'legal_documents', 'usage', 'plan']);
+const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'integrations', 'notifications', 'policies', 'statuses', 'audit_logs', 'sso', 'mfa', 'legal_documents', 'usage', 'plan']);
 
 /** Renders a tab-specific content skeleton for the org settings loading state. */
 function OrgSettingsTabSkeleton({ section }: { section: string }) {
@@ -1672,6 +1673,11 @@ export default function OrganizationSettingsPage() {
       id: 'policies',
       label: 'Policies',
       icon: <Shield className="h-4 w-4 tab-icon-shake" />,
+    }] : []),
+    ...(canManageCompliance ? [{
+      id: 'statuses',
+      label: 'Statuses',
+      icon: <Tag className="h-4 w-4 tab-icon-shake" />,
     }] : []),
     // Conditionally show Audit Logs section based on view_activity permission
     ...(effectivePermissions?.view_activity ? [{
@@ -3321,6 +3327,10 @@ export default function OrganizationSettingsPage() {
                 <div style={{ display: activeSection === 'policies' ? undefined : 'none' }}>
                   <PoliciesPage isSettingsSubpage={true} />
                 </div>
+              )}
+
+              {activeSection === 'statuses' && (
+                <StatusesSection />
               )}
 
               {activeSection === 'audit_logs' && (

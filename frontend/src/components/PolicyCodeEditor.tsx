@@ -11,8 +11,25 @@ const DEPTEX_THEME: editor.IStandaloneThemeData = {
 };
 
 const POLICY_TYPEDEFS = `
-/** Asset criticality tier for the project. */
+/** Asset criticality tier (legacy enum). */
 type AssetTier = 'CROWN_JEWELS' | 'EXTERNAL' | 'INTERNAL' | 'NON_PRODUCTION';
+
+/** Custom asset tier from organization settings. */
+interface Tier {
+  /** Tier display name. */
+  name: string;
+  /** Tier rank (lower = more critical). */
+  rank: number;
+  /** Environmental multiplier for Depscore (e.g. 1.5 for Crown Jewels). */
+  multiplier: number;
+}
+
+/** Malicious indicator data (null if not flagged). */
+interface MaliciousIndicator {
+  source?: string;
+  confidence?: number;
+  reason?: string;
+}
 
 /** Supply chain analysis status. */
 type AnalysisStatus = 'pass' | 'warning' | 'fail';
@@ -146,6 +163,81 @@ declare function pullRequestCheck(context: PullRequestCheckContext): PullRequest
  * Return { compliant: true } if the project meets policy, or { compliant: false, violations: [...] }.
  */
 declare function projectCompliance(context: ProjectComplianceContext): ComplianceResult;
+
+// ───── Phase 4: New function signatures ─────
+
+/** Context for packagePolicy() - runs per dependency with tier info. */
+interface PackagePolicyContext {
+  dependency: {
+    name: string;
+    version: string;
+    license: string | null;
+    openSsfScore: number | null;
+    weeklyDownloads: number | null;
+    lastPublishedAt: string | null;
+    releasesLast12Months: number | null;
+    dependencyScore: number | null;
+    maliciousIndicator: MaliciousIndicator | null;
+    slsaLevel: number | null;
+    registryIntegrityStatus: 'pass' | 'warning' | 'fail' | null;
+    installScriptsStatus: 'pass' | 'warning' | 'fail' | null;
+    entropyAnalysisStatus: 'pass' | 'warning' | 'fail' | null;
+  };
+  tier: Tier;
+  fetch: (url: string) => Promise<{ ok: boolean; status: number; json: () => Promise<any>; text: () => Promise<string> }>;
+}
+
+interface PackagePolicyResult {
+  allowed: boolean;
+  reasons: string[];
+}
+
+/** Context for projectStatus() - runs per project with all dep policy results. */
+interface ProjectStatusContext {
+  project: { name: string; tier: Tier; teamName: string };
+  dependencies: Array<{
+    name: string;
+    version: string;
+    license: string | null;
+    dependencyScore: number | null;
+    policyResult: { allowed: boolean; reasons: string[] };
+    isDirect: boolean;
+    isDevDependency: boolean;
+    filesImportingCount: number;
+    isOutdated: boolean;
+    versionsBehind: number;
+    vulnerabilities: Vulnerability[];
+  }>;
+  statuses: string[];
+  fetch: (url: string) => Promise<any>;
+}
+
+interface ProjectStatusResult {
+  status: string;
+  violations: string[];
+}
+
+/**
+ * Evaluate a single package against org policy. Return { allowed, reasons }.
+ */
+declare function packagePolicy(context: PackagePolicyContext): PackagePolicyResult;
+
+/**
+ * Determine project status from dependency policy results and vulnerabilities.
+ * Return { status, violations } where status matches an org-defined status name.
+ */
+declare function projectStatus(context: ProjectStatusContext): ProjectStatusResult;
+
+/** Helper: check if license is in the allow list. */
+declare function isLicenseAllowed(license: string, allowList: string[]): boolean;
+/** Helper: check if license is in the ban list. */
+declare function isLicenseBanned(license: string, banList: string[]): boolean;
+/** Helper: semver greater-than comparison. */
+declare function semverGt(a: string, b: string): boolean;
+/** Helper: semver less-than comparison. */
+declare function semverLt(a: string, b: string): boolean;
+/** Helper: days since date string. */
+declare function daysSince(dateString: string): number;
 `;
 
 const disposablesRef: IDisposable[] = [];
@@ -238,12 +330,63 @@ export function PolicyCodeEditor({
         if (/context\.\s*$/.test(textUntilPosition)) {
           const ctxFields = [
             { label: 'project', detail: 'Project', doc: 'Project metadata (name, asset_tier).' },
-            { label: 'dependencies', detail: 'Dependency[]', doc: 'All project dependencies (projectCompliance).' },
+            { label: 'dependencies', detail: 'Dependency[]', doc: 'All project dependencies (projectCompliance / projectStatus).' },
             { label: 'added', detail: 'Dependency[]', doc: 'Newly added dependencies (pullRequestCheck).' },
             { label: 'updated', detail: 'UpdatedDependency[]', doc: 'Updated dependencies (pullRequestCheck).' },
             { label: 'removed', detail: 'RemovedDependency[]', doc: 'Removed dependencies (pullRequestCheck).' },
+            { label: 'dependency', detail: 'PackageDependency', doc: 'Package data (packagePolicy).' },
+            { label: 'tier', detail: 'Tier', doc: 'Asset tier: { name, rank, multiplier } (packagePolicy / projectStatus).' },
+            { label: 'statuses', detail: 'string[]', doc: 'Available status names (projectStatus / pullRequestCheck).' },
+            { label: 'fetch', detail: 'function', doc: 'Controlled fetch() for external API calls.' },
           ];
           for (const f of ctxFields) {
+            suggestions.push({
+              label: f.label,
+              kind: monaco.languages.CompletionItemKind.Field,
+              detail: f.detail,
+              documentation: f.doc,
+              insertText: f.label,
+              range,
+            });
+          }
+          return { suggestions };
+        }
+
+        if (/\.tier\.\s*$/.test(textUntilPosition)) {
+          for (const f of [
+            { label: 'name', detail: 'string', doc: 'Tier display name (e.g. "Crown Jewels").' },
+            { label: 'rank', detail: 'number', doc: 'Tier rank (lower = more critical).' },
+            { label: 'multiplier', detail: 'number', doc: 'Environmental multiplier for Depscore.' },
+          ]) {
+            suggestions.push({
+              label: f.label,
+              kind: monaco.languages.CompletionItemKind.Field,
+              detail: f.detail,
+              documentation: f.doc,
+              insertText: f.label,
+              range,
+            });
+          }
+          return { suggestions };
+        }
+
+        if (/\.dependency\.\s*$/.test(textUntilPosition)) {
+          const pkgFields = [
+            { label: 'name', detail: 'string', doc: 'Package name.' },
+            { label: 'version', detail: 'string', doc: 'Package version.' },
+            { label: 'license', detail: 'string | null', doc: 'SPDX license identifier.' },
+            { label: 'openSsfScore', detail: 'number | null', doc: 'OpenSSF Scorecard score (0.0-10.0).' },
+            { label: 'weeklyDownloads', detail: 'number | null', doc: 'npm weekly download count.' },
+            { label: 'lastPublishedAt', detail: 'string | null', doc: 'ISO date of last publish.' },
+            { label: 'releasesLast12Months', detail: 'number | null', doc: 'Release count in last 12 months.' },
+            { label: 'dependencyScore', detail: 'number | null', doc: 'Deptex reputation score (0-100).' },
+            { label: 'maliciousIndicator', detail: 'object | null', doc: 'Malicious indicator { source, confidence, reason }.' },
+            { label: 'slsaLevel', detail: 'number | null', doc: 'SLSA provenance level (0-4).' },
+            { label: 'registryIntegrityStatus', detail: 'string | null', doc: '"pass" | "warning" | "fail"' },
+            { label: 'installScriptsStatus', detail: 'string | null', doc: '"pass" | "warning" | "fail"' },
+            { label: 'entropyAnalysisStatus', detail: 'string | null', doc: '"pass" | "warning" | "fail"' },
+          ];
+          for (const f of pkgFields) {
             suggestions.push({
               label: f.label,
               kind: monaco.languages.CompletionItemKind.Field,
@@ -260,6 +403,8 @@ export function PolicyCodeEditor({
           for (const f of [
             { label: 'name', detail: 'string', doc: 'Project name.' },
             { label: 'asset_tier', detail: 'AssetTier', doc: '"CROWN_JEWELS" | "EXTERNAL" | "INTERNAL" | "NON_PRODUCTION"' },
+            { label: 'tier', detail: 'Tier', doc: 'Custom tier: { name, rank, multiplier }.' },
+            { label: 'teamName', detail: 'string', doc: 'Owning team name.' },
           ]) {
             suggestions.push({
               label: f.label,
@@ -293,6 +438,11 @@ export function PolicyCodeEditor({
             { label: 'vulnerabilities', detail: 'Vulnerability[]', doc: 'Known vulnerabilities for this dependency version.' },
             { label: 'from_version', detail: 'string', doc: 'Previous version (updated deps only).' },
             { label: 'to_version', detail: 'string', doc: 'New version (updated deps only).' },
+            { label: 'policyResult', detail: '{ allowed, reasons }', doc: 'Package policy result from packagePolicy().' },
+            { label: 'isDirect', detail: 'boolean', doc: 'Whether this is a direct dependency (camelCase).' },
+            { label: 'isDevDependency', detail: 'boolean', doc: 'Whether this is a dev dependency.' },
+            { label: 'isOutdated', detail: 'boolean', doc: 'Whether the dependency is outdated.' },
+            { label: 'versionsBehind', detail: 'number', doc: 'Number of versions behind latest.' },
           ];
           for (const f of depFields) {
             suggestions.push({

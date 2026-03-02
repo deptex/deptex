@@ -28,6 +28,7 @@ export interface RolePermissions {
   manage_security?: boolean;
   view_activity: boolean;
   manage_compliance: boolean;
+  manage_statuses?: boolean;
   interact_with_security_agent: boolean;
   manage_aegis: boolean;
   view_members: boolean;
@@ -2000,6 +2001,148 @@ export const api = {
       { method: 'DELETE' }
     );
   },
+
+  // ───── Phase 4: Statuses ─────
+
+  async getOrganizationStatuses(orgId: string): Promise<OrganizationStatus[]> {
+    return fetchWithAuth(`/api/organizations/${orgId}/statuses`);
+  },
+
+  async createOrganizationStatus(orgId: string, data: { name: string; color: string; description?: string; is_passing: boolean; rank: number }): Promise<OrganizationStatus> {
+    return fetchWithAuth(`/api/organizations/${orgId}/statuses`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async updateOrganizationStatus(orgId: string, statusId: string, data: Partial<OrganizationStatus>): Promise<OrganizationStatus> {
+    return fetchWithAuth(`/api/organizations/${orgId}/statuses/${statusId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async deleteOrganizationStatus(orgId: string, statusId: string): Promise<void> {
+    return fetchWithAuth(`/api/organizations/${orgId}/statuses/${statusId}`, { method: 'DELETE' });
+  },
+
+  async reorderOrganizationStatuses(orgId: string, order: { id: string; rank: number }[]): Promise<OrganizationStatus[]> {
+    return fetchWithAuth(`/api/organizations/${orgId}/statuses/reorder`, {
+      method: 'PUT',
+      body: JSON.stringify({ order }),
+    });
+  },
+
+  // ───── Phase 4: Asset Tiers ─────
+
+  async getOrganizationAssetTiers(orgId: string): Promise<OrganizationAssetTier[]> {
+    return fetchWithAuth(`/api/organizations/${orgId}/asset-tiers`);
+  },
+
+  async createOrganizationAssetTier(orgId: string, data: { name: string; color: string; description?: string; environmental_multiplier: number; rank: number }): Promise<OrganizationAssetTier> {
+    return fetchWithAuth(`/api/organizations/${orgId}/asset-tiers`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async updateOrganizationAssetTier(orgId: string, tierId: string, data: Partial<OrganizationAssetTier>): Promise<OrganizationAssetTier> {
+    return fetchWithAuth(`/api/organizations/${orgId}/asset-tiers/${tierId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async deleteOrganizationAssetTier(orgId: string, tierId: string, reassignToId?: string): Promise<void> {
+    return fetchWithAuth(`/api/organizations/${orgId}/asset-tiers/${tierId}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ reassign_to_id: reassignToId }),
+    });
+  },
+
+  // ───── Phase 4: Split Policy Code ─────
+
+  async getOrganizationPolicyCode(orgId: string): Promise<{
+    package_policy: { package_policy_code: string | null };
+    status_code: { project_status_code: string | null };
+    pr_check: { pr_check_code: string | null };
+  }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/policy-code`);
+  },
+
+  async updateOrganizationPolicyCode(orgId: string, codeType: string, code: string, message?: string): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/policy-code/${codeType}`, {
+      method: 'PUT',
+      body: JSON.stringify({ code, message }),
+    });
+  },
+
+  async revertOrganizationPolicyCode(orgId: string, codeType: string, changeId?: string): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/policy-code/${codeType}/revert`, {
+      method: 'POST',
+      body: JSON.stringify({ change_id: changeId }),
+    });
+  },
+
+  async getOrganizationPolicyChanges(orgId: string, codeType?: string): Promise<OrganizationPolicyChange[]> {
+    const params = codeType ? `?code_type=${codeType}` : '';
+    return fetchWithAuth(`/api/organizations/${orgId}/policy-changes${params}`);
+  },
+
+  // ───── Phase 4: Policy Evaluation ─────
+
+  async validatePolicyCode(orgId: string, code: string, codeType: string): Promise<PolicyValidationResult> {
+    return fetchWithAuth(`/api/organizations/${orgId}/validate-policy`, {
+      method: 'POST',
+      body: JSON.stringify({ code, codeType }),
+    });
+  },
+
+  async evaluateProjectPolicy(orgId: string, projectId: string): Promise<{ statusName: string; violations: string[]; depResults: number }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/evaluate-policy`, {
+      method: 'POST',
+    });
+  },
+
+  async preflightCheck(orgId: string, projectId: string, packageName: string, packageVersion?: string): Promise<{
+    allowed: boolean;
+    reasons: string[];
+    tierName: string;
+    disclaimer: string;
+  }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/preflight-check`, {
+      method: 'POST',
+      body: JSON.stringify({ packageName, packageVersion }),
+    });
+  },
+
+  // ───── Phase 4: Project Policy Changes ─────
+
+  async getProjectPolicyChanges(orgId: string, projectId: string, codeType?: string): Promise<ProjectPolicyChange[]> {
+    const params = codeType ? `?code_type=${codeType}` : '';
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/policy-changes${params}`);
+  },
+
+  async createProjectPolicyChange(orgId: string, projectId: string, data: { code_type: string; proposed_code: string; message: string }): Promise<ProjectPolicyChange> {
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/policy-changes`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async reviewProjectPolicyChange(orgId: string, changeId: string, action: 'accept' | 'reject', mergedCode?: string): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/policy-changes/${changeId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ action, merged_code: mergedCode }),
+    });
+  },
+
+  async revertProjectPolicy(orgId: string, projectId: string, codeType: string): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/revert-policy`, {
+      method: 'POST',
+      body: JSON.stringify({ code_type: codeType, to_org_base: true }),
+    });
+  },
 };
 
 export interface Team {
@@ -2088,6 +2231,15 @@ export interface Project {
   extraction_error?: string | null;
   role?: string;
   asset_tier?: AssetTier;
+  // Phase 4: Custom statuses and tiers
+  status_id?: string | null;
+  status_name?: string;
+  status_color?: string;
+  status_violations?: string[];
+  asset_tier_id?: string | null;
+  asset_tier_name?: string;
+  asset_tier_color?: string;
+  policy_evaluated_at?: string | null;
 }
 
 export interface ProjectRepository {
@@ -2508,6 +2660,67 @@ export interface OrganizationPolicies {
   slsa_level?: number | null;
 }
 
+export interface SplitPolicyCode {
+  package_policy: { package_policy_code: string | null; updated_at?: string; updated_by_id?: string };
+  status_code: { project_status_code: string | null; updated_at?: string; updated_by_id?: string };
+  pr_check: { pr_check_code: string | null; updated_at?: string; updated_by_id?: string };
+}
+
+export type PolicyCodeType = 'package_policy' | 'project_status' | 'pr_check';
+
+export interface PolicyValidationResult {
+  syntaxPass: boolean;
+  syntaxError?: string;
+  shapePass: boolean;
+  shapeError?: string;
+  fetchResiliencePass: boolean;
+  fetchResilienceError?: string;
+  allPassed: boolean;
+}
+
+export interface PolicyEvaluationResult {
+  statusName: string;
+  violations: string[];
+  depResults: number;
+}
+
+export interface PreflightCheckResult {
+  allowed: boolean;
+  reasons: string[];
+  tierName: string;
+}
+
+export interface OrganizationPolicyChange {
+  id: string;
+  organization_id: string;
+  code_type: PolicyCodeType;
+  author_id: string;
+  parent_id: string | null;
+  previous_code: string;
+  new_code: string;
+  message: string;
+  created_at: string;
+}
+
+export interface ProjectPolicyChange {
+  id: string;
+  project_id: string;
+  organization_id: string;
+  code_type: PolicyCodeType;
+  author_id: string;
+  reviewer_id: string | null;
+  parent_id: string | null;
+  base_code: string;
+  proposed_code: string;
+  message: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  is_ai_generated: boolean;
+  ai_merged_code: string | null;
+  has_conflict: boolean;
+  created_at: string;
+  reviewed_at: string | null;
+}
+
 export interface Activity {
   id: string;
   organization_id: string;
@@ -2692,6 +2905,7 @@ export interface BumpAllResponse {
 }
 
 // Watchtower types
+
 export interface WatchtowerSummary {
   name: string;
   status: 'pending' | 'analyzing' | 'ready' | 'error';

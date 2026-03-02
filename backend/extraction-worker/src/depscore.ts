@@ -1,6 +1,6 @@
 /**
  * Depscore: context-aware vulnerability score (0–100).
- * Uses 4-tier asset criticality + dependency context (directness, environment, malicious, reputation).
+ * Supports both legacy 4-tier enum and custom tier multipliers from organization_asset_tiers.
  */
 
 export type AssetTier = 'CROWN_JEWELS' | 'EXTERNAL' | 'INTERNAL' | 'NON_PRODUCTION';
@@ -11,6 +11,8 @@ export interface DepscoreContext {
   cisaKev: boolean;
   isReachable: boolean;
   assetTier: AssetTier;
+  tierMultiplier?: number;
+  tierRank?: number;
   isDirect?: boolean;
   isDevDependency?: boolean;
   isMalicious?: boolean;
@@ -55,13 +57,17 @@ export function calculateDepscore(ctx: DepscoreContext): number {
     ? 1.2
     : 0.6 + 0.6 * Math.sqrt(epss);
 
-  const tierWeight = TIER_WEIGHT[ctx.assetTier];
+  // Use custom multiplier if provided, otherwise fall back to legacy enum lookup
+  const tierWeight = ctx.tierMultiplier ?? TIER_WEIGHT[ctx.assetTier];
+
   const reachabilityWeight = ctx.isReachable
     ? 1.0
-    : REACHABILITY_WEIGHT_UNREACHABLE[ctx.assetTier];
+    : ctx.tierMultiplier != null
+      ? 0.1 + 0.7 * (ctx.tierMultiplier / 1.5)
+      : REACHABILITY_WEIGHT_UNREACHABLE[ctx.assetTier];
+
   const environmentalMultiplier = tierWeight * reachabilityWeight;
 
-  // Dependency context multiplier (new fields are optional for backward compat)
   const directnessWeight = ctx.isDirect === false ? 0.75 : 1.0;
   const envWeight = ctx.isDevDependency === true ? 0.4 : 1.0;
   const maliciousWeight = ctx.isMalicious === true ? 1.3 : 1.0;

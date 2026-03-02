@@ -1,6 +1,6 @@
 /**
  * Depscore: context-aware vulnerability score (0–100).
- * Uses 4-tier asset criticality + dependency context (directness, environment, malicious, reputation).
+ * Supports both legacy 4-tier enum and custom tier multipliers from organization_asset_tiers.
  * Matches backend extraction-worker depscore formula.
  */
 
@@ -12,6 +12,8 @@ export interface DepscoreContext {
   cisaKev: boolean;
   isReachable: boolean;
   assetTier: AssetTier;
+  tierMultiplier?: number;
+  tierRank?: number;
   isDirect?: boolean;
   isDevDependency?: boolean;
   isMalicious?: boolean;
@@ -49,10 +51,13 @@ export function calculateDepscore(context: DepscoreContext): number {
     ? 1.2
     : 0.6 + 0.6 * Math.sqrt(epss);
 
-  const tierWeight = TIER_WEIGHT[context.assetTier];
+  const tierWeight = context.tierMultiplier ?? TIER_WEIGHT[context.assetTier];
+
   const reachabilityWeight = context.isReachable
     ? 1.0
-    : REACHABILITY_WEIGHT_UNREACHABLE[context.assetTier];
+    : context.tierMultiplier != null
+      ? 0.1 + 0.7 * (context.tierMultiplier / 1.5)
+      : REACHABILITY_WEIGHT_UNREACHABLE[context.assetTier];
 
   const environmentalMultiplier = tierWeight * reachabilityWeight;
 
