@@ -9364,7 +9364,7 @@ router.get('/:id/projects/:projectId/registry-search', async (req: AuthRequest, 
         case 'npm': {
           const resp = await fetch(`https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(searchQuery)}&size=15`, { signal: controller.signal });
           if (!resp.ok) throw new Error(`npm registry returned ${resp.status}`);
-          const data = await resp.json();
+          const data = await resp.json() as { objects?: Array<{ package: { name: string; version: string; links?: { license?: string }; description?: string; downloads?: { weekly?: number } } }> };
           results = (data.objects || []).map((obj: any) => ({
             name: obj.package.name,
             version: obj.package.version,
@@ -9377,7 +9377,7 @@ router.get('/:id/projects/:projectId/registry-search', async (req: AuthRequest, 
         case 'maven': {
           const resp = await fetch(`https://search.maven.org/solrsearch/select?q=${encodeURIComponent(searchQuery)}&rows=15&wt=json`, { signal: controller.signal });
           if (!resp.ok) throw new Error(`Maven Central returned ${resp.status}`);
-          const data = await resp.json();
+          const data = await resp.json() as { response?: { docs?: Array<{ g: string; a: string; latestVersion?: string; v?: string }> } };
           results = (data.response?.docs || []).map((doc: any) => ({
             name: `${doc.g}:${doc.a}`,
             version: doc.latestVersion || doc.v,
@@ -9393,7 +9393,7 @@ router.get('/:id/projects/:projectId/registry-search', async (req: AuthRequest, 
             headers: { 'User-Agent': 'Deptex/1.0 (https://deptex.com)' },
           });
           if (!resp.ok) throw new Error(`crates.io returned ${resp.status}`);
-          const data = await resp.json();
+          const data = await resp.json() as { crates?: Array<{ name: string; newest_version?: string; max_version?: string; license?: string; description?: string; recent_downloads?: number; downloads?: number }> };
           results = (data.crates || []).map((crate: any) => ({
             name: crate.name,
             version: crate.newest_version || crate.max_version,
@@ -9407,8 +9407,8 @@ router.get('/:id/projects/:projectId/registry-search', async (req: AuthRequest, 
         case 'gem': {
           const resp = await fetch(`https://rubygems.org/api/v1/search.json?query=${encodeURIComponent(searchQuery)}`, { signal: controller.signal });
           if (!resp.ok) throw new Error(`RubyGems returned ${resp.status}`);
-          const data = await resp.json();
-          results = (data || []).slice(0, 15).map((gem: any) => ({
+          const data = await resp.json() as Array<{ name: string; version: string; licenses?: string[]; info?: string; downloads?: number }>;
+          results = (Array.isArray(data) ? data : []).slice(0, 15).map((gem: any) => ({
             name: gem.name,
             version: gem.version,
             license: gem.licenses?.[0] || null,
@@ -9423,7 +9423,7 @@ router.get('/:id/projects/:projectId/registry-search', async (req: AuthRequest, 
             if (resp.status === 404) return res.json({ results: [], mode: 'exact' });
             throw new Error(`PyPI returned ${resp.status}`);
           }
-          const data = await resp.json();
+          const data = await resp.json() as { info?: { name?: string; version?: string; license?: string; summary?: string } };
           results = [{
             name: data.info?.name || searchQuery,
             version: data.info?.version,
@@ -9440,7 +9440,7 @@ router.get('/:id/projects/:projectId/registry-search', async (req: AuthRequest, 
             if (resp.status === 404) return res.json({ results: [], mode: 'exact' });
             throw new Error(`Go proxy returned ${resp.status}`);
           }
-          const data = await resp.json();
+          const data = await resp.json() as { Version?: string };
           results = [{
             name: searchQuery,
             version: data.Version?.replace(/^v/, '') || 'latest',
@@ -9550,7 +9550,9 @@ Return ONLY the complete modified function code (the full packagePolicy function
         return res.status(503).json({ error: 'AI service temporarily unavailable - please request the exception manually.' });
       }
 
-      const geminiData = await geminiResp.json();
+      const geminiData = (await geminiResp.json()) as {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      };
       aiCode = (geminiData?.candidates?.[0]?.content?.parts?.[0]?.text ?? '').trim()
         .replace(/^```(?:javascript|js)?\n?/, '')
         .replace(/\n?```$/, '');
@@ -9567,10 +9569,15 @@ Return ONLY the complete modified function code (the full packagePolicy function
     }
 
     const validationResult = await validatePolicyCode(aiCode, 'package_policy', organizationId);
-    if (!validationResult.valid) {
+    if (!validationResult.allPassed) {
+      const validationErrors = [
+        validationResult.syntaxError,
+        validationResult.shapeError,
+        validationResult.fetchResilienceError,
+      ].filter((e): e is string => !!e);
       return res.status(422).json({
         error: 'Could not generate valid exception - please request manually.',
-        validationErrors: validationResult.errors,
+        validationErrors,
       });
     }
 
