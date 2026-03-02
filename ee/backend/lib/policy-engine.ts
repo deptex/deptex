@@ -224,9 +224,19 @@ async function executePolicyFunction(opts: ExecuteOptions): Promise<unknown> {
     mockFetch,
   } = opts;
 
-  const fetchFn = mockFetch
+  const MAX_FETCHES_PER_EXECUTION = 10;
+  let fetchCount = 0;
+
+  const rawFetch = mockFetch
     ? mockFetch
     : (urlStr: string) => controlledFetch(urlStr, organizationId, codeType);
+
+  const fetchFn = (urlStr: string) => {
+    if (++fetchCount > MAX_FETCHES_PER_EXECUTION) {
+      throw new Error(`fetch() limit exceeded: maximum ${MAX_FETCHES_PER_EXECUTION} requests per policy execution`);
+    }
+    return rawFetch(urlStr);
+  };
 
   const helpers = {
     isLicenseAllowed,

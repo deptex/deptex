@@ -4172,6 +4172,7 @@ async function fetchEnrichedDependenciesForProject(organizationId: string, proje
         source,
         environment,
         files_importing_count,
+        policy_result,
         created_at
       `)
       .eq('project_id', projectId)
@@ -8763,12 +8764,19 @@ router.post('/:id/bump-all', async (req: AuthRequest, res) => {
 // ───── Phase 4: Policy Engine Endpoints ─────
 
 import { evaluateProjectPolicies, validatePolicyCode, preflightCheck } from '../lib/policy-engine';
+import { checkRateLimit } from '../lib/rate-limit';
 
 // POST /api/organizations/:id/projects/:projectId/evaluate-policy
 router.post('/:id/projects/:projectId/evaluate-policy', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id: organizationId, projectId } = req.params;
+
+    const rl = await checkRateLimit(`evaluate:${projectId}`, 1, 300);
+    if (!rl.allowed) {
+      res.set('Retry-After', String(rl.retryAfterSeconds ?? 300));
+      return res.status(429).json({ error: 'Re-evaluation rate limit exceeded. Try again later.' });
+    }
 
     const access = await checkProjectAccess(userId, organizationId, projectId);
     if (!access.hasAccess) {
@@ -8804,6 +8812,12 @@ router.post('/:id/validate-policy', async (req: AuthRequest, res) => {
     const { id: organizationId } = req.params;
     const { code, codeType } = req.body;
 
+    const rl = await checkRateLimit(`validate:${userId}`, 10, 60);
+    if (!rl.allowed) {
+      res.set('Retry-After', String(rl.retryAfterSeconds ?? 60));
+      return res.status(429).json({ error: 'Validation rate limit exceeded. Try again later.' });
+    }
+
     const { data: membership } = await supabase
       .from('organization_members')
       .select('role')
@@ -8838,6 +8852,12 @@ router.post('/:id/projects/:projectId/preflight-check', async (req: AuthRequest,
     const userId = req.user!.id;
     const { id: organizationId, projectId } = req.params;
     const { packageName, packageVersion } = req.body;
+
+    const rl = await checkRateLimit(`preflight:${userId}`, 30, 60);
+    if (!rl.allowed) {
+      res.set('Retry-After', String(rl.retryAfterSeconds ?? 60));
+      return res.status(429).json({ error: 'Preflight check rate limit exceeded. Try again later.' });
+    }
 
     const { data: membership } = await supabase
       .from('organization_members')

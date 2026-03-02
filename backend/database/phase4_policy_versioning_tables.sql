@@ -52,6 +52,11 @@ CREATE INDEX idx_project_policy_changes_org ON project_policy_changes(organizati
 CREATE INDEX idx_project_policy_changes_status ON project_policy_changes(organization_id, status);
 CREATE INDEX idx_project_policy_changes_type ON project_policy_changes(project_id, code_type, status);
 
+COMMENT ON TABLE project_policy_changes IS 'Git-like commit chain for project-level policy overrides. Each code_type has its own chain per project.';
+COMMENT ON COLUMN project_policy_changes.parent_id IS 'Points to the previously accepted change of the same code_type for the same project.';
+COMMENT ON COLUMN project_policy_changes.base_code IS 'Snapshot of the effective code when this change was authored (for conflict detection).';
+COMMENT ON COLUMN project_policy_changes.has_conflict IS 'True when base_code does not match current effective code at review time.';
+
 -- Org-level policy version history
 CREATE TABLE IF NOT EXISTS organization_policy_changes (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -86,6 +91,9 @@ CREATE POLICY "Admins can manage org policy changes"
 
 CREATE INDEX idx_org_policy_changes_org ON organization_policy_changes(organization_id);
 CREATE INDEX idx_org_policy_changes_type ON organization_policy_changes(organization_id, code_type);
+
+COMMENT ON TABLE organization_policy_changes IS 'Version history for org-level policy edits. Each save creates a new row for revert capability.';
+COMMENT ON COLUMN organization_policy_changes.parent_id IS 'Points to the previous change of the same code_type for the same org.';
 
 -- Policy evaluation jobs (async re-evaluation queue)
 CREATE TABLE IF NOT EXISTS policy_evaluation_jobs (

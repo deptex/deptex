@@ -2333,6 +2333,7 @@ export interface ProjectDependency {
   is_current_version_banned?: boolean;
   is_outdated?: boolean;
   versions_behind?: number;
+  policy_result?: { allowed: boolean; reasons: string[] } | null;
 }
 
 export interface DependencyVersionVulnerability {

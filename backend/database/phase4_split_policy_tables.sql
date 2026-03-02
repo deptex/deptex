@@ -91,3 +91,7 @@ CREATE POLICY "Admins can manage PR checks"
 CREATE INDEX idx_org_package_policies_org ON organization_package_policies(organization_id);
 CREATE INDEX idx_org_status_codes_org ON organization_status_codes(organization_id);
 CREATE INDEX idx_org_pr_checks_org ON organization_pr_checks(organization_id);
+
+COMMENT ON TABLE organization_package_policies IS 'Stores the packagePolicy() function code. Runs per-dependency to return { allowed, reasons }.';
+COMMENT ON TABLE organization_status_codes IS 'Stores the projectStatus() function code. Runs per-project to return { status, violations }.';
+COMMENT ON TABLE organization_pr_checks IS 'Stores the pullRequestCheck() function code. Runs per-PR to return { status, violations }.';
