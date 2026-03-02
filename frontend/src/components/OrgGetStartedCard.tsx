@@ -61,7 +61,10 @@ export default function OrgGetStartedCard({
   const hasProject = projects.length > 0;
 
   const hasPolicy =
-    !!policies?.policy_code && policies.policy_code.trim().length > 0;
+    (!!policies?.policy_code && policies.policy_code.trim().length > 0) ||
+    !!(policies as any)?.package_policy_code?.trim() ||
+    !!(policies as any)?.project_status_code?.trim() ||
+    !!(policies as any)?.pr_check_code?.trim();
 
   const steps: Step[] = [
     {

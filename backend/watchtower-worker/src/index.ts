@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import semver from 'semver';
-import { Redis } from '@upstash/redis';
+import { supabase } from './supabase';
 import { analyzePackage, analyzePackageVersion, cleanupTempDir } from './analyzer';
 import {
   updateWatchedPackageStatus,
@@ -15,7 +15,6 @@ import {
   updateDependencyVersionAnalysis,
   getCandidateProjectsForAutoBump,
   getDependencyLatestVersion,
-  getDependencyLatestReleaseDate,
   getWatchlistRow,
   updateWatchlistQuarantineNextRelease,
   updateWatchlistClearQuarantineAndSetLatest,
@@ -27,32 +26,40 @@ import {
 import { isVersionAffected, isVersionFixed } from './semver-affected';
 import { createBumpPrForProject } from './create-bump-pr';
 
-const redisUrl = process.env.UPSTASH_REDIS_URL;
-const redisToken = process.env.UPSTASH_REDIS_TOKEN;
+const MACHINE_ID = process.env.FLY_MACHINE_ID || `watchtower-${process.pid}-${Date.now()}`;
+const HEARTBEAT_INTERVAL_MS = 60_000;
+const IDLE_SHUTDOWN_MS = 60_000;
+const MAX_MACHINE_RUNTIME_MS = 4 * 60 * 60 * 1000; // 4-hour watchdog
 
-// Guard Redis initialization so tests can import this module without env vars
-let redis: Redis | null = null;
-if (redisUrl && redisToken) {
-  redis = new Redis({
-    url: redisUrl,
-    token: redisToken,
-  });
+const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3001';
+const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY;
+
+interface WatchtowerJobRow {
+  id: string;
+  status: string;
+  job_type: string;
+  priority: number;
+  payload: Record<string, any>;
+  organization_id: string | null;
+  project_id: string | null;
+  dependency_id: string | null;
+  package_name: string;
+  attempt: number;
+  max_attempts: number;
+  machine_id: string | null;
+  heartbeat_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
-// Use different queue name for local development to avoid conflicts with deployed workers
-const QUEUE_NAME = process.env.WATCHTOWER_QUEUE_NAME ||
-  (process.env.NODE_ENV === 'production' ? 'watchtower-jobs' : 'watchtower-jobs-local');
-const NEW_VERSION_QUEUE_NAME = process.env.WATCHTOWER_NEW_VERSION_QUEUE_NAME ||
-  (process.env.NODE_ENV === 'production' ? 'watchtower-new-version-jobs' : 'watchtower-new-version-jobs-local');
-const BATCH_VERSION_QUEUE_NAME = process.env.WATCHTOWER_BATCH_VERSION_QUEUE_NAME ||
-  (process.env.NODE_ENV === 'production' ? 'watchtower-batch-version-jobs' : 'watchtower-batch-version-jobs-local');
-const WORKER_ID = `watchtower-worker-${process.pid}-${Date.now()}`;
-
-export interface BatchVersionAnalysisJob {
-  type: 'batch_version_analysis';
-  dependency_id: string;
+export interface WatchtowerJob {
   packageName: string;
-  versions: string[]; // up to 20 previous versions to analyze
+  watchedPackageId: string;
+  projectDependencyId: string;
+  currentVersion?: string;
 }
 
 export interface NewVersionJob {
@@ -63,41 +70,64 @@ export interface NewVersionJob {
   latest_release_date?: string | null;
 }
 
-// Test Redis connection on startup
-async function testRedisConnection(): Promise<boolean> {
-  if (!redis) return false;
+export interface BatchVersionAnalysisJob {
+  type: 'batch_version_analysis';
+  dependency_id: string;
+  packageName: string;
+  versions: string[];
+}
+
+interface WatchtowerEvent {
+  event_type: 'security_analysis_failure' | 'supply_chain_anomaly' | 'new_version_available';
+  organization_id: string;
+  project_id?: string;
+  package_name: string;
+  payload: Record<string, any>;
+  priority: 'critical' | 'high' | 'normal' | 'low';
+}
+
+async function emitWatchtowerEvent(event: WatchtowerEvent): Promise<void> {
+  if (!BACKEND_URL || !INTERNAL_API_KEY) return;
   try {
-    console.log(`[${new Date().toISOString()}] 🔌 Testing Redis connection...`);
-    const pingResult = await redis.ping();
-    console.log(`[${new Date().toISOString()}] ✅ Redis connection successful (ping: ${pingResult})`);
-    
-    // Check queue length
-    const queueLength = await redis.llen(QUEUE_NAME);
-    console.log(`[${new Date().toISOString()}] 📊 Current queue length: ${queueLength} jobs`);
-    
-    if (queueLength > 0) {
-      console.log(`[${new Date().toISOString()}] ⚠️  Found ${queueLength} job(s) waiting in queue - will process them now`);
-    }
-    
-    return true;
-  } catch (error: any) {
-    console.error(`[${new Date().toISOString()}] ❌ Redis connection failed:`, error.message);
-    return false;
+    await fetch(`${BACKEND_URL}/api/internal/watchtower-event`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Internal-Api-Key': INTERNAL_API_KEY,
+      },
+      body: JSON.stringify(event),
+    });
+  } catch {
+    // Fire-and-forget
   }
 }
 
-export interface WatchtowerJob {
-  packageName: string;
-  watchedPackageId: string;
-  projectDependencyId: string;
-  /** Version the project is using; worker runs integrity checks on this and on latest. */
-  currentVersion?: string;
+async function sendHeartbeat(jobId: string): Promise<void> {
+  await supabase
+    .from('watchtower_jobs')
+    .update({ heartbeat_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq('id', jobId);
 }
 
-/**
- * Returns true if the target version is affected by any known vulnerability and not fixed.
- * We must not auto-bump to a vulnerable version.
- */
+async function completeJob(jobId: string): Promise<void> {
+  await supabase
+    .from('watchtower_jobs')
+    .update({ status: 'completed', completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq('id', jobId);
+}
+
+async function failJob(jobId: string, errorMessage: string): Promise<void> {
+  await supabase
+    .from('watchtower_jobs')
+    .update({ status: 'failed', error_message: errorMessage, completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq('id', jobId);
+}
+
+async function claimJob(): Promise<WatchtowerJobRow | null> {
+  const { data } = await supabase.rpc('claim_watchtower_job', { p_machine_id: MACHINE_ID });
+  return (data as WatchtowerJobRow[] | null)?.[0] ?? null;
+}
+
 export async function isTargetVersionVulnerable(dependencyId: string, targetVersion: string): Promise<boolean> {
   const vulns = await getDependencyVulnerabilities(dependencyId);
   for (const v of vulns) {
@@ -108,22 +138,14 @@ export async function isTargetVersionVulnerable(dependencyId: string, targetVers
   return false;
 }
 
-/**
- * Run PR and quarantine logic for a dependency + target version (after analysis passes or quarantine expired).
- * - Candidates = projects that have this dependency as direct AND have auto_bump on (true or null); see getCandidateProjectsForAutoBump.
- * - Only creates bump PR when org does NOT have this package on Watchtower (no watchlist row) = "auto bump".
- * - When org HAS package on Watchtower (watchlist exists), we apply quarantine rules instead; PR only after quarantine allows.
- */
 export async function runAutoBumpPrLogic(
   dependencyId: string,
   packageName: string,
   targetVersion: string,
-  latestReleaseDate: string | null
+  latestReleaseDate: string | null,
+  organizationId?: string
 ): Promise<void> {
   const candidates = await getCandidateProjectsForAutoBump(dependencyId, packageName);
-  // #region agent log
-  fetch('http://127.0.0.1:7243/ingest/abaca787-5416-40c4-b6fe-aea97fa8dfd8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'index.ts:runAutoBumpPrLogic:after-getCandidates', message: 'candidate count', data: { packageName, targetVersion, candidateCount: candidates.length, projectIds: candidates.slice(0, 3).map(c => c.project_id) }, timestamp: Date.now(), sessionId: 'debug-session', hypothesisId: 'A' }) }).catch(() => {});
-  // #endregion
   if (candidates.length === 0) {
     console.log(`[${new Date().toISOString()}] No candidate projects for ${packageName}@${targetVersion}`);
     return;
@@ -139,7 +161,6 @@ export async function runAutoBumpPrLogic(
       const orgHasPackageOnWatchtower = watchlist != null;
 
       if (orgHasPackageOnWatchtower) {
-        // Org has this package on Watchtower: apply quarantine/watchlist rules; only create PR when allowed.
         if (watchlist!.quarantine_next_release) {
           await updateWatchlistQuarantineNextRelease(watchlist!.id, quarantineUntilIso);
           console.log(`[${new Date().toISOString()}] Quarantine set for ${packageName} (org ${proj.organization_id}) until ${quarantineUntilIso}`);
@@ -153,7 +174,6 @@ export async function runAutoBumpPrLogic(
           await updateWatchlistSetLatestAllowed(watchlist!.id, targetVersion);
         }
       }
-      // Org does NOT have this package on Watchtower (watchlist === null): auto-bump = create PR.
 
       const result = await createBumpPrForProject(
         proj.organization_id,
@@ -174,21 +194,14 @@ export async function runAutoBumpPrLogic(
   }
 }
 
-/**
- * Process a new_version or quarantine_expired job (auto-bump pipeline).
- */
-export async function processNewVersionJob(job: NewVersionJob): Promise<{ success: boolean; error?: string }> {
+export async function processNewVersionJob(job: NewVersionJob, orgId?: string): Promise<{ success: boolean; error?: string }> {
   const { type, dependency_id, name } = job;
-  // #region agent log
-  fetch('http://127.0.0.1:7243/ingest/abaca787-5416-40c4-b6fe-aea97fa8dfd8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'index.ts:processNewVersionJob:entry', message: 'auto-bump job received', data: { type, dependency_id, name, new_version: job.new_version }, timestamp: Date.now(), sessionId: 'debug-session', hypothesisId: 'D' }) }).catch(() => {});
-  // #endregion
   let targetVersion: string;
   let latestReleaseDate: string | null = null;
 
   if (type === 'quarantine_expired') {
     targetVersion = (await getDependencyLatestVersion(dependency_id)) ?? '';
     if (!targetVersion) {
-      console.warn(`[${new Date().toISOString()}] No latest_version for dependency ${dependency_id}, skipping quarantine_expired`);
       return { success: false, error: 'No latest_version' };
     }
   } else {
@@ -204,6 +217,15 @@ export async function processNewVersionJob(job: NewVersionJob): Promise<{ succes
       tmpDir = analysisResult.tmpDir;
       if (!analysisResult.success) {
         await setDependencyVersionError(dependency_id, targetVersion, analysisResult.error ?? 'Analysis failed');
+        if (orgId) {
+          emitWatchtowerEvent({
+            event_type: 'security_analysis_failure',
+            organization_id: orgId,
+            package_name: name,
+            payload: { version: targetVersion, error: analysisResult.error },
+            priority: 'high',
+          });
+        }
         return { success: false, error: analysisResult.error };
       }
       const data = analysisResult.data!;
@@ -211,45 +233,58 @@ export async function processNewVersionJob(job: NewVersionJob): Promise<{ succes
         data.registryIntegrityStatus === 'fail' ||
         data.installScriptsStatus === 'fail' ||
         data.entropyAnalysisStatus === 'fail';
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/abaca787-5416-40c4-b6fe-aea97fa8dfd8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'index.ts:processNewVersionJob:after-analysis', message: 'analysis result', data: { name, targetVersion, failed, registry: data.registryIntegrityStatus, scripts: data.installScriptsStatus, entropy: data.entropyAnalysisStatus }, timestamp: Date.now(), sessionId: 'debug-session', hypothesisId: 'E' }) }).catch(() => {});
-      // #endregion
       if (failed) {
         await setDependencyVersionError(
           dependency_id,
           targetVersion,
           `Checks failed: registry=${data.registryIntegrityStatus} scripts=${data.installScriptsStatus} entropy=${data.entropyAnalysisStatus}`
         );
+        if (orgId) {
+          emitWatchtowerEvent({
+            event_type: 'security_analysis_failure',
+            organization_id: orgId,
+            package_name: name,
+            payload: {
+              version: targetVersion,
+              registry: data.registryIntegrityStatus,
+              scripts: data.installScriptsStatus,
+              entropy: data.entropyAnalysisStatus,
+            },
+            priority: 'high',
+          });
+        }
         return { success: false, error: 'One or more checks failed' };
       }
       await updateDependencyVersionAnalysis(dependency_id, targetVersion, data);
+
+      if (orgId) {
+        emitWatchtowerEvent({
+          event_type: 'new_version_available',
+          organization_id: orgId,
+          package_name: name,
+          payload: { version: targetVersion, checks: 'all_passed' },
+          priority: 'low',
+        });
+      }
     } finally {
       if (tmpDir) cleanupTempDir(tmpDir);
     }
   }
 
-  // Do not auto-bump to a version that is known vulnerable.
   if (await isTargetVersionVulnerable(dependency_id, targetVersion)) {
-    console.log(`[${new Date().toISOString()}] ⚠️ Skipping auto-bump for ${name}@${targetVersion}: target version is affected by a known vulnerability`);
+    console.log(`[${new Date().toISOString()}] Skipping auto-bump for ${name}@${targetVersion}: target version is vulnerable`);
     return { success: true };
   }
 
-  await runAutoBumpPrLogic(dependency_id, name, targetVersion, latestReleaseDate);
+  await runAutoBumpPrLogic(dependency_id, name, targetVersion, latestReleaseDate, orgId);
   return { success: true };
 }
 
-/**
- * Process a batch version analysis job — runs the three checks on up to 20 previous versions.
- * This is a low-priority background job that never blocks primary analysis or auto-bump.
- */
 async function processBatchVersionJob(job: BatchVersionAnalysisJob): Promise<{ success: boolean; error?: string }> {
   const { dependency_id, packageName, versions } = job;
   const existing = await getVersionsWithExistingAnalysis(dependency_id, versions);
   const toAnalyze = versions.filter((v) => !existing.has(v));
-  if (existing.size > 0) {
-    console.log(`[${new Date().toISOString()}] 📦 Skipping ${existing.size} version(s) already in DB for ${packageName}`);
-  }
-  console.log(`[${new Date().toISOString()}] 📦 Processing batch version analysis for ${packageName} (${toAnalyze.length} versions)`);
+  console.log(`[${new Date().toISOString()}] Batch analysis for ${packageName} (${toAnalyze.length}/${versions.length} versions)`);
 
   let successCount = 0;
   let failCount = 0;
@@ -257,60 +292,42 @@ async function processBatchVersionJob(job: BatchVersionAnalysisJob): Promise<{ s
   for (const version of toAnalyze) {
     let tmpDir: string | undefined;
     try {
-      console.log(`[${new Date().toISOString()}] 🔍 Analyzing ${packageName}@${version}...`);
       const result = await analyzePackageVersion(packageName, version);
       tmpDir = result.tmpDir;
 
       if (result.success && result.data) {
         await upsertDependencyVersionAnalysis(dependency_id, version, result.data);
         successCount++;
-        console.log(`[${new Date().toISOString()}] ✅ ${packageName}@${version} analysis stored`);
       } else {
         failCount++;
         await setDependencyVersionError(dependency_id, version, result.error ?? 'Analysis failed');
-        console.warn(`[${new Date().toISOString()}] ⚠️ ${packageName}@${version} analysis failed: ${result.error}`);
       }
     } catch (e: any) {
       failCount++;
-      console.warn(`[${new Date().toISOString()}] ⚠️ ${packageName}@${version} error: ${e.message}`);
+      console.warn(`[${new Date().toISOString()}] ${packageName}@${version} error: ${e.message}`);
     } finally {
       if (tmpDir) cleanupTempDir(tmpDir);
     }
   }
 
-  console.log(`[${new Date().toISOString()}] 📦 Batch complete for ${packageName}: ${successCount} succeeded, ${failCount} failed`);
+  console.log(`[${new Date().toISOString()}] Batch complete for ${packageName}: ${successCount} succeeded, ${failCount} failed`);
   return { success: true };
 }
 
-/** True if version is a stable release (no canary/experimental/alpha/beta/rc). */
 function isStableVersion(version: string): boolean {
   if (!semver.valid(version)) return false;
   return !semver.prerelease(version);
 }
 
-/**
- * Fetch the previous N stable versions (by publish date) from npm registry, excluding specified versions.
- * Prefers stable releases over canary/experimental so projects using 19.1.x etc. get analyzed.
- */
-async function getPreviousVersions(
-  packageName: string,
-  excludeVersions: string[],
-  count: number = 20
-): Promise<string[]> {
+async function getPreviousVersions(packageName: string, excludeVersions: string[], count: number = 20): Promise<string[]> {
   try {
     const encodedName = encodeURIComponent(packageName);
     const response = await fetch(`https://registry.npmjs.org/${encodedName}`);
     if (!response.ok) return [];
-
-    const packageData = await response.json() as {
-      versions?: Record<string, unknown>;
-      time?: Record<string, string>;
-    };
-
+    const packageData = await response.json() as { versions?: Record<string, unknown>; time?: Record<string, string> };
     if (!packageData.versions || !packageData.time) return [];
 
     const excludeSet = new Set(excludeVersions);
-    // Prefer stable versions; only include prereleases if we need more to reach count
     const allEntries = Object.keys(packageData.versions)
       .filter((v) => !excludeSet.has(v) && packageData.time![v])
       .map((v) => ({ version: v, time: new Date(packageData.time![v]).getTime(), stable: isStableVersion(v) }))
@@ -318,7 +335,6 @@ async function getPreviousVersions(
 
     const stable = allEntries.filter((e) => e.stable).slice(0, count);
     if (stable.length >= count) return stable.map((e) => e.version);
-    // Fill with prereleases if we need more
     const extra = allEntries.filter((e) => !e.stable).slice(0, count - stable.length);
     return [...stable, ...extra].map((e) => e.version);
   } catch (e: any) {
@@ -327,250 +343,275 @@ async function getPreviousVersions(
   }
 }
 
-/**
- * Process a single Watchtower job
- */
-async function processJob(job: WatchtowerJob): Promise<{ success: boolean; error?: string }> {
-  const startTime = new Date().toISOString();
-  console.log(`[${startTime}] 🚀 Processing Watchtower job for ${job.packageName}`);
+async function processFullAnalysisJob(job: WatchtowerJobRow): Promise<{ success: boolean; error?: string }> {
+  const payload = job.payload as { watchedPackageId?: string; projectDependencyId?: string; currentVersion?: string };
+  const watchedPackageId = payload.watchedPackageId;
+  const projectDependencyId = payload.projectDependencyId;
+  const currentVersion = payload.currentVersion;
+
+  if (!watchedPackageId) {
+    return { success: false, error: 'Missing watchedPackageId in payload' };
+  }
 
   let tmpDir: string | undefined;
   let currentVersionTmpDir: string | undefined;
 
   try {
-    // Update status to analyzing
-    await updateWatchedPackageStatus(job.watchedPackageId, 'analyzing');
+    await updateWatchedPackageStatus(watchedPackageId, 'analyzing');
 
-    // Analyze the package (full pipeline: npm metadata, tarball, git, all checks)
-    console.log(`[${new Date().toISOString()}] 🔍 Running full analysis for ${job.packageName}...`);
-    const analysisResult = await analyzePackage(job.packageName);
-
-    // Store the temp directory path for cleanup
+    const analysisResult = await analyzePackage(job.package_name);
     tmpDir = analysisResult.tmpDir;
 
     if (!analysisResult.success) {
       throw new Error(analysisResult.error || 'Analysis failed');
     }
 
-    // Store main analysis results in watched_packages table
-    console.log(`[${new Date().toISOString()}] 💾 Storing analysis results...`);
-    await updateWatchedPackageResults(job.watchedPackageId, analysisResult.data!);
+    await updateWatchedPackageResults(watchedPackageId, analysisResult.data!);
 
-    // Store commits if available
-    if (analysisResult.commits && analysisResult.commits.length > 0) {
-      console.log(`[${new Date().toISOString()}] 💾 Storing ${analysisResult.commits.length} commits...`);
-      await storePackageCommits(job.watchedPackageId, analysisResult.commits);
+    if (analysisResult.commits?.length) {
+      await storePackageCommits(watchedPackageId, analysisResult.commits);
     }
 
-    // Store contributor profiles if available
     let emailToIdMap = new Map<string, string>();
-    if (analysisResult.contributors && analysisResult.contributors.length > 0) {
-      console.log(`[${new Date().toISOString()}] 💾 Storing ${analysisResult.contributors.length} contributor profiles...`);
-      emailToIdMap = await storeContributorProfiles(job.watchedPackageId, analysisResult.contributors);
+    if (analysisResult.contributors?.length) {
+      emailToIdMap = await storeContributorProfiles(watchedPackageId, analysisResult.contributors);
     }
 
-    // Store anomalies if available
-    if (analysisResult.anomalies && analysisResult.anomalies.length > 0) {
-      console.log(`[${new Date().toISOString()}] 💾 Storing ${analysisResult.anomalies.length} anomalies...`);
-      await storeAnomalies(job.watchedPackageId, analysisResult.anomalies, emailToIdMap);
+    if (analysisResult.anomalies?.length) {
+      await storeAnomalies(watchedPackageId, analysisResult.anomalies, emailToIdMap);
+
+      const highAnomalies = analysisResult.anomalies.filter((a) => (a.totalScore ?? 0) >= 60);
+      if (highAnomalies.length > 0 && job.organization_id) {
+        for (const anomaly of highAnomalies.slice(0, 3)) {
+          emitWatchtowerEvent({
+            event_type: 'supply_chain_anomaly',
+            organization_id: job.organization_id,
+            project_id: job.project_id || undefined,
+            package_name: job.package_name,
+            payload: {
+              commit_sha: anomaly.commitSha,
+              author: anomaly.contributorEmail,
+              anomaly_score: anomaly.totalScore,
+            },
+            priority: 'normal',
+          });
+        }
+      }
     }
 
-    // Run integrity checks on current version (project's version) if different from latest, and store + link
-    if (job.currentVersion && job.currentVersion !== analysisResult.data!.latestVersion) {
-      const dependencyId = await getDependencyIdForWatchedPackage(job.watchedPackageId);
+    // Check for security failures and emit events
+    const data = analysisResult.data!;
+    const anyFailed =
+      data.registryIntegrityStatus === 'fail' ||
+      data.installScriptsStatus === 'fail' ||
+      data.entropyAnalysisStatus === 'fail';
+    if (anyFailed && job.organization_id) {
+      emitWatchtowerEvent({
+        event_type: 'security_analysis_failure',
+        organization_id: job.organization_id,
+        project_id: job.project_id || undefined,
+        package_name: job.package_name,
+        payload: {
+          registry: data.registryIntegrityStatus,
+          scripts: data.installScriptsStatus,
+          entropy: data.entropyAnalysisStatus,
+        },
+        priority: 'high',
+      });
+    }
+
+    if (currentVersion && currentVersion !== analysisResult.data!.latestVersion) {
+      const dependencyId = await getDependencyIdForWatchedPackage(watchedPackageId);
       if (dependencyId) {
-        console.log(`[${new Date().toISOString()}] 🔍 Analyzing current version ${job.currentVersion} (project's version)...`);
-        const currentResult = await analyzePackageVersion(job.packageName, job.currentVersion);
+        const currentResult = await analyzePackageVersion(job.package_name, currentVersion);
         currentVersionTmpDir = currentResult.tmpDir;
         if (currentResult.success && currentResult.data) {
-          await upsertDependencyVersionAnalysis(dependencyId, job.currentVersion, currentResult.data);
-          if (job.projectDependencyId) {
-            const depVersionId = await getDependencyVersionRowId(dependencyId, job.currentVersion);
+          await upsertDependencyVersionAnalysis(dependencyId, currentVersion, currentResult.data);
+          if (projectDependencyId) {
+            const depVersionId = await getDependencyVersionRowId(dependencyId, currentVersion);
             if (depVersionId) {
-              await setProjectDependencyVersionId(job.projectDependencyId, depVersionId);
+              await setProjectDependencyVersionId(projectDependencyId, depVersionId);
             }
           }
         }
       }
     }
 
-    // Queue batch version analysis for the previous 20 versions (low-priority background job)
+    // Queue batch version analysis
     try {
       const latestVersion = analysisResult.data!.latestVersion;
       const excludeVersions = [latestVersion];
-      if (job.currentVersion && job.currentVersion !== latestVersion) {
-        excludeVersions.push(job.currentVersion);
+      if (currentVersion && currentVersion !== latestVersion) {
+        excludeVersions.push(currentVersion);
       }
-      const dependencyId = await getDependencyIdForWatchedPackage(job.watchedPackageId);
+      const dependencyId = await getDependencyIdForWatchedPackage(watchedPackageId);
       if (dependencyId) {
-        const previousVersions = await getPreviousVersions(job.packageName, excludeVersions, 20);
+        const previousVersions = await getPreviousVersions(job.package_name, excludeVersions, 20);
         if (previousVersions.length > 0) {
-          const batchJob: BatchVersionAnalysisJob = {
-            type: 'batch_version_analysis',
+          await supabase.from('watchtower_jobs').insert({
+            job_type: 'batch_version_analysis',
+            priority: 20,
+            payload: { dependency_id: dependencyId, packageName: job.package_name, versions: previousVersions },
+            organization_id: job.organization_id,
+            project_id: job.project_id,
             dependency_id: dependencyId,
-            packageName: job.packageName,
-            versions: previousVersions,
-          };
-          await redis.rpush(BATCH_VERSION_QUEUE_NAME, JSON.stringify(batchJob));
-          console.log(`[${new Date().toISOString()}] 📦 Queued batch version analysis for ${job.packageName} (${previousVersions.length} versions)`);
+            package_name: job.package_name,
+          });
         }
       }
     } catch (batchErr: any) {
-      // Non-fatal: don't fail the main job if batch queueing fails
-      console.warn(`[${new Date().toISOString()}] ⚠️ Failed to queue batch version analysis: ${batchErr.message}`);
+      console.warn(`[${new Date().toISOString()}] Failed to queue batch version analysis: ${batchErr.message}`);
     }
 
-    console.log(`[${new Date().toISOString()}] ✅ Successfully processed Watchtower job for ${job.packageName}`);
     return { success: true };
   } catch (error: any) {
-    console.error(`Error processing job for ${job.packageName}:`, error);
-    
-    // Update status to error
-    await updateWatchedPackageStatus(job.watchedPackageId, 'error', error.message);
-    
+    console.error(`Error processing full analysis for ${job.package_name}:`, error);
+    await updateWatchedPackageStatus(watchedPackageId, 'error', error.message);
     return { success: false, error: error.message };
   } finally {
-    // Clean up temp directories
-    if (tmpDir) {
-      console.log(`[${new Date().toISOString()}] 🧹 Cleaning up temp directory...`);
-      cleanupTempDir(tmpDir);
-    }
-    if (currentVersionTmpDir) {
-      cleanupTempDir(currentVersionTmpDir);
-    }
+    if (tmpDir) cleanupTempDir(tmpDir);
+    if (currentVersionTmpDir) cleanupTempDir(currentVersionTmpDir);
   }
 }
 
-/**
- * Main worker loop - continuously polls Redis for jobs
- */
-async function runWorker(): Promise<void> {
-  if (!redis) {
-    console.error('Redis not initialized. Set UPSTASH_REDIS_URL and UPSTASH_REDIS_TOKEN.');
-    process.exit(1);
-  }
-  const startTime = new Date().toISOString();
-  console.log(`[${startTime}] ========================================`);
-  console.log(`[${startTime}] Watchtower Worker starting...`);
-  console.log(`[${startTime}] ========================================`);
-  console.log(`[${startTime}] Queue name: ${QUEUE_NAME}`);
-  console.log(`[${startTime}] Auto-bump queue: ${NEW_VERSION_QUEUE_NAME}`);
-  console.log(`[${startTime}] Batch version queue: ${BATCH_VERSION_QUEUE_NAME}`);
-  console.log(`[${startTime}] Redis URL configured: ${!!redisUrl}`);
-  console.log(`[${startTime}] Redis Token configured: ${!!redisToken}`);
-  
-  // Test Redis connection
-  const redisConnected = await testRedisConnection();
-  if (!redisConnected) {
-    console.error(`[${startTime}] ❌ Cannot start worker - Redis connection failed`);
-    process.exit(1);
-  }
-  
-  console.log(`[${startTime}] ✅ Worker ready, starting to poll for jobs...`);
-  console.log(`[${startTime}] Worker ID: ${WORKER_ID} (PID: ${process.pid})`);
-  console.log(`[${startTime}] ========================================`);
+async function processPollSweepJob(job: WatchtowerJobRow): Promise<{ success: boolean; error?: string }> {
+  const payload = job.payload as { watched_package_id?: string; last_known_commit_sha?: string };
+  const watchedPackageId = payload.watched_package_id;
+  if (!watchedPackageId) return { success: false, error: 'Missing watched_package_id' };
 
+  try {
+    const { data: pkg } = await supabase
+      .from('watched_packages')
+      .select('id, name, analysis_data, status')
+      .eq('id', watchedPackageId)
+      .single();
+
+    if (!pkg || pkg.status !== 'ready') {
+      return { success: true };
+    }
+
+    const analysisResult = await analyzePackage(pkg.name);
+    if (!analysisResult.success) {
+      console.warn(`[${new Date().toISOString()}] Poll sweep for ${pkg.name} failed: ${analysisResult.error}`);
+      return { success: false, error: analysisResult.error };
+    }
+
+    if (analysisResult.tmpDir) cleanupTempDir(analysisResult.tmpDir);
+
+    await updateWatchedPackageResults(watchedPackageId, analysisResult.data!);
+
+    if (analysisResult.commits?.length) {
+      await storePackageCommits(watchedPackageId, analysisResult.commits);
+    }
+
+    let emailToIdMap = new Map<string, string>();
+    if (analysisResult.contributors?.length) {
+      emailToIdMap = await storeContributorProfiles(watchedPackageId, analysisResult.contributors);
+    }
+    if (analysisResult.anomalies?.length) {
+      await storeAnomalies(watchedPackageId, analysisResult.anomalies, emailToIdMap);
+    }
+
+    await supabase
+      .from('watched_packages')
+      .update({ last_polled_at: new Date().toISOString() })
+      .eq('id', watchedPackageId);
+
+    return { success: true };
+  } catch (e: any) {
+    console.error(`[${new Date().toISOString()}] Poll sweep error for ${job.package_name}:`, e.message);
+    return { success: false, error: e.message };
+  }
+}
+
+async function routeJob(job: WatchtowerJobRow): Promise<{ success: boolean; error?: string }> {
+  switch (job.job_type) {
+    case 'full_analysis':
+      return processFullAnalysisJob(job);
+    case 'new_version': {
+      const payload = job.payload as NewVersionJob;
+      return processNewVersionJob(
+        {
+          type: payload.type || 'new_version',
+          dependency_id: job.dependency_id || payload.dependency_id || '',
+          name: job.package_name,
+          new_version: payload.new_version,
+          latest_release_date: payload.latest_release_date,
+        },
+        job.organization_id || undefined
+      );
+    }
+    case 'batch_version_analysis': {
+      const payload = job.payload as BatchVersionAnalysisJob;
+      return processBatchVersionJob({
+        type: 'batch_version_analysis',
+        dependency_id: job.dependency_id || payload.dependency_id || '',
+        packageName: job.package_name,
+        versions: payload.versions || [],
+      });
+    }
+    case 'poll_sweep':
+      return processPollSweepJob(job);
+    default:
+      return { success: false, error: `Unknown job type: ${job.job_type}` };
+  }
+}
+
+async function runWorker(): Promise<void> {
+  const startTime = Date.now();
+  console.log(`[${new Date().toISOString()}] Watchtower Worker starting (Supabase polling, scale-to-zero)`);
+  console.log(`[${new Date().toISOString()}] Machine ID: ${MACHINE_ID}`);
+
+  let idleStart = Date.now();
   let pollCount = 0;
 
   while (true) {
+    // 4-hour watchdog
+    if (Date.now() - startTime > MAX_MACHINE_RUNTIME_MS) {
+      console.log(`[${new Date().toISOString()}] 4-hour watchdog reached, shutting down`);
+      process.exit(0);
+    }
+
     try {
       pollCount++;
-      const pollStartTime = new Date().toISOString();
-      
-      // Only log every 10th poll to reduce noise
-      if (pollCount % 10 === 1) {
-        console.log(`[${pollStartTime}] 🔄 Poll #${pollCount} on queue '${QUEUE_NAME}'`);
-      }
-      
-      // Poll: first new-version queue (auto-bump), then main watchtower queue, then batch version queue (lowest priority)
-      let jobData: string | WatchtowerJob | NewVersionJob | BatchVersionAnalysisJob | null = null;
-      let isNewVersionJob = false;
-      let isBatchVersionJob = false;
+      const job = await claimJob();
 
-      const newVersionLength = await redis.llen(NEW_VERSION_QUEUE_NAME);
-      if (newVersionLength > 0) {
-        jobData = await redis.lpop(NEW_VERSION_QUEUE_NAME) as string | NewVersionJob | null;
-        isNewVersionJob = true;
-        // #region agent log
-        const _j = typeof jobData === 'string' ? JSON.parse(jobData) : jobData;
-        fetch('http://127.0.0.1:7243/ingest/abaca787-5416-40c4-b6fe-aea97fa8dfd8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'index.ts:worker-loop:popped-new-version-job', message: 'job popped from new-version queue', data: { queueLength: newVersionLength, type: (_j as any)?.type, name: (_j as any)?.name, dependency_id: (_j as any)?.dependency_id }, timestamp: Date.now(), sessionId: 'debug-session', hypothesisId: 'D' }) }).catch(() => {});
-        // #endregion
-      }
-      if (!jobData) {
-        const queueLengthBefore = await redis.llen(QUEUE_NAME);
-        if (queueLengthBefore > 0) {
-          console.log(`[${new Date().toISOString()}] 📬 Found ${queueLengthBefore} job(s) in queue, processing...`);
-          jobData = await redis.lpop(QUEUE_NAME) as string | WatchtowerJob | null;
+      if (!job) {
+        if (Date.now() - idleStart >= IDLE_SHUTDOWN_MS) {
+          console.log(`[${new Date().toISOString()}] Idle for ${IDLE_SHUTDOWN_MS / 1000}s, shutting down`);
+          process.exit(0);
         }
-      } else {
-        console.log(`[${new Date().toISOString()}] 📬 Processing auto-bump job from ${NEW_VERSION_QUEUE_NAME}`);
-      }
-      // Lowest priority: batch version analysis queue
-      if (!jobData) {
-        const batchLength = await redis.llen(BATCH_VERSION_QUEUE_NAME);
-        if (batchLength > 0) {
-          console.log(`[${new Date().toISOString()}] 📬 Found ${batchLength} batch version job(s), processing...`);
-          jobData = await redis.lpop(BATCH_VERSION_QUEUE_NAME) as string | BatchVersionAnalysisJob | null;
-          isBatchVersionJob = true;
-        }
+        await new Promise((r) => setTimeout(r, 5000));
+        continue;
       }
 
-      if (jobData) {
-        if (isNewVersionJob) {
-          let job: NewVersionJob;
-          if (typeof jobData === 'string') {
-            job = JSON.parse(jobData) as NewVersionJob;
-          } else {
-            job = jobData as NewVersionJob;
-          }
-          const jobResult = await processNewVersionJob(job);
-          if (!jobResult.success) {
-            console.error(`[${new Date().toISOString()}] Auto-bump job failed: ${jobResult.error}`);
-          } else {
-            console.log(`[${new Date().toISOString()}] ✅ Auto-bump job completed for ${job.name}`);
-          }
-        } else if (isBatchVersionJob) {
-          let job: BatchVersionAnalysisJob;
-          if (typeof jobData === 'string') {
-            job = JSON.parse(jobData) as BatchVersionAnalysisJob;
-          } else {
-            job = jobData as BatchVersionAnalysisJob;
-          }
-          const jobResult = await processBatchVersionJob(job);
-          if (!jobResult.success) {
-            console.error(`[${new Date().toISOString()}] Batch version job failed: ${jobResult.error}`);
-          } else {
-            console.log(`[${new Date().toISOString()}] ✅ Batch version job completed for ${job.packageName}`);
-          }
+      idleStart = Date.now();
+      console.log(`[${new Date().toISOString()}] Claimed ${job.job_type} job for ${job.package_name} (id: ${job.id}, attempt: ${job.attempt})`);
+
+      const heartbeatTimer = setInterval(() => sendHeartbeat(job.id), HEARTBEAT_INTERVAL_MS);
+
+      try {
+        const result = await routeJob(job);
+        if (result.success) {
+          await completeJob(job.id);
+          console.log(`[${new Date().toISOString()}] Completed ${job.job_type} for ${job.package_name}`);
         } else {
-          let job: WatchtowerJob;
-          if (typeof jobData === 'string') {
-            job = JSON.parse(jobData) as WatchtowerJob;
-          } else if (typeof jobData === 'object' && jobData !== null) {
-            job = jobData as WatchtowerJob;
-          } else {
-            throw new Error(`Unexpected jobData type: ${typeof jobData}`);
-          }
-          const jobResult = await processJob(job);
-          if (!jobResult.success) {
-            console.error(`[${new Date().toISOString()}] Job failed: ${jobResult.error}`);
-          } else {
-            console.log(`[${new Date().toISOString()}] ✅ Job completed successfully for ${job.packageName}`);
-          }
+          await failJob(job.id, result.error || 'Unknown error');
+          console.error(`[${new Date().toISOString()}] Failed ${job.job_type} for ${job.package_name}: ${result.error}`);
         }
-      } else {
-        // No job available, wait before polling again
-        await new Promise((resolve) => setTimeout(resolve, 5000));
+      } catch (err: any) {
+        await failJob(job.id, err.message);
+        console.error(`[${new Date().toISOString()}] Unhandled error for ${job.package_name}: ${err.message}`);
+      } finally {
+        clearInterval(heartbeatTimer);
       }
     } catch (error: any) {
       console.error('Error in worker loop:', error);
-      // Wait a bit before retrying to avoid tight error loops
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await new Promise((r) => setTimeout(r, 5000));
     }
   }
 }
 
-// Handle graceful shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM received, shutting down gracefully...');
   process.exit(0);
@@ -581,7 +622,6 @@ process.on('SIGINT', () => {
   process.exit(0);
 });
 
-// Start the worker (skip when running under test runner)
 if (process.env.NODE_ENV !== 'test') {
   runWorker().catch((error) => {
     console.error('Fatal error in worker:', error);

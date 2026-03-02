@@ -7,6 +7,7 @@ todos:
     status: pending
 isProject: false
 ---
+
 ## Phase 15: Security SLA Management
 
 **Goal:** Enable organizations to define maximum remediation timeframes (SLAs) per vulnerability severity, track adherence across all projects in real time, alert when deadlines approach or breach, and export SLA compliance data for regulatory audits. This is the #1 feature enterprises require for SOC 2, ISO 27001, and PCI DSS compliance.
@@ -87,10 +88,12 @@ ALTER TABLE project_dependency_vulnerabilities
 **SLA resolution events:**
 
 When a vulnerability is resolved (pdv row removed or `resolved` event in timeline):
+
 - If `NOW() <= sla_deadline_at`: set `sla_status = 'met'`, `sla_met_at = NOW()`
 - If `NOW() > sla_deadline_at`: set `sla_status = 'breached'` (was already breached, now resolved late)
 
 When a vulnerability is suppressed or risk-accepted:
+
 - Set `sla_status = 'exempt'`, `sla_exempt_reason = 'Suppressed by [user]'` or `'Risk accepted by [user]: [reason]'`
 - Exempt vulns are excluded from SLA compliance calculations but tracked separately for audit
 
@@ -193,6 +196,7 @@ Under "Current Vulnerabilities" list: each vulnerability row shows a small SLA i
 **Project Security Sidebar (6F):**
 
 New "SLA Summary" card:
+
 - "SLA Compliance: 87%" (green/amber/red based on threshold)
 - Breakdown: "0 breached, 2 warning, 14 on track, 3 exempt"
 - "View SLA Dashboard" link
@@ -205,6 +209,7 @@ New "SLA Summary" card:
 ### 15E: SLA Compliance Dashboard
 
 New page or section accessible from:
+
 - Org Settings > Security SLAs > "View Dashboard" button
 - Org Security page > "SLA Compliance" tab
 - Aegis screen (Aegis can link to it)
@@ -212,25 +217,30 @@ New page or section accessible from:
 **Dashboard layout:**
 
 Top row -- three metric cards:
+
 - "Overall SLA Compliance": percentage of vulns resolved within SLA in the selected period. Color-coded (>90% green, 70-90% amber, <70% red).
 - "Current Breaches": count of open vulns currently past their SLA deadline. Red if > 0.
 - "Average MTTR": mean time to remediation across all resolved vulns, broken down by severity.
 
 Middle row -- SLA adherence chart:
+
 - Stacked bar chart by month (last 6 months): green = met within SLA, amber = met late (after breach), red = still open and breached, gray = exempt.
 - Shows trend over time -- are we getting better or worse?
 
 Table -- Current SLA violations:
+
 - Columns: Project, Vulnerability (OSV ID), Severity, Detected, Deadline, Overdue By, Assignee (who triggered the last fix attempt), Status (active fix? PR open?)
 - Sorted by most overdue first
 - Each row clickable: navigates to the vulnerability detail sidebar
 - "Fix with AI" bulk action: select multiple breached vulns and trigger a sprint
 
 Bottom row -- Per-team breakdown:
+
 - Table: Team name, Total vulns, On track %, Warning count, Breached count, Avg MTTR
 - Helps identify which teams need help
 
 **Export:**
+
 - "Export SLA Report" button: generates a PDF/CSV with all SLA compliance data for the selected period
 - Suitable for attaching to SOC 2 Type II audit evidence packages
 - Integrates with Aegis `generateAuditPackage` tool (Phase 7B-H): SLA report automatically included in audit packages
@@ -240,15 +250,14 @@ Bottom row -- Per-team breakdown:
 > Design an SLA Compliance Dashboard page for Deptex (dark theme: bg #09090b, cards #18181b, borders #27272a 1px, text #fafafa, secondary #a1a1aa, accent green #22c55e, warning amber #f59e0b, breach red #ef4444). This is a full-width page accessible from Org Settings > Security SLAs and from the Org Security page. Font: Inter body, JetBrains Mono for numbers/timestamps/percentages. 8px border-radius. No gradients, no shadows. Ultra-minimal Linear/Vercel style.
 >
 > **Page header** (px-6, py-5, border-b zinc-800):
+>
 > - Left: "SLA Compliance" title in 22px semibold + clock icon (zinc-400). Below: "Track remediation deadlines and compliance across all projects." in 14px zinc-400.
 > - Right: time range selector -- segmented control with "30 Days" / "90 Days" / "6 Months" / "1 Year" (zinc-800 bg, zinc-700 border, 13px, 32px tall, rounded-lg, active segment: zinc-700 bg white text). Far right: "Export Report" button (zinc-700 bg, download icon, 13px zinc-200 text, rounded-md, 32px height).
 >
 > **Top row -- Metric cards** (px-6, py-4, three cards side-by-side, equal width, 12px gap):
 >
 > - Card 1 (zinc-900 bg, zinc-800 border, rounded-lg, p-4): "Overall SLA Compliance" label 11px uppercase zinc-500 tracking-wider. Main number: "87%" in 36px semibold (color: green-500 if >90%, amber-500 if 70-90%, red-500 if <70%). Below: "142 of 163 vulnerabilities resolved within SLA" in 12px zinc-400. Thin divider (zinc-800, my-3). "vs last period: +4%" in 12px green-500 (or red-500 if negative), with up/down arrow icon.
->
 > - Card 2: "Current Breaches" label. Main number: "3" in 36px semibold red-500 (or "0" in green-500). Below: "2 critical, 1 high" in 12px zinc-400 (or "All vulnerabilities within SLA" in 12px green-500). Thin divider. "Oldest breach: 48h overdue" in 12px red-400.
->
 > - Card 3: "Average MTTR" label. Main number: "4.2 days" in 36px semibold zinc-200. Below breakdown by severity in 12px zinc-400: "Critical: 1.8d | High: 3.5d | Medium: 12.4d | Low: 28.1d" with color-coded dots (red, amber, yellow, green) before each. Thin divider. "vs last period: -1.3 days" in 12px green-500.
 >
 > **Middle row -- SLA Adherence Trend** card (mx-6, mt-4, zinc-900 bg, zinc-800 border, rounded-lg, p-5):
@@ -305,6 +314,7 @@ A breached SLA vuln always ranks above non-breached, regardless of Depscore.
 #### Backend Tests (`backend/src/__tests__/security-slas.test.ts`)
 
 Tests 1-8 (SLA Configuration):
+
 1. Creating SLA policies for all four severities stores correct `max_hours` values
 2. Updating SLA threshold changes `sla_deadline_at` for all affected open vulnerabilities
 3. Disabling an SLA severity sets affected vulns to `sla_status = 'exempt'` with reason "SLA disabled"

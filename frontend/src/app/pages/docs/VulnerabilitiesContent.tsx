@@ -29,24 +29,29 @@ const depscoreExample = [
 
 const reachabilityTiers = [
   {
-    tier: "Reachable",
-    description: "Static analysis confirms the vulnerable function is called from your code.",
+    tier: "confirmed",
+    description: "Code-level analysis confirms the vulnerable code path is reachable (data-flow or call path).",
     multiplier: "1.0×",
   },
   {
-    tier: "Potentially Reachable",
-    description: "The vulnerable function is imported but the exact call path could not be confirmed.",
-    multiplier: "0.8×",
-  },
-  {
-    tier: "Unreachable",
-    description: "No import chain or call path connects your code to the vulnerable function.",
-    multiplier: "0.4×",
-  },
-  {
-    tier: "Unknown",
-    description: "Reachability analysis was not possible (e.g. unsupported language or dynamic import).",
+    tier: "data_flow",
+    description: "Data-flow analysis shows the vulnerable sink is reachable from your code.",
     multiplier: "0.9×",
+  },
+  {
+    tier: "function",
+    description: "The vulnerable function is imported and callable; exact data-flow not confirmed.",
+    multiplier: "0.7×",
+  },
+  {
+    tier: "module",
+    description: "The package (module) is imported but the vulnerable function was not traced.",
+    multiplier: "0.5×",
+  },
+  {
+    tier: "unreachable",
+    description: "No import chain or call path connects your code to the vulnerable function.",
+    multiplier: "0.1×–0.8× (tier-based)",
   },
 ];
 
@@ -235,17 +240,18 @@ export default function VulnerabilitiesContent() {
 
       {/* Reachability Analysis */}
       <div>
-        <h2 className="text-lg font-semibold text-foreground mb-3">Reachability Analysis</h2>
+        <h2 className="text-lg font-semibold text-foreground mb-3">Reachability Analysis (Phase 6B)</h2>
         <div className="space-y-3 text-foreground-secondary leading-relaxed mb-4">
           <p>
-            Not every vulnerability in your dependency tree is exploitable. Deptex performs static analysis on your
-            project&rsquo;s source code to determine whether the vulnerable code paths in a dependency are actually
-            invoked. This dramatically reduces noise &mdash; in practice, a large percentage of flagged CVEs turn
-            out to be unreachable.
+            Not every vulnerability in your dependency tree is exploitable. Deptex performs code-level reachability
+            analysis (dep-scan with research profile) on your project&rsquo;s source code to determine whether the
+            vulnerable code paths in a dependency are actually invoked. Results are classified into five tiers;
+            unreachable vulnerabilities receive a much lower Depscore.
           </p>
           <p>
-            The analysis traces import chains and function call graphs from your application entry points through to the
-            specific functions identified in the vulnerability advisory. Results are classified into four tiers:
+            The analysis traces import chains, function call graphs, and data-flow from your application entry points
+            through to the specific functions identified in the advisory. The Security tab filter supports filtering
+            by reachability level (Data flow, Function, Module, Unreachable).
           </p>
         </div>
         <div className="rounded-lg border border-border bg-background-card overflow-hidden">
@@ -269,8 +275,9 @@ export default function VulnerabilitiesContent() {
           </table>
         </div>
         <p className="text-sm text-foreground-secondary leading-relaxed mt-3">
-          Reachability results feed directly into the Depscore environmental multiplier and are displayed in the
-          vulnerability detail sidebar alongside the traced call path when available.
+          Reachability results feed into the Depscore environmental multiplier. In the vulnerability detail sidebar,
+          each finding shows a <strong className="text-foreground">tiered reachability badge</strong> (e.g. Data flow, Function, Module, Unreachable).
+          When data-flow or call path is available, the <strong className="text-foreground">Code Impact</strong> view shows the traced path and code snippets.
         </p>
       </div>
 
@@ -325,6 +332,10 @@ export default function VulnerabilitiesContent() {
             <li className="flex gap-2">
               <span className="text-primary shrink-0 mt-1.5 size-1.5 rounded-full bg-primary" aria-hidden />
               <span><strong className="text-foreground">Advisory info</strong> &mdash; OSV/GHSA ID, CVE aliases, severity, CVSS score, and published date.</span>
+            </li>
+            <li className="flex gap-2">
+              <span className="text-primary shrink-0 mt-1.5 size-1.5 rounded-full bg-primary" aria-hidden />
+              <span><strong className="text-foreground">Tiered reachability badge</strong> &mdash; confirmed, data_flow, function, module, or unreachable; optional Code Impact view with data-flow path and code snippets.</span>
             </li>
             <li className="flex gap-2">
               <span className="text-primary shrink-0 mt-1.5 size-1.5 rounded-full bg-primary" aria-hidden />

@@ -28,11 +28,15 @@ export interface VulnGraphDepNode {
     aliases: string[];
     /** When false, vulnerability is not reachable from app code. Optional; default true. */
     is_reachable?: boolean;
+    reachability_level?: string | null;
     depscore?: number | null;
     epss_score?: number | null;
     cvss_score?: number | null;
     cisa_kev?: boolean | null;
     fixed_versions?: string[] | null;
+    /** Phase 15: SLA status for graph badge (warning = amber clock, breached = red clock). */
+    sla_status?: string | null;
+    sla_deadline_at?: string | null;
   }>;
   /** When true, package is zombie (never imported); show at opacity 0.5. */
   isZombie?: boolean;
@@ -360,7 +364,10 @@ export function buildDepAndVulnNodesAndEdges(
           epss_score: vuln.epss_score,
           cisa_kev: vuln.cisa_kev,
           is_reachable: vuln.is_reachable,
+          reachability_level: vuln.reachability_level,
           fixed_versions: vuln.fixed_versions,
+          sla_status: vuln.sla_status ?? undefined,
+          sla_deadline_at: vuln.sla_deadline_at ?? undefined,
         } satisfies VulnerabilityNodeData,
         draggable: true,
         selectable: false,
@@ -386,6 +393,17 @@ export function buildDepAndVulnNodesAndEdges(
 }
 
 export type WorstSeverity = 'critical' | 'high' | 'medium' | 'low' | 'none';
+
+/** Phase 15: Count vulns with sla_status === 'breached' across all deps. */
+export function getSlaBreachCount(depNodes: VulnGraphDepNode[]): number {
+  let count = 0;
+  for (const dep of depNodes) {
+    for (const v of dep.vulnerabilities) {
+      if (v.sla_status === 'breached') count++;
+    }
+  }
+  return count;
+}
 
 /** Worst severity among deps; only considers reachable vulns and non-zombie deps for center/node color. */
 export function getWorstSeverity(depNodes: VulnGraphDepNode[]): WorstSeverity {

@@ -7,6 +7,7 @@ todos:
     status: pending
 isProject: false
 ---
+
 ## Phase 13: Plans, Billing & Stripe Integration
 
 **Goal:** Implement a tiered pricing model with Stripe integration, usage metering, plan limits enforced throughout the app, and legal compliance documents. Transform the existing "Usage & Plan & Billing" placeholder in Org Settings into a fully functional billing dashboard.

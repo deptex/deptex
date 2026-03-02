@@ -1,5 +1,6 @@
 import { Fragment } from 'react';
-import { User, HelpCircle, Settings, LogOut, BookOpen, Mail, Search, Plus, ChevronRight } from 'lucide-react';
+import { HelpCircle, Settings, LogOut, BookOpen, Mail, Search, Plus, ChevronRight } from 'lucide-react';
+import NotificationBell from './NotificationBell';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useUserProfile } from '../hooks/useUserProfile';
@@ -33,6 +34,7 @@ export default function AppHeader({ breadcrumb, showSearch = false, showNewOrg =
   const location = useLocation();
   const isOrganizationsPage = location.pathname === '/organizations';
   const isOrganizationDetailPage = location.pathname.startsWith('/organizations/') && location.pathname !== '/organizations';
+  const currentOrgId = location.pathname.match(/^\/organizations\/([^/]+)/)?.[1];
   // Only remove border on organization detail pages (where tabs are shown)
   const showBorder = !isOrganizationDetailPage;
 
@@ -101,6 +103,9 @@ export default function AppHeader({ breadcrumb, showSearch = false, showNewOrg =
                 New organization
               </Button>
             )}
+
+            {/* Notifications */}
+            <NotificationBell organizationId={currentOrgId} />
 
             {/* Help dropdown */}
             <DropdownMenu>

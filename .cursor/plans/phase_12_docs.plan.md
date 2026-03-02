@@ -7,6 +7,7 @@ todos:
     status: pending
 isProject: false
 ---
+
 ## Phase 12: Documentation Overhaul
 
 **Goal:** Update all existing docs to reflect the new features (custom statuses, scoring, AI fixing) and create all missing "coming soon" pages that are relevant to project features. Merge overlapping feature docs into their Core Concepts counterparts. Leave unrelated sections (Anomaly Detection, Security Agent, Teams, API Reference, Learn) as "coming soon."

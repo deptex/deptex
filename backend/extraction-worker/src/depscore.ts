@@ -10,6 +10,7 @@ export interface DepscoreContext {
   epss: number;
   cisaKev: boolean;
   isReachable: boolean;
+  reachabilityLevel?: string;
   assetTier: AssetTier;
   tierMultiplier?: number;
   tierRank?: number;
@@ -18,6 +19,13 @@ export interface DepscoreContext {
   isMalicious?: boolean;
   packageScore?: number | null;
 }
+
+const REACHABILITY_LEVEL_WEIGHTS: Record<string, number> = {
+  confirmed: 1.0,
+  data_flow: 0.9,
+  function: 0.7,
+  module: 0.5,
+};
 
 export const SEVERITY_TO_CVSS: Record<string, number> = {
   critical: 9.0,
@@ -60,11 +68,16 @@ export function calculateDepscore(ctx: DepscoreContext): number {
   // Use custom multiplier if provided, otherwise fall back to legacy enum lookup
   const tierWeight = ctx.tierMultiplier ?? TIER_WEIGHT[ctx.assetTier];
 
-  const reachabilityWeight = ctx.isReachable
-    ? 1.0
-    : ctx.tierMultiplier != null
+  let reachabilityWeight: number;
+  if (ctx.reachabilityLevel && ctx.reachabilityLevel !== 'unreachable') {
+    reachabilityWeight = REACHABILITY_LEVEL_WEIGHTS[ctx.reachabilityLevel] ?? 0.5;
+  } else if (ctx.reachabilityLevel === 'unreachable' || !ctx.isReachable) {
+    reachabilityWeight = ctx.tierMultiplier != null
       ? 0.1 + 0.7 * (ctx.tierMultiplier / 1.5)
       : REACHABILITY_WEIGHT_UNREACHABLE[ctx.assetTier];
+  } else {
+    reachabilityWeight = 1.0;
+  }
 
   const environmentalMultiplier = tierWeight * reachabilityWeight;
 

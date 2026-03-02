@@ -1,77 +1,74 @@
-import { Redis } from '@upstash/redis';
+import { supabase } from '../../../backend/src/lib/supabase';
+import { startWatchtowerMachine } from './fly-machines';
 
-// Redis client for Watchtower job queue
-// This handles queueing forensic analysis jobs for watched packages
+export interface WatchtowerJobInput {
+  type?: 'full_analysis' | 'new_version' | 'batch_version_analysis' | 'poll_sweep';
+  priority?: number;
+  payload: Record<string, any>;
+  organizationId?: string;
+  projectId?: string;
+  dependencyId?: string;
+  packageName: string;
+}
 
-let redisClient: Redis | null = null;
+export async function queueWatchtowerJob(job: WatchtowerJobInput): Promise<{ success: boolean; jobId?: string; error?: string }> {
+  try {
+    const { data, error } = await supabase
+      .from('watchtower_jobs')
+      .insert({
+        job_type: job.type || 'full_analysis',
+        priority: job.priority || 10,
+        payload: job.payload,
+        organization_id: job.organizationId || null,
+        project_id: job.projectId || null,
+        dependency_id: job.dependencyId || null,
+        package_name: job.packageName,
+      })
+      .select('id')
+      .single();
 
-function getRedisClient(): Redis | null {
-  if (!redisClient) {
-    const url = process.env.UPSTASH_REDIS_URL;
-    const token = process.env.UPSTASH_REDIS_TOKEN;
-
-    if (!url || !token) {
-      console.warn('UPSTASH_REDIS_URL and UPSTASH_REDIS_TOKEN not configured - Watchtower queue disabled');
-      return null;
+    if (error) {
+      console.error('[watchtower-queue] Failed to insert job:', error.message);
+      return { success: false, error: error.message };
     }
 
-    redisClient = new Redis({
-      url,
-      token,
-    });
-  }
+    startWatchtowerMachine().catch(() => {});
 
-  return redisClient;
-}
-
-export interface WatchtowerJob {
-  packageName: string;
-  watchedPackageId: string;
-  projectDependencyId: string;
-  /** Version the project is using; worker runs integrity checks on this and on latest. */
-  currentVersion?: string;
-}
-
-// Use different queue name for local development to avoid conflicts with deployed workers
-const WATCHTOWER_QUEUE_NAME = process.env.WATCHTOWER_QUEUE_NAME || 
-  (process.env.NODE_ENV === 'production' ? 'watchtower-jobs' : 'watchtower-jobs-local');
-
-/**
- * Queue a Watchtower forensic analysis job to Redis
- * This is called when watching is enabled for a dependency
- */
-export async function queueWatchtowerJob(job: WatchtowerJob): Promise<{ success: boolean; error?: string }> {
-  const client = getRedisClient();
-  if (!client) {
-    console.warn('Redis not configured - skipping Watchtower job queue');
-    return { success: false, error: 'Redis not configured' };
-  }
-
-  try {
-    // Push job to the end of the queue (FIFO)
-    const jobString = JSON.stringify(job);
-    await client.rpush(WATCHTOWER_QUEUE_NAME, jobString);
-    
-    // Verify the job is actually in the queue using llen
-    const queueLength = await client.llen(WATCHTOWER_QUEUE_NAME);
-    console.log(`[${new Date().toISOString()}] ✅ Queued Watchtower job for ${job.packageName} to queue '${WATCHTOWER_QUEUE_NAME}' (queue length: ${queueLength})`);
-    return { success: true };
+    console.log(`[watchtower-queue] Queued ${job.type || 'full_analysis'} job for ${job.packageName} (id: ${data.id})`);
+    return { success: true, jobId: data.id };
   } catch (error: any) {
-    console.error('Failed to queue Watchtower job:', error);
+    console.error('[watchtower-queue] Failed to queue job:', error.message);
     return { success: false, error: error.message };
   }
 }
 
-/**
- * Check if Watchtower queue is configured
- */
-export function isWatchtowerQueueConfigured(): boolean {
-  return !!getRedisClient();
-}
+export async function queueWatchtowerJobs(jobs: WatchtowerJobInput[]): Promise<{ success: boolean; count: number }> {
+  if (jobs.length === 0) return { success: true, count: 0 };
 
-/**
- * Get the Watchtower queue name (for worker use)
- */
-export function getWatchtowerQueueName(): string {
-  return WATCHTOWER_QUEUE_NAME;
+  try {
+    const rows = jobs.map((job) => ({
+      job_type: job.type || 'full_analysis',
+      priority: job.priority || 10,
+      payload: job.payload,
+      organization_id: job.organizationId || null,
+      project_id: job.projectId || null,
+      dependency_id: job.dependencyId || null,
+      package_name: job.packageName,
+    }));
+
+    const { error } = await supabase.from('watchtower_jobs').insert(rows);
+
+    if (error) {
+      console.error('[watchtower-queue] Failed to insert batch:', error.message);
+      return { success: false, count: 0 };
+    }
+
+    startWatchtowerMachine().catch(() => {});
+
+    console.log(`[watchtower-queue] Queued ${jobs.length} watchtower jobs`);
+    return { success: true, count: jobs.length };
+  } catch (error: any) {
+    console.error('[watchtower-queue] Failed to queue batch:', error.message);
+    return { success: false, count: 0 };
+  }
 }

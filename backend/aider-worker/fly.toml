@@ -1,0 +1,16 @@
+# fly.toml app configuration file generated for deptex-aider-worker on 2026-03-02T10:39:28-08:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'deptex-aider-worker'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[[vm]]
+  memory = '8gb'
+  cpu_kind = 'shared'
+  cpus = 4
+  memory_mb = 8192

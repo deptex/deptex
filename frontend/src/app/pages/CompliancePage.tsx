@@ -14,6 +14,7 @@ import {
   ExternalLink,
   Package,
   CheckCircle2,
+  Clock,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
@@ -45,6 +46,8 @@ import {
 } from '../../lib/compliance-utils';
 import { useToast } from '../../hooks/use-toast';
 import { Toaster } from '../../components/ui/toaster';
+import SLAComplianceDashboard from '../../components/compliance/SLAComplianceDashboard';
+import { cn } from '../../lib/utils';
 
 interface OrganizationContextType {
   organization: { id: string; name?: string } | null;
@@ -86,6 +89,7 @@ export default function CompliancePage() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [showPoliciesPanel, setShowPoliciesPanel] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [complianceTab, setComplianceTab] = useState<'overview' | 'sla'>('overview');
 
   const loadData = useCallback(async () => {
     if (!organizationId) return;
@@ -267,13 +271,54 @@ export default function CompliancePage() {
   return (
     <>
       <main className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-6 flex items-start justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">Compliance</h1>
-            <p className="text-foreground-secondary mt-1">
-              View and manage organization compliance status across all projects.
-            </p>
-          </div>
+        <div className="mb-4">
+          <h1 className="text-2xl font-bold text-foreground">Compliance</h1>
+          <p className="text-foreground-secondary mt-1">
+            View and manage organization compliance status across all projects.
+          </p>
+        </div>
+
+        {/* Tab: Overview | SLA */}
+        <div className="flex gap-1 mb-6 border-b border-border">
+          <button
+            type="button"
+            onClick={() => setComplianceTab('overview')}
+            className={cn(
+              'px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+              complianceTab === 'overview'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <ClipboardList className="h-4 w-4 inline mr-2" />
+            Overview
+          </button>
+          <button
+            type="button"
+            onClick={() => setComplianceTab('sla')}
+            className={cn(
+              'px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+              complianceTab === 'sla'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <Clock className="h-4 w-4 inline mr-2" />
+            SLA
+          </button>
+        </div>
+
+        {complianceTab === 'sla' && organizationId && organization && (
+          <SLAComplianceDashboard
+            organizationId={organizationId}
+            organizationName={organization.name ?? 'Organization'}
+          />
+        )}
+
+        {complianceTab === 'overview' && (
+        <>
+        <div className="flex items-start justify-between mb-6">
+          <div className="flex-1" />
           <div className="flex items-center gap-2">
             {orgPolicies && (
               <Button variant="outline" onClick={() => setShowPoliciesPanel(true)}>
@@ -585,6 +630,8 @@ export default function CompliancePage() {
               </div>
             </div>
           </>
+        )}
+        </>
         )}
       </main>
 

@@ -1,31 +1,18 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
-import { useOutletContext, useParams, useNavigate, useLocation } from 'react-router-dom';
-import { Search, FolderOpen, Copy, Check, Lock, ShieldCheck, Activity, GitBranch, TrendingUp, ArrowRight, RefreshCw, AlertTriangle, AlertCircle, Info, Clock, Package } from 'lucide-react';
-import { api, ProjectWithRole, ProjectPermissions, ProjectRepository, ProjectImportStatus } from '../../lib/api';
+import { useEffect, useState, useCallback } from 'react';
+import { useOutletContext, useParams, useNavigate, useLocation, Link } from 'react-router-dom';
+import {
+  RefreshCw, AlertTriangle, ShieldCheck, Package, Shield, FileCode, GitBranch,
+  Activity, Loader2, Github, GitlabIcon, ExternalLink,
+} from 'lucide-react';
+import { api, ProjectWithRole, ProjectPermissions, ProjectStats, ProjectActivityItem } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
+import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
 import { Button } from '../../components/ui/button';
 import { FrameworkIcon } from '../../components/framework-icon';
-
-// Dummy data for the overview dashboard (replace with real data later)
-const DUMMY_HEALTH = { score: 87, trend: '+2', status: 'good' as const };
-const DUMMY_COMPLIANCE = { percent: 94, failing: 3, total: 48 };
-const DUMMY_VULNS = { total: 12, critical: 3, high: 4, medium: 5, low: 0, reachablePct: 67 };
-const DUMMY_SYNC = { lastSynced: '2 hours ago', branch: 'main', status: 'synced' as const };
-const DUMMY_ACTIVITY = [
-  { id: 1, pkg: 'lodash', from: '4.17.20', to: '4.17.21', type: 'patch' as const, time: '3h ago', severity: null },
-  { id: 2, pkg: 'axios', from: '1.6.0', to: '1.7.2', type: 'minor' as const, time: '1d ago', severity: 'medium' as const },
-  { id: 3, pkg: 'react', from: '18.2.0', to: '18.3.1', type: 'minor' as const, time: '2d ago', severity: null },
-  { id: 4, pkg: 'typescript', from: '5.3.3', to: '5.4.5', type: 'minor' as const, time: '3d ago', severity: null },
-  { id: 5, pkg: 'vite', from: '5.1.0', to: '5.2.8', type: 'minor' as const, time: '4d ago', severity: null },
-  { id: 6, pkg: 'express', from: '4.18.2', to: '4.19.2', type: 'patch' as const, time: '5d ago', severity: 'high' as const },
-];
-const DUMMY_TOP_VULNS = [
-  { id: 1, pkg: 'lodash', version: '4.17.20', severity: 'critical' as const, title: 'Prototype Pollution', reachable: true },
-  { id: 2, pkg: 'axios', version: '1.6.0', severity: 'high' as const, title: 'SSRF via redirect', reachable: true },
-  { id: 3, pkg: 'semver', version: '7.5.1', severity: 'high' as const, title: 'ReDoS vulnerability', reachable: false },
-  { id: 4, pkg: 'minimatch', version: '3.0.4', severity: 'medium' as const, title: 'ReDoS vulnerability', reachable: false },
-  { id: 5, pkg: 'tough-cookie', version: '4.1.2', severity: 'medium' as const, title: 'Prototype Pollution', reachable: true },
-];
+import { StatsStrip, type StatCardData } from '../../components/StatsStrip';
+import { ActionableItems } from '../../components/ActionableItems';
+import { ActivityFeed } from '../../components/ActivityFeed';
+import { OverviewGraph } from '../../components/OverviewGraph';
 
 interface ProjectContextType {
   project: ProjectWithRole | null;
@@ -33,8 +20,6 @@ interface ProjectContextType {
   organizationId: string;
   userPermissions: ProjectPermissions | null;
 }
-
-const allValidTabs = ['overview', 'dependencies', 'watchlist', 'members', 'settings'];
 
 function extractionStepLabel(step: string | null | undefined): string {
   if (!step) return 'Starting extraction...';
@@ -51,106 +36,118 @@ function extractionStepLabel(step: string | null | undefined): string {
   return labels[step] ?? `Processing (${step})...`;
 }
 
+function relativeTime(dateStr: string | null): string {
+  if (!dateStr) return 'Never';
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(dateStr).toLocaleDateString();
+}
+
+function HealthBadge({ score }: { score: number }) {
+  const color = score >= 80 ? 'text-emerald-400 border-emerald-500/40 bg-emerald-500/10' :
+                score >= 50 ? 'text-yellow-400 border-yellow-500/40 bg-yellow-500/10' :
+                'text-red-400 border-red-500/40 bg-red-500/10';
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-bold tabular-nums ${color}`}>
+      {score}
+    </span>
+  );
+}
+
+function SeverityDots({ critical, high, medium, low }: { critical: number; high: number; medium: number; low: number }) {
+  return (
+    <span className="flex items-center gap-1">
+      {critical > 0 && <span className="h-2 w-2 rounded-full bg-red-500" title={`${critical} critical`} />}
+      {high > 0 && <span className="h-2 w-2 rounded-full bg-orange-500" title={`${high} high`} />}
+      {medium > 0 && <span className="h-2 w-2 rounded-full bg-yellow-500" title={`${medium} medium`} />}
+      {low > 0 && <span className="h-2 w-2 rounded-full bg-slate-500" title={`${low} low`} />}
+    </span>
+  );
+}
+
 export default function ProjectOverviewPage() {
   const { project, reloadProject, organizationId, userPermissions } = useOutletContext<ProjectContextType>();
-  const { projectId } = useParams<{ projectId: string; tab?: string }>();
+  const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
   const { toast } = useToast();
+
+  const [stats, setStats] = useState<ProjectStats | null>(null);
+  const [activity, setActivity] = useState<ProjectActivityItem[]>([]);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [activityLoading, setActivityLoading] = useState(true);
+  const [statsError, setStatsError] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [permissionsChecked, setPermissionsChecked] = useState(false);
+  const [errorBannerDismissed, setErrorBannerDismissed] = useState(false);
 
-  // Repository state (kept for real-data polling and status banners)
-  const [repositories, setRepositories] = useState<Array<{ id: number; full_name: string; default_branch: string; private: boolean; framework: string }>>([]);
-  const [connectedRepository, setConnectedRepository] = useState<ProjectRepository | null>(null);
-  const [repositoriesLoading, setRepositoriesLoading] = useState(false);
-  const [detectedFramework, setDetectedFramework] = useState<string>('unknown');
-  const [importStatus, setImportStatus] = useState<ProjectImportStatus | null>(null);
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const realtime = useRealtimeStatus(organizationId, projectId);
 
-  // Permission check and invalid tab redirect
+  // Permission check
   useEffect(() => {
     if (!project || !projectId || !userPermissions) return;
-    const pathParts = location.pathname.split('/');
-    const currentTab = pathParts[pathParts.length - 1];
-    const isOverviewPage = currentTab === projectId || currentTab === 'overview';
-    if (currentTab !== projectId && !allValidTabs.includes(currentTab)) {
-      navigate(`/organizations/${organizationId}/projects/${projectId}${userPermissions.view_overview ? '' : '/dependencies'}`, { replace: true });
-      return;
-    }
-    if (isOverviewPage && !userPermissions.view_overview) {
+    if (userPermissions.view_overview === false) {
       navigate(`/organizations/${organizationId}/projects/${projectId}/dependencies`, { replace: true });
       return;
     }
     setPermissionsChecked(true);
-  }, [project, projectId, userPermissions, location.pathname, navigate, organizationId]);
+  }, [project, projectId, userPermissions, navigate, organizationId]);
 
-  // Load repository info (for status banners)
-  const loadProjectRepositories = async () => {
+  // Load stats + activity
+  const loadData = useCallback(async () => {
     if (!organizationId || !projectId) return;
-    const cached = api.getCachedProjectRepositories(organizationId, projectId);
     try {
-      if (!cached) setRepositoriesLoading(true);
-      const data = await api.getProjectRepositories(organizationId, projectId);
-      setConnectedRepository(data.connectedRepository);
-      setRepositories(data.repositories);
+      setStatsLoading(true);
+      setStatsError(false);
+      const [s, a] = await Promise.all([
+        api.getProjectStats(organizationId, projectId),
+        api.getProjectRecentActivity(organizationId, projectId),
+      ]);
+      setStats(s);
+      setActivity(a);
     } catch {
-      // silently fail for overview
+      setStatsError(true);
     } finally {
-      setRepositoriesLoading(false);
+      setStatsLoading(false);
+      setActivityLoading(false);
+    }
+  }, [organizationId, projectId]);
+
+  useEffect(() => {
+    if (permissionsChecked) loadData();
+  }, [permissionsChecked, loadData]);
+
+  // Reload on extraction complete
+  useEffect(() => {
+    if (realtime.status === 'ready' && !realtime.isLoading) {
+      loadData();
+      reloadProject();
+    }
+  }, [realtime.status]);
+
+  const canManage = userPermissions?.manage_project === true ||
+    (userPermissions as any)?.manage_teams_and_projects === true;
+
+  const handleSync = async () => {
+    if (!organizationId || !projectId || syncing) return;
+    try {
+      setSyncing(true);
+      await api.triggerProjectSync(organizationId, projectId);
+      toast({ title: 'Sync started', description: 'Extraction has been queued.' });
+      setErrorBannerDismissed(false);
+    } catch (err: any) {
+      const msg = err?.message ?? 'Failed to trigger sync';
+      toast({ title: 'Sync failed', description: msg, variant: 'destructive' });
+    } finally {
+      setSyncing(false);
     }
   };
-
-  useEffect(() => {
-    if (permissionsChecked && organizationId && projectId) {
-      const cached = api.getCachedProjectRepositories(organizationId, projectId);
-      if (cached) {
-        setConnectedRepository(cached.connectedRepository);
-        setRepositories(cached.repositories);
-      }
-      loadProjectRepositories();
-    }
-  }, [permissionsChecked, organizationId, projectId]);
-
-  const checkImportStatus = useCallback(async () => {
-    if (!organizationId || !projectId) return false;
-    try {
-      const status = await api.getProjectImportStatus(organizationId, projectId);
-      setImportStatus(status);
-      const inProgress = connectedRepository?.status === 'initializing' || connectedRepository?.status === 'extracting' || connectedRepository?.status === 'analyzing' || connectedRepository?.status === 'finalizing';
-      if (status.status === 'ready' && inProgress) {
-        setConnectedRepository(prev => prev ? { ...prev, status: 'ready' } : null);
-        await loadProjectRepositories();
-        await reloadProject();
-        toast({ title: 'Analysis complete', description: status.total > 0 ? `All ${status.total} dependencies have been analyzed.` : 'Extraction complete.' });
-      }
-      if (status.status === 'error') {
-        setConnectedRepository(prev => prev ? { ...prev, status: 'error' } : null);
-        await loadProjectRepositories();
-      }
-      return status.status === 'ready' || status.status === 'error';
-    } catch {
-      return false;
-    }
-  }, [organizationId, projectId, connectedRepository?.status, reloadProject, toast]);
-
-  useEffect(() => {
-    const repoStatus = connectedRepository?.status;
-    const importStatusPoll = importStatus?.status;
-    const shouldPoll = repoStatus === 'initializing' || repoStatus === 'extracting' || repoStatus === 'analyzing' || repoStatus === 'finalizing' || importStatusPoll === 'finalizing';
-    if (!shouldPoll) return;
-    checkImportStatus();
-    const id = setInterval(() => {
-      checkImportStatus().then(done => { if (done && pollingIntervalRef.current) clearInterval(pollingIntervalRef.current); });
-    }, 3000);
-    pollingIntervalRef.current = id;
-    return () => { if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current); pollingIntervalRef.current = null; };
-  }, [connectedRepository?.status, importStatus?.status, checkImportStatus]);
-
-  useEffect(() => {
-    if (!connectedRepository || repositories.length === 0) return;
-    const match = repositories.find(r => r.full_name === connectedRepository.repo_full_name);
-    setDetectedFramework(match ? match.framework : 'unknown');
-  }, [connectedRepository, repositories]);
 
   // Loading skeleton
   if (!project || !permissionsChecked) {
@@ -158,211 +155,186 @@ export default function ProjectOverviewPage() {
       <main className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
         <div className="animate-pulse space-y-6">
           <div className="h-8 bg-muted rounded w-48" />
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-6 py-6 border-y border-border">
-            {[1, 2, 3, 4].map((i) => <div key={i} className="h-16 bg-muted rounded" />)}
-          </div>
+          <StatsStrip cards={[]} loading />
         </div>
       </main>
     );
   }
 
-  const pathParts = location.pathname.split('/');
-  const currentTab = pathParts[pathParts.length - 1];
-  const isOverviewPage = currentTab === projectId || currentTab === 'overview';
-  if (isOverviewPage && !userPermissions?.view_overview) return null;
+  const isExtracting = realtime.status === 'initializing' || realtime.status === 'extracting' ||
+    realtime.status === 'analyzing' || realtime.status === 'finalizing';
+  const hasFailed = (stats?.sync.last_error || realtime.status === 'error') && !errorBannerDismissed;
+  const noRepo = realtime.status === 'not_connected' && !realtime.isLoading;
 
-  const sevColor = (s: string) => s === 'critical' ? 'text-destructive' : s === 'high' ? 'text-orange-500' : s === 'medium' ? 'text-warning' : 'text-foreground-secondary';
-  const sevDot = (s: string) => s === 'critical' ? 'bg-destructive' : s === 'high' ? 'bg-orange-500' : s === 'medium' ? 'bg-warning' : 'bg-foreground-secondary';
-  const updateBadge = (t: string) => t === 'major' ? 'text-destructive border-destructive/30 bg-destructive/10' : t === 'minor' ? 'text-warning border-warning/30 bg-warning/10' : 'text-foreground-secondary border-border bg-foreground/5';
+  // Stats strip cards
+  const statsCards: StatCardData[] = stats ? [
+    {
+      icon: <Activity className="h-4 w-4" />,
+      iconBg: stats.health_score >= 80 ? 'bg-emerald-500/15' : stats.health_score >= 50 ? 'bg-yellow-500/15' : 'bg-red-500/15',
+      iconColor: stats.health_score >= 80 ? 'text-emerald-400' : stats.health_score >= 50 ? 'text-yellow-400' : 'text-red-400',
+      label: 'Health',
+      value: stats.health_score,
+    },
+    {
+      icon: <ShieldCheck className="h-4 w-4" />,
+      iconBg: stats.status?.is_passing ? 'bg-emerald-500/15' : stats.status ? 'bg-red-500/15' : 'bg-zinc-500/15',
+      iconColor: stats.status?.is_passing ? 'text-emerald-400' : stats.status ? 'text-red-400' : 'text-zinc-400',
+      label: 'Status',
+      value: stats.status?.name ?? 'Not evaluated',
+      badge: stats.status ? (
+        <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: stats.status.color }} />
+      ) : undefined,
+    },
+    {
+      icon: <FileCode className="h-4 w-4" />,
+      iconBg: 'bg-blue-500/15',
+      iconColor: 'text-blue-400',
+      label: 'Compliance',
+      value: `${stats.compliance.percent}%`,
+      sub: stats.compliance.failing > 0 ? `${stats.compliance.failing} failing` : 'All compliant',
+      onClick: () => navigate(`/organizations/${organizationId}/projects/${projectId}/compliance`),
+    },
+    {
+      icon: <Shield className="h-4 w-4" />,
+      iconBg: stats.vulnerabilities.total > 0 ? 'bg-orange-500/15' : 'bg-emerald-500/15',
+      iconColor: stats.vulnerabilities.total > 0 ? 'text-orange-400' : 'text-emerald-400',
+      label: 'Vulnerabilities',
+      value: stats.vulnerabilities.total,
+      sub: `${stats.code_findings.semgrep_count} code issues, ${stats.code_findings.secret_count} secrets`,
+      badge: stats.vulnerabilities.total > 0 ? (
+        <SeverityDots {...stats.vulnerabilities} />
+      ) : undefined,
+      onClick: () => navigate(`/organizations/${organizationId}/projects/${projectId}/security`),
+    },
+    {
+      icon: <Package className="h-4 w-4" />,
+      iconBg: 'bg-violet-500/15',
+      iconColor: 'text-violet-400',
+      label: 'Dependencies',
+      value: stats.dependencies.total,
+      sub: `${stats.dependencies.direct} direct, ${stats.dependencies.transitive} transitive${stats.dependencies.outdated > 0 ? `, ${stats.dependencies.outdated} outdated` : ''}`,
+      onClick: () => navigate(`/organizations/${organizationId}/projects/${projectId}/dependencies`),
+    },
+  ] : [];
 
   return (
     <main className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
-
-      {/* Page header */}
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-foreground">Overview</h1>
-        {connectedRepository && (
-          <div className="flex items-center gap-2 mt-1.5 text-sm text-foreground-secondary">
-            <FrameworkIcon frameworkId={detectedFramework} />
-            <span>{connectedRepository.repo_full_name}</span>
-            <span className="text-foreground-muted">·</span>
-            <span className="font-mono text-xs">{connectedRepository.default_branch}</span>
-            {connectedRepository.status === 'ready' && (
-              <>
-                <span className="text-foreground-muted">·</span>
-                <span className="flex items-center gap-1 text-success text-xs">
-                  <span className="h-1.5 w-1.5 rounded-full bg-success" />
-                  Synced
-                </span>
-              </>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* ── Compact status banners (only when active) ── */}
-
-      {repositoriesLoading && (
-        <div className="mb-6 flex items-center gap-2 text-sm text-foreground-secondary">
-          <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full flex-shrink-0" />
-          Loading...
-        </div>
-      )}
-
-      {connectedRepository && (connectedRepository.status === 'initializing' || connectedRepository.status === 'extracting') && (
-        <div className="mb-6 flex items-center gap-3 px-4 py-3 rounded-lg border border-border bg-background-card text-sm">
-          <span className="animate-spin h-4 w-4 border-2 border-foreground-secondary border-t-transparent rounded-full flex-shrink-0" />
-          <div>
-            <div className="font-medium text-foreground">Extraction in progress</div>
-            <div className="text-xs text-foreground-secondary mt-0.5">
-              {extractionStepLabel(importStatus?.extraction_step ?? connectedRepository.extraction_step ?? 'queued')}
-            </div>
-          </div>
-          <span className="ml-auto text-xs text-foreground-secondary font-mono">{connectedRepository.repo_full_name}</span>
-        </div>
-      )}
-
-      {connectedRepository?.status === 'error' && (
-        <div className="mb-6 px-4 py-3 rounded-lg border border-destructive/30 bg-destructive/5 text-sm flex items-center gap-3">
-          <AlertTriangle className="h-4 w-4 text-destructive flex-shrink-0" />
-          <div>
-            <div className="font-medium text-destructive">Extraction failed</div>
-            <div className="text-xs text-foreground-secondary mt-0.5">
-              {importStatus?.extraction_error ?? connectedRepository.extraction_error ?? 'An error occurred during extraction.'}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {connectedRepository && (connectedRepository.status === 'analyzing' || connectedRepository.status === 'finalizing' || importStatus?.status === 'finalizing') && (
-        <div className="mb-6 px-4 py-3 rounded-lg border border-border bg-background-card text-sm">
+      {/* Header */}
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
           <div className="flex items-center gap-3">
-            <span className="animate-spin h-4 w-4 border-2 border-foreground-secondary border-t-transparent rounded-full flex-shrink-0" />
-            <div className="font-medium text-foreground">
-              {importStatus?.status === 'finalizing' || connectedRepository.status === 'finalizing' ? 'Finalizing analysis...' : 'Analyzing dependencies...'}
-            </div>
-            {importStatus && importStatus.total > 0 && (
-              <span className="ml-auto text-xs text-foreground-secondary">{importStatus.ready} / {importStatus.total}</span>
+            <h1 className="text-2xl font-bold text-foreground">{project.name}</h1>
+            {stats && <HealthBadge score={stats.health_score} />}
+            {stats?.status && (
+              <span className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium"
+                style={{ borderColor: stats.status.color + '60', color: stats.status.color, backgroundColor: stats.status.color + '15' }}>
+                {stats.status.name}
+              </span>
+            )}
+            {stats?.asset_tier && (
+              <span className="inline-flex items-center rounded-full border border-border px-2 py-0.5 text-xs text-foreground-secondary">
+                {stats.asset_tier.name}
+              </span>
             )}
           </div>
-          {importStatus && importStatus.total > 0 && connectedRepository.status === 'analyzing' && (
-            <div className="mt-3 h-1 bg-border rounded-full overflow-hidden">
-              <div className="h-full bg-primary transition-all duration-500" style={{ width: `${Math.round((importStatus.ready / importStatus.total) * 100)}%` }} />
+          {stats && (
+            <div className="flex items-center gap-2 mt-1.5 text-sm text-foreground-secondary">
+              {project.framework && <FrameworkIcon frameworkId={project.framework} />}
+              <GitBranch className="h-3.5 w-3.5" />
+              <span className="font-mono text-xs">{stats.sync.branch}</span>
+              <span className="text-foreground-muted">·</span>
+              <span>Last synced {relativeTime(stats.sync.last_synced)}</span>
             </div>
           )}
         </div>
+        {canManage && !noRepo && (
+          <Button variant="outline" size="sm" onClick={handleSync} disabled={syncing || isExtracting}>
+            <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${syncing || isExtracting ? 'animate-spin' : ''}`} />
+            Sync
+          </Button>
+        )}
+      </div>
+
+      {/* No repository CTA */}
+      {noRepo && (
+        <div className="mb-6 rounded-lg border border-border bg-background-card p-8 text-center">
+          <Package className="h-10 w-10 text-foreground-secondary/40 mx-auto mb-3" />
+          <h2 className="text-lg font-semibold text-foreground mb-1">Connect a repository to get started</h2>
+          <p className="text-sm text-foreground-secondary mb-4">Link a GitHub, GitLab, or Bitbucket repository to analyze dependencies and vulnerabilities.</p>
+          <Button onClick={() => navigate(`/organizations/${organizationId}/projects/${projectId}/settings`)}>
+            Connect Repository
+          </Button>
+        </div>
       )}
 
-      {/* ── Stats strip ── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-6 py-6 border-y border-border mb-8">
-        <div>
-          <div className="text-xs font-semibold uppercase tracking-wider text-foreground-secondary mb-2">Health Score</div>
-          <div className="text-3xl font-bold text-foreground tabular-nums">{DUMMY_HEALTH.score}</div>
-          <div className="flex items-center gap-1 mt-1.5 text-sm text-success">
-            <TrendingUp className="h-3.5 w-3.5" />
-            {DUMMY_HEALTH.trend} this week
-          </div>
-        </div>
-        <div>
-          <div className="text-xs font-semibold uppercase tracking-wider text-foreground-secondary mb-2">Compliance</div>
-          <div className="text-3xl font-bold text-foreground tabular-nums">{DUMMY_COMPLIANCE.percent}%</div>
-          <div className="text-sm text-foreground-secondary mt-1.5">{DUMMY_COMPLIANCE.failing} policies failing</div>
-        </div>
-        <div>
-          <div className="text-xs font-semibold uppercase tracking-wider text-foreground-secondary mb-2">Vulnerabilities</div>
-          <div className="text-3xl font-bold text-foreground tabular-nums">{DUMMY_VULNS.total}</div>
-          <div className="flex items-center gap-2 mt-1.5 text-sm">
-            <span className="text-destructive font-medium">{DUMMY_VULNS.critical} critical</span>
-            <span className="text-foreground-muted">·</span>
-            <span className="text-foreground-secondary">{DUMMY_VULNS.reachablePct}% reachable</span>
-          </div>
-        </div>
-        <div>
-          <div className="text-xs font-semibold uppercase tracking-wider text-foreground-secondary mb-2">Sync Status</div>
-          <div className="flex items-center gap-2 mt-1">
-            <span className="h-2 w-2 rounded-full bg-success flex-shrink-0" />
-            <span className="text-base font-semibold text-foreground">Synced</span>
-          </div>
-          <div className="flex items-center gap-1.5 mt-1.5 text-sm text-foreground-secondary">
-            <Clock className="h-3.5 w-3.5" />
-            {DUMMY_SYNC.lastSynced}
-          </div>
-        </div>
-      </div>
-
-      {/* ── Main content ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-10">
-
-        {/* Top Vulnerabilities (3 cols) */}
-        <div className="lg:col-span-3">
-          <div className="flex items-center justify-between mb-5">
-            <h2 className="text-sm font-semibold text-foreground">Top Vulnerabilities</h2>
-            <span className="text-xs text-foreground-secondary">{DUMMY_VULNS.reachablePct}% reachable</span>
-          </div>
-
-          <div className="flex gap-8 mb-5">
-            <div>
-              <span className="text-2xl font-bold text-destructive tabular-nums">{DUMMY_VULNS.critical}</span>
-              <span className="text-sm text-foreground-secondary ml-2">Critical</span>
-            </div>
-            <div>
-              <span className="text-2xl font-bold text-orange-500 tabular-nums">{DUMMY_VULNS.high}</span>
-              <span className="text-sm text-foreground-secondary ml-2">High</span>
-            </div>
-            <div>
-              <span className="text-2xl font-bold text-warning tabular-nums">{DUMMY_VULNS.medium}</span>
-              <span className="text-sm text-foreground-secondary ml-2">Medium</span>
+      {/* Extraction in progress banner */}
+      {isExtracting && (
+        <div className="mb-6 flex items-center gap-3 px-4 py-3 rounded-lg border border-border bg-background-card text-sm">
+          <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" />
+          <div>
+            <div className="font-medium text-foreground">Extraction in progress</div>
+            <div className="text-xs text-foreground-secondary mt-0.5">
+              {extractionStepLabel(realtime.extractionStep)}
             </div>
           </div>
+        </div>
+      )}
 
-          <div className="divide-y divide-border">
-            {DUMMY_TOP_VULNS.map((vuln) => (
-              <div key={vuln.id} className="py-3 flex items-center gap-3">
-                <span className={`h-2 w-2 rounded-full flex-shrink-0 ${sevDot(vuln.severity)}`} />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-mono font-medium text-foreground">{vuln.pkg}</span>
-                    <span className="text-xs text-foreground-secondary">{vuln.version}</span>
-                  </div>
-                  <div className="text-xs text-foreground-secondary mt-0.5">{vuln.title}</div>
-                </div>
-                <div className="flex items-center gap-3 flex-shrink-0">
-                  {vuln.reachable && <span className="text-xs text-foreground-secondary">reachable</span>}
-                  <span className={`text-xs font-medium ${sevColor(vuln.severity)}`}>{vuln.severity}</span>
-                </div>
-              </div>
-            ))}
+      {/* Error banner */}
+      {hasFailed && !isExtracting && (
+        <div className="mb-6 px-4 py-3 rounded-lg border border-amber-500/30 bg-amber-500/5 text-sm flex items-center gap-3">
+          <AlertTriangle className="h-4 w-4 text-amber-400 flex-shrink-0" />
+          <div className="flex-1">
+            <div className="font-medium text-amber-400">Last sync failed</div>
+            <div className="text-xs text-foreground-secondary mt-0.5">{stats?.sync.last_error ?? 'An error occurred during extraction.'}</div>
+          </div>
+          <div className="flex items-center gap-2">
+            {canManage && (
+              <Button variant="outline" size="sm" onClick={handleSync} disabled={syncing}>
+                <RefreshCw className="h-3 w-3 mr-1" /> Retry
+              </Button>
+            )}
+            <Button variant="ghost" size="sm" onClick={() => setErrorBannerDismissed(true)} className="text-xs">
+              Dismiss
+            </Button>
           </div>
         </div>
+      )}
 
-        {/* Recent Activity (2 cols) */}
-        <div className="lg:col-span-2">
-          <h2 className="text-sm font-semibold text-foreground mb-5">Recent Activity</h2>
-          <div className="divide-y divide-border">
-            {DUMMY_ACTIVITY.map((item) => (
-              <div key={item.id} className="py-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <div className="flex items-center gap-1.5 text-sm flex-wrap">
-                      <span className="font-mono font-medium text-foreground">{item.pkg}</span>
-                      <span className="text-foreground-secondary text-xs">{item.from}</span>
-                      <ArrowRight className="h-3 w-3 text-foreground-muted flex-shrink-0" />
-                      <span className="text-xs font-medium text-foreground">{item.to}</span>
-                    </div>
-                    <div className="flex items-center gap-2 mt-1.5">
-                      <span className={`text-xs px-1.5 py-0.5 rounded border ${updateBadge(item.type)}`}>{item.type}</span>
-                      {item.severity && (
-                        <span className={`text-xs ${sevColor(item.severity)}`}>{item.severity} vuln fixed</span>
-                      )}
-                    </div>
-                  </div>
-                  <span className="text-xs text-foreground-muted flex-shrink-0 mt-0.5">{item.time}</span>
-                </div>
-              </div>
-            ))}
-          </div>
+      {/* Stats error */}
+      {statsError && !statsLoading && (
+        <div className="mb-6 rounded-lg border border-border bg-background-card p-8 text-center">
+          <p className="text-sm text-foreground-secondary mb-2">Unable to load dashboard.</p>
+          <button onClick={loadData} className="text-sm text-primary hover:underline">Retry</button>
         </div>
-      </div>
+      )}
+
+      {/* Stats strip */}
+      {!noRepo && <div className="mb-6"><StatsStrip cards={statsCards} loading={statsLoading} /></div>}
+
+      {/* Two-column: Graph + Action Items */}
+      {!noRepo && !statsError && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+          <OverviewGraph
+            mode="project"
+            organizationId={organizationId}
+            graphDeps={stats?.graph_deps}
+            projectName={project.name}
+            frameworkName={project.framework ?? undefined}
+            fullGraphLink={`/organizations/${organizationId}/projects/${projectId}/security`}
+          />
+          <ActionableItems items={stats?.action_items ?? []} loading={statsLoading} />
+        </div>
+      )}
+
+      {/* Activity feed */}
+      {!noRepo && (
+        <ActivityFeed
+          items={activity}
+          loading={activityLoading}
+          onRetrySync={canManage ? handleSync : undefined}
+        />
+      )}
     </main>
   );
 }

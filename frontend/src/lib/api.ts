@@ -29,8 +29,12 @@ export interface RolePermissions {
   view_activity: boolean;
   manage_compliance: boolean;
   manage_statuses?: boolean;
-  interact_with_security_agent: boolean;
+  interact_with_security_agent?: boolean;
+  interact_with_aegis: boolean;
   manage_aegis: boolean;
+  trigger_fix?: boolean;
+  manage_incidents?: boolean;
+  view_ai_spending?: boolean;
   view_members: boolean;
   add_members: boolean;
   edit_roles: boolean;
@@ -39,6 +43,7 @@ export interface RolePermissions {
   manage_teams_and_projects: boolean;
   manage_integrations: boolean;
   manage_notifications?: boolean;
+  manage_watchtower?: boolean;
   view_overview?: boolean;
   view_all_teams_and_projects?: boolean;
 }
@@ -1051,6 +1056,81 @@ export const api = {
     return fetchWithAuth(`/api/aegis/inbox/${messageId}/read`, { method: 'PUT' });
   },
 
+  // ============================================================
+  // AI Provider Management (BYOK)
+  // ============================================================
+
+  async getAIProviders(orgId: string): Promise<AIProviderConfig[]> {
+    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers`);
+  },
+
+  async addAIProvider(orgId: string, provider: string, apiKey: string, modelPreference?: string, monthlyCostCap?: number): Promise<AIProviderConfig> {
+    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers`, {
+      method: 'POST',
+      body: JSON.stringify({ provider, api_key: apiKey, model_preference: modelPreference, monthly_cost_cap: monthlyCostCap }),
+    });
+  },
+
+  async deleteAIProvider(orgId: string, providerId: string): Promise<{ message: string; warning?: string }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers/${providerId}`, { method: 'DELETE' });
+  },
+
+  async testAIProvider(orgId: string, provider: string, apiKey: string, model?: string): Promise<{ success: boolean; model?: string; error?: string; code?: string }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers/test`, {
+      method: 'POST',
+      body: JSON.stringify({ provider, api_key: apiKey, model }),
+    });
+  },
+
+  async setDefaultAIProvider(orgId: string, providerId: string): Promise<{ message: string }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers/${providerId}/default`, { method: 'PATCH' });
+  },
+
+  async getAIUsage(orgId: string, period?: string): Promise<AIUsageSummary> {
+    const params = period ? `?period=${period}` : '';
+    return fetchWithAuth(`/api/organizations/${orgId}/ai-usage${params}`);
+  },
+
+  async getAIUsageLogs(orgId: string, page?: number, perPage?: number): Promise<{ logs: any[]; total: number }> {
+    const params = new URLSearchParams();
+    if (page) params.set('page', String(page));
+    if (perPage) params.set('per_page', String(perPage));
+    const qs = params.toString();
+    return fetchWithAuth(`/api/organizations/${orgId}/ai-usage/logs${qs ? `?${qs}` : ''}`);
+  },
+
+  async streamAegisMessage(
+    orgId: string,
+    threadId: string | null,
+    message: string,
+    context?: { type: string; id: string; projectId?: string },
+  ): Promise<Response> {
+    const token = await getAuthToken();
+    if (!token) throw new Error('Not authenticated');
+
+    const response = await fetch(`${API_BASE_URL}/api/aegis/stream`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
+      },
+      body: JSON.stringify({ organizationId: orgId, threadId, message, context }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(error.error || `HTTP error! status: ${response.status}`);
+    }
+
+    return response;
+  },
+
+  async getAegisThreadsByProject(orgId: string, projectId?: string): Promise<AegisThread[]> {
+    const params = projectId ? `?projectId=${projectId}` : '';
+    return fetchWithAuth(`/api/aegis/threads-by-project/${orgId}${params}`);
+  },
+
   _projectPrefetchCache: new Map<string, Promise<ProjectWithRole>>(),
 
   async getProject(organizationId: string, projectId: string, useCache = true): Promise<ProjectWithRole> {
@@ -1749,6 +1829,40 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/security-summary`);
   },
 
+  // Phase 6B: Reachability endpoints
+  async getReachableFlows(
+    organizationId: string,
+    projectId: string,
+    depId?: string,
+    page = 1,
+    perPage = 50
+  ): Promise<PaginatedResponse<ReachableFlow>> {
+    const params = new URLSearchParams({ page: String(page), per_page: String(perPage) });
+    if (depId) params.set('dependency_id', depId);
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/reachable-flows?${params}`);
+  },
+
+  async getUsageSlices(
+    organizationId: string,
+    projectId: string,
+    depId?: string,
+    page = 1,
+    perPage = 50
+  ): Promise<PaginatedResponse<UsageSlice>> {
+    const params = new URLSearchParams({ page: String(page), per_page: String(perPage) });
+    if (depId) params.set('target_type', depId);
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/usage-slices?${params}`);
+  },
+
+  async getFlowCodeContext(
+    organizationId: string,
+    projectId: string,
+    flowId: string,
+    stepIndex: number
+  ): Promise<CodeContext> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/reachable-flows/${flowId}/code-context?step=${stepIndex}`);
+  },
+
   async addProjectContributingTeam(organizationId: string, projectId: string, teamId: string): Promise<ProjectContributingTeam> {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/contributing-teams`, {
       method: 'POST',
@@ -2217,6 +2331,45 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/policy-changes${params}`);
   },
 
+  // ───── Phase 15: Security SLA Management ─────
+
+  async getSlaPolicies(orgId: string): Promise<{ policies: SlaPolicy[]; sla_paused_at: string | null }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/sla-policies`);
+  },
+
+  async updateSlaPolicies(orgId: string, policies: Array<{ id?: string; severity: string; asset_tier_id?: string | null; max_hours: number; warning_threshold_percent?: number; enabled?: boolean }>): Promise<{ policies: SlaPolicy[] }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/sla-policies`, {
+      method: 'PUT',
+      body: JSON.stringify({ policies }),
+    });
+  },
+
+  async enableSlaPolicies(orgId: string): Promise<{ policies: SlaPolicy[]; backfill_updated: number }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/sla-policies/enable`, { method: 'POST' });
+  },
+
+  async pauseSlaPolicies(orgId: string): Promise<{ sla_paused_at: string }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/sla-policies/pause`, { method: 'POST' });
+  },
+
+  async resumeSlaPolicies(orgId: string): Promise<{ sla_paused_at: string | null }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/sla-policies/resume`, { method: 'POST' });
+  },
+
+  async getSlaCompliance(orgId: string, timeRange?: string): Promise<SlaComplianceResponse> {
+    const params = timeRange ? `?timeRange=${encodeURIComponent(timeRange)}` : '';
+    return fetchWithAuth(`/api/organizations/${orgId}/sla-compliance${params}`);
+  },
+
+  async getSlaComplianceExport(orgId: string, timeRange?: string): Promise<{ rows: SlaExportRow[]; summary: SlaExportSummary }> {
+    const params = timeRange ? `?timeRange=${encodeURIComponent(timeRange)}` : '';
+    return fetchWithAuth(`/api/organizations/${orgId}/sla-compliance/export${params}`);
+  },
+
+  async getSlaPolicyChanges(orgId: string): Promise<SlaPolicyChange[]> {
+    return fetchWithAuth(`/api/organizations/${orgId}/sla-policy-changes`);
+  },
+
   // ───── Phase 4: Policy Evaluation ─────
 
   async validatePolicyCode(orgId: string, code: string, codeType: string): Promise<PolicyValidationResult> {
@@ -2329,6 +2482,137 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/revert-policy`, {
       method: 'POST',
       body: JSON.stringify({ code_type: codeType, to_org_base: true }),
+    });
+  },
+
+  // ───── Phase 8: Pull Requests & Commits ─────
+
+  async getProjectPullRequests(
+    orgId: string,
+    projectId: string,
+    options?: { status?: string; search?: string; page?: number; perPage?: number }
+  ): Promise<PaginatedResponse<ProjectPullRequest>> {
+    const params = new URLSearchParams();
+    if (options?.status && options.status !== 'all') params.set('status', options.status);
+    if (options?.search) params.set('search', options.search);
+    params.set('page', String(options?.page ?? 1));
+    params.set('per_page', String(options?.perPage ?? 15));
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/pull-requests?${params}`);
+  },
+
+  async getProjectCommits(
+    orgId: string,
+    projectId: string,
+    options?: { compliance_status?: string; search?: string; page?: number; perPage?: number }
+  ): Promise<PaginatedResponse<ProjectCommit>> {
+    const params = new URLSearchParams();
+    if (options?.compliance_status && options.compliance_status !== 'all') params.set('compliance_status', options.compliance_status);
+    if (options?.search) params.set('search', options.search);
+    params.set('page', String(options?.page ?? 1));
+    params.set('per_page', String(options?.perPage ?? 15));
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/commits?${params}`);
+  },
+
+  // Phase 10: Overview stats endpoints
+  async getProjectStats(orgId: string, projectId: string): Promise<ProjectStats> {
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/stats`);
+  },
+
+  async getProjectRecentActivity(orgId: string, projectId: string): Promise<ProjectActivityItem[]> {
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/recent-activity`);
+  },
+
+  async triggerProjectSync(orgId: string, projectId: string): Promise<{ job_id: string; status: string }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/sync`, { method: 'POST' });
+  },
+
+  async getOrgStats(orgId: string): Promise<OrgStats> {
+    return fetchWithAuth(`/api/organizations/${orgId}/stats`);
+  },
+
+  async getTeamStats(orgId: string, teamId: string): Promise<TeamStats> {
+    return fetchWithAuth(`/api/organizations/${orgId}/teams/${teamId}/stats`);
+  },
+
+  // Phase 7: AI Fix
+  async requestFix(orgId: string, projectId: string, body: {
+    strategy: string;
+    vulnerabilityOsvId?: string;
+    dependencyId?: string;
+    projectDependencyId?: string;
+    targetVersion?: string;
+    semgrepFindingId?: string;
+    secretFindingId?: string;
+  }): Promise<{ success: boolean; jobId?: string; error?: string; errorCode?: string }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fix`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+
+  async getFixStatus(orgId: string, projectId: string): Promise<FixJob[]> {
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fix-status`);
+  },
+
+  async getFixes(orgId: string, projectId: string, params?: {
+    osvId?: string;
+    semgrepFindingId?: string;
+    secretFindingId?: string;
+    status?: string;
+  }): Promise<FixJob[]> {
+    const search = new URLSearchParams();
+    if (params?.osvId) search.set('osvId', params.osvId);
+    if (params?.semgrepFindingId) search.set('semgrepFindingId', params.semgrepFindingId);
+    if (params?.secretFindingId) search.set('secretFindingId', params.secretFindingId);
+    if (params?.status) search.set('status', params.status);
+    const qs = search.toString();
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fixes${qs ? `?${qs}` : ''}`);
+  },
+
+  async cancelFix(orgId: string, projectId: string, fixId: string): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fixes/${fixId}/cancel`, {
+      method: 'POST',
+    });
+  },
+
+  // Phase 16: Learning
+  async getStrategyRecommendations(orgId: string, params: {
+    ecosystem: string;
+    vulnerabilityType?: string;
+    isDirect?: boolean;
+    fixType: 'vulnerability' | 'semgrep' | 'secret';
+  }): Promise<{ recommendations: StrategyRecommendation[] }> {
+    const qs = new URLSearchParams({ ecosystem: params.ecosystem, fixType: params.fixType });
+    if (params.vulnerabilityType) qs.set('vulnType', params.vulnerabilityType);
+    if (params.isDirect !== undefined) qs.set('isDirect', String(params.isDirect));
+    return fetchWithAuth(`/api/organizations/${orgId}/learning/recommendations?${qs}`);
+  },
+
+  async getLearningDashboard(orgId: string, timeRange?: string): Promise<LearningDashboard> {
+    const qs = timeRange ? `?timeRange=${timeRange}` : '';
+    return fetchWithAuth(`/api/organizations/${orgId}/learning/dashboard${qs}`);
+  },
+
+  async getLearningOutcomes(orgId: string, params?: {
+    page?: number;
+    limit?: number;
+    strategy?: string;
+    success?: boolean;
+    ecosystem?: string;
+  }): Promise<{ outcomes: any[]; total: number; page: number; limit: number }> {
+    const qs = new URLSearchParams();
+    if (params?.page) qs.set('page', String(params.page));
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.strategy) qs.set('strategy', params.strategy);
+    if (params?.success !== undefined) qs.set('success', String(params.success));
+    if (params?.ecosystem) qs.set('ecosystem', params.ecosystem);
+    return fetchWithAuth(`/api/organizations/${orgId}/learning/outcomes?${qs}`);
+  },
+
+  async submitFixFeedback(orgId: string, fixOutcomeId: string, rating: number): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/learning/feedback`, {
+      method: 'POST',
+      body: JSON.stringify({ fixOutcomeId, rating }),
     });
   },
 };
@@ -2761,6 +3045,9 @@ export interface ProjectVulnerability {
   cvss_score?: number;
   cisa_kev?: boolean;
   depscore?: number;
+  /** Phase 15: SLA status (on_track, warning, breached, met, resolved_late, exempt). */
+  sla_status?: string | null;
+  sla_deadline_at?: string | null;
 }
 
 export interface ProjectPermissions {
@@ -2891,6 +3178,80 @@ export interface OrganizationPolicyChange {
   created_at: string;
 }
 
+export interface SlaPolicy {
+  id: string;
+  organization_id: string;
+  severity: string;
+  asset_tier_id: string | null;
+  max_hours: number;
+  warning_threshold_percent: number;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SlaComplianceResponse {
+  overall_compliance_percent: number;
+  current_breaches: number;
+  on_track: number;
+  warning: number;
+  exempt: number;
+  met: number;
+  resolved_late: number;
+  average_mttr_by_severity: Record<string, number>;
+  adherence_by_month: Array<{ month: string; met: number; met_late: number; breached: number; exempt: number }>;
+  violations: Array<{
+    id: string;
+    project_id: string;
+    project_name: string;
+    osv_id: string;
+    severity: string;
+    detected_at: string;
+    deadline: string | null;
+    sla_status: string;
+  }>;
+  team_breakdown: Array<{
+    team_id: string;
+    team_name: string;
+    total: number;
+    on_track_pct: number;
+    warning: number;
+    breached: number;
+    avg_mttr: number;
+  }>;
+}
+
+export interface SlaExportRow {
+  project_name: string;
+  project_id: string;
+  osv_id: string;
+  severity: string;
+  sla_status: string;
+  detected_at: string;
+  deadline: string | null;
+  met_at: string | null;
+  breached_at: string | null;
+}
+
+export interface SlaExportSummary {
+  time_range: string;
+  total_vulnerabilities: number;
+  met_within_sla: number;
+  resolved_late: number;
+  current_breaches: number;
+  compliance_percent: number;
+}
+
+export interface SlaPolicyChange {
+  id: string;
+  organization_id: string;
+  changed_by: string;
+  change_type: string;
+  previous_values: Record<string, unknown> | null;
+  new_values: Record<string, unknown> | null;
+  created_at: string;
+}
+
 export interface ProjectPolicyChange {
   id: string;
   project_id: string;
@@ -2982,6 +3343,26 @@ export interface AegisInboxMessage {
   metadata: Record<string, any>;
   read: boolean;
   created_at: string;
+}
+
+export interface AIProviderConfig {
+  id: string;
+  provider: 'openai' | 'anthropic' | 'google';
+  model_preference: string | null;
+  is_default: boolean;
+  monthly_cost_cap: number;
+  connected: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AIUsageSummary {
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalEstimatedCost: number;
+  monthlyCostCap: number;
+  byFeature: Record<string, { tokens: number; cost: number; count: number }>;
+  byUser: Array<{ userId: string; tokens: number; cost: number; count: number }>;
 }
 
 export interface ProjectPolicyException {
@@ -3245,6 +3626,20 @@ export interface VulnerabilityDetail {
     risk_accepted_by?: string;
     risk_accepted_at?: string;
     risk_accepted_reason?: string;
+    reachability_level?: ReachabilityLevel;
+    reachability_details?: {
+      flow_count?: number;
+      entry_points?: string[];
+      sink_methods?: string[];
+      tags?: string[];
+    };
+    sla_status?: string | null;
+    sla_deadline_at?: string | null;
+    sla_warning_at?: string | null;
+    sla_breached_at?: string | null;
+    sla_met_at?: string | null;
+    sla_exempt_reason?: string | null;
+    detected_at?: string | null;
   };
   affected_dependencies: Array<{
     id: string;
@@ -3257,6 +3652,7 @@ export interface VulnerabilityDetail {
   }>;
   version_candidates: VersionCandidate[];
   timeline_events: VulnerabilityEvent[];
+  reachable_flows?: ReachableFlow[];
 }
 
 export interface DependencySecuritySummary {
@@ -3284,6 +3680,8 @@ export interface DependencySecuritySummary {
   }>;
   version_candidates: VersionCandidate[];
   watchtower: { status: string; analysis_data: any } | null;
+  usage_slices?: UsageSlice[];
+  reachable_flows?: ReachableFlow[];
 }
 
 export interface ProjectSecuritySummary {
@@ -3305,3 +3703,351 @@ export interface PaginatedResponse<T> {
   page: number;
   per_page: number;
 }
+
+// Phase 6B: Reachability types
+export interface ReachableFlowNode {
+  id?: number;
+  label?: string;
+  name?: string;
+  fullName?: string;
+  signature?: string;
+  isExternal?: boolean;
+  code?: string;
+  typeFullName?: string;
+  parentMethodName?: string;
+  parentMethodSignature?: string;
+  parentFileName?: string;
+  parentPackageName?: string;
+  parentClassName?: string;
+  lineNumber?: number;
+  columnNumber?: number;
+  tags?: string;
+}
+
+export interface ReachableFlow {
+  id: string;
+  project_id: string;
+  extraction_run_id: string;
+  purl: string;
+  dependency_id: string | null;
+  flow_nodes: ReachableFlowNode[];
+  entry_point_file: string | null;
+  entry_point_method: string | null;
+  entry_point_line: number | null;
+  entry_point_tag: string | null;
+  sink_file: string | null;
+  sink_method: string | null;
+  sink_line: number | null;
+  sink_is_external: boolean;
+  flow_length: number;
+  llm_prompt: string | null;
+  created_at: string;
+}
+
+export interface UsageSlice {
+  id: string;
+  project_id: string;
+  extraction_run_id: string;
+  file_path: string;
+  line_number: number;
+  containing_method: string | null;
+  target_name: string;
+  target_type: string | null;
+  resolved_method: string | null;
+  usage_label: string | null;
+  ecosystem: string | null;
+  created_at: string;
+}
+
+export interface CodeContext {
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  code: string;
+  language: string;
+}
+
+export type ReachabilityLevel = 'unreachable' | 'module' | 'function' | 'data_flow' | 'confirmed' | null;
+
+// Phase 8: PR & Commit tracking types
+
+export interface ProjectPullRequest {
+  id: string;
+  project_id: string;
+  pr_number: number;
+  title: string | null;
+  author_login: string | null;
+  author_avatar_url: string | null;
+  status: 'open' | 'merged' | 'closed';
+  check_result: 'passed' | 'failed' | 'pending' | 'skipped' | null;
+  check_summary: string | null;
+  deps_added: number;
+  deps_updated: number;
+  deps_removed: number;
+  transitive_changes: number;
+  blocked_by: Record<string, any> | null;
+  provider: string;
+  provider_url: string | null;
+  base_branch: string | null;
+  head_branch: string | null;
+  head_sha: string | null;
+  opened_at: string | null;
+  merged_at: string | null;
+  closed_at: string | null;
+  last_checked_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectCommit {
+  id: string;
+  project_id: string;
+  sha: string;
+  message: string | null;
+  author_name: string | null;
+  author_email: string | null;
+  author_avatar_url: string | null;
+  committed_at: string | null;
+  manifest_changed: boolean;
+  extraction_triggered: boolean;
+  extraction_status: string | null;
+  files_changed: number | null;
+  compliance_status: 'COMPLIANT' | 'NON_COMPLIANT' | 'UNKNOWN' | null;
+  dependencies_added: number;
+  dependencies_removed: number;
+  dependencies_updated: number;
+  provider: string;
+  provider_url: string | null;
+  created_at: string;
+}
+
+// Phase 10: Overview Stats types
+
+export interface ProjectStats {
+  health_score: number;
+  status: { id: string; name: string; color: string; is_passing: boolean } | null;
+  asset_tier: { id: string; name: string; color: string } | null;
+  compliance: { percent: number; compliant: number; failing: number; not_evaluated: number; total: number };
+  vulnerabilities: { total: number; critical: number; high: number; medium: number; low: number; reachable_count: number };
+  code_findings: { semgrep_count: number; secret_count: number; verified_secret_count: number };
+  dependencies: { total: number; direct: number; transitive: number; outdated: number };
+  sync: { status: string; extraction_step: string | null; last_synced: string | null; last_error: string | null; branch: string };
+  action_items: ActionItem[];
+  graph_deps: GraphDep[];
+}
+
+export interface ActionItem {
+  type: 'critical_vuln' | 'high_vuln' | 'non_compliant' | 'policy_violation' | 'outdated_critical' | 'code_finding';
+  title: string;
+  description: string;
+  count: number;
+  link: string;
+}
+
+export interface GraphDep {
+  id: string;
+  name: string;
+  worst_severity: 'critical' | 'high' | 'medium' | 'low' | 'none';
+}
+
+export interface ProjectActivityItem {
+  id: string;
+  source: 'activity' | 'vuln_event' | 'extraction';
+  type: 'sync_started' | 'sync_completed' | 'sync_failed' | 'vuln_discovered' | 'vuln_resolved' | 'policy_change' | 'team_assignment' | 'guardrail_update' | 'other';
+  title: string;
+  description: string;
+  metadata: Record<string, any>;
+  created_at: string;
+}
+
+export interface OrgStats {
+  projects: { total: number; healthy: number; at_risk: number; critical: number; syncing_count: number };
+  vulnerabilities: { total: number; critical: number; high: number; medium: number; low: number };
+  code_findings: { semgrep_total: number; secret_total: number };
+  compliance: { percent: number; status_distribution: StatusDistItem[] };
+  top_vulnerabilities: TopVuln[];
+  dependencies_total: number;
+  members_count: number;
+}
+
+export interface TeamStats extends OrgStats {}
+
+export interface StatusDistItem {
+  status_id: string;
+  name: string;
+  color: string;
+  is_passing: boolean;
+  count: number;
+}
+
+export interface FixJob {
+  id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'pr_closed' | 'merged' | 'superseded';
+  strategy: string;
+  fix_type: string;
+  osv_id: string | null;
+  semgrep_finding_id: string | null;
+  secret_finding_id: string | null;
+  target_version: string | null;
+  pr_url: string | null;
+  pr_number: number | null;
+  pr_branch: string | null;
+  error_message: string | null;
+  error_category: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  triggered_by: string;
+  run_id: string;
+}
+
+export interface TopVuln {
+  osv_id: string;
+  summary: string;
+  severity: string;
+  depscore: number;
+  affected_project_count: number;
+  worst_project: { id: string; name: string };
+}
+
+// ─── Phase 16: Learning types ───
+
+export interface StrategyRecommendation {
+  strategy: string;
+  displayName: string;
+  predictedSuccessRate: number;
+  confidence: 'low' | 'medium' | 'high';
+  basedOnSamples: number;
+  avgDuration: number;
+  avgCost: number;
+  reasoning: string;
+  warnings?: string[];
+  isGlobalDefault: boolean;
+}
+
+export interface LearningDashboard {
+  strategyMatrix: Array<{
+    strategy: string;
+    displayName: string;
+    successRate: number;
+    samples: number;
+    confidence: string;
+    avgCost: number | null;
+    avgDuration: number | null;
+  }>;
+  learningCurve: Array<{
+    month: string;
+    successRate: number;
+    total: number;
+    successes: number;
+  }>;
+  failureAnalysis: Array<{
+    reason: string;
+    displayName: string;
+    count: number;
+    percentage: number;
+  }>;
+  followupChains: Array<{
+    failedStrategy: string;
+    failedDisplayName: string;
+    followupStrategy: string;
+    followupDisplayName: string;
+    followupSuccessRate: number;
+    samples: number;
+  }>;
+  qualityInsights: Array<{
+    strategy: string;
+    displayName: string;
+    avgRating: number;
+    totalRatings: number;
+    distribution: number[];
+  }>;
+  totalOutcomes: number;
+  totalSuccesses: number;
+  totalRatings: number;
+}
+
+// ─── Phase 13: Billing API ───
+
+export interface StripeInvoice {
+  id: string;
+  number: string | null;
+  amount_due: number;
+  amount_paid: number;
+  currency: string;
+  status: string | null;
+  created: number;
+  period_start: number;
+  period_end: number;
+  invoice_pdf: string | null;
+  hosted_invoice_url: string | null;
+}
+
+export const billingApi = {
+  async getPlan(orgId: string) {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error('Not authenticated');
+    const res = await fetch(`${API_BASE_URL}/api/organizations/${orgId}/billing/plan`, {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    if (!res.ok) throw new Error('Failed to fetch plan');
+    return res.json();
+  },
+
+  async getUsage(orgId: string) {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error('Not authenticated');
+    const res = await fetch(`${API_BASE_URL}/api/organizations/${orgId}/billing/usage`, {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    if (!res.ok) throw new Error('Failed to fetch usage');
+    return res.json();
+  },
+
+  async createCheckoutSession(orgId: string, priceId: string, billingEmail?: string): Promise<{ url: string }> {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error('Not authenticated');
+    const res = await fetch(`${API_BASE_URL}/api/organizations/${orgId}/billing/checkout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ priceId, billingEmail }),
+    });
+    if (!res.ok) throw new Error('Failed to create checkout');
+    return res.json();
+  },
+
+  async createPortalSession(orgId: string): Promise<{ url: string }> {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error('Not authenticated');
+    const res = await fetch(`${API_BASE_URL}/api/organizations/${orgId}/billing/portal`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+    });
+    if (!res.ok) throw new Error('Failed to create portal session');
+    return res.json();
+  },
+
+  async getInvoices(orgId: string, limit = 10, startingAfter?: string): Promise<{ invoices: StripeInvoice[]; has_more: boolean }> {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error('Not authenticated');
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (startingAfter) params.set('starting_after', startingAfter);
+    const res = await fetch(`${API_BASE_URL}/api/organizations/${orgId}/billing/invoices?${params}`, {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    if (!res.ok) throw new Error('Failed to fetch invoices');
+    return res.json();
+  },
+
+  async checkDowngrade(orgId: string, targetTier: string): Promise<{ allowed: boolean; overLimits: Array<{ resource: string; current: number; targetLimit: number }> }> {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error('Not authenticated');
+    const res = await fetch(`${API_BASE_URL}/api/organizations/${orgId}/billing/check-downgrade`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ targetTier }),
+    });
+    if (!res.ok) throw new Error('Failed to check downgrade');
+    return res.json();
+  },
+};

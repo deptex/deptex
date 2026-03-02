@@ -13,6 +13,8 @@ import {
   ChevronDown,
   ExternalLink,
   Circle,
+  Bot,
+  Activity,
 } from "lucide-react";
 
 const quickLinks = [
@@ -51,6 +53,18 @@ const quickLinks = [
     title: "Notifications",
     description: "Configure alert rules triggered by vulnerability and policy events.",
     to: "/docs/notification-rules",
+  },
+  {
+    icon: Bot,
+    title: "Aegis",
+    description: "Autonomous security agent: chat, tasks, automations, Slack, and PR review.",
+    to: "/docs/aegis",
+  },
+  {
+    icon: Activity,
+    title: "Watchtower",
+    description: "Supply chain monitoring and forensic analysis per dependency.",
+    to: "/docs/watchtower",
   },
 ];
 

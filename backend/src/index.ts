@@ -11,8 +11,26 @@ import { isEeEdition } from './lib/features';
 import userProfileRouter from './routes/userProfile';
 import docsAssistantRouter from './routes/docs-assistant';
 import recoveryRouter from './routes/recovery';
+import fixRecoveryRouter from './routes/fix-recovery';
+import vulnCheckRouter from './routes/vuln-check';
+import scheduledExtractionRouter from './routes/scheduled-extraction';
+import watchtowerDailyPollRouter from './routes/watchtower-daily-poll';
+import notificationUnsubscribeRouter from './routes/notification-unsubscribe';
+import userNotificationsRouter from './routes/user-notifications';
+import watchtowerRecoveryRouter from './routes/watchtower-recovery';
+import watchtowerEventRouter from './routes/watchtower-event';
+import aegisTaskStepRouter from './routes/aegis-task-step';
+import stripeWebhooksRouter from './routes/stripe-webhooks';
+import syncCounterResetRouter from './routes/sync-counter-reset';
+import ssoRouter from './routes/sso';
+import userSessionsRouter from './routes/user-sessions';
+import userApiTokensRouter from './routes/user-api-tokens';
+import scimRouter from './routes/scim';
+import learningCronRouter from './routes/learning-cron';
+import incidentCronRouter from './routes/incident-cron';
 
 const app = express();
+app.set('trust proxy', true);
 const PORT = process.env.PORT || 3001;
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 
@@ -68,6 +86,23 @@ app.get('/health', (req, res) => {
 app.use('/api/user-profile', userProfileRouter);
 app.use('/api/docs-assistant', docsAssistantRouter);
 app.use('/api/internal/recovery', recoveryRouter);
+app.use('/api/internal/recovery', fixRecoveryRouter);
+app.use('/api/internal/vuln-check', vulnCheckRouter);
+app.use('/api/workers', scheduledExtractionRouter);
+app.use('/api/workers', watchtowerDailyPollRouter);
+app.use('/api/notifications', notificationUnsubscribeRouter);
+app.use('/api/user-notifications', userNotificationsRouter);
+app.use('/api/internal/recovery', watchtowerRecoveryRouter);
+app.use('/api/internal/watchtower-event', watchtowerEventRouter);
+app.use('/api/internal/aegis', aegisTaskStepRouter);
+app.use('/api/stripe/webhooks', stripeWebhooksRouter);
+app.use('/api/workers', syncCounterResetRouter);
+app.use('/api/sso', ssoRouter);
+app.use('/api/user/sessions', userSessionsRouter);
+app.use('/api/user/api-tokens', userApiTokensRouter);
+app.use('/api/scim/v2', scimRouter);
+app.use('/api/internal/learning', learningCronRouter);
+app.use('/api/internal/incidents', incidentCronRouter);
 
 // API Routes - EE (mounted only when DEPTEX_EDITION=ee, loaded from ee/backend/routes/)
 if (isEeEdition()) {
@@ -83,6 +118,9 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
+    if (!process.env.AI_ENCRYPTION_KEY) {
+      console.warn('[AI] WARNING: AI_ENCRYPTION_KEY is not set. BYOK AI provider features will be unavailable.');
+    }
   });
 }
 

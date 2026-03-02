@@ -20,18 +20,20 @@ import { detectMonorepo } from '../../../backend/src/lib/detect-monorepo';
 import { createProvider, GitHubProvider, type GitProvider, type OrgIntegration } from '../lib/git-provider';
 import { queueExtractionJob, cancelExtractionJob } from '../lib/redis';
 import { MANIFEST_FILES, detectFrameworkForEcosystem, ECOSYSTEM_DEFAULTS } from '../../../backend/src/lib/ecosystems';
-import { queueWatchtowerJob } from '../lib/watchtower-queue';
+import { queueWatchtowerJob, queueWatchtowerJobs } from '../lib/watchtower-queue';
 import { createBumpPrForProject } from '../lib/create-bump-pr';
 import { createRemovePrForProject } from '../lib/create-remove-pr';
 import { isVersionAffected, isVersionFixed } from '../../../backend/src/lib/semver-affected';
 import { fetchGhsaVulnerabilitiesBatch, filterGhsaVulnsByVersion, ghsaSeverityToLevel } from '../../../backend/src/lib/ghsa';
 import { getVulnCountsBatch, getVulnCountsForVersion, getVulnCountsForVersionsBatch, VulnCounts } from '../../../backend/src/lib/vuln-counts';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
+import { emitEvent } from '../lib/event-bus';
 import pacote from 'pacote';
 import { calculateLatestSafeVersion, type LatestSafeVersionResponse } from '../lib/latest-safe-version';
 import {
   getCached,
   setCached,
+  invalidateCache,
   getDependenciesCacheKey,
   getDependencyVersionsCacheKey,
   getDependencyNotesCacheKey,
@@ -983,6 +985,20 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
       return res.status(403).json({ error: 'You do not have permission to create projects' });
     }
 
+    // Plan limit check: projects
+    try {
+      const { checkPlanLimit, TIER_DISPLAY_NAMES } = require('../lib/plan-limits');
+      const planCheck = await checkPlanLimit(id, 'projects');
+      if (!planCheck.allowed) {
+        return res.status(403).json({
+          error: 'PLAN_LIMIT',
+          message: `You've reached the ${planCheck.limit} project limit on your ${TIER_DISPLAY_NAMES[planCheck.tier]} plan.`,
+          resource: 'projects', current: planCheck.current, limit: planCheck.limit,
+          tier: planCheck.tier, upgradeTier: planCheck.upgradeTier,
+        });
+      }
+    } catch (e) { /* fail open if plan-limits module unavailable */ }
+
     // Validate team_ids if provided
     const teamIdsArray = Array.isArray(team_ids) ? team_ids.filter((tid: any) => tid && typeof tid === 'string') : [];
     if (teamIdsArray.length > 0) {
@@ -1084,6 +1100,10 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
         team_names: teamNames,
       },
     });
+
+    try {
+      await emitEvent({ type: 'project_created', organizationId: id, projectId: project.id, payload: { projectName: name.trim(), teamIds: teamIdsArray }, source: 'system', priority: 'normal' });
+    } catch (e) {}
 
     res.status(201).json(formattedProject);
   } catch (error: any) {
@@ -1358,6 +1378,10 @@ router.delete('/:id/projects/:projectId', async (req: AuthRequest, res) => {
     if (deleteError) {
       throw deleteError;
     }
+
+    try {
+      await emitEvent({ type: 'project_deleted', organizationId: id, projectId, payload: {}, source: 'system', priority: 'normal' });
+    } catch (e) {}
 
     res.json({ message: 'Project deleted' });
   } catch (error: any) {
@@ -4063,7 +4087,7 @@ router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthR
   try {
     const userId = req.user!.id;
     const { id, projectId } = req.params;
-    const { pull_request_comments_enabled, auto_fix_vulnerabilities_enabled } = req.body || {};
+    const { pull_request_comments_enabled, auto_fix_vulnerabilities_enabled, sync_frequency } = req.body || {};
 
     const accessCheck = await checkProjectAccess(userId, id, projectId);
     if (!accessCheck.hasAccess) {
@@ -4122,6 +4146,11 @@ router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthR
       return res.status(404).json({ error: 'No repository connected to this project' });
     }
 
+    const VALID_SYNC_FREQUENCIES = ['manual', 'on_commit', 'daily', 'weekly'] as const;
+    if (sync_frequency !== undefined && !VALID_SYNC_FREQUENCIES.includes(sync_frequency)) {
+      return res.status(400).json({ error: `Invalid sync_frequency. Must be one of: ${VALID_SYNC_FREQUENCIES.join(', ')}` });
+    }
+
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (typeof pull_request_comments_enabled === 'boolean') {
       updates.pull_request_comments_enabled = pull_request_comments_enabled;
@@ -4129,12 +4158,15 @@ router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthR
     if (typeof auto_fix_vulnerabilities_enabled === 'boolean') {
       updates.auto_fix_vulnerabilities_enabled = auto_fix_vulnerabilities_enabled;
     }
+    if (sync_frequency !== undefined) {
+      updates.sync_frequency = sync_frequency;
+    }
 
     const { data: updated, error: updateError } = await supabase
       .from('project_repositories')
       .update(updates)
       .eq('project_id', projectId)
-      .select('repo_full_name, default_branch, status, pull_request_comments_enabled, auto_fix_vulnerabilities_enabled')
+      .select('repo_full_name, default_branch, status, pull_request_comments_enabled, auto_fix_vulnerabilities_enabled, sync_frequency')
       .single();
 
     if (updateError) {
@@ -4147,6 +4179,7 @@ router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthR
       status: updated.status,
       pull_request_comments_enabled: (updated as { pull_request_comments_enabled?: boolean }).pull_request_comments_enabled !== false,
       auto_fix_vulnerabilities_enabled: (updated as { auto_fix_vulnerabilities_enabled?: boolean }).auto_fix_vulnerabilities_enabled === true,
+      sync_frequency: (updated as any).sync_frequency ?? 'on_commit',
     });
   } catch (error: any) {
     console.error('Error updating repository settings:', error);
@@ -6334,6 +6367,21 @@ router.patch('/:id/projects/:projectId/dependencies/:dependencyId/watching', asy
       if (!packageDependencyId) {
         return res.status(400).json({ error: 'Could not resolve package for watchlist' });
       }
+
+      // Plan limit check: watchtower packages
+      try {
+        const { checkPlanLimit, TIER_DISPLAY_NAMES } = require('../lib/plan-limits');
+        const planCheck = await checkPlanLimit(organizationId, 'watchtower');
+        if (!planCheck.allowed) {
+          return res.status(403).json({
+            error: 'PLAN_LIMIT',
+            message: `Your ${TIER_DISPLAY_NAMES[planCheck.tier]} plan supports up to ${planCheck.limit} watched packages.`,
+            resource: 'watchtower', current: planCheck.current, limit: planCheck.limit,
+            tier: planCheck.tier, upgradeTier: planCheck.upgradeTier,
+          });
+        }
+      } catch (e) { /* fail open */ }
+
       const npmLatest = await fetchLatestNpmVersion(depDetails.name);
       const latestAllowedVersion = npmLatest.latest_version ?? depDetails.version;
       const { error: insertError } = await supabase
@@ -6480,13 +6528,17 @@ router.patch('/:id/projects/:projectId/dependencies/:dependencyId/watching', asy
           }
         }
 
-        // Queue watchtower job via Redis only if this is a new package or needs retry
+        // Queue watchtower job via Supabase only if this is a new package or needs retry
         if (watchedPkgId && shouldQueueJob) {
           const queueResult = await queueWatchtowerJob({
             packageName: depDetails.name,
-            watchedPackageId: watchedPkgId,
-            projectDependencyId: dependencyId,
-            currentVersion: depDetails.version,
+            payload: {
+              watchedPackageId: watchedPkgId,
+              projectDependencyId: dependencyId,
+              currentVersion: depDetails.version,
+            },
+            organizationId: orgId,
+            dependencyId: depDetails.dependency_id,
           });
           if (!queueResult.success) {
             console.warn(`Failed to queue Watchtower job for ${depDetails.name}: ${queueResult.error}`);
@@ -7219,6 +7271,8 @@ router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, 
       modified_at: vuln.modified_at,
       dependency_id: vuln.dependency_id,
       dependency_name: vuln.dependency_name ?? 'Unknown',
+      sla_status: vuln.sla_status ?? null,
+      sla_deadline_at: vuln.sla_deadline_at ?? null,
       dependency_version: vuln.dependency_version ?? 'Unknown',
       ...(usePdv && {
         is_reachable: vuln.is_reachable ?? true,
@@ -9847,6 +9901,20 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
       .limit(1)
       .single();
 
+    // Phase 6B: fetch reachable flows for affected dependencies
+    const affectedDepIds = affectedDeps.map((d: any) => d.dependency_id).filter(Boolean);
+    let reachableFlows: any[] = [];
+    if (affectedDepIds.length > 0) {
+      const { data: flows } = await supabase
+        .from('project_reachable_flows')
+        .select('*')
+        .eq('project_id', projectId)
+        .in('dependency_id', affectedDepIds)
+        .order('flow_length', { ascending: true })
+        .limit(20);
+      reachableFlows = flows ?? [];
+    }
+
     res.json({
       vulnerability: {
         ...vuln,
@@ -9862,6 +9930,7 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
       })),
       version_candidates: versionCandidates,
       timeline_events: events ?? [],
+      reachable_flows: reachableFlows,
     });
   } catch (error: any) {
     console.error('Error fetching vulnerability detail:', error);
@@ -9886,7 +9955,13 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/suppress', async (
 
     const { error } = await supabase
       .from('project_dependency_vulnerabilities')
-      .update({ suppressed: true, suppressed_by: userId, suppressed_at: new Date().toISOString() })
+      .update({
+        suppressed: true,
+        suppressed_by: userId,
+        suppressed_at: new Date().toISOString(),
+        sla_status: 'exempt',
+        sla_exempt_reason: 'Suppressed',
+      })
       .eq('project_id', projectId)
       .eq('osv_id', osvId);
 
@@ -9959,6 +10034,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/accept-risk', asyn
       return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
     }
 
+    const exemptReason = reason?.trim() ? `Risk accepted: ${reason.trim()}` : 'Risk accepted';
     const { error } = await supabase
       .from('project_dependency_vulnerabilities')
       .update({
@@ -9966,6 +10042,8 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/accept-risk', asyn
         risk_accepted_by: userId,
         risk_accepted_at: new Date().toISOString(),
         risk_accepted_reason: reason ?? null,
+        sla_status: 'exempt',
+        sla_exempt_reason: exemptReason,
       })
       .eq('project_id', projectId)
       .eq('osv_id', osvId);
@@ -10080,12 +10158,40 @@ router.get('/:id/projects/:projectId/dependencies/:depId/security-summary', asyn
       }
     }
 
+    // Phase 6B: fetch usage slices for this dependency
+    let usageSlices: any[] = [];
+    if (projDep.name) {
+      const { data: slices } = await supabase
+        .from('project_usage_slices')
+        .select('file_path, line_number, target_name, resolved_method, usage_label')
+        .eq('project_id', projectId)
+        .eq('target_type', projDep.name)
+        .order('line_number', { ascending: true })
+        .limit(50);
+      usageSlices = slices ?? [];
+    }
+
+    // Phase 6B: fetch reachable flows for this dependency
+    let reachableFlows: any[] = [];
+    if (projDep.dependency_id) {
+      const { data: flows } = await supabase
+        .from('project_reachable_flows')
+        .select('id, purl, entry_point_file, entry_point_method, entry_point_line, entry_point_tag, sink_method, sink_file, flow_length, llm_prompt')
+        .eq('project_id', projectId)
+        .eq('dependency_id', projDep.dependency_id)
+        .order('flow_length', { ascending: true })
+        .limit(20);
+      reachableFlows = flows ?? [];
+    }
+
     res.json({
       dependency: projDep,
       files: (files ?? []).map((f: any) => f.file_path),
       vulnerabilities: vulns ?? [],
       version_candidates: candidates ?? [],
       watchtower: watchtowerSummary,
+      usage_slices: usageSlices,
+      reachable_flows: reachableFlows,
     });
   } catch (error: any) {
     console.error('Error fetching dependency security summary:', error);
@@ -10232,6 +10338,1401 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
   } catch (error: any) {
     console.error('Error fetching org security summary:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch security summary' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Phase 6B: Reachable Flows & Usage Slices Endpoints
+// ---------------------------------------------------------------------------
+
+// GET /api/organizations/:id/projects/:projectId/reachable-flows
+router.get('/:id/projects/:projectId/reachable-flows', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page as string) || 50));
+    const dependencyId = (req.query.dependency_id as string) || null;
+    const entryPointFile = (req.query.entry_point_file as string) || null;
+
+    let query = supabase
+      .from('project_reachable_flows')
+      .select('*', { count: 'exact' })
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false })
+      .range((page - 1) * perPage, page * perPage - 1);
+
+    if (dependencyId) query = query.eq('dependency_id', dependencyId);
+    if (entryPointFile) query = query.eq('entry_point_file', entryPointFile);
+
+    const { data, count, error } = await query;
+    if (error) throw error;
+
+    res.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage });
+  } catch (error: any) {
+    console.error('Error fetching reachable flows:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch reachable flows' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/usage-slices
+router.get('/:id/projects/:projectId/usage-slices', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page as string) || 50));
+    const targetType = (req.query.target_type as string) || null;
+    const filePath = (req.query.file_path as string) || null;
+
+    let query = supabase
+      .from('project_usage_slices')
+      .select('*', { count: 'exact' })
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false })
+      .range((page - 1) * perPage, page * perPage - 1);
+
+    if (targetType) query = query.eq('target_type', targetType);
+    if (filePath) query = query.eq('file_path', filePath);
+
+    const { data, count, error } = await query;
+    if (error) throw error;
+
+    res.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage });
+  } catch (error: any) {
+    console.error('Error fetching usage slices:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch usage slices' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/reachable-flows/:flowId/code-context
+router.get('/:id/projects/:projectId/reachable-flows/:flowId/code-context', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, flowId } = req.params;
+    const step = parseInt(req.query.step as string) || 0;
+
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const rlKey = `code-context:${userId}`;
+    const { checkRateLimit: rl } = await import('../lib/rate-limit');
+    const rateResult = await rl(rlKey, 30, 60);
+    if (!rateResult.allowed) {
+      return res.status(429).json({ error: 'Rate limit exceeded', retry_after: rateResult.retryAfterSeconds });
+    }
+
+    const { data: flow, error: flowError } = await supabase
+      .from('project_reachable_flows')
+      .select('flow_nodes')
+      .eq('id', flowId)
+      .eq('project_id', projectId)
+      .single();
+
+    if (flowError || !flow) {
+      return res.status(404).json({ error: 'Flow not found' });
+    }
+
+    const nodes = flow.flow_nodes as any[];
+    if (!Array.isArray(nodes) || step < 0 || step >= nodes.length) {
+      return res.status(404).json({ error: 'Invalid step index' });
+    }
+
+    const node = nodes[step];
+    const filePath = node.parentFileName;
+    if (!filePath) {
+      return res.status(404).json({ error: 'No file path available for this flow step' });
+    }
+
+    const { data: repo } = await supabase
+      .from('project_repositories')
+      .select('provider, repo_full_name, default_branch')
+      .eq('project_id', projectId)
+      .single();
+
+    if (!repo) {
+      return res.status(404).json({ error: 'No repository connected' });
+    }
+
+    const { data: integration } = await supabase
+      .from('organization_integrations')
+      .select('*')
+      .eq('organization_id', id)
+      .eq('provider', repo.provider || 'github')
+      .single();
+
+    if (!integration) {
+      return res.status(404).json({ error: 'Repository integration disconnected' });
+    }
+
+    try {
+      const provider = createProvider(integration);
+      const lineNum = node.lineNumber ?? 1;
+      const ref = repo.default_branch || 'main';
+
+      const fullContent = await provider.getFileContent(repo.repo_full_name, filePath, ref);
+      const lines = fullContent.split('\n');
+      const startLine = Math.max(1, lineNum - 5);
+      const endLine = Math.min(lines.length, lineNum + 5);
+      const code = lines.slice(startLine - 1, endLine).join('\n');
+
+      const ext = (filePath.split('.').pop() || '').toLowerCase();
+      const langMap: Record<string, string> = {
+        ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+        py: 'python', java: 'java', php: 'php', rb: 'ruby', go: 'go', rs: 'rust',
+      };
+
+      res.json({
+        filePath,
+        startLine,
+        endLine,
+        code,
+        language: langMap[ext] ?? ext,
+      });
+    } catch (providerErr: any) {
+      return res.status(404).json({ error: 'File not found in repository' });
+    }
+  } catch (error: any) {
+    console.error('Error fetching code context:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch code context' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/commits - Paginated project commits
+router.get('/:id/projects/:projectId/commits', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+    const status = (req.query.status as string) || 'ALL';
+    const timeframe = (req.query.timeframe as string) || 'ALL';
+    const search = (req.query.search as string) || '';
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page as string) || 25));
+
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    let query = supabase
+      .from('project_commits')
+      .select('*', { count: 'exact' })
+      .eq('project_id', projectId);
+
+    if (status && status !== 'ALL') {
+      query = query.eq('compliance_status', status);
+    }
+
+    if (timeframe && timeframe !== 'ALL') {
+      const now = new Date();
+      let since: Date;
+      switch (timeframe) {
+        case '24H': since = new Date(now.getTime() - 24 * 60 * 60 * 1000); break;
+        case '7D': since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); break;
+        case '30D': since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); break;
+        default: since = new Date(0);
+      }
+      query = query.gte('committed_at', since.toISOString());
+    }
+
+    if (search) {
+      query = query.or(`message.ilike.%${search}%,author_name.ilike.%${search}%,sha.ilike.%${search}%`);
+    }
+
+    const from = (page - 1) * perPage;
+    const to = from + perPage - 1;
+
+    query = query.order('committed_at', { ascending: false }).range(from, to);
+
+    const { data, error, count } = await query;
+    if (error) throw error;
+
+    res.json({ commits: data ?? [], total: count ?? 0, page, per_page: perPage });
+  } catch (error: any) {
+    console.error('Error fetching project commits:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch project commits' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/pull-requests/stats - PR statistics
+router.get('/:id/projects/:projectId/pull-requests/stats', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const [openRes, failedRes, passedRes, mergedRes] = await Promise.all([
+      supabase
+        .from('project_pull_requests')
+        .select('id', { count: 'exact', head: true })
+        .eq('project_id', projectId)
+        .eq('status', 'open'),
+      supabase
+        .from('project_pull_requests')
+        .select('id', { count: 'exact', head: true })
+        .eq('project_id', projectId)
+        .eq('check_result', 'failed'),
+      supabase
+        .from('project_pull_requests')
+        .select('id', { count: 'exact', head: true })
+        .eq('project_id', projectId)
+        .eq('check_result', 'passed'),
+      supabase
+        .from('project_pull_requests')
+        .select('id', { count: 'exact', head: true })
+        .eq('project_id', projectId)
+        .eq('status', 'merged')
+        .gte('merged_at', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()),
+    ]);
+
+    res.json({
+      open: openRes.count ?? 0,
+      failed_checks: failedRes.count ?? 0,
+      passed_checks: passedRes.count ?? 0,
+      merged_this_week: mergedRes.count ?? 0,
+    });
+  } catch (error: any) {
+    console.error('Error fetching PR stats:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch PR stats' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/pull-requests - Paginated pull requests
+router.get('/:id/projects/:projectId/pull-requests', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+    const status = (req.query.status as string) || 'ALL';
+    const checkResult = (req.query.check_result as string) || 'ALL';
+    const timeframe = (req.query.timeframe as string) || 'ALL';
+    const search = (req.query.search as string) || '';
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page as string) || 25));
+
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    let query = supabase
+      .from('project_pull_requests')
+      .select('*', { count: 'exact' })
+      .eq('project_id', projectId);
+
+    if (status && status !== 'ALL') {
+      query = query.eq('status', status);
+    }
+
+    if (checkResult && checkResult !== 'ALL') {
+      query = query.eq('check_result', checkResult);
+    }
+
+    if (timeframe && timeframe !== 'ALL') {
+      const now = new Date();
+      let since: Date;
+      switch (timeframe) {
+        case '24H': since = new Date(now.getTime() - 24 * 60 * 60 * 1000); break;
+        case '7D': since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); break;
+        case '30D': since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); break;
+        default: since = new Date(0);
+      }
+      query = query.gte('created_at', since.toISOString());
+    }
+
+    if (search) {
+      query = query.or(`title.ilike.%${search}%,author_login.ilike.%${search}%,head_branch.ilike.%${search}%`);
+    }
+
+    const from = (page - 1) * perPage;
+    const to = from + perPage - 1;
+
+    query = query.order('created_at', { ascending: false }).range(from, to);
+
+    const { data, error, count } = await query;
+    if (error) throw error;
+
+    res.json({ pullRequests: data ?? [], total: count ?? 0, page, per_page: perPage });
+  } catch (error: any) {
+    console.error('Error fetching project pull requests:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch project pull requests' });
+  }
+});
+
+// ============================================================================
+// Phase 10: Project Stats, Recent Activity, and Sync endpoints
+// ============================================================================
+
+// GET /api/organizations/:id/projects/:projectId/stats
+router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: organizationId, projectId } = req.params;
+
+    const accessCheck = await checkProjectAccess(userId, organizationId, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const cacheKey = `project-stats:${projectId}`;
+    const cached = await getCached<any>(cacheKey);
+    if (cached) return res.json(cached);
+
+    const [
+      projectRow,
+      depsRows,
+      vulnRows,
+      semgrepResult,
+      secretResult,
+      verifiedSecretResult,
+      repoRow,
+      lastFailedJob,
+    ] = await Promise.all([
+      supabase.from('projects').select('health_score, status_id, asset_tier_id').eq('id', projectId).single().then(r => r.data),
+      supabase.from('project_dependencies').select('id, is_direct, policy_result, is_outdated, dependency_id').eq('project_id', projectId).then(r => r.data ?? []),
+      supabase.from('project_dependency_vulnerabilities').select('severity, depscore, is_reachable, project_dependency_id, sla_status').eq('project_id', projectId).eq('suppressed', false).then(r => r.data ?? []),
+      supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId),
+      supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId),
+      supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('verified', true),
+      supabase.from('project_repositories').select('status, extraction_step, updated_at, default_branch').eq('project_id', projectId).single().then(r => r.data),
+      supabase.from('extraction_jobs').select('error, created_at').eq('project_id', projectId).eq('status', 'failed').order('created_at', { ascending: false }).limit(1).single().then(r => r.data),
+    ]);
+
+    // Status & tier lookups
+    let status: any = null;
+    if (projectRow?.status_id) {
+      const { data: s } = await supabase.from('organization_statuses').select('id, name, color, is_passing').eq('id', projectRow.status_id).single();
+      status = s;
+    }
+    let assetTier: any = null;
+    if (projectRow?.asset_tier_id) {
+      const { data: t } = await supabase.from('organization_asset_tiers').select('id, name, color').eq('id', projectRow.asset_tier_id).single();
+      assetTier = t;
+    }
+
+    // Compliance
+    const compliant = depsRows.filter((d: any) => d.policy_result?.allowed === true).length;
+    const failing = depsRows.filter((d: any) => d.policy_result?.allowed === false).length;
+    const notEvaluated = depsRows.length - compliant - failing;
+    const compliancePercent = depsRows.length > 0 ? Math.round((compliant / depsRows.length) * 100) : 100;
+
+    // Vulnerabilities
+    const vulnCritical = vulnRows.filter((v: any) => v.severity === 'critical').length;
+    const vulnHigh = vulnRows.filter((v: any) => v.severity === 'high').length;
+    const vulnMedium = vulnRows.filter((v: any) => v.severity === 'medium').length;
+    const vulnLow = vulnRows.filter((v: any) => v.severity === 'low').length;
+    const reachableCount = vulnRows.filter((v: any) => v.is_reachable).length;
+
+    // Dependencies
+    const directDeps = depsRows.filter((d: any) => d.is_direct === true);
+    const transitiveDeps = depsRows.filter((d: any) => d.is_direct === false);
+    const outdated = depsRows.filter((d: any) => d.is_outdated === true).length;
+
+    // Action items
+    const actionItems: any[] = [];
+    if (vulnCritical > 0) {
+      actionItems.push({
+        type: 'critical_vuln', title: `${vulnCritical} critical vulnerabilit${vulnCritical === 1 ? 'y' : 'ies'}`,
+        description: `Critical vulnerabilities require immediate attention`, count: vulnCritical,
+        link: `/organizations/${organizationId}/projects/${projectId}/security`,
+      });
+    }
+    if (vulnHigh > 0) {
+      actionItems.push({
+        type: 'high_vuln', title: `${vulnHigh} high severity vulnerabilit${vulnHigh === 1 ? 'y' : 'ies'}`,
+        description: `High severity vulnerabilities should be addressed soon`, count: vulnHigh,
+        link: `/organizations/${organizationId}/projects/${projectId}/security`,
+      });
+    }
+    if (failing > 0) {
+      actionItems.push({
+        type: 'non_compliant', title: `${failing} non-compliant dependenc${failing === 1 ? 'y' : 'ies'}`,
+        description: `Dependencies failing organization policy`, count: failing,
+        link: `/organizations/${organizationId}/projects/${projectId}/compliance`,
+      });
+    }
+    const semgrepCount = semgrepResult.count ?? 0;
+    const secretCount = secretResult.count ?? 0;
+    const verifiedSecretCount = verifiedSecretResult.count ?? 0;
+    if (semgrepCount > 0 || verifiedSecretCount > 0) {
+      actionItems.push({
+        type: 'code_finding', title: `${semgrepCount + verifiedSecretCount} code finding${semgrepCount + verifiedSecretCount === 1 ? '' : 's'}`,
+        description: `${semgrepCount} Semgrep issue${semgrepCount === 1 ? '' : 's'}, ${verifiedSecretCount} verified secret${verifiedSecretCount === 1 ? '' : 's'}`,
+        count: semgrepCount + verifiedSecretCount,
+        link: `/organizations/${organizationId}/projects/${projectId}/security`,
+      });
+    }
+
+    // Graph deps — direct deps with worst severity
+    const directDepIds = directDeps.map((d: any) => d.id);
+    const depIdToDepRow = new Map(depsRows.map((d: any) => [d.id, d]));
+
+    const { data: depNames } = await supabase
+      .from('project_dependencies')
+      .select('id, dependency_id, dependencies!inner(name)')
+      .eq('project_id', projectId)
+      .eq('is_direct', true)
+      .limit(30);
+
+    const severityRank: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+    const vulnByPd = new Map<string, string>();
+    for (const v of vulnRows) {
+      const curr = vulnByPd.get(v.project_dependency_id) ?? 'none';
+      const newSev = v.severity ?? 'none';
+      if ((severityRank[newSev] ?? 0) > (severityRank[curr] ?? 0)) {
+        vulnByPd.set(v.project_dependency_id, newSev);
+      }
+    }
+
+    const graphDeps = (depNames ?? []).map((d: any) => ({
+      id: d.dependency_id,
+      name: (d as any).dependencies?.name ?? 'unknown',
+      worst_severity: vulnByPd.get(d.id) ?? 'none',
+    }));
+
+    // Phase 15: SLA aggregates
+    const slaOnTrack = vulnRows.filter((v: any) => v.sla_status === 'on_track').length;
+    const slaWarning = vulnRows.filter((v: any) => v.sla_status === 'warning').length;
+    const slaBreached = vulnRows.filter((v: any) => v.sla_status === 'breached').length;
+    const slaExempt = vulnRows.filter((v: any) => v.sla_status === 'exempt').length;
+    const slaMet = vulnRows.filter((v: any) => v.sla_status === 'met').length;
+    const slaResolvedLate = vulnRows.filter((v: any) => v.sla_status === 'resolved_late').length;
+    const slaTotalResolved = slaMet + slaResolvedLate;
+    const slaCompliancePercent = slaTotalResolved > 0 ? Math.round((slaMet / slaTotalResolved) * 100) : 100;
+
+    const result = {
+      health_score: projectRow?.health_score ?? 0,
+      status,
+      asset_tier: assetTier,
+      compliance: { percent: compliancePercent, compliant, failing, not_evaluated: notEvaluated, total: depsRows.length },
+      vulnerabilities: { total: vulnRows.length, critical: vulnCritical, high: vulnHigh, medium: vulnMedium, low: vulnLow, reachable_count: reachableCount },
+      code_findings: { semgrep_count: semgrepCount, secret_count: secretCount, verified_secret_count: verifiedSecretCount },
+      dependencies: { total: depsRows.length, direct: directDeps.length, transitive: transitiveDeps.length, outdated },
+      sync: {
+        status: repoRow?.status ?? 'not_connected',
+        extraction_step: repoRow?.extraction_step ?? null,
+        last_synced: repoRow?.status === 'ready' ? repoRow.updated_at : null,
+        last_error: lastFailedJob?.error ?? null,
+        branch: repoRow?.default_branch ?? 'main',
+      },
+      action_items: actionItems,
+      graph_deps: graphDeps,
+      sla: {
+        compliance_percent: slaCompliancePercent,
+        on_track: slaOnTrack,
+        warning: slaWarning,
+        breached: slaBreached,
+        exempt: slaExempt,
+        met: slaMet,
+        resolved_late: slaResolvedLate,
+      },
+    };
+
+    await setCached(cacheKey, result, 60);
+    res.json(result);
+  } catch (error: any) {
+    console.error('Error fetching project stats:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch project stats' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/recent-activity
+router.get('/:id/projects/:projectId/recent-activity', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: organizationId, projectId } = req.params;
+
+    const accessCheck = await checkProjectAccess(userId, organizationId, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const [activitiesResult, vulnEventsResult, extractionJobsResult] = await Promise.all([
+      supabase
+        .from('activities')
+        .select('id, activity_type, description, metadata, created_at')
+        .eq('organization_id', organizationId)
+        .filter('metadata->>project_id', 'eq', projectId)
+        .order('created_at', { ascending: false })
+        .limit(20),
+      supabase
+        .from('project_vulnerability_events')
+        .select('id, event_type, osv_id, metadata, created_at')
+        .eq('project_id', projectId)
+        .order('created_at', { ascending: false })
+        .limit(20),
+      supabase
+        .from('extraction_jobs')
+        .select('id, status, error, created_at, completed_at')
+        .eq('project_id', projectId)
+        .in('status', ['completed', 'failed', 'processing'])
+        .order('created_at', { ascending: false })
+        .limit(20),
+    ]);
+
+    // Fetch OSV summaries for vuln events
+    const osvIds = [...new Set((vulnEventsResult.data ?? []).map((e: any) => e.osv_id).filter(Boolean))];
+    let osvMap = new Map<string, { summary: string; severity: string }>();
+    if (osvIds.length > 0) {
+      const { data: vulnDetails } = await supabase
+        .from('dependency_vulnerabilities')
+        .select('osv_id, summary, severity')
+        .in('osv_id', osvIds);
+      for (const v of vulnDetails ?? []) {
+        osvMap.set(v.osv_id, { summary: v.summary, severity: v.severity });
+      }
+    }
+
+    const typeMap: Record<string, string> = {
+      policy_change: 'policy_change', team_assignment: 'team_assignment',
+      guardrail_update: 'guardrail_update', extraction: 'sync_completed',
+    };
+
+    const items: any[] = [];
+
+    for (const a of activitiesResult.data ?? []) {
+      items.push({
+        id: a.id, source: 'activity',
+        type: typeMap[a.activity_type] ?? 'other',
+        title: a.activity_type?.replace(/_/g, ' ') ?? 'Activity',
+        description: a.description ?? '',
+        metadata: a.metadata ?? {}, created_at: a.created_at,
+      });
+    }
+
+    for (const e of vulnEventsResult.data ?? []) {
+      const detail = osvMap.get(e.osv_id);
+      items.push({
+        id: e.id, source: 'vuln_event',
+        type: e.event_type === 'detected' ? 'vuln_discovered' : 'vuln_resolved',
+        title: e.event_type === 'detected' ? `Vulnerability discovered: ${e.osv_id}` : `Vulnerability resolved: ${e.osv_id}`,
+        description: detail?.summary ?? '',
+        metadata: { osv_id: e.osv_id, severity: detail?.severity, ...e.metadata },
+        created_at: e.created_at,
+      });
+    }
+
+    for (const j of extractionJobsResult.data ?? []) {
+      let type = 'other';
+      let title = 'Extraction';
+      if (j.status === 'processing') { type = 'sync_started'; title = 'Sync started'; }
+      else if (j.status === 'completed') { type = 'sync_completed'; title = 'Sync completed'; }
+      else if (j.status === 'failed') { type = 'sync_failed'; title = 'Sync failed'; }
+
+      items.push({
+        id: j.id, source: 'extraction', type, title,
+        description: j.status === 'failed' ? (j.error ?? 'Unknown error') : '',
+        metadata: { status: j.status, error: j.error, completed_at: j.completed_at },
+        created_at: j.status === 'completed' || j.status === 'failed' ? (j.completed_at ?? j.created_at) : j.created_at,
+      });
+    }
+
+    items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    res.json(items.slice(0, 20));
+  } catch (error: any) {
+    console.error('Error fetching project recent activity:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch recent activity' });
+  }
+});
+
+// POST /api/organizations/:id/projects/:projectId/sync
+router.post('/:id/projects/:projectId/sync', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: organizationId, projectId } = req.params;
+
+    const accessCheck = await checkProjectAccess(userId, organizationId, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const isOwner = accessCheck.orgMembership?.role === 'owner';
+    const hasPermission = accessCheck.orgRole?.permissions?.manage_teams_and_projects === true;
+    if (!isOwner && !hasPermission) {
+      return res.status(403).json({ error: 'You do not have permission to trigger sync' });
+    }
+
+    const { data: repo } = await supabase
+      .from('project_repositories')
+      .select('repo_full_name, installation_id, default_branch, package_json_path, ecosystem, provider, integration_id')
+      .eq('project_id', projectId)
+      .single();
+
+    if (!repo) {
+      return res.status(400).json({ error: 'No repository connected to this project.' });
+    }
+
+    const { data: existingJob } = await supabase
+      .from('extraction_jobs')
+      .select('id')
+      .eq('project_id', projectId)
+      .in('status', ['queued', 'processing'])
+      .maybeSingle();
+
+    if (existingJob) {
+      return res.status(409).json({ error: 'Extraction already in progress.' });
+    }
+
+    // Check 60-second cooldown
+    const cooldownKey = `sync-cooldown:${projectId}`;
+    const cooldownExists = await getCached<string>(cooldownKey);
+    if (cooldownExists) {
+      return res.status(429).json({ error: 'Please wait before syncing again.' });
+    }
+
+    const result = await queueExtractionJob(projectId, organizationId, {
+      repo_full_name: repo.repo_full_name,
+      installation_id: repo.installation_id,
+      default_branch: repo.default_branch,
+      package_json_path: repo.package_json_path ?? '',
+      ecosystem: repo.ecosystem ?? 'npm',
+      provider: repo.provider ?? 'github',
+      integration_id: repo.integration_id,
+    });
+
+    if (!result.success) {
+      return res.status(500).json({ error: result.error ?? 'Failed to queue extraction' });
+    }
+
+    await setCached(cooldownKey, '1', 60);
+    await invalidateCache(`project-stats:${projectId}`);
+
+    res.json({ job_id: result.run_id, status: 'queued' });
+  } catch (error: any) {
+    console.error('Error triggering project sync:', error);
+    res.status(500).json({ error: error.message || 'Failed to trigger sync' });
+  }
+});
+
+// ============================================================================
+// Phase 7: AI-Powered Security Fixing
+// ============================================================================
+
+// POST /api/organizations/:id/projects/:projectId/fix - Request an AI fix
+router.post('/:id/projects/:projectId/fix', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    const projectId = req.params.projectId;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role, organization_roles!inner(permissions)')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      res.status(403).json({ error: 'Not a member of this organization' });
+      return;
+    }
+
+    const perms = (membership as any).organization_roles?.permissions || {};
+    if (!perms.manage_teams_and_projects && membership.role !== 'owner') {
+      res.status(403).json({ error: 'Insufficient permissions' });
+      return;
+    }
+
+    const { strategy, vulnerabilityOsvId, dependencyId, projectDependencyId, targetVersion, semgrepFindingId, secretFindingId } = req.body;
+    if (!strategy) {
+      res.status(400).json({ error: 'strategy is required' });
+      return;
+    }
+
+    const { requestFix } = await import('../lib/ai-fix-engine');
+    const result = await requestFix({
+      projectId,
+      organizationId: orgId,
+      userId,
+      strategy,
+      vulnerabilityOsvId,
+      dependencyId,
+      projectDependencyId,
+      targetVersion,
+      semgrepFindingId,
+      secretFindingId,
+    });
+
+    if (!result.success) {
+      const statusCode = result.errorCode === 'NO_REPO' || result.errorCode === 'NO_BYOK' ? 400
+        : result.errorCode === 'DUPLICATE_ACTIVE' || result.errorCode === 'MAX_CONCURRENT' ? 409
+        : result.errorCode === 'MAX_ATTEMPTS' ? 429
+        : result.errorCode === 'BUDGET_EXCEEDED' ? 402
+        : 400;
+      res.status(statusCode).json({ error: result.error, errorCode: result.errorCode });
+      return;
+    }
+
+    res.json({ success: true, jobId: result.jobId });
+  } catch (error: any) {
+    console.error('[FIX] Error:', error);
+    res.status(500).json({ error: error.message || 'Failed to queue fix' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/fixes - List fix jobs
+router.get('/:id/projects/:projectId/fixes', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    const projectId = req.params.projectId;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      res.status(403).json({ error: 'Not a member of this organization' });
+      return;
+    }
+
+    const { osvId, semgrepFindingId, secretFindingId, status } = req.query as Record<string, string>;
+
+    let query = supabase
+      .from('project_security_fixes')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (osvId) query = query.eq('osv_id', osvId);
+    if (semgrepFindingId) query = query.eq('semgrep_finding_id', semgrepFindingId);
+    if (secretFindingId) query = query.eq('secret_finding_id', secretFindingId);
+    if (status) query = query.eq('status', status);
+
+    const { data, error } = await query;
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+
+    res.json(data || []);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch fixes' });
+  }
+});
+
+// POST /api/organizations/:id/projects/:projectId/fixes/:fixId/cancel - Cancel a fix job
+router.post('/:id/projects/:projectId/fixes/:fixId/cancel', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    const fixId = req.params.fixId;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role, organization_roles!inner(permissions)')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      res.status(403).json({ error: 'Not a member of this organization' });
+      return;
+    }
+
+    const perms = (membership as any).organization_roles?.permissions || {};
+    if (!perms.manage_teams_and_projects && membership.role !== 'owner') {
+      res.status(403).json({ error: 'Insufficient permissions' });
+      return;
+    }
+
+    const { cancelFixJob } = await import('../lib/ai-fix-engine');
+    const result = await cancelFixJob(fixId, userId);
+
+    if (!result.success) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to cancel fix' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/fix-status - Get active fix status
+router.get('/:id/projects/:projectId/fix-status', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    const projectId = req.params.projectId;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      res.status(403).json({ error: 'Not a member of this organization' });
+      return;
+    }
+
+    const { data } = await supabase
+      .from('project_security_fixes')
+      .select('id, status, strategy, fix_type, osv_id, semgrep_finding_id, secret_finding_id, target_version, pr_url, pr_number, pr_branch, error_message, error_category, started_at, completed_at, created_at, triggered_by, run_id')
+      .eq('project_id', projectId)
+      .in('status', ['queued', 'running', 'completed', 'failed'])
+      .order('created_at', { ascending: false })
+      .limit(20);
+
+    res.json(data || []);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch fix status' });
+  }
+});
+
+// ===== PROJECT WATCHTOWER ENDPOINTS (Phase 10B) =====
+
+router.post('/:orgId/projects/:projectId/watchtower/toggle', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { orgId, projectId } = req.params;
+    const { enabled } = req.body;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      res.status(403).json({ error: 'Not a member of this organization' });
+      return;
+    }
+
+    if (enabled) {
+      await supabase
+        .from('projects')
+        .update({ watchtower_enabled: true, watchtower_enabled_at: new Date().toISOString() })
+        .eq('id', projectId);
+
+      const { data: directDeps } = await supabase
+        .from('project_dependencies')
+        .select('dependency_id, name, version')
+        .eq('project_id', projectId)
+        .eq('is_direct', true);
+
+      const deps = directDeps || [];
+      let packagesWatched = 0;
+      const newJobs: Array<{ packageName: string; payload: Record<string, any>; organizationId: string; projectId: string; dependencyId: string }> = [];
+
+      for (const dep of deps) {
+        const { data: existing } = await supabase
+          .from('organization_watchlist')
+          .select('id')
+          .eq('organization_id', orgId)
+          .eq('dependency_id', dep.dependency_id)
+          .single();
+
+        let watchlistId: string;
+        let isNew = false;
+
+        if (existing) {
+          watchlistId = existing.id;
+        } else {
+          const { data: inserted } = await supabase
+            .from('organization_watchlist')
+            .upsert({ organization_id: orgId, dependency_id: dep.dependency_id }, { onConflict: 'organization_id,dependency_id' })
+            .select('id')
+            .single();
+          watchlistId = inserted?.id;
+          isNew = true;
+        }
+
+        if (watchlistId) {
+          await supabase
+            .from('project_watchlist')
+            .upsert({ project_id: projectId, organization_watchlist_id: watchlistId }, { onConflict: 'project_id,organization_watchlist_id' });
+          packagesWatched++;
+
+          if (isNew) {
+            const { data: wp } = await supabase
+              .from('watched_packages')
+              .select('id')
+              .eq('name', dep.name)
+              .single();
+
+            if (wp) {
+              newJobs.push({
+                packageName: dep.name,
+                payload: { watchedPackageId: wp.id, currentVersion: dep.version },
+                organizationId: orgId,
+                projectId,
+                dependencyId: dep.dependency_id,
+              });
+            }
+          }
+        }
+      }
+
+      if (newJobs.length > 0) {
+        await queueWatchtowerJobs(newJobs);
+      }
+
+      await invalidateCache(`watchtower-project-stats:${projectId}`);
+      await invalidateCache(`watchtower-org-stats:${orgId}`);
+
+      res.json({ watchtower_enabled: true, packages_watched: packagesWatched });
+    } else {
+      await supabase
+        .from('projects')
+        .update({ watchtower_enabled: false })
+        .eq('id', projectId);
+
+      const { data: projectWatchlistRows } = await supabase
+        .from('project_watchlist')
+        .select('id, organization_watchlist_id')
+        .eq('project_id', projectId);
+
+      for (const row of projectWatchlistRows || []) {
+        const { data: otherRefs } = await supabase
+          .from('project_watchlist')
+          .select('id')
+          .eq('organization_watchlist_id', row.organization_watchlist_id)
+          .neq('project_id', projectId)
+          .limit(1);
+
+        if (!otherRefs?.length) {
+          await supabase.from('organization_watchlist').delete().eq('id', row.organization_watchlist_id);
+        } else {
+          await supabase.from('project_watchlist').delete().eq('id', row.id);
+        }
+      }
+
+      await invalidateCache(`watchtower-project-stats:${projectId}`);
+      await invalidateCache(`watchtower-org-stats:${orgId}`);
+
+      res.json({ watchtower_enabled: false, packages_watched: 0 });
+    }
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to toggle Watchtower' });
+  }
+});
+
+router.get('/:orgId/projects/:projectId/watchtower/stats', async (req: AuthRequest, res) => {
+  try {
+    const { orgId, projectId } = req.params;
+    const userId = req.user!.id;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      res.status(403).json({ error: 'Not a member' });
+      return;
+    }
+
+    const cacheKey = `watchtower-project-stats:${projectId}`;
+    const cached = await getCached(cacheKey);
+    if (cached) { res.json(cached); return; }
+
+    const { data: project } = await supabase
+      .from('projects')
+      .select('watchtower_enabled, watchtower_enabled_at')
+      .eq('id', projectId)
+      .single();
+
+    if (!project?.watchtower_enabled) {
+      res.json({ enabled: false });
+      return;
+    }
+
+    const { count: totalDirect } = await supabase
+      .from('project_dependencies')
+      .select('id', { count: 'exact', head: true })
+      .eq('project_id', projectId)
+      .eq('is_direct', true);
+
+    const { data: watchlistRows } = await supabase
+      .from('project_watchlist')
+      .select('organization_watchlist_id')
+      .eq('project_id', projectId);
+
+    const watchlistIds = (watchlistRows || []).map((r: any) => r.organization_watchlist_id);
+
+    let analyzedCount = 0;
+    let alertCount = 0;
+    let blockedCount = 0;
+    let erroredCount = 0;
+
+    if (watchlistIds.length > 0) {
+      const { data: watchlistEntries } = await supabase
+        .from('organization_watchlist')
+        .select('dependency_id')
+        .in('id', watchlistIds);
+
+      const depIds = (watchlistEntries || []).map((e: any) => e.dependency_id);
+
+      if (depIds.length > 0) {
+        const { data: watchedPkgs } = await supabase
+          .from('watched_packages')
+          .select('id, name, status, analysis_data')
+          .in('name', depIds.length > 0 ? [] : []);
+
+        // Join via dependency names
+        const { data: deps } = await supabase
+          .from('dependencies')
+          .select('id, name')
+          .in('id', depIds);
+
+        const depNames = (deps || []).map((d: any) => d.name);
+
+        if (depNames.length > 0) {
+          const { data: pkgs } = await supabase
+            .from('watched_packages')
+            .select('id, name, status, analysis_data')
+            .in('name', depNames);
+
+          for (const pkg of pkgs || []) {
+            if (pkg.status === 'ready') {
+              analyzedCount++;
+              const ad = pkg.analysis_data as any;
+              if (ad?.registryIntegrityStatus === 'fail' || ad?.installScriptsStatus === 'fail' || ad?.entropyAnalysisStatus === 'fail') {
+                alertCount++;
+              }
+            } else if (pkg.status === 'error') {
+              erroredCount++;
+            }
+          }
+        }
+      }
+    }
+
+    const result = {
+      enabled: true,
+      enabled_at: project.watchtower_enabled_at,
+      total_direct: totalDirect ?? 0,
+      analyzed: analyzedCount,
+      alerts: alertCount,
+      blocked: blockedCount,
+      errored: erroredCount,
+    };
+
+    await setCached(cacheKey, result, 60);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch stats' });
+  }
+});
+
+router.get('/:orgId/projects/:projectId/watchtower/packages', async (req: AuthRequest, res) => {
+  try {
+    const { orgId, projectId } = req.params;
+    const userId = req.user!.id;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      res.status(403).json({ error: 'Not a member' });
+      return;
+    }
+
+    const { data: directDeps } = await supabase
+      .from('project_dependencies')
+      .select('dependency_id, name, version, files_importing_count, ecosystem')
+      .eq('project_id', projectId)
+      .eq('is_direct', true);
+
+    const deps = directDeps || [];
+    if (deps.length === 0) {
+      res.json({ packages: [], total_direct_deps: 0 });
+      return;
+    }
+
+    const depNames = deps.map((d: any) => d.name);
+    const depIdMap = new Map(deps.map((d: any) => [d.name, d]));
+
+    const { data: watchedPkgs } = await supabase
+      .from('watched_packages')
+      .select('id, name, status, analysis_data, error_message')
+      .in('name', depNames);
+
+    const watchedMap = new Map((watchedPkgs || []).map((p: any) => [p.name, p]));
+
+    const { data: depRows } = await supabase
+      .from('dependencies')
+      .select('id, name, latest_version, ecosystem')
+      .in('name', depNames);
+
+    const latestMap = new Map((depRows || []).map((d: any) => [d.name, d]));
+
+    const { data: watchlistRows } = await supabase
+      .from('organization_watchlist')
+      .select('id, dependency_id, quarantine_next_release, quarantine_until, is_current_version_quarantined, latest_allowed_version')
+      .eq('organization_id', orgId);
+
+    const watchlistByDepId = new Map((watchlistRows || []).map((w: any) => [w.dependency_id, w]));
+
+    const packages = deps.map((dep: any) => {
+      const watched = watchedMap.get(dep.name);
+      const latest = latestMap.get(dep.name);
+      const watchlist = watchlistByDepId.get(dep.dependency_id);
+      const ad = watched?.analysis_data as any;
+
+      let nextVersionStatus: string | null = null;
+      if (latest?.latest_version && dep.version !== latest.latest_version) {
+        if (watchlist?.is_current_version_quarantined || (watchlist?.quarantine_until && new Date(watchlist.quarantine_until) > new Date())) {
+          nextVersionStatus = 'quarantined';
+        } else if (ad?.registryIntegrityStatus === 'fail' || ad?.installScriptsStatus === 'fail' || ad?.entropyAnalysisStatus === 'fail') {
+          nextVersionStatus = 'blocked';
+        } else if (watched?.status === 'ready') {
+          nextVersionStatus = 'ready';
+        }
+      } else if (latest?.latest_version && dep.version === latest.latest_version) {
+        nextVersionStatus = 'latest';
+      }
+
+      return {
+        watchlist_id: watchlist?.id || null,
+        dependency_id: dep.dependency_id,
+        name: dep.name,
+        version: dep.version,
+        registry_integrity_status: ad?.registryIntegrityStatus || null,
+        registry_integrity_reason: ad?.registryIntegrityReason || null,
+        install_scripts_status: ad?.installScriptsStatus || null,
+        install_scripts_reason: ad?.installScriptsReason || null,
+        entropy_analysis_status: ad?.entropyAnalysisStatus || null,
+        entropy_analysis_reason: ad?.entropyAnalysisReason || null,
+        max_anomaly_score: ad?.maxAnomalyScore ?? null,
+        latest_version: latest?.latest_version || null,
+        latest_allowed_version: watchlist?.latest_allowed_version || null,
+        next_version_status: nextVersionStatus,
+        quarantine_next_release: watchlist?.quarantine_next_release ?? false,
+        quarantine_until: watchlist?.quarantine_until || null,
+        is_current_version_quarantined: watchlist?.is_current_version_quarantined ?? false,
+        bump_pr_url: null,
+        decrease_pr_url: null,
+        import_count: dep.files_importing_count || 0,
+        analysis_status: watched?.status || 'pending',
+        analysis_error: watched?.error_message || null,
+        ecosystem: latest?.ecosystem || dep.ecosystem || 'npm',
+      };
+    });
+
+    packages.sort((a: any, b: any) => {
+      if (a.analysis_status === 'error' && b.analysis_status !== 'error') return -1;
+      if (b.analysis_status === 'error' && a.analysis_status !== 'error') return 1;
+      const aAlert = a.registry_integrity_status === 'fail' || a.install_scripts_status === 'fail' || a.entropy_analysis_status === 'fail';
+      const bAlert = b.registry_integrity_status === 'fail' || b.install_scripts_status === 'fail' || b.entropy_analysis_status === 'fail';
+      if (aAlert && !bAlert) return -1;
+      if (bAlert && !aAlert) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    res.json({ packages, total_direct_deps: deps.length });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch packages' });
+  }
+});
+
+router.get('/:orgId/projects/:projectId/watchtower/commits', async (req: AuthRequest, res) => {
+  try {
+    const { orgId, projectId } = req.params;
+    const userId = req.user!.id;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+    const offset = parseInt(req.query.offset as string) || 0;
+    const sort = (req.query.sort as string) || 'recent';
+    const filter = (req.query.filter as string) || 'all';
+    const packageFilter = req.query.package as string;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      res.status(403).json({ error: 'Not a member' });
+      return;
+    }
+
+    const { data: directDeps } = await supabase
+      .from('project_dependencies')
+      .select('name')
+      .eq('project_id', projectId)
+      .eq('is_direct', true);
+
+    let depNames = (directDeps || []).map((d: any) => d.name);
+    if (packageFilter) {
+      depNames = depNames.filter((n: string) => n === packageFilter);
+    }
+
+    if (depNames.length === 0) {
+      res.json({ commits: [], total: 0 });
+      return;
+    }
+
+    const { data: watchedPkgs } = await supabase
+      .from('watched_packages')
+      .select('id, name')
+      .in('name', depNames);
+
+    const watchedIds = (watchedPkgs || []).map((p: any) => p.id);
+    const watchedNameMap = new Map((watchedPkgs || []).map((p: any) => [p.id, p.name]));
+
+    if (watchedIds.length === 0) {
+      res.json({ commits: [], total: 0 });
+      return;
+    }
+
+    let query = supabase
+      .from('package_commits')
+      .select('*, package_anomalies(anomaly_score)', { count: 'exact' })
+      .in('watched_package_id', watchedIds);
+
+    if (filter === 'high_anomaly') {
+      query = query.gte('anomaly_score', 60);
+    }
+
+    if (sort === 'anomaly') {
+      query = query.order('anomaly_score', { ascending: false, nullsFirst: false });
+    } else {
+      query = query.order('committed_at', { ascending: false });
+    }
+
+    const { data: commits, count } = await query.range(offset, offset + limit - 1);
+
+    const enriched = (commits || []).map((c: any) => ({
+      ...c,
+      package_name: watchedNameMap.get(c.watched_package_id) || 'unknown',
+    }));
+
+    res.json({ commits: enriched, total: count ?? 0 });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch commits' });
+  }
+});
+
+router.post('/:orgId/projects/:projectId/watchtower/clear-commits', async (req: AuthRequest, res) => {
+  try {
+    const { orgId, projectId } = req.params;
+    const userId = req.user!.id;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      res.status(403).json({ error: 'Not a member' });
+      return;
+    }
+
+    const { data: directDeps } = await supabase
+      .from('project_dependencies')
+      .select('name')
+      .eq('project_id', projectId)
+      .eq('is_direct', true);
+
+    const depNames = (directDeps || []).map((d: any) => d.name);
+
+    const { data: watchedPkgs } = await supabase
+      .from('watched_packages')
+      .select('id, name')
+      .in('name', depNames);
+
+    for (const pkg of watchedPkgs || []) {
+      await supabase
+        .from('organization_watchlist_cleared_commits')
+        .upsert({
+          organization_id: orgId,
+          watched_package_id: pkg.id,
+          cleared_at: new Date().toISOString(),
+        }, { onConflict: 'organization_id,watched_package_id' });
+    }
+
+    await invalidateCache(`watchtower-project-stats:${projectId}`);
+    res.json({ cleared: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to clear commits' });
+  }
+});
+
+router.post('/:orgId/projects/:projectId/watchtower/packages/:watchlistId/reanalyze', async (req: AuthRequest, res) => {
+  try {
+    const { orgId, projectId, watchlistId } = req.params;
+
+    const { data: existing } = await supabase
+      .from('watchtower_jobs')
+      .select('id')
+      .eq('status', 'queued')
+      .or(`status.eq.processing`)
+      .limit(1);
+
+    const { data: watchlistEntry } = await supabase
+      .from('organization_watchlist')
+      .select('id, dependency_id')
+      .eq('id', watchlistId)
+      .single();
+
+    if (!watchlistEntry) {
+      res.status(404).json({ error: 'Watchlist entry not found' });
+      return;
+    }
+
+    const { data: dep } = await supabase
+      .from('dependencies')
+      .select('name')
+      .eq('id', watchlistEntry.dependency_id)
+      .single();
+
+    const { data: wp } = await supabase
+      .from('watched_packages')
+      .select('id')
+      .eq('name', dep?.name)
+      .single();
+
+    const result = await queueWatchtowerJob({
+      packageName: dep?.name || '',
+      payload: { watchedPackageId: wp?.id },
+      organizationId: orgId,
+      projectId,
+      dependencyId: watchlistEntry.dependency_id,
+    });
+
+    if (!result.success) {
+      res.status(500).json({ error: result.error || 'Failed to queue analysis' });
+      return;
+    }
+
+    await invalidateCache(`watchtower-project-stats:${projectId}`);
+    res.json({ queued: true, jobId: result.jobId });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to reanalyze' });
   }
 });
 

@@ -11,6 +11,9 @@ interface ProjectSecurityContentProps {
   projectId: string;
   canManage: boolean;
   onNavigateToVuln?: (osvId: string) => void;
+  hasByokProvider?: boolean;
+  hasAegisPermission?: boolean;
+  onOpenAegis?: (context: { type: string; id: string }) => void;
 }
 
 function getSeverityBadgeClass(severity: string): string {
@@ -198,13 +201,20 @@ function ProjectSecurityContent({ organizationId, projectId, canManage, onNaviga
               {f.message && (
                 <div className="mt-1 text-xs text-zinc-400 line-clamp-2">{f.message}</div>
               )}
-              <button
-                disabled
-                className="mt-1 text-[10px] text-zinc-500 flex items-center gap-0.5 cursor-not-allowed"
-                title="Configure AI in Organization Settings"
-              >
-                <Sparkles className="h-2.5 w-2.5" /> Ask Aegis
-              </button>
+              {hasAegisPermission !== false && (
+                hasByokProvider ? (
+                  <button
+                    onClick={() => onOpenAegis?.({ type: 'semgrep', id: f.id })}
+                    className="mt-1 text-[10px] text-emerald-400 hover:text-emerald-300 flex items-center gap-0.5 transition-colors"
+                  >
+                    <Sparkles className="h-2.5 w-2.5" /> Ask Aegis
+                  </button>
+                ) : (
+                  <button disabled className="mt-1 text-[10px] text-zinc-500 flex items-center gap-0.5 cursor-not-allowed" title="Configure AI in Organization Settings">
+                    <Sparkles className="h-2.5 w-2.5" /> Ask Aegis
+                  </button>
+                )
+              )}
             </div>
           ))}
           {semgrepTotal > semgrepFindings.length && (
@@ -262,14 +272,19 @@ function ProjectSecurityContent({ organizationId, projectId, canManage, onNaviga
                   This credential was exposed in a previous commit. Rotate immediately.
                 </div>
               )}
-              {s.is_current && (
-                <button
-                  disabled
-                  className="mt-1 text-[10px] text-zinc-500 flex items-center gap-0.5 cursor-not-allowed"
-                  title="Configure AI in Organization Settings"
-                >
-                  <Sparkles className="h-2.5 w-2.5" /> Ask Aegis
-                </button>
+              {s.is_current && hasAegisPermission !== false && (
+                hasByokProvider ? (
+                  <button
+                    onClick={() => onOpenAegis?.({ type: 'secret', id: s.id })}
+                    className="mt-1 text-[10px] text-emerald-400 hover:text-emerald-300 flex items-center gap-0.5 transition-colors"
+                  >
+                    <Sparkles className="h-2.5 w-2.5" /> Ask Aegis
+                  </button>
+                ) : (
+                  <button disabled className="mt-1 text-[10px] text-zinc-500 flex items-center gap-0.5 cursor-not-allowed" title="Configure AI in Organization Settings">
+                    <Sparkles className="h-2.5 w-2.5" /> Ask Aegis
+                  </button>
+                )
               )}
             </div>
           ))}
@@ -307,15 +322,26 @@ function ProjectSecurityContent({ organizationId, projectId, canManage, onNaviga
       )}
 
       {/* Actions */}
-      <div className="pt-2">
-        <button
-          disabled
-          className="w-full py-2 rounded-lg text-xs font-medium bg-zinc-800 text-zinc-500 cursor-not-allowed flex items-center justify-center gap-2"
-          title="Configure AI in Organization Settings"
-        >
-          <Sparkles className="h-4 w-4" /> Ask Aegis
-        </button>
-      </div>
+      {hasAegisPermission !== false && (
+        <div className="pt-2">
+          {hasByokProvider ? (
+            <button
+              onClick={() => onOpenAegis?.({ type: 'project', id: projectId })}
+              className="w-full py-2 rounded-lg text-xs font-medium bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 flex items-center justify-center gap-2 transition-colors border border-emerald-500/20"
+            >
+              <Sparkles className="h-4 w-4" /> Ask Aegis
+            </button>
+          ) : (
+            <button
+              disabled
+              className="w-full py-2 rounded-lg text-xs font-medium bg-zinc-800 text-zinc-500 cursor-not-allowed flex items-center justify-center gap-2"
+              title="Configure AI in Organization Settings"
+            >
+              <Sparkles className="h-4 w-4" /> Ask Aegis
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

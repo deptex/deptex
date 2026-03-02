@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { type Node, type Edge, MarkerType } from '@xyflow/react';
 import { buildDepAndVulnNodesAndEdges, getWorstSeverity, getWorstDepscore } from './useVulnerabilitiesGraphLayout';
 import type { VulnGraphDepNode, WorstSeverity } from './useVulnerabilitiesGraphLayout';
-import { VULN_CENTER_NODE_WIDTH, VULN_CENTER_NODE_HEIGHT } from './useVulnerabilitiesGraphLayout';
+import { VULN_CENTER_NODE_WIDTH, VULN_CENTER_NODE_HEIGHT, getSlaBreachCount } from './useVulnerabilitiesGraphLayout';
 import { VULN_PROJECT_NODE_WIDTH, VULN_PROJECT_NODE_HEIGHT } from './VulnProjectNode';
 import type { ProjectWithGraphData } from './useTeamVulnerabilitiesGraphLayout';
 
@@ -93,6 +93,7 @@ export function useOrganizationVulnerabilitiesGraphLayout(
       const px = centerX + Math.cos(angle) * teamRingRadius;
       const py = centerY + Math.sin(angle) * teamRingRadius;
       const projectWorstSeverity = proj.worstSeverity ?? getWorstSeverity(proj.graphDepNodes);
+      const slaBreachCount = getSlaBreachCount(proj.graphDepNodes);
 
       nodes.push({
         id: projectNodeId,
@@ -106,6 +107,7 @@ export function useOrganizationVulnerabilitiesGraphLayout(
           projectId: proj.projectId,
           framework: proj.framework ?? undefined,
           worstSeverity: projectWorstSeverity,
+          slaBreachCount,
         },
         draggable: true,
         selectable: false,
@@ -191,6 +193,7 @@ export function useOrganizationVulnerabilitiesGraphLayout(
         const py = ty + Math.sin(projAngle) * projectRingRadius;
 
         const projectWorstSeverity = proj.worstSeverity ?? getWorstSeverity(proj.graphDepNodes);
+        const slaBreachCount = getSlaBreachCount(proj.graphDepNodes);
 
         nodes.push({
           id: projectNodeId,
@@ -204,6 +207,7 @@ export function useOrganizationVulnerabilitiesGraphLayout(
             projectId: proj.projectId,
             framework: proj.framework ?? undefined,
             worstSeverity: projectWorstSeverity,
+            slaBreachCount,
           },
           draggable: true,
           selectable: false,

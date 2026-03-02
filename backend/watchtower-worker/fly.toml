@@ -1,21 +1,21 @@
-# Fly.io configuration for Watchtower Worker
-app = "deptex-watchtower-worker"
-primary_region = "iad"
+# fly.toml for deptex-watchtower-worker (scale-to-zero job worker)
+#
+# No [http_service]: this app is not a web server. Machines run only when started
+# by the backend via Fly Machines API (e.g. after watchtower-daily-poll or when
+# jobs are enqueued). Worker process exits after 60s idle → machine stops.
+# See ee/backend/lib/fly-machines.ts startWatchtowerMachine().
+#
+
+app = 'deptex-watchtower-worker'
+primary_region = 'iad'
 
 [build]
 
 [env]
-  NODE_ENV = "production"
+  NODE_ENV = 'production'
 
-[http_service]
-  internal_port = 8080
-  force_https = true
-  auto_stop_machines = false
-  auto_start_machines = true
-  min_machines_running = 1
-  processes = ["app"]
-
+# VM size used when backend creates a burst machine via API
 [[vm]]
-  cpu_kind = "shared"
+  cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 512
+  memory_mb = 1024

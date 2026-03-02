@@ -527,7 +527,7 @@ User views dependency supply chain (DependencySupplyChainPage)
 | 5 | Compliance Tab Overhaul | Refined |
 | 6 | Security Tab Overhaul (Depscore graphs, Semgrep/TruffleHog, Aegis Copilot) | Refined |
 | 6B | Code-Level Reachability Engine (atom, call graphs, data-flow) | Refined |
-| 7 | AI-Powered Fixing (Aider on Fly.io, 7 fix strategies) | Refined |
+| 7 | AI-Powered Fixing (Aider on Fly.io, 7 fix strategies) | Completed |
 | 7B | Aegis Autonomous Security Platform (50+ tools, memory, automations, Slack bot, PR review) | Refined |
 | 8 | PR Management & Webhooks (manifest registry, smart extraction, check runs) | Refined |
 | 9 | Notifications & Integrations (event bus, 8 destinations, batching, rate limiting) | Refined |
@@ -536,11 +536,33 @@ User views dependency supply chain (DependencySupplyChainPage)
 | 11 | CANCELLED -- merged into 7B | -- |
 | 12 | Documentation Overhaul | Refined |
 | 13 | Plans, Billing & Stripe (4 tiers, usage metering, plan limits) | Outline |
-| 14 | Enterprise Security (MFA, SSO/SAML, session management) | Outline |
+| 14 | Enterprise Security (MFA, SSO/SAML, IP allowlist, API tokens, audit log, SCIM) | Completed |
 | 15 | Security SLA Management (per-severity deadlines, breach detection, compliance reports) | Outline |
-| 16 | Aegis Outcome-Based Learning (fix outcome tracking, strategy recommendations) | Outline |
-| 17 | Incident Response Orchestration (6-phase IR, playbooks, post-mortem) | Outline |
+| 16 | Aegis Outcome-Based Learning (fix outcome tracking, strategy recommendations, learning dashboard) | Completed |
+| 17 | Incident Response Orchestration (6-phase IR, playbooks, post-mortem) | Completed |
 | 18 | Developer Touchpoints (VS Code extension, CLI, GitHub Action, git hooks) | Outline |
+
+---
+
+## Phase 14 Setup Checklist
+
+After deploying Phase 14 (Enterprise Security):
+
+1. **Run database migration:** `phase14_enterprise_security.sql` (creates security_audit_logs, organization_mfa_exemptions, user_sessions, organization_sso_providers, organization_sso_bypass_tokens, organization_ip_allowlist, api_tokens, organization_scim_configs, scim_user_mappings; adds mfa/session/ip columns to organizations; fixes manage_security on member role).
+
+2. **Install npm packages:** `cd backend && npm install @node-saml/node-saml ipaddr.js`.
+
+3. **Trust proxy:** `app.set('trust proxy', true)` set in `backend/src/index.ts`.
+
+4. **CE routes:** SSO (`/api/sso/*`), user sessions (`/api/user/sessions`), API tokens (`/api/user/api-tokens`), SCIM (`/api/scim/v2/*`).
+
+5. **Frontend:** `/sso-callback` (public), `/settings/security` (user). Org Settings sidebar: Session Policy, IP Allowlist, API Tokens, SCIM under Security.
+
+6. **MFA:** Supabase Auth TOTP + AAL. MFAGate wraps ProtectedRoute.
+
+7. **SSO:** `@node-saml/node-saml` (free). Domain verification via DNS TXT. Emergency bypass 24h tokens.
+
+8. **API tokens:** `dptx_` prefix, SHA-256 hashed, scopes (read/write/admin). Auth middleware auto-detects.
 
 ---
 
@@ -556,3 +578,4 @@ User views dependency supply chain (DependencySupplyChainPage)
 - See `DEVELOPERS.md` for full setup, `CONTRIBUTING.md` for PR flow
 - See `.cursor/skills/add-new-features/SKILL.md` for CE vs EE placement decisions
 - See `.cursor/skills/frontend-design/SKILL.md` and `.cursor/skills/ui-principles/SKILL.md` for UI standards
+- Phase 14 migrations: phase14_enterprise_security.sql (security_audit_logs, organization_mfa_exemptions, user_sessions, organization_sso_providers, organization_sso_bypass_tokens, organization_ip_allowlist, api_tokens, organization_scim_configs, scim_user_mappings).

@@ -1,3 +1,8 @@
+/**
+ * @deprecated Phase 8: Production use migrated to QStash cron (POST /api/workers/watchtower-daily-poll).
+ * This standalone poller remains functional for local development and testing.
+ * Core logic extracted to backend/src/lib/watchtower-poll.ts for the QStash endpoint.
+ */
 import 'dotenv/config';
 import {
   testRedisConnection,

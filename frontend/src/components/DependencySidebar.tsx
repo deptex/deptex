@@ -1,6 +1,6 @@
 import { memo, useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, GitBranch, TowerControl, MessageSquareText } from 'lucide-react';
+import { LayoutDashboard, GitBranch, MessageSquareText } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { api } from '../lib/api';
 
@@ -12,16 +12,14 @@ interface DependencySidebarProps {
   notesSidebarOpen?: boolean;
   onNotesClick?: () => void;
   notesCount?: number;
-  watchtowerStatus?: 'safe' | 'unsafe' | 'not-good' | null;
 }
 
 const navItems = [
   { id: 'overview', label: 'Overview', path: 'overview', icon: LayoutDashboard },
   { id: 'supply-chain', label: 'Supply Chain', path: 'supply-chain', icon: GitBranch },
-  { id: 'watchtower', label: 'Watchtower', path: 'watchtower', icon: TowerControl },
 ];
 
-function DependencySidebar({ organizationId, projectId, dependencyId, dependencyName, notesSidebarOpen = false, onNotesClick, notesCount = 0, watchtowerStatus = null }: DependencySidebarProps) {
+function DependencySidebar({ organizationId, projectId, dependencyId, dependencyName, notesSidebarOpen = false, onNotesClick, notesCount = 0 }: DependencySidebarProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [isHovered, setIsHovered] = useState(false);
@@ -61,8 +59,6 @@ function DependencySidebar({ organizationId, projectId, dependencyId, dependency
         api.prefetchDependencyOverview(organizationId, projectId, dependencyId);
       } else if (tabId === 'supply-chain') {
         api.prefetchDependencySupplyChain(organizationId, projectId, dependencyId);
-      } else if (tabId === 'watchtower' && dependencyName) {
-        api.prefetchWatchtowerData(dependencyName, dependencyId, organizationId);
       }
       prefetchTimeouts.current.delete(tabId);
     }, 100);
@@ -78,15 +74,6 @@ function DependencySidebar({ organizationId, projectId, dependencyId, dependency
     }
   }, []);
 
-  // Prefetch Watchtower on mount when on another tab, so data may be ready when user clicks Watchtower
-  useEffect(() => {
-    if (!organizationId || !dependencyId || !dependencyName || activeTab === 'watchtower') return;
-    const timeout = setTimeout(() => {
-      api.prefetchWatchtowerData(dependencyName, dependencyId, organizationId);
-    }, 500);
-    return () => clearTimeout(timeout);
-  }, [organizationId, dependencyId, dependencyName, activeTab]);
-
   return (
     <aside
       onMouseEnter={() => setIsHovered(true)}
@@ -101,7 +88,6 @@ function DependencySidebar({ organizationId, projectId, dependencyId, dependency
           {navItems.map((item) => {
             const isActive = activeTab === item.id;
             const Icon = item.icon;
-            const isWatchtower = item.id === 'watchtower';
 
             return (
               <button
@@ -126,11 +112,6 @@ function DependencySidebar({ organizationId, projectId, dependencyId, dependency
                 >
                   {item.label}
                 </span>
-                {isWatchtower && (watchtowerStatus === 'unsafe' || watchtowerStatus === 'not-good') && (
-                  <span className="absolute -top-0.5 left-6 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold text-white">
-                    !
-                  </span>
-                )}
               </button>
             );
           })}
@@ -183,7 +164,6 @@ export default memo(DependencySidebar, (prevProps, nextProps) => {
     prevProps.dependencyId === nextProps.dependencyId &&
     prevProps.dependencyName === nextProps.dependencyName &&
     prevProps.notesSidebarOpen === nextProps.notesSidebarOpen &&
-    prevProps.notesCount === nextProps.notesCount &&
-    prevProps.watchtowerStatus === nextProps.watchtowerStatus
+    prevProps.notesCount === nextProps.notesCount
   );
 });

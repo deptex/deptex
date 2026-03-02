@@ -1,13 +1,15 @@
 import express from 'express';
 import * as crypto from 'crypto';
-import { authenticateUser, AuthRequest } from '../../../backend/src/middleware/auth';
+import { authenticateUser, AuthRequest, checkMFACompliance } from '../../../backend/src/middleware/auth';
+import { createIPAllowlistMiddleware } from '../../../backend/src/middleware/ip-allowlist';
 import { supabase } from '../../../backend/src/lib/supabase';
 import { sendInvitationEmail } from '../lib/email';
 import { createActivity } from '../lib/activities';
 import { getOpenAIClient } from '../lib/openai';
 import { updateAllProjectsCompliance } from './projects';
-import { invalidateAllProjectCachesInOrg, invalidateProjectCachesForTeam } from '../lib/cache';
+import { invalidateAllProjectCachesInOrg, invalidateProjectCachesForTeam, getCached, setCached } from '../lib/cache';
 import { seedOrganizationPolicyDefaults } from '../lib/policy-seed';
+import { emitEvent } from '../lib/event-bus';
 
 const router = express.Router();
 
@@ -21,6 +23,16 @@ import {
 
 // All routes require authentication
 router.use(authenticateUser);
+
+// Phase 14: IP allowlist and MFA enforcement for org-scoped routes (/:id/...)
+router.use('/:id', createIPAllowlistMiddleware());
+router.use('/:id', async (req: AuthRequest, res: express.Response, next: express.NextFunction) => {
+  const orgId = req.params.id;
+  if (!orgId) return next();
+  const mfa = await checkMFACompliance(req, orgId);
+  if (!mfa.ok) return res.status(403).json({ error: mfa.error, grace_period_expired: true });
+  next();
+});
 
 // Helper function to get a user's rank (display_order) in an organization
 // Lower numbers = higher rank (owner is 0)
@@ -651,6 +663,20 @@ router.post('/:id/invitations', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'Already invited this person' });
     }
 
+    // Plan limit check: members
+    try {
+      const { checkPlanLimit, TIER_DISPLAY_NAMES } = require('../lib/plan-limits');
+      const planCheck = await checkPlanLimit(id, 'members');
+      if (!planCheck.allowed) {
+        return res.status(403).json({
+          error: 'PLAN_LIMIT',
+          message: `Your ${TIER_DISPLAY_NAMES[planCheck.tier]} plan supports up to ${planCheck.limit} members.`,
+          resource: 'members', current: planCheck.current, limit: planCheck.limit,
+          tier: planCheck.tier, upgradeTier: planCheck.upgradeTier,
+        });
+      }
+    } catch (e) { /* fail open */ }
+
     // Validate team_ids if provided and get team names
     const teamNames: string[] = [];
     if (teamIdsArray.length > 0) {
@@ -768,6 +794,10 @@ router.post('/:id/invitations', async (req: AuthRequest, res) => {
         team_names: teamNames,
       },
     });
+
+    try {
+      await emitEvent({ type: 'member_invited', organizationId: id, payload: { email: email.trim().toLowerCase(), role: roleToUse, teamIds: teamIdsArray }, source: 'system', priority: 'normal' });
+    } catch (e) {}
 
     // Return invitation with team information included
     const invitationWithTeams = {
@@ -1538,6 +1568,10 @@ router.delete('/:id/members/:userId', async (req: AuthRequest, res) => {
         },
       });
     }
+
+    try {
+      await emitEvent({ type: 'member_removed', organizationId: id, payload: { removedUserId: targetUserId, removedEmail: targetUser?.email, selfRemoval: userId === targetUserId }, source: 'system', priority: 'normal' });
+    } catch (e) {}
 
     res.json({ message: userId === targetUserId ? 'Left organization successfully' : 'Member removed successfully' });
   } catch (error: any) {
@@ -2840,6 +2874,596 @@ router.delete('/:id/asset-tiers/:tierId', async (req: AuthRequest, res) => {
   }
 });
 
+// ───── Phase 15: Security SLA Management ─────
+
+const SLA_DEFAULT_HOURS: Record<string, number> = {
+  critical: 48,
+  high: 168,   // 7d
+  medium: 720, // 30d
+  low: 2160,   // 90d
+};
+
+// GET /api/organizations/:id/sla-policies
+router.get('/:id/sla-policies', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    if (!(await canManageStatuses(id, userId))) {
+      return res.status(403).json({ error: 'Permission denied. Requires manage compliance or statuses.' });
+    }
+
+    const { data: policies, error } = await supabase
+      .from('organization_sla_policies')
+      .select('*')
+      .eq('organization_id', id)
+      .order('severity', { ascending: true });
+
+    if (error) throw error;
+
+    const { data: org } = await supabase
+      .from('organizations')
+      .select('sla_paused_at')
+      .eq('id', id)
+      .single();
+
+    res.json({
+      policies: policies ?? [],
+      sla_paused_at: (org as any)?.sla_paused_at ?? null,
+    });
+  } catch (error: any) {
+    console.error('Error fetching SLA policies:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch SLA policies' });
+  }
+});
+
+// PUT /api/organizations/:id/sla-policies
+router.put('/:id/sla-policies', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    if (!(await canManageStatuses(id, userId))) {
+      return res.status(403).json({ error: 'Permission denied.' });
+    }
+
+    const { policies: policiesPayload } = req.body as { policies?: Array<{ id?: string; severity: string; asset_tier_id?: string | null; max_hours: number; warning_threshold_percent?: number; enabled?: boolean }> };
+    if (!Array.isArray(policiesPayload)) {
+      return res.status(400).json({ error: 'policies array is required' });
+    }
+
+    const severities = ['critical', 'high', 'medium', 'low'];
+    const { data: existing } = await supabase
+      .from('organization_sla_policies')
+      .select('*')
+      .eq('organization_id', id);
+
+    const existingMap = new Map<string, any>();
+    for (const p of existing ?? []) {
+      const key = `${p.severity}:${p.asset_tier_id ?? 'default'}`;
+      existingMap.set(key, p);
+    }
+
+    for (const row of policiesPayload) {
+      if (!row.severity || !severities.includes(row.severity)) continue;
+      const maxHours = typeof row.max_hours === 'number' && row.max_hours > 0 ? row.max_hours : SLA_DEFAULT_HOURS[row.severity];
+      const warningPct = typeof row.warning_threshold_percent === 'number' ? Math.min(99, Math.max(1, row.warning_threshold_percent)) : 75;
+      const enabled = row.enabled !== false;
+      const assetTierId = row.asset_tier_id === undefined || row.asset_tier_id === '' ? null : row.asset_tier_id;
+      const key = `${row.severity}:${assetTierId ?? 'default'}`;
+      const existingRow = existingMap.get(key);
+
+      if (existingRow) {
+        const prev = { max_hours: existingRow.max_hours, warning_threshold_percent: existingRow.warning_threshold_percent, enabled: existingRow.enabled };
+        const { error: updateErr } = await supabase
+          .from('organization_sla_policies')
+          .update({ max_hours: maxHours, warning_threshold_percent: warningPct, enabled, updated_at: new Date().toISOString() })
+          .eq('id', existingRow.id);
+        if (updateErr) throw updateErr;
+        await supabase.from('sla_policy_changes').insert({
+          organization_id: id,
+          changed_by: userId,
+          change_type: 'updated',
+          previous_values: prev,
+          new_values: { max_hours: maxHours, warning_threshold_percent: warningPct, enabled },
+        });
+      } else {
+        const { error: insertErr } = await supabase
+          .from('organization_sla_policies')
+          .insert({
+            organization_id: id,
+            severity: row.severity,
+            asset_tier_id: assetTierId,
+            max_hours: maxHours,
+            warning_threshold_percent: warningPct,
+            enabled,
+          });
+        if (insertErr) throw insertErr;
+        await supabase.from('sla_policy_changes').insert({
+          organization_id: id,
+          changed_by: userId,
+          change_type: 'created',
+          new_values: { severity: row.severity, asset_tier_id: assetTierId, max_hours: maxHours, warning_threshold_percent: warningPct, enabled },
+        });
+      }
+    }
+
+    const { data: updated } = await supabase
+      .from('organization_sla_policies')
+      .select('*')
+      .eq('organization_id', id)
+      .order('severity', { ascending: true });
+
+    res.json({ policies: updated ?? [] });
+  } catch (error: any) {
+    console.error('Error updating SLA policies:', error);
+    res.status(500).json({ error: error.message || 'Failed to update SLA policies' });
+  }
+});
+
+// POST /api/organizations/:id/sla-policies/enable
+router.post('/:id/sla-policies/enable', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    if (!(await canManageStatuses(id, userId))) {
+      return res.status(403).json({ error: 'Permission denied.' });
+    }
+
+    const { data: existing } = await supabase
+      .from('organization_sla_policies')
+      .select('id')
+      .eq('organization_id', id)
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      return res.status(400).json({ error: 'SLA policies already enabled for this organization' });
+    }
+
+    for (const severity of ['critical', 'high', 'medium', 'low']) {
+      const { error: insertErr } = await supabase
+        .from('organization_sla_policies')
+        .insert({
+          organization_id: id,
+          severity,
+          asset_tier_id: null,
+          max_hours: SLA_DEFAULT_HOURS[severity],
+          warning_threshold_percent: 75,
+          enabled: true,
+        });
+      if (insertErr) throw insertErr;
+    }
+
+    await supabase.from('sla_policy_changes').insert({
+      organization_id: id,
+      changed_by: userId,
+      change_type: 'created',
+      new_values: { action: 'enable_defaults', severities: ['critical', 'high', 'medium', 'low'] },
+    });
+
+    const { data: rpcResult, error: rpcError } = await supabase.rpc('backfill_sla_for_organization', { p_organization_id: id });
+    if (rpcError) {
+      console.error('SLA backfill RPC error:', rpcError);
+      // still return success; policies are created
+    }
+
+    const { data: policies } = await supabase
+      .from('organization_sla_policies')
+      .select('*')
+      .eq('organization_id', id)
+      .order('severity', { ascending: true });
+
+    res.status(201).json({
+      policies: policies ?? [],
+      backfill_updated: (rpcResult as number) ?? 0,
+    });
+  } catch (error: any) {
+    console.error('Error enabling SLA policies:', error);
+    res.status(500).json({ error: error.message || 'Failed to enable SLA policies' });
+  }
+});
+
+// POST /api/organizations/:id/sla-policies/pause
+router.post('/:id/sla-policies/pause', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    if (!(await canManageStatuses(id, userId))) {
+      return res.status(403).json({ error: 'Permission denied.' });
+    }
+
+    const now = new Date().toISOString();
+    const { error } = await supabase
+      .from('organizations')
+      .update({ sla_paused_at: now })
+      .eq('id', id);
+
+    if (error) throw error;
+
+    await supabase.from('sla_policy_changes').insert({
+      organization_id: id,
+      changed_by: userId,
+      change_type: 'paused',
+      new_values: { sla_paused_at: now },
+    });
+
+    res.json({ sla_paused_at: now });
+  } catch (error: any) {
+    console.error('Error pausing SLA:', error);
+    res.status(500).json({ error: error.message || 'Failed to pause SLA' });
+  }
+});
+
+// POST /api/organizations/:id/sla-policies/resume
+router.post('/:id/sla-policies/resume', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    if (!(await canManageStatuses(id, userId))) {
+      return res.status(403).json({ error: 'Permission denied.' });
+    }
+
+    const { data: org } = await supabase
+      .from('organizations')
+      .select('sla_paused_at')
+      .eq('id', id)
+      .single();
+
+    const pausedAt = (org as any)?.sla_paused_at;
+    if (!pausedAt) {
+      return res.json({ sla_paused_at: null, message: 'SLAs were not paused' });
+    }
+
+    const pauseDurationMs = Date.now() - new Date(pausedAt).getTime();
+    const pauseDurationSeconds = Math.round(pauseDurationMs / 1000);
+    const pauseDurationHours = pauseDurationMs / (1000 * 60 * 60);
+
+    const { error: rpcErr } = await supabase.rpc('resume_sla_shift_deadlines', {
+      p_organization_id: id,
+      p_pause_duration_seconds: pauseDurationSeconds,
+    });
+    if (rpcErr) {
+      console.error('resume_sla_shift_deadlines RPC error:', rpcErr);
+    }
+
+    const { error: updateErr } = await supabase
+      .from('organizations')
+      .update({ sla_paused_at: null })
+      .eq('id', id);
+
+    if (updateErr) throw updateErr;
+
+    await supabase.from('sla_policy_changes').insert({
+      organization_id: id,
+      changed_by: userId,
+      change_type: 'resumed',
+      previous_values: { sla_paused_at: pausedAt },
+      new_values: { pause_duration_hours: pauseDurationHours },
+    });
+
+    res.json({ sla_paused_at: null });
+  } catch (error: any) {
+    console.error('Error resuming SLA:', error);
+    res.status(500).json({ error: error.message || 'Failed to resume SLA' });
+  }
+});
+
+// GET /api/organizations/:id/sla-compliance
+router.get('/:id/sla-compliance', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId } = req.params;
+    const timeRange = (req.query.timeRange as string) || '90d';
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const { data: projects } = await supabase.from('projects').select('id, name, asset_tier_id, team_id').eq('organization_id', orgId);
+    const projectList = projects ?? [];
+    const projectIds = projectList.map((p: any) => p.id);
+    const projectNameMap = new Map(projectList.map((p: any) => [p.id, p.name]));
+
+    if (projectIds.length === 0) {
+      return res.json({
+        overall_compliance_percent: 100,
+        current_breaches: 0,
+        average_mttr_by_severity: {},
+        adherence_by_month: [],
+        violations: [],
+        team_breakdown: [],
+      });
+    }
+
+    const pdvSelect = 'id, project_id, severity, sla_status, sla_deadline_at, sla_met_at, sla_breached_at, detected_at, osv_id, created_at';
+    const { data: allPdv } = await supabase
+      .from('project_dependency_vulnerabilities')
+      .select(pdvSelect)
+      .in('project_id', projectIds);
+
+    const pdvList = allPdv ?? [];
+    const met = pdvList.filter((p: any) => p.sla_status === 'met').length;
+    const resolvedLate = pdvList.filter((p: any) => p.sla_status === 'resolved_late').length;
+    const breached = pdvList.filter((p: any) => p.sla_status === 'breached').length;
+    const onTrack = pdvList.filter((p: any) => p.sla_status === 'on_track').length;
+    const warning = pdvList.filter((p: any) => p.sla_status === 'warning').length;
+    const exempt = pdvList.filter((p: any) => p.sla_status === 'exempt').length;
+    const totalResolved = met + resolvedLate;
+    const overallCompliancePercent = totalResolved > 0 ? Math.round((met / totalResolved) * 100) : 100;
+
+    const violations = pdvList
+      .filter((p: any) => p.sla_status === 'breached' || p.sla_status === 'warning')
+      .map((p: any) => ({
+        id: p.id,
+        project_id: p.project_id,
+        project_name: projectNameMap.get(p.project_id) ?? '',
+        osv_id: p.osv_id,
+        severity: p.severity,
+        detected_at: p.detected_at ?? p.created_at,
+        deadline: p.sla_deadline_at,
+        sla_status: p.sla_status,
+      }))
+      .sort((a: any, b: any) => {
+        const aDeadline = a.deadline ? new Date(a.deadline).getTime() : 0;
+        const bDeadline = b.deadline ? new Date(b.deadline).getTime() : 0;
+        return aDeadline - bDeadline;
+      });
+
+    const severityKeys = ['critical', 'high', 'medium', 'low'];
+    const mttrBySeverity: Record<string, number> = {};
+    for (const sev of severityKeys) {
+      const resolved = pdvList.filter((p: any) => p.severity === sev && (p.sla_status === 'met' || p.sla_status === 'resolved_late') && p.sla_met_at);
+      if (resolved.length === 0) continue;
+      let totalHours = 0;
+      for (const p of resolved) {
+        const detected = p.detected_at ?? p.created_at;
+        if (detected && p.sla_met_at) {
+          totalHours += (new Date(p.sla_met_at).getTime() - new Date(detected).getTime()) / (1000 * 60 * 60);
+        }
+      }
+      mttrBySeverity[sev] = Math.round((totalHours / resolved.length) * 10) / 10;
+    }
+
+    const monthsBack = timeRange === '30d' ? 1 : timeRange === '90d' ? 3 : timeRange === '6m' ? 6 : 12;
+    const adherenceByMonth: Array<{ month: string; met: number; met_late: number; breached: number; exempt: number }> = [];
+    const now = new Date();
+    for (let i = monthsBack - 1; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const monthStart = new Date(d.getFullYear(), d.getMonth(), 1).toISOString();
+      const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59).toISOString();
+      const inMonth = pdvList.filter((p: any) => {
+        const metAt = p.sla_met_at;
+        const breachedAt = p.sla_breached_at;
+        const created = p.created_at;
+        if (metAt && metAt >= monthStart && metAt <= monthEnd) return true;
+        if (breachedAt && breachedAt >= monthStart && breachedAt <= monthEnd) return true;
+        if (p.sla_status === 'exempt' && created >= monthStart && created <= monthEnd) return true;
+        return false;
+      });
+      const metCount = inMonth.filter((p: any) => p.sla_status === 'met').length;
+      const metLateCount = inMonth.filter((p: any) => p.sla_status === 'resolved_late').length;
+      const breachedCount = inMonth.filter((p: any) => p.sla_status === 'breached').length;
+      const exemptCount = inMonth.filter((p: any) => p.sla_status === 'exempt').length;
+      adherenceByMonth.push({ month: monthKey, met: metCount, met_late: metLateCount, breached: breachedCount, exempt: exemptCount });
+    }
+
+    const teamIds = [...new Set(projectList.map((p: any) => p.team_id).filter(Boolean))];
+    const teamBreakdown: Array<{ team_id: string; team_name: string; total: number; on_track_pct: number; warning: number; breached: number; avg_mttr: number }> = [];
+    if (teamIds.length > 0) {
+      const { data: teams } = await supabase.from('teams').select('id, name').in('id', teamIds);
+      const teamNameMap = new Map((teams ?? []).map((t: any) => [t.id, t.name]));
+      for (const tid of teamIds) {
+        const teamProjectIds = projectList.filter((p: any) => p.team_id === tid).map((p: any) => p.id);
+        const teamPdv = pdvList.filter((p: any) => teamProjectIds.includes(p.project_id));
+        const total = teamPdv.length;
+        const onTrackCount = teamPdv.filter((p: any) => p.sla_status === 'on_track').length;
+        const warningCount = teamPdv.filter((p: any) => p.sla_status === 'warning').length;
+        const breachedCount = teamPdv.filter((p: any) => p.sla_status === 'breached').length;
+        const resolvedTeam = teamPdv.filter((p: any) => (p.sla_status === 'met' || p.sla_status === 'resolved_late') && p.sla_met_at);
+        let avgMttr = 0;
+        if (resolvedTeam.length > 0) {
+          const totalH = resolvedTeam.reduce((acc: number, p: any) => {
+            const det = p.detected_at ?? p.created_at;
+            return acc + (det && p.sla_met_at ? (new Date(p.sla_met_at).getTime() - new Date(det).getTime()) / (1000 * 60 * 60) : 0);
+          }, 0);
+          avgMttr = Math.round((totalH / resolvedTeam.length) * 10) / 10;
+        }
+        teamBreakdown.push({
+          team_id: tid,
+          team_name: teamNameMap.get(tid) ?? 'Unknown',
+          total,
+          on_track_pct: total > 0 ? Math.round((onTrackCount / total) * 100) : 100,
+          warning: warningCount,
+          breached: breachedCount,
+          avg_mttr: avgMttr,
+        });
+      }
+    }
+
+    res.json({
+      overall_compliance_percent: overallCompliancePercent,
+      current_breaches: breached,
+      on_track: onTrack,
+      warning,
+      exempt,
+      met,
+      resolved_late: resolvedLate,
+      average_mttr_by_severity: mttrBySeverity,
+      adherence_by_month: adherenceByMonth,
+      violations,
+      team_breakdown: teamBreakdown,
+    });
+  } catch (error: any) {
+    console.error('Error fetching SLA compliance:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch SLA compliance' });
+  }
+});
+
+// GET /api/organizations/:id/sla-compliance/export
+router.get('/:id/sla-compliance/export', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId } = req.params;
+    const timeRange = (req.query.timeRange as string) || '90d';
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const { data: projects } = await supabase.from('projects').select('id, name').eq('organization_id', orgId);
+    const projectList = projects ?? [];
+    const projectIds = projectList.map((p: any) => p.id);
+    const projectNameMap = new Map(projectList.map((p: any) => [p.id, p.name]));
+
+    if (projectIds.length === 0) {
+      return res.json({ rows: [], summary: {} });
+    }
+
+    const { data: allPdv } = await supabase
+      .from('project_dependency_vulnerabilities')
+      .select('id, project_id, osv_id, severity, sla_status, detected_at, sla_deadline_at, sla_met_at, sla_breached_at, created_at')
+      .in('project_id', projectIds);
+
+    const rows = (allPdv ?? []).map((p: any) => ({
+      project_name: projectNameMap.get(p.project_id) ?? '',
+      project_id: p.project_id,
+      osv_id: p.osv_id,
+      severity: p.severity,
+      sla_status: p.sla_status,
+      detected_at: p.detected_at ?? p.created_at,
+      deadline: p.sla_deadline_at,
+      met_at: p.sla_met_at,
+      breached_at: p.sla_breached_at,
+    }));
+
+    const pdvList = allPdv ?? [];
+    const met = pdvList.filter((p: any) => p.sla_status === 'met').length;
+    const totalResolved = met + pdvList.filter((p: any) => p.sla_status === 'resolved_late').length;
+    const summary = {
+      time_range: timeRange,
+      total_vulnerabilities: pdvList.length,
+      met_within_sla: met,
+      resolved_late: pdvList.filter((p: any) => p.sla_status === 'resolved_late').length,
+      current_breaches: pdvList.filter((p: any) => p.sla_status === 'breached').length,
+      compliance_percent: totalResolved > 0 ? Math.round((met / totalResolved) * 100) : 100,
+    };
+
+    res.json({ rows, summary });
+  } catch (error: any) {
+    console.error('Error exporting SLA compliance:', error);
+    res.status(500).json({ error: error.message || 'Failed to export SLA compliance' });
+  }
+});
+
+// GET /api/organizations/:id/sla-policy-changes
+router.get('/:id/sla-policy-changes', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    if (!(await canManageStatuses(id, userId))) {
+      return res.status(403).json({ error: 'Permission denied.' });
+    }
+
+    const { data: changes, error } = await supabase
+      .from('sla_policy_changes')
+      .select('*')
+      .eq('organization_id', id)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (error) throw error;
+    res.json(changes ?? []);
+  } catch (error: any) {
+    console.error('Error fetching SLA policy changes:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch SLA policy changes' });
+  }
+});
+
 // ───── Phase 4: Split Policy Code CRUD ─────
 
 // GET /api/organizations/:id/policy-code
@@ -2974,6 +3598,10 @@ router.put('/:id/policy-code/:codeType', async (req: AuthRequest, res) => {
       description: `updated ${codeType.replace('_', ' ')} policy code`,
       metadata: { code_type: codeType },
     });
+
+    try {
+      await emitEvent({ type: 'policy_code_updated', organizationId: id, payload: { codeType, updatedBy: userId }, source: 'system', priority: 'normal' });
+    } catch (e) {}
 
     res.json({ success: true, code_type: codeType });
   } catch (error: any) {
@@ -3206,6 +3834,20 @@ router.post('/:id/notification-rules', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'triggerType must be one of: weekly_digest, vulnerability_discovered, custom_code_pipeline' });
     }
 
+    // Plan limit check: notification rules
+    try {
+      const { checkPlanLimit, TIER_DISPLAY_NAMES } = require('../lib/plan-limits');
+      const planCheck = await checkPlanLimit(id, 'notification_rules');
+      if (!planCheck.allowed) {
+        return res.status(403).json({
+          error: 'PLAN_LIMIT',
+          message: `Your ${TIER_DISPLAY_NAMES[planCheck.tier]} plan supports up to ${planCheck.limit} notification rules.`,
+          resource: 'notification_rules', current: planCheck.current, limit: planCheck.limit,
+          tier: planCheck.tier, upgradeTier: planCheck.upgradeTier,
+        });
+      }
+    } catch (e) { /* fail open */ }
+
     const dests = Array.isArray(destinations) ? destinations : [];
     const insertData: Record<string, unknown> = {
       organization_id: id,
@@ -3259,21 +3901,33 @@ router.put('/:id/notification-rules/:ruleId', async (req: AuthRequest, res) => {
       return res.status(403).json({ error: 'You do not have permission to manage notification rules' });
     }
 
-    const validTriggers = ['weekly_digest', 'vulnerability_discovered', 'custom_code_pipeline'];
+    const validTriggers = ['weekly_digest', 'custom_code_pipeline'];
     const updateData: Record<string, unknown> = {};
     if (typeof name === 'string') updateData.name = name.trim();
     if (triggerType && validTriggers.includes(triggerType)) updateData.trigger_type = triggerType;
-    if (triggerType === 'vulnerability_discovered') {
-      updateData.min_depscore_threshold = typeof minDepscoreThreshold === 'number' ? minDepscoreThreshold : null;
-    } else {
-      updateData.min_depscore_threshold = null;
+    if (typeof minDepscoreThreshold === 'number') {
+      updateData.min_depscore_threshold = minDepscoreThreshold;
     }
-    if (triggerType === 'custom_code_pipeline') {
-      updateData.custom_code = typeof customCode === 'string' ? customCode : null;
-    } else {
-      updateData.custom_code = null;
+    if (triggerType === 'custom_code_pipeline' && typeof customCode === 'string') {
+      const { validateNotificationTriggerCode } = require('../lib/notification-validator');
+      if (customCode.trim()) {
+        const validation = await validateNotificationTriggerCode(customCode);
+        if (!validation.passed) {
+          return res.status(422).json({ error: 'Validation failed', checks: validation.checks });
+        }
+      }
+      updateData.custom_code = customCode;
     }
     if (Array.isArray(destinations)) updateData.destinations = destinations;
+    if (typeof req.body.dryRun === 'boolean') updateData.dry_run = req.body.dryRun;
+    if (typeof req.body.scheduleConfig === 'object') updateData.schedule_config = req.body.scheduleConfig;
+
+    const { data: existing } = await supabase
+      .from('organization_notification_rules')
+      .select('custom_code, destinations')
+      .eq('id', ruleId)
+      .eq('organization_id', id)
+      .single();
 
     const { data: updated, error } = await supabase
       .from('organization_notification_rules')
@@ -3282,6 +3936,21 @@ router.put('/:id/notification-rules/:ruleId', async (req: AuthRequest, res) => {
       .eq('organization_id', id)
       .select()
       .single();
+
+    if (!error && updated && existing) {
+      const { data: profile } = await supabase.from('user_profiles').select('full_name').eq('id', userId).single();
+      await supabase.from('notification_rule_changes').insert({
+        rule_id: ruleId,
+        rule_scope: 'organization',
+        organization_id: id,
+        previous_code: existing.custom_code,
+        new_code: updated.custom_code,
+        previous_destinations: existing.destinations,
+        new_destinations: updated.destinations,
+        changed_by_user_id: userId,
+        changed_by_name: profile?.full_name || req.user!.email,
+      }).then(() => {}).catch(() => {});
+    }
 
     if (error) throw error;
     if (!updated) return res.status(404).json({ error: 'Notification rule not found' });
@@ -3325,6 +3994,370 @@ router.delete('/:id/notification-rules/:ruleId', async (req: AuthRequest, res) =
     console.error('Error deleting notification rule:', error);
     res.status(500).json({ error: error.message || 'Failed to delete notification rule' });
   }
+});
+
+// POST /api/organizations/:id/validate-notification-rule - Validate trigger code
+router.post('/:id/validate-notification-rule', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const { code } = req.body;
+
+    if (!(await canManageNotificationRules(id, userId))) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    if (!code || typeof code !== 'string') {
+      return res.status(400).json({ error: 'code is required' });
+    }
+
+    const { validateNotificationTriggerCode } = require('../lib/notification-validator');
+    const result = await validateNotificationTriggerCode(code);
+    res.json(result);
+  } catch (error: any) {
+    console.error('Validate notification rule error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/organizations/:id/test-notification-rule - Test trigger code against sample events
+router.post('/:id/test-notification-rule', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const { code, eventType } = req.body;
+
+    if (!(await canManageNotificationRules(id, userId))) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    if (!code || typeof code !== 'string') {
+      return res.status(400).json({ error: 'code is required' });
+    }
+
+    const { executeNotificationTrigger } = require('../lib/notification-validator');
+    const { buildDefaultMessage } = require('../lib/destination-dispatchers');
+
+    const testEventTypes = eventType ? [eventType] : ['vulnerability_discovered', 'dependency_added', 'status_changed'];
+
+    const SAMPLE_CONTEXTS: Record<string, any> = {
+      vulnerability_discovered: {
+        event: { type: 'vulnerability_discovered', timestamp: new Date().toISOString(), source: 'vuln_monitor' },
+        project: { id: 'test-id', name: 'api-service', asset_tier: 'Crown Jewels', asset_tier_rank: 1, health_score: 72, status: 'Compliant', status_is_passing: true, dependencies_count: 145, team_name: 'Platform' },
+        dependency: { name: 'lodash', version: '4.17.20', license: 'MIT', is_direct: true, is_dev_dependency: false, environment: 'production', score: 82, dependency_score: 82, openssf_score: 7.2, weekly_downloads: 45000000, malicious_indicator: null, slsa_level: 0, vulnerabilities: [] },
+        vulnerability: { osv_id: 'GHSA-test-0000-0000', severity: 'critical', cvss_score: 9.8, epss_score: 0.45, depscore: 88, is_reachable: true, cisa_kev: false, fixed_versions: ['4.17.21'], summary: 'Prototype Pollution in lodash' },
+        pr: null, previous: null, batch: null,
+      },
+      dependency_added: {
+        event: { type: 'dependency_added', timestamp: new Date().toISOString(), source: 'extraction' },
+        project: { id: 'test-id', name: 'web-app', asset_tier: 'External', asset_tier_rank: 2, health_score: 85, status: 'Compliant', status_is_passing: true, dependencies_count: 200, team_name: 'Frontend' },
+        dependency: { name: 'new-pkg', version: '1.0.0', license: 'MIT', is_direct: true, is_dev_dependency: false, environment: 'production', score: 45, dependency_score: 45, openssf_score: 3.1, weekly_downloads: 1200, malicious_indicator: null, slsa_level: 0, vulnerabilities: [] },
+        vulnerability: null, pr: null, previous: null, batch: null,
+      },
+      status_changed: {
+        event: { type: 'status_changed', timestamp: new Date().toISOString(), source: 'policy_eval' },
+        project: { id: 'test-id', name: 'api-service', asset_tier: 'Crown Jewels', asset_tier_rank: 1, health_score: 45, status: 'Blocked', status_is_passing: false, dependencies_count: 145, team_name: 'Platform' },
+        dependency: null, vulnerability: null, pr: null,
+        previous: { status: 'Compliant', status_is_passing: true, health_score: 72 }, batch: null,
+      },
+    };
+
+    const results = [];
+    for (const et of testEventTypes) {
+      const sampleContext = SAMPLE_CONTEXTS[et] || SAMPLE_CONTEXTS.vulnerability_discovered;
+      sampleContext.event.type = et;
+      const start = Date.now();
+      try {
+        const triggerResult = await executeNotificationTrigger(code, sampleContext, id);
+        const message = triggerResult.notify ? buildDefaultMessage(
+          { id: 'test', event_type: et, organization_id: id, payload: sampleContext },
+          sampleContext,
+        ) : undefined;
+        results.push({
+          eventType: et, sampleContext, returnValue: triggerResult, wouldNotify: triggerResult.notify,
+          message: message ? { title: message.title, body: message.body, severity: message.severity } : undefined,
+          executionTimeMs: Date.now() - start,
+        });
+      } catch (err: any) {
+        results.push({ eventType: et, sampleContext, wouldNotify: false, error: err.message, executionTimeMs: Date.now() - start });
+      }
+    }
+    res.json({ results });
+  } catch (error: any) {
+    console.error('Test notification rule error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/organizations/:id/notification-history - Paginated delivery history
+router.get('/:id/notification-history', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const { event_type, destination_type, status, timeframe, page: pageStr, per_page: perPageStr } = req.query;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+    if (!membership) return res.status(403).json({ error: 'Not a member' });
+
+    const page = parseInt(pageStr as string) || 1;
+    const perPage = Math.min(parseInt(perPageStr as string) || 20, 50);
+    const offset = (page - 1) * perPage;
+
+    let query = supabase
+      .from('notification_deliveries')
+      .select('*, notification_events!inner(event_type, payload, priority, created_at)', { count: 'exact' })
+      .eq('organization_id', id)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + perPage - 1);
+
+    if (event_type) query = query.eq('notification_events.event_type', event_type as string);
+    if (destination_type) query = query.eq('destination_type', destination_type as string);
+    if (status && status !== 'all') query = query.eq('status', status as string);
+    if (timeframe) {
+      const hours = timeframe === '24h' ? 24 : timeframe === '7d' ? 168 : timeframe === '30d' ? 720 : 168;
+      query = query.gte('created_at', new Date(Date.now() - hours * 3600000).toISOString());
+    }
+
+    const { data, count, error } = await query;
+    if (error) throw error;
+    res.json({ deliveries: data || [], total: count || 0, page, perPage });
+  } catch (error: any) {
+    console.error('Notification history error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/organizations/:id/notification-history/:deliveryId/retry - Retry failed delivery
+router.post('/:id/notification-history/:deliveryId/retry', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, deliveryId } = req.params;
+
+    if (!(await canManageNotificationRules(id, userId))) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const { data: delivery } = await supabase
+      .from('notification_deliveries')
+      .select('event_id, status')
+      .eq('id', deliveryId)
+      .eq('organization_id', id)
+      .single();
+
+    if (!delivery) return res.status(404).json({ error: 'Delivery not found' });
+    if (delivery.status !== 'failed') return res.status(400).json({ error: 'Only failed deliveries can be retried' });
+
+    await supabase.from('notification_deliveries').update({ status: 'pending', attempts: 0 }).eq('id', deliveryId);
+
+    const token = process.env.QSTASH_TOKEN;
+    if (token) {
+      const apiBaseUrl = process.env.API_BASE_URL || process.env.BACKEND_URL || 'http://localhost:3001';
+      await fetch('https://qstash.upstash.io/v2/publish/' + encodeURIComponent(`${apiBaseUrl}/api/workers/dispatch-notification`), {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Upstash-Method': 'POST', 'Upstash-Retries': '5', 'Upstash-Forward-Content-Type': 'application/json' },
+        body: JSON.stringify({ eventId: delivery.event_id }),
+      });
+    }
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Retry delivery error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/organizations/:id/notification-stats - Aggregate notification stats
+router.get('/:id/notification-stats', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    const { data: membership } = await supabase.from('organization_members').select('role').eq('organization_id', id).eq('user_id', userId).single();
+    if (!membership) return res.status(403).json({ error: 'Not a member' });
+
+    const oneDayAgo = new Date(Date.now() - 24 * 3600000).toISOString();
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600000).toISOString();
+
+    const [deliveries24h, deliveries7d, events7d, recentFailures] = await Promise.all([
+      supabase.from('notification_deliveries').select('status', { count: 'exact' }).eq('organization_id', id).gte('created_at', oneDayAgo),
+      supabase.from('notification_deliveries').select('status', { count: 'exact' }).eq('organization_id', id).gte('created_at', sevenDaysAgo),
+      supabase.from('notification_events').select('event_type, created_at', { count: 'exact' }).eq('organization_id', id).gte('created_at', sevenDaysAgo),
+      supabase.from('notification_deliveries').select('*').eq('organization_id', id).eq('status', 'failed').order('created_at', { ascending: false }).limit(5),
+    ]);
+
+    const delivered24h = (deliveries24h.data || []).filter((d: any) => d.status === 'delivered').length;
+    const total24h = deliveries24h.count || 0;
+
+    res.json({
+      delivery_success_rate_24h: total24h > 0 ? Math.round((delivered24h / total24h) * 100) : 100,
+      total_deliveries_24h: total24h,
+      total_deliveries_7d: deliveries7d.count || 0,
+      total_events_7d: events7d.count || 0,
+      recent_failures: recentFailures.data || [],
+    });
+  } catch (error: any) {
+    console.error('Notification stats error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/organizations/:id/notification-rules/:ruleId/history - Rule change history
+router.get('/:id/notification-rules/:ruleId/history', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, ruleId } = req.params;
+
+    const { data: membership } = await supabase.from('organization_members').select('role').eq('organization_id', id).eq('user_id', userId).single();
+    if (!membership) return res.status(403).json({ error: 'Not a member' });
+
+    const { data, error } = await supabase
+      .from('notification_rule_changes')
+      .select('*')
+      .eq('rule_id', ruleId)
+      .eq('organization_id', id)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (error) throw error;
+    res.json(data || []);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/organizations/:id/notification-rules/:ruleId/revert/:changeId - Revert rule to previous version
+router.post('/:id/notification-rules/:ruleId/revert/:changeId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, ruleId, changeId } = req.params;
+
+    if (!(await canManageNotificationRules(id, userId))) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const { data: change } = await supabase
+      .from('notification_rule_changes')
+      .select('previous_code, previous_destinations')
+      .eq('id', changeId)
+      .eq('rule_id', ruleId)
+      .single();
+
+    if (!change) return res.status(404).json({ error: 'Change not found' });
+
+    const updateData: Record<string, any> = {};
+    if (change.previous_code !== null) updateData.custom_code = change.previous_code;
+    if (change.previous_destinations !== null) updateData.destinations = change.previous_destinations;
+
+    const { data: updated, error } = await supabase
+      .from('organization_notification_rules')
+      .update(updateData)
+      .eq('id', ruleId)
+      .eq('organization_id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json(updated);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/integrations/organizations/:orgId/pagerduty/connect - PagerDuty connect
+router.post('/:id/pagerduty/connect', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const { routingKey, serviceName } = req.body;
+
+    if (!(await canManageNotificationRules(id, userId))) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    if (!routingKey || routingKey.length < 20) {
+      return res.status(400).json({ error: 'Invalid PagerDuty routing key' });
+    }
+
+    const testResponse = await fetch('https://events.pagerduty.com/v2/enqueue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        routing_key: routingKey,
+        event_action: 'trigger',
+        dedup_key: `deptex-test-${Date.now()}`,
+        payload: { summary: 'Deptex connection test - you can resolve this incident', source: 'Deptex', severity: 'info' },
+      }),
+    });
+
+    if (!testResponse.ok) {
+      return res.status(400).json({ error: 'PagerDuty rejected the routing key' });
+    }
+
+    await fetch('https://events.pagerduty.com/v2/enqueue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ routing_key: routingKey, event_action: 'resolve', dedup_key: `deptex-test-${Date.now()}` }),
+    }).catch(() => {});
+
+    await supabase.from('organization_integrations').upsert({
+      organization_id: id,
+      provider: 'pagerduty',
+      access_token: routingKey,
+      display_name: serviceName || 'PagerDuty',
+      metadata: { service_name: serviceName },
+      status: 'active',
+    }, { onConflict: 'organization_id,provider' });
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('PagerDuty connect error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PATCH /api/organizations/:id/notification-rules/:ruleId/snooze - Snooze a rule
+router.patch('/:id/notification-rules/:ruleId/snooze', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, ruleId } = req.params;
+    const { snoozedUntil } = req.body;
+
+    if (!(await canManageNotificationRules(id, userId))) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const { data, error } = await supabase
+      .from('organization_notification_rules')
+      .update({ snoozed_until: snoozedUntil || null })
+      .eq('id', ruleId)
+      .eq('organization_id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/organizations/:id/notification-rule-templates - Get rule templates
+router.get('/:id/notification-rule-templates', async (req: AuthRequest, res) => {
+  const RULE_TEMPLATES = [
+    { id: 'critical-vuln-alert', name: 'Critical Vulnerability Alert', description: 'Notify immediately when a critical or high-severity vulnerability is discovered', code: "if (context.event.type !== 'vulnerability_discovered') return false;\nif (!context.vulnerability) return false;\nreturn context.vulnerability.severity === 'critical' || context.vulnerability.severity === 'high';", suggestedDestinations: ['slack', 'email', 'pagerduty'] },
+    { id: 'malicious-package', name: 'Malicious Package Detection', description: 'Immediate alert when a dependency is flagged as malicious', code: "return context.event.type === 'malicious_package_detected';", suggestedDestinations: ['slack', 'pagerduty', 'email'] },
+    { id: 'weekly-digest', name: 'Weekly Security Digest', description: 'Weekly summary of all security events across projects', triggerType: 'weekly_digest', suggestedDestinations: ['email', 'slack'] },
+    { id: 'policy-violation', name: 'Policy Violation Alert', description: 'Alert when a dependency violates package policy', code: "return context.event.type === 'policy_violation' || context.event.type === 'license_violation';", suggestedDestinations: ['slack', 'jira'] },
+    { id: 'extraction-failure', name: 'Extraction Failure Alert', description: 'Alert when dependency extraction fails', code: "return context.event.type === 'extraction_failed';", suggestedDestinations: ['slack', 'email'] },
+    { id: 'pr-check-failure', name: 'PR Check Failure', description: 'Alert when a PR fails dependency policy checks', code: "if (context.event.type !== 'pr_check_completed') return false;\nreturn context.pr && context.pr.check_result === 'failed';", suggestedDestinations: ['slack', 'discord'] },
+    { id: 'crown-jewels-any-change', name: 'Crown Jewels - Any Change', description: 'Alert on any event affecting Crown Jewels projects', code: "return context.project.asset_tier === 'Crown Jewels';", suggestedDestinations: ['slack', 'pagerduty'] },
+    { id: 'new-dep-low-score', name: 'New Dependency with Low Score', description: 'Alert when a new dependency is added with a low reputation score', code: "if (context.event.type !== 'dependency_added') return false;\nreturn context.dependency && context.dependency.score < 50;", suggestedDestinations: ['slack', 'jira'] },
+    { id: 'watchtower-alerts', name: 'Watchtower Alerts', description: 'Alert on supply chain security check failures, high-anomaly commits, and new version availability', code: "const watchEvents = [\n  'security_analysis_failure',\n  'supply_chain_anomaly',\n  'new_version_available'\n];\nif (!watchEvents.includes(context.event.type)) return false;\nreturn true;", suggestedDestinations: ['slack', 'email'] },
+  ];
+  res.json(RULE_TEMPLATES);
 });
 
 // POST /api/organizations/:id/notifications/ai-assist - AI assistant for notification rule trigger code (SSE streaming)
@@ -4637,5 +5670,1943 @@ router.delete('/:id/teams/:teamId/notification-rules/:ruleId', async (req: AuthR
   }
 });
 
-export default router;
+// ============================================================
+// AI Provider Management (BYOK)
+// ============================================================
 
+async function hasManageIntegrations(orgId: string, userId: string): Promise<boolean> {
+  const { data: membership } = await supabase
+    .from('organization_members')
+    .select('role')
+    .eq('organization_id', orgId)
+    .eq('user_id', userId)
+    .single();
+  if (!membership) return false;
+
+  const { data: role } = await supabase
+    .from('organization_roles')
+    .select('permissions')
+    .eq('organization_id', orgId)
+    .eq('name', membership.role)
+    .single();
+
+  return role?.permissions?.manage_integrations === true;
+}
+
+// POST /api/organizations/:id/ai-providers -- add or update provider
+router.post('/:id/ai-providers', async (req: AuthRequest, res) => {
+  try {
+    const { encryptApiKey, isEncryptionConfigured } = await import('../lib/ai/encryption');
+    if (!isEncryptionConfigured()) {
+      return res.status(503).json({ error: 'AI encryption not configured. Contact your administrator.' });
+    }
+
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasManageIntegrations(orgId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+    }
+
+    const { provider, api_key, model_preference, monthly_cost_cap } = req.body;
+    if (!provider || !api_key) {
+      return res.status(400).json({ error: 'provider and api_key are required' });
+    }
+    if (!['openai', 'anthropic', 'google'].includes(provider)) {
+      return res.status(400).json({ error: 'Invalid provider. Must be openai, anthropic, or google' });
+    }
+
+    const { encrypted, version } = encryptApiKey(api_key);
+
+    const { data: existing } = await supabase
+      .from('organization_ai_providers')
+      .select('id')
+      .eq('organization_id', orgId);
+
+    const isOnlyProvider = !existing || existing.length === 0;
+
+    const { data, error } = await supabase
+      .from('organization_ai_providers')
+      .upsert({
+        organization_id: orgId,
+        provider,
+        encrypted_api_key: encrypted,
+        encryption_key_version: version,
+        model_preference: model_preference || null,
+        monthly_cost_cap: monthly_cost_cap ?? 100,
+        is_default: isOnlyProvider ? true : undefined,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'organization_id,provider' })
+      .select('id, provider, model_preference, is_default, monthly_cost_cap')
+      .single();
+
+    if (error) throw error;
+    res.json({ ...data, connected: true });
+  } catch (error: any) {
+    console.error('Error adding AI provider:', error);
+    res.status(500).json({ error: error.message || 'Failed to add AI provider' });
+  }
+});
+
+// GET /api/organizations/:id/ai-providers -- list providers (no keys)
+router.get('/:id/ai-providers', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasManageIntegrations(orgId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+    }
+
+    const { data, error } = await supabase
+      .from('organization_ai_providers')
+      .select('id, provider, model_preference, is_default, monthly_cost_cap, created_at, updated_at')
+      .eq('organization_id', orgId);
+
+    if (error) throw error;
+    res.json((data || []).map((p: any) => ({ ...p, connected: true })));
+  } catch (error: any) {
+    console.error('Error listing AI providers:', error);
+    res.status(500).json({ error: error.message || 'Failed to list AI providers' });
+  }
+});
+
+// DELETE /api/organizations/:id/ai-providers/:providerId
+router.delete('/:id/ai-providers/:providerId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasManageIntegrations(orgId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+    }
+
+    const { providerId } = req.params;
+
+    const { data: activeThreads } = await supabase
+      .from('aegis_chat_threads')
+      .select('id')
+      .eq('organization_id', orgId)
+      .gte('updated_at', new Date(Date.now() - 5 * 60 * 1000).toISOString())
+      .limit(1);
+
+    let warning: string | undefined;
+    if (activeThreads?.length) {
+      warning = 'There are active Aegis conversations using this provider. They may be affected.';
+    }
+
+    const { error } = await supabase
+      .from('organization_ai_providers')
+      .delete()
+      .eq('id', providerId)
+      .eq('organization_id', orgId);
+
+    if (error) throw error;
+    res.json({ message: 'Provider deleted', ...(warning ? { warning } : {}) });
+  } catch (error: any) {
+    console.error('Error deleting AI provider:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete AI provider' });
+  }
+});
+
+// POST /api/organizations/:id/ai-providers/test -- test connection (dry-run)
+router.post('/:id/ai-providers/test', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+
+    const { checkRateLimit } = await import('../lib/rate-limit');
+    const rl = await checkRateLimit(`ai:test:${userId}`, 5, 60);
+    if (!rl.allowed) {
+      return res.status(429).json({ error: 'Too many test requests. Try again in a minute.' });
+    }
+
+    const { provider, api_key, model } = req.body;
+    if (!provider || !api_key) {
+      return res.status(400).json({ error: 'provider and api_key are required' });
+    }
+
+    const { createProviderFromKey } = await import('../lib/ai/provider');
+    const aiProvider = createProviderFromKey(provider, api_key, model);
+
+    const result = await aiProvider.chat([
+      { role: 'user', content: 'Say hello in exactly one word.' }
+    ], { maxTokens: 10 });
+
+    res.json({ success: true, model: result.model, response: result.content.slice(0, 100) });
+  } catch (error: any) {
+    const { AIProviderError } = await import('../lib/ai/types');
+    if (error instanceof AIProviderError) {
+      return res.json({ success: false, error: error.message, code: error.code });
+    }
+    res.json({ success: false, error: error.message || 'Connection test failed' });
+  }
+});
+
+// PATCH /api/organizations/:id/ai-providers/:providerId/default
+router.patch('/:id/ai-providers/:providerId/default', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasManageIntegrations(orgId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+    }
+
+    const { providerId } = req.params;
+
+    await supabase
+      .from('organization_ai_providers')
+      .update({ is_default: false, updated_at: new Date().toISOString() })
+      .eq('organization_id', orgId);
+
+    const { error } = await supabase
+      .from('organization_ai_providers')
+      .update({ is_default: true, updated_at: new Date().toISOString() })
+      .eq('id', providerId)
+      .eq('organization_id', orgId);
+
+    if (error) throw error;
+    res.json({ message: 'Default provider updated' });
+  } catch (error: any) {
+    console.error('Error setting default AI provider:', error);
+    res.status(500).json({ error: error.message || 'Failed to set default provider' });
+  }
+});
+
+// ============================================================
+// AI Usage Dashboard
+// ============================================================
+
+// GET /api/organizations/:id/ai-usage
+router.get('/:id/ai-usage', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasManageIntegrations(orgId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to view AI usage' });
+    }
+
+    const period = req.query.period === '7d' ? 7 : req.query.period === '90d' ? 90 : 30;
+    const { getAIUsageSummary } = await import('../lib/ai/logging');
+    const summary = await getAIUsageSummary(orgId, period);
+    res.json(summary);
+  } catch (error: any) {
+    console.error('Error fetching AI usage:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch AI usage' });
+  }
+});
+
+// GET /api/organizations/:id/ai-usage/logs
+router.get('/:id/ai-usage/logs', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasManageIntegrations(orgId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to view AI usage logs' });
+    }
+
+    const page = parseInt(req.query.page as string) || 1;
+    const perPage = Math.min(parseInt(req.query.per_page as string) || 50, 100);
+    const { getAIUsageLogs } = await import('../lib/ai/logging');
+    const result = await getAIUsageLogs(orgId, page, perPage);
+    res.json(result);
+  } catch (error: any) {
+    console.error('Error fetching AI usage logs:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch AI usage logs' });
+  }
+});
+
+// ============================================================
+// Webhook Deliveries
+// ============================================================
+
+// GET /api/organizations/:id/webhook-deliveries
+router.get('/:id/webhook-deliveries', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasManageIntegrations(orgId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+    }
+
+    const provider = (req.query.provider as string) || 'ALL';
+    const status = (req.query.status as string) || 'ALL';
+    const eventType = (req.query.event_type as string) || 'ALL';
+    const repo = req.query.repo as string | undefined;
+    const timeframe = (req.query.timeframe as string) || '30D';
+    const page = parseInt(req.query.page as string) || 1;
+    const perPage = Math.min(parseInt(req.query.per_page as string) || 50, 100);
+
+    const { data: projects } = await supabase
+      .from('projects')
+      .select('id')
+      .eq('organization_id', orgId);
+
+    if (!projects || projects.length === 0) {
+      return res.json({ deliveries: [], total: 0, page, per_page: perPage });
+    }
+
+    const projectIds = projects.map((p: any) => p.id);
+    const { data: repos } = await supabase
+      .from('project_repositories')
+      .select('repo_full_name')
+      .in('project_id', projectIds);
+
+    const repoNames = (repos || []).map((r: any) => r.repo_full_name).filter(Boolean);
+    if (repoNames.length === 0) {
+      return res.json({ deliveries: [], total: 0, page, per_page: perPage });
+    }
+
+    const timeframeMs: Record<string, number> = {
+      '1H': 60 * 60 * 1000,
+      '24H': 24 * 60 * 60 * 1000,
+      '7D': 7 * 24 * 60 * 60 * 1000,
+      '30D': 30 * 24 * 60 * 60 * 1000,
+    };
+    const cutoff = new Date(Date.now() - (timeframeMs[timeframe] || timeframeMs['30D'])).toISOString();
+
+    let query = supabase
+      .from('webhook_deliveries')
+      .select('*', { count: 'exact' })
+      .in('repo_full_name', repoNames)
+      .gte('created_at', cutoff);
+
+    if (provider !== 'ALL') query = query.eq('provider', provider);
+    if (status !== 'ALL') query = query.eq('processing_status', status);
+    if (eventType !== 'ALL') query = query.eq('event_type', eventType);
+    if (repo) query = query.eq('repo_full_name', repo);
+
+    query = query.order('created_at', { ascending: false });
+
+    const offset = (page - 1) * perPage;
+    query = query.range(offset, offset + perPage - 1);
+
+    const { data: deliveries, count, error } = await query;
+    if (error) throw error;
+
+    res.json({ deliveries: deliveries || [], total: count || 0, page, per_page: perPage });
+  } catch (error: any) {
+    console.error('Error fetching webhook deliveries:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch webhook deliveries' });
+  }
+});
+
+// GET /api/organizations/:id/webhook-deliveries/stats
+router.get('/:id/webhook-deliveries/stats', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasManageIntegrations(orgId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+    }
+
+    const timeframe = (req.query.timeframe as string) || '30D';
+
+    const { data: projects } = await supabase
+      .from('projects')
+      .select('id')
+      .eq('organization_id', orgId);
+
+    if (!projects || projects.length === 0) {
+      return res.json({ total: 0, processed: 0, errors: 0, skipped: 0 });
+    }
+
+    const projectIds = projects.map((p: any) => p.id);
+    const { data: repos } = await supabase
+      .from('project_repositories')
+      .select('repo_full_name')
+      .in('project_id', projectIds);
+
+    const repoNames = (repos || []).map((r: any) => r.repo_full_name).filter(Boolean);
+    if (repoNames.length === 0) {
+      return res.json({ total: 0, processed: 0, errors: 0, skipped: 0 });
+    }
+
+    const timeframeMs: Record<string, number> = {
+      '1H': 60 * 60 * 1000,
+      '24H': 24 * 60 * 60 * 1000,
+      '7D': 7 * 24 * 60 * 60 * 1000,
+      '30D': 30 * 24 * 60 * 60 * 1000,
+    };
+    const cutoff = new Date(Date.now() - (timeframeMs[timeframe] || timeframeMs['30D'])).toISOString();
+
+    const { data: deliveries, error } = await supabase
+      .from('webhook_deliveries')
+      .select('processing_status')
+      .in('repo_full_name', repoNames)
+      .gte('created_at', cutoff);
+
+    if (error) throw error;
+
+    const all = deliveries || [];
+    res.json({
+      total: all.length,
+      processed: all.filter((d: any) => d.processing_status === 'processed').length,
+      errors: all.filter((d: any) => d.processing_status === 'error').length,
+      skipped: all.filter((d: any) => d.processing_status === 'skipped').length,
+    });
+  } catch (error: any) {
+    console.error('Error fetching webhook delivery stats:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch webhook delivery stats' });
+  }
+});
+
+// ============================================================================
+// Phase 10: Organization Stats endpoint
+// ============================================================================
+
+// GET /api/organizations/:id/stats
+router.get('/:id/stats', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const cacheKey = `org-stats:${orgId}`;
+    const cached = await getCached<any>(cacheKey);
+    if (cached) return res.json(cached);
+
+    const [
+      projectsResult,
+      syncingResult,
+      membersResult,
+      statusesResult,
+    ] = await Promise.all([
+      supabase.from('projects').select('id, name, health_score, status_id').eq('organization_id', orgId),
+      supabase.from('extraction_jobs').select('id', { count: 'exact', head: true }).eq('organization_id', orgId).in('status', ['queued', 'processing']),
+      supabase.from('organization_members').select('id', { count: 'exact', head: true }).eq('organization_id', orgId),
+      supabase.from('organization_statuses').select('id, name, color, is_passing').eq('organization_id', orgId),
+    ]);
+
+    const projects = projectsResult.data ?? [];
+    const projectIds = projects.map((p: any) => p.id);
+
+    // Health bands
+    const healthy = projects.filter((p: any) => (p.health_score ?? 0) >= 80).length;
+    const atRisk = projects.filter((p: any) => (p.health_score ?? 0) >= 50 && (p.health_score ?? 0) < 80).length;
+    const critical = projects.filter((p: any) => (p.health_score ?? 0) < 50).length;
+
+    // Vulns across all org projects
+    let vulnTotals = { total: 0, critical: 0, high: 0, medium: 0, low: 0 };
+    let topVulns: any[] = [];
+    if (projectIds.length > 0) {
+      const { data: vulns } = await supabase
+        .from('project_dependency_vulnerabilities')
+        .select('severity, depscore, project_id, project_dependency_id')
+        .in('project_id', projectIds)
+        .eq('suppressed', false);
+
+      for (const v of vulns ?? []) {
+        vulnTotals.total++;
+        if (v.severity === 'critical') vulnTotals.critical++;
+        else if (v.severity === 'high') vulnTotals.high++;
+        else if (v.severity === 'medium') vulnTotals.medium++;
+        else if (v.severity === 'low') vulnTotals.low++;
+      }
+
+      // Top 5 critical/high vulns by depscore
+      const { data: topVulnRows } = await supabase
+        .from('project_dependency_vulnerabilities')
+        .select('osv_id, severity, depscore, project_id')
+        .in('project_id', projectIds)
+        .eq('suppressed', false)
+        .in('severity', ['critical', 'high'])
+        .order('depscore', { ascending: false })
+        .limit(20);
+
+      const osvIdSet = new Set<string>();
+      const topRaw: any[] = [];
+      for (const r of topVulnRows ?? []) {
+        if (!r.osv_id || osvIdSet.has(r.osv_id)) continue;
+        osvIdSet.add(r.osv_id);
+        topRaw.push(r);
+        if (topRaw.length >= 5) break;
+      }
+
+      if (topRaw.length > 0) {
+        const { data: vulnDetails } = await supabase
+          .from('dependency_vulnerabilities')
+          .select('osv_id, summary, severity')
+          .in('osv_id', topRaw.map((r: any) => r.osv_id));
+        const detailMap = new Map((vulnDetails ?? []).map((d: any) => [d.osv_id, d]));
+
+        // Count affected projects per osv_id
+        const affectedCounts = new Map<string, Set<string>>();
+        for (const v of topVulnRows ?? []) {
+          if (!v.osv_id) continue;
+          if (!affectedCounts.has(v.osv_id)) affectedCounts.set(v.osv_id, new Set());
+          affectedCounts.get(v.osv_id)!.add(v.project_id);
+        }
+
+        const projectNameMap = new Map(projects.map((p: any) => [p.id, p.name]));
+
+        topVulns = topRaw.map((r: any) => {
+          const detail = detailMap.get(r.osv_id);
+          return {
+            osv_id: r.osv_id,
+            summary: detail?.summary ?? '',
+            severity: detail?.severity ?? r.severity,
+            depscore: r.depscore ?? 0,
+            affected_project_count: affectedCounts.get(r.osv_id)?.size ?? 1,
+            worst_project: { id: r.project_id, name: projectNameMap.get(r.project_id) ?? 'Unknown' },
+          };
+        });
+      }
+    }
+
+    // Code findings
+    let semgrepTotal = 0;
+    let secretTotal = 0;
+    if (projectIds.length > 0) {
+      const [sr, scr] = await Promise.all([
+        supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).in('project_id', projectIds),
+        supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).in('project_id', projectIds),
+      ]);
+      semgrepTotal = sr.count ?? 0;
+      secretTotal = scr.count ?? 0;
+    }
+
+    // Status distribution
+    const statuses = statusesResult.data ?? [];
+    const statusDist = statuses.map((s: any) => ({
+      status_id: s.id, name: s.name, color: s.color, is_passing: s.is_passing,
+      count: projects.filter((p: any) => p.status_id === s.id).length,
+    }));
+    const passingProjects = projects.filter((p: any) => {
+      const st = statuses.find((s: any) => s.id === p.status_id);
+      return st?.is_passing === true;
+    }).length;
+    const compliancePercent = projects.length > 0 ? Math.round((passingProjects / projects.length) * 100) : 100;
+
+    // Dependencies total
+    let depsTotalCount = 0;
+    if (projectIds.length > 0) {
+      const { count } = await supabase.from('project_dependencies').select('id', { count: 'exact', head: true }).in('project_id', projectIds);
+      depsTotalCount = count ?? 0;
+    }
+
+    // Phase 15: SLA aggregates (org-wide)
+    let slaAgg = { compliance_percent: 100, on_track: 0, warning: 0, breached: 0, exempt: 0, met: 0, resolved_late: 0 };
+    if (projectIds.length > 0) {
+      const { data: pdvSla } = await supabase
+        .from('project_dependency_vulnerabilities')
+        .select('sla_status')
+        .in('project_id', projectIds);
+      const list = pdvSla ?? [];
+      const met = list.filter((p: any) => p.sla_status === 'met').length;
+      const resolvedLate = list.filter((p: any) => p.sla_status === 'resolved_late').length;
+      const totalResolved = met + resolvedLate;
+      slaAgg = {
+        compliance_percent: totalResolved > 0 ? Math.round((met / totalResolved) * 100) : 100,
+        on_track: list.filter((p: any) => p.sla_status === 'on_track').length,
+        warning: list.filter((p: any) => p.sla_status === 'warning').length,
+        breached: list.filter((p: any) => p.sla_status === 'breached').length,
+        exempt: list.filter((p: any) => p.sla_status === 'exempt').length,
+        met,
+        resolved_late: resolvedLate,
+      };
+    }
+
+    const result = {
+      projects: { total: projects.length, healthy, at_risk: atRisk, critical, syncing_count: syncingResult.count ?? 0 },
+      vulnerabilities: vulnTotals,
+      code_findings: { semgrep_total: semgrepTotal, secret_total: secretTotal },
+      compliance: { percent: compliancePercent, status_distribution: statusDist },
+      top_vulnerabilities: topVulns,
+      dependencies_total: depsTotalCount,
+      members_count: membersResult.count ?? 0,
+      sla: slaAgg,
+    };
+
+    await setCached(cacheKey, result, 60);
+    res.json(result);
+  } catch (error: any) {
+    console.error('Error fetching org stats:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch organization stats' });
+  }
+});
+
+// ===== ORG WATCHTOWER ENDPOINTS (Phase 10B) =====
+
+router.get('/:id/watchtower/overview', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      res.status(403).json({ error: 'Not a member' });
+      return;
+    }
+
+    const cacheKey = `watchtower-org-stats:${orgId}`;
+    const cached = await getCached(cacheKey);
+    if (cached) { res.json(cached); return; }
+
+    const { data: projects } = await supabase
+      .from('projects')
+      .select('id, name, watchtower_enabled, watchtower_enabled_at, asset_tier_id, health_score')
+      .eq('organization_id', orgId);
+
+    const allProjects = projects || [];
+    const enabledProjects = allProjects.filter((p: any) => p.watchtower_enabled);
+
+    const { data: watchlistEntries } = await supabase
+      .from('organization_watchlist')
+      .select('id, dependency_id')
+      .eq('organization_id', orgId);
+
+    const depIds = (watchlistEntries || []).map((w: any) => w.dependency_id);
+    let depNames: string[] = [];
+    if (depIds.length > 0) {
+      const { data: deps } = await supabase
+        .from('dependencies')
+        .select('id, name')
+        .in('id', depIds);
+      depNames = (deps || []).map((d: any) => d.name);
+    }
+
+    let totalAlerts = 0;
+    let totalBlocked = 0;
+    if (depNames.length > 0) {
+      const { data: pkgs } = await supabase
+        .from('watched_packages')
+        .select('id, name, status, analysis_data')
+        .in('name', depNames);
+
+      for (const pkg of pkgs || []) {
+        const ad = pkg.analysis_data as any;
+        if (ad?.registryIntegrityStatus === 'fail' || ad?.installScriptsStatus === 'fail' || ad?.entropyAnalysisStatus === 'fail') {
+          totalAlerts++;
+        }
+      }
+    }
+
+    const { data: tiers } = await supabase
+      .from('organization_asset_tiers')
+      .select('id, name')
+      .eq('organization_id', orgId);
+
+    const tierMap = new Map((tiers || []).map((t: any) => [t.id, t.name]));
+
+    const projectsSummary = allProjects.map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      tier: tierMap.get(p.asset_tier_id) || null,
+      watchtower_enabled: p.watchtower_enabled,
+      enabled_at: p.watchtower_enabled_at,
+    }));
+
+    const result = {
+      projects_enabled: enabledProjects.length,
+      projects_total: allProjects.length,
+      packages_monitored: depNames.length,
+      total_alerts: totalAlerts,
+      total_blocked: totalBlocked,
+      projects: projectsSummary,
+    };
+
+    await setCached(cacheKey, result, 60);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch overview' });
+  }
+});
+
+router.get('/:id/watchtower/projects', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      res.status(403).json({ error: 'Not a member' });
+      return;
+    }
+
+    const { data: projects } = await supabase
+      .from('projects')
+      .select('id, name, watchtower_enabled, watchtower_enabled_at, asset_tier_id')
+      .eq('organization_id', orgId);
+
+    const { data: tiers } = await supabase
+      .from('organization_asset_tiers')
+      .select('id, name')
+      .eq('organization_id', orgId);
+
+    const tierMap = new Map((tiers || []).map((t: any) => [t.id, t.name]));
+
+    const result = (projects || []).map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      tier: tierMap.get(p.asset_tier_id) || null,
+      watchtower_enabled: p.watchtower_enabled,
+      enabled_at: p.watchtower_enabled_at,
+    }));
+
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch projects' });
+  }
+});
+
+router.get('/:id/watchtower/package-usage', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      res.status(403).json({ error: 'Not a member' });
+      return;
+    }
+
+    const { data: orgProjects } = await supabase
+      .from('projects')
+      .select('id')
+      .eq('organization_id', orgId);
+
+    const projectIds = (orgProjects || []).map((p: any) => p.id);
+    if (projectIds.length === 0) {
+      res.json([]);
+      return;
+    }
+
+    const { data: deps } = await supabase
+      .from('project_dependencies')
+      .select('dependency_id, name, project_id')
+      .in('project_id', projectIds)
+      .eq('is_direct', true);
+
+    const usageMap = new Map<string, { name: string; dependency_id: string; project_count: number; project_ids: string[] }>();
+    for (const dep of deps || []) {
+      const existing = usageMap.get(dep.name);
+      if (existing) {
+        existing.project_count++;
+        existing.project_ids.push(dep.project_id);
+      } else {
+        usageMap.set(dep.name, { name: dep.name, dependency_id: dep.dependency_id, project_count: 1, project_ids: [dep.project_id] });
+      }
+    }
+
+    const { data: watchlistEntries } = await supabase
+      .from('organization_watchlist')
+      .select('dependency_id')
+      .eq('organization_id', orgId);
+
+    const watchedDepIds = new Set((watchlistEntries || []).map((w: any) => w.dependency_id));
+
+    const result = Array.from(usageMap.values())
+      .map((u) => ({ ...u, watched: watchedDepIds.has(u.dependency_id) }))
+      .sort((a, b) => b.project_count - a.project_count)
+      .slice(0, 50);
+
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch package usage' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// PHASE 13: BILLING ENDPOINTS
+// ═══════════════════════════════════════════════════════════════════════
+
+// GET /:id/billing/plan -- plan details (any member)
+router.get('/:id/billing/plan', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) return res.status(403).json({ error: 'Not a member of this organization' });
+
+    const { getUsageSummary } = require('../lib/plan-limits');
+    const summary = await getUsageSummary(orgId);
+
+    const { data: planRow } = await supabase
+      .from('organization_plans')
+      .select('billing_cycle, cancel_at_period_end, cancel_at, payment_method_brand, payment_method_last4, billing_email, subscription_status')
+      .eq('organization_id', orgId)
+      .single();
+
+    res.json({
+      ...summary,
+      billing_cycle: planRow?.billing_cycle || 'monthly',
+      cancel_at_period_end: planRow?.cancel_at_period_end || false,
+      cancel_at: planRow?.cancel_at || null,
+      payment_method_brand: planRow?.payment_method_brand || null,
+      payment_method_last4: planRow?.payment_method_last4 || null,
+      billing_email: planRow?.billing_email || null,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch plan' });
+  }
+});
+
+// GET /:id/billing/usage -- usage vs limits (manage_billing)
+router.get('/:id/billing/usage', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkBillingPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { getUsageSummary } = require('../lib/plan-limits');
+    const summary = await getUsageSummary(orgId);
+    res.json(summary);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch usage' });
+  }
+});
+
+// POST /:id/billing/checkout -- create Stripe Checkout session (manage_billing)
+router.post('/:id/billing/checkout', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkBillingPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { priceId, billingEmail } = req.body;
+    if (!priceId) return res.status(400).json({ error: 'priceId is required' });
+
+    // If downgrading, check usage fits target tier
+    const { checkDowngradeAllowed } = require('../lib/plan-limits');
+    const { tierFromPriceId: _tierCheck } = require('../lib/stripe');
+
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const successUrl = `${frontendUrl}/organizations/${orgId}/settings/plan?billing=success`;
+    const cancelUrl = `${frontendUrl}/organizations/${orgId}/settings/plan?billing=cancelled`;
+
+    const { createCheckoutSession } = require('../lib/stripe');
+    const url = await createCheckoutSession(orgId, priceId, successUrl, cancelUrl, billingEmail);
+
+    if (!url) return res.status(500).json({ error: 'Failed to create checkout session' });
+    res.json({ url });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to create checkout session' });
+  }
+});
+
+// POST /:id/billing/portal -- create Stripe Customer Portal session (manage_billing)
+router.post('/:id/billing/portal', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkBillingPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const returnUrl = `${frontendUrl}/organizations/${orgId}/settings/plan`;
+
+    const { createPortalSession } = require('../lib/stripe');
+    const url = await createPortalSession(orgId, returnUrl);
+    res.json({ url });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to create portal session' });
+  }
+});
+
+// GET /:id/billing/invoices -- paginated invoice list (manage_billing)
+router.get('/:id/billing/invoices', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkBillingPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const limit = Math.min(parseInt(req.query.limit as string) || 10, 50);
+    const startingAfter = req.query.starting_after as string | undefined;
+
+    const { getInvoices } = require('../lib/stripe');
+    const result = await getInvoices(orgId, limit, startingAfter);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch invoices' });
+  }
+});
+
+// POST /:id/billing/check-downgrade -- check if downgrade is possible (manage_billing)
+router.post('/:id/billing/check-downgrade', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkBillingPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { targetTier } = req.body;
+    if (!targetTier) return res.status(400).json({ error: 'targetTier is required' });
+
+    const { checkDowngradeAllowed } = require('../lib/plan-limits');
+    const result = await checkDowngradeAllowed(orgId, targetTier);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to check downgrade' });
+  }
+});
+
+async function checkBillingPermission(orgId: string, userId: string): Promise<boolean> {
+  const { data: membership } = await supabase
+    .from('organization_members')
+    .select('role')
+    .eq('organization_id', orgId)
+    .eq('user_id', userId)
+    .single();
+
+  if (!membership) return false;
+  if (membership.role === 'owner' || membership.role === 'admin') return true;
+
+  const { data: role } = await supabase
+    .from('organization_roles')
+    .select('permissions')
+    .eq('organization_id', orgId)
+    .eq('name', membership.role)
+    .single();
+
+  return role?.permissions?.manage_billing === true;
+}
+
+async function checkSecurityPermission(orgId: string, userId: string): Promise<boolean> {
+  const { data: membership } = await supabase
+    .from('organization_members')
+    .select('role')
+    .eq('organization_id', orgId)
+    .eq('user_id', userId)
+    .single();
+
+  if (!membership) return false;
+  if (membership.role === 'owner' || membership.role === 'admin') return true;
+
+  const { data: role } = await supabase
+    .from('organization_roles')
+    .select('permissions')
+    .eq('organization_id', orgId)
+    .eq('name', membership.role)
+    .single();
+
+  return role?.permissions?.manage_security === true;
+}
+
+// ============================================================
+// Phase 14: Enterprise Security Endpoints
+// ============================================================
+
+// --- 14A: Security Audit Log ---
+
+router.get('/:id/security/audit-log', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+    const offset = (page - 1) * limit;
+    const action = req.query.action as string;
+    const actorId = req.query.actor_id as string;
+    const severity = req.query.severity as string;
+    const from = req.query.from as string;
+    const to = req.query.to as string;
+
+    let query = supabase
+      .from('security_audit_logs')
+      .select('*', { count: 'exact' })
+      .eq('organization_id', orgId)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (action) query = query.eq('action', action);
+    if (actorId) query = query.eq('actor_id', actorId);
+    if (severity) query = query.eq('severity', severity);
+    if (from) query = query.gte('created_at', from);
+    if (to) query = query.lte('created_at', to);
+
+    const { data: logs, count, error } = await query;
+
+    if (error) return res.status(500).json({ error: 'Failed to fetch audit logs' });
+
+    res.json({ logs: logs || [], total: count || 0, page, limit });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch audit logs' });
+  }
+});
+
+router.get('/:id/security/audit-log/export', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const from = req.query.from as string;
+    const to = req.query.to as string;
+
+    let query = supabase
+      .from('security_audit_logs')
+      .select('*')
+      .eq('organization_id', orgId)
+      .order('created_at', { ascending: false })
+      .limit(10000);
+
+    if (from) query = query.gte('created_at', from);
+    if (to) query = query.lte('created_at', to);
+
+    const { data: logs, error } = await query;
+    if (error) return res.status(500).json({ error: 'Failed to export audit logs' });
+
+    const rows = (logs || []).map((l: any) => ({
+      timestamp: l.created_at,
+      action: l.action,
+      actor_id: l.actor_id || '',
+      target_type: l.target_type || '',
+      target_id: l.target_id || '',
+      ip_address: l.ip_address || '',
+      severity: l.severity,
+      metadata: JSON.stringify(l.metadata || {}),
+    }));
+
+    const header = 'timestamp,action,actor_id,target_type,target_id,ip_address,severity,metadata\n';
+    const csvRows = rows.map((r: any) =>
+      [r.timestamp, r.action, r.actor_id, r.target_type, r.target_id, r.ip_address, r.severity, `"${r.metadata.replace(/"/g, '""')}"`].join(',')
+    );
+
+    res.set('Content-Type', 'text/csv');
+    res.set('Content-Disposition', `attachment; filename="audit-log-${orgId}-${new Date().toISOString().split('T')[0]}.csv"`);
+    res.send(header + csvRows.join('\n'));
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to export audit logs' });
+  }
+});
+
+// --- 14B: MFA Enforcement ---
+
+router.get('/:id/security/mfa-status', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { data: org } = await supabase
+      .from('organizations')
+      .select('mfa_enforced, mfa_grace_period_days, mfa_enforcement_started_at')
+      .eq('id', orgId)
+      .single();
+
+    const { data: members } = await supabase
+      .from('organization_members')
+      .select('user_id')
+      .eq('organization_id', orgId);
+
+    const userIds = (members || []).map((m: any) => m.user_id);
+
+    const { data: factors } = await supabase
+      .from('auth.mfa_factors' as any)
+      .select('user_id, status')
+      .in('user_id', userIds);
+
+    const verifiedFactors = new Set(
+      (factors || []).filter((f: any) => f.status === 'verified').map((f: any) => f.user_id)
+    );
+
+    const { data: exemptions } = await supabase
+      .from('organization_mfa_exemptions')
+      .select('user_id, reason, expires_at')
+      .eq('organization_id', orgId)
+      .gt('expires_at', new Date().toISOString());
+
+    const exemptionMap = new Map((exemptions || []).map((e: any) => [e.user_id, e]));
+
+    const memberStatuses = userIds.map((uid: string) => ({
+      user_id: uid,
+      has_mfa: verifiedFactors.has(uid),
+      is_exempt: exemptionMap.has(uid),
+      exemption: exemptionMap.get(uid) || null,
+    }));
+
+    res.json({
+      enforcement: {
+        enabled: org?.mfa_enforced || false,
+        grace_period_days: org?.mfa_grace_period_days || 7,
+        started_at: org?.mfa_enforcement_started_at || null,
+      },
+      members: memberStatuses,
+      summary: {
+        total: userIds.length,
+        enrolled: memberStatuses.filter((m: any) => m.has_mfa).length,
+        not_enrolled: memberStatuses.filter((m: any) => !m.has_mfa && !m.is_exempt).length,
+        exempt: memberStatuses.filter((m: any) => m.is_exempt).length,
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch MFA status' });
+  }
+});
+
+router.patch('/:id/security/mfa-enforcement', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { enabled, grace_period_days } = req.body;
+
+    const updates: Record<string, unknown> = {};
+    if (typeof enabled === 'boolean') {
+      updates.mfa_enforced = enabled;
+      if (enabled) {
+        updates.mfa_enforcement_started_at = new Date().toISOString();
+      }
+    }
+    if (typeof grace_period_days === 'number') {
+      updates.mfa_grace_period_days = Math.max(1, Math.min(90, grace_period_days));
+    }
+
+    const { error } = await supabase
+      .from('organizations')
+      .update(updates)
+      .eq('id', orgId);
+
+    if (error) return res.status(500).json({ error: 'Failed to update MFA enforcement' });
+
+    const { logSecurityEvent } = require('../lib/security-audit');
+    await logSecurityEvent({
+      organizationId: orgId,
+      actorId: userId,
+      action: 'mfa_enforcement_changed',
+      req,
+      metadata: updates,
+    });
+
+    res.json({ success: true, ...updates });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to update MFA enforcement' });
+  }
+});
+
+router.post('/:id/security/mfa-exemptions', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { target_user_id, reason, expires_in_days } = req.body;
+    if (!target_user_id || !reason) {
+      return res.status(400).json({ error: 'target_user_id and reason are required' });
+    }
+
+    const expiresAt = new Date(Date.now() + (expires_in_days || 30) * 86400000).toISOString();
+
+    const { data, error } = await supabase
+      .from('organization_mfa_exemptions')
+      .upsert({
+        organization_id: orgId,
+        user_id: target_user_id,
+        exempted_by: userId,
+        reason,
+        expires_at: expiresAt,
+      }, { onConflict: 'organization_id,user_id' })
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: 'Failed to create exemption' });
+
+    const { logSecurityEvent } = require('../lib/security-audit');
+    await logSecurityEvent({
+      organizationId: orgId,
+      actorId: userId,
+      action: 'mfa_exemption_created',
+      targetType: 'user',
+      targetId: target_user_id,
+      req,
+      metadata: { reason, expires_at: expiresAt },
+    });
+
+    res.status(201).json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to create exemption' });
+  }
+});
+
+router.delete('/:id/security/mfa-exemptions/:userId', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { error } = await supabase
+      .from('organization_mfa_exemptions')
+      .delete()
+      .eq('organization_id', orgId)
+      .eq('user_id', req.params.userId);
+
+    if (error) return res.status(500).json({ error: 'Failed to remove exemption' });
+
+    const { logSecurityEvent } = require('../lib/security-audit');
+    await logSecurityEvent({
+      organizationId: orgId,
+      actorId: userId,
+      action: 'mfa_exemption_removed',
+      targetType: 'user',
+      targetId: req.params.userId,
+      req,
+    });
+
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to remove exemption' });
+  }
+});
+
+// --- 14C: Session Management ---
+
+router.patch('/:id/security/session-policy', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { max_session_duration_hours, require_reauth_for_sensitive } = req.body;
+
+    const updates: Record<string, unknown> = {};
+    if (typeof max_session_duration_hours === 'number') {
+      updates.max_session_duration_hours = Math.max(1, Math.min(720, max_session_duration_hours));
+    }
+    if (typeof require_reauth_for_sensitive === 'boolean') {
+      updates.require_reauth_for_sensitive = require_reauth_for_sensitive;
+    }
+
+    const { error } = await supabase
+      .from('organizations')
+      .update(updates)
+      .eq('id', orgId);
+
+    if (error) return res.status(500).json({ error: 'Failed to update session policy' });
+
+    const { logSecurityEvent } = require('../lib/security-audit');
+    await logSecurityEvent({
+      organizationId: orgId,
+      actorId: userId,
+      action: 'session_policy_changed',
+      req,
+      metadata: updates,
+    });
+
+    res.json({ success: true, ...updates });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to update session policy' });
+  }
+});
+
+router.get('/:id/security/session-policy', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { data: org } = await supabase
+      .from('organizations')
+      .select('max_session_duration_hours, require_reauth_for_sensitive')
+      .eq('id', orgId)
+      .single();
+
+    res.json({
+      max_session_duration_hours: org?.max_session_duration_hours ?? 168,
+      require_reauth_for_sensitive: org?.require_reauth_for_sensitive ?? false,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch session policy' });
+  }
+});
+
+router.post('/:id/security/force-logout/:targetUserId', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const targetUserId = req.params.targetUserId;
+
+    const { data: member } = await supabase
+      .from('organization_members')
+      .select('id')
+      .eq('organization_id', orgId)
+      .eq('user_id', targetUserId)
+      .single();
+
+    if (!member) return res.status(404).json({ error: 'User is not a member of this organization' });
+
+    await supabase.from('user_sessions').delete().eq('user_id', targetUserId);
+
+    const { logSecurityEvent } = require('../lib/security-audit');
+    await logSecurityEvent({
+      organizationId: orgId,
+      actorId: userId,
+      action: 'force_logout',
+      targetType: 'user',
+      targetId: targetUserId,
+      req,
+      severity: 'warning',
+    });
+
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to force logout' });
+  }
+});
+
+// --- 14D: SSO/SAML ---
+
+router.get('/:id/security/sso', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { data: sso } = await supabase
+      .from('organization_sso_providers')
+      .select('id, provider_type, display_name, domain, domain_verified, enforce_sso, allow_oauth_fallback, jit_provisioning, default_role_id, group_role_mapping, is_active, created_at, updated_at')
+      .eq('organization_id', orgId)
+      .single();
+
+    res.json({ sso: sso || null });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch SSO config' });
+  }
+});
+
+router.post('/:id/security/sso', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { provider_type, display_name, entity_id, sso_url, certificate, domain, metadata_url, metadata_xml, default_role_id, group_role_mapping, jit_provisioning } = req.body;
+
+    if (!provider_type || !entity_id || !sso_url || !certificate || !domain) {
+      return res.status(400).json({ error: 'provider_type, entity_id, sso_url, certificate, and domain are required' });
+    }
+
+    const { generateDomainVerificationToken } = require('../lib/saml');
+    const verificationToken = generateDomainVerificationToken();
+
+    const { data, error } = await supabase
+      .from('organization_sso_providers')
+      .insert({
+        organization_id: orgId,
+        provider_type,
+        display_name: display_name || null,
+        entity_id,
+        sso_url,
+        certificate,
+        domain: domain.toLowerCase(),
+        domain_verification_token: verificationToken,
+        metadata_url: metadata_url || null,
+        metadata_xml: metadata_xml || null,
+        default_role_id: default_role_id || null,
+        group_role_mapping: group_role_mapping || {},
+        jit_provisioning: jit_provisioning !== false,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === '23505') {
+        return res.status(409).json({ error: 'SSO already configured for this organization or domain is in use' });
+      }
+      return res.status(500).json({ error: 'Failed to create SSO config' });
+    }
+
+    const { logSecurityEvent } = require('../lib/security-audit');
+    await logSecurityEvent({
+      organizationId: orgId,
+      actorId: userId,
+      action: 'sso_configured',
+      req,
+      metadata: { provider_type, domain },
+    });
+
+    res.status(201).json({
+      ...data,
+      domain_verification_record: `deptex-domain-verify=${verificationToken}`,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to create SSO config' });
+  }
+});
+
+router.put('/:id/security/sso', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const allowed = ['display_name', 'entity_id', 'sso_url', 'certificate', 'metadata_url', 'metadata_xml', 'enforce_sso', 'allow_oauth_fallback', 'jit_provisioning', 'default_role_id', 'group_role_mapping', 'is_active'];
+    const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) updates[key] = req.body[key];
+    }
+
+    const { error } = await supabase
+      .from('organization_sso_providers')
+      .update(updates)
+      .eq('organization_id', orgId);
+
+    if (error) return res.status(500).json({ error: 'Failed to update SSO config' });
+
+    if (updates.enforce_sso !== undefined) {
+      const { logSecurityEvent } = require('../lib/security-audit');
+      await logSecurityEvent({
+        organizationId: orgId,
+        actorId: userId,
+        action: 'sso_enforcement_changed',
+        req,
+        metadata: { enforce_sso: updates.enforce_sso },
+      });
+    }
+
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to update SSO config' });
+  }
+});
+
+router.delete('/:id/security/sso', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { error } = await supabase
+      .from('organization_sso_providers')
+      .delete()
+      .eq('organization_id', orgId);
+
+    if (error) return res.status(500).json({ error: 'Failed to remove SSO config' });
+
+    const { logSecurityEvent } = require('../lib/security-audit');
+    await logSecurityEvent({
+      organizationId: orgId,
+      actorId: userId,
+      action: 'sso_removed',
+      req,
+      severity: 'warning',
+    });
+
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to remove SSO config' });
+  }
+});
+
+router.post('/:id/security/sso/verify-domain', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { data: sso } = await supabase
+      .from('organization_sso_providers')
+      .select('domain, domain_verification_token')
+      .eq('organization_id', orgId)
+      .single();
+
+    if (!sso) return res.status(404).json({ error: 'No SSO config found' });
+
+    const { verifyDomain } = require('../lib/saml');
+    const verified = await verifyDomain(sso.domain, sso.domain_verification_token);
+
+    if (verified) {
+      await supabase
+        .from('organization_sso_providers')
+        .update({ domain_verified: true, updated_at: new Date().toISOString() })
+        .eq('organization_id', orgId);
+
+      const { logSecurityEvent } = require('../lib/security-audit');
+      await logSecurityEvent({
+        organizationId: orgId,
+        actorId: userId,
+        action: 'sso_domain_verified',
+        req,
+        metadata: { domain: sso.domain },
+      });
+    }
+
+    res.json({ verified, domain: sso.domain });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to verify domain' });
+  }
+});
+
+router.post('/:id/security/sso/test', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { data: sso } = await supabase
+      .from('organization_sso_providers')
+      .select('*')
+      .eq('organization_id', orgId)
+      .single();
+
+    if (!sso) return res.status(404).json({ error: 'No SSO config found' });
+
+    try {
+      const { createSAMLInstance, generateAuthRequest } = require('../lib/saml');
+      const saml = createSAMLInstance(sso);
+      const url = await generateAuthRequest(saml);
+      res.json({ success: true, test_url: url });
+    } catch (err: any) {
+      res.json({ success: false, error: err.message });
+    }
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to test SSO' });
+  }
+});
+
+router.post('/:id/security/sso/bypass-token', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { generateBypassToken } = require('../lib/saml');
+    const { raw, hash } = generateBypassToken();
+
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+    const { error } = await supabase
+      .from('organization_sso_bypass_tokens')
+      .insert({
+        organization_id: orgId,
+        token_hash: hash,
+        created_by: userId,
+        expires_at: expiresAt,
+      });
+
+    if (error) return res.status(500).json({ error: 'Failed to create bypass token' });
+
+    res.status(201).json({ token: raw, expires_at: expiresAt });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to create bypass token' });
+  }
+});
+
+router.get('/:id/security/sso/bypass-tokens', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { data: tokens } = await supabase
+      .from('organization_sso_bypass_tokens')
+      .select('id, created_by, used_at, expires_at, created_at')
+      .eq('organization_id', orgId)
+      .order('created_at', { ascending: false })
+      .limit(20);
+
+    res.json({ tokens: tokens || [] });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch bypass tokens' });
+  }
+});
+
+// --- 14E: IP Allowlisting ---
+
+router.get('/:id/security/ip-allowlist', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { data: org } = await supabase
+      .from('organizations')
+      .select('ip_allowlist_enabled')
+      .eq('id', orgId)
+      .single();
+
+    const { data: entries } = await supabase
+      .from('organization_ip_allowlist')
+      .select('id, cidr, label, created_by, created_at')
+      .eq('organization_id', orgId)
+      .order('created_at', { ascending: false });
+
+    res.json({
+      enabled: org?.ip_allowlist_enabled || false,
+      entries: entries || [],
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch IP allowlist' });
+  }
+});
+
+router.post('/:id/security/ip-allowlist', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { cidr, label } = req.body;
+    if (!cidr) return res.status(400).json({ error: 'cidr is required' });
+
+    const cidrPattern = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$|^[0-9a-fA-F:]+\/\d{1,3}$/;
+    if (!cidrPattern.test(cidr)) {
+      return res.status(400).json({ error: 'Invalid CIDR format' });
+    }
+
+    const { data, error } = await supabase
+      .from('organization_ip_allowlist')
+      .insert({
+        organization_id: orgId,
+        cidr,
+        label: label || null,
+        created_by: userId,
+      })
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: 'Failed to add IP entry' });
+
+    try {
+      const { invalidateIPAllowlistCache } = require('../../../backend/src/middleware/ip-allowlist');
+      invalidateIPAllowlistCache(orgId);
+    } catch {}
+
+    const { logSecurityEvent } = require('../lib/security-audit');
+    await logSecurityEvent({
+      organizationId: orgId,
+      actorId: userId,
+      action: 'ip_allowlist_entry_added',
+      req,
+      metadata: { cidr, label },
+    });
+
+    res.status(201).json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to add IP entry' });
+  }
+});
+
+router.delete('/:id/security/ip-allowlist/:entryId', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { data: entry } = await supabase
+      .from('organization_ip_allowlist')
+      .select('id, cidr')
+      .eq('id', req.params.entryId)
+      .eq('organization_id', orgId)
+      .single();
+
+    if (!entry) return res.status(404).json({ error: 'Entry not found' });
+
+    await supabase.from('organization_ip_allowlist').delete().eq('id', entry.id);
+
+    try {
+      const { invalidateIPAllowlistCache } = require('../../../backend/src/middleware/ip-allowlist');
+      invalidateIPAllowlistCache(orgId);
+    } catch {}
+
+    const { logSecurityEvent } = require('../lib/security-audit');
+    await logSecurityEvent({
+      organizationId: orgId,
+      actorId: userId,
+      action: 'ip_allowlist_entry_removed',
+      req,
+      metadata: { cidr: entry.cidr },
+    });
+
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to remove IP entry' });
+  }
+});
+
+router.patch('/:id/security/ip-allowlist-enabled', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { enabled } = req.body;
+    if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'enabled must be a boolean' });
+
+    if (enabled) {
+      const { data: entries } = await supabase
+        .from('organization_ip_allowlist')
+        .select('id')
+        .eq('organization_id', orgId)
+        .limit(1);
+
+      if (!entries || entries.length === 0) {
+        return res.status(400).json({ error: 'Cannot enable IP allowlist with no entries. Add at least one IP range first.' });
+      }
+    }
+
+    const { error } = await supabase
+      .from('organizations')
+      .update({ ip_allowlist_enabled: enabled })
+      .eq('id', orgId);
+
+    if (error) return res.status(500).json({ error: 'Failed to toggle IP allowlist' });
+
+    try {
+      const { invalidateIPAllowlistCache } = require('../../../backend/src/middleware/ip-allowlist');
+      invalidateIPAllowlistCache(orgId);
+    } catch {}
+
+    const { logSecurityEvent } = require('../lib/security-audit');
+    await logSecurityEvent({
+      organizationId: orgId,
+      actorId: userId,
+      action: 'ip_allowlist_toggled',
+      req,
+      metadata: { enabled },
+    });
+
+    res.json({ success: true, enabled });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to toggle IP allowlist' });
+  }
+});
+
+// --- 14F: API Tokens (org admin view) ---
+
+router.get('/:id/security/api-tokens', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { data: tokens } = await supabase
+      .from('api_tokens')
+      .select('id, user_id, name, token_prefix, scopes, last_used_at, last_used_ip, expires_at, created_at')
+      .eq('organization_id', orgId)
+      .is('revoked_at', null)
+      .order('created_at', { ascending: false });
+
+    res.json({ tokens: tokens || [] });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch tokens' });
+  }
+});
+
+router.delete('/:id/security/api-tokens/:tokenId', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { data: tokenRow } = await supabase
+      .from('api_tokens')
+      .select('id, name, user_id')
+      .eq('id', req.params.tokenId)
+      .eq('organization_id', orgId)
+      .is('revoked_at', null)
+      .single();
+
+    if (!tokenRow) return res.status(404).json({ error: 'Token not found' });
+
+    await supabase
+      .from('api_tokens')
+      .update({ revoked_at: new Date().toISOString() })
+      .eq('id', tokenRow.id);
+
+    const { logSecurityEvent } = require('../lib/security-audit');
+    await logSecurityEvent({
+      organizationId: orgId,
+      actorId: userId,
+      action: 'api_token_revoked',
+      targetType: 'api_token',
+      targetId: tokenRow.id,
+      req,
+      metadata: { name: tokenRow.name, token_owner: tokenRow.user_id },
+      severity: 'warning',
+    });
+
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to revoke token' });
+  }
+});
+
+// --- 14G: SCIM Config ---
+
+router.get('/:id/security/scim', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { data: config } = await supabase
+      .from('organization_scim_configs')
+      .select('id, scim_token_prefix, is_active, last_sync_at, created_at')
+      .eq('organization_id', orgId)
+      .single();
+
+    const baseUrl = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 3001}`;
+
+    res.json({
+      config: config || null,
+      endpoint_url: `${baseUrl}/api/scim/v2`,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to fetch SCIM config' });
+  }
+});
+
+router.post('/:id/security/scim', async (req: AuthRequest, res) => {
+  try {
+    const orgId = req.params.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const hasAccess = await checkSecurityPermission(orgId, userId);
+    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const { generateSCIMToken } = require('../lib/saml');
+    const { raw, prefix, hash } = generateSCIMToken();
+
+    const { data, error } = await supabase
+      .from('organization_scim_configs')
+      .upsert({
+        organization_id: orgId,
+        scim_token_hash: hash,
+        scim_token_prefix: prefix,
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'organization_id' })
+      .select('id, scim_token_prefix, is_active, created_at')
+      .single();
+
+    if (error) return res.status(500).json({ error: 'Failed to create SCIM config' });
+
+    const baseUrl = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 3001}`;
+
+    res.status(201).json({
+      ...data,
+      token: raw,
+      endpoint_url: `${baseUrl}/api/scim/v2`,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to create SCIM config' });
+  }
+});
+
+export default router;

@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
-import { Plus, Trash2, Check, Pencil, MoreVertical, Mail, ChevronDown, Loader2, Webhook, BookOpen } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { Plus, Trash2, Check, Pencil, MoreVertical, Mail, ChevronDown, Loader2, Webhook, BookOpen, X, Clock, Play, Info, LayoutGrid } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '../../components/ui/button';
+import { Switch } from '../../components/ui/switch';
 import { cn } from '../../lib/utils';
 import { PolicyCodeEditor } from '../../components/PolicyCodeEditor';
 import { NotificationAIAssistant } from '../../components/NotificationAIAssistant';
@@ -14,10 +15,13 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
 
-const DESTINATION_PROVIDERS = ['slack', 'discord', 'jira', 'linear', 'asana', 'custom_notification', 'custom_ticketing', 'email'] as const;
+const DESTINATION_PROVIDERS = ['slack', 'discord', 'jira', 'linear', 'asana', 'pagerduty', 'custom_notification', 'custom_ticketing', 'email'] as const;
 
 function getConnectionIconSrc(conn: CiCdConnection): string | null {
   const isCustom = conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing';
@@ -29,6 +33,7 @@ function getConnectionIconSrc(conn: CiCdConnection): string | null {
   if (conn.provider === 'jira') return '/images/integrations/jira.png';
   if (conn.provider === 'linear') return '/images/integrations/linear.png';
   if (conn.provider === 'asana') return '/images/integrations/asana.png';
+  if (conn.provider === 'pagerduty') return '/images/integrations/pagerduty.png';
   return null;
 }
 
@@ -41,6 +46,7 @@ function getProviderLabel(conn: CiCdConnection): string {
   if (conn.provider === 'jira') return conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira';
   if (conn.provider === 'linear') return 'Linear';
   if (conn.provider === 'asana') return 'Asana';
+  if (conn.provider === 'pagerduty') return 'PagerDuty';
   return conn.provider;
 }
 
@@ -241,6 +247,14 @@ export default function NotificationRulesSection({ organizationId = '', projectI
   const [destinations, setDestinations] = useState<DestinationAction[]>([
     { id: crypto.randomUUID(), connectionId: '' },
   ]);
+  const [dryRun, setDryRun] = useState(false);
+  const [validationChecks, setValidationChecks] = useState<{ name: string; pass: boolean; error?: string }[] | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testResults, setTestResults] = useState<{ eventType: string; wouldNotify: boolean; message?: string; executionTime?: number; error?: string }[] | null>(null);
+  const [snoozingRuleId, setSnoozingRuleId] = useState<string | null>(null);
+  const [templates, setTemplates] = useState<{ id: string; name: string; description: string; code: string }[]>([]);
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
 
   useEffect(() => {
     if (!organizationId) {
@@ -330,11 +344,34 @@ export default function NotificationRulesSection({ organizationId = '', projectI
     }
   }, [createHandlerRef]);
 
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const w = window as any;
+    if (!w.monaco) return;
+    const lib = w.monaco.languages.typescript.javascriptDefaults.addExtraLib(`
+      declare const context: {
+        event: { type: string; timestamp: string; source: string };
+        project: { id: string; name: string; asset_tier: string; health_score: number; status: string; status_is_passing: boolean; dependencies_count: number; team_name: string | null };
+        dependency: { name: string; version: string; license: string | null; is_direct: boolean; score: number; openssf_score: number | null; weekly_downloads: number | null; malicious_indicator: any; slsa_level: number; vulnerabilities: any[] } | null;
+        vulnerability: { osv_id: string; severity: string; cvss_score: number; epss_score: number; depscore: number; is_reachable: boolean; cisa_kev: boolean; fixed_versions: string[]; summary: string } | null;
+        pr: { number: number; title: string; author: string; check_result: string; check_summary: string; deps_added: number; deps_updated: number; deps_removed: number } | null;
+        previous: { status?: string; health_score?: number } | null;
+        batch: { total: number; by_type: Record<string, number>; events: any[] } | null;
+      };
+      declare function fetch(url: string, options?: any): Promise<any>;
+    `, 'notification-context.d.ts');
+    return () => lib?.dispose();
+  }, [sidebarOpen]);
+
   const resetForm = () => {
     setRuleName('');
     setCustomCode(DEFAULT_CUSTOM_CODE);
     setDestinations([{ id: crypto.randomUUID(), connectionId: destinationConnections[0]?.id ?? '' }]);
     setEditingRuleId(null);
+    setDryRun(false);
+    setValidationChecks(null);
+    setTestResults(null);
+    setShowTemplatePicker(false);
   };
 
   const closeSidebar = () => {
@@ -378,17 +415,18 @@ export default function NotificationRulesSection({ organizationId = '', projectI
     const payload = { name, triggerType: 'custom_code_pipeline' as const, customCode, destinations: dests };
 
     setSaving(true);
+    setValidationChecks(null);
     try {
       if (editingRuleId) {
         const updated = teamId
-          ? await api.updateTeamNotificationRule(organizationId, teamId, editingRuleId, payload)
+          ? await api.updateTeamNotificationRule(organizationId, teamId, editingRuleId, { ...payload, dryRun })
           : projectId
-            ? await api.updateProjectNotificationRule(organizationId, projectId, editingRuleId, payload)
-            : await api.updateOrganizationNotificationRule(organizationId, editingRuleId, payload);
+            ? await api.updateProjectNotificationRule(organizationId, projectId, editingRuleId, { ...payload, dryRun })
+            : await api.updateOrganizationNotificationRule(organizationId, editingRuleId, { ...payload, dryRun });
         setRules((prev) => prev.map((r) => (r.id === editingRuleId ? updated : r)));
         toast({ title: 'Rule updated', description: 'Notification rule saved successfully.' });
       } else {
-        const createPayload = { ...payload, createdByName };
+        const createPayload = { ...payload, createdByName, dryRun };
         const newRule = teamId
           ? await api.createTeamNotificationRule(organizationId, teamId, createPayload)
           : projectId
@@ -399,6 +437,18 @@ export default function NotificationRulesSection({ organizationId = '', projectI
       }
       closeSidebar();
     } catch (err: any) {
+      if (err.checks && Array.isArray(err.checks)) {
+        setValidationChecks(err.checks);
+      } else {
+        try {
+          const parsed = typeof err.body === 'string' ? JSON.parse(err.body) : err.body;
+          if (parsed?.checks) {
+            setValidationChecks(parsed.checks);
+          }
+        } catch {
+          // not a validation error
+        }
+      }
       toast({ title: 'Failed to save', description: err.message || 'Could not save rule', variant: 'destructive' });
     } finally {
       setSaving(false);
@@ -408,7 +458,9 @@ export default function NotificationRulesSection({ organizationId = '', projectI
   const handleCreateClick = () => {
     resetForm();
     setEditingRuleId(null);
+    setShowTemplatePicker(true);
     setSidebarOpen(true);
+    fetchTemplates();
   };
 
   const handleEdit = (rule: OrganizationNotificationRule, e: React.MouseEvent) => {
@@ -437,6 +489,84 @@ export default function NotificationRulesSection({ organizationId = '', projectI
       toast({ title: 'Failed to delete', description: err.message || 'Could not delete rule', variant: 'destructive' });
     }
   };
+
+  const getToken = async () => {
+    const { supabase: sb } = await import('../../lib/supabase');
+    const session = await sb.auth.getSession();
+    return session.data.session?.access_token || '';
+  };
+
+  const handleTestRule = async () => {
+    if (!organizationId) return;
+    setTesting(true);
+    setTestResults(null);
+    try {
+      const token = await getToken();
+      const res = await fetch(`${import.meta.env.VITE_API_URL || ''}/api/organizations/${organizationId}/test-notification-rule`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ code: customCode }),
+      });
+      const data = await res.json();
+      if (data.results && Array.isArray(data.results)) {
+        setTestResults(data.results);
+      } else if (data.error) {
+        toast({ title: 'Test failed', description: data.error, variant: 'destructive' });
+      }
+    } catch (err: any) {
+      toast({ title: 'Test failed', description: err.message || 'Could not test rule', variant: 'destructive' });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleSnooze = async (ruleId: string, duration: string) => {
+    if (!organizationId) return;
+    setSnoozingRuleId(ruleId);
+    try {
+      const token = await getToken();
+      const baseUrl = teamId
+        ? `/api/organizations/${organizationId}/teams/${teamId}/notification-rules/${ruleId}/snooze`
+        : projectId
+          ? `/api/organizations/${organizationId}/projects/${projectId}/notification-rules/${ruleId}/snooze`
+          : `/api/organizations/${organizationId}/notification-rules/${ruleId}/snooze`;
+      const res = await fetch(`${import.meta.env.VITE_API_URL || ''}${baseUrl}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ duration }),
+      });
+      if (!res.ok) throw new Error('Failed to snooze');
+      toast({ title: 'Rule snoozed', description: `Notifications paused for ${duration}.` });
+    } catch (err: any) {
+      toast({ title: 'Snooze failed', description: err.message, variant: 'destructive' });
+    } finally {
+      setSnoozingRuleId(null);
+    }
+  };
+
+  const fetchTemplates = useCallback(async () => {
+    if (!organizationId) return;
+    setLoadingTemplates(true);
+    try {
+      const token = await getToken();
+      const baseUrl = teamId
+        ? `/api/organizations/${organizationId}/teams/${teamId}/notification-rule-templates`
+        : projectId
+          ? `/api/organizations/${organizationId}/projects/${projectId}/notification-rule-templates`
+          : `/api/organizations/${organizationId}/notification-rule-templates`;
+      const res = await fetch(`${import.meta.env.VITE_API_URL || ''}${baseUrl}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setTemplates(Array.isArray(data) ? data : data.templates || []);
+      }
+    } catch {
+      // templates are optional — fail silently
+    } finally {
+      setLoadingTemplates(false);
+    }
+  }, [organizationId, teamId, projectId]);
 
   const addDestination = () => {
     setDestinations((prev) => [
@@ -545,6 +675,28 @@ export default function NotificationRulesSection({ organizationId = '', projectI
                       <Pencil className="h-3.5 w-3.5 mr-2" />
                       Edit
                     </DropdownMenuItem>
+                    <DropdownMenuSub>
+                      <DropdownMenuSubTrigger>
+                        <Clock className="h-3.5 w-3.5 mr-2" />
+                        Snooze
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent>
+                        {[
+                          { label: '1 hour', value: '1h' },
+                          { label: '4 hours', value: '4h' },
+                          { label: '24 hours', value: '24h' },
+                          { label: '1 week', value: '1w' },
+                        ].map((opt) => (
+                          <DropdownMenuItem
+                            key={opt.value}
+                            disabled={snoozingRuleId === rule.id}
+                            onClick={(e) => { e.stopPropagation(); handleSnooze(rule.id, opt.value); }}
+                          >
+                            {opt.label}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
                     <DropdownMenuItem
                       onClick={(e) => handleDelete(rule.id, e)}
                       className="text-destructive focus:text-destructive"
@@ -590,86 +742,219 @@ export default function NotificationRulesSection({ organizationId = '', projectI
             </div>
 
             <div className="flex-1 flex flex-col min-h-0 overflow-hidden items-stretch">
-              <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4 flex flex-col items-stretch">
-                <div className="space-y-4 w-full text-left">
-                  <div>
-                    <label className="block text-sm font-medium text-foreground mb-1.5 text-left">Name</label>
-                    <input
-                      type="text"
-                      value={ruleName}
-                      onChange={(e) => setRuleName(e.target.value)}
-                      className="w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all text-left"
-                      placeholder=""
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-foreground mb-2 text-left">Destinations</label>
-                    <div className="space-y-2">
-                      {destinations.map((dest) => (
-                        <div key={dest.id} className="flex gap-2 items-center">
-                          <ConnectionDropdown
-                            value={dest.connectionId}
-                            connections={destinationConnections}
-                            onChange={(connectionId) => updateDestination(dest.id, connectionId)}
-                            placeholder="Select integration"
-                            className="flex-1 min-w-0"
-                          />
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-9 w-9 shrink-0 text-foreground-secondary hover:text-destructive rounded-lg"
-                            onClick={() => removeDestination(dest.id)}
-                            disabled={destinations.length <= 1}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+              {/* Template picker for new rules */}
+              {showTemplatePicker && !editingRuleId ? (
+                <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4 flex flex-col items-stretch">
+                  <div className="space-y-4 w-full text-left">
+                    <label className="block text-sm font-medium text-foreground text-left">Choose a starting point</label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => { setShowTemplatePicker(false); setCustomCode(DEFAULT_CUSTOM_CODE); }}
+                        className="p-4 rounded-lg border border-border bg-background-card hover:border-foreground-secondary/40 transition-colors text-left group"
+                      >
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <Plus className="h-4 w-4 text-foreground-secondary group-hover:text-foreground" />
+                          <span className="text-sm font-medium text-foreground">Start from scratch</span>
                         </div>
-                      ))}
+                        <p className="text-xs text-foreground-secondary">Write your own trigger logic from an empty template.</p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setShowTemplatePicker(false); setCustomCode(DEFAULT_CUSTOM_CODE); }}
+                        className="p-4 rounded-lg border border-border bg-background-card hover:border-foreground-secondary/40 transition-colors text-left group"
+                      >
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <Info className="h-4 w-4 text-foreground-secondary group-hover:text-foreground" />
+                          <span className="text-sm font-medium text-foreground">Use AI Assistant</span>
+                        </div>
+                        <p className="text-xs text-foreground-secondary">Describe what you want and let AI write the rule.</p>
+                      </button>
                     </div>
-                    {destinationConnections.length === 0 && (
-                      <p className="text-xs text-foreground-muted mt-1">
-                        Connect Slack, Jira, Linear, or other integrations in Organization Settings first.
-                      </p>
+                    {loadingTemplates ? (
+                      <div className="flex items-center justify-center py-8">
+                        <Loader2 className="h-5 w-5 animate-spin text-foreground-secondary" />
+                      </div>
+                    ) : templates.length > 0 && (
+                      <>
+                        <div className="flex items-center gap-2 pt-2">
+                          <LayoutGrid className="h-3.5 w-3.5 text-foreground-secondary" />
+                          <span className="text-xs font-medium text-foreground-secondary uppercase tracking-wider">Templates</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          {templates.map((tpl) => (
+                            <button
+                              key={tpl.id}
+                              type="button"
+                              onClick={() => { setShowTemplatePicker(false); setCustomCode(tpl.code); }}
+                              className="p-4 rounded-lg border border-border bg-background-card hover:border-primary/40 transition-colors text-left"
+                            >
+                              <span className="text-sm font-medium text-foreground block mb-1">{tpl.name}</span>
+                              <p className="text-xs text-foreground-secondary line-clamp-2">{tpl.description}</p>
+                            </button>
+                          ))}
+                        </div>
+                      </>
                     )}
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={addDestination}
-                      className="mt-2 rounded-lg"
-                      disabled={destinationConnections.length === 0}
-                    >
-                      <Plus className="h-4 w-4" />
-                      Add destination
-                    </Button>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-foreground mb-2 text-left">Trigger logic</label>
-                    <div className="rounded-lg border border-border overflow-hidden">
-                      <PolicyCodeEditor
-                        value={customCode}
-                        onChange={setCustomCode}
-                        readOnly={false}
-                        fitContent
-                      />
-                    </div>
                   </div>
                 </div>
-              </div>
+              ) : (
+                <>
+                  <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4 flex flex-col items-stretch">
+                    <div className="space-y-4 w-full text-left">
+                      <div>
+                        <label className="block text-sm font-medium text-foreground mb-1.5 text-left">Name</label>
+                        <input
+                          type="text"
+                          value={ruleName}
+                          onChange={(e) => setRuleName(e.target.value)}
+                          className="w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all text-left"
+                          placeholder=""
+                        />
+                      </div>
 
-              <div className="flex-shrink-0 flex flex-col">
-                <NotificationAIAssistant
-                  organizationId={organizationId}
-                  currentCode={customCode}
-                  onUpdateCode={setCustomCode}
-                  onClose={() => {}}
-                  embedded
-                  variant="inline"
-                />
-              </div>
+                      <div>
+                        <label className="block text-sm font-medium text-foreground mb-2 text-left">Destinations</label>
+                        <div className="space-y-2">
+                          {destinations.map((dest) => (
+                            <div key={dest.id} className="flex gap-2 items-center">
+                              <ConnectionDropdown
+                                value={dest.connectionId}
+                                connections={destinationConnections}
+                                onChange={(connectionId) => updateDestination(dest.id, connectionId)}
+                                placeholder="Select integration"
+                                className="flex-1 min-w-0"
+                              />
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-9 w-9 shrink-0 text-foreground-secondary hover:text-destructive rounded-lg"
+                                onClick={() => removeDestination(dest.id)}
+                                disabled={destinations.length <= 1}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                        {destinationConnections.length === 0 && (
+                          <p className="text-xs text-foreground-muted mt-1">
+                            Connect Slack, Jira, Linear, or other integrations in Organization Settings first.
+                          </p>
+                        )}
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={addDestination}
+                          className="mt-2 rounded-lg"
+                          disabled={destinationConnections.length === 0}
+                        >
+                          <Plus className="h-4 w-4" />
+                          Add destination
+                        </Button>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-foreground mb-2 text-left">Trigger logic</label>
+                        <div className="rounded-lg border border-border overflow-hidden">
+                          <PolicyCodeEditor
+                            value={customCode}
+                            onChange={(v) => { setCustomCode(v); setValidationChecks(null); }}
+                            readOnly={false}
+                            fitContent
+                          />
+                        </div>
+
+                        {/* Validation checks display */}
+                        {validationChecks && (
+                          <div className="mt-2 space-y-1">
+                            {validationChecks.map((check, i) => (
+                              <div key={i} className="flex items-start gap-2 text-xs">
+                                {check.pass ? (
+                                  <Check className="h-3.5 w-3.5 text-green-500 mt-0.5 flex-shrink-0" />
+                                ) : (
+                                  <X className="h-3.5 w-3.5 text-destructive mt-0.5 flex-shrink-0" />
+                                )}
+                                <div>
+                                  <span className={check.pass ? 'text-green-500' : 'text-destructive'}>{check.name}</span>
+                                  {check.error && <p className="text-foreground-secondary mt-0.5">{check.error}</p>}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Test Rule button + results */}
+                        <div className="mt-3">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={handleTestRule}
+                            disabled={testing}
+                            className="rounded-lg"
+                          >
+                            {testing ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Play className="h-3.5 w-3.5 mr-1.5" />}
+                            Test Rule
+                          </Button>
+                          {testResults && (
+                            <div className="mt-2 rounded-lg border border-border bg-background-card overflow-hidden">
+                              <div className="px-3 py-2 bg-background-card-header border-b border-border">
+                                <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Test Results</span>
+                              </div>
+                              <div className="divide-y divide-border">
+                                {testResults.map((r, i) => (
+                                  <div key={i} className="px-3 py-2 flex items-start gap-2">
+                                    {r.error ? (
+                                      <X className="h-3.5 w-3.5 text-destructive mt-0.5 flex-shrink-0" />
+                                    ) : r.wouldNotify ? (
+                                      <Check className="h-3.5 w-3.5 text-green-500 mt-0.5 flex-shrink-0" />
+                                    ) : (
+                                      <span className="h-3.5 w-3.5 text-foreground-secondary mt-0.5 flex-shrink-0 text-center leading-[14px]">—</span>
+                                    )}
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-xs font-medium text-foreground">{r.eventType}</span>
+                                        {r.executionTime != null && (
+                                          <span className="text-[10px] text-foreground-secondary">{r.executionTime}ms</span>
+                                        )}
+                                      </div>
+                                      {r.message && <p className="text-xs text-foreground-secondary mt-0.5 truncate">{r.message}</p>}
+                                      {r.error && <p className="text-xs text-destructive mt-0.5">{r.error}</p>}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Dry Run toggle */}
+                      <div className="flex items-center justify-between py-2 px-3 rounded-lg border border-border bg-background-card">
+                        <div className="flex-1 min-w-0 mr-3">
+                          <span className="text-sm font-medium text-foreground block">Dry Run</span>
+                          <span className="text-xs text-foreground-secondary">Evaluate against real events without sending notifications.</span>
+                        </div>
+                        <Switch checked={dryRun} onCheckedChange={setDryRun} />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex-shrink-0 flex flex-col">
+                    <NotificationAIAssistant
+                      organizationId={organizationId}
+                      currentCode={customCode}
+                      onUpdateCode={setCustomCode}
+                      onClose={() => {}}
+                      embedded
+                      variant="inline"
+                    />
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border bg-background-card-header">

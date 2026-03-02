@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { type Node, type Edge, MarkerType } from '@xyflow/react';
 import { buildDepAndVulnNodesAndEdges, getWorstSeverity } from './useVulnerabilitiesGraphLayout';
 import type { VulnGraphDepNode, WorstSeverity } from './useVulnerabilitiesGraphLayout';
-import { VULN_CENTER_NODE_WIDTH, VULN_CENTER_NODE_HEIGHT } from './useVulnerabilitiesGraphLayout';
+import { VULN_CENTER_NODE_WIDTH, VULN_CENTER_NODE_HEIGHT, getSlaBreachCount } from './useVulnerabilitiesGraphLayout';
 import { VULN_PROJECT_NODE_WIDTH, VULN_PROJECT_NODE_HEIGHT } from './VulnProjectNode';
 
 export const TEAM_CENTER_ID = 'team-center';
@@ -76,6 +76,7 @@ export function useTeamVulnerabilitiesGraphLayout(
       const py = centerY + Math.sin(angle) * projectRingRadius - VULN_PROJECT_NODE_HEIGHT / 2;
 
       const worstSeverity = proj.worstSeverity ?? getWorstSeverity(proj.graphDepNodes);
+      const slaBreachCount = getSlaBreachCount(proj.graphDepNodes);
 
       nodes.push({
         id: projectNodeId,
@@ -86,6 +87,7 @@ export function useTeamVulnerabilitiesGraphLayout(
           projectId: proj.projectId,
           framework: proj.framework,
           worstSeverity,
+          slaBreachCount,
         },
         draggable: true,
         selectable: false,

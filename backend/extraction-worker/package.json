@@ -17,7 +17,8 @@
     "@upstash/redis": "^1.25.0",
     "dotenv": "^16.3.1",
     "oxc-parser": "^0.15.0",
-    "simple-git": "^3.22.0"
+    "simple-git": "^3.22.0",
+    "stream-json": "^1.8.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.6",

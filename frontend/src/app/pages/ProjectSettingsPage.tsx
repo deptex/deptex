@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useOutletContext, useNavigate, useParams, useLocation, Link, useSearchParams } from 'react-router-dom';
 import { cn } from '../../lib/utils';
-import { Settings, Trash2, Shield, Bell, ChevronDown, Users, Plus, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, BookOpen, Sparkles, Clock, Loader2, Eye, Ban, Mail, Webhook, GitBranch, Info, RefreshCw, GitCommit } from 'lucide-react';
+import { Settings, Trash2, Shield, Bell, ChevronDown, Users, Plus, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, BookOpen, Sparkles, Clock, Loader2, Eye, Ban, Mail, Webhook, GitBranch, Info, RefreshCw, GitCommit, AlertTriangle } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -379,6 +379,7 @@ export default function ProjectSettingsPage() {
   // Pull request comments toggle (repository settings)
   const [pullRequestCommentsEnabled, setPullRequestCommentsEnabled] = useState(true);
   const [autoFixVulnerabilitiesEnabled, setAutoFixVulnerabilitiesEnabled] = useState(false);
+  const [syncFrequency, setSyncFrequency] = useState<string>('on_commit');
   const [selectedSyncLog, setSelectedSyncLog] = useState<SyncLogEntry | null>(null);
   const [showExtractionLogs, setShowExtractionLogs] = useState(false);
   // Transfer project state
@@ -504,6 +505,9 @@ export default function ProjectSettingsPage() {
       if (data.connectedRepository?.auto_fix_vulnerabilities_enabled !== undefined) {
         setAutoFixVulnerabilitiesEnabled(data.connectedRepository.auto_fix_vulnerabilities_enabled === true);
       }
+      if ((data.connectedRepository as any)?.sync_frequency) {
+        setSyncFrequency((data.connectedRepository as any).sync_frequency);
+      }
     } catch (error: any) {
       setRepositoriesError(error.message || 'Failed to load repositories');
     } finally {
@@ -625,6 +629,9 @@ export default function ProjectSettingsPage() {
         }
         if (cached.connectedRepository?.auto_fix_vulnerabilities_enabled !== undefined) {
           setAutoFixVulnerabilitiesEnabled(cached.connectedRepository.auto_fix_vulnerabilities_enabled === true);
+        }
+        if ((cached.connectedRepository as any)?.sync_frequency) {
+          setSyncFrequency((cached.connectedRepository as any).sync_frequency);
         }
       }
       loadProjectRepositories();
@@ -1370,6 +1377,48 @@ export default function ProjectSettingsPage() {
     }
   };
 
+  const handleSyncFrequencyChange = async (value: string) => {
+    if (!organizationId || !projectId) return;
+    const prev = syncFrequency;
+    setSyncFrequency(value);
+    try {
+      await api.updateProjectRepositorySettings(organizationId, projectId, {
+        sync_frequency: value,
+      });
+      setConnectedRepository((r) =>
+        r ? { ...r, sync_frequency: value } as any : null
+      );
+      const labels: Record<string, string> = { on_commit: 'On Every Commit', daily: 'Daily', weekly: 'Weekly', manual: 'Manual Only' };
+      toast({ title: `Sync frequency set to ${labels[value] || value}` });
+    } catch (err: any) {
+      setSyncFrequency(prev);
+      toast({
+        title: 'Failed to update sync frequency',
+        description: (err as Error).message,
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const isRepoDisconnected = connectedRepository?.status === 'repo_deleted'
+    || connectedRepository?.status === 'access_revoked'
+    || connectedRepository?.status === 'installation_removed';
+
+  const disconnectedBannerMessage = (() => {
+    const provider = (connectedRepository as any)?.provider || 'GitHub';
+    const providerLabel = provider === 'gitlab' ? 'GitLab' : provider === 'bitbucket' ? 'Bitbucket' : 'GitHub';
+    switch (connectedRepository?.status) {
+      case 'repo_deleted':
+        return `This repository has been deleted on ${providerLabel}. Please connect a different repository.`;
+      case 'access_revoked':
+        return `The Deptex ${providerLabel} App no longer has access to this repository. Please re-install the App or connect a different repository.`;
+      case 'installation_removed':
+        return `The Deptex ${providerLabel} App has been uninstalled from this organization. Please re-install to continue syncing.`;
+      default:
+        return '';
+    }
+  })();
+
   return (
     <div className="bg-background">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
@@ -1614,6 +1663,14 @@ export default function ProjectSettingsPage() {
                   <h2 className="text-2xl font-bold text-foreground">Repository</h2>
                 </div>
 
+                {/* Disconnected repository banner */}
+                {isRepoDisconnected && disconnectedBannerMessage && (
+                  <div className="flex items-start gap-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-4 py-3">
+                    <AlertTriangle className="h-5 w-5 text-yellow-500 shrink-0 mt-0.5" />
+                    <p className="text-sm text-foreground">{disconnectedBannerMessage}</p>
+                  </div>
+                )}
+
                 {/* Connected Git Repository card */}
                 <section className="space-y-4">
                   {repositoriesLoading ? (
@@ -1699,7 +1756,7 @@ export default function ProjectSettingsPage() {
                             </TooltipTrigger>
                             <TooltipContent>View logs</TooltipContent>
                           </Tooltip>
-                          {(connectedRepository.status === 'ready' && importStatus?.status !== 'finalizing') ? (
+                          {(connectedRepository.status === 'ready' && importStatus?.status !== 'finalizing' && !isRepoDisconnected) ? (
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <button
@@ -1730,6 +1787,41 @@ export default function ProjectSettingsPage() {
                           </div>
                         </div>
                       )}
+
+                      {/* Webhook health */}
+                      <div className="border-t border-border/60 px-5 py-3 flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-4 text-sm">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-medium text-foreground-secondary">Webhook Status</span>
+                            {(() => {
+                              const ws = (connectedRepository as any)?.webhook_status as string | undefined;
+                              const dot = ws === 'active' ? 'bg-emerald-500' : ws === 'inactive' ? 'bg-yellow-500' : ws === 'error' ? 'bg-red-500' : 'bg-gray-400';
+                              const label = ws === 'active' ? 'Active' : ws === 'inactive' ? 'Inactive' : ws === 'error' ? 'Error' : 'Unknown';
+                              return (
+                                <span className="flex items-center gap-1.5">
+                                  <span className={cn('h-2 w-2 rounded-full shrink-0', dot)} />
+                                  <span className="text-xs text-foreground">{label}</span>
+                                  {ws === 'active' && (connectedRepository as any)?.last_webhook_at && (
+                                    <span className="text-xs text-foreground-secondary">({formatConnectedAgo((connectedRepository as any).last_webhook_at)})</span>
+                                  )}
+                                </span>
+                              );
+                            })()}
+                          </div>
+                          {(connectedRepository as any)?.last_webhook_event && (
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs text-foreground-secondary">Last Event</span>
+                              <span className="text-xs font-mono text-foreground">{(connectedRepository as any).last_webhook_event}</span>
+                            </div>
+                          )}
+                        </div>
+                        {((connectedRepository as any)?.provider === 'gitlab' || (connectedRepository as any)?.provider === 'bitbucket') && (
+                          <Button variant="outline" size="sm" className="h-7 text-xs">
+                            <Webhook className="h-3.5 w-3.5 mr-1.5" />
+                            Re-register Webhook
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   ) : (
                     <div className="flex items-center gap-4 py-5 px-5 rounded-lg border border-dashed border-border/60 bg-background-content/30">
@@ -1782,6 +1874,24 @@ export default function ProjectSettingsPage() {
                           className="shrink-0 self-center pointer-events-none"
                         />
                       </button>
+                    </div>
+
+                    <div className="mt-5">
+                      <div className="text-sm font-medium text-foreground mb-1">Sync Frequency</div>
+                      <p className="text-xs text-foreground-secondary mb-3">
+                        Controls when Deptex re-extracts dependencies from this repository.
+                      </p>
+                      <Select value={syncFrequency} onValueChange={handleSyncFrequencyChange}>
+                        <SelectTrigger className="w-full max-w-xs px-3 py-2.5 h-auto bg-background-content">
+                          <SelectValue placeholder="Select frequency" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="on_commit">On Every Commit</SelectItem>
+                          <SelectItem value="daily">Daily</SelectItem>
+                          <SelectItem value="weekly">Weekly</SelectItem>
+                          <SelectItem value="manual">Manual Only</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </div>
                   </section>
                 )}

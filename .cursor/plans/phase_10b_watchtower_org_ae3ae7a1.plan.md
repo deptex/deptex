@@ -1,18 +1,21 @@
 ---
 name: Phase 10B - Watchtower Refactor
-overview: Refactor Watchtower from per-package to per-project activation (direct deps only), promote it to a first-class project tab with packages security table and aggregated commits, build an org-level Watchtower page with project-based sidebar, add Watchtower docs, manage_watchtower org permission, PR guardrails integration, auto-sync on extraction, cloud deployment plan for worker/poller, and comprehensive edge case handling.
+overview: Refactor Watchtower from per-package to per-project activation (direct deps only), promote it to a first-class project tab with packages security table and aggregated commits, build an org-level Watchtower page with project-based sidebar, migrate watchtower-worker to Fly.io scale-to-zero (Supabase job table + Machines API), wire notification events, add Watchtower docs, manage_watchtower org permission, PR guardrails integration, auto-sync on extraction, and comprehensive edge case handling. Includes prerequisite bug fixes (Dockerfile, watchtower-poll.ts, fly.toml).
 todos:
+  - id: 10b-prereq
+    content: "Prerequisites: Fix watchtower-worker Dockerfile (add git), fix watchtower-poll.ts (enqueue new-version jobs via Supabase + start machine, enqueue poll sweep jobs), remove [http_service] from watchtower-worker fly.toml, clean debug logging from worker index.ts"
+    status: pending
   - id: 10b-a-project-tab
     content: Add Watchtower as a top-level project sidebar tab (Overview, Dependencies, Security, Compliance, Watchtower, Settings)
     status: pending
   - id: 10b-b-project-page
-    content: "Create ProjectWatchtowerPage.tsx: enable toggle, packages security table (direct deps + check statuses), aggregated commits table"
+    content: "Create ProjectWatchtowerPage.tsx: enable toggle, packages security table (direct deps + check statuses + error state + multi-ecosystem n/a), aggregated commits table, progress tracking"
     status: pending
   - id: 10b-c-project-activation
-    content: Add projects.watchtower_enabled column, toggle endpoint, auto-populate organization_watchlist with direct deps on enable
+    content: Add projects.watchtower_enabled + watchtower_enabled_at columns, project_watchlist table with orphan cleanup trigger, toggle endpoint, auto-populate watchlist. Drop existing orphan watchlist entries (clean slate).
     status: pending
   - id: 10b-d-project-api
-    content: "Backend: project watchtower endpoints (toggle, packages, commits, stats, clear-commits)"
+    content: "Backend: project watchtower endpoints (toggle, packages, commits, stats, clear-commits, reanalyze), Redis stats caching (watchtower-project-stats:{id}, 60s TTL)"
     status: pending
   - id: 10b-e-remove-dep-tab
     content: Remove Watchtower sub-tab from DependencySidebar, add compact status badge to dependency Overview tab
@@ -24,19 +27,19 @@ todos:
     content: Create OrganizationWatchtowerPage.tsx with sidebar (Overview + projects list with status icons)
     status: pending
   - id: 10b-h-org-overview
-    content: "Build org overview: stats strip, projects summary table, active alerts, package coverage analysis"
+    content: "Build org overview: stats strip, projects summary table, active alerts, package coverage analysis, Redis stats caching (watchtower-org-stats:{id}, 60s TTL)"
     status: pending
   - id: 10b-i-org-api
     content: "Backend: org watchtower endpoints (overview, projects, package-usage, toggle from org)"
     status: pending
   - id: 10b-j-auto-sync
-    content: Auto-sync watchlist when extraction adds/removes direct deps on a watchtower-enabled project
+    content: Auto-sync watchlist when extraction adds/removes direct deps on a watchtower-enabled project. Uses Supabase watchtower_jobs table + startWatchtowerMachine().
     status: pending
   - id: 10b-k-docs
-    content: Add 'watchtower' docs page to docsConfig.ts + DocsPage.tsx, update 'Read our study' button to 'Docs'
+    content: Add 'watchtower' docs page to docsConfig.ts + DocsPage.tsx
     status: pending
   - id: 10b-l-permission
-    content: Add manage_watchtower to org RolePermissions, backend JSONB schema, UI guards
+    content: "Add manage_watchtower to org RolePermissions, backend JSONB schema, UI guards. Note: project-level can_manage_watchtower is already derived (no new column)."
     status: pending
   - id: 10b-m-pr-blocking
     content: "Integrate Watchtower check status into PR guardrails: block upgrades to versions that failed checks or are quarantined"
@@ -44,8 +47,11 @@ todos:
   - id: 10b-n-notification-preset
     content: Add 'Watchtower Alerts' preset template in notification rules creation UI
     status: pending
-  - id: 10b-o-poller-deployment
-    content: Create Dockerfile + fly.toml for watchtower-poller, or replace with QStash cron triggering an API endpoint
+  - id: 10b-o-scale-to-zero
+    content: "Scale-to-zero migration: watchtower_jobs Supabase table + claim/recovery RPCs, startWatchtowerMachine() in fly-machines.ts, worker rewrite (Supabase polling + heartbeat + 60s idle shutdown), fly.toml update (min_machines=0), recovery endpoint + QStash cron, remove all Redis queue dependencies"
+    status: pending
+  - id: 10b-p-notification-wiring
+    content: Add POST /api/internal/watchtower-event CE endpoint. Wire watchtower-worker to emit security_analysis_failure, supply_chain_anomaly, new_version_available events via HTTP call to backend.
     status: pending
 isProject: false
 ---
@@ -67,6 +73,50 @@ The watchtower-worker and watchtower-poller already run the actual analysis at t
 - [ee/backend/routes/watchtower.ts](ee/backend/routes/watchtower.ts) -- existing per-package API routes (kept, consumed by new project-level endpoints).
 - [ee/backend/routes/projects.ts](ee/backend/routes/projects.ts) -- new project-level Watchtower endpoints.
 
+---
+
+## 10B.PREREQ: Critical Bug Fixes (Do First)
+
+Three bugs in the existing codebase that will cause Phase 10B to fail in production. Fix these before any other 10B work.
+
+### BUG 1: Watchtower Worker Dockerfile Missing `git`
+
+The worker uses `simple-git` for cloning repos (analyzer.ts, github.ts, registry-integrity.ts, commit-extractor.ts, touched-functions.ts) but the [Dockerfile](backend/watchtower-worker/Dockerfile) never installs git. The extraction-worker Dockerfile correctly installs it; the watchtower-worker does not. **The worker will crash at runtime on Fly.io.**
+
+**Fix:** Add to [backend/watchtower-worker/Dockerfile](backend/watchtower-worker/Dockerfile) after the `FROM` line:
+
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
+```
+
+### BUG 2: Production Poll Path Doesn't Enqueue New-Version Jobs
+
+The production path is: QStash cron -> `POST /api/workers/watchtower-daily-poll` -> [backend/src/lib/watchtower-poll.ts](backend/src/lib/watchtower-poll.ts).
+
+When `runDependencyRefresh()` detects a version change (line 105-114), it **only updates the DB**. It does NOT insert a job into the `watchtower_jobs` table (or, pre-migration, push to Redis). The deprecated standalone [watchtower-poller](backend/watchtower-poller/src/dependency-refresh.ts) has `enqueueNewVersionJob()` which does this correctly.
+
+**Impact:** Auto-bump PRs never fire in production. New version security analysis never happens automatically.
+
+**Fix (post scale-to-zero migration):** When `latest_version` changes in `runDependencyRefresh()`, insert a `new_version` row into Supabase `watchtower_jobs` table and call `startWatchtowerMachine()`. See 10B.O for the new job table schema.
+
+### BUG 3: Production `runPollSweep()` Is a Stub
+
+The production [runPollSweep()](backend/src/lib/watchtower-poll.ts) (lines 166-192) only updates `last_polled_at` timestamps. It does NOT check for new remote commits, run incremental analysis, or detect anomalies. The deprecated poller does all of this in `processOneWatchedPackage()`.
+
+**Impact:** Watched packages never get commit updates after initial analysis. The commits table will always be stale.
+
+**Fix (post scale-to-zero migration):** `runPollSweep()` should insert one `poll_sweep` job per ready `watched_packages` entry into the `watchtower_jobs` table and call `startWatchtowerMachine()`. The Fly.io worker handles the heavy git/analysis work (it already has git installed and the analysis code).
+
+### BUG 4: `[http_service]` on Workers With No HTTP Server
+
+[watchtower-worker/fly.toml](backend/watchtower-worker/fly.toml) defines `[http_service]` on port 8080 but the worker has no HTTP server. Fly.io will attempt TCP health checks on that port.
+
+**Fix:** Remove the entire `[http_service]` section from `backend/watchtower-worker/fly.toml`. (The parser-worker has the same issue but is deprecated and not on Fly.io.)
+
+### BUG 5: Debug Logging in Worker
+
+[backend/watchtower-worker/src/index.ts](backend/watchtower-worker/src/index.ts) line 125 contains a debug agent log that posts to `http://127.0.0.1:7243/ingest/...`. Remove the `// #region agent log` ... `// #endregion` block.
+
 ## Architecture
 
 ```mermaid
@@ -74,13 +124,16 @@ graph TD
     subgraph activation [Activation - Per Project]
         Toggle["Enable Watchtower on Project"] --> QueryDeps["Query direct deps from project_dependencies"]
         QueryDeps --> Upsert["Upsert into organization_watchlist + project_watchlist"]
-        Upsert --> QueueJobs["Queue watchtower-worker jobs for new packages"]
+        Upsert --> InsertJobs["Insert into Supabase watchtower_jobs + startWatchtowerMachine()"]
     end
 
-    subgraph monitoring [Monitoring - Per Package]
-        Worker["watchtower-worker (Fly.io)"] --> Checks["Registry Integrity + Install Scripts + Entropy"]
-        Poller["watchtower-poller (Fly.io or QStash)"] --> NewCommits["Poll new commits + anomaly detection"]
-        Poller --> NewVersions["Detect new versions + auto-analyze"]
+    subgraph monitoring [Monitoring - Scale-to-Zero]
+        Machine["watchtower-worker (Fly.io)<br/>scale-to-zero, shared-cpu-1x 1GB<br/>polls Supabase watchtower_jobs<br/>60s idle -> stops ($0 when idle)"]
+        Machine --> Checks["Registry Integrity + Install Scripts + Entropy + Commits + Anomalies"]
+        Machine --> Events["POST /api/internal/watchtower-event<br/>(emit notification events)"]
+        Cron["QStash daily cron (4AM UTC)"] --> PollEndpoint["POST /api/workers/watchtower-daily-poll"]
+        PollEndpoint --> InsertPollJobs["Insert poll_sweep + new_version jobs<br/>into watchtower_jobs + start machine"]
+        RecoveryCron["QStash recovery (every 5 min)"] --> RecoveryEndpoint["POST /api/internal/recovery/watchtower-jobs"]
     end
 
     subgraph projectUI [Project Watchtower Tab]
@@ -94,9 +147,10 @@ graph TD
         ProjectList["Projects sidebar (links to project tabs)"]
     end
 
-    activation --> monitoring
-    monitoring --> projectUI
-    monitoring --> orgUI
+    activation --> Machine
+    InsertPollJobs --> Machine
+    Machine --> projectUI
+    Machine --> orgUI
 ```
 
 
@@ -115,6 +169,8 @@ Watchtower monitors **direct dependencies only** (`is_direct = true` in `project
 - Watching all 150+ deps (including transitives) would generate excessive noise
 
 The packages security table shows a note: "Monitoring N direct dependencies. Transitive dependencies are covered through their parent packages."
+
+**Multi-ecosystem coverage:** Registry integrity and install script analysis are npm-only. Entropy analysis and commit anomaly detection work for any ecosystem with a GitHub repo. Non-npm packages show "n/a" for npm-specific checks. The table should display an ecosystem icon (npm, PyPI, Maven, Cargo, etc.) per package. Version polling (`runDependencyRefresh`) currently only fetches npm latest; non-npm packages won't get automatic version updates via the poller -- this is a known limitation to address post-10B.
 
 ---
 
@@ -161,10 +217,11 @@ Full-width CTA screen (reuse the `FeatureCard` pattern from current `DependencyW
 
 4 compact stat cards:
 
-- **Packages Monitored**: `{analyzed} / {total_direct}` -- some packages may lack GitHub repos and can't be fully analyzed. Thin progress bar showing coverage.
+- **Packages Monitored**: `{analyzed} / {total_direct}` -- some packages may lack GitHub repos and can't be fully analyzed. Thin progress bar showing coverage. Updates live as worker completes jobs (poll or Supabase Realtime on `watchtower_jobs`).
 - **Security Alerts**: count of packages with any failed check. Red styling if > 0.
 - **Anomalous Commits**: count of commits with anomaly score >= 30 in the last 30 days.
 - **Blocked Versions**: count of packages where the next version failed checks or is quarantined.
+- **Errored Packages**: (shown only when > 0) count of packages where worker analysis failed. Orange styling.
 
 ### Active State -- Packages Security Table
 
@@ -174,9 +231,9 @@ Dense data table showing all direct dependencies and their Watchtower status:
 
 - **Package**: name + ecosystem icon (npm, PyPI, etc.)
 - **Version**: current version in the project
-- **Registry Integrity**: pass (green check) / fail (red X) / pending (gray spinner) / n/a (dash, for non-npm packages)
-- **Install Scripts**: same statuses
-- **Entropy**: same statuses
+- **Registry Integrity**: pass (green check) / fail (red X) / pending (gray spinner) / error (orange !) / n/a (dash). **n/a** when: non-npm ecosystem, or package has no linked GitHub repo. Tooltip: "Registry integrity requires npm + GitHub repository."
+- **Install Scripts**: same statuses. **n/a** for non-npm ecosystems (install scripts are npm-specific). Tooltip: "Install script analysis is available for npm packages."
+- **Entropy**: same statuses. Works across all ecosystems (tarball analysis). **n/a** only when no tarball is available.
 - **Anomaly**: highest anomaly score from recent commits. Color: green (<30), yellow (30-59), red (>=60). Dash if no data.
 - **Next Version**: status badge showing one of:
   - "v1.2.3 Ready" (green) -- new version available, all checks pass, not quarantined
@@ -187,6 +244,7 @@ Dense data table showing all direct dependencies and their Watchtower status:
 - **Actions**: contextual buttons:
   - "Bump" -- create PR to latest safe version (when next version is Ready)
   - "View PR" -- if a bump/decrease PR already exists
+  - "Retry" -- re-queue analysis (when `analysis_status = 'error'`)
   - Quarantine toggle icon (shield icon, toggles `quarantine_next_release`)
 
 **Table features:**
@@ -230,6 +288,7 @@ All commits across all watched packages for this project. Same table pattern as 
 
 ```sql
 ALTER TABLE projects ADD COLUMN watchtower_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE projects ADD COLUMN watchtower_enabled_at TIMESTAMPTZ;
 
 CREATE TABLE project_watchlist (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -241,9 +300,31 @@ CREATE TABLE project_watchlist (
 
 CREATE INDEX idx_project_watchlist_project ON project_watchlist(project_id);
 CREATE INDEX idx_project_watchlist_watchlist ON project_watchlist(organization_watchlist_id);
+
+-- Automatically clean up orphaned organization_watchlist entries when
+-- a project_watchlist row is deleted (project disabled or project deleted).
+CREATE OR REPLACE FUNCTION cleanup_orphaned_watchlist()
+RETURNS TRIGGER AS $$
+BEGIN
+  DELETE FROM organization_watchlist
+  WHERE id = OLD.organization_watchlist_id
+  AND NOT EXISTS (
+    SELECT 1 FROM project_watchlist
+    WHERE organization_watchlist_id = OLD.organization_watchlist_id
+    AND id != OLD.id
+  );
+  RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_cleanup_orphaned_watchlist
+AFTER DELETE ON project_watchlist
+FOR EACH ROW EXECUTE FUNCTION cleanup_orphaned_watchlist();
 ```
 
 `project_watchlist` is a junction table tracking which projects contributed which packages to the org watchlist. This enables clean removal when a project disables Watchtower.
+
+**Existing watchlist cleanup:** Since the current user is the only user, run a one-time cleanup before applying the migration to drop any orphaned `organization_watchlist` entries that don't correspond to a project's direct dependencies. This avoids stale data confusing the new project-based model.
 
 ### Enable Endpoint
 
@@ -289,6 +370,8 @@ All under `/api/organizations/:orgId/projects/:projectId/watchtower/`:
 | POST   | `packages/:watchlistId/quarantine` | Toggle quarantine_next_release for a specific package                          | `can_manage_watchtower` |
 | POST   | `packages/:watchlistId/bump`       | Create bump PR for a specific package                                          | `can_manage_watchtower` |
 | POST   | `packages/:watchlistId/decrease`   | Create decrease PR for a specific package                                      | `can_manage_watchtower` |
+| POST   | `packages/:watchlistId/reanalyze`  | Re-queue watchtower analysis for a specific package (retry after error)        | `can_manage_watchtower` |
+| GET    | `packages/:watchlistId/details`    | Lazy-load expanded row data: check failure reasons, recent anomalous commits   | any project member      |
 
 
 `**GET packages` response shape:**
@@ -316,7 +399,9 @@ All under `/api/organizations/:orgId/projects/:projectId/watchtower/`:
     bump_pr_url: string | null;
     decrease_pr_url: string | null;
     import_count: number;                 // how many import sites in this project
-    analysis_status: 'ready' | 'pending' | 'analyzing';
+    analysis_status: 'ready' | 'pending' | 'analyzing' | 'error';
+    analysis_error: string | null;        // error message when status='error'
+    ecosystem: string;                    // npm, pypi, maven, etc. -- for n/a tooltip logic
   }>;
   total_direct_deps: number;
 }
@@ -325,6 +410,12 @@ All under `/api/organizations/:orgId/projects/:projectId/watchtower/`:
 `**GET commits` query params:** `limit`, `offset`, `sort` (recent|anomaly), `filter` (all|touches_imported|high_anomaly), `package` (optional package name filter)
 
 Implementation: aggregates across all `organization_watchlist` entries linked to this project via `project_watchlist`, calling the existing per-package `/api/watchtower/:packageName/commits` under the hood or querying `package_commits` directly with a JOIN.
+
+**Stats caching:** `GET stats` response is cached in Redis at `watchtower-project-stats:{projectId}` with 60s TTL (matching Phase 10 pattern). Invalidated on: watchtower enable/disable, worker job completion (via the internal watchtower-event endpoint), commit clear.
+
+**Reanalyze endpoint:** `POST packages/:watchlistId/reanalyze` inserts a new `full_analysis` job into the `watchtower_jobs` Supabase table and calls `startWatchtowerMachine()`. Returns 429 if a job for this package is already queued/processing.
+
+**Details endpoint:** `GET packages/:watchlistId/details` returns check failure reasons (from `watched_packages.analysis_data`), quarantine details, import count, and top 3 recent anomalous commits for this package. Lazy-loaded when the user expands a row in the packages table.
 
 ## 10B.E: Remove Dependency-Level Watchtower Tab
 
@@ -445,6 +536,10 @@ Top packages across the org by usage (from `project_dependencies` grouped by `de
 - For unwatched high-usage packages: "Enable Watchtower on [Project] to monitor this package"
 - Helps identify coverage gaps
 
+### Stats Caching
+
+`GET /api/organizations/:id/watchtower/overview` caches the response in Redis at `watchtower-org-stats:{orgId}` with 60s TTL. Invalidated on: watchtower enable/disable, worker job completion events.
+
 ## 10B.I: Organization API Endpoints
 
 
@@ -469,8 +564,9 @@ When an extraction completes for a project with `watchtower_enabled = true`, syn
 1. For each new direct dep (`is_direct = true`):
   a. UPSERT into `organization_watchlist` (org_id + dependency_id)
    b. INSERT into `project_watchlist` (project_id + watchlist_id)
-   c. Queue watchtower-worker job for the new package
-2. Log: "Watchtower: added N new packages to watchlist"
+   c. Insert `full_analysis` job into Supabase `watchtower_jobs` table for the new package
+2. Call `startWatchtowerMachine()` once after all jobs are inserted (batch start, not per-package)
+3. Log: "Watchtower: added N new packages to watchlist"
 
 **Dependencies removed (in extraction diff):**
 
@@ -524,6 +620,9 @@ Backend: Add to the org roles `permissions` JSONB schema.
 - Toggling quarantine on individual packages
 - Creating bump/decrease PRs
 - Clearing commits
+- Re-queuing analysis (reanalyze)
+
+**Note:** `can_manage_watchtower` is already derived in [ee/backend/routes/projects.ts](ee/backend/routes/projects.ts) (line 1507) from `hasOrgManagePermission || hasOwnerTeamManageProjects`. No new DB column needed for the project-level permission.
 
 **Permission hierarchy:**
 
@@ -566,52 +665,312 @@ return true;
 
 No new event types needed -- Phase 9 already defines these Watchtower-related events in the event catalog (9A).
 
-## 10B.O: Cloud Deployment -- Worker and Poller
+## 10B.P: Notification Event Wiring
+
+The watchtower-worker runs on Fly.io as a separate deployment and cannot import from `ee/backend/`. To emit Phase 9 notification events, the worker calls an internal HTTP endpoint on the main backend.
+
+### CE Endpoint
+
+Add `POST /api/internal/watchtower-event` to [backend/src/routes/](backend/src/routes/) (CE route, `X-Internal-Api-Key`):
+
+```typescript
+// Request body
+{
+  event_type: 'security_analysis_failure' | 'supply_chain_anomaly' | 'new_version_available';
+  organization_id: string;
+  project_id?: string;
+  package_name: string;
+  payload: Record<string, any>;
+  priority: 'critical' | 'high' | 'normal' | 'low';
+}
+```
+
+The endpoint calls `emitEvent()` from [ee/backend/lib/event-bus.ts](ee/backend/lib/event-bus.ts) (via dynamic import when EE edition). In CE mode, it's a no-op that returns 200.
+
+### Worker Integration
+
+In the watchtower-worker, after analysis completes with failures or anomalies:
+
+1. `**security_analysis_failure**` (priority: high) -- emitted when any security check fails (registry integrity, install scripts, entropy). Payload includes: check name, failure reason, package version.
+2. `**supply_chain_anomaly**` (priority: normal) -- emitted when a commit has anomaly score >= 60 (high threshold). Payload includes: commit SHA, author, anomaly score, anomaly reasons.
+3. `**new_version_available**` (priority: low) -- emitted when a new version is detected and all checks pass. Payload includes: old version, new version, check results summary.
+
+Worker calls:
+
+```typescript
+const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3001';
+const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY;
+
+async function emitWatchtowerEvent(event: WatchtowerEvent): Promise<void> {
+  if (!BACKEND_URL || !INTERNAL_API_KEY) return;
+  try {
+    await fetch(`${BACKEND_URL}/api/internal/watchtower-event`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Internal-Api-Key': INTERNAL_API_KEY,
+      },
+      body: JSON.stringify(event),
+    });
+  } catch {
+    // Fire-and-forget; don't let notification failures break analysis
+  }
+}
+```
+
+### Environment Variables
+
+Add to watchtower-worker Fly.io secrets:
+
+- `BACKEND_URL` -- the main backend URL (e.g., `https://api.deptex.dev`)
+- `INTERNAL_API_KEY` -- same key used by other internal endpoints
+
+## 10B.O: Scale-to-Zero Migration -- Watchtower Worker
+
+Migrate the watchtower-worker from always-on Redis polling to the same Supabase job table + Fly Machines API pattern used by the extraction-worker. This eliminates the ~$5/mo always-on cost, removes the Redis queue dependency for watchtower, and unifies all worker infrastructure.
 
 ### Current State
 
-- **watchtower-worker**: Has Dockerfile + fly.toml (`deptex-watchtower-worker`, shared-cpu-1x, 512MB, `min_machines_running = 1`). Runs 24/7 polling Redis queues. Already deployable to Fly.io.
-- **watchtower-poller**: Has NO Dockerfile or fly.toml. Runs locally as `npm start`. Not cloud-ready.
+- **watchtower-worker**: Fly.io always-on (`min_machines_running = 1`), polls 3 Redis queues (`watchtower-jobs`, `watchtower-new-version-jobs`, `watchtower-batch-version-jobs`) in priority order, sleeps 5s when empty. ~$5/mo.
+- **watchtower-poller**: Deprecated for production. QStash cron already triggers `POST /api/workers/watchtower-daily-poll`, but that endpoint has bugs (see PREREQ).
 
-### Watchtower Worker (no changes needed)
+### Target State
 
-The worker's fly.toml is already configured for always-on (`min_machines_running = 1`, `auto_stop_machines = false`). This is correct -- the worker needs to continuously poll Redis for jobs. 512MB RAM is sufficient for registry checks, git operations, and entropy analysis.
+- **watchtower-worker**: Fly.io scale-to-zero (`min_machines_running = 0`), polls Supabase `watchtower_jobs` table via atomic RPC, shuts down after 60s idle. $0 when idle, ~$0.005/job.
+- **Job queuing**: Backend inserts into Supabase `watchtower_jobs` + calls `startWatchtowerMachine()` to wake a stopped machine.
+- **Redis**: No longer used for watchtower job queues. Remove `watchtower-jobs`, `watchtower-new-version-jobs`, `watchtower-batch-version-jobs` queue names.
 
-One fix needed: the fly.toml defines `[http_service]` but the worker has no HTTP server. Remove the `[http_service]` section.
+### New Database Table: `watchtower_jobs`
 
-### Watchtower Poller (needs deployment plan)
+```sql
+CREATE TABLE watchtower_jobs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'processing', 'completed', 'failed')),
+  job_type TEXT NOT NULL CHECK (job_type IN ('full_analysis', 'new_version', 'batch_version_analysis', 'poll_sweep')),
+  priority INTEGER NOT NULL DEFAULT 10,
+  payload JSONB NOT NULL DEFAULT '{}',
+  organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+  project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
+  dependency_id UUID REFERENCES dependencies(id) ON DELETE CASCADE,
+  package_name TEXT NOT NULL,
+  attempt INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  machine_id TEXT,
+  heartbeat_at TIMESTAMPTZ,
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  error_message TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
 
-Two options:
+CREATE INDEX idx_watchtower_jobs_status ON watchtower_jobs(status) WHERE status IN ('queued', 'processing');
+CREATE INDEX idx_watchtower_jobs_priority ON watchtower_jobs(priority, created_at) WHERE status = 'queued';
+CREATE INDEX idx_watchtower_jobs_heartbeat ON watchtower_jobs(heartbeat_at) WHERE status = 'processing';
+```
 
-**Option A: Deploy as Fly.io machine (simple, matches worker pattern)**
+**Priority values:**
 
-Create `backend/watchtower-poller/Dockerfile` and `backend/watchtower-poller/fly.toml`:
+- `1` = `new_version` (auto-bump, time-sensitive)
+- `5` = `poll_sweep` (daily commit checks)
+- `10` = `full_analysis` (initial enable, normal queue)
+- `20` = `batch_version_analysis` (historical, lowest priority)
 
-- App: `deptex-watchtower-poller`
-- VM: `shared-cpu-1x`, 256MB RAM (very lightweight -- just checks Redis and queries Supabase)
-- `min_machines_running = 1`, `auto_stop_machines = false`
-- Cost: ~$2/month (always-on shared CPU)
+**Payload shapes** (stored as JSONB, mirrors current job interfaces):
 
-**Option B: Replace with QStash cron (more efficient, no idle machine)**
+```typescript
+// full_analysis
+{ watchedPackageId: string; projectDependencyId: string; currentVersion?: string }
 
-The poller checks every 60 seconds but only fires the daily poll once per 24 hours. This is wasteful. Replace with:
+// new_version
+{ type: 'new_version' | 'quarantine_expired'; new_version?: string; latest_release_date?: string }
 
-1. QStash cron schedule: `0 4 * * *` (runs daily at 4 AM UTC)
-2. Triggers `POST /api/workers/watchtower-daily-poll` on the backend
-3. The endpoint runs `runDependencyRefresh()` + `runPollSweep()` synchronously (or queues them)
-4. No dedicated machine needed -- runs on the main backend
+// batch_version_analysis
+{ versions: string[] }
 
-Recommendation: **Option B** for the daily poll (it's a once-per-day job, not worth a 24/7 machine). If more frequent polling is needed in the future, add a second QStash schedule.
+// poll_sweep
+{ watched_package_id: string; last_known_commit_sha?: string }
+```
 
-The existing poller's `runDependencyRefresh()` and `runPollSweep()` functions would be extracted into a shared library and called from the QStash consumer endpoint.
+### Supabase RPCs
 
-### Impact on Phase 10B
+```sql
+-- Atomic claim: picks highest-priority queued job, locks it
+CREATE OR REPLACE FUNCTION claim_watchtower_job(p_machine_id TEXT)
+RETURNS SETOF watchtower_jobs AS $$
+  UPDATE watchtower_jobs
+  SET status = 'processing',
+      machine_id = p_machine_id,
+      started_at = NOW(),
+      heartbeat_at = NOW(),
+      attempt = attempt + 1,
+      updated_at = NOW()
+  WHERE id = (
+    SELECT id FROM watchtower_jobs
+    WHERE status = 'queued'
+    ORDER BY priority ASC, created_at ASC
+    FOR UPDATE SKIP LOCKED
+    LIMIT 1
+  )
+  RETURNING *;
+$$ LANGUAGE sql;
 
-Phase 10B doesn't need to implement the full deployment -- that's Phase 2's domain. But Phase 10B should:
+-- Recovery: requeue jobs stuck processing (no heartbeat in 5 min)
+CREATE OR REPLACE FUNCTION recover_stuck_watchtower_jobs()
+RETURNS INTEGER AS $$
+DECLARE
+  recovered INTEGER;
+BEGIN
+  UPDATE watchtower_jobs
+  SET status = 'queued',
+      machine_id = NULL,
+      started_at = NULL,
+      heartbeat_at = NULL,
+      updated_at = NOW()
+  WHERE status = 'processing'
+    AND heartbeat_at < NOW() - INTERVAL '5 minutes'
+    AND attempt < max_attempts;
+  GET DIAGNOSTICS recovered = ROW_COUNT;
 
-1. Fix the watchtower-worker fly.toml (remove `[http_service]`)
-2. Ensure all new Watchtower endpoints work with the existing worker/poller architecture
-3. Document that the poller needs either a Fly.io machine or QStash cron migration as part of Phase 2 deployment
+  UPDATE watchtower_jobs
+  SET status = 'failed',
+      error_message = 'Exhausted max attempts',
+      completed_at = NOW(),
+      updated_at = NOW()
+  WHERE status = 'processing'
+    AND heartbeat_at < NOW() - INTERVAL '5 minutes'
+    AND attempt >= max_attempts;
+
+  RETURN recovered;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+### Fly Machines API Integration
+
+Add to [ee/backend/lib/fly-machines.ts](ee/backend/lib/fly-machines.ts):
+
+```typescript
+const FLY_WATCHTOWER_APP = process.env.FLY_WATCHTOWER_APP || 'deptex-watchtower-worker';
+
+export async function startWatchtowerMachine(): Promise<string | null> {
+  // Same pattern as startExtractionMachine():
+  // 1. List machines for FLY_WATCHTOWER_APP
+  // 2. Find a stopped machine -> start it
+  // 3. If none stopped, return null (no burst for watchtower -- single machine is sufficient)
+  // 4. Return machine_id on success
+}
+```
+
+No burst machines for watchtower (unlike extraction). A single `shared-cpu-1x 1GB` machine handles all job types sequentially. If a backlog builds (e.g., enabling Watchtower on a project with 50 deps), jobs queue in Supabase and the machine works through them.
+
+### Worker Rewrite
+
+The worker main loop changes from Redis polling to Supabase polling:
+
+```typescript
+// OLD: Redis lpop in priority order
+const job = await redis.lpop('watchtower-new-version-jobs')
+  || await redis.lpop('watchtower-jobs')
+  || await redis.lpop('watchtower-batch-version-jobs');
+
+// NEW: Supabase RPC (atomic, priority-ordered)
+const { data: jobs } = await supabase.rpc('claim_watchtower_job', { p_machine_id: MACHINE_ID });
+const job = jobs?.[0] ?? null;
+```
+
+**Key changes to worker:**
+
+- Replace Redis client with Supabase client for job claiming
+- Add heartbeat: update `heartbeat_at` every 60s during processing
+- Add idle shutdown: if no job claimed for 60 consecutive seconds, `process.exit(0)` (Fly stops the machine)
+- On job complete: update `status = 'completed'`, `completed_at = NOW()`
+- On job error: update `status = 'failed'`, `error_message`, `completed_at = NOW()`
+- Job type routing: switch on `job.job_type` to call `processJob()`, `processNewVersionJob()`, `processBatchVersionJob()`, or `processPollSweepJob()`
+- New `processPollSweepJob()`: implements the full poll sweep logic (git remote check, incremental analysis, anomaly detection) that `runPollSweep()` currently stubs out
+- 4-hour machine watchdog (same as extraction-worker): force exit after 4h to prevent runaway
+
+### Updated fly.toml
+
+```toml
+app = "deptex-watchtower-worker"
+primary_region = "iad"
+
+[build]
+
+[env]
+  NODE_ENV = "production"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 1024
+```
+
+No `[http_service]` (worker has no HTTP server). No `auto_stop_machines` or `min_machines_running` (controlled via Machines API, not Fly proxy).
+
+### Updated `queueWatchtowerJob()`
+
+Replace [ee/backend/lib/watchtower-queue.ts](ee/backend/lib/watchtower-queue.ts) to use Supabase instead of Redis:
+
+```typescript
+export async function queueWatchtowerJob(job: WatchtowerJobInput): Promise<{ success: boolean; jobId?: string }> {
+  const { data, error } = await supabase
+    .from('watchtower_jobs')
+    .insert({
+      job_type: job.type || 'full_analysis',
+      priority: job.priority || 10,
+      payload: job.payload,
+      organization_id: job.organizationId,
+      project_id: job.projectId,
+      dependency_id: job.dependencyId,
+      package_name: job.packageName,
+    })
+    .select('id')
+    .single();
+
+  if (error) return { success: false };
+
+  // Start machine (fire-and-forget; if it fails, recovery cron will handle it)
+  startWatchtowerMachine().catch(() => {});
+
+  return { success: true, jobId: data.id };
+}
+```
+
+### Recovery Endpoint
+
+Add `POST /api/internal/recovery/watchtower-jobs` (CE route, `X-Internal-Api-Key`):
+
+1. Call `recover_stuck_watchtower_jobs()` RPC
+2. Check for queued jobs with no running machine -> call `startWatchtowerMachine()`
+3. Return `{ recovered, failed, started }`
+
+QStash cron: `*/5 * * * *` -> `POST /api/internal/recovery/watchtower-jobs`
+
+### Updated `watchtower-poll.ts`
+
+After the scale-to-zero migration, the QStash daily poll endpoint (`POST /api/workers/watchtower-daily-poll`) calls:
+
+1. `runDependencyRefresh()` -- when `latest_version` changes, insert a `new_version` job into `watchtower_jobs` (priority 1) and call `startWatchtowerMachine()`
+2. `runPollSweep()` -- for each `watched_packages` with `status = 'ready'`, insert a `poll_sweep` job into `watchtower_jobs` (priority 5) and call `startWatchtowerMachine()` once after all jobs are inserted
+3. `runWebhookHealthCheck()` -- unchanged
+4. `cleanupOldWebhookDeliveries()` -- unchanged
+
+### Cost Impact
+
+- **Before:** ~$5/mo always-on (shared-cpu-1x 512MB, running 24/7)
+- **After:** ~$0 idle, ~$0.005 per job (machine runs only during analysis)
+- **Typical month:** 30 daily polls + occasional enables/reanalyzes = ~$0.50/mo
+- **Savings:** ~$4.50/mo
+
+### Environment Variables
+
+Add to backend `.env`:
+
+- `FLY_WATCHTOWER_APP` (default: `deptex-watchtower-worker`)
+
+The existing `FLY_API_TOKEN` is shared across all Fly apps.
 
 ---
 
@@ -629,9 +988,12 @@ Phase 10B doesn't need to implement the full deployment -- that's Phase 2's doma
 ### Packages Table Edge Cases
 
 1. **Package has no GitHub repo**: Registry integrity check requires a git source. Status shows "n/a" (not applicable) for registry integrity. Install scripts and entropy can still run on the tarball. Show tooltip: "Registry integrity check unavailable -- no linked repository."
-2. **Package analysis is pending (just enabled)**: Show "Analyzing..." spinner in all check columns. The stats strip shows "N / M packages analyzed."
-3. **Package was removed from registry (unpublished)**: Worker returns error. Show "Package unavailable" status. This is actually a critical alert -- an unpublished package can be re-registered by an attacker (dependency confusion).
-4. **Very large project (500+ direct deps)**: Table should use virtual scrolling or pagination. API uses cursor-based pagination. Enable button shows warning: "This will queue analysis for 500+ packages. This may take several hours to complete."
+2. **Non-npm ecosystem packages**: Registry integrity and install scripts show "n/a". Entropy and commit analysis work if the package has a GitHub repo. Show ecosystem icon and tooltip explaining which checks apply.
+3. **Package analysis is pending (just enabled)**: Show "Analyzing..." spinner in all check columns. The stats strip shows "N / M packages analyzed."
+4. **Package analysis failed (worker error)**: Show orange "Error" badge with the error message in the expanded row. "Retry" button re-queues the job. Stats strip shows errored count if > 0.
+5. **Package was removed from registry (unpublished)**: Worker returns error. Show "Package unavailable" status. This is actually a critical alert -- an unpublished package can be re-registered by an attacker (dependency confusion). Emit `security_analysis_failure` event.
+6. **Very large project (500+ direct deps)**: Table should use virtual scrolling or pagination. API uses cursor-based pagination. Enable button shows confirmation: "This will queue analysis for 500+ packages. This may take several hours to complete." Backend batches all job inserts in a single Supabase call, then calls `startWatchtowerMachine()` once.
+7. **Worker machine doesn't start (Fly.io error)**: Jobs stay queued in Supabase. Recovery cron (every 5 min) detects queued jobs with no running machine and retries `startWatchtowerMachine()`. UI shows "pending" until machine starts.
 
 ### Commits Table Edge Cases
 
@@ -641,9 +1003,10 @@ Phase 10B doesn't need to implement the full deployment -- that's Phase 2's doma
 
 ### Sync Edge Cases
 
-1. **Extraction adds 50 new direct deps at once**: Batch UPSERT into `organization_watchlist` and `project_watchlist`. Queue all 50 watchtower-worker jobs. The worker processes them in order (5-second polling interval).
-2. **Extraction removes all direct deps**: All `project_watchlist` rows are removed. Orphaned `organization_watchlist` entries are cleaned up. Project shows "0 packages monitored" but Watchtower remains enabled (ready for next extraction).
+1. **Extraction adds 50 new direct deps at once**: Batch UPSERT into `organization_watchlist` and `project_watchlist`. Batch insert 50 jobs into `watchtower_jobs` (single Supabase call). Call `startWatchtowerMachine()` once. Worker processes them by priority order.
+2. **Extraction removes all direct deps**: All `project_watchlist` rows are removed. Orphaned `organization_watchlist` entries are automatically cleaned up by the `trg_cleanup_orphaned_watchlist` trigger. Project shows "0 packages monitored" but Watchtower remains enabled (ready for next extraction).
 3. **Extraction fails mid-way**: Watchtower sync only runs AFTER successful dependency sync. If extraction fails, no watchlist changes are made.
+4. **Extraction machine starts but watchtower machine fails to start**: Jobs queue in `watchtower_jobs` and stay pending. Recovery cron picks them up within 5 minutes.
 
 ### Permission Edge Cases
 
@@ -662,14 +1025,33 @@ Phase 10B doesn't need to implement the full deployment -- that's Phase 2's doma
 ## Cross-Phase Integration Points
 
 
-| Phase                   | Integration              | Details                                                                                                                                                            |
-| ----------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Phase 2 (Fly.io)        | Worker/poller deployment | watchtower-worker already has fly.toml. Poller needs Dockerfile + fly.toml OR QStash cron migration. Fix worker fly.toml (remove [http_service]).                  |
-| Phase 4 (Policy)        | Policy engine context    | Policy evaluation context could include `watchtower_status` for the dependency (pass/fail/pending), enabling policy rules like "block if Watchtower check failed." |
-| Phase 5 (Compliance)    | Compliance status        | Watchtower check failures could contribute to compliance violations if configured in the policy.                                                                   |
-| Phase 8 (PR Webhooks)   | PR guardrails            | 10B.M adds a Watchtower check step to the PR evaluation pipeline. Blocks upgrades to failed/quarantined versions.                                                  |
-| Phase 9 (Notifications) | Event types              | `security_analysis_failure`, `supply_chain_anomaly`, `new_version_available` events already defined. 10B.N adds a preset template.                                 |
-| Phase 12 (Docs)         | Documentation            | 10B.K adds the Watchtower docs page. Phase 12 may expand or refine it.                                                                                             |
-| Phase 13 (Billing)      | Plan limits              | `watchtower_limit` in `organization_plans` table caps how many projects can have Watchtower enabled per plan tier.                                                 |
+| Phase                   | Integration            | Details                                                                                                                                                                                    |
+| ----------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Phase 2 (Fly.io)        | Scale-to-zero complete | 10B.O migrates watchtower-worker to scale-to-zero (Supabase job table + Machines API), matching extraction-worker pattern. Fly.io deployment fully handled in 10B.                         |
+| Phase 4 (Policy)        | Policy engine context  | Policy evaluation context could include `watchtower_status` for the dependency (pass/fail/pending), enabling policy rules like "block if Watchtower check failed."                         |
+| Phase 5 (Compliance)    | Compliance status      | Watchtower check failures could contribute to compliance violations if configured in the policy.                                                                                           |
+| Phase 8 (PR Webhooks)   | PR guardrails          | 10B.M adds a Watchtower check step to the PR evaluation pipeline. Blocks upgrades to failed/quarantined versions.                                                                          |
+| Phase 9 (Notifications) | Event wiring           | 10B.P adds the internal endpoint + worker HTTP calls to emit events. 10B.N adds the preset template. Events: `security_analysis_failure`, `supply_chain_anomaly`, `new_version_available`. |
+| Phase 12 (Docs)         | Documentation          | 10B.K adds the Watchtower docs page. Phase 12 may expand or refine it.                                                                                                                     |
+| Phase 13 (Billing)      | Plan limits            | `watchtower_limit` in `organization_plans` table caps how many projects can have Watchtower enabled per plan tier.                                                                         |
 
+
+## Implementation Order
+
+Recommended sequence (backend-first, then frontend):
+
+1. **10B.PREREQ** -- Fix critical bugs (Dockerfile, debug logging)
+2. **10B.O** -- Scale-to-zero migration (watchtower_jobs table, RPCs, fly-machines.ts, worker rewrite). This must land before other backend work because it changes how jobs are queued.
+3. **10B.PREREQ (BUG 2+3)** -- Fix watchtower-poll.ts to use the new Supabase job table
+4. **10B.P** -- Notification event wiring (internal endpoint + worker integration)
+5. **10B.C + 10B.L** -- Database migration (project_watchlist, permissions) + toggle endpoint
+6. **10B.D + 10B.I** -- Backend API endpoints (project + org)
+7. **10B.J** -- Auto-sync logic in extraction pipeline
+8. **10B.M** -- PR guardrails integration
+9. **10B.A + 10B.F** -- Sidebar nav changes (quick frontend)
+10. **10B.B** -- Project Watchtower page (largest frontend piece)
+11. **10B.E** -- Remove dependency-level tab + redirects + extract components
+12. **10B.G + 10B.H** -- Org Watchtower page
+13. **10B.K** -- Docs page
+14. **10B.N** -- Notification preset template
 

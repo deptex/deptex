@@ -1,7 +1,6 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as path from 'path';
-// @ts-expect-error - oxc-parser types may not match runtime (filename, sourceText)
 import { parseSync } from 'oxc-parser';
 
 const execAsync = promisify(exec);
@@ -104,20 +103,20 @@ export function getExportedDeclarationsWithLineRanges(filePath: string, content:
 
   try {
     const result = parseSync(filePath, content);
-    const programString = result.program;
-    if (!programString || (typeof programString === 'string' && programString.length === 0)) {
+    const programRaw = result.program as string | object | null | undefined;
+    if (programRaw == null || (typeof programRaw === 'string' && programRaw.length === 0)) {
       return declarations;
     }
 
     let programNode: any;
-    if (typeof programString === 'string') {
+    if (typeof programRaw === 'string') {
       try {
-        programNode = JSON.parse(programString);
+        programNode = JSON.parse(programRaw);
       } catch {
         return declarations;
       }
     } else {
-      programNode = programString;
+      programNode = programRaw;
     }
 
     function getLineRange(node: any): { startLine: number; endLine: number } | null {

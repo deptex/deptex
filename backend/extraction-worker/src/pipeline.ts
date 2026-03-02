@@ -4,7 +4,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync, spawnSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { cloneRepository, cleanupRepository, cloneByProvider } from './clone';
 import { parseSbom, getBomRefToNameVersion, patchDevDependencies, type ParsedSbomDep, type ParsedSbomRelationship } from './sbom';
@@ -12,6 +12,8 @@ import { calculateDepscore, SEVERITY_TO_CVSS, type AssetTier } from './depscore'
 import { analyzeRepository } from './ast-parser';
 import { storeAstAnalysisResults } from './ast-storage';
 import { ExtractionLogger } from './logger';
+import { parsePurl, resolvePurlToDependencyId } from './purl';
+import { parseReachableFlows, parseUsageSlices, parseLlmPrompts, updateReachabilityLevels } from './reachability';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
@@ -68,12 +70,22 @@ async function setError(
     .eq('project_id', projectId);
 }
 
-function runCdxgen(workspacePath: string): string {
+function runCdxgen(workspacePath: string, ecosystem?: string): string {
   const outPath = path.join(workspacePath, 'sbom.json');
+  const args = [
+    '--yes', '@cyclonedx/cdxgen',
+    '--path', `"${workspacePath}"`,
+    '-o', `"${outPath}"`,
+    '--profile', 'research',
+    '--deep',
+  ];
+  if (ecosystem) {
+    args.push('-t', ecosystem);
+  }
   try {
-    execSync(`npx --yes @cyclonedx/cdxgen --path "${workspacePath}" -o "${outPath}"`, {
+    execSync(`npx ${args.join(' ')}`, {
       stdio: 'pipe',
-      timeout: 300000,
+      timeout: 15 * 60 * 1000,
       maxBuffer: 50 * 1024 * 1024,
     });
   } catch (e: any) {
@@ -125,6 +137,59 @@ export interface ExtractionJob {
   integration_id?: string;
 }
 
+function runDepScan(
+  depScanExe: string,
+  args: string[],
+  cwd: string,
+  logger: { info: (step: string, msg: string) => Promise<void>; warn: (step: string, msg: string) => Promise<void> },
+  heartbeat: () => Promise<void>,
+  timeoutMs: number = 180 * 60 * 1000,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(depScanExe, args, { cwd, stdio: 'pipe' });
+    let stdout = '';
+    let stderr = '';
+    const startTime = Date.now();
+
+    child.stdout.on('data', (data: Buffer) => {
+      stdout += data.toString();
+      const trimmed = data.toString().trim();
+      if (trimmed) {
+        logger.info('depscan', trimmed).catch(() => {});
+      }
+    });
+    child.stderr.on('data', (data: Buffer) => {
+      stderr += data.toString();
+    });
+
+    const heartbeatInterval = setInterval(async () => {
+      try {
+        await heartbeat();
+        const elapsed = Math.round((Date.now() - startTime) / 60000);
+        await logger.info('depscan', `Atom analysis in progress (${elapsed} min elapsed)...`);
+      } catch {}
+    }, 60_000);
+
+    const timeout = setTimeout(() => {
+      child.kill('SIGTERM');
+      clearInterval(heartbeatInterval);
+      reject(new Error(`dep-scan timed out after ${timeoutMs / 60000} min`));
+    }, timeoutMs);
+
+    child.on('close', (code: number | null) => {
+      clearInterval(heartbeatInterval);
+      clearTimeout(timeout);
+      resolve({ stdout, stderr, exitCode: code ?? 1 });
+    });
+
+    child.on('error', (err: Error) => {
+      clearInterval(heartbeatInterval);
+      clearTimeout(timeout);
+      reject(err);
+    });
+  });
+}
+
 function classifyCloneError(message: string): string {
   if (/401|403|authentication|authorization/i.test(message)) {
     return 'Authentication failed — your source code integration may need to be reconnected in Organization Settings';
@@ -148,10 +213,14 @@ function classifyCdxgenError(message: string): string {
   return `SBOM generation failed: ${message.slice(0, 200)}`;
 }
 
+/** Logger interface for pipeline; full ExtractionLogger or minimal mock for tests. */
+export type PipelineLogger = Pick<ExtractionLogger, 'info' | 'success' | 'warn' | 'error'>;
+
 export async function runPipeline(
   job: ExtractionJob,
-  logger?: ExtractionLogger,
-  checkCancelled?: () => Promise<boolean>
+  logger?: ExtractionLogger | PipelineLogger,
+  checkCancelled?: () => Promise<boolean>,
+  heartbeat?: () => Promise<void>
 ): Promise<void> {
   const supabase = getSupabase();
   const projectId = job.projectId;
@@ -196,6 +265,8 @@ export async function runPipeline(
       throw new Error(msg);
     }
 
+    const jobEcosystem = job.ecosystem || 'npm';
+
     // === STEP: SBOM (CRITICAL) ===
     if (checkCancelled && await checkCancelled()) return;
     await updateStep(supabase, projectId, 'sbom');
@@ -204,7 +275,7 @@ export async function runPipeline(
     const sbomStart = Date.now();
     let sbomPath: string;
     try {
-      sbomPath = await retry(() => Promise.resolve(runCdxgen(workspaceRoot)), 'cdxgen');
+      sbomPath = await retry(() => Promise.resolve(runCdxgen(workspaceRoot, jobEcosystem)), 'cdxgen');
     } catch (e: any) {
       const userMsg = classifyCdxgenError(e.message);
       await log.error('sbom', userMsg, e);
@@ -233,7 +304,6 @@ export async function runPipeline(
     const bomRefMap = getBomRefToNameVersion(sbom);
 
     // Patch devDependency detection by cross-referencing with manifest files
-    const jobEcosystem = job.ecosystem || 'npm';
     try {
       patchDevDependencies(dependencies, workspaceRoot, jobEcosystem);
     } catch (e: any) {
@@ -480,37 +550,37 @@ export async function runPipeline(
         }
       }
 
-      const ecosystem = job.ecosystem || 'npm';
       const depScanArgs = [
+        '--profile', 'research',
         '--bom', bomArg,
         '--reports-dir', outArg,
-        '-t', ecosystem,
+        '-t', jobEcosystem,
         '--no-banner',
         '--vulnerability-analyzer', 'VDRAnalyzer',
+        '--explain',
+        '--explanation-mode', 'LLMPrompts',
       ];
-      if (process.env.DEPSCAN_EXPLAIN === '1') depScanArgs.push('--explain');
 
-      const res = spawnSync(depScanExe, depScanArgs, {
-        cwd: workspaceRoot,
-        encoding: 'utf8',
-        timeout: 90 * 60 * 1000,
-      });
+      const heartbeatFn = heartbeat ?? (async () => {});
+      try {
+        const res = await runDepScan(depScanExe, depScanArgs, workspaceRoot, log, heartbeatFn);
 
-      if (res.error) {
-        if ((res.error as any).code === 'ENOENT') {
+        if (res.exitCode !== 0) {
+          const stderrFirst = (res.stderr ?? '').split('\n')[0] || 'unknown error';
+          if (res.exitCode === 137) {
+            await log.warn('vuln_scan', 'dep-scan out of memory during atom analysis — falling back to basic scan results');
+          } else {
+            await log.warn('vuln_scan', `Vulnerability scan exited with code ${res.exitCode}: ${stderrFirst}`);
+          }
+        } else {
+          depScanSucceeded = true;
+        }
+      } catch (spawnErr: any) {
+        if (spawnErr.code === 'ENOENT') {
           await log.warn('vuln_scan', 'Vulnerability scanning unavailable (dep-scan not installed)');
         } else {
-          throw res.error;
+          throw spawnErr;
         }
-      } else if (res.status !== 0) {
-        const stderrFirst = (res.stderr ?? '').split('\n')[0] || 'unknown error';
-        if (res.status === 137) {
-          await log.warn('vuln_scan', 'Vulnerability scan ran out of memory — scanning skipped');
-        } else {
-          await log.warn('vuln_scan', `Vulnerability scan failed: ${stderrFirst}`);
-        }
-      } else {
-        depScanSucceeded = true;
       }
     } catch (e: any) {
       if (/timed out|timeout/i.test(e.message)) {
@@ -781,6 +851,27 @@ export async function runPipeline(
       await log.warn('vuln_scan', 'No vulnerability scan results available');
     }
 
+    // === STEP: Deep reachability analysis (OPTIONAL) ===
+    if (checkCancelled && await checkCancelled()) return;
+    await log.info('reachability', 'Analyzing code-level reachability...');
+    const reachStart = Date.now();
+    try {
+      const hasReachableSlices = fs.readdirSync(reportsDir)
+        .some(f => f.endsWith('-reachables.slices.json'));
+
+      if (hasReachableSlices) {
+        await parseReachableFlows(reportsDir, projectId, runId, supabase, log);
+        await parseUsageSlices(reportsDir, projectId, runId, jobEcosystem, supabase, log);
+        await parseLlmPrompts(reportsDir, projectId, runId, supabase, log);
+        await updateReachabilityLevels(projectId, supabase, log);
+        await log.success('reachability', 'Deep reachability analysis complete', Date.now() - reachStart);
+      } else {
+        await log.info('reachability', 'Atom analysis produced no output; preserving reachability data from previous run');
+      }
+    } catch (reachErr: any) {
+      await log.warn('reachability', `Reachability analysis failed (non-fatal): ${reachErr.message}`);
+    }
+
     // === STEP: Semgrep (OPTIONAL) ===
     if (checkCancelled && await checkCancelled()) return;
     await log.info('semgrep', 'Running static code analysis...');
@@ -958,6 +1049,16 @@ export async function runPipeline(
         .neq('extraction_run_id', runId);
 
       await supabase.from('project_secret_findings')
+        .delete()
+        .eq('project_id', projectId)
+        .neq('extraction_run_id', runId);
+
+      await supabase.from('project_reachable_flows')
+        .delete()
+        .eq('project_id', projectId)
+        .neq('extraction_run_id', runId);
+
+      await supabase.from('project_usage_slices')
         .delete()
         .eq('project_id', projectId)
         .neq('extraction_run_id', runId);

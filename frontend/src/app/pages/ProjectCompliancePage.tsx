@@ -19,7 +19,11 @@ import {
   Sparkles,
   Info,
   GitPullRequest,
+  GitCommitHorizontal,
   Scale,
+  ExternalLink,
+  ChevronLeft,
+  FileCode2,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
@@ -38,6 +42,8 @@ import {
   ProjectEffectivePolicies,
   RegistrySearchResult,
   LicenseObligationGroup,
+  ProjectPullRequest,
+  ProjectCommit,
 } from '../../lib/api';
 import { downloadFile } from '../../lib/compliance-utils';
 import { useToast } from '../../hooks/use-toast';
@@ -431,6 +437,22 @@ export default function ProjectCompliancePage() {
   const [exporting, setExporting] = useState<'sbom' | 'notice' | null>(null);
   const [obligationsOpen, setObligationsOpen] = useState(false);
 
+  // Updates tab state
+  const [updatesSubTab, setUpdatesSubTab] = useState<'pull-requests' | 'commits'>('pull-requests');
+  const [pullRequests, setPullRequests] = useState<ProjectPullRequest[]>([]);
+  const [prTotal, setPrTotal] = useState(0);
+  const [prPage, setPrPage] = useState(1);
+  const [prStatusFilter, setPrStatusFilter] = useState<string>('all');
+  const [prSearch, setPrSearch] = useState('');
+  const [prLoading, setPrLoading] = useState(false);
+
+  const [commits, setCommits] = useState<ProjectCommit[]>([]);
+  const [commitsTotal, setCommitsTotal] = useState(0);
+  const [commitsPage, setCommitsPage] = useState(1);
+  const [commitsComplianceFilter, setCommitsComplianceFilter] = useState<string>('all');
+  const [commitsSearch, setCommitsSearch] = useState('');
+  const [commitsLoading, setCommitsLoading] = useState(false);
+
   const [exceptionLoading, setExceptionLoading] = useState<string | null>(null);
   const [diffDialog, setDiffDialog] = useState<{
     open: boolean;
@@ -659,6 +681,63 @@ export default function ProjectCompliancePage() {
       setConfirming(false);
     }
   }, [diffDialog, toast, loadData]);
+
+  const PER_PAGE = 15;
+
+  const loadPullRequests = useCallback(async () => {
+    if (!organizationId || !projectId) return;
+    setPrLoading(true);
+    try {
+      const res = await api.getProjectPullRequests(organizationId, projectId, {
+        status: prStatusFilter,
+        search: prSearch || undefined,
+        page: prPage,
+        perPage: PER_PAGE,
+      });
+      setPullRequests(res.data);
+      setPrTotal(res.total);
+    } catch {
+      setPullRequests([]);
+      setPrTotal(0);
+    } finally {
+      setPrLoading(false);
+    }
+  }, [organizationId, projectId, prStatusFilter, prSearch, prPage]);
+
+  const loadCommits = useCallback(async () => {
+    if (!organizationId || !projectId) return;
+    setCommitsLoading(true);
+    try {
+      const res = await api.getProjectCommits(organizationId, projectId, {
+        compliance_status: commitsComplianceFilter,
+        search: commitsSearch || undefined,
+        page: commitsPage,
+        perPage: PER_PAGE,
+      });
+      setCommits(res.data);
+      setCommitsTotal(res.total);
+    } catch {
+      setCommits([]);
+      setCommitsTotal(0);
+    } finally {
+      setCommitsLoading(false);
+    }
+  }, [organizationId, projectId, commitsComplianceFilter, commitsSearch, commitsPage]);
+
+  useEffect(() => {
+    if (activeTab === 'updates' && updatesSubTab === 'pull-requests') {
+      loadPullRequests();
+    }
+  }, [activeTab, updatesSubTab, loadPullRequests]);
+
+  useEffect(() => {
+    if (activeTab === 'updates' && updatesSubTab === 'commits') {
+      loadCommits();
+    }
+  }, [activeTab, updatesSubTab, loadCommits]);
+
+  const prTotalPages = Math.max(1, Math.ceil(prTotal / PER_PAGE));
+  const commitsTotalPages = Math.max(1, Math.ceil(commitsTotal / PER_PAGE));
 
   // Loading
   if (!project || loading) {
@@ -1165,14 +1244,394 @@ export default function ProjectCompliancePage() {
           {/* ─── UPDATES TAB ─── */}
           {activeTab === 'updates' && (
             <div className="space-y-4">
-              <div className="bg-background-card border border-border rounded-lg p-8 text-center">
-                <GitPullRequest className="h-10 w-10 text-foreground-secondary mx-auto mb-3" />
-                <h3 className="text-lg font-semibold text-foreground mb-1">PR checks not configured</h3>
-                <p className="text-sm text-foreground-secondary">
-                  Enable webhooks in organization settings to track pull request compliance impact.
-                </p>
-                <p className="text-xs text-foreground-secondary mt-2">Coming in Phase 8: PR Management & Webhooks</p>
+              {/* Sub-tabs */}
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={() => { setUpdatesSubTab('pull-requests'); setPrPage(1); }}
+                  className={cn(
+                    'text-sm font-medium transition-colors pb-1 border-b-2',
+                    updatesSubTab === 'pull-requests' ? 'text-foreground border-foreground' : 'text-foreground-secondary border-transparent hover:text-foreground'
+                  )}
+                >
+                  Pull Requests
+                  {prTotal > 0 && (
+                    <span className="ml-1.5 text-[10px] bg-foreground/10 text-foreground-secondary px-1.5 py-0.5 rounded-full">
+                      {prTotal}
+                    </span>
+                  )}
+                </button>
+                <button
+                  onClick={() => { setUpdatesSubTab('commits'); setCommitsPage(1); }}
+                  className={cn(
+                    'text-sm font-medium transition-colors pb-1 border-b-2',
+                    updatesSubTab === 'commits' ? 'text-foreground border-foreground' : 'text-foreground-secondary border-transparent hover:text-foreground'
+                  )}
+                >
+                  Commits
+                  {commitsTotal > 0 && (
+                    <span className="ml-1.5 text-[10px] bg-foreground/10 text-foreground-secondary px-1.5 py-0.5 rounded-full">
+                      {commitsTotal}
+                    </span>
+                  )}
+                </button>
               </div>
+
+              {/* ── Pull Requests ── */}
+              {updatesSubTab === 'pull-requests' && (
+                <div className="space-y-4">
+                  {/* Filters */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {(['all', 'open', 'merged', 'closed'] as const).map((status) => (
+                      <Button
+                        key={status}
+                        variant={prStatusFilter === status ? 'default' : 'outline'}
+                        size="sm"
+                        className="h-8 text-xs capitalize"
+                        onClick={() => { setPrStatusFilter(status); setPrPage(1); }}
+                      >
+                        {status === 'all' ? 'All' : status}
+                      </Button>
+                    ))}
+                    <div className="flex-1 max-w-xs">
+                      <Input
+                        placeholder="Search by title or author..."
+                        value={prSearch}
+                        onChange={(e) => { setPrSearch(e.target.value); setPrPage(1); }}
+                        className="h-8 text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Table */}
+                  {prLoading ? (
+                    <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                      <div className="divide-y divide-border">
+                        {[1, 2, 3, 4, 5].map((i) => (
+                          <div key={i} className="flex items-center gap-4 px-4 py-3">
+                            <div className="h-4 w-4 bg-muted rounded animate-pulse" />
+                            <div className="flex-1 space-y-1.5">
+                              <div className="h-4 w-3/5 bg-muted rounded animate-pulse" />
+                              <div className="h-3 w-1/4 bg-muted rounded animate-pulse" />
+                            </div>
+                            <div className="h-5 w-16 bg-muted rounded-full animate-pulse" />
+                            <div className="h-5 w-16 bg-muted rounded-full animate-pulse" />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : pullRequests.length === 0 ? (
+                    <div className="bg-background-card border border-border rounded-lg p-8 text-center">
+                      <GitPullRequest className="h-10 w-10 text-foreground-secondary mx-auto mb-3" />
+                      <h3 className="text-lg font-semibold text-foreground mb-1">No pull requests yet.</h3>
+                      <p className="text-sm text-foreground-secondary">
+                        Pull requests will appear here once webhooks deliver PR events.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full">
+                          <thead className="bg-background-card-header border-b border-border">
+                            <tr>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Pull Request</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[14%]">Author</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[10%]">Status</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[12%]">Check</th>
+                              <th className="text-right px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[10%]">Deps</th>
+                              <th className="text-right px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[10%]">Time</th>
+                              <th className="text-right px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[4%]"></th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border">
+                            {pullRequests.map((pr) => {
+                              const depsChanged = pr.deps_added + pr.deps_updated + pr.deps_removed;
+                              const timestamp = pr.merged_at || pr.closed_at || pr.opened_at || pr.created_at;
+                              return (
+                                <tr key={pr.id} className="group hover:bg-table-hover transition-colors">
+                                  <td className="px-4 py-2.5">
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-1.5">
+                                        <GitPullRequest className={cn(
+                                          'h-3.5 w-3.5 shrink-0',
+                                          pr.status === 'merged' ? 'text-purple-400' : pr.status === 'closed' ? 'text-red-400' : 'text-green-400'
+                                        )} />
+                                        <span className="text-sm font-medium text-foreground truncate">{pr.title || `PR #${pr.pr_number}`}</span>
+                                        <span className="text-xs text-foreground-secondary shrink-0">#{pr.pr_number}</span>
+                                      </div>
+                                      {pr.head_branch && (
+                                        <span className="text-[11px] text-foreground-secondary mt-0.5 block truncate">{pr.head_branch}</span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-2.5">
+                                    <div className="flex items-center gap-1.5">
+                                      {pr.author_avatar_url ? (
+                                        <img src={pr.author_avatar_url} alt="" className="h-5 w-5 rounded-full shrink-0" />
+                                      ) : (
+                                        <div className="h-5 w-5 rounded-full bg-foreground/10 shrink-0" />
+                                      )}
+                                      <span className="text-xs text-foreground-secondary truncate">{pr.author_login || 'Unknown'}</span>
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-2.5">
+                                    <Badge className={cn('text-[10px]',
+                                      pr.status === 'merged' ? 'bg-purple-500/15 text-purple-400 border-purple-500/20' :
+                                      pr.status === 'open' ? 'bg-green-500/15 text-green-400 border-green-500/20' :
+                                      'bg-zinc-500/15 text-zinc-400 border-zinc-500/20'
+                                    )}>
+                                      {pr.status === 'merged' ? 'Merged' : pr.status === 'open' ? 'Open' : 'Closed'}
+                                    </Badge>
+                                  </td>
+                                  <td className="px-4 py-2.5">
+                                    {pr.check_result ? (
+                                      <Badge className={cn('text-[10px]',
+                                        pr.check_result === 'passed' ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20' :
+                                        pr.check_result === 'failed' ? 'bg-red-500/15 text-red-400 border-red-500/20' :
+                                        pr.check_result === 'pending' ? 'bg-yellow-500/15 text-yellow-400 border-yellow-500/20' :
+                                        'bg-zinc-500/15 text-zinc-400 border-zinc-500/20'
+                                      )}>
+                                        {pr.check_result === 'passed' ? 'Passed' :
+                                         pr.check_result === 'failed' ? 'Failed' :
+                                         pr.check_result === 'pending' ? 'Pending' : 'Skipped'}
+                                      </Badge>
+                                    ) : (
+                                      <span className="text-xs text-foreground-secondary">—</span>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-2.5 text-right">
+                                    {depsChanged > 0 ? (
+                                      <span className="text-xs text-foreground-secondary">{depsChanged} changed</span>
+                                    ) : (
+                                      <span className="text-xs text-foreground-secondary">—</span>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-2.5 text-right">
+                                    <span className="text-xs text-foreground-secondary">{formatTimeAgo(timestamp)}</span>
+                                  </td>
+                                  <td className="px-4 py-2.5 text-right">
+                                    {pr.provider_url && (
+                                      <a href={pr.provider_url} target="_blank" rel="noopener noreferrer" className="text-foreground-secondary hover:text-foreground transition-colors">
+                                        <ExternalLink className="h-3.5 w-3.5" />
+                                      </a>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Pagination */}
+                      {prTotalPages > 1 && (
+                        <div className="flex items-center justify-between px-4 py-3 border-t border-border">
+                          <span className="text-xs text-foreground-secondary">
+                            Page {prPage} of {prTotalPages} ({prTotal} total)
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs px-2"
+                              disabled={prPage <= 1}
+                              onClick={() => setPrPage((p) => Math.max(1, p - 1))}
+                            >
+                              <ChevronLeft className="h-3.5 w-3.5 mr-0.5" />
+                              Prev
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs px-2"
+                              disabled={prPage >= prTotalPages}
+                              onClick={() => setPrPage((p) => p + 1)}
+                            >
+                              Next
+                              <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── Commits ── */}
+              {updatesSubTab === 'commits' && (
+                <div className="space-y-4">
+                  {/* Filters */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {(['all', 'COMPLIANT', 'NON_COMPLIANT', 'UNKNOWN'] as const).map((status) => (
+                      <Button
+                        key={status}
+                        variant={commitsComplianceFilter === status ? 'default' : 'outline'}
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={() => { setCommitsComplianceFilter(status); setCommitsPage(1); }}
+                      >
+                        {status === 'all' ? 'All' : status === 'COMPLIANT' ? 'Compliant' : status === 'NON_COMPLIANT' ? 'Non-Compliant' : 'Unknown'}
+                      </Button>
+                    ))}
+                    <div className="flex-1 max-w-xs">
+                      <Input
+                        placeholder="Search by message or author..."
+                        value={commitsSearch}
+                        onChange={(e) => { setCommitsSearch(e.target.value); setCommitsPage(1); }}
+                        className="h-8 text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Table */}
+                  {commitsLoading ? (
+                    <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                      <div className="divide-y divide-border">
+                        {[1, 2, 3, 4, 5].map((i) => (
+                          <div key={i} className="flex items-center gap-4 px-4 py-3">
+                            <div className="h-4 w-4 bg-muted rounded animate-pulse" />
+                            <div className="flex-1 space-y-1.5">
+                              <div className="h-4 w-3/5 bg-muted rounded animate-pulse" />
+                              <div className="h-3 w-1/4 bg-muted rounded animate-pulse" />
+                            </div>
+                            <div className="h-5 w-16 bg-muted rounded-full animate-pulse" />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : commits.length === 0 ? (
+                    <div className="bg-background-card border border-border rounded-lg p-8 text-center">
+                      <GitCommitHorizontal className="h-10 w-10 text-foreground-secondary mx-auto mb-3" />
+                      <h3 className="text-lg font-semibold text-foreground mb-1">No commits recorded yet.</h3>
+                      <p className="text-sm text-foreground-secondary">
+                        Commits will appear here once webhooks deliver push events.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full">
+                          <thead className="bg-background-card-header border-b border-border">
+                            <tr>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Commit</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[14%]">Author</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[12%]">Compliance</th>
+                              <th className="text-center px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[8%]">Manifest</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[12%]">Extraction</th>
+                              <th className="text-right px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[10%]">Time</th>
+                              <th className="text-right px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[4%]"></th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border">
+                            {commits.map((commit) => {
+                              const firstLine = (commit.message || '').split('\n')[0];
+                              const truncatedMsg = firstLine.length > 72 ? firstLine.slice(0, 72) + '...' : firstLine;
+                              return (
+                                <tr key={commit.id} className="group hover:bg-table-hover transition-colors">
+                                  <td className="px-4 py-2.5">
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-1.5">
+                                        <GitCommitHorizontal className="h-3.5 w-3.5 text-foreground-secondary shrink-0" />
+                                        <span className="text-sm font-medium text-foreground truncate">{truncatedMsg || 'No message'}</span>
+                                      </div>
+                                      <span className="text-[11px] text-foreground-secondary font-mono mt-0.5 block">{commit.sha.slice(0, 7)}</span>
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-2.5">
+                                    <div className="flex items-center gap-1.5">
+                                      {commit.author_avatar_url ? (
+                                        <img src={commit.author_avatar_url} alt="" className="h-5 w-5 rounded-full shrink-0" />
+                                      ) : (
+                                        <div className="h-5 w-5 rounded-full bg-foreground/10 shrink-0" />
+                                      )}
+                                      <span className="text-xs text-foreground-secondary truncate">{commit.author_name || 'Unknown'}</span>
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-2.5">
+                                    <Badge className={cn('text-[10px]',
+                                      commit.compliance_status === 'COMPLIANT' ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20' :
+                                      commit.compliance_status === 'NON_COMPLIANT' ? 'bg-red-500/15 text-red-400 border-red-500/20' :
+                                      'bg-zinc-500/15 text-zinc-400 border-zinc-500/20'
+                                    )}>
+                                      {commit.compliance_status === 'COMPLIANT' ? 'Compliant' :
+                                       commit.compliance_status === 'NON_COMPLIANT' ? 'Non-Compliant' : 'Unknown'}
+                                    </Badge>
+                                  </td>
+                                  <td className="px-4 py-2.5 text-center">
+                                    {commit.manifest_changed ? (
+                                      <FileCode2 className="h-4 w-4 text-yellow-400 mx-auto" />
+                                    ) : (
+                                      <span className="text-xs text-foreground-secondary">—</span>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-2.5">
+                                    {commit.extraction_triggered ? (
+                                      <Badge className={cn('text-[10px]',
+                                        commit.extraction_status === 'completed' ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20' :
+                                        commit.extraction_status === 'processing' ? 'bg-blue-500/15 text-blue-400 border-blue-500/20' :
+                                        commit.extraction_status === 'failed' ? 'bg-red-500/15 text-red-400 border-red-500/20' :
+                                        'bg-zinc-500/15 text-zinc-400 border-zinc-500/20'
+                                      )}>
+                                        {commit.extraction_status === 'completed' ? 'Completed' :
+                                         commit.extraction_status === 'processing' ? 'Running' :
+                                         commit.extraction_status === 'failed' ? 'Failed' :
+                                         commit.extraction_status || 'Queued'}
+                                      </Badge>
+                                    ) : (
+                                      <span className="text-xs text-foreground-secondary">—</span>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-2.5 text-right">
+                                    <span className="text-xs text-foreground-secondary">{formatTimeAgo(commit.committed_at || commit.created_at)}</span>
+                                  </td>
+                                  <td className="px-4 py-2.5 text-right">
+                                    {commit.provider_url && (
+                                      <a href={commit.provider_url} target="_blank" rel="noopener noreferrer" className="text-foreground-secondary hover:text-foreground transition-colors">
+                                        <ExternalLink className="h-3.5 w-3.5" />
+                                      </a>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Pagination */}
+                      {commitsTotalPages > 1 && (
+                        <div className="flex items-center justify-between px-4 py-3 border-t border-border">
+                          <span className="text-xs text-foreground-secondary">
+                            Page {commitsPage} of {commitsTotalPages} ({commitsTotal} total)
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs px-2"
+                              disabled={commitsPage <= 1}
+                              onClick={() => setCommitsPage((p) => Math.max(1, p - 1))}
+                            >
+                              <ChevronLeft className="h-3.5 w-3.5 mr-0.5" />
+                              Prev
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs px-2"
+                              disabled={commitsPage >= commitsTotalPages}
+                              onClick={() => setCommitsPage((p) => p + 1)}
+                            >
+                              Next
+                              <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

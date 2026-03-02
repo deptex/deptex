@@ -23,6 +23,7 @@ export interface GhsaVuln {
   publishedAt: string | null;
   updatedAt: string | null;
   identifiers: Array<{ type: string; value: string }>;
+  cweIds: string[];
 }
 
 /** Map our ecosystem ids to GHSA GraphQL SecurityAdvisoryEcosystem enum values. */
@@ -56,7 +57,7 @@ export async function fetchGhsaVulnerabilitiesBatch(packageNames: string[], ecos
   const buildQuery = (): string => {
     const parts = names.map((name, i) => {
       const escaped = JSON.stringify(name);
-      return `p${i}: securityVulnerabilities(package: ${escaped}, ecosystem: ${ghsaEcosystem}, first: ${firstPerPackage}) { nodes { advisory { ghsaId summary description severity classification publishedAt updatedAt identifiers { type value } } vulnerableVersionRange firstPatchedVersion { identifier } } }`;
+      return `p${i}: securityVulnerabilities(package: ${escaped}, ecosystem: ${ghsaEcosystem}, first: ${firstPerPackage}) { nodes { advisory { ghsaId summary description severity classification publishedAt updatedAt identifiers { type value } cwes(first: 10) { nodes { cweId } } } vulnerableVersionRange firstPatchedVersion { identifier } } }`;
     });
     return `query { ${parts.join(' ')} }`;
   };
@@ -80,7 +81,7 @@ export async function fetchGhsaVulnerabilitiesBatch(packageNames: string[], ecos
       return result;
     }
     const json = (await res.json()) as { errors?: unknown; data?: Record<string, { nodes: Array<{
-      advisory: { ghsaId: string; summary: string | null; description: string | null; severity: string | null; classification: string | null; publishedAt: string | null; updatedAt: string | null; identifiers: Array<{ type: string; value: string }> };
+      advisory: { ghsaId: string; summary: string | null; description: string | null; severity: string | null; classification: string | null; publishedAt: string | null; updatedAt: string | null; identifiers: Array<{ type: string; value: string }>; cwes?: { nodes: Array<{ cweId: string }> } };
       vulnerableVersionRange: string;
       firstPatchedVersion: { identifier: string } | null;
     }> }> };
@@ -98,6 +99,7 @@ export async function fetchGhsaVulnerabilitiesBatch(packageNames: string[], ecos
         publishedAt: string | null;
         updatedAt: string | null;
         identifiers: Array<{ type: string; value: string }>;
+        cwes?: { nodes: Array<{ cweId: string }> };
       };
       vulnerableVersionRange: string;
       firstPatchedVersion: { identifier: string } | null;
@@ -115,6 +117,7 @@ export async function fetchGhsaVulnerabilitiesBatch(packageNames: string[], ecos
         publishedAt: n.advisory.publishedAt ?? null,
         updatedAt: n.advisory.updatedAt ?? null,
         identifiers: n.advisory.identifiers ?? [],
+        cweIds: (n.advisory.cwes?.nodes || []).map((c) => c.cweId),
       }));
       result.set(names[i], vulns);
     }
@@ -169,5 +172,6 @@ export function ghsaVulnToRow(dependencyId: string, v: GhsaVuln): Record<string,
     fixed_versions: fixedVersions,
     published_at: v.publishedAt || null,
     modified_at: v.updatedAt || null,
+    cwe_ids: v.cweIds || [],
   };
 }

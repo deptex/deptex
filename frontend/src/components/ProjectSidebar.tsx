@@ -1,6 +1,6 @@
 import { memo, useState, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ShieldAlert, Package, Shield, Settings } from 'lucide-react';
+import { LayoutDashboard, ShieldAlert, Package, Shield, TowerControl, Settings } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { ProjectPermissions } from '../lib/api';
 
@@ -15,6 +15,7 @@ const allNavItems = [
   { id: 'dependencies', label: 'Dependencies', path: 'dependencies', icon: Package, requiredPermission: null },
   { id: 'security', label: 'Security', path: 'security', icon: ShieldAlert, requiredPermission: null },
   { id: 'compliance', label: 'Compliance', path: 'compliance', icon: Shield, requiredPermission: null },
+  { id: 'watchtower', label: 'Watchtower', path: 'watchtower', icon: TowerControl, requiredPermission: null },
   { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: 'view_settings' as const },
 ];
 
@@ -47,9 +48,9 @@ function ProjectSidebar({ organizationId, projectId, userPermissions }: ProjectS
     if (matchingTab) return matchingTab.id;
     // No segment after project id (e.g. .../projects/PROJECT_ID) or last segment is project id
     if (!projectTabSegment || lastSegment === projectId) return 'overview';
-    // Under dependencies: .../dependencies/DEP_ID/overview or /watchtower etc. → still "dependencies"
     if (projectTabSegment === 'dependencies') return 'dependencies';
     if (projectTabSegment === 'compliance' || parentSegment === 'compliance') return 'compliance';
+    if (projectTabSegment === 'watchtower') return 'watchtower';
     return 'overview';
   }, [projectTabSegment, lastSegment, projectId, parentSegment, visibleNavItems]);
 

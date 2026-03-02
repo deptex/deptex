@@ -4,7 +4,7 @@ import {
   ChevronRight, ExternalLink, CheckCircle, Ban, Activity
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { api, DependencySecuritySummary, VersionCandidate } from '../../lib/api';
+import { api, DependencySecuritySummary, VersionCandidate, type UsageSlice } from '../../lib/api';
 
 interface DependencySecurityContentProps {
   organizationId: string;
@@ -89,7 +89,7 @@ function DependencySecurityContent({ organizationId, projectId, depId, onNavigat
     return <div className="text-sm text-zinc-400">Dependency not found.</div>;
   }
 
-  const { dependency: dep, files, vulnerabilities: vulns, version_candidates: candidates, watchtower } = data;
+  const { dependency: dep, files, vulnerabilities: vulns, version_candidates: candidates, watchtower, usage_slices: usageSlices, reachable_flows: reachableFlows } = data;
   const activeVulns = vulns.filter(v => !v.suppressed && !v.risk_accepted);
   const isZombie = dep.files_importing_count === 0;
 
@@ -137,6 +137,27 @@ function DependencySecurityContent({ organizationId, projectId, depId, onNavigat
               {files.length > 8 && (
                 <div className="text-xs text-zinc-500">+{files.length - 8} more files</div>
               )}
+            </div>
+          )}
+          {/* Phase 6B: Usage slices - specific functions used */}
+          {usageSlices && usageSlices.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-border">
+              <div className="text-xs text-zinc-400 mb-2">Functions used from this package:</div>
+              <div className="space-y-1">
+                {usageSlices.slice(0, 10).map((slice: UsageSlice, i: number) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className="text-zinc-300 font-mono">
+                      {slice.resolved_method ?? slice.target_name}
+                    </span>
+                    <span className="text-zinc-600 font-mono truncate">
+                      {slice.file_path}:{slice.line_number}
+                    </span>
+                  </div>
+                ))}
+                {usageSlices.length > 10 && (
+                  <div className="text-xs text-zinc-500">+{usageSlices.length - 10} more usages</div>
+                )}
+              </div>
             </div>
           )}
         </div>

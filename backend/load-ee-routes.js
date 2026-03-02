@@ -16,7 +16,13 @@ module.exports = function mountEeRoutes(app) {
   app.use('/api/workers', require(path.join(eeRoutes, 'workers')).default);
   app.use('/api/watchtower', require(path.join(eeRoutes, 'watchtower')).default);
   app.use('/api/internal', require(path.join(eeRoutes, 'internal')).default);
+  app.use('/api/organizations', require(path.join(eeRoutes, 'learning')).default);
+  app.use('/api/organizations', require(path.join(eeRoutes, 'incidents')).default);
 
   const integrations = require(path.join(eeRoutes, 'integrations'));
   app.post('/api/webhook/github', integrations.githubWebhookHandler);
+
+  // Phase 8: GitLab and Bitbucket webhook handlers
+  app.use('/api/integrations', require(path.join(eeRoutes, 'gitlab-webhooks')).default);
+  app.use('/api/integrations', require(path.join(eeRoutes, 'bitbucket-webhooks')).default);
 };

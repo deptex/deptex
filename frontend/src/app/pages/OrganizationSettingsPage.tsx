@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useParams, useOutletContext, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
-import { api, Organization, OrganizationMember, OrganizationRole, RolePermissions, CiCdConnection, type CiCdProvider } from '../../lib/api';
+import { api, Organization, OrganizationMember, OrganizationRole, RolePermissions, CiCdConnection, type CiCdProvider, billingApi, type StripeInvoice } from '../../lib/api';
+import { usePlan, TIER_DISPLAY } from '../../contexts/PlanContext';
 import { supabase } from '../../lib/supabase';
 import { Button } from '../../components/ui/button';
 import { Toaster } from '../../components/ui/toaster';
@@ -12,7 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink } from 'lucide-react';
+import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
@@ -21,12 +22,19 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/too
 import { cn } from '../../lib/utils';
 import { RoleDropdown } from '../../components/RoleDropdown';
 import { RoleBadge } from '../../components/RoleBadge';
-import { UserCircle, FileText } from 'lucide-react';
+import { Badge } from '../../components/ui/badge';
+import { Switch } from '../../components/ui/switch';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
+import { UserCircle, FileText, Sparkles, Globe, KeyRound, Timer, Network } from 'lucide-react';
 import MembersPage from './MembersPage';
 import AuditLogsSection from './AuditLogsSection';
 import PoliciesPage from './PoliciesPage';
 import StatusesSection from '@/components/StatusesSection';
 import NotificationRulesSection from './NotificationRulesSection';
+import NotificationHistorySection from './NotificationHistorySection';
+import AIConfigurationSection from '../../components/settings/AIConfigurationSection';
+import { AegisManagementConsole } from '../../components/settings/AegisManagementConsole';
+import SLAConfigurationSection from '../../components/settings/SLAConfigurationSection';
 
 interface OrganizationContextType {
   organization: Organization | null;
@@ -56,65 +64,67 @@ const planTiers: PlanTier[] = [
     id: 'free',
     name: 'Free',
     description: 'Perfect for students, indie devs, and small projects',
-    price: {
-      monthly: 'Free',
-      annual: 'Free',
-    },
+    price: { monthly: 'Free', annual: 'Free' },
     features: [
       { name: 'Up to 3 projects' },
-      { name: 'Dependency tracking' },
-      { name: 'AI agent (20 actions/month)' },
-      { name: 'Basic policy enforcement' },
-      { name: 'Basic anomaly detection' },
-      { name: 'Basic vulnerability watchlists' },
-      { name: '2 team members' },
+      { name: 'Up to 5 members' },
+      { name: '10 syncs/month' },
+      { name: 'Deep reachability analysis' },
+      { name: 'Vulnerability scanning' },
+      { name: 'Policy-as-code' },
+      { name: 'Platform AI summaries' },
       { name: 'Community support' },
     ],
   },
   {
     id: 'pro',
     name: 'Pro',
-    description: 'For power users and small teams maintaining multiple projects',
-    price: {
-      monthly: '$12',
-      annual: '$8',
-      perUnit: 'per user',
-    },
+    description: 'For growing teams that need full automation and AI',
+    price: { monthly: '$25', annual: '$250/yr' },
     popular: true,
     features: [
-      { name: 'Unlimited projects' },
-      { name: 'Unlimited team members' },
-      { name: 'Full AI agent access' },
-      { name: 'Fix vulnerabilities' },
-      { name: 'Summarize repo health' },
-      { name: 'Generate PRs for dependency issues' },
-      { name: 'Expanded anomaly detection' },
-      { name: 'Automated PR generation' },
-      { name: 'Dependency graph visualization' },
-      { name: 'Custom policies' },
-      { name: 'Advanced reporting' },
+      { name: 'Up to 15 projects' },
+      { name: 'Up to 20 members' },
+      { name: '100 syncs/month' },
+      { name: 'Aegis AI Security Copilot' },
+      { name: 'AI-powered fixes & sprints' },
+      { name: 'Background monitoring' },
+      { name: 'Watchtower forensics' },
+      { name: 'Configurable sync frequency' },
+      { name: 'All integrations' },
+    ],
+  },
+  {
+    id: 'team',
+    name: 'Team',
+    description: 'For organizations with compliance and security needs',
+    price: { monthly: '$300', annual: '$3,000/yr' },
+    features: [
+      { name: 'Up to 50 projects' },
+      { name: 'Unlimited members' },
+      { name: '1,000 syncs/month' },
+      { name: 'Everything in Pro' },
+      { name: 'SSO (SAML)' },
+      { name: 'MFA enforcement' },
+      { name: 'Audit logs' },
+      { name: 'Legal documents (DPA, TIA)' },
+      { name: 'Aegis management console' },
       { name: 'Priority support' },
     ],
   },
   {
     id: 'enterprise',
     name: 'Enterprise',
-    description: 'For companies with compliance requirements',
-    price: {
-      monthly: '$99-$299',
-      annual: '$99-$299',
-      perUnit: 'per org',
-    },
+    description: 'Custom solutions for large organizations',
+    price: { monthly: 'Contact us', annual: 'Contact us' },
     features: [
-      { name: 'Everything in Pro' },
-      { name: 'Unlimited AI agent usage' },
-      { name: 'SSO (SAML)' },
-      { name: 'Audit logs' },
-      { name: 'SLAs' },
-      { name: 'Custom retention' },
-      { name: 'Custom policy pack' },
-      { name: 'Dedicated account support' },
-      { name: 'Private cloud / on-prem (optional)' },
+      { name: 'Everything in Team' },
+      { name: 'Unlimited projects & syncs' },
+      { name: 'Custom SLA' },
+      { name: 'BYO cloud / self-hosted' },
+      { name: 'Private Slack + CSM' },
+      { name: 'Custom integrations' },
+      { name: 'Dedicated support' },
     ],
   },
 ];
@@ -126,7 +136,7 @@ const orgRolesCache: Record<string, OrganizationRole[]> = {};
 const CACHE_KEY_MEMBERS = (orgId: string) => `org_members_${orgId}`;
 const CACHE_KEY_ROLES = (orgId: string) => `org_roles_${orgId}`;
 
-const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'integrations', 'notifications', 'policies', 'statuses', 'audit_logs', 'sso', 'mfa', 'legal_documents', 'usage', 'plan']);
+const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'integrations', 'webhooks', 'notifications', 'policies', 'statuses', 'security_slas', 'audit_logs', 'sso', 'mfa', 'ip_allowlist', 'api_tokens', 'session_policy', 'scim', 'legal_documents', 'usage', 'plan', 'ai_configuration', 'aegis_management']);
 
 /** Renders a tab-specific content skeleton for the org settings loading state. */
 function OrgSettingsTabSkeleton({ section }: { section: string }) {
@@ -489,6 +499,10 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
       );
     case 'sso':
     case 'mfa':
+    case 'session_policy':
+    case 'ip_allowlist':
+    case 'api_tokens':
+    case 'scim':
     case 'legal_documents':
       return (
         <div className="space-y-6">
@@ -522,6 +536,933 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
   }
 }
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+
+function SSOSection({ organizationId }: { organizationId: string }) {
+  const [ssoLoading, setSsoLoading] = useState(true);
+  const [ssoConfig, setSsoConfig] = useState<{ configured: boolean; provider_type?: string; domain?: string; verified?: boolean; enforce?: boolean; fallback?: boolean } | null>(null);
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const { toast } = useToast();
+
+  const fetchSso = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) return;
+    const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/sso`, {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setSsoConfig(data);
+    } else {
+      setSsoConfig({ configured: false });
+    }
+  }, [organizationId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token || cancelled) return;
+        const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/sso`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (cancelled) return;
+        if (res.ok) {
+          const data = await res.json();
+          setSsoConfig(data);
+        } else {
+          setSsoConfig({ configured: false });
+        }
+      } catch {
+        if (!cancelled) setSsoConfig({ configured: false });
+      } finally {
+        if (!cancelled) setSsoLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [organizationId]);
+
+  const handleVerifyDomain = async () => {
+    setVerifyLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/sso/verify-domain`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (res.ok) {
+        await fetchSso();
+        toast({ title: 'Domain verified', description: 'Your domain has been verified.' });
+      } else {
+        toast({ title: 'Error', description: 'Failed to verify domain.', variant: 'destructive' });
+      }
+    } catch {
+      toast({ title: 'Error', description: 'Failed to verify domain.', variant: 'destructive' });
+    } finally {
+      setVerifyLoading(false);
+    }
+  };
+
+  const handleToggleEnforce = async (enforce: boolean) => {
+    setSaving(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/sso`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enforce }),
+      });
+      if (res.ok) {
+        setSsoConfig((c) => c ? { ...c, enforce } : c);
+        toast({ title: 'Saved', description: 'SSO enforcement updated.' });
+      } else {
+        toast({ title: 'Error', description: 'Failed to update.', variant: 'destructive' });
+      }
+    } catch {
+      toast({ title: 'Error', description: 'Failed to update.', variant: 'destructive' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleToggleFallback = async (fallback: boolean) => {
+    setSaving(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/sso`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fallback }),
+      });
+      if (res.ok) {
+        setSsoConfig((c) => c ? { ...c, fallback } : c);
+        toast({ title: 'Saved', description: 'OAuth fallback updated.' });
+      } else {
+        toast({ title: 'Error', description: 'Failed to update.', variant: 'destructive' });
+      }
+    } catch {
+      toast({ title: 'Error', description: 'Failed to update.', variant: 'destructive' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteSso = async () => {
+    if (!confirm('Delete SSO configuration? Members will sign in with email/password.')) return;
+    setDeleteLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/sso`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (res.ok) {
+        setSsoConfig({ configured: false });
+        toast({ title: 'SSO removed', description: 'SSO configuration has been deleted.' });
+      } else {
+        toast({ title: 'Error', description: 'Failed to delete SSO.', variant: 'destructive' });
+      }
+    } catch {
+      toast({ title: 'Error', description: 'Failed to delete SSO.', variant: 'destructive' });
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
+  if (ssoLoading) return <div className="flex items-center gap-2 pt-8 text-foreground-secondary"><Loader2 className="h-4 w-4 animate-spin" /> Loading...</div>;
+  return (
+    <div className="space-y-6 pt-8">
+      <div>
+        <h2 className="text-2xl font-bold text-foreground">Single Sign-On</h2>
+        <p className="mt-1 text-sm text-foreground-secondary">Configure SAML 2.0 SSO for your organization</p>
+      </div>
+      <div className="rounded-lg border border-border bg-background-card p-6">
+        {!ssoConfig?.configured ? (
+          <div className="flex flex-col gap-4">
+            <p className="text-sm text-foreground-secondary">SSO is not configured. Set up SAML 2.0 to allow members to sign in with your identity provider.</p>
+            <Button size="sm">Configure SSO</Button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-foreground">Provider:</span>
+              <span className="text-sm text-foreground-secondary">{ssoConfig.provider_type || 'SAML'}</span>
+            </div>
+            {ssoConfig.domain && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-medium text-foreground">Domain:</span>
+                <span className="text-sm text-foreground-secondary">{ssoConfig.domain}</span>
+                <Badge variant={ssoConfig.verified ? 'default' : 'secondary'} className="gap-1">
+                  {ssoConfig.verified ? <><Check className="h-3 w-3" /> Verified</> : 'Unverified'}
+                </Badge>
+                {!ssoConfig.verified && (
+                  <Button size="sm" variant="outline" onClick={handleVerifyDomain} disabled={verifyLoading}>
+                    {verifyLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Verify Domain'}
+                  </Button>
+                )}
+              </div>
+            )}
+            <div className="flex items-center gap-4 pt-2">
+              <div className="flex items-center gap-2">
+                <Switch checked={ssoConfig.enforce ?? false} onCheckedChange={handleToggleEnforce} disabled={saving} />
+                <Label className="text-sm">Enforce SSO</Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch checked={ssoConfig.fallback ?? false} onCheckedChange={handleToggleFallback} disabled={saving} />
+                <Label className="text-sm">Allow OAuth Fallback</Label>
+              </div>
+            </div>
+            <div className="pt-4 border-t border-border">
+              <Button variant="destructive" size="sm" onClick={handleDeleteSso} disabled={deleteLoading}>
+                {deleteLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" /> : <Trash2 className="h-3.5 w-3.5 mr-2" />}
+                Delete SSO
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MFASection({ organizationId }: { organizationId: string }) {
+  const [loading, setLoading] = useState(true);
+  const [requireMfa, setRequireMfa] = useState(false);
+  const [gracePeriodDays, setGracePeriodDays] = useState(7);
+  const [members, setMembers] = useState<Array<{ user_id: string; email?: string; has_mfa: boolean; exempt?: boolean }>>([]);
+  const [saving, setSaving] = useState(false);
+  const { toast } = useToast();
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token || cancelled) return;
+        const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/mfa-status`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (cancelled) return;
+        if (res.ok) {
+          const data = await res.json();
+          setRequireMfa(data.require_mfa ?? false);
+          setGracePeriodDays(data.grace_period_days ?? 7);
+          setMembers(data.members ?? []);
+        }
+      } catch {
+        if (!cancelled) setMembers([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [organizationId]);
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/mfa-enforcement`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ require_mfa: requireMfa, grace_period_days: gracePeriodDays }),
+      });
+      if (res.ok) {
+        toast({ title: 'Saved', description: 'MFA enforcement updated.' });
+      } else {
+        toast({ title: 'Error', description: 'Failed to update MFA settings.', variant: 'destructive' });
+      }
+    } catch {
+      toast({ title: 'Error', description: 'Failed to update MFA settings.', variant: 'destructive' });
+    } finally {
+      setSaving(false);
+    }
+  };
+  const membersWithoutMfa = members.filter((m) => !m.has_mfa && !m.exempt);
+  const exemptions = members.filter((m) => m.exempt);
+  if (loading) return <div className="flex items-center gap-2 pt-8 text-foreground-secondary"><Loader2 className="h-4 w-4 animate-spin" /> Loading...</div>;
+  return (
+    <div className="space-y-6 pt-8">
+      <div>
+        <h2 className="text-2xl font-bold text-foreground">Multi-Factor Authentication</h2>
+        <p className="mt-1 text-sm text-foreground-secondary">Require MFA for all members and manage exemptions</p>
+      </div>
+      <div className="rounded-lg border border-border bg-background-card p-6 space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <Label className="text-sm font-medium text-foreground">Enforce MFA for all members</Label>
+            <p className="text-xs text-foreground-secondary mt-0.5">Members must enable MFA within the grace period</p>
+          </div>
+          <Switch checked={requireMfa} onCheckedChange={setRequireMfa} />
+        </div>
+        <div className="flex items-center gap-2">
+          <Label className="text-sm text-foreground">Grace period:</Label>
+          <Select value={String(gracePeriodDays)} onValueChange={(v) => setGracePeriodDays(Number(v))}>
+            <SelectTrigger className="w-32">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {[3, 7, 14, 30].map((d) => (
+                <SelectItem key={d} value={String(d)}>{d} days</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <Button onClick={handleSave} disabled={saving} size="sm">
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
+        </Button>
+      </div>
+      <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+        <div className="px-4 py-3 border-b border-border">
+          <h3 className="text-sm font-semibold text-foreground">Members without MFA</h3>
+          <p className="text-xs text-foreground-secondary mt-0.5">Members who have not enrolled in MFA</p>
+        </div>
+        <table className="w-full text-sm">
+          <thead className="bg-background-card-header">
+            <tr>
+              <th className="text-left px-4 py-2 font-medium text-foreground">User</th>
+              <th className="text-left px-4 py-2 font-medium text-foreground">Enrollment status</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {membersWithoutMfa.length === 0 ? (
+              <tr>
+                <td colSpan={2} className="px-4 py-4 text-center text-sm text-foreground-secondary">
+                  All members have MFA enabled or are exempt.
+                </td>
+              </tr>
+            ) : (
+              membersWithoutMfa.map((m) => (
+                <tr key={m.user_id}>
+                  <td className="px-4 py-2 text-foreground">{m.email || m.user_id}</td>
+                  <td className="px-4 py-2">
+                    <Badge variant="secondary">Not enrolled</Badge>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+        <div className="px-4 py-3 border-b border-border">
+          <h3 className="text-sm font-semibold text-foreground">Exemptions</h3>
+          <p className="text-xs text-foreground-secondary mt-0.5">Members exempt from MFA requirement</p>
+        </div>
+        <table className="w-full text-sm">
+          <thead className="bg-background-card-header">
+            <tr>
+              <th className="text-left px-4 py-2 font-medium text-foreground">User</th>
+              <th className="text-left px-4 py-2 font-medium text-foreground">Status</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {exemptions.length === 0 ? (
+              <tr>
+                <td colSpan={2} className="px-4 py-4 text-center text-sm text-foreground-secondary">
+                  No exemptions.
+                </td>
+              </tr>
+            ) : (
+              exemptions.map((m) => (
+                <tr key={m.user_id}>
+                  <td className="px-4 py-2 text-foreground">{m.email || m.user_id}</td>
+                  <td className="px-4 py-2">
+                    <Badge variant="outline">Exempt</Badge>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+const SESSION_DURATION_OPTIONS = [
+  { value: 1, label: '1 hour' },
+  { value: 4, label: '4 hours' },
+  { value: 8, label: '8 hours' },
+  { value: 24, label: '24 hours' },
+  { value: 168, label: '7 days' },
+  { value: 720, label: '30 days' },
+];
+
+function SessionPolicySection({ organizationId }: { organizationId: string }) {
+  const [loading, setLoading] = useState(true);
+  const [maxDurationHours, setMaxDurationHours] = useState(24);
+  const [requireReauth, setRequireReauth] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [showForceLogoutConfirm, setShowForceLogoutConfirm] = useState(false);
+  const [forceLogoutLoading, setForceLogoutLoading] = useState(false);
+  const { toast } = useToast();
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token || cancelled) return;
+        const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/session-policy`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (cancelled) return;
+        if (res.ok) {
+          const data = await res.json();
+          const hours = data.max_session_duration_hours ?? data.max_session_duration ?? 24;
+          setMaxDurationHours(typeof hours === 'number' ? hours : 24);
+          setRequireReauth(data.require_reauth_for_sensitive ?? false);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [organizationId]);
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/session-policy`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ max_session_duration_hours: maxDurationHours, require_reauth_for_sensitive: requireReauth }),
+      });
+      if (res.ok) {
+        toast({ title: 'Saved', description: 'Session policy updated.' });
+      } else {
+        toast({ title: 'Error', description: 'Failed to update session policy.', variant: 'destructive' });
+      }
+    } catch {
+      toast({ title: 'Error', description: 'Failed to update session policy.', variant: 'destructive' });
+    } finally {
+      setSaving(false);
+    }
+  };
+  const handleForceLogout = async () => {
+    setForceLogoutLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/session-policy/force-logout`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (res.ok) {
+        setShowForceLogoutConfirm(false);
+        toast({ title: 'Done', description: 'All members have been logged out.' });
+      } else {
+        toast({ title: 'Error', description: 'Failed to force logout.', variant: 'destructive' });
+      }
+    } catch {
+      toast({ title: 'Error', description: 'Failed to force logout.', variant: 'destructive' });
+    } finally {
+      setForceLogoutLoading(false);
+    }
+  };
+  if (loading) return <div className="flex items-center gap-2 pt-8 text-foreground-secondary"><Loader2 className="h-4 w-4 animate-spin" /> Loading...</div>;
+  return (
+    <div className="space-y-6 pt-8">
+      <div>
+        <h2 className="text-2xl font-bold text-foreground">Session Policy</h2>
+        <p className="mt-1 text-sm text-foreground-secondary">Configure session duration and re-authentication requirements</p>
+      </div>
+      <div className="rounded-lg border border-border bg-background-card p-6 space-y-6">
+        <div className="flex items-center gap-2">
+          <Label className="text-sm text-foreground">Max session duration:</Label>
+          <Select value={String(maxDurationHours)} onValueChange={(v) => setMaxDurationHours(Number(v))}>
+            <SelectTrigger className="w-36">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SESSION_DURATION_OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={String(opt.value)}>{opt.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-center justify-between">
+          <Label className="text-sm text-foreground">Require re-authentication for sensitive actions</Label>
+          <Switch checked={requireReauth} onCheckedChange={setRequireReauth} />
+        </div>
+        <div className="flex gap-2">
+          <Button onClick={handleSave} disabled={saving} size="sm">
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
+          </Button>
+          <Button variant="destructive" size="sm" onClick={() => setShowForceLogoutConfirm(true)}>
+            Force Logout All Members
+          </Button>
+        </div>
+      </div>
+
+      <Dialog open={showForceLogoutConfirm} onOpenChange={setShowForceLogoutConfirm}>
+        <DialogContent className="sm:max-w-[425px] bg-background">
+          <DialogTitle>Force Logout All Members</DialogTitle>
+          <DialogDescription>
+            All members will be signed out and will need to sign in again. This action cannot be undone.
+          </DialogDescription>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShowForceLogoutConfirm(false)} disabled={forceLogoutLoading}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleForceLogout} disabled={forceLogoutLoading}>
+              {forceLogoutLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Force Logout
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function IPAllowlistSection({ organizationId }: { organizationId: string }) {
+  const [loading, setLoading] = useState(true);
+  const [enabled, setEnabled] = useState(false);
+  const [entries, setEntries] = useState<Array<{ id?: string; cidr: string; label?: string; added_by?: string; added_at?: string }>>([]);
+  const [newCidr, setNewCidr] = useState('');
+  const [newLabel, setNewLabel] = useState('');
+  const [showAdd, setShowAdd] = useState(false);
+  const [addLoading, setAddLoading] = useState(false);
+  const [toggleLoading, setToggleLoading] = useState(false);
+  const [showEnableWarning, setShowEnableWarning] = useState(false);
+  const { toast } = useToast();
+
+  const fetchAllowlist = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) return;
+    const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/ip-allowlist`, {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setEnabled(data.enabled ?? false);
+      setEntries(data.entries ?? []);
+    }
+  }, [organizationId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token || cancelled) return;
+        const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/ip-allowlist`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (cancelled) return;
+        if (res.ok) {
+          const data = await res.json();
+          setEnabled(data.enabled ?? false);
+          setEntries(data.entries ?? []);
+        }
+      } catch {
+        if (!cancelled) setEntries([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [organizationId]);
+
+  const handleToggleEnabled = async (checked: boolean) => {
+    if (checked && !showEnableWarning) {
+      setShowEnableWarning(true);
+      return;
+    }
+    setToggleLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/ip-allowlist`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: checked }),
+      });
+      if (res.ok) {
+        setEnabled(checked);
+        setShowEnableWarning(false);
+        toast({ title: 'Saved', description: checked ? 'IP allowlist enabled.' : 'IP allowlist disabled.' });
+      } else {
+        toast({ title: 'Error', description: 'Failed to update.', variant: 'destructive' });
+      }
+    } catch {
+      toast({ title: 'Error', description: 'Failed to update.', variant: 'destructive' });
+    } finally {
+      setToggleLoading(false);
+    }
+  };
+
+  const handleAdd = async () => {
+    if (!newCidr.trim()) return;
+    setAddLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/ip-allowlist`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cidr: newCidr.trim(), label: newLabel.trim() || undefined }),
+      });
+      if (res.ok) {
+        await fetchAllowlist();
+        setNewCidr('');
+        setNewLabel('');
+        setShowAdd(false);
+        toast({ title: 'Added', description: 'IP range added.' });
+      } else {
+        toast({ title: 'Error', description: 'Failed to add IP range.', variant: 'destructive' });
+      }
+    } catch {
+      toast({ title: 'Error', description: 'Failed to add IP range.', variant: 'destructive' });
+    } finally {
+      setAddLoading(false);
+    }
+  };
+
+  const handleDelete = async (entryId: string | number, cidr: string) => {
+    if (!confirm(`Remove ${cidr} from allowlist?`)) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/ip-allowlist/${entryId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (res.ok) {
+        setEntries((e) => e.filter((x) => (x.id ?? x.cidr) !== entryId));
+        toast({ title: 'Removed', description: 'IP range removed.' });
+      } else {
+        toast({ title: 'Error', description: 'Failed to remove.', variant: 'destructive' });
+      }
+    } catch {
+      toast({ title: 'Error', description: 'Failed to remove.', variant: 'destructive' });
+    }
+  };
+
+  if (loading) return <div className="flex items-center gap-2 pt-8 text-foreground-secondary"><Loader2 className="h-4 w-4 animate-spin" /> Loading...</div>;
+  return (
+    <div className="space-y-6 pt-8">
+      <div>
+        <h2 className="text-2xl font-bold text-foreground">IP Allowlist</h2>
+        <p className="mt-1 text-sm text-foreground-secondary">Restrict access to specific IP ranges</p>
+      </div>
+      <div className="rounded-lg border border-border bg-background-card p-6 space-y-6">
+        {showEnableWarning && (
+          <div className="flex items-start gap-3 p-4 rounded-lg border border-amber-500/50 bg-amber-500/10 text-foreground">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-amber-500" />
+            <div>
+              <p className="text-sm font-medium">Enable IP allowlist?</p>
+              <p className="text-sm text-foreground-secondary mt-1">Once enabled, only requests from allowed IP ranges will be accepted. Ensure you add your current IP before enabling, or you may lock yourself out.</p>
+              <div className="flex gap-2 mt-3">
+                <Button size="sm" onClick={() => handleToggleEnabled(true)} disabled={toggleLoading}>
+                  {toggleLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" /> : null}
+                  Confirm & Enable
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setShowEnableWarning(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+        <div className="flex items-center justify-between">
+          <Label className="text-sm text-foreground">Enable IP allowlist</Label>
+          <Switch
+            checked={enabled}
+            onCheckedChange={(checked) => (checked ? setShowEnableWarning(true) : handleToggleEnabled(false))}
+            disabled={toggleLoading}
+          />
+        </div>
+        {showAdd && (
+          <div className="flex gap-2 items-end flex-wrap">
+            <div>
+              <Label className="text-xs text-foreground-secondary">CIDR</Label>
+              <Input value={newCidr} onChange={(e) => setNewCidr(e.target.value)} placeholder="10.0.0.0/24" className="mt-1" />
+            </div>
+            <div>
+              <Label className="text-xs text-foreground-secondary">Label</Label>
+              <Input value={newLabel} onChange={(e) => setNewLabel(e.target.value)} placeholder="Office" className="mt-1" />
+            </div>
+            <Button size="sm" onClick={handleAdd} disabled={addLoading || !newCidr.trim()}>
+              {addLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" /> : null}
+              Add
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => { setShowAdd(false); setNewCidr(''); setNewLabel(''); }}>
+              Cancel
+            </Button>
+          </div>
+        )}
+        <Button size="sm" variant="outline" onClick={() => setShowAdd(!showAdd)}>Add IP Range</Button>
+        <div className="rounded-lg border border-border overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-background-card-header">
+              <tr>
+                <th className="text-left px-4 py-2 font-medium text-foreground">CIDR</th>
+                <th className="text-left px-4 py-2 font-medium text-foreground">Label</th>
+                <th className="text-left px-4 py-2 font-medium text-foreground">Added by</th>
+                <th className="text-left px-4 py-2 font-medium text-foreground">Date</th>
+                <th className="w-10"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {entries.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-4 py-4 text-center text-sm text-foreground-secondary">
+                    No IP ranges configured.
+                  </td>
+                </tr>
+              ) : (
+                entries.map((e, i) => (
+                  <tr key={e.id ?? i}>
+                    <td className="px-4 py-2 text-foreground font-mono">{e.cidr}</td>
+                    <td className="px-4 py-2 text-foreground-secondary">{e.label || '-'}</td>
+                    <td className="px-4 py-2 text-foreground-secondary">{e.added_by || '-'}</td>
+                    <td className="px-4 py-2 text-foreground-secondary">{e.added_at ? new Date(e.added_at).toLocaleDateString() : '-'}</td>
+                    <td className="px-4 py-2">
+                      <Button variant="ghost" size="sm" onClick={() => handleDelete(e.id ?? e.cidr, e.cidr)}>Remove</Button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function APITokensSection({ organizationId }: { organizationId: string }) {
+  const [loading, setLoading] = useState(true);
+  const [tokens, setTokens] = useState<Array<{ id: string; user_id: string; user?: string; name: string; prefix: string; scopes?: string[]; last_used?: string }>>([]);
+  const { toast } = useToast();
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token || cancelled) return;
+        const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/api-tokens`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (cancelled) return;
+        if (res.ok) {
+          const data = await res.json();
+          setTokens(data.tokens ?? []);
+        }
+      } catch {
+        if (!cancelled) setTokens([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [organizationId]);
+  const handleRevoke = async (tokenId: string) => {
+    if (!confirm('Revoke this token?')) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/api-tokens/${tokenId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (res.ok) {
+        setTokens((t) => t.filter((x) => x.id !== tokenId));
+        toast({ title: 'Revoked', description: 'Token revoked.' });
+      } else {
+        toast({ title: 'Error', description: 'Failed to revoke token.', variant: 'destructive' });
+      }
+    } catch {
+      toast({ title: 'Error', description: 'Failed to revoke token.', variant: 'destructive' });
+    }
+  };
+  if (loading) return <div className="flex items-center gap-2 pt-8 text-foreground-secondary"><Loader2 className="h-4 w-4 animate-spin" /> Loading...</div>;
+  return (
+    <div className="space-y-6 pt-8">
+      <div>
+        <h2 className="text-2xl font-bold text-foreground">API Tokens</h2>
+        <p className="mt-1 text-sm text-foreground-secondary">All API tokens used in this organization</p>
+      </div>
+      <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-background-card-header">
+            <tr>
+              <th className="text-left px-4 py-2 font-medium text-foreground">User</th>
+              <th className="text-left px-4 py-2 font-medium text-foreground">Name</th>
+              <th className="text-left px-4 py-2 font-medium text-foreground">Prefix</th>
+              <th className="text-left px-4 py-2 font-medium text-foreground">Scopes</th>
+              <th className="text-left px-4 py-2 font-medium text-foreground">Last used</th>
+              <th className="w-10"></th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {tokens.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="px-4 py-4 text-center text-sm text-foreground-secondary">
+                  No API tokens in this organization.
+                </td>
+              </tr>
+            ) : (
+              tokens.map((t) => (
+              <tr key={t.id}>
+                <td className="px-4 py-2 text-foreground">{t.user || t.user_id}</td>
+                <td className="px-4 py-2 text-foreground">{t.name}</td>
+                <td className="px-4 py-2 text-foreground-secondary font-mono">{t.prefix}</td>
+                <td className="px-4 py-2 text-foreground-secondary">{t.scopes?.join(', ') || '-'}</td>
+                <td className="px-4 py-2 text-foreground-secondary">{t.last_used || '-'}</td>
+                <td className="px-4 py-2">
+                  <Button variant="ghost" size="sm" onClick={() => handleRevoke(t.id)}>Revoke</Button>
+                </td>
+              </tr>
+            ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function SCIMSection({ organizationId }: { organizationId: string }) {
+  const [loading, setLoading] = useState(true);
+  const [config, setConfig] = useState<{ configured: boolean; endpoint_url?: string; token_prefix?: string; last_sync?: string } | null>(null);
+  const [enableLoading, setEnableLoading] = useState(false);
+  const [regenLoading, setRegenLoading] = useState(false);
+  const { toast } = useToast();
+
+  const fetchScim = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) return;
+    const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/scim`, {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setConfig(data);
+    } else {
+      setConfig({ configured: false });
+    }
+  }, [organizationId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token || cancelled) return;
+        const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/scim`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (cancelled) return;
+        if (res.ok) {
+          const data = await res.json();
+          setConfig(data);
+        } else {
+          setConfig({ configured: false });
+        }
+      } catch {
+        if (!cancelled) setConfig({ configured: false });
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [organizationId]);
+
+  const handleEnable = async () => {
+    setEnableLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/scim`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (res.ok) {
+        await fetchScim();
+        toast({ title: 'SCIM enabled', description: 'SCIM provisioning has been configured.' });
+      } else {
+        toast({ title: 'Error', description: 'Failed to enable SCIM.', variant: 'destructive' });
+      }
+    } catch {
+      toast({ title: 'Error', description: 'Failed to enable SCIM.', variant: 'destructive' });
+    } finally {
+      setEnableLoading(false);
+    }
+  };
+
+  const handleRegenerateToken = async () => {
+    setRegenLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/scim/regenerate-token`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (res.ok) {
+        await fetchScim();
+        toast({ title: 'Token regenerated', description: 'A new SCIM token has been generated.' });
+      } else {
+        toast({ title: 'Error', description: 'Failed to regenerate token.', variant: 'destructive' });
+      }
+    } catch {
+      toast({ title: 'Error', description: 'Failed to regenerate token.', variant: 'destructive' });
+    } finally {
+      setRegenLoading(false);
+    }
+  };
+
+  if (loading) return <div className="flex items-center gap-2 pt-8 text-foreground-secondary"><Loader2 className="h-4 w-4 animate-spin" /> Loading...</div>;
+  return (
+    <div className="space-y-6 pt-8">
+      <div>
+        <h2 className="text-2xl font-bold text-foreground">SCIM Provisioning</h2>
+        <p className="mt-1 text-sm text-foreground-secondary">Provision users and groups from your identity provider</p>
+      </div>
+      <div className="rounded-lg border border-border bg-background-card p-6">
+        {!config?.configured ? (
+          <div className="flex flex-col gap-4">
+            <p className="text-sm text-foreground-secondary">SCIM is not configured. Enable SCIM to sync users and groups from your IdP.</p>
+            <Button size="sm" onClick={handleEnable} disabled={enableLoading}>
+              {enableLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" /> : null}
+              Enable SCIM
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <Label className="text-sm text-foreground-secondary">Endpoint URL</Label>
+              <p className="text-sm font-mono text-foreground mt-1 break-all">{config.endpoint_url}</p>
+            </div>
+            <div>
+              <Label className="text-sm text-foreground-secondary">Token prefix</Label>
+              <p className="text-sm font-mono text-foreground mt-1">{config.token_prefix || '***'}</p>
+            </div>
+            <div>
+              <Label className="text-sm text-foreground-secondary">Last sync</Label>
+              <p className="text-sm text-foreground mt-1">{config.last_sync || 'Never'}</p>
+            </div>
+            <Button size="sm" variant="outline" onClick={handleRegenerateToken} disabled={regenLoading}>
+              {regenLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" /> : null}
+              Regenerate Token
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function getCachedMembers(orgId: string): OrganizationMember[] | null {
   if (orgMembersCache[orgId]) return orgMembersCache[orgId];
   try {
@@ -551,7 +1492,7 @@ function getCachedRoles(orgId: string): OrganizationRole[] | null {
 export default function OrganizationSettingsPage() {
   const { id, section: sectionParam } = useParams<{ id: string; section?: string }>();
   const { organization, reloadOrganization } = useOutletContext<OrganizationContextType>();
-  const { user } = useAuth();
+  const { user, session } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -640,6 +1581,7 @@ export default function OrganizationSettingsPage() {
   const [hasVisitedMembers, setHasVisitedMembers] = useState(false);
   const [hasVisitedIntegrations, setHasVisitedIntegrations] = useState(false);
   const [hasVisitedNotifications, setHasVisitedNotifications] = useState(false);
+  const [notifSubTab, setNotifSubTab] = useState<'rules' | 'history' | 'health'>('rules');
   const [hasVisitedPolicies, setHasVisitedPolicies] = useState(false);
   const [selectedRoleForSettings, setSelectedRoleForSettings] = useState<OrganizationRole | null>(null);
   const [newRoleNameInput, setNewRoleNameInput] = useState('');
@@ -710,9 +1652,37 @@ export default function OrganizationSettingsPage() {
   const [emailToAdd, setEmailToAdd] = useState('');
   const [emailSaving, setEmailSaving] = useState(false);
 
+  const [showPagerDutyDialog, setShowPagerDutyDialog] = useState(false);
+  const [pagerDutyServiceName, setPagerDutyServiceName] = useState('');
+  const [pagerDutyRoutingKey, setPagerDutyRoutingKey] = useState('');
+  const [pagerDutySaving, setPagerDutySaving] = useState(false);
+
+  const [notifPausedUntil, setNotifPausedUntil] = useState<string | null>(null);
+
+  const [notifStats, setNotifStats] = useState<{
+    success_rate_24h: number;
+    total_deliveries_7d: number;
+    total_events_7d: number;
+    recent_failures: { id: string; event_type: string; destination_type: string; error_message: string; created_at: string }[];
+  } | null>(null);
+  const [notifStatsLoading, setNotifStatsLoading] = useState(false);
+
   // Usage screen state
   const [usageData, setUsageData] = useState<{ teamMembers: number; projectsCreated: number } | null>(null);
   const [loadingUsage, setLoadingUsage] = useState(false);
+
+  // Webhooks section state
+  const [webhookStats, setWebhookStats] = useState<{ total: number; processed: number; errors: number; skipped: number } | null>(null);
+  const [webhookDeliveries, setWebhookDeliveries] = useState<any[]>([]);
+  const [webhookTotalCount, setWebhookTotalCount] = useState(0);
+  const [webhookLoading, setWebhookLoading] = useState(false);
+  const [webhookStatsLoading, setWebhookStatsLoading] = useState(false);
+  const [webhookProvider, setWebhookProvider] = useState('all');
+  const [webhookStatus, setWebhookStatus] = useState('all');
+  const [webhookEvent, setWebhookEvent] = useState('all');
+  const [webhookTimeframe, setWebhookTimeframe] = useState('30D');
+  const [webhookPage, setWebhookPage] = useState(1);
+  const WEBHOOK_PER_PAGE = 50;
 
   // Get cached or organization permissions
   const getCachedPermissions = (): RolePermissions | null => {
@@ -798,7 +1768,7 @@ export default function OrganizationSettingsPage() {
   }, [id, sectionParam, permissionsChecked, canManageCompliance, navigate]);
 
   // Redirect away from security sections when user lacks manage_security
-  const securitySections = ['sso', 'mfa', 'legal_documents'];
+  const securitySections = ['sso', 'mfa', 'ip_allowlist', 'api_tokens', 'session_policy', 'scim', 'legal_documents'];
   useEffect(() => {
     if (id && sectionParam && securitySections.includes(sectionParam) && permissionsChecked && !effectivePermissions?.manage_security) {
       navigate(`/organizations/${id}/settings/general`, { replace: true });
@@ -925,6 +1895,32 @@ export default function OrganizationSettingsPage() {
     if (activeSection === 'policies') setHasVisitedPolicies(true);
   }, [activeSection]);
 
+  useEffect(() => {
+    setNotifPausedUntil((organization as any)?.notifications_paused_until ?? null);
+  }, [organization]);
+
+  useEffect(() => {
+    if (activeSection !== 'notifications' || notifSubTab !== 'health' || !id || !session?.access_token) return;
+    let cancelled = false;
+    const fetchStats = async () => {
+      setNotifStatsLoading(true);
+      try {
+        const res = await fetch(`/api/organizations/${id}/notification-stats`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!cancelled) setNotifStats(data);
+      } catch {
+        if (!cancelled) setNotifStats(null);
+      } finally {
+        if (!cancelled) setNotifStatsLoading(false);
+      }
+    };
+    fetchStats();
+    return () => { cancelled = true; };
+  }, [activeSection, notifSubTab, id, session?.access_token]);
+
   const loadUsage = async () => {
     if (!id) return;
     setLoadingUsage(true);
@@ -956,6 +1952,87 @@ export default function OrganizationSettingsPage() {
       loadUsage();
     }
   }, [activeSection, id]);
+
+  const loadWebhookStats = async () => {
+    if (!id) return;
+    setWebhookStatsLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+      const res = await fetch(`${API_BASE_URL}/api/organizations/${id}/webhook-deliveries/stats?timeframe=${webhookTimeframe}`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setWebhookStats(data);
+      }
+    } catch { /* ignore */ } finally {
+      setWebhookStatsLoading(false);
+    }
+  };
+
+  const loadWebhookDeliveries = async () => {
+    if (!id) return;
+    setWebhookLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+      const params = new URLSearchParams({
+        timeframe: webhookTimeframe,
+        page: String(webhookPage),
+        per_page: String(WEBHOOK_PER_PAGE),
+      });
+      if (webhookProvider !== 'all') params.set('provider', webhookProvider);
+      if (webhookStatus !== 'all') params.set('status', webhookStatus);
+      if (webhookEvent !== 'all') params.set('event_type', webhookEvent);
+      const res = await fetch(`${API_BASE_URL}/api/organizations/${id}/webhook-deliveries?${params}`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setWebhookDeliveries(data.deliveries ?? data.items ?? data ?? []);
+        setWebhookTotalCount(data.total ?? data.total_count ?? (data.deliveries ?? data.items ?? data).length ?? 0);
+      }
+    } catch { /* ignore */ } finally {
+      setWebhookLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeSection === 'webhooks' && id) {
+      loadWebhookStats();
+      loadWebhookDeliveries();
+    }
+  }, [activeSection, id, webhookTimeframe]);
+
+  useEffect(() => {
+    if (activeSection === 'webhooks' && id) {
+      loadWebhookDeliveries();
+    }
+  }, [webhookProvider, webhookStatus, webhookEvent, webhookPage]);
+
+  const formatWebhookTime = (dateString: string | null): string => {
+    if (!dateString) return '—';
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffS = Math.floor((now.getTime() - date.getTime()) / 1000);
+    if (diffS < 60) return 'Just now';
+    if (diffS < 3600) return `${Math.floor(diffS / 60)}m ago`;
+    if (diffS < 86400) return `${Math.floor(diffS / 3600)}h ago`;
+    if (diffS < 2592000) return `${Math.floor(diffS / 86400)}d ago`;
+    return date.toLocaleDateString();
+  };
+
+  const webhookStatusDot = (status: string) => {
+    switch (status) {
+      case 'processed': return 'bg-green-500';
+      case 'skipped': return 'bg-amber-400';
+      case 'error': return 'bg-red-500';
+      default: return 'bg-foreground-secondary';
+    }
+  };
 
   // Handle integration connection callbacks (GitHub, GitLab, Bitbucket)
   useEffect(() => {
@@ -1655,12 +2732,19 @@ export default function OrganizationSettingsPage() {
       label: 'Integrations',
       icon: <Plug className="h-4 w-4 tab-icon-shake" />,
     }] : []),
+    // Webhooks section - show when manage_integrations
+    ...(effectivePermissions?.manage_integrations ? [{
+      id: 'webhooks',
+      label: 'Webhooks',
+      icon: <Webhook className="h-4 w-4 tab-icon-shake" />,
+    }] : []),
     // Notifications section (after Integrations) - show when manage_integrations OR manage_notifications
     ...((effectivePermissions?.manage_integrations || effectivePermissions?.manage_notifications) ? [{
       id: 'notifications',
       label: 'Notifications',
       icon: <Bell className="h-4 w-4 tab-icon-shake" />,
     }] : []),
+    // AI Configuration moved to "AI & Automation" category below
 
     // Security Category - only show when user has access to at least one security section
     ...(canManageCompliance || effectivePermissions?.view_activity || effectivePermissions?.manage_security ? [{
@@ -1679,6 +2763,11 @@ export default function OrganizationSettingsPage() {
       label: 'Statuses',
       icon: <Tag className="h-4 w-4 tab-icon-shake" />,
     }] : []),
+    ...(canManageCompliance ? [{
+      id: 'security_slas',
+      label: 'Security SLAs',
+      icon: <Clock className="h-4 w-4 tab-icon-shake" />,
+    }] : []),
     // Conditionally show Audit Logs section based on view_activity permission
     ...(effectivePermissions?.view_activity ? [{
       id: 'audit_logs',
@@ -1689,9 +2778,30 @@ export default function OrganizationSettingsPage() {
     ...(effectivePermissions?.manage_security ? [
       { id: 'sso', label: 'Single Sign-On', icon: <LogIn className="h-4 w-4 tab-icon-shake" /> },
       { id: 'mfa', label: 'Multi-Factor Authentication', icon: <Smartphone className="h-4 w-4 tab-icon-shake" /> },
+      { id: 'session_policy', label: 'Session Policy', icon: <Timer className="h-4 w-4 tab-icon-shake" /> },
+      { id: 'ip_allowlist', label: 'IP Allowlist', icon: <Globe className="h-4 w-4 tab-icon-shake" /> },
+      { id: 'api_tokens', label: 'API Tokens', icon: <KeyRound className="h-4 w-4 tab-icon-shake" /> },
+      { id: 'scim', label: 'SCIM Provisioning', icon: <Network className="h-4 w-4 tab-icon-shake" /> },
       { id: 'category_legal', label: 'Legal', isCategory: true as const },
       { id: 'legal_documents', label: 'Legal Documents', icon: <BookOpen className="h-4 w-4 tab-icon-shake" /> },
     ] : []),
+
+    // AI & Automation Category
+    ...((effectivePermissions?.manage_aegis || effectivePermissions?.interact_with_aegis) ? [{
+      id: 'category_ai',
+      label: 'AI & Automation',
+      isCategory: true as const,
+    }] : []),
+    ...(effectivePermissions?.manage_aegis ? [{
+      id: 'aegis_management',
+      label: 'Aegis AI',
+      icon: <Sparkles className="h-4 w-4 tab-icon-shake text-green-500" />,
+    }] : []),
+    ...(effectivePermissions?.manage_aegis ? [{
+      id: 'ai_configuration',
+      label: 'AI Configuration',
+      icon: <Zap className="h-4 w-4 tab-icon-shake" />,
+    }] : []),
 
     // Plan Category - only show if user has manage_billing permission
     ...(effectivePermissions?.manage_billing ? [{
@@ -2207,80 +3317,31 @@ export default function OrganizationSettingsPage() {
               )}
 
               {activeSection === 'plan' && (
-                <div className="space-y-8 pt-8">
-                  <div>
-                    <h2 className="text-2xl font-bold text-foreground">Plan & Billing</h2>
-                  </div>
-
-                  <div className="space-y-6">
-                    <div>
-                      <h3 className="text-base font-semibold text-foreground mb-2">Subscription Plan</h3>
-                      <p className="text-sm text-foreground">
-                        Each organization has its own subscription plan and usage quotas.
-                      </p>
-                    </div>
-                    <p className="text-sm text-foreground">
-                      You are currently on the <strong className="text-primary">Free Plan</strong>.
-                    </p>
-                    <p className="text-sm text-foreground">
-                      <strong>Pro Plan</strong> coming soon.
-                    </p>
-                  </div>
-                </div>
+                <PlanBillingSectionContent organizationId={id || ''} />
               )}
 
-              {activeSection === 'sso' && (
-                <div className="space-y-6 pt-8">
-                  <div>
-                    <h2 className="text-2xl font-bold text-foreground">Single Sign-On</h2>
-                  </div>
-                  <div className="rounded-lg border border-border bg-background-card p-6">
-                    <div className="flex gap-3">
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
-                        <Info className="h-4 w-4 text-foreground-secondary" />
-                      </div>
-                      <div className="flex-1 space-y-2">
-                        <h3 className="text-sm font-semibold text-foreground">Upgrade to unlock Single Sign-On</h3>
-                        <p className="text-sm text-foreground-secondary">
-                          Connect your identity provider (Okta, Azure AD, Google Workspace, etc.) to enable SAML 2.0 SSO for your organization.
-                        </p>
-                        <Button
-                          onClick={() => id && navigate(`/organizations/${id}/settings/plan`)}
-                          className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm px-4"
-                        >
-                          Upgrade to Pro
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+              {activeSection === 'sso' && id && (
+                <SSOSection organizationId={id} />
               )}
 
-              {activeSection === 'mfa' && (
-                <div className="space-y-6 pt-8">
-                  <div>
-                    <h2 className="text-2xl font-bold text-foreground">Multi-Factor Authentication</h2>
-                  </div>
-                  <div className="rounded-lg border border-border bg-background-card p-6">
-                    <div className="flex gap-3">
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
-                        <Info className="h-4 w-4 text-foreground-secondary" />
-                      </div>
-                      <div className="flex-1 space-y-2">
-                        <h3 className="text-sm font-semibold text-foreground">Upgrade to unlock Multi-Factor Authentication</h3>
-                        <p className="text-sm text-foreground-secondary">
-                          Require MFA for your organization to add an extra layer of security to user sign-ins.
-                        </p>
-                        <Button
-                          onClick={() => id && navigate(`/organizations/${id}/settings/plan`)}
-                          className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm px-4"
-                        >
-                          Upgrade to Pro
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+              {activeSection === 'mfa' && id && (
+                <MFASection organizationId={id} />
+              )}
+
+              {activeSection === 'session_policy' && id && (
+                <SessionPolicySection organizationId={id} />
+              )}
+
+              {activeSection === 'ip_allowlist' && id && (
+                <IPAllowlistSection organizationId={id} />
+              )}
+
+              {activeSection === 'api_tokens' && id && (
+                <APITokensSection organizationId={id} />
+              )}
+
+              {activeSection === 'scim' && id && (
+                <SCIMSection organizationId={id} />
               )}
 
               {activeSection === 'legal_documents' && (
@@ -2855,6 +3916,19 @@ export default function OrganizationSettingsPage() {
                               <Webhook className="h-3.5 w-3.5 mr-1.5" />
                               Add Custom
                             </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-xs"
+                              onClick={() => {
+                                setPagerDutyServiceName('');
+                                setPagerDutyRoutingKey('');
+                                setShowPagerDutyDialog(true);
+                              }}
+                            >
+                              <span className="mr-1.5 text-sm leading-none">🚨</span>
+                              Add PagerDuty
+                            </Button>
                           </div>
                         </div>
                         {loadingConnections ? (
@@ -3267,8 +4341,448 @@ export default function OrganizationSettingsPage() {
 
               {/* Keep Notifications mounted after first visit so it doesn't reload when switching tabs (like Integrations) */}
               {(activeSection === 'notifications' || hasVisitedNotifications) && id && (
-                <div className="pt-8" style={{ display: activeSection === 'notifications' ? undefined : 'none' }}>
-                  <NotificationRulesSection organizationId={id} connections={cicdConnections} />
+                <div className="pt-8 space-y-6" style={{ display: activeSection === 'notifications' ? undefined : 'none' }}>
+                  {/* Header with Pause button */}
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h2 className="text-2xl font-bold text-foreground">Notifications</h2>
+                      <p className="text-sm text-foreground-secondary mt-1">Configure notification rules, view delivery history, and monitor health.</p>
+                    </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm" className="text-xs">
+                          <PauseCircle className="h-3.5 w-3.5 mr-1.5" />
+                          {notifPausedUntil && new Date(notifPausedUntil) > new Date() ? 'Paused' : 'Pause All'}
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {notifPausedUntil && new Date(notifPausedUntil) > new Date() ? (
+                          <DropdownMenuItem onClick={async () => {
+                            try {
+                              await fetch(`/api/organizations/${id}`, {
+                                method: 'PATCH',
+                                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+                                body: JSON.stringify({ notifications_paused_until: null }),
+                              });
+                              setNotifPausedUntil(null);
+                              toast({ title: 'Resumed', description: 'Notifications have been resumed.' });
+                            } catch { toast({ title: 'Error', description: 'Failed to resume notifications.', variant: 'destructive' }); }
+                          }}>
+                            Resume notifications
+                          </DropdownMenuItem>
+                        ) : (
+                          <>
+                            {[{ label: 'Pause for 1 hour', hours: 1 }, { label: 'Pause for 4 hours', hours: 4 }, { label: 'Pause for 24 hours', hours: 24 }].map(({ label, hours }) => (
+                              <DropdownMenuItem key={hours} onClick={async () => {
+                                const until = new Date(Date.now() + hours * 3600000).toISOString();
+                                try {
+                                  await fetch(`/api/organizations/${id}`, {
+                                    method: 'PATCH',
+                                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+                                    body: JSON.stringify({ notifications_paused_until: until }),
+                                  });
+                                  setNotifPausedUntil(until);
+                                  toast({ title: 'Paused', description: `Notifications paused for ${hours} hour${hours > 1 ? 's' : ''}.` });
+                                } catch { toast({ title: 'Error', description: 'Failed to pause notifications.', variant: 'destructive' }); }
+                              }}>
+                                {label}
+                              </DropdownMenuItem>
+                            ))}
+                          </>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+
+                  {/* Paused banner */}
+                  {notifPausedUntil && new Date(notifPausedUntil) > new Date() && (
+                    <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3">
+                      <PauseCircle className="h-4 w-4 text-amber-400 flex-shrink-0" />
+                      <span className="text-sm text-amber-400">
+                        Notifications paused until {new Date(notifPausedUntil).toLocaleString()}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Sub-tabs */}
+                  <div className="flex gap-1">
+                    {(['rules', 'history', 'health'] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        onClick={() => setNotifSubTab(tab)}
+                        className={cn(
+                          'px-3 py-1.5 text-sm rounded-md transition-colors',
+                          notifSubTab === tab
+                            ? 'bg-zinc-800 text-white'
+                            : 'text-zinc-400 hover:text-zinc-300'
+                        )}
+                      >
+                        {tab === 'rules' ? 'Rules' : tab === 'history' ? 'History' : 'Health'}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Tab content */}
+                  {notifSubTab === 'rules' && (
+                    <NotificationRulesSection organizationId={id} connections={cicdConnections} />
+                  )}
+                  {notifSubTab === 'history' && (
+                    <NotificationHistorySection organizationId={id} />
+                  )}
+                  {notifSubTab === 'health' && (
+                    <div className="space-y-6">
+                      {notifStatsLoading ? (
+                        <div className="grid grid-cols-3 gap-4">
+                          {[1, 2, 3].map((i) => (
+                            <div key={i} className="rounded-lg border border-border bg-background-card p-5">
+                              <div className="h-4 w-24 bg-muted animate-pulse rounded mb-3" />
+                              <div className="h-8 w-16 bg-muted animate-pulse rounded" />
+                            </div>
+                          ))}
+                        </div>
+                      ) : notifStats ? (
+                        <>
+                          <div className="grid grid-cols-3 gap-4">
+                            <div className="rounded-lg border border-border bg-background-card p-5">
+                              <p className="text-xs font-medium text-foreground-secondary uppercase tracking-wider mb-1">Success Rate (24h)</p>
+                              <p className="text-2xl font-bold text-foreground">{notifStats.success_rate_24h.toFixed(1)}%</p>
+                              <div className="mt-2 h-1.5 bg-background-subtle rounded-full overflow-hidden">
+                                <div
+                                  className={cn('h-full rounded-full transition-all', notifStats.success_rate_24h >= 95 ? 'bg-green-500' : notifStats.success_rate_24h >= 80 ? 'bg-amber-500' : 'bg-red-500')}
+                                  style={{ width: `${Math.min(100, notifStats.success_rate_24h)}%` }}
+                                />
+                              </div>
+                            </div>
+                            <div className="rounded-lg border border-border bg-background-card p-5">
+                              <p className="text-xs font-medium text-foreground-secondary uppercase tracking-wider mb-1">Total Deliveries (7d)</p>
+                              <p className="text-2xl font-bold text-foreground">{notifStats.total_deliveries_7d.toLocaleString()}</p>
+                            </div>
+                            <div className="rounded-lg border border-border bg-background-card p-5">
+                              <p className="text-xs font-medium text-foreground-secondary uppercase tracking-wider mb-1">Total Events (7d)</p>
+                              <p className="text-2xl font-bold text-foreground">{notifStats.total_events_7d.toLocaleString()}</p>
+                            </div>
+                          </div>
+
+                          {notifStats.recent_failures.length > 0 ? (
+                            <div>
+                              <h3 className="text-sm font-semibold text-foreground mb-3">Recent Failures</h3>
+                              <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                                <table className="w-full text-sm">
+                                  <thead className="bg-background-card-header border-b border-border">
+                                    <tr>
+                                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Time</th>
+                                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Event</th>
+                                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Destination</th>
+                                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Error</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-border">
+                                    {notifStats.recent_failures.map((f) => (
+                                      <tr key={f.id} className="hover:bg-table-hover transition-colors">
+                                        <td className="px-4 py-3 text-foreground-secondary whitespace-nowrap">
+                                          <div className="flex items-center gap-1.5">
+                                            <Clock className="h-3.5 w-3.5" />
+                                            <span className="text-xs">{new Date(f.created_at).toLocaleString()}</span>
+                                          </div>
+                                        </td>
+                                        <td className="px-4 py-3 text-foreground text-xs">{f.event_type.replaceAll('_', ' ')}</td>
+                                        <td className="px-4 py-3 text-foreground text-xs">{f.destination_type}</td>
+                                        <td className="px-4 py-3 text-red-400 text-xs truncate max-w-[300px]">{f.error_message}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-center py-8">
+                              <Check className="h-8 w-8 text-green-400 mx-auto mb-2" />
+                              <p className="text-sm text-foreground-secondary">No recent delivery failures</p>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div className="text-center py-8">
+                          <AlertTriangle className="h-8 w-8 text-foreground-secondary mx-auto mb-2" />
+                          <p className="text-sm text-foreground-secondary">Failed to load notification stats</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeSection === 'ai_configuration' && id && (
+                <div className="pt-8">
+                  <AIConfigurationSection organizationId={id} />
+                </div>
+              )}
+
+              {activeSection === 'aegis_management' && id && (
+                <div className="pt-8">
+                  <AegisManagementConsole organizationId={id} userPermissions={effectivePermissions} />
+                </div>
+              )}
+
+              {activeSection === 'webhooks' && id && (
+                <div className="space-y-6 pt-8">
+                  <div>
+                    <h2 className="text-2xl font-bold text-foreground">Webhooks</h2>
+                    <p className="text-sm text-foreground-secondary mt-1">Monitor incoming webhook deliveries from connected Git providers.</p>
+                  </div>
+
+                  {/* Summary Cards */}
+                  {webhookStatsLoading ? (
+                    <div className="grid grid-cols-4 gap-4">
+                      {[1, 2, 3, 4].map((i) => (
+                        <div key={i} className="bg-background-card border border-border rounded-lg p-4">
+                          <div className="h-3 w-16 bg-muted animate-pulse rounded mb-2" />
+                          <div className="h-7 w-12 bg-muted animate-pulse rounded" />
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-4 gap-4">
+                      {[
+                        { label: 'Total (30d)', value: webhookStats?.total ?? 0 },
+                        { label: 'Processed', value: webhookStats?.processed ?? 0, color: 'text-green-500' },
+                        { label: 'Errors', value: webhookStats?.errors ?? 0, color: webhookStats?.errors ? 'text-red-500' : undefined },
+                        { label: 'Skipped', value: webhookStats?.skipped ?? 0, color: webhookStats?.skipped ? 'text-amber-400' : undefined },
+                      ].map(({ label, value, color }) => (
+                        <div key={label} className="bg-background-card border border-border rounded-lg p-4">
+                          <p className="text-xs font-medium uppercase tracking-wider text-foreground-secondary">{label}</p>
+                          <p className={cn('mt-1 text-2xl font-semibold', color || 'text-foreground')}>{value.toLocaleString()}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Filters Row */}
+                  <div className="flex items-center gap-3 flex-wrap">
+                    {/* Provider filter */}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm" className="text-xs gap-1.5">
+                          {webhookProvider === 'all' ? 'All Providers' : webhookProvider === 'github' ? 'GitHub' : webhookProvider === 'gitlab' ? 'GitLab' : 'Bitbucket'}
+                          <ChevronDown className="h-3 w-3 opacity-50" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start">
+                        {[
+                          { value: 'all', label: 'All Providers' },
+                          { value: 'github', label: 'GitHub' },
+                          { value: 'gitlab', label: 'GitLab' },
+                          { value: 'bitbucket', label: 'Bitbucket' },
+                        ].map(({ value, label }) => (
+                          <DropdownMenuItem key={value} onClick={() => { setWebhookProvider(value); setWebhookPage(1); }}>
+                            {label}
+                            {webhookProvider === value && <Check className="h-3.5 w-3.5 ml-auto" />}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+
+                    {/* Status filter */}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm" className="text-xs gap-1.5">
+                          {webhookStatus === 'all' ? 'All Statuses' : webhookStatus.charAt(0).toUpperCase() + webhookStatus.slice(1)}
+                          <ChevronDown className="h-3 w-3 opacity-50" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start">
+                        {[
+                          { value: 'all', label: 'All Statuses' },
+                          { value: 'processed', label: 'Processed' },
+                          { value: 'error', label: 'Error' },
+                          { value: 'skipped', label: 'Skipped' },
+                        ].map(({ value, label }) => (
+                          <DropdownMenuItem key={value} onClick={() => { setWebhookStatus(value); setWebhookPage(1); }}>
+                            {label}
+                            {webhookStatus === value && <Check className="h-3.5 w-3.5 ml-auto" />}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+
+                    {/* Event filter */}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm" className="text-xs gap-1.5">
+                          {webhookEvent === 'all' ? 'All Events' : webhookEvent}
+                          <ChevronDown className="h-3 w-3 opacity-50" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start">
+                        {[
+                          { value: 'all', label: 'All Events' },
+                          { value: 'push', label: 'push' },
+                          { value: 'pull_request', label: 'pull_request' },
+                          { value: 'repository', label: 'repository' },
+                        ].map(({ value, label }) => (
+                          <DropdownMenuItem key={value} onClick={() => { setWebhookEvent(value); setWebhookPage(1); }}>
+                            {label}
+                            {webhookEvent === value && <Check className="h-3.5 w-3.5 ml-auto" />}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+
+                    {/* Timeframe filter */}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm" className="text-xs gap-1.5">
+                          {webhookTimeframe === '1H' ? 'Last Hour' : webhookTimeframe === '24H' ? '24 Hours' : webhookTimeframe === '7D' ? '7 Days' : '30 Days'}
+                          <ChevronDown className="h-3 w-3 opacity-50" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start">
+                        {[
+                          { value: '1H', label: 'Last Hour' },
+                          { value: '24H', label: '24 Hours' },
+                          { value: '7D', label: '7 Days' },
+                          { value: '30D', label: '30 Days' },
+                        ].map(({ value, label }) => (
+                          <DropdownMenuItem key={value} onClick={() => { setWebhookTimeframe(value); setWebhookPage(1); }}>
+                            {label}
+                            {webhookTimeframe === value && <Check className="h-3.5 w-3.5 ml-auto" />}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+
+                    {/* Refresh */}
+                    <Button variant="ghost" size="sm" className="text-xs gap-1.5 ml-auto" onClick={() => { loadWebhookStats(); loadWebhookDeliveries(); }} disabled={webhookLoading}>
+                      <RefreshCw className={cn('h-3.5 w-3.5', webhookLoading && 'animate-spin')} />
+                      Refresh
+                    </Button>
+                  </div>
+
+                  {/* Deliveries Table */}
+                  <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                    {webhookLoading && webhookDeliveries.length === 0 ? (
+                      <table className="w-full">
+                        <thead className="bg-background-card-header border-b border-border">
+                          <tr>
+                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Time</th>
+                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
+                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Event</th>
+                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Repository</th>
+                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</th>
+                            <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Duration</th>
+                            <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Size</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {[1, 2, 3, 4, 5].map((i) => (
+                            <tr key={i}>
+                              <td className="px-4 py-3"><div className="h-4 w-16 bg-muted animate-pulse rounded" /></td>
+                              <td className="px-4 py-3"><div className="flex items-center gap-2"><div className="h-5 w-5 rounded-sm bg-muted animate-pulse" /><div className="h-4 w-14 bg-muted animate-pulse rounded" /></div></td>
+                              <td className="px-4 py-3"><div className="h-4 w-24 bg-muted animate-pulse rounded" /></td>
+                              <td className="px-4 py-3"><div className="h-4 w-32 bg-muted animate-pulse rounded" /></td>
+                              <td className="px-4 py-3"><div className="h-4 w-16 bg-muted animate-pulse rounded" /></td>
+                              <td className="px-4 py-3 text-right"><div className="h-4 w-10 bg-muted animate-pulse rounded ml-auto" /></td>
+                              <td className="px-4 py-3 text-right"><div className="h-4 w-10 bg-muted animate-pulse rounded ml-auto" /></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    ) : webhookDeliveries.length === 0 ? (
+                      <div className="px-6 py-16 flex flex-col items-center justify-center text-center">
+                        <div className="h-12 w-12 rounded-full bg-background-subtle flex items-center justify-center mb-4">
+                          <Webhook className="h-6 w-6 text-foreground-secondary" />
+                        </div>
+                        <p className="text-sm font-medium text-foreground mb-1">No webhook deliveries yet</p>
+                        <p className="text-xs text-foreground-secondary max-w-sm">Connect a repository and push a commit to see webhook activity here.</p>
+                      </div>
+                    ) : (
+                      <table className="w-full">
+                        <thead className="bg-background-card-header border-b border-border">
+                          <tr>
+                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Time</th>
+                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
+                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Event</th>
+                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Repository</th>
+                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</th>
+                            <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Duration</th>
+                            <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Size</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {webhookDeliveries.map((d: any, idx: number) => {
+                            const providerIcon = d.provider === 'github' ? '/images/integrations/github.png'
+                              : d.provider === 'gitlab' ? '/images/integrations/gitlab.png'
+                              : d.provider === 'bitbucket' ? '/images/integrations/bitbucket.png' : null;
+                            const providerLabel = d.provider === 'github' ? 'GitHub'
+                              : d.provider === 'gitlab' ? 'GitLab'
+                              : d.provider === 'bitbucket' ? 'Bitbucket' : d.provider ?? '—';
+                            const isError = d.status === 'error';
+                            const durationMs = d.processing_duration_ms ?? d.duration_ms ?? null;
+                            const sizeKb = d.payload_size_bytes ? (d.payload_size_bytes / 1024).toFixed(1) : null;
+                            return (
+                              <tr key={d.id ?? idx} className={cn('group hover:bg-table-hover transition-colors', isError && 'bg-red-500/[0.03]')} title={isError && d.error_message ? d.error_message : undefined}>
+                                <td className="px-4 py-3">
+                                  <span className="text-sm text-foreground" title={d.received_at ? new Date(d.received_at).toLocaleString() : undefined}>
+                                    {formatWebhookTime(d.received_at ?? d.created_at)}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center gap-2">
+                                    {providerIcon ? (
+                                      <img src={providerIcon} alt="" className="h-5 w-5 rounded-sm flex-shrink-0" />
+                                    ) : (
+                                      <Webhook className="h-4 w-4 text-foreground-secondary flex-shrink-0" />
+                                    )}
+                                    <span className="text-sm text-foreground">{providerLabel}</span>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-sm text-foreground">{d.event_type ?? '—'}</span>
+                                    {d.event_action && (
+                                      <Badge variant="default" className="text-[10px] px-1.5 py-0">{d.event_action}</Badge>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <span className="text-sm text-foreground truncate block max-w-[200px]" title={d.repo_full_name}>{d.repo_full_name ?? '—'}</span>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center gap-1.5">
+                                    <div className={cn('h-2 w-2 rounded-full flex-shrink-0', webhookStatusDot(d.status))} />
+                                    <span className="text-sm text-foreground capitalize">{d.status ?? '—'}</span>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 text-right">
+                                  <span className="text-sm text-foreground-secondary tabular-nums">{durationMs != null ? `${durationMs}ms` : '—'}</span>
+                                </td>
+                                <td className="px-4 py-3 text-right">
+                                  <span className="text-sm text-foreground-secondary tabular-nums">{sizeKb != null ? `${sizeKb} KB` : '—'}</span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+
+                  {/* Pagination */}
+                  {webhookTotalCount > 0 && (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-foreground-secondary">
+                        Showing {((webhookPage - 1) * WEBHOOK_PER_PAGE) + 1}–{Math.min(webhookPage * WEBHOOK_PER_PAGE, webhookTotalCount)} of {webhookTotalCount.toLocaleString()}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <Button variant="outline" size="sm" className="text-xs" disabled={webhookPage <= 1 || webhookLoading} onClick={() => setWebhookPage((p) => Math.max(1, p - 1))}>
+                          Prev
+                        </Button>
+                        <Button variant="outline" size="sm" className="text-xs" disabled={webhookPage * WEBHOOK_PER_PAGE >= webhookTotalCount || webhookLoading} onClick={() => setWebhookPage((p) => p + 1)}>
+                          Next
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -3333,6 +4847,12 @@ export default function OrganizationSettingsPage() {
                 <StatusesSection />
               )}
 
+              {activeSection === 'security_slas' && id && (
+                <div className="pt-8">
+                  <SLAConfigurationSection organizationId={id} />
+                </div>
+              )}
+
               {activeSection === 'audit_logs' && (
                 <div className="h-full pt-8">
                   <AuditLogsSection />
@@ -3340,57 +4860,7 @@ export default function OrganizationSettingsPage() {
               )}
 
               {activeSection === 'usage' && (
-                <div className="space-y-8 pt-8">
-                  <div>
-                    <h2 className="text-2xl font-bold text-foreground">Usage</h2>
-                  </div>
-
-                  <div className="space-y-8">
-                    <div>
-                      <h3 className="text-base font-semibold text-foreground mb-2">Usage Summary</h3>
-                      <p className="text-sm text-foreground">
-                        Your plan includes a limited amount of usage. If exceeded, you may experience restrictions. It may take up to 1 hour to refresh.
-                      </p>
-                    </div>
-
-                    {loadingUsage ? (
-                      <div className="space-y-6">
-                        <div className="h-4 w-80 bg-muted animate-pulse rounded" />
-                        <div className="grid gap-6 sm:grid-cols-2">
-                          {[1, 2].map((i) => (
-                            <div key={i}>
-                              <div className="h-3 w-24 bg-muted animate-pulse rounded mb-2" />
-                              <div className="h-5 w-20 bg-muted animate-pulse rounded" />
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : usageData ? (
-                      <div className="space-y-6">
-                        <p className="text-sm text-foreground">
-                          You have not exceeded your Free Plan quota for this billing cycle.
-                        </p>
-                        <div className="grid gap-6 sm:grid-cols-2">
-                          {[
-                            { label: 'Team members', value: usageData.teamMembers },
-                            { label: 'Projects created', value: usageData.projectsCreated },
-                          ].map(({ label, value }) => (
-                            <div key={label}>
-                              <p className="text-xs font-medium uppercase tracking-wider text-foreground-secondary">
-                                {label}
-                              </p>
-                              <p className="mt-1 text-base font-medium text-foreground">
-                                {value} <span className="font-normal text-foreground-secondary">/ Unlimited</span>
-                              </p>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : (
-                      <p className="text-sm text-foreground-secondary">Unable to load usage data.</p>
-                    )}
-                  </div>
-                </div>
+                <UsageSectionContent organizationId={id || ''} />
               )}
 
               {/* Create New Role – Vercel-style right-side popup panel */}
@@ -4562,6 +6032,77 @@ export default function OrganizationSettingsPage() {
                 </DialogContent>
               </Dialog>
 
+              {/* PagerDuty Connect Dialog */}
+              <Dialog open={showPagerDutyDialog} onOpenChange={setShowPagerDutyDialog}>
+                <DialogContent hideClose className="sm:max-w-[440px] bg-background p-0 gap-0">
+                  <div className="px-6 pt-6 pb-4 border-b border-border">
+                    <div className="flex items-center gap-3">
+                      <div className="h-7 w-7 rounded flex items-center justify-center text-lg leading-none">🚨</div>
+                      <div>
+                        <DialogTitle>Connect PagerDuty</DialogTitle>
+                        <DialogDescription>Get paged for critical security events. PagerDuty pricing: $21/user/month on their side.</DialogDescription>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="px-6 py-6 grid gap-4 bg-background">
+                    <div className="grid gap-2">
+                      <Label htmlFor="pd-service-name">Service name</Label>
+                      <Input
+                        id="pd-service-name"
+                        value={pagerDutyServiceName}
+                        onChange={(e) => setPagerDutyServiceName(e.target.value)}
+                        placeholder="e.g. Deptex Security Alerts"
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="pd-routing-key">Routing key</Label>
+                      <Input
+                        id="pd-routing-key"
+                        type="password"
+                        value={pagerDutyRoutingKey}
+                        onChange={(e) => setPagerDutyRoutingKey(e.target.value)}
+                        placeholder="PagerDuty Events API v2 routing key"
+                      />
+                      <p className="text-xs text-foreground-muted">Found in PagerDuty &rarr; Service &rarr; Integrations &rarr; Events API v2.</p>
+                    </div>
+                  </div>
+
+                  <DialogFooter className="px-6 py-4 bg-background">
+                    <Button variant="outline" onClick={() => setShowPagerDutyDialog(false)}>Cancel</Button>
+                    <Button
+                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                      disabled={!pagerDutyServiceName.trim() || !pagerDutyRoutingKey.trim() || pagerDutySaving}
+                      onClick={async () => {
+                        if (!organization?.id || !session?.access_token) return;
+                        setPagerDutySaving(true);
+                        try {
+                          const res = await fetch(`/api/organizations/${organization.id}/pagerduty/connect`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+                            body: JSON.stringify({ service_name: pagerDutyServiceName.trim(), routing_key: pagerDutyRoutingKey.trim() }),
+                          });
+                          if (!res.ok) {
+                            const err = await res.json().catch(() => ({ error: 'Failed to connect' }));
+                            throw new Error(err.error || `HTTP ${res.status}`);
+                          }
+                          toast({ title: 'Connected', description: 'PagerDuty has been connected successfully.' });
+                          setShowPagerDutyDialog(false);
+                          await loadConnections();
+                        } catch (err: any) {
+                          toast({ title: 'Error', description: err.message || 'Failed to connect PagerDuty.', variant: 'destructive' });
+                        } finally {
+                          setPagerDutySaving(false);
+                        }
+                      }}
+                    >
+                      {pagerDutySaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
+                      Connect
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+
             </div>
           </div>
         </div>
@@ -4572,4 +6113,389 @@ export default function OrganizationSettingsPage() {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// PHASE 13: Usage Section Content
+// ═══════════════════════════════════════════════════════════════════════
 
+function UsageSectionContent({ organizationId }: { organizationId: string }) {
+  const { plan, loading } = usePlan();
+
+  if (loading || !plan) {
+    return (
+      <div className="space-y-8 pt-8">
+        <h2 className="text-2xl font-bold text-foreground">Usage</h2>
+        <div className="space-y-4">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="h-16 bg-muted animate-pulse rounded-lg" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const usageItems: { label: string; key: string; current: number; limit: number }[] = [
+    { label: 'Projects', key: 'projects', current: plan.usage.projects, limit: plan.limits.projects },
+    { label: 'Members', key: 'members', current: plan.usage.members, limit: plan.limits.members },
+    { label: 'Syncs this period', key: 'syncs', current: plan.usage.syncs, limit: plan.limits.syncs },
+    { label: 'Watched packages', key: 'watchtower', current: plan.usage.watchtower, limit: plan.limits.watchtower },
+    { label: 'Teams', key: 'teams', current: plan.usage.teams, limit: plan.limits.teams },
+    { label: 'Notification rules', key: 'notification_rules', current: plan.usage.notification_rules, limit: plan.limits.notification_rules },
+    { label: 'Integrations', key: 'integrations', current: plan.usage.integrations, limit: plan.limits.integrations },
+    { label: 'Aegis automations', key: 'automations', current: plan.usage.automations, limit: plan.limits.automations },
+  ];
+
+  return (
+    <div className="space-y-8 pt-8">
+      <div>
+        <h2 className="text-2xl font-bold text-foreground">Usage</h2>
+        <p className="text-sm text-foreground-secondary mt-1">
+          Current usage for your {TIER_DISPLAY[plan.tier]} plan.
+          {plan.current_period_end && (
+            <> Resets {new Date(plan.current_period_end).toLocaleDateString()}.</>
+          )}
+        </p>
+      </div>
+      <div className="space-y-4">
+        {usageItems.map(({ label, current, limit }) => {
+          const isUnlimited = limit === -1;
+          const pct = isUnlimited ? 0 : limit > 0 ? Math.min(100, Math.round((current / limit) * 100)) : 0;
+          const isWarning = !isUnlimited && pct >= 80;
+          const isAtLimit = !isUnlimited && pct >= 100;
+          return (
+            <div key={label} className="space-y-1.5">
+              <div className="flex items-baseline justify-between">
+                <span className="text-sm font-medium text-foreground">{label}</span>
+                <span className="text-sm tabular-nums text-foreground-secondary">
+                  {current}{' '}
+                  <span className="text-foreground-tertiary">/ {isUnlimited ? '∞' : limit.toLocaleString()}</span>
+                </span>
+              </div>
+              {!isUnlimited && (
+                <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      isAtLimit ? 'bg-red-500' : isWarning ? 'bg-yellow-500' : 'bg-primary'
+                    }`}
+                    style={{ width: `${Math.min(100, pct)}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// PHASE 13: Plan & Billing Section Content
+// ═══════════════════════════════════════════════════════════════════════
+
+function PlanBillingSectionContent({ organizationId }: { organizationId: string }) {
+  const { plan, loading, refetch } = usePlan();
+  const { toast } = useToast();
+  const [billingCycle, setBillingCycle] = useState<'monthly' | 'annual'>('monthly');
+  const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
+  const [portalLoading, setPortalLoading] = useState(false);
+  const [invoices, setInvoices] = useState<StripeInvoice[]>([]);
+  const [invoicesLoading, setInvoicesLoading] = useState(false);
+  const [searchParams] = useSearchParams();
+
+  useEffect(() => {
+    const billingResult = searchParams.get('billing');
+    if (billingResult === 'success') {
+      toast({ title: 'Plan upgraded', description: 'Your plan has been updated successfully.' });
+      refetch();
+    }
+  }, [searchParams]);
+
+  const loadInvoices = useCallback(async () => {
+    if (!organizationId) return;
+    setInvoicesLoading(true);
+    try {
+      const result = await billingApi.getInvoices(organizationId, 10);
+      setInvoices(result.invoices);
+    } catch {
+    } finally {
+      setInvoicesLoading(false);
+    }
+  }, [organizationId]);
+
+  useEffect(() => {
+    if (plan && plan.tier !== 'free') loadInvoices();
+  }, [plan, loadInvoices]);
+
+  const handleCheckout = async (tierId: string) => {
+    setCheckoutLoading(tierId);
+    try {
+      const priceIdMap: Record<string, Record<string, string>> = {
+        pro: {
+          monthly: import.meta.env.VITE_STRIPE_PRO_MONTHLY_PRICE_ID || '',
+          annual: import.meta.env.VITE_STRIPE_PRO_ANNUAL_PRICE_ID || '',
+        },
+        team: {
+          monthly: import.meta.env.VITE_STRIPE_TEAM_MONTHLY_PRICE_ID || '',
+          annual: import.meta.env.VITE_STRIPE_TEAM_ANNUAL_PRICE_ID || '',
+        },
+      };
+      const priceId = priceIdMap[tierId]?.[billingCycle];
+      if (!priceId) {
+        toast({ title: 'Contact sales', description: 'Please contact us for Enterprise plans.' });
+        return;
+      }
+      const { url } = await billingApi.createCheckoutSession(organizationId, priceId);
+      if (url) window.location.href = url;
+    } catch (err: any) {
+      toast({ title: 'Error', description: err.message, variant: 'destructive' });
+    } finally {
+      setCheckoutLoading(null);
+    }
+  };
+
+  const handlePortal = async () => {
+    setPortalLoading(true);
+    try {
+      const { url } = await billingApi.createPortalSession(organizationId);
+      if (url) window.location.href = url;
+    } catch (err: any) {
+      toast({ title: 'Error', description: err.message, variant: 'destructive' });
+    } finally {
+      setPortalLoading(false);
+    }
+  };
+
+  if (loading || !plan) {
+    return (
+      <div className="space-y-8 pt-8">
+        <h2 className="text-2xl font-bold text-foreground">Plan & Billing</h2>
+        <div className="space-y-4">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-24 bg-muted animate-pulse rounded-lg" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const isPastDue = plan.status === 'past_due';
+
+  return (
+    <div className="space-y-8 pt-8">
+      <div>
+        <h2 className="text-2xl font-bold text-foreground">Plan & Billing</h2>
+        <p className="text-sm text-foreground-secondary mt-1">
+          Manage your subscription and billing details.
+        </p>
+      </div>
+
+      {isPastDue && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-red-400" />
+            <span className="text-sm font-medium text-red-400">Payment failed</span>
+          </div>
+          <p className="text-sm text-red-300 mt-1">
+            Your last payment failed. Please update your payment method to avoid service interruption.
+          </p>
+          <Button variant="outline" size="sm" className="mt-3" onClick={handlePortal} disabled={portalLoading}>
+            {portalLoading ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+            Update Payment Method
+          </Button>
+        </div>
+      )}
+
+      {/* Current Plan Card */}
+      <div className="rounded-lg border border-border bg-background-card p-5">
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-semibold text-foreground">{TIER_DISPLAY[plan.tier]} Plan</h3>
+              {plan.tier !== 'free' && (
+                <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
+                  {plan.billing_cycle === 'annual' ? 'Annual' : 'Monthly'}
+                </span>
+              )}
+            </div>
+            {plan.current_period_end && (
+              <p className="text-sm text-foreground-secondary mt-1">
+                {plan.cancel_at_period_end
+                  ? `Cancels ${new Date(plan.current_period_end).toLocaleDateString()}`
+                  : `Renews ${new Date(plan.current_period_end).toLocaleDateString()}`}
+              </p>
+            )}
+          </div>
+          {plan.tier !== 'free' && (
+            <div className="flex items-center gap-2">
+              {plan.payment_method_brand && plan.payment_method_last4 && (
+                <span className="text-xs text-foreground-secondary">
+                  {plan.payment_method_brand.charAt(0).toUpperCase() + plan.payment_method_brand.slice(1)} ····{plan.payment_method_last4}
+                </span>
+              )}
+              <Button variant="outline" size="sm" onClick={handlePortal} disabled={portalLoading}>
+                {portalLoading ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                Manage
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Plan Selector */}
+      <div>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-base font-semibold text-foreground">
+            {plan.tier === 'free' ? 'Upgrade your plan' : 'Change plan'}
+          </h3>
+          <div className="flex items-center gap-1 rounded-lg border border-border p-0.5 bg-muted/50">
+            <button
+              onClick={() => setBillingCycle('monthly')}
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                billingCycle === 'monthly' ? 'bg-background text-foreground shadow-sm' : 'text-foreground-secondary hover:text-foreground'
+              }`}
+            >
+              Monthly
+            </button>
+            <button
+              onClick={() => setBillingCycle('annual')}
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                billingCycle === 'annual' ? 'bg-background text-foreground shadow-sm' : 'text-foreground-secondary hover:text-foreground'
+              }`}
+            >
+              Annual <span className="text-green-500 ml-1">Save 17%</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {planTiers.map((tier) => {
+            const isCurrent = tier.id === plan.tier;
+            const isEnterprise = tier.id === 'enterprise';
+            const price = billingCycle === 'annual' ? tier.price.annual : tier.price.monthly;
+
+            return (
+              <div
+                key={tier.id}
+                className={`rounded-lg border p-4 transition-colors ${
+                  isCurrent ? 'border-primary bg-primary/5' : 'border-border bg-background-card hover:border-foreground-tertiary'
+                } ${tier.popular ? 'ring-1 ring-primary' : ''}`}
+              >
+                {tier.popular && (
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-primary">Most Popular</span>
+                )}
+                <h4 className="text-sm font-semibold text-foreground mt-1">{tier.name}</h4>
+                <p className="text-xs text-foreground-secondary mt-0.5 line-clamp-2">{tier.description}</p>
+                <div className="mt-3">
+                  <span className="text-xl font-bold text-foreground">{price}</span>
+                  {!isEnterprise && tier.id !== 'free' && (
+                    <span className="text-xs text-foreground-secondary ml-1">
+                      {billingCycle === 'annual' ? '' : '/mo'}
+                    </span>
+                  )}
+                </div>
+                <ul className="mt-3 space-y-1">
+                  {tier.features.slice(0, 5).map((f) => (
+                    <li key={f.name} className="flex items-start gap-1.5 text-xs text-foreground-secondary">
+                      <Check className="h-3 w-3 text-green-500 mt-0.5 flex-shrink-0" />
+                      {f.name}
+                    </li>
+                  ))}
+                  {tier.features.length > 5 && (
+                    <li className="text-xs text-foreground-tertiary">+{tier.features.length - 5} more</li>
+                  )}
+                </ul>
+                <div className="mt-4">
+                  {isCurrent ? (
+                    <Button variant="outline" size="sm" className="w-full" disabled>
+                      Current plan
+                    </Button>
+                  ) : isEnterprise ? (
+                    <Button variant="outline" size="sm" className="w-full" asChild>
+                      <a href="mailto:sales@deptex.io">Contact Sales</a>
+                    </Button>
+                  ) : tier.id === 'free' ? (
+                    <Button variant="outline" size="sm" className="w-full" disabled>
+                      Free
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      className="w-full"
+                      onClick={() => handleCheckout(tier.id)}
+                      disabled={!!checkoutLoading}
+                    >
+                      {checkoutLoading === tier.id ? (
+                        <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                      ) : null}
+                      {plan.tier === 'free' ? 'Upgrade' : 'Switch'}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Invoices */}
+      {plan.tier !== 'free' && (
+        <div>
+          <h3 className="text-base font-semibold text-foreground mb-3">Invoices</h3>
+          {invoicesLoading ? (
+            <div className="space-y-2">
+              {[1, 2, 3].map((i) => <div key={i} className="h-10 bg-muted animate-pulse rounded" />)}
+            </div>
+          ) : invoices.length === 0 ? (
+            <p className="text-sm text-foreground-secondary">No invoices yet.</p>
+          ) : (
+            <div className="rounded-lg border border-border overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-muted/30">
+                    <th className="text-left px-4 py-2 text-xs font-medium text-foreground-secondary">Date</th>
+                    <th className="text-left px-4 py-2 text-xs font-medium text-foreground-secondary">Amount</th>
+                    <th className="text-left px-4 py-2 text-xs font-medium text-foreground-secondary">Status</th>
+                    <th className="text-right px-4 py-2 text-xs font-medium text-foreground-secondary" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {invoices.map((inv) => (
+                    <tr key={inv.id} className="border-b border-border last:border-0">
+                      <td className="px-4 py-2.5 text-foreground">
+                        {new Date(inv.created * 1000).toLocaleDateString()}
+                      </td>
+                      <td className="px-4 py-2.5 text-foreground tabular-nums">
+                        ${(inv.amount_paid / 100).toFixed(2)} {inv.currency.toUpperCase()}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                          inv.status === 'paid' ? 'bg-green-500/10 text-green-500' :
+                          inv.status === 'open' ? 'bg-yellow-500/10 text-yellow-500' :
+                          'bg-muted text-foreground-secondary'
+                        }`}>
+                          {inv.status}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        {inv.hosted_invoice_url && (
+                          <a href={inv.hosted_invoice_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">
+                            View
+                          </a>
+                        )}
+                        {inv.invoice_pdf && (
+                          <a href={inv.invoice_pdf} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline ml-3">
+                            PDF
+                          </a>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

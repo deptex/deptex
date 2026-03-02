@@ -148,6 +148,25 @@ export async function queueExtractionJob(
       return { success: false, error: 'Extraction already in progress for this project' };
     }
 
+    // Plan limit check: syncs
+    try {
+      const { getOrgPlan, getResolvedLimits } = require('./plan-limits');
+      const plan = await getOrgPlan(organizationId);
+      const limits = getResolvedLimits(plan.plan_tier, plan.custom_limits);
+      const syncLimit = limits.syncs;
+
+      const { data: rpcResult } = await supabase.rpc('increment_sync_usage', {
+        p_org_id: organizationId,
+        p_sync_limit: syncLimit,
+      });
+
+      if (rpcResult && rpcResult.length > 0 && !rpcResult[0].was_allowed) {
+        return { success: false, error: 'Monthly sync limit reached. Upgrade your plan for more syncs.' };
+      }
+    } catch (e: any) {
+      console.warn('[EXTRACT] Plan limit check failed (allowing):', e.message);
+    }
+
     const { error: insertError } = await supabase.from('extraction_jobs').insert({
       project_id: projectId,
       organization_id: organizationId,

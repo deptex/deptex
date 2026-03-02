@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Button } from './ui/button';
 import { RolePermissions } from '../lib/api';
-import { Save, Settings, Shield, Users } from 'lucide-react';
+import { Save, Settings, Shield, Users, Sparkles } from 'lucide-react';
 
 interface PermissionEditorProps {
   permissions: RolePermissions;
@@ -84,6 +84,14 @@ export function PermissionEditor({
       }
     }
 
+    // If interact_with_aegis is disabled, disable all dependent AI permissions
+    if (key === 'interact_with_aegis' && !value) {
+      updated.trigger_fix = false;
+      updated.manage_aegis = false;
+      updated.view_ai_spending = false;
+      updated.manage_incidents = false;
+    }
+
     setLocalPermissions(updated);
     if (onChange) {
       onChange(updated);
@@ -114,8 +122,20 @@ export function PermissionEditor({
       title: 'Security & Policies',
       icon: <Shield className="h-3.5 w-3.5" />,
       permissions: [
-        { key: 'manage_compliance' as const, label: 'Manage Compliance' },
+        { key: 'manage_compliance' as const, label: 'Manage Compliance & Policies' },
         { key: 'manage_statuses' as const, label: 'Manage Statuses & Tiers' },
+        { key: 'manage_watchtower' as const, label: 'Manage Watchtower' },
+      ],
+    },
+    {
+      title: 'AI & Automation',
+      icon: <Sparkles className="h-3.5 w-3.5" />,
+      permissions: [
+        { key: 'interact_with_aegis' as const, label: 'Use Aegis AI' },
+        { key: 'trigger_fix' as const, label: 'Trigger AI Fixes', dependsOn: 'interact_with_aegis' as const },
+        { key: 'manage_aegis' as const, label: 'Manage Aegis Configuration', dependsOn: 'interact_with_aegis' as const },
+        { key: 'view_ai_spending' as const, label: 'View AI Spending & Usage', dependsOn: 'interact_with_aegis' as const },
+        { key: 'manage_incidents' as const, label: 'Manage Incidents', dependsOn: 'interact_with_aegis' as const },
       ],
     },
     {

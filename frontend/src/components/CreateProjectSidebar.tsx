@@ -8,6 +8,7 @@ import { ProjectTeamSelect } from './ProjectTeamSelect';
 import { FrameworkIcon } from './framework-icon';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import { SlideInSidebar } from './SlideInSidebar';
+import { usePlanLimit, TIER_DISPLAY } from '../contexts/PlanContext';
 
 function repoNameOnly(fullName: string): string {
   const parts = fullName.split('/');
@@ -187,9 +188,20 @@ export function CreateProjectSidebar({
     }
   };
 
+  const projectLimit = usePlanLimit('projects');
+
   const handleCreateProject = async () => {
     if (!organizationId || !projectName.trim()) {
       toast({ title: 'Error', description: 'Project name is required', variant: 'destructive' });
+      return;
+    }
+
+    if (!projectLimit.allowed) {
+      toast({
+        title: 'Project limit reached',
+        description: `Your plan supports up to ${projectLimit.limit} projects. Upgrade for more.`,
+        variant: 'destructive',
+      });
       return;
     }
 

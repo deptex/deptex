@@ -81,7 +81,13 @@ export interface VulnerabilityNodeData {
   cvss_score?: number | null;
   cisa_kev?: boolean | null;
   is_reachable?: boolean | null;
+  reachability_level?: string | null;
   fixed_versions?: string[] | null;
+  /** Phase 7: AI fix status for this vulnerability */
+  fixStatus?: 'queued' | 'running' | 'completed' | 'failed' | null;
+  /** Phase 15: SLA status for badge (warning = amber clock, breached = red clock) */
+  sla_status?: string | null;
+  sla_deadline_at?: string | null;
 }
 
 /**
@@ -191,7 +197,7 @@ export function useGraphLayout(
 ) {
   const tier: AssetTier = extras?.assetTier ?? 'EXTERNAL';
 
-  const vulnToNodeData = (vuln: { osv_id: string; severity: string; summary: string | null; aliases: string[]; depscore?: number | null; cvss_score?: number | null; epss_score?: number | null; cisa_kev?: boolean; is_reachable?: boolean }): VulnerabilityNodeData => {
+  const vulnToNodeData = (vuln: { osv_id: string; severity: string; summary: string | null; aliases: string[]; depscore?: number | null; cvss_score?: number | null; epss_score?: number | null; cisa_kev?: boolean; is_reachable?: boolean; sla_status?: string | null; sla_deadline_at?: string | null; [k: string]: unknown }): VulnerabilityNodeData => {
     const cvss = vuln.cvss_score ?? (vuln.severity ? (SEVERITY_TO_CVSS[vuln.severity] ?? 0) : 0);
     const depscore = vuln.depscore != null && Number.isFinite(vuln.depscore)
       ? vuln.depscore
@@ -208,6 +214,8 @@ export function useGraphLayout(
       summary: vuln.summary,
       aliases: vuln.aliases ?? [],
       depscore,
+      sla_status: vuln.sla_status ?? null,
+      sla_deadline_at: vuln.sla_deadline_at ?? null,
     };
   };
 

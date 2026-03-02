@@ -78,8 +78,7 @@ export default function ProjectsContent() {
                 <td className="px-4 py-3 font-mono text-xs text-foreground">3</td>
                 <td className="px-4 py-3 text-foreground font-medium">Vulnerability Scan</td>
                 <td className="px-4 py-3 text-foreground-secondary">
-                  Scan the SBOM against vulnerability databases using{" "}
-                  <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">dep-scan</code>. Matches CVEs, GitHub Security Advisories, and OSV records.
+                  Scan the SBOM using <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">dep-scan</code> (with research profile for code-level reachability). Matches CVEs, GitHub Security Advisories, and OSV; produces reachability tiers (confirmed, data_flow, function, module, unreachable).
                 </td>
               </tr>
               <tr className="hover:bg-table-hover transition-colors">
@@ -109,6 +108,9 @@ export default function ProjectsContent() {
             </tbody>
           </table>
         </div>
+        <p className="text-foreground-secondary leading-relaxed mt-3 text-sm">
+          AI-powered vulnerability fixing (Aider) is a <strong className="text-foreground">separate flow</strong> triggered from the Security tab or Aegis; it does not run as part of extraction.
+        </p>
       </div>
 
       {/* Live Extraction Logs */}
@@ -220,10 +222,9 @@ export default function ProjectsContent() {
             <div className="px-4 py-3 border-b border-border bg-background-card-header">
               <h3 className="text-sm font-semibold text-foreground">Repository Sync</h3>
             </div>
-            <div className="p-4 text-sm text-foreground-secondary leading-relaxed">
+            <div className="p-4 text-sm text-foreground-secondary leading-relaxed space-y-2">
               <p>
-                Configure which branch to track, enable or disable automatic re-extraction on push events, and set the sync cadence.
-                Webhook-triggered extractions happen automatically when your provider sends a push event.
+                Configure which branch to track and the <strong className="text-foreground">sync frequency</strong>: manual (extract only when you click Sync), on commit (webhook on push), daily, or weekly. Webhook-triggered extractions run when your provider sends a push event (for projects set to on commit). A <strong className="text-foreground">Sync</strong> button on the overview triggers a new extraction with a short cooldown to avoid duplicate runs.
               </p>
             </div>
           </div>
@@ -238,10 +239,12 @@ export default function ProjectsContent() {
         </p>
         <div className="grid gap-3 sm:grid-cols-2">
           {[
-            { label: "Health Score", desc: "A 0\u2013100 score reflecting the overall security health of the project, factoring in vulnerabilities, compliance, and supply-chain signals." },
-            { label: "Dependency Count", desc: "Total direct and transitive dependencies resolved from the latest extraction." },
-            { label: "Vulnerability Summary", desc: "Counts by severity (critical, high, medium, low) with links to the full vulnerability list." },
-            { label: "Recent Activity", desc: "Timeline of extraction runs, policy evaluations, and status changes." },
+            { label: "Health Score", desc: "A 0\u2013100 score reflecting overall security health (vulnerabilities, compliance, supply-chain). Computed after extraction and policy evaluation." },
+            { label: "Dependency Count", desc: "Total direct and transitive dependencies from the latest extraction." },
+            { label: "Vulnerability Summary", desc: "Counts by severity (critical, high, medium, low) with links to the Security tab." },
+            { label: "Real-time Extraction Status", desc: "Live extraction progress via Supabase Realtime; Sync button to re-run with cooldown." },
+            { label: "Action Items", desc: "Prioritized list of critical vulns, compliance issues, and code findings." },
+            { label: "Recent Activity", desc: "Timeline of extraction runs, policy evaluations, status changes, and vuln events." },
           ].map((item) => (
             <div
               key={item.label}
@@ -253,7 +256,7 @@ export default function ProjectsContent() {
           ))}
         </div>
         <p className="text-foreground-secondary leading-relaxed mt-4 text-sm">
-          Drill into the{" "}
+          The overview may also show a mini dependency graph. Drill into the{" "}
           <Link to="/docs/dependencies" className="text-primary hover:underline">Dependencies</Link>,{" "}
           <Link to="/docs/vulnerabilities" className="text-primary hover:underline">Vulnerabilities</Link>, and{" "}
           <Link to="/docs/compliance" className="text-primary hover:underline">Compliance</Link>{" "}

@@ -16,20 +16,36 @@ isProject: false
 
 **Prerequisites:** Phase 6 (Security tab, data to query), Phase 6B (reachability data for intelligence), Phase 7 (Aider fix engine for remediation tasks), Phase 8 (PR webhooks for PR review), Phase 9 (event system for automation triggers).
 
-The full Phase 7B subsections (7B-A through 7B-P) are detailed below. This is the largest section in the entire roadmap -- each subsection represents a major capability of the Aegis platform.
+**Parallel Build Path (Phase 7 is building now):**
+
+The following subsections can be built in parallel with Phase 7 (using stubs for fix-related tools):
+
+- 7B-A (Core agentic loop), 7B-B (Tool registry -- query/safe tools), 7B-D (Memory system), 7B-E (Automations engine), 7B-K (Management console), 7B-L (Dedicated Aegis screen), 7B-M (Security debt tracking), 7B-P (Permissions)
+
+Blocked by Phase 7 completion:
+
+- 7B-N (Sprint orchestration -- needs fix engine), Security ops tools that call `triggerFix`
+
+Blocked by Phase 8 completion:
+
+- 7B-G (PR security review -- needs PR webhooks)
+
+The full Phase 7B subsections (7B-A through 7B-Q) are detailed below. This is the largest section in the entire roadmap -- each subsection represents a major capability of the Aegis platform.
 
 **Key Technical Decision -- Vercel AI SDK as the Agent Engine Layer:**
 
-Rather than building a custom multi-provider LLM abstraction from scratch (or trying to embed an external agent runtime like OpenClaw), Aegis uses the **Vercel AI SDK** (`ai` npm package) as its foundational LLM layer. This gives us for free:
+Phase 6C already built a custom provider abstraction (`ee/backend/lib/ai/`) with `OpenAIProvider`, `AnthropicProvider`, `GoogleProvider`, BYOK key encryption, cost caps, and usage logging. For the agentic loop, Aegis layers the **Vercel AI SDK** (`ai` npm package) on top of this existing infrastructure. The AI SDK provides:
 
-- Multi-provider support (OpenAI, Anthropic, Google) with a unified API -- no writing separate `OpenAIProvider`, `AnthropicProvider`, `GoogleProvider` classes
 - Multi-turn tool calling via `streamText()` with `maxSteps` -- the ReAct loop handled by the SDK
 - SSE streaming with proper event formatting via `.toDataStreamResponse()`
 - React `useChat` hook for the frontend with automatic streaming, loading states, error handling
 - Token counting and cost estimation per provider
 - Tool calling protocol translation (each provider has different function-calling formats -- SDK normalizes them)
 
-Install: `npm install ai @ai-sdk/openai @ai-sdk/anthropic @ai-sdk/google zod`
+**Migration strategy:** The existing `getProviderForOrg()` in `ee/backend/lib/ai/provider.ts` continues to handle BYOK key decryption and config resolution. The new `llm-provider.ts` receives the decrypted key from `getProviderForOrg()` and creates an AI SDK model instance. Existing `cost-cap.ts` (Redis-based monthly cap, SSE concurrency), `logging.ts` (ai_usage_logs), and `encryption.ts` (AES-256-GCM) are preserved -- they're called from the AI SDK's `onStepFinish` and `onFinish` callbacks. The Phase 6C provider classes (`OpenAIProvider`, `AnthropicProvider`, `GoogleProvider`) remain for non-Aegis platform AI features (docs assistant, policy AI, notification AI).
+
+Install in `ee/backend`: `npm install ai @ai-sdk/openai @ai-sdk/anthropic @ai-sdk/google`
+Install in `frontend`: `npm install @ai-sdk/react`
 
 **OpenClaw-Inspired Patterns (concepts borrowed, not code):**
 
@@ -133,19 +149,25 @@ type AegisStreamEvent =
 
 **Multi-provider LLM support via Vercel AI SDK:**
 
-Create `ee/backend/lib/aegis/llm-provider.ts` -- a thin wrapper around the AI SDK that resolves the correct provider from BYOK config:
+Create `ee/backend/lib/aegis/llm-provider.ts` -- a thin wrapper around the AI SDK that bridges the existing BYOK infrastructure with the AI SDK's model interface:
 
 ```typescript
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { LanguageModel, embed } from 'ai';
+import { LanguageModel } from 'ai';
+import { getProviderConfigForOrg } from '../ai/provider';
 
 interface ProviderConfig {
   providerType: 'openai' | 'anthropic' | 'google';
   apiKey: string;
   model: string;
-  baseURL?: string; // for Azure OpenAI or custom endpoints
+  baseURL?: string;
+}
+
+export async function getLanguageModelForOrg(organizationId: string): Promise<LanguageModel> {
+  const config = await getProviderConfigForOrg(organizationId);
+  return getLanguageModel(config);
 }
 
 export function getLanguageModel(config: ProviderConfig): LanguageModel {
@@ -159,14 +181,17 @@ export function getLanguageModel(config: ProviderConfig): LanguageModel {
   }
 }
 
-export function getEmbeddingModel(config: ProviderConfig) {
-  // Embeddings always use OpenAI text-embedding-3-small (cheapest, best for memory)
-  // even if the org's chat model is Anthropic/Google
-  return createOpenAI({ apiKey: config.apiKey })('text-embedding-3-small');
+export function getEmbeddingModel() {
+  // Memory embeddings use the platform-level Google AI key (same as Tier 1 features).
+  // This avoids requiring every org to have an OpenAI key just for embeddings.
+  // Google text-embedding-004 produces 768-dim vectors. Cost: negligible (~$0.000001/embedding).
+  const apiKey = process.env.GOOGLE_AI_API_KEY;
+  if (!apiKey) throw new Error('GOOGLE_AI_API_KEY required for memory embeddings');
+  return createGoogleGenerativeAI({ apiKey })('text-embedding-004');
 }
 ```
 
-This replaces the need for separate `OpenAIProvider`, `AnthropicProvider`, `GoogleProvider` classes. The AI SDK handles all provider-specific differences internally (tool calling format, streaming protocol, token counting). Provider selected via BYOK config `provider_type`.
+The existing `getProviderConfigForOrg()` handles BYOK key decryption via `encryption.ts`. The AI SDK handles all provider-specific differences internally (tool calling format, streaming protocol, token counting).
 
 **SSE endpoint using AI SDK streaming:**
 
@@ -206,6 +231,15 @@ app.post('/api/aegis/stream', async (req, res) => {
 The `maxSteps: 25` parameter tells the AI SDK to keep looping (model calls tool -> executes tool -> feeds result back -> model decides next action) up to 25 iterations, which is exactly the ReAct loop from the original plan. The SDK manages the iteration, tool result injection, and streaming -- we focus on the permission layer and logging.
 
 Old `/handle` endpoint kept for backward compatibility, delegates internally to the streaming endpoint.
+
+**Frontend migration (two-phase):**
+
+The existing `AegisPanel` uses custom SSE parsing via `aegis-stream.ts` (event types: `chunk`, `tool_start`, `tool_result`, `done`, `error`, `heartbeat`). The new AI SDK endpoint uses a completely different wire protocol (`toDataStreamResponse()`). Migration:
+
+- **Phase 1:** Build the new `/api/aegis/v2/stream` endpoint with AI SDK protocol. The new full-page Aegis screen (7B-L) uses `useChat` from `@ai-sdk/react` against this endpoint. The existing `AegisPanel` sidebar continues working on the old `/api/aegis/stream` endpoint unchanged.
+- **Phase 2:** After the full-page screen is stable, migrate `AegisPanel` to also use `useChat` (replace `aegis-stream.ts`), then deprecate the old endpoint.
+
+This ensures zero downtime during the transition. Both endpoints share the same thread storage (`aegis_chat_threads`, `aegis_chat_messages`).
 
 **Anti-hallucination enforcement** in system prompt: Aegis MUST call query tools before making factual claims. Never guess vulnerability counts, compliance status, or security posture. Always cite tool results in responses.
 
@@ -274,19 +308,32 @@ function buildToolSet(organizationId: string, userId: string) {
 
 **Security Operations** (10 tools): `getVulnerabilityDetail`, `suppressVulnerability` (moderate), `acceptRisk` (moderate), `revertSuppression` (moderate), `triggerFix` (moderate -- invokes Phase 7 Aider engine), `getFixStatus`, `createSecuritySprint` (moderate), `getSprintStatus`, `assessBlastRadius`, `emergencyLockdownPackage` (dangerous -- pins package across all org projects)
 
-**Policy Operations** (7 tools): `listPolicies`, `getPolicy`, `createPolicy` (moderate), `updatePolicy` (moderate), `deletePolicy` (dangerous), `testPolicyDryRun`, `generatePolicyFromDescription` (absorbs Phase 11C)
+**Policy Operations** (7 tools): `listPolicies`, `getPolicy`, `createPolicy` (moderate), `updatePolicy` (moderate), `deletePolicy` (dangerous), `testPolicyDryRun`, `generatePolicyFromDescription`
 
 **Compliance Operations** (5 tools): `getComplianceStatus`, `generateSBOM`, `generateVEX`, `generateLicenseNotice`, `generateAuditPackage` (moderate)
 
-**Intelligence** (6 tools): `getPackageReputation`, `analyzeUpgradePath` (absorbs Phase 11D), `getEPSSTrends`, `checkCISAKEV`, `searchPackages`, `analyzeNewDependency` (absorbs Phase 11A)
+**Intelligence** (6 tools): `getPackageReputation`, `analyzeUpgradePath`, `getEPSSTrends`, `checkCISAKEV`, `searchPackages`, `analyzeNewDependency`
 
-**Reporting** (4 tools): `generateSecurityReport`, `generateComplianceReport`, `generateExecutiveSummary` (absorbs Phase 11E), `getROIMetrics`
+**Reporting** (4 tools): `generateSecurityReport`, `generateComplianceReport`, `generateExecutiveSummary`, `getROIMetrics`
 
 **External / "The Body"** (6 tools): `sendSlackMessage` (moderate), `sendEmail` (moderate), `createJiraTicket` (moderate), `createLinearTicket` (moderate), `postPRComment` (moderate), `sendWebhook` (moderate)
 
 **Memory** (3 tools): `storeMemory`, `queryMemory`, `listMemories`
 
 **Automation** (3 tools): `createScheduledJob` (moderate), `updateScheduledJob` (moderate), `deleteScheduledJob` (moderate)
+
+**Dynamic tool loading (context-aware profiles):**
+
+With 50+ tool definitions, the system prompt + tool schemas could consume 15,000-25,000 tokens before any conversation starts. To manage context window usage, tools are loaded via profiles based on the conversation context:
+
+- **Default profile** (~20 tools): Core query tools (listProjects, getProjectVulnerabilities, getVulnerabilityDetail, etc.) + memory tools + reporting tools. Loaded for every conversation.
+- **Security profile** (+10 tools): Security ops, fix tools, sprint tools. Loaded when conversation context includes a vulnerability, project security, or "fix"/"sprint" keywords.
+- **Policy profile** (+7 tools): Policy CRUD, dry-run, generation. Loaded when context includes compliance or policy topics.
+- **Intelligence profile** (+6 tools): Reputation, upgrade paths, EPSS, CISA KEV. Loaded when context includes dependency analysis or risk assessment.
+- **External profile** (+6 tools): Slack, email, Jira, Linear, PR comments. Loaded when context involves notifications or external communication.
+- **Admin profile** (+11 tools): Org management, automation CRUD. Loaded when user has `manage_aegis` or `manage_teams_and_projects`.
+
+The executor detects context from the thread's `context_type`, attached entities, and keyword analysis in the user's message. Multiple profiles can be active simultaneously. A meta-tool `loadToolProfile(profile)` allows Aegis to request additional tools mid-conversation if needed.
 
 **Permission model (3 layers):**
 
@@ -350,8 +397,8 @@ For operations that take minutes to hours (security sprints, cross-org analysis,
 1. User sends a complex request ("Fix all critical reachable vulnerabilities in the payments project")
 2. Aegis enters Plan mode within SSE: calls tools to gather data, generates a plan
 3. Streams `plan_created` event -- frontend renders a plan card with steps, costs, Approve/Modify/Cancel buttons
-4. User approves -> Aegis creates background task with steps
-5. Task worker processes steps sequentially, updating status after each
+4. User approves -> Aegis creates background task with steps, queues first step via QStash
+5. Steps execute sequentially via QStash-triggered endpoint (each step completion queues the next)
 6. Frontend subscribes to `aegis_tasks` + `aegis_task_steps` via Supabase Realtime
 7. On completion: summary generated, delivered to thread + configured channels
 
@@ -397,7 +444,21 @@ CREATE TABLE aegis_task_steps (
 );
 ```
 
-**Task worker** (`ee/backend/lib/aegis/task-worker.ts`): Polls `aegis_tasks` with `status = 'running'` every 5 seconds. Processes next pending step, checks budget before each step, applies circuit breaker (>50% failures, min 3 -> pause). Resilient to restarts (picks up from last completed step).
+**Task step execution via QStash** (no polling worker needed):
+
+Rather than a separate polling process (which would require an always-on Fly.io machine or block the Express event loop), task steps are executed via QStash-triggered HTTP endpoints -- matching the existing patterns for `dispatch-notification`, `populate-dependencies`, and `scheduled-extraction`.
+
+Flow:
+
+1. Task approved -> set `status = 'running'`, queue first step: `POST /api/internal/aegis/execute-task-step` via QStash
+2. Step endpoint: claim step (atomic), execute tool, update step status, check circuit breaker
+3. If next step exists and circuit breaker OK -> queue next step via QStash (0s delay for sequential, configurable delay for rate-limited operations)
+4. If circuit breaker triggers (>50% failures, min 3) -> set task `status = 'paused'`, notify user
+5. If no more steps -> set task `status = 'completed'`, generate summary, deliver to thread + configured channels
+
+Budget check happens before each step execution. The step endpoint is idempotent (skips if step already completed). QStash retries handle transient failures (3 retries). This is resilient to server restarts since state is in Supabase and the next step is always queued externally.
+
+New CE route: `POST /api/internal/aegis/execute-task-step` (auth: QStash signature or X-Internal-Api-Key).
 
 **Platform awareness:** Any UI component queries `aegis_task_steps` to check if Aegis is working on a related entity. Vulnerability sidebar shows "Being fixed by Aegis (Step 3/7)" when a fix task targets that CVE.
 
@@ -414,7 +475,7 @@ CREATE TABLE aegis_memory (
   category TEXT NOT NULL, -- 'decision', 'preference', 'knowledge', 'outcome', 'note'
   key TEXT NOT NULL,
   content TEXT NOT NULL,
-  embedding vector(1536),
+  embedding vector(768), -- Google text-embedding-004 produces 768-dim vectors
   source_thread_id UUID REFERENCES aegis_chat_threads(id),
   created_by UUID REFERENCES auth.users(id),
   metadata JSONB DEFAULT '{}',
@@ -422,7 +483,9 @@ CREATE TABLE aegis_memory (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX ON aegis_memory USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+-- HNSW index: works well at any scale (unlike ivfflat which needs tuning for small datasets).
+-- Supabase recommends HNSW for most use cases.
+CREATE INDEX ON aegis_memory USING hnsw (embedding vector_cosine_ops);
 ```
 
 **Categories:** `decision` (past decisions + rationale), `preference` (org preferences), `knowledge` (domain facts), `outcome` (results of past actions), `note` (user-created notes for Aegis)
@@ -442,7 +505,7 @@ When a conversation thread grows long enough that the message history approaches
 
 This pattern ensures Aegis never loses important organizational context even in very long conversations, while keeping token usage within budget. OpenClaw uses a similar approach with their automatic memory flush before session compaction, adapted here for our pgvector-backed memory system instead of their file-based approach.
 
-**Cost:** OpenAI `text-embedding-3-small` = $0.02/1M tokens. ~$0.000002 per memory stored. The compaction LLM call adds ~$0.01-0.05 per compaction event (rare -- only on very long conversations). Negligible overall.
+**Cost:** Embeddings use the platform-level Google AI key (`GOOGLE_AI_API_KEY`, same key used for Tier 1 features like docs assistant). Google `text-embedding-004` is extremely cheap (~$0.000001 per embedding). This means no org needs a separate key for memory -- it works out of the box. The compaction LLM call uses the org's BYOK key and adds ~$0.01-0.05 per compaction event (rare -- only on very long conversations). Negligible overall.
 
 ### 7B-E: Scheduled Automations Engine
 
@@ -477,9 +540,13 @@ CREATE TABLE aegis_event_triggers (
 
 **Expanded `aegis_automations`:** Add columns for `cron_expression`, `timezone`, `automation_type`, `delivery_config` (JSONB), `template_config` (JSONB), `qstash_schedule_id`, `last_run_at`, `last_run_status`, `last_run_output`, `run_count`.
 
-**Delivery channels:** in-app inbox, email (via Resend), Slack (channel or DM), Discord, Jira, Linear, webhook, PDF export to Supabase storage.
+**Delivery channels:** in-app inbox, email (via existing Nodemailer/Gmail infrastructure from `ee/backend/lib/email.ts`), Slack (channel or DM), Discord, Jira, Linear, webhook, PDF export to Supabase storage. Reuses the Phase 9 `destination-dispatchers.ts` for Slack Block Kit, Discord embeds, Jira/Linear/Asana ticket creation, and email HTML templates.
+
+**PDF generation:** For report exports and audit packages, use `@react-pdf/renderer` (lightweight, server-side, aligns with React frontend). Install: `npm install @react-pdf/renderer`. PDFs uploaded to Supabase Storage `aegis-reports/{orgId}/{reportId}/`.
 
 **Failure handling:** 3 consecutive failures auto-disables automation and notifies admin.
+
+**QStash cost note:** Automations add QStash message volume (1 message per automation execution + potential follow-up dispatches). With 8 templates across multiple orgs, the free tier (1,000 messages/day) may be exceeded. **QStash Pay-as-you-go ($1/100K messages) is expected at this phase.** To minimize message count, batch automation due-checks into a single cron endpoint (`POST /api/internal/aegis/check-due-automations`) that checks all orgs' due automations in one call, rather than one QStash schedule per automation.
 
 ### 7B-F: Multi-Channel Presence ("The Body")
 
@@ -503,9 +570,17 @@ Capabilities: @Aegis mentions in any channel -> Slack Events API -> Aegis proces
 
 Backend: `ee/backend/lib/aegis/slack-bot.ts` handles Events API + Interactions API. New routes: `POST /api/integrations/slack/events`, `POST /api/integrations/slack/interactions`. Both verify Slack signing secrets.
 
+**Slack critical implementation details:**
+
+- **3-second ack requirement:** Slack Events API retries if the endpoint doesn't respond within 3 seconds. The events endpoint MUST ack immediately (return 200) and process the message asynchronously via QStash (`POST /api/internal/aegis/process-slack-message`). Never run the Aegis agent loop synchronously in the Slack webhook handler.
+- **OAuth V2 install flow:** Slack bots for multi-tenant SaaS require per-workspace installation via Slack OAuth V2. The existing Slack integration in `organization_integrations` stores a user OAuth token for notifications. The Aegis bot needs a **bot token** (different scope: `channels:history`, `app_mentions:read`, `commands`, `chat:write`, `reactions:write`, `users:read`). Use the **same Slack app** with expanded scopes -- when an org connects Slack, store both the notification user token (existing) and the bot token (new, in `aegis_slack_config`). The Slack app manifest must include the Events API URL and Interactive Components URL.
+- **Slack app distribution:** For private/internal use, no Slack review needed. For App Directory listing (public distribution), Slack requires a review process. Start with private distribution; submit for directory listing when the feature is mature.
+- **Bot token encryption:** `aegis_slack_config.slack_bot_token` and `slack_signing_secret` are encrypted using the existing `encryption.ts` (AES-256-GCM, same as BYOK API keys).
+- **Slack rate limits:** Slack allows ~1 message/second per channel. For bulk operations (sprint notifications, batch approvals), add 1-second delays between messages.
+
 **Cost:** Slack API is free. No additional cost.
 
-**Email:** Via Resend ($20/month for 50K emails, free tier available). HTML templates for security briefings, digests, reports, critical alerts. Backend: `ee/backend/lib/aegis/email.ts`.
+**Email:** Uses the existing Nodemailer/Gmail infrastructure (`ee/backend/lib/email.ts`, `GMAIL_USER`, `GMAIL_APP_PASSWORD`). HTML templates for security briefings, digests, reports, critical alerts. Reuses Phase 9 email templates where applicable. Gmail supports up to 500 emails/day, which is sufficient for Aegis reports and digests.
 
 **PR Comments:** Use existing git provider APIs. Posted by PR Security Review (7B-G).
 
@@ -527,7 +602,7 @@ Triggered by PR webhook (Phase 8). After Phase 8's policy evaluation, if org has
   - Policy Compliance
 4. Sets check run status: `required` (blocks merge on critical findings), `advisory` (warns only, default), or `disabled`
 
-**Absorbs Phase 11A** (AI Dependency Review): new dep analysis is part of the PR review pipeline and a standalone tool.
+AI dependency review is part of the PR review pipeline and also available as a standalone tool (`analyzeNewDependency`).
 
 ### 7B-H: Compliance Autopilot
 
@@ -539,11 +614,25 @@ Triggered by PR webhook (Phase 8). After Phase 8's policy evaluation, if org has
 
 **Audit package export:** Tool `generateAuditPackage(projectIds?, framework?)`. Bundles SBOMs + VEX + license notices + compliance reports + vulnerability summaries + remediation history into a ZIP in Supabase storage.
 
-**Absorbs Phase 11C** (Policy Assistant): `generatePolicyFromDescription`, `testPolicyDryRun` tools.
+Includes AI policy assistant capabilities: `generatePolicyFromDescription`, `testPolicyDryRun` tools.
 
 ### 7B-I: Proactive Intelligence
 
 **Package reputation scoring:** Composite score (0-100) per package. Signals: maintainer activity (20%), bus factor (10%), historical CVE frequency (15%), Watchtower anomalies (15%), download trend stability (10%), typosquatting similarity (10%), license stability (5%), package age (5%), open security issues (10%). Stored in `package_reputation_scores`, updated on extraction.
+
+```sql
+CREATE TABLE package_reputation_scores (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  dependency_id UUID NOT NULL REFERENCES dependencies(id) ON DELETE CASCADE,
+  score NUMERIC(5, 2) NOT NULL,
+  breakdown JSONB NOT NULL, -- { maintainer_activity: 18, bus_factor: 7, ... }
+  signals_available INTEGER NOT NULL DEFAULT 0, -- how many of the 10 signals had data
+  calculated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(dependency_id)
+);
+```
+
+Note: Not all signals are available for all ecosystems. `signals_available` tracks data completeness. Scores are normalized to account for missing signals (e.g., if only 7 of 10 signals have data, the score is weighted across those 7).
 
 **Cross-project blast radius:** Tool `assessBlastRadius(packageName)`. Queries dependency graph across ALL org projects -- which projects use it, how (direct/transitive), which functions called (usage slices), which data flows reach it (reachable flows), which are Crown Jewels.
 
@@ -551,9 +640,9 @@ Triggered by PR webhook (Phase 8). After Phase 8's policy evaluation, if org has
 
 **Zero-day rapid response:** When critical CVE published (Phase 6H or Critical CVE Alert automation): Aegis creates autonomous task -> `assessBlastRadius` -> check reachability per project -> generate priority-ranked triage report -> optionally start fixing critical projects (in Autopilot mode) -> notify via configured channels. Entire workflow within minutes of disclosure.
 
-**Smart upgrade paths** (absorbs Phase 11D): Tool `analyzeUpgradePath`. LLM reads changelogs, identifies breaking changes, estimates effort, suggests optimal upgrade path.
+**Smart upgrade paths:** Tool `analyzeUpgradePath`. LLM reads changelogs, identifies breaking changes, estimates effort, suggests optimal upgrade path.
 
-**Anomaly detection** (absorbs Phase 11F): Runs during extraction post-processing and scheduled health audits. Detects: sudden dep spikes, low-reputation new deps, typosquatting, license changes, maintainer transfers.
+**Anomaly detection:** Runs during extraction post-processing and scheduled health audits. Detects: sudden dep spikes, low-reputation new deps, typosquatting, license changes, maintainer transfers.
 
 ### 7B-J: Executive Reporting and ROI
 
@@ -561,7 +650,7 @@ Triggered by PR webhook (Phase 8). After Phase 8's policy evaluation, if org has
 
 **ROI tracking:** Heuristics: auto-fix = 2h saved, code patch = 4h, sprint = 1h/fix + 2h planning, triage = 30min, report = 4h, VEX = 2h, audit package = 8h, PR review = 30min/PR. Tool `getROIMetrics(timeRange?)`. Returns: hours saved, cost savings (hours x $75/hr), fixes completed, reports generated, PRs reviewed, net savings.
 
-**Executive summary** (absorbs Phase 11E): Tool `generateExecutiveSummary(timeRange?, format?)`. Non-technical C-suite report: overall status + trend, key metrics, Aegis impact with dollar savings, top remaining risks.
+**Executive summary:** Tool `generateExecutiveSummary(timeRange?, format?)`. Non-technical C-suite report: overall status + trend, key metrics, Aegis impact with dollar savings, top remaining risks.
 
 ### 7B-K: Aegis Management Console (Organization Settings)
 
@@ -619,8 +708,8 @@ Add `'aegis_management'` and `'ai_configuration'` to `VALID_SETTINGS_SECTIONS`.
 3. **Active Work**: Running tasks with progress bars + Pause/Cancel buttons, queued tasks, pending approval requests with Approve/Reject buttons.
 4. **Automations**: List with enable/disable toggles, last run status, next run time. Create/edit/delete. Run history.
 5. **Memory**: Searchable memory list by category. "Teach Aegis" button for manual knowledge. Edit/delete per memory. "Clear all" with confirmation.
-6. **Learning**: Strategy performance matrix, learning curve chart, failure analysis, follow-up chains, quality insights (Phase 16 -- see Stitch prompt in `phase_16_aegis_learning.plan.md`).
-7. **Incidents**: Incident history table, playbook management, create/edit playbooks (Phase 17 -- see Stitch prompt in `phase_17_incident_response.plan.md`).
+6. **Learning**: Strategy performance matrix, learning curve chart, failure analysis, follow-up chains, quality insights. **Placeholder in Phase 7B:** Renders empty state card with "Aegis Learning -- Coming Soon" messaging, sparkle icon, and brief description of what the Learning tab will track. No skeleton components or fake data. Full implementation in Phase 16.
+7. **Incidents**: Incident history table, playbook management, create/edit playbooks. **Placeholder in Phase 7B:** Renders empty state card with "Incident Response -- Coming Soon" messaging and brief description. Full implementation in Phase 17.
 8. **Usage Analytics**: Messages/day chart, most used tools, fix success rate, average response time, token usage breakdown.
 9. **Audit Log**: Full `aegis_tool_executions` log. Filterable by date/user/category/permission level. Expandable rows. CSV export.
 
@@ -734,6 +823,7 @@ CREATE TABLE aegis_org_settings (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   organization_id UUID NOT NULL UNIQUE REFERENCES organizations(id) ON DELETE CASCADE,
   operating_mode TEXT NOT NULL DEFAULT 'propose', -- 'readonly', 'propose', 'autopilot'
+  role_mode_overrides JSONB DEFAULT '{}', -- { "role_id": "readonly" } -- per-role caps (role can never exceed org mode)
   monthly_budget NUMERIC(10, 2),
   daily_budget NUMERIC(10, 2),
   per_task_budget NUMERIC(10, 2) DEFAULT 25.00,
@@ -760,13 +850,13 @@ Add Aegis as a new nav item in `allNavItems`, positioned between "Compliance" an
 
 ```typescript
 const allNavItems = [
-  { id: 'overview',        label: 'Overview',        path: 'overview',        icon: LayoutDashboard, requiredPermission: null },
-  { id: 'vulnerabilities', label: 'Vulnerabilities',  path: 'vulnerabilities', icon: ShieldAlert,     requiredPermission: null },
-  { id: 'projects',        label: 'Projects',         path: 'projects',        icon: FolderKanban,    requiredPermission: null },
-  { id: 'teams',           label: 'Teams',            path: 'teams',           icon: Users,           requiredPermission: null },
-  { id: 'compliance',      label: 'Compliance',       path: 'compliance',      icon: ClipboardCheck,  requiredPermission: null },
-  { id: 'aegis',           label: 'Aegis',            path: 'aegis',           icon: Sparkles,        requiredPermission: 'interact_with_aegis' },
-  { id: 'settings',        label: 'Settings',         path: 'settings',        icon: Settings,        requiredPermission: 'view_settings' },
+  { id: 'overview',    label: 'Overview',    path: 'overview',    icon: LayoutDashboard, requiredPermission: null },
+  { id: 'security',    label: 'Security',    path: 'security',    icon: ShieldAlert,     requiredPermission: null },
+  { id: 'projects',    label: 'Projects',    path: 'projects',    icon: FolderKanban,    requiredPermission: null },
+  { id: 'teams',       label: 'Teams',       path: 'teams',       icon: Users,           requiredPermission: null },
+  { id: 'compliance',  label: 'Compliance',  path: 'compliance',  icon: ClipboardCheck,  requiredPermission: null },
+  { id: 'aegis',       label: 'Aegis',       path: 'aegis',       icon: Sparkles,        requiredPermission: 'interact_with_aegis' },
+  { id: 'settings',    label: 'Settings',    path: 'settings',    icon: Settings,        requiredPermission: 'view_settings' as const },
 ];
 ```
 
@@ -979,6 +1069,8 @@ CREATE TABLE security_debt_snapshots (
 
 **Proactive alerts:** If debt grows faster than resolved for 2+ weeks, Aegis sends alert to configured channel.
 
+**Snapshot retention:** Daily snapshots for 90 days, weekly (keep Sunday snapshot) for 1 year, monthly (keep 1st-of-month) forever. Cleanup runs as part of the existing `notification-cleanup` QStash cron (`0 3` * * *).
+
 ### 7B-N: Sprint Orchestration
 
 Carries forward the batch fix orchestrator concept, now integrated as a task type within the Task System (7B-C). A sprint = `aegis_task` with fix steps.
@@ -1008,11 +1100,64 @@ interface SecuritySprintRequest {
 
 **Integration points:** Security tab "Run Security Sprint" button, Aegis chat natural language trigger, Compliance tab "Resolve all non-compliant packages" button, Org dashboard "Run Org-Wide Sprint", Phase 9 notifications for sprint events.
 
-### 7B-O: Database Schema Summary
+**Sprint summary export:** Exportable as PDF via `@react-pdf/renderer` (shared with 7B-E report generation). Stored in Supabase Storage.
 
-New tables: `aegis_tool_executions`, `aegis_tasks`, `aegis_task_steps`, `aegis_memory`, `aegis_approval_requests`, `aegis_event_triggers`, `aegis_org_settings`, `aegis_slack_config`, `security_debt_snapshots`, `package_reputation_scores`
+### 7B-O: Database Schema Summary & Migration
 
-Modified existing: `aegis_automations` (expanded with cron, delivery, templates), `aegis_chat_messages` (add metadata for tool execution refs), `aegis_chat_threads` (add `total_tokens_used`)
+**Migration file:** `backend/database/phase7b_aegis_platform.sql`
+
+**New tables (10):** `aegis_tool_executions`, `aegis_tasks`, `aegis_task_steps`, `aegis_memory`, `aegis_approval_requests`, `aegis_event_triggers`, `aegis_org_settings`, `aegis_slack_config`, `security_debt_snapshots`, `package_reputation_scores`
+
+**Modified existing tables:**
+
+```sql
+-- Enable pgvector extension
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- Expand aegis_automations with cron, delivery, template support
+ALTER TABLE aegis_automations
+  ADD COLUMN IF NOT EXISTS cron_expression TEXT,
+  ADD COLUMN IF NOT EXISTS timezone TEXT DEFAULT 'UTC',
+  ADD COLUMN IF NOT EXISTS automation_type TEXT DEFAULT 'custom', -- 'custom', 'template'
+  ADD COLUMN IF NOT EXISTS delivery_config JSONB DEFAULT '{}',
+  ADD COLUMN IF NOT EXISTS template_config JSONB DEFAULT '{}',
+  ADD COLUMN IF NOT EXISTS qstash_schedule_id TEXT,
+  ADD COLUMN IF NOT EXISTS last_run_status TEXT,
+  ADD COLUMN IF NOT EXISTS last_run_output TEXT,
+  ADD COLUMN IF NOT EXISTS run_count INTEGER DEFAULT 0;
+
+-- Add metadata to aegis_chat_messages for tool execution refs
+ALTER TABLE aegis_chat_messages
+  ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}';
+
+-- Note: aegis_chat_threads.total_tokens_used already exists from Phase 6C migration
+
+-- Permission rename: interact_with_security_agent -> interact_with_aegis
+-- Updates the JSONB permissions column in all existing organization roles
+UPDATE organization_roles
+SET permissions = jsonb_set(
+  permissions - 'interact_with_security_agent',
+  '{interact_with_aegis}',
+  COALESCE(permissions->'interact_with_security_agent', 'true'::jsonb)
+)
+WHERE permissions ? 'interact_with_security_agent';
+
+-- Add new permissions to all existing owner roles
+UPDATE organization_roles
+SET permissions = permissions
+  || '{"trigger_fix": true, "view_ai_spending": true, "manage_incidents": true}'::jsonb
+WHERE name = 'owner' OR (permissions->>'manage_aegis')::boolean = true;
+```
+
+**New QStash cron schedules (add in Upstash dashboard):**
+
+- **Aegis due automations check:** `*/5 * * * *` -> `POST /api/internal/aegis/check-due-automations`
+- **Aegis debt snapshot:** `0 2 * * *` (daily 2AM UTC) -> `POST /api/internal/aegis/snapshot-debt`
+
+**Dependencies to install:**
+
+- `ee/backend`: `npm install ai @ai-sdk/openai @ai-sdk/anthropic @ai-sdk/google @react-pdf/renderer`
+- `frontend`: `npm install @ai-sdk/react`
 
 ### 7B-P: Permissions -- Full AI & Aegis Permission System
 
@@ -1031,15 +1176,17 @@ The codebase currently uses `interact_with_security_agent`. The plans use `inter
 
 **Complete AI-related permissions table:**
 
-| Permission | Type | Default (Owner) | Default (Admin) | Default (Member) | Used By | Phase |
-|---|---|---|---|---|---|---|
-| `interact_with_aegis` | Org-level | true | true | true | All Aegis chat, copilot panel, "Fix with AI", "Explain with Aegis", "Analyze" buttons across all screens. Gates sidebar nav item. | 6, 7, 7B |
-| `manage_aegis` | Org-level | true | true | false | Aegis Management Console (7B-K), AI Configuration section in org settings, operating mode changes, budget configuration, tool permission overrides, memory management, automation management, playbook management | 7B, 16, 17 |
-| `manage_compliance` | Org-level | true | true | false | Policy editor, SLA configuration (Phase 15), compliance tab actions, exception approval | 4, 5, 15 |
-| `manage_watchtower` | Org-level | true | true | false | Enable/disable Watchtower on projects from org page, org-wide quarantine actions, clearing commits | 10B |
-| `trigger_fix` | Org-level | true | true | false | Manually triggering AI fix jobs (separate from viewing Aegis -- a member can chat with Aegis but not trigger fixes that consume budget and create PRs) | 7 |
-| `manage_incidents` | Org-level | true | true | false | Declare/resolve/close incidents, approve incident phases, manage playbooks | 17 |
-| `view_ai_spending` | Org-level | true | true | false | View AI spending data, usage analytics, audit log in Aegis Management Console (subset of manage_aegis -- allows viewing without changing config) | 7B |
+
+| Permission            | Type      | Default (Owner) | Default (Admin) | Default (Member) | Used By                                                                                                                                                                                                           | Phase      |
+| --------------------- | --------- | --------------- | --------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| `interact_with_aegis` | Org-level | true            | true            | true             | All Aegis chat, copilot panel, "Fix with AI", "Explain with Aegis", "Analyze" buttons across all screens. Gates sidebar nav item.                                                                                 | 6, 7, 7B   |
+| `manage_aegis`        | Org-level | true            | true            | false            | Aegis Management Console (7B-K), AI Configuration section in org settings, operating mode changes, budget configuration, tool permission overrides, memory management, automation management, playbook management | 7B, 16, 17 |
+| `manage_compliance`   | Org-level | true            | true            | false            | Policy editor, SLA configuration (Phase 15), compliance tab actions, exception approval                                                                                                                           | 4, 5, 15   |
+| `manage_watchtower`   | Org-level | true            | true            | false            | Enable/disable Watchtower on projects from org page, org-wide quarantine actions, clearing commits                                                                                                                | 10B        |
+| `trigger_fix`         | Org-level | true            | true            | false            | Manually triggering AI fix jobs (separate from viewing Aegis -- a member can chat with Aegis but not trigger fixes that consume budget and create PRs)                                                            | 7          |
+| `manage_incidents`    | Org-level | true            | true            | false            | Declare/resolve/close incidents, approve incident phases, manage playbooks                                                                                                                                        | 17         |
+| `view_ai_spending`    | Org-level | true            | true            | false            | View AI spending data, usage analytics, audit log in Aegis Management Console (subset of manage_aegis -- allows viewing without changing config)                                                                  | 7B         |
+
 
 **New permissions to add to `RolePermissions` interface:**
 

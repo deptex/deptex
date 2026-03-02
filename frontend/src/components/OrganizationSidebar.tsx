@@ -1,6 +1,6 @@
 import { memo, useState, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, FolderKanban, Users, ShieldAlert, ClipboardCheck, Settings } from 'lucide-react';
+import { LayoutDashboard, FolderKanban, Users, ShieldAlert, ClipboardCheck, TowerControl, Sparkles, Settings } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { RolePermissions } from '../lib/api';
 
@@ -15,6 +15,8 @@ const allNavItems = [
   { id: 'projects', label: 'Projects', path: 'projects', icon: FolderKanban, requiredPermission: null },
   { id: 'teams', label: 'Teams', path: 'teams', icon: Users, requiredPermission: null },
   { id: 'compliance', label: 'Compliance', path: 'compliance', icon: ClipboardCheck, requiredPermission: null },
+  { id: 'watchtower', label: 'Watchtower', path: 'watchtower', icon: TowerControl, requiredPermission: null },
+  { id: 'aegis', label: 'Aegis', path: 'aegis', icon: Sparkles, requiredPermission: 'interact_with_aegis' as const },
   { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: 'view_settings' as const },
 ];
 
@@ -43,6 +45,8 @@ function OrganizationSidebar({ organizationId, userPermissions }: OrganizationSi
       const settingsTab = visibleNavItems.find((tab) => tab.id === 'settings');
       if (settingsTab) return 'settings';
     }
+    if (pathParts.includes('watchtower')) return 'watchtower';
+    if (pathParts.includes('aegis')) return 'aegis';
     if (currentTab === organizationId) {
       const overviewTab = visibleNavItems.find((tab) => tab.id === 'overview');
       return overviewTab ? 'overview' : 'projects';

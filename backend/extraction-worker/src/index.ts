@@ -60,7 +60,8 @@ async function processJob(supabase: SupabaseClient, job: ExtractionJobRow): Prom
         integration_id: payload.integration_id,
       },
       logger,
-      async () => isJobCancelled(supabase, job.id)
+      async () => isJobCancelled(supabase, job.id),
+      async () => { await sendHeartbeat(supabase, job.id); }
     );
 
     if (await isJobCancelled(supabase, job.id)) {

@@ -1,25 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useOutletContext, useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
-  FolderKanban,
-  Users,
-  ShieldAlert,
-  CheckCircle2,
-  XCircle,
-  ArrowRight,
-  Plus,
-  ExternalLink,
-  Activity,
-  Clock,
-  BookOpen,
-  LifeBuoy,
-  MessageSquare,
-  Zap,
-  TrendingUp,
+  FolderKanban, Users, ShieldAlert, CheckCircle2, XCircle, ArrowRight, Plus,
+  Activity, Clock, BookOpen, LifeBuoy, Zap, TrendingUp, Shield, Package,
 } from 'lucide-react';
-import { Organization, api, RolePermissions, Project, OrganizationIntegration, OrganizationPolicies } from '../../lib/api';
+import {
+  Organization, api, RolePermissions, Project, OrganizationIntegration, OrganizationPolicies,
+  OrgStats, ProjectActivityItem,
+} from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import OrgGetStartedCard from '../../components/OrgGetStartedCard';
+import { StatsStrip, type StatCardData } from '../../components/StatsStrip';
+import { ActivityFeed } from '../../components/ActivityFeed';
+import { OverviewGraph } from '../../components/OverviewGraph';
 import { cn } from '../../lib/utils';
 
 interface OrganizationContextType {
@@ -27,12 +20,11 @@ interface OrganizationContextType {
   reloadOrganization: () => Promise<void>;
 }
 
-// All valid tabs in the organization (handled by various pages)
-const allValidTabs = ['overview', 'projects', 'teams', 'members', 'policies', 'activity', 'settings', 'compliance', 'vulnerabilities'];
+const allValidTabs = ['overview', 'projects', 'teams', 'members', 'policies', 'activity', 'settings', 'compliance', 'vulnerabilities', 'security'];
 
 export default function OrganizationDetailPage() {
   const { organization, reloadOrganization } = useOutletContext<OrganizationContextType>();
-  const { id } = useParams<{ id: string; tab?: string }>();
+  const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
   const { toast } = useToast();
@@ -42,11 +34,14 @@ export default function OrganizationDetailPage() {
 
   // Overview data
   const [projects, setProjects] = useState<Project[]>([]);
+  const [teams, setTeams] = useState<any[]>([]);
   const [integrations, setIntegrations] = useState<OrganizationIntegration[]>([]);
   const [policies, setPolicies] = useState<OrganizationPolicies | null>(null);
+  const [orgStats, setOrgStats] = useState<OrgStats | null>(null);
+  const [activities, setActivities] = useState<ProjectActivityItem[]>([]);
   const [overviewLoading, setOverviewLoading] = useState(true);
+  const [statsLoading, setStatsLoading] = useState(true);
 
-  // Get cached permissions for immediate check
   const getCachedPermissions = (): RolePermissions | null => {
     if (!id) return null;
     if (organization?.permissions) return organization.permissions;
@@ -57,7 +52,6 @@ export default function OrganizationDetailPage() {
     return null;
   };
 
-  // Load user permissions
   useEffect(() => {
     const loadPermissions = async () => {
       if (!id || !organization?.role) {
@@ -72,7 +66,7 @@ export default function OrganizationDetailPage() {
           localStorage.setItem(`org_permissions_${id}`, JSON.stringify(userRole.permissions));
         }
       } catch {
-        // Keep using cached permissions on error
+        // Keep using cached permissions
       } finally {
         setPermissionsLoaded(true);
       }
@@ -80,31 +74,53 @@ export default function OrganizationDetailPage() {
     loadPermissions();
   }, [id, organization?.role]);
 
-  // Load overview data (projects, integrations, policies) in parallel
-  useEffect(() => {
+  const loadOverviewData = useCallback(async () => {
     if (!id) return;
-
     const pathParts = location.pathname.split('/');
     const currentTab = pathParts[pathParts.length - 1];
     const isOverview = currentTab === id || currentTab === 'overview';
     if (!isOverview) return;
 
     setOverviewLoading(true);
-    Promise.all([
+    setStatsLoading(true);
+
+    const [p, i, pol, t] = await Promise.all([
       api.getProjects(id).catch(() => [] as Project[]),
       api.getOrganizationIntegrations(id).catch(() => [] as OrganizationIntegration[]),
       api.getOrganizationPolicies(id).catch(() => null),
-    ]).then(([p, i, pol]) => {
-      setProjects(p);
-      setIntegrations(i);
-      setPolicies(pol);
-      setOverviewLoading(false);
+      api.getTeams(id).catch(() => []),
+    ]);
+    setProjects(p);
+    setIntegrations(i);
+    setPolicies(pol);
+    setTeams(t);
+    setOverviewLoading(false);
+
+    // Fetch stats + activities in parallel (non-blocking)
+    Promise.all([
+      api.getOrgStats(id).catch(() => null),
+      api.getActivities(id, { limit: 15 }).then(acts =>
+        acts.map((act: any) => ({
+          id: act.id,
+          source: 'activity' as const,
+          type: act.activity_type ?? 'other',
+          title: act.activity_type?.replace(/_/g, ' ') ?? 'Activity',
+          description: act.description ?? '',
+          metadata: act.metadata ?? {},
+          created_at: act.created_at,
+        })),
+      ).catch(() => []),
+    ]).then(([s, a]) => {
+      setOrgStats(s as OrgStats | null);
+      setActivities(a as ProjectActivityItem[]);
+      setStatsLoading(false);
     });
   }, [id, location.pathname]);
 
+  useEffect(() => { loadOverviewData(); }, [loadOverviewData]);
+
   const effectivePermissions = userPermissions || getCachedPermissions();
 
-  // Permission-based redirect after permissions load
   useEffect(() => {
     if (!id || !organization || !effectivePermissions) return;
     const pathParts = location.pathname.split('/');
@@ -116,22 +132,9 @@ export default function OrganizationDetailPage() {
     if (currentTab === 'activity' && !effectivePermissions.view_activity) {
       navigate(`/organizations/${id}`, { replace: true });
     }
-    if (currentTab === 'aegis') {
-      navigate(`/organizations/${id}`, { replace: true });
-    }
   }, [effectivePermissions, id, location.pathname, navigate, organization]);
 
-  if (!organization) {
-    return (
-      <main className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
-        <div className="flex items-center justify-center py-12">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
-        </div>
-      </main>
-    );
-  }
-
-  if (!effectivePermissions) {
+  if (!organization || !effectivePermissions) {
     return (
       <main className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
         <div className="flex items-center justify-center py-12">
@@ -144,24 +147,62 @@ export default function OrganizationDetailPage() {
   const pathParts = location.pathname.split('/');
   const currentTab = pathParts[pathParts.length - 1];
   const isOverviewPage = currentTab === id || currentTab === 'overview';
-
   if (!isOverviewPage) return null;
 
-  // Derive stats
-  const totalVulns = projects.reduce((sum, p) => sum + (p.alerts_count ?? 0), 0);
-  const compliantProjects = projects.filter((p) => p.is_compliant === true).length;
-  const hasPolicyDefined = !!policies?.policy_code && policies.policy_code.trim().length > 0;
-  const recentProjects = [...projects]
-    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
-    .slice(0, 5);
+  const handleGetStartedDismissed = async () => { await reloadOrganization(); };
 
-  const handleGetStartedDismissed = async () => {
-    await reloadOrganization();
-  };
+  // Stats strip cards
+  const statsCards: StatCardData[] = orgStats ? [
+    {
+      icon: <FolderKanban className="h-4 w-4" />,
+      iconBg: 'bg-violet-500/15', iconColor: 'text-violet-400',
+      label: 'Projects', value: orgStats.projects.total,
+      sub: `${orgStats.projects.healthy} healthy, ${orgStats.projects.at_risk} at-risk, ${orgStats.projects.critical} critical`,
+      badge: orgStats.projects.syncing_count > 0 ? (
+        <span className="inline-flex items-center rounded-full bg-blue-500/15 px-2 py-0.5 text-[10px] font-medium text-blue-400">
+          {orgStats.projects.syncing_count} syncing
+        </span>
+      ) : undefined,
+      onClick: () => navigate(`/organizations/${id}/projects`),
+    },
+    {
+      icon: <Package className="h-4 w-4" />,
+      iconBg: 'bg-blue-500/15', iconColor: 'text-blue-400',
+      label: 'Dependencies', value: orgStats.dependencies_total,
+    },
+    {
+      icon: <ShieldAlert className="h-4 w-4" />,
+      iconBg: orgStats.vulnerabilities.total > 0 ? 'bg-orange-500/15' : 'bg-emerald-500/15',
+      iconColor: orgStats.vulnerabilities.total > 0 ? 'text-orange-400' : 'text-emerald-400',
+      label: 'Vulnerabilities', value: orgStats.vulnerabilities.total,
+      sub: `${orgStats.vulnerabilities.critical} critical, ${orgStats.vulnerabilities.high} high`,
+      onClick: () => navigate(`/organizations/${id}/security`),
+    },
+    {
+      icon: <CheckCircle2 className="h-4 w-4" />,
+      iconBg: orgStats.compliance.percent >= 80 ? 'bg-emerald-500/15' : 'bg-amber-500/15',
+      iconColor: orgStats.compliance.percent >= 80 ? 'text-emerald-400' : 'text-amber-400',
+      label: 'Compliance', value: `${orgStats.compliance.percent}%`,
+      sub: `${orgStats.compliance.status_distribution.filter(s => s.is_passing).reduce((a, s) => a + s.count, 0)} projects passing`,
+    },
+    {
+      icon: <Users className="h-4 w-4" />,
+      iconBg: 'bg-blue-500/15', iconColor: 'text-blue-400',
+      label: 'Members', value: orgStats.members_count,
+      onClick: () => navigate(`/organizations/${id}/settings/members`),
+    },
+  ] : [];
+
+  // Build team → project_ids map for graph
+  const teamProjectMap = teams.map((t: any) => ({
+    id: t.id,
+    name: t.name,
+    project_ids: projects.filter(p => p.team_ids?.includes(t.id)).map(p => p.id),
+  }));
 
   return (
     <main className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-      {/* Page header */}
+      {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-foreground">{organization.name}</h1>
         <p className="text-sm text-foreground-secondary mt-1">
@@ -172,7 +213,7 @@ export default function OrganizationDetailPage() {
         </p>
       </div>
 
-      {/* Get Started card — hidden once dismissed */}
+      {/* Get Started card */}
       {!organization.get_started_dismissed && !overviewLoading && (
         <OrgGetStartedCard
           organization={organization}
@@ -184,201 +225,139 @@ export default function OrganizationDetailPage() {
         />
       )}
 
-      {/* Stats row */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <StatCard
-          icon={<FolderKanban className="h-4 w-4" />}
-          iconColor="text-violet-400"
-          iconBg="bg-violet-500/10"
-          label="Active Projects"
-          value={overviewLoading ? '—' : String(projects.length)}
-          sub={projects.length === 1 ? '1 project' : `${projects.length} projects`}
-          onClick={() => navigate(`/organizations/${id}/projects`)}
+      {/* Stats strip */}
+      <StatsStrip cards={statsCards} loading={statsLoading} />
+
+      {/* Two-column: Graph + Security Posture */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <OverviewGraph
+          mode="org"
+          organizationId={id!}
+          orgName={organization.name}
+          teams={teamProjectMap}
+          projects={projects.map(p => ({ id: p.id, name: p.name, health_score: (p as any).health_score ?? 0 }))}
         />
-        <StatCard
-          icon={<Users className="h-4 w-4" />}
-          iconColor="text-blue-400"
-          iconBg="bg-blue-500/10"
-          label="Members"
-          value={overviewLoading ? '—' : String(organization.member_count ?? 0)}
-          sub="across all teams"
-          onClick={() => navigate(`/organizations/${id}/settings/members`)}
-        />
-        <StatCard
-          icon={<ShieldAlert className="h-4 w-4" />}
-          iconColor={totalVulns > 0 ? 'text-orange-400' : 'text-green-400'}
-          iconBg={totalVulns > 0 ? 'bg-orange-500/10' : 'bg-green-500/10'}
-          label="Open Vulnerabilities"
-          value={overviewLoading ? '—' : String(totalVulns)}
-          sub={totalVulns === 0 ? 'All clear' : `across ${projects.length} project${projects.length !== 1 ? 's' : ''}`}
-          onClick={() => navigate(`/organizations/${id}/vulnerabilities`)}
-        />
-        <StatCard
-          icon={
-            hasPolicyDefined ? (
-              <CheckCircle2 className="h-4 w-4" />
-            ) : (
-              <XCircle className="h-4 w-4" />
-            )
-          }
-          iconColor={hasPolicyDefined ? 'text-green-400' : 'text-foreground-secondary'}
-          iconBg={hasPolicyDefined ? 'bg-green-500/10' : 'bg-background-subtle/50'}
-          label="Policy"
-          value={overviewLoading ? '—' : hasPolicyDefined ? 'Configured' : 'Not set'}
-          sub={
-            hasPolicyDefined
-              ? `${compliantProjects}/${projects.length} projects compliant`
-              : 'No policy defined yet'
-          }
-          onClick={() => navigate(`/organizations/${id}/compliance`)}
-        />
+        <div className="rounded-lg border border-border bg-background-card p-4">
+          <h3 className="text-sm font-semibold text-foreground mb-3">Security Posture</h3>
+          {statsLoading ? (
+            <div className="animate-pulse space-y-3">
+              <div className="h-2 rounded bg-muted/60 w-full" />
+              <div className="h-3 rounded bg-muted/40 w-32" />
+            </div>
+          ) : orgStats && orgStats.vulnerabilities.total === 0 && orgStats.code_findings.semgrep_total === 0 ? (
+            <div className="flex flex-col items-center justify-center py-6 text-center">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500/15 mb-3">
+                <Shield className="h-5 w-5 text-emerald-400" />
+              </div>
+              <p className="text-sm font-medium text-foreground">No vulnerabilities detected</p>
+            </div>
+          ) : orgStats ? (
+            <div className="space-y-4">
+              {/* Severity bar */}
+              <div className="flex h-2 rounded-full overflow-hidden bg-muted/30 w-full">
+                {orgStats.vulnerabilities.critical > 0 && <div className="bg-red-500 h-full" style={{ width: `${(orgStats.vulnerabilities.critical / orgStats.vulnerabilities.total) * 100}%` }} />}
+                {orgStats.vulnerabilities.high > 0 && <div className="bg-orange-500 h-full" style={{ width: `${(orgStats.vulnerabilities.high / orgStats.vulnerabilities.total) * 100}%` }} />}
+                {orgStats.vulnerabilities.medium > 0 && <div className="bg-yellow-500 h-full" style={{ width: `${(orgStats.vulnerabilities.medium / orgStats.vulnerabilities.total) * 100}%` }} />}
+                {orgStats.vulnerabilities.low > 0 && <div className="bg-slate-500 h-full" style={{ width: `${(orgStats.vulnerabilities.low / orgStats.vulnerabilities.total) * 100}%` }} />}
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div><span className="text-red-400 font-medium">{orgStats.vulnerabilities.critical}</span> <span className="text-foreground-secondary">Critical</span></div>
+                <div><span className="text-orange-400 font-medium">{orgStats.vulnerabilities.high}</span> <span className="text-foreground-secondary">High</span></div>
+                <div><span className="text-yellow-400 font-medium">{orgStats.vulnerabilities.medium}</span> <span className="text-foreground-secondary">Medium</span></div>
+                <div><span className="text-slate-400 font-medium">{orgStats.vulnerabilities.low}</span> <span className="text-foreground-secondary">Low</span></div>
+              </div>
+              <div className="flex items-center gap-4 text-sm text-foreground-secondary pt-2 border-t border-border">
+                <span>Semgrep: {orgStats.code_findings.semgrep_total}</span>
+                <span>Secrets: {orgStats.code_findings.secret_total}</span>
+              </div>
+              {orgStats.top_vulnerabilities.length > 0 && (
+                <div className="pt-2 border-t border-border">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-foreground-secondary mb-2">Top Vulnerabilities</p>
+                  <div className="space-y-1.5">
+                    {orgStats.top_vulnerabilities.map((v) => (
+                      <button
+                        key={v.osv_id}
+                        className="flex items-center gap-2 w-full text-left rounded-md px-2 py-1.5 hover:bg-muted/50 transition-colors"
+                        onClick={() => navigate(`/organizations/${id}/projects/${v.worst_project.id}/security`)}
+                      >
+                        <span className={`h-2 w-2 rounded-full shrink-0 ${v.severity === 'critical' ? 'bg-red-500' : 'bg-orange-500'}`} />
+                        <span className="text-xs font-mono text-foreground truncate">{v.osv_id}</span>
+                        <span className="text-xs text-foreground-secondary truncate ml-auto">{v.affected_project_count} project{v.affected_project_count !== 1 ? 's' : ''}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : null}
+        </div>
       </div>
 
-      {/* Bottom two-column layout */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* Recent projects (wide) */}
-        <div className="lg:col-span-2 rounded-lg border border-border bg-background-card overflow-hidden">
-          <div className="flex items-center justify-between px-5 py-3.5 border-b border-border bg-black/20">
-            <div className="flex items-center gap-2">
-              <Activity className="h-4 w-4 text-foreground-secondary" />
-              <span className="text-sm font-semibold text-foreground">Recent Projects</span>
-            </div>
-            <button
-              onClick={() => navigate(`/organizations/${id}/projects`)}
-              className="flex items-center gap-1 text-xs text-foreground-secondary hover:text-foreground transition-colors"
-            >
-              View all
-              <ArrowRight className="h-3.5 w-3.5" />
-            </button>
-          </div>
-
-          {overviewLoading ? (
-            <div className="divide-y divide-border">
-              {[...Array(3)].map((_, i) => (
-                <div key={i} className="flex items-center gap-3 px-5 py-3.5 animate-pulse">
-                  <div className="h-8 w-8 rounded-md bg-muted" />
-                  <div className="flex-1 space-y-1.5">
-                    <div className="h-3.5 w-32 bg-muted rounded" />
-                    <div className="h-3 w-20 bg-muted rounded" />
-                  </div>
+      {/* Status Distribution + Activity Feed */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Status Distribution */}
+        <div className="rounded-lg border border-border bg-background-card p-4">
+          <h3 className="text-sm font-semibold text-foreground mb-3">Status Distribution</h3>
+          {statsLoading ? (
+            <div className="animate-pulse space-y-2">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <div className="h-3 w-3 rounded-full bg-muted/60" />
+                  <div className="h-3 w-24 rounded bg-muted/40" />
                 </div>
               ))}
             </div>
-          ) : recentProjects.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 px-6 text-center">
-              <div className="h-12 w-12 rounded-full bg-background-subtle flex items-center justify-center mb-3">
-                <FolderKanban className="h-5 w-5 text-foreground-secondary" />
-              </div>
-              <p className="text-sm font-medium text-foreground mb-1">No projects yet</p>
-              <p className="text-xs text-foreground-secondary mb-4">
-                Create a project to start tracking your dependencies.
-              </p>
-              <button
-                onClick={() => navigate(`/organizations/${id}/projects`)}
-                className="flex items-center gap-1.5 text-xs font-medium text-primary hover:text-primary/80 transition-colors"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Create your first project
-              </button>
-            </div>
-          ) : (
-            <div className="divide-y divide-border">
-              {recentProjects.map((project) => (
-                <button
-                  key={project.id}
-                  onClick={() => navigate(`/organizations/${id}/projects/${project.id}`)}
-                  className="w-full flex items-center gap-3 px-5 py-3.5 hover:bg-table-hover transition-colors text-left"
-                >
-                  <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md border border-border bg-background-subtle">
-                    <FolderKanban className="h-4 w-4 text-foreground-secondary" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-foreground truncate">{project.name}</p>
-                    <p className="text-xs text-foreground-secondary">
-                      {project.dependencies_count ?? 0} dependencies
-                      {project.team_name ? ` · ${project.team_name}` : ''}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3 flex-shrink-0">
-                    {project.alerts_count != null && project.alerts_count > 0 && (
-                      <span className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium bg-orange-500/10 text-orange-400 border border-orange-500/20">
-                        <ShieldAlert className="h-3 w-3" />
-                        {project.alerts_count}
-                      </span>
-                    )}
-                    {project.is_compliant === true && (
-                      <span className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium bg-green-500/10 text-green-500 border border-green-500/20">
-                        <CheckCircle2 className="h-3 w-3" />
-                        Compliant
-                      </span>
-                    )}
-                    <span className="flex items-center gap-1 text-xs text-foreground-secondary">
-                      <Clock className="h-3 w-3" />
-                      {formatRelativeTime(project.updated_at)}
-                    </span>
-                    <ArrowRight className="h-3.5 w-3.5 text-foreground-secondary" />
-                  </div>
-                </button>
+          ) : orgStats ? (
+            <div className="space-y-2">
+              {orgStats.compliance.status_distribution.filter(s => s.count > 0).map((s) => (
+                <div key={s.status_id} className="flex items-center gap-2.5">
+                  <span className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: s.color }} />
+                  <span className="text-sm text-foreground flex-1">{s.name}</span>
+                  <span className="text-sm font-medium text-foreground tabular-nums">{s.count}</span>
+                </div>
               ))}
+              {orgStats.compliance.status_distribution.every(s => s.count === 0) && (
+                <p className="text-sm text-foreground-secondary">No projects with assigned statuses yet.</p>
+              )}
             </div>
-          )}
+          ) : null}
         </div>
 
-        {/* Quick links sidebar */}
-        <div className="space-y-4">
-          {/* Quick actions */}
-          <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-            <div className="flex items-center gap-2 px-5 py-3.5 border-b border-border bg-black/20">
-              <Zap className="h-4 w-4 text-foreground-secondary" />
-              <span className="text-sm font-semibold text-foreground">Quick Actions</span>
-            </div>
-            <div className="p-2 space-y-0.5">
-              <QuickAction
-                icon={<Plus className="h-4 w-4" />}
-                label="New project"
-                onClick={() => navigate(`/organizations/${id}/projects`)}
-              />
-              <QuickAction
-                icon={<Users className="h-4 w-4" />}
-                label="Invite members"
-                onClick={() => navigate(`/organizations/${id}/settings/members`)}
-              />
-              <QuickAction
-                icon={<TrendingUp className="h-4 w-4" />}
-                label="View vulnerabilities"
-                onClick={() => navigate(`/organizations/${id}/vulnerabilities`)}
-              />
-              <QuickAction
-                icon={<Activity className="h-4 w-4" />}
-                label="Activity log"
-                onClick={() => navigate(`/organizations/${id}/settings/audit_logs`)}
-              />
-            </div>
-          </div>
+        {/* Activity Feed */}
+        <div className="lg:col-span-2">
+          <ActivityFeed items={activities} loading={statsLoading} emptyMessage="Organization activity will appear here." />
+        </div>
+      </div>
 
-          {/* Resources */}
-          <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-            <div className="flex items-center gap-2 px-5 py-3.5 border-b border-border bg-black/20">
-              <BookOpen className="h-4 w-4 text-foreground-secondary" />
-              <span className="text-sm font-semibold text-foreground">Resources</span>
-            </div>
-            <div className="p-2 space-y-0.5">
-              <ResourceLink
-                icon={<BookOpen className="h-4 w-4" />}
-                label="Documentation"
-                href="https://docs.deptex.com"
-              />
-              <ResourceLink
-                icon={<LifeBuoy className="h-4 w-4" />}
-                label="Support"
-                href="https://docs.deptex.com/support"
-              />
-              <ResourceLink
-                icon={<MessageSquare className="h-4 w-4" />}
-                label="Community"
-                href="https://discord.gg/deptex"
-              />
-            </div>
+      {/* Quick Actions + Resources */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+          <div className="flex items-center gap-2 px-5 py-3.5 border-b border-border bg-black/20">
+            <Zap className="h-4 w-4 text-foreground-secondary" />
+            <span className="text-sm font-semibold text-foreground">Quick Actions</span>
+          </div>
+          <div className="p-2 space-y-0.5">
+            {effectivePermissions.manage_teams_and_projects && (
+              <QuickAction icon={<Plus className="h-4 w-4" />} label="New project" onClick={() => navigate(`/organizations/${id}/projects`)} />
+            )}
+            {(effectivePermissions.add_members || effectivePermissions.kick_members) && (
+              <QuickAction icon={<Users className="h-4 w-4" />} label="Invite members" onClick={() => navigate(`/organizations/${id}/settings/members`)} />
+            )}
+            <QuickAction icon={<TrendingUp className="h-4 w-4" />} label="View security" onClick={() => navigate(`/organizations/${id}/security`)} />
+            {effectivePermissions.view_activity && (
+              <QuickAction icon={<Activity className="h-4 w-4" />} label="Activity log" onClick={() => navigate(`/organizations/${id}/settings/audit_logs`)} />
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+          <div className="flex items-center gap-2 px-5 py-3.5 border-b border-border bg-black/20">
+            <BookOpen className="h-4 w-4 text-foreground-secondary" />
+            <span className="text-sm font-semibold text-foreground">Resources</span>
+          </div>
+          <div className="p-2 space-y-0.5">
+            <QuickAction icon={<BookOpen className="h-4 w-4" />} label="Documentation" onClick={() => navigate('/docs/introduction')} />
+            <QuickAction icon={<LifeBuoy className="h-4 w-4" />} label="Help Center" onClick={() => navigate('/docs/help')} />
           </div>
         </div>
       </div>
@@ -386,40 +365,7 @@ export default function OrganizationDetailPage() {
   );
 }
 
-// ─── Sub-components ────────────────────────────────────────────────────────────
-
-interface StatCardProps {
-  icon: React.ReactNode;
-  iconColor: string;
-  iconBg: string;
-  label: string;
-  value: string;
-  sub: string;
-  onClick?: () => void;
-}
-
-function StatCard({ icon, iconColor, iconBg, label, value, sub, onClick }: StatCardProps) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        'group text-left rounded-lg border border-border bg-background-card p-4 transition-colors',
-        onClick && 'hover:border-border/80 hover:bg-background-card/80 cursor-pointer'
-      )}
-    >
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-xs font-semibold uppercase tracking-wider text-foreground-secondary">
-          {label}
-        </span>
-        <div className={cn('flex h-7 w-7 items-center justify-center rounded-md', iconBg)}>
-          <span className={iconColor}>{icon}</span>
-        </div>
-      </div>
-      <p className="text-2xl font-bold text-foreground tabular-nums">{value}</p>
-      <p className="text-xs text-foreground-secondary mt-0.5">{sub}</p>
-    </button>
-  );
-}
+// ─── Sub-components ─────────────────────────────────────────────────────────
 
 interface QuickActionProps {
   icon: React.ReactNode;
@@ -437,27 +383,6 @@ function QuickAction({ icon, label, onClick }: QuickActionProps) {
       <span className="flex-1 text-left">{label}</span>
       <ArrowRight className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100 transition-opacity" />
     </button>
-  );
-}
-
-interface ResourceLinkProps {
-  icon: React.ReactNode;
-  label: string;
-  href: string;
-}
-
-function ResourceLink({ icon, label, href }: ResourceLinkProps) {
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="flex items-center gap-2.5 px-3 py-2 rounded-md text-sm text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
-    >
-      <span className="flex-shrink-0">{icon}</span>
-      <span className="flex-1">{label}</span>
-      <ExternalLink className="h-3.5 w-3.5 flex-shrink-0" />
-    </a>
   );
 }
 

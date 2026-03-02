@@ -2,6 +2,7 @@ import express from 'express';
 import { supabase } from '../../../backend/src/lib/supabase';
 import { authenticateUser, AuthRequest } from '../../../backend/src/middleware/auth';
 import { createActivity } from '../lib/activities';
+import { getCached, setCached } from '../lib/cache';
 
 const router = express.Router();
 router.use(authenticateUser);
@@ -310,6 +311,20 @@ router.post('/:id/teams', async (req: AuthRequest, res) => {
         return res.status(403).json({ error: 'You do not have permission to create teams' });
       }
     }
+
+    // Plan limit check: teams
+    try {
+      const { checkPlanLimit, TIER_DISPLAY_NAMES } = require('../lib/plan-limits');
+      const planCheck = await checkPlanLimit(id, 'teams');
+      if (!planCheck.allowed) {
+        return res.status(403).json({
+          error: 'PLAN_LIMIT',
+          message: `You've reached the ${planCheck.limit} team limit on your ${TIER_DISPLAY_NAMES[planCheck.tier]} plan.`,
+          resource: 'teams', current: planCheck.current, limit: planCheck.limit,
+          tier: planCheck.tier, upgradeTier: planCheck.upgradeTier,
+        });
+      }
+    } catch (e) { /* fail open */ }
 
     // Create team
     const { data: team, error: teamError } = await supabase
@@ -2025,6 +2040,195 @@ router.get('/:id/teams/:teamId/security-summary', async (req: AuthRequest, res) 
   } catch (error: any) {
     console.error('Error fetching team security summary:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch team security summary' });
+  }
+});
+
+// ============================================================================
+// Phase 10: Team Stats endpoint
+// ============================================================================
+
+// GET /api/organizations/:id/teams/:teamId/stats
+router.get('/:id/teams/:teamId/stats', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, teamId } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', orgId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const cacheKey = `team-stats:${teamId}`;
+    const cached = await getCached<any>(cacheKey);
+    if (cached) return res.json(cached);
+
+    const { data: projectTeams } = await supabase
+      .from('project_teams')
+      .select('project_id')
+      .eq('team_id', teamId);
+
+    const projectIds = (projectTeams ?? []).map((pt: any) => pt.project_id);
+
+    const [
+      projectsResult,
+      membersResult,
+      statusesResult,
+    ] = await Promise.all([
+      projectIds.length > 0
+        ? supabase.from('projects').select('id, name, health_score, status_id').in('id', projectIds)
+        : Promise.resolve({ data: [] }),
+      supabase.from('team_members').select('id', { count: 'exact', head: true }).eq('team_id', teamId),
+      supabase.from('organization_statuses').select('id, name, color, is_passing').eq('organization_id', orgId),
+    ]);
+
+    const projects = projectsResult.data ?? [];
+    const healthy = projects.filter((p: any) => (p.health_score ?? 0) >= 80).length;
+    const atRisk = projects.filter((p: any) => (p.health_score ?? 0) >= 50 && (p.health_score ?? 0) < 80).length;
+    const critical = projects.filter((p: any) => (p.health_score ?? 0) < 50).length;
+
+    let vulnTotals = { total: 0, critical: 0, high: 0, medium: 0, low: 0 };
+    let topVulns: any[] = [];
+    let syncingCount = 0;
+
+    if (projectIds.length > 0) {
+      const [vulnsResult, syncResult] = await Promise.all([
+        supabase.from('project_dependency_vulnerabilities')
+          .select('severity, depscore, project_id, osv_id')
+          .in('project_id', projectIds)
+          .eq('suppressed', false),
+        supabase.from('extraction_jobs')
+          .select('id', { count: 'exact', head: true })
+          .in('project_id', projectIds)
+          .in('status', ['queued', 'processing']),
+      ]);
+
+      syncingCount = syncResult.count ?? 0;
+      const vulns = vulnsResult.data ?? [];
+
+      for (const v of vulns) {
+        vulnTotals.total++;
+        if (v.severity === 'critical') vulnTotals.critical++;
+        else if (v.severity === 'high') vulnTotals.high++;
+        else if (v.severity === 'medium') vulnTotals.medium++;
+        else if (v.severity === 'low') vulnTotals.low++;
+      }
+
+      // Top 5 vulns
+      const byDepscore = [...vulns].filter((v: any) => v.severity === 'critical' || v.severity === 'high');
+      byDepscore.sort((a: any, b: any) => (b.depscore ?? 0) - (a.depscore ?? 0));
+      const seen = new Set<string>();
+      const topRaw: any[] = [];
+      for (const r of byDepscore) {
+        if (!r.osv_id || seen.has(r.osv_id)) continue;
+        seen.add(r.osv_id);
+        topRaw.push(r);
+        if (topRaw.length >= 5) break;
+      }
+
+      if (topRaw.length > 0) {
+        const { data: vulnDetails } = await supabase
+          .from('dependency_vulnerabilities')
+          .select('osv_id, summary, severity')
+          .in('osv_id', topRaw.map((r: any) => r.osv_id));
+        const detailMap = new Map((vulnDetails ?? []).map((d: any) => [d.osv_id, d]));
+        const projectNameMap = new Map(projects.map((p: any) => [p.id, p.name]));
+
+        const affectedCounts = new Map<string, Set<string>>();
+        for (const v of vulns) {
+          if (!v.osv_id) continue;
+          if (!affectedCounts.has(v.osv_id)) affectedCounts.set(v.osv_id, new Set());
+          affectedCounts.get(v.osv_id)!.add(v.project_id);
+        }
+
+        topVulns = topRaw.map((r: any) => {
+          const detail = detailMap.get(r.osv_id);
+          return {
+            osv_id: r.osv_id,
+            summary: detail?.summary ?? '',
+            severity: detail?.severity ?? r.severity,
+            depscore: r.depscore ?? 0,
+            affected_project_count: affectedCounts.get(r.osv_id)?.size ?? 1,
+            worst_project: { id: r.project_id, name: projectNameMap.get(r.project_id) ?? 'Unknown' },
+          };
+        });
+      }
+    }
+
+    // Code findings
+    let semgrepTotal = 0;
+    let secretTotal = 0;
+    if (projectIds.length > 0) {
+      const [sr, scr] = await Promise.all([
+        supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).in('project_id', projectIds),
+        supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).in('project_id', projectIds),
+      ]);
+      semgrepTotal = sr.count ?? 0;
+      secretTotal = scr.count ?? 0;
+    }
+
+    // Status distribution and compliance
+    const statuses = statusesResult.data ?? [];
+    const statusDist = statuses.map((s: any) => ({
+      status_id: s.id, name: s.name, color: s.color, is_passing: s.is_passing,
+      count: projects.filter((p: any) => p.status_id === s.id).length,
+    }));
+    const passingProjects = projects.filter((p: any) => {
+      const st = statuses.find((s: any) => s.id === p.status_id);
+      return st?.is_passing === true;
+    }).length;
+    const compliancePercent = projects.length > 0 ? Math.round((passingProjects / projects.length) * 100) : 100;
+
+    // Dependencies total
+    let depsTotalCount = 0;
+    if (projectIds.length > 0) {
+      const { count } = await supabase.from('project_dependencies').select('id', { count: 'exact', head: true }).in('project_id', projectIds);
+      depsTotalCount = count ?? 0;
+    }
+
+    // Phase 15: SLA aggregates (team's projects)
+    let slaAgg = { compliance_percent: 100, on_track: 0, warning: 0, breached: 0, exempt: 0, met: 0, resolved_late: 0 };
+    if (projectIds.length > 0) {
+      const { data: pdvSla } = await supabase
+        .from('project_dependency_vulnerabilities')
+        .select('sla_status')
+        .in('project_id', projectIds);
+      const list = pdvSla ?? [];
+      const met = list.filter((p: any) => p.sla_status === 'met').length;
+      const resolvedLate = list.filter((p: any) => p.sla_status === 'resolved_late').length;
+      const totalResolved = met + resolvedLate;
+      slaAgg = {
+        compliance_percent: totalResolved > 0 ? Math.round((met / totalResolved) * 100) : 100,
+        on_track: list.filter((p: any) => p.sla_status === 'on_track').length,
+        warning: list.filter((p: any) => p.sla_status === 'warning').length,
+        breached: list.filter((p: any) => p.sla_status === 'breached').length,
+        exempt: list.filter((p: any) => p.sla_status === 'exempt').length,
+        met,
+        resolved_late: resolvedLate,
+      };
+    }
+
+    const result = {
+      projects: { total: projects.length, healthy, at_risk: atRisk, critical, syncing_count: syncingCount },
+      vulnerabilities: vulnTotals,
+      code_findings: { semgrep_total: semgrepTotal, secret_total: secretTotal },
+      compliance: { percent: compliancePercent, status_distribution: statusDist },
+      top_vulnerabilities: topVulns,
+      dependencies_total: depsTotalCount,
+      members_count: membersResult.count ?? 0,
+      sla: slaAgg,
+    };
+
+    await setCached(cacheKey, result, 60);
+    res.json(result);
+  } catch (error: any) {
+    console.error('Error fetching team stats:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch team stats' });
   }
 });
 

@@ -10,18 +10,25 @@ import {
   createCheckRun,
   updateCheckRun,
   createIssueComment,
+  listIssueComments,
+  updateIssueComment,
   type CheckRunOutput,
 } from '../lib/github';
-import { queueASTParsingJob } from '../lib/redis';
+import { queueExtractionJob, queueASTParsingJob } from '../lib/redis';
 import { invalidateProjectCaches } from '../lib/cache';
-import { extractDependencies } from './workers';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
 import { getVulnCountsForPackageVersion, exceedsThreshold, type VulnCounts } from '../../../backend/src/lib/vuln-counts';
+import { detectAffectedWorkspaces, isFileInWorkspace, type EcosystemId } from '../lib/manifest-registry';
+import { checkRateLimit } from '../lib/rate-limit';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import { emitEvent } from '../lib/event-bus';
 
-const PR_GUARDRAILS_CHECK_NAME = 'Deptex PR guardrails';
+const DEPTEX_COMMENT_MARKER = '<!-- deptex-pr-check -->';
+const MAX_COMMENT_LENGTH = 60000;
+const MAX_CHECK_RUN_TEXT = 65000;
+const MAX_EXTRACTION_PER_PUSH = 10;
 
 /** Base URL of this backend (no trailing slash). Used for OAuth redirect/callback URLs. */
 function getBackendUrl(): string {
@@ -478,6 +485,7 @@ router.get('/discord/org-callback', async (req, res) => {
         console.error('Discord org integration DB error:', dbError);
         return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=discord&message=Failed to save integration`);
       }
+      try { await emitEvent({ type: 'integration_connected', organizationId: orgId, payload: { provider: 'discord', displayName }, source: 'system', priority: 'normal' }); } catch (e) {}
       res.redirect(redirectOnSuccess);
     }
   } catch (err: any) {
@@ -1339,6 +1347,10 @@ router.get('/github/callback', async (req, res) => {
 
     console.log('GitHub App installation successful:', { orgId, installation_id });
 
+    try {
+      await emitEvent({ type: 'integration_connected', organizationId: orgId, payload: { provider: 'github', displayName: githubAccountLogin || `GitHub #${installation_id}` }, source: 'system', priority: 'normal' });
+    } catch (e) {}
+
     const redirectUrl = `${frontendUrl}/organizations/${orgId}/settings/integrations?connected=github`;
     res.redirect(redirectUrl);
   } catch (error: any) {
@@ -1403,6 +1415,8 @@ router.delete('/organizations/:orgId/integrations/github', authenticateUser, asy
       console.error('Failed to update integration status:', integrationError);
     }
     
+    try { await emitEvent({ type: 'integration_disconnected', organizationId: orgId, payload: { provider: 'github' }, source: 'system', priority: 'normal' }); } catch (e) {}
+
     // Return installation_id so frontend can open GitHub's uninstall page
     res.json({ success: true, installationId });
   } catch (error: any) {
@@ -1412,19 +1426,22 @@ router.delete('/organizations/:orgId/integrations/github', authenticateUser, asy
 });
 
 // ============================================================
-// Push event: re-extract dependencies and conditionally queue AST
+// Push event: intelligent extraction based on manifest changes + sync_frequency
+// Phase 8B: Complete rewrite with change detection, commit tracking, concurrency caps
 // ============================================================
 type PushProjectRow = {
   project_id: string;
   default_branch: string;
   package_json_path: string | null;
   installation_id: string;
+  sync_frequency: string;
+  status: string;
   projects: { organization_id: string }[] | { organization_id: string } | null;
 };
 
 async function handlePushEvent(payload: any): Promise<void> {
   const repoFullName = payload.repository?.full_name;
-  const ref = payload.ref; // e.g. refs/heads/main
+  const ref = payload.ref;
   const installationId = payload.installation?.id;
   const before = payload.before;
   const after = payload.after;
@@ -1433,163 +1450,454 @@ async function handlePushEvent(payload: any): Promise<void> {
     console.log('[webhook push] Missing repository.full_name, ref, or installation.id; skipping.');
     return;
   }
-  // Branch deleted (e.g. after is all zeros)
-  if (!after || /^0+$/.test(String(after))) {
-    return;
-  }
+  if (!after || /^0+$/.test(String(after))) return;
 
   const { data: rows, error: fetchError } = await supabase
     .from('project_repositories')
-    .select('project_id, default_branch, package_json_path, installation_id, projects(organization_id)')
-    .eq('repo_full_name', repoFullName);
+    .select('project_id, default_branch, package_json_path, installation_id, sync_frequency, status, projects(organization_id)')
+    .eq('repo_full_name', repoFullName)
+    .eq('installation_id', String(installationId));
 
   if (fetchError) {
     console.error('[webhook push] Failed to fetch project_repositories:', fetchError);
     return;
   }
+
   const expectedRef = (branch: string) => `refs/heads/${branch}`;
   const rowList = (rows ?? []) as PushProjectRow[];
-  const projects = rowList.filter(
-    (r) => r.default_branch && ref === expectedRef(r.default_branch)
-  );
-  if (projects.length === 0) {
-    return;
+
+  // 8B.6: Stale default_branch guard
+  const payloadDefaultBranch = payload.repository?.default_branch;
+  if (payloadDefaultBranch) {
+    for (const r of rowList) {
+      if (r.default_branch && r.default_branch !== payloadDefaultBranch) {
+        await supabase.from('project_repositories')
+          .update({ default_branch: payloadDefaultBranch, updated_at: new Date().toISOString() })
+          .eq('project_id', r.project_id);
+        r.default_branch = payloadDefaultBranch;
+      }
+    }
   }
 
-  const repoRecord = {
-    repo_full_name: repoFullName,
-    default_branch: projects[0].default_branch,
-    installation_id: projects[0].installation_id,
-    package_json_path: (projects[0].package_json_path ?? '').trim(),
-  };
+  const activeStatuses = ['pending', 'initializing', 'ready', 'error', 'cancelled'];
+  const projects = rowList.filter(
+    (r) => r.default_branch && ref === expectedRef(r.default_branch) && activeStatuses.includes(r.status)
+  );
+  if (projects.length === 0) return;
+
+  let changedFiles: string[] = [];
+  let forceFullExtraction = false;
+  try {
+    const token = await createInstallationToken(String(installationId));
+    changedFiles = await getCompareChangedFiles(token, repoFullName, before, after);
+  } catch (err: any) {
+    if (err?.message?.includes('422') || err?.message?.includes('404')) {
+      console.warn('[webhook push] Force push detected, falling back to full extraction');
+      forceFullExtraction = true;
+    } else {
+      console.error('[webhook push] Compare API failed:', err?.message);
+    }
+  }
+
+  const affectedWorkspaces = detectAffectedWorkspaces(changedFiles);
+  const rootManifestChanged = affectedWorkspaces.has('');
+
+  let extractionCount = 0;
 
   for (const row of projects) {
     const proj = row.projects;
     const organizationId = Array.isArray(proj) ? proj[0]?.organization_id : proj?.organization_id;
     if (!organizationId) continue;
-    try {
-      const result = await extractDependencies(row.project_id, organizationId, {
-        installation_id: Number(row.installation_id),
-        repo_full_name: repoRecord.repo_full_name,
-        default_branch: row.default_branch,
-        package_json_path: (row.package_json_path ?? '').trim(),
+
+    const workspace = (row.package_json_path ?? '').trim();
+    const workspaceChanged = affectedWorkspaces.has(workspace);
+    const isAffected = forceFullExtraction || workspaceChanged || (rootManifestChanged && workspace !== '');
+
+    let extractionTriggered = false;
+
+    if (isAffected && row.sync_frequency === 'on_commit') {
+      if (extractionCount < MAX_EXTRACTION_PER_PUSH) {
+        try {
+          const result = await queueExtractionJob(row.project_id, organizationId, row as any);
+          if (result.success) {
+            extractionCount++;
+            extractionTriggered = true;
+            console.log('[webhook push] Queued extraction for project', row.project_id);
+          }
+        } catch (err: any) {
+          console.error('[webhook push] Extraction queue failed for project', row.project_id, err?.message);
+        }
+      } else {
+        console.warn(`[webhook push] Per-org cap reached (${MAX_EXTRACTION_PER_PUSH}), skipping extraction for project`, row.project_id);
+      }
+    }
+
+    if (!extractionTriggered) {
+      const anyFileInWorkspace = changedFiles.some((f) => isFileInWorkspace(f, workspace));
+      if (anyFileInWorkspace) {
+        await queueASTParsingJob(row.project_id, {
+          repo_full_name: repoFullName,
+          installation_id: String(installationId),
+          default_branch: row.default_branch,
+          package_json_path: workspace,
+        }).catch((err: any) => {
+          console.warn('[webhook push] AST job not queued for project', row.project_id, err?.message);
+        });
+      }
+    }
+
+    // 8C: Record commits
+    const commits = payload.commits ?? [];
+    for (const c of commits) {
+      const commitSha = c.id || c.sha;
+      if (!commitSha) continue;
+      const manifestChanged = (c.added ?? []).concat(c.modified ?? [], c.removed ?? []).some(
+        (f: string) => {
+          const match = detectAffectedWorkspaces([f]);
+          return match.size > 0;
+        }
+      );
+      await supabase.from('project_commits').upsert({
+        project_id: row.project_id,
+        sha: commitSha,
+        message: (c.message || '').slice(0, 10000),
+        author_name: c.author?.name,
+        author_email: c.author?.email,
+        author_avatar_url: c.author?.avatar_url,
+        committed_at: c.timestamp,
+        manifest_changed: manifestChanged,
+        extraction_triggered: extractionTriggered,
+        extraction_status: extractionTriggered ? 'queued' : 'skipped',
+        files_changed: (c.added?.length ?? 0) + (c.modified?.length ?? 0) + (c.removed?.length ?? 0),
+        provider: 'github',
+        provider_url: c.url,
+      }, { onConflict: 'project_id,sha' }).catch((err: any) => {
+        console.warn('[webhook push] Commit record failed:', err?.message);
       });
-      await invalidateProjectCaches(organizationId, row.project_id).catch(() => {});
-      console.log('[webhook push] Extracted dependencies for project', row.project_id, result);
-    } catch (err: any) {
-      console.error('[webhook push] Extract failed for project', row.project_id, err?.message || err);
     }
-  }
 
-  let changedFiles: string[] = [];
-  try {
-    const token = await createInstallationToken(String(installationId));
-    changedFiles = await getCompareChangedFiles(token, repoFullName, before, after);
-  } catch (err: any) {
-    console.error('[webhook push] Compare API failed; skipping AST eligibility:', err?.message || err);
-  }
+    // Update webhook health
+    await supabase.from('project_repositories').update({
+      last_webhook_at: new Date().toISOString(),
+      last_webhook_event: 'push',
+      webhook_status: 'active',
+    }).eq('project_id', row.project_id);
 
-  function isFileInWorkspace(filePath: string, packageJsonPath: string): boolean {
-    const workspace = (packageJsonPath ?? '').trim();
-    if (workspace === '') return true; // root: any file counts
-    return filePath === workspace || filePath.startsWith(workspace + '/');
-  }
-
-  for (const row of projects) {
-    const workspacePath = (row.package_json_path ?? '').trim();
-    const shouldRunAst = changedFiles.some((f) => isFileInWorkspace(f, workspacePath));
-    if (!shouldRunAst) continue;
-    const ok = await queueASTParsingJob(row.project_id, {
-      repo_full_name: repoFullName,
-      installation_id: row.installation_id,
-      default_branch: row.default_branch,
-      package_json_path: (row.package_json_path ?? '').trim(),
-    });
-    if (!ok.success) {
-      console.warn('[webhook push] AST job not queued for project', row.project_id, ok.error);
-    }
+    await invalidateProjectCaches(organizationId, row.project_id).catch(() => {});
   }
 }
 
-/**
- * Verify GitHub webhook signature (HMAC-SHA256).
- * Uses req.rawBody which must be set by express.json verify callback.
- */
 function verifyGitHubWebhookSignature(req: express.Request): boolean {
   const secret = process.env.GITHUB_WEBHOOK_SECRET;
   if (!secret) {
-    console.warn('GITHUB_WEBHOOK_SECRET not set; skipping webhook signature verification.');
+    if (process.env.NODE_ENV === 'production') {
+      console.error('CRITICAL: GITHUB_WEBHOOK_SECRET not set in production. Rejecting webhook.');
+      return false;
+    }
+    console.warn('GITHUB_WEBHOOK_SECRET not set; skipping verification (dev mode only).');
     return true;
   }
   const signature = req.headers['x-hub-signature-256'] as string | undefined;
-  if (!signature || !signature.startsWith('sha256=')) {
-    return false;
-  }
+  if (!signature || !signature.startsWith('sha256=')) return false;
   const rawBody = (req as any).rawBody;
-  if (typeof rawBody !== 'string') {
+  if (typeof rawBody !== 'string') return false;
+  const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+  try {
+    return crypto.timingSafeEqual(Buffer.from(signature, 'utf8'), Buffer.from(expected, 'utf8'));
+  } catch {
     return false;
   }
-  const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-  return crypto.timingSafeEqual(Buffer.from(signature, 'utf8'), Buffer.from(expected, 'utf8'));
 }
 
-// GitHub webhook handler (exported for direct mounting)
+async function deduplicateWebhookDelivery(deliveryId: string | undefined): Promise<boolean> {
+  if (!deliveryId) return false;
+  try {
+    const { Redis } = await import('@upstash/redis');
+    const redis = new Redis({
+      url: process.env.UPSTASH_REDIS_URL!,
+      token: process.env.UPSTASH_REDIS_TOKEN!,
+    });
+    const key = `webhook-delivery:${deliveryId}`;
+    const existing = await redis.get(key);
+    if (existing) return true;
+    await redis.set(key, '1', { ex: 3600 });
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+async function recordWebhookDelivery(
+  deliveryId: string | undefined,
+  eventType: string,
+  action: string | undefined,
+  repoFullName: string | null,
+  installationId: string | undefined,
+  payloadSize: number,
+  status: string = 'received'
+) {
+  try {
+    await supabase.from('webhook_deliveries').insert({
+      delivery_id: deliveryId || 'unknown',
+      provider: 'github',
+      event_type: eventType,
+      action,
+      repo_full_name: repoFullName,
+      installation_id: installationId,
+      processing_status: status,
+      payload_size_bytes: payloadSize,
+    });
+  } catch {}
+}
+
+async function updateWebhookDeliveryStatus(
+  deliveryId: string | undefined,
+  status: string,
+  durationMs?: number,
+  errorMessage?: string
+) {
+  if (!deliveryId) return;
+  try {
+    const update: Record<string, unknown> = { processing_status: status };
+    if (durationMs !== undefined) update.processing_duration_ms = durationMs;
+    if (errorMessage) update.error_message = errorMessage.slice(0, 500);
+    await supabase.from('webhook_deliveries')
+      .update(update)
+      .eq('delivery_id', deliveryId)
+      .eq('provider', 'github');
+  } catch {}
+}
+
 export async function githubWebhookHandler(req: express.Request, res: express.Response) {
   try {
+    // 8Q.2: Rate limiting
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const rl = await checkRateLimit(`webhook:github:${ip}`, 100, 60);
+    if (!rl.allowed) {
+      return res.status(429).json({ error: 'Rate limit exceeded' });
+    }
+
     if (!verifyGitHubWebhookSignature(req)) {
       res.status(401).json({ error: 'Invalid webhook signature' });
       return;
     }
 
-    const event = req.headers['x-github-event'];
+    const event = req.headers['x-github-event'] as string;
+    const deliveryId = req.headers['x-github-delivery'] as string | undefined;
     const payload = req.body;
-    
+    const payloadSize = Buffer.byteLength(JSON.stringify(payload));
+
     console.log('GitHub webhook received:', event, payload?.action || '');
-    
-    // Handle different event types
-    switch (event) {
-      case 'installation':
-        await handleInstallationEvent(payload);
-        break;
-      case 'installation_repositories':
-        // Handle repository selection changes
-        console.log('GitHub App repository selection changed:', {
-          action: payload.action,
-          installation_id: payload.installation?.id,
-          repositories_added: payload.repositories_added?.map((r: any) => r.full_name),
-          repositories_removed: payload.repositories_removed?.map((r: any) => r.full_name),
-        });
-        break;
-      case 'push':
-        console.log('GitHub push event received:', {
-          repository: payload.repository?.full_name,
-          ref: payload.ref,
-          pusher: payload.pusher?.name,
-        });
-        await handlePushEvent(payload);
-        break;
-      case 'pull_request':
-        if (['opened', 'synchronize', 'reopened'].includes(payload?.action)) {
-          handlePullRequestEvent(payload).catch((err) =>
-            console.error('[PR guardrails]', err?.message || err)
-          );
-        }
-        break;
-      case 'repository':
-        // Handle repository creation/deletion
-        console.log('GitHub repository event:', payload.action, payload.repository?.full_name);
-        break;
-      default:
-        console.log('Unhandled GitHub event:', event);
+
+    const startMs = Date.now();
+    await recordWebhookDelivery(
+      deliveryId, event, payload?.action,
+      payload?.repository?.full_name,
+      payload?.installation?.id?.toString(),
+      payloadSize
+    );
+
+    // 8F.7: Deduplication
+    if (await deduplicateWebhookDelivery(deliveryId)) {
+      await updateWebhookDeliveryStatus(deliveryId, 'skipped');
+      return res.json({ received: true, skipped: 'duplicate' });
     }
-    
-    // Always respond with 200 to acknowledge receipt
+
     res.json({ received: true });
+
+    try {
+      switch (event) {
+        case 'installation':
+          await handleInstallationEvent(payload);
+          break;
+
+        case 'installation_repositories':
+          if (payload?.action === 'removed') {
+            await handleInstallationReposRemovedEvent(payload);
+          }
+          break;
+
+        case 'push':
+          await handlePushEvent(payload);
+          break;
+
+        case 'pull_request':
+          if (['opened', 'synchronize', 'reopened'].includes(payload?.action)) {
+            await handlePullRequestEvent(payload);
+          }
+          if (payload?.action === 'closed') {
+            await handlePullRequestClosedEvent(payload);
+          }
+          break;
+
+        case 'repository':
+          switch (payload?.action) {
+            case 'deleted':
+              await handleRepositoryDeletedEvent(payload);
+              break;
+            case 'renamed':
+              await handleRepositoryRenamedEvent(payload);
+              break;
+            case 'transferred':
+              await handleRepositoryTransferredEvent(payload);
+              break;
+            case 'edited':
+              await handleRepositoryEditedEvent(payload);
+              break;
+            default:
+              console.log('Repository event:', payload?.action, payload?.repository?.full_name);
+          }
+          break;
+
+        default:
+          console.log('Unhandled GitHub event:', event);
+      }
+
+      await updateWebhookDeliveryStatus(deliveryId, 'processed', Date.now() - startMs);
+    } catch (err: any) {
+      console.error('GitHub webhook processing error:', err?.message);
+      await updateWebhookDeliveryStatus(deliveryId, 'error', Date.now() - startMs, err?.message);
+    }
   } catch (error: any) {
     console.error('GitHub webhook error:', error);
-    // Still return 200 to prevent GitHub from retrying
     res.status(200).json({ received: true, error: error.message });
   }
+}
+
+// 8P: Repository Lifecycle Event Handlers
+async function handleRepositoryDeletedEvent(payload: any) {
+  const repoFullName = payload.repository?.full_name;
+  if (!repoFullName) return;
+
+  await supabase
+    .from('project_repositories')
+    .update({ status: 'repo_deleted', updated_at: new Date().toISOString() })
+    .eq('repo_full_name', repoFullName);
+
+  const { data: repos } = await supabase
+    .from('project_repositories')
+    .select('project_id')
+    .eq('repo_full_name', repoFullName);
+
+  for (const repo of repos || []) {
+    await supabase
+      .from('extraction_jobs')
+      .update({ status: 'cancelled' })
+      .eq('project_id', repo.project_id)
+      .in('status', ['queued', 'processing']);
+  }
+
+  console.log(`[webhook] Repository deleted: ${repoFullName}. Marked ${repos?.length || 0} repos as repo_deleted.`);
+}
+
+async function handleRepositoryRenamedEvent(payload: any) {
+  const oldName = payload.changes?.repository?.name?.from;
+  const newFullName = payload.repository?.full_name;
+  const owner = payload.repository?.owner?.login;
+  if (!oldName || !newFullName || !owner) return;
+
+  const oldFullName = `${owner}/${oldName}`;
+  const { data } = await supabase
+    .from('project_repositories')
+    .update({ repo_full_name: newFullName, updated_at: new Date().toISOString() })
+    .eq('repo_full_name', oldFullName)
+    .select('id');
+
+  console.log(`[webhook] Repository renamed: ${oldFullName} -> ${newFullName}. Updated ${data?.length || 0} repos.`);
+}
+
+async function handleRepositoryTransferredEvent(payload: any) {
+  const newFullName = payload.repository?.full_name;
+  const changes = payload.changes;
+  if (!newFullName || !changes) return;
+
+  const oldOwner = changes.owner?.from?.user?.login || changes.owner?.from?.organization?.login;
+  const oldName = payload.repository?.name;
+  if (oldOwner && oldName) {
+    const oldFullName = `${oldOwner}/${oldName}`;
+    await supabase
+      .from('project_repositories')
+      .update({ repo_full_name: newFullName, updated_at: new Date().toISOString() })
+      .eq('repo_full_name', oldFullName);
+    console.log(`[webhook] Repository transferred: ${oldFullName} -> ${newFullName}`);
+  }
+}
+
+async function handleRepositoryEditedEvent(payload: any) {
+  const repoFullName = payload.repository?.full_name;
+  const defaultBranchChange = payload.changes?.default_branch;
+  if (!repoFullName || !defaultBranchChange) return;
+
+  const newDefaultBranch = payload.repository?.default_branch;
+  const { data } = await supabase
+    .from('project_repositories')
+    .update({ default_branch: newDefaultBranch, updated_at: new Date().toISOString() })
+    .eq('repo_full_name', repoFullName)
+    .select('id');
+
+  console.log(`[webhook] Default branch changed for ${repoFullName}: ${defaultBranchChange.from} -> ${newDefaultBranch}. Updated ${data?.length || 0} repos.`);
+}
+
+async function handleInstallationReposRemovedEvent(payload: any) {
+  const removedRepos = payload.repositories_removed || [];
+  for (const repo of removedRepos) {
+    await supabase
+      .from('project_repositories')
+      .update({ status: 'access_revoked', updated_at: new Date().toISOString() })
+      .eq('repo_full_name', repo.full_name);
+  }
+  if (removedRepos.length > 0) {
+    console.log(`[webhook] Installation repos removed: ${removedRepos.map((r: any) => r.full_name).join(', ')}`);
+  }
+}
+
+// 8G.3: Handle PR closed/merged event
+async function handlePullRequestClosedEvent(payload: any) {
+  const repoFullName = payload?.repository?.full_name;
+  const pr = payload?.pull_request;
+  if (!repoFullName || !pr) return;
+
+  const prNumber = pr.number;
+  const isMerged = pr.merged === true;
+
+  const { data: projectRows } = await supabase
+    .from('project_repositories')
+    .select('project_id')
+    .eq('repo_full_name', repoFullName);
+
+  for (const row of projectRows ?? []) {
+    await supabase
+      .from('project_pull_requests')
+      .update({
+        status: isMerged ? 'merged' : 'closed',
+        ...(isMerged ? { merged_at: pr.merged_at || new Date().toISOString() } : { closed_at: pr.closed_at || new Date().toISOString() }),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('project_id', (row as any).project_id)
+      .eq('pr_number', prNumber)
+      .eq('provider', 'github');
+
+    // Phase 7: Update AI fix job status when fix PR is merged/closed
+    const fixStatus = isMerged ? 'merged' : 'pr_closed';
+    await supabase
+      .from('project_security_fixes')
+      .update({ status: fixStatus, completed_at: new Date().toISOString() })
+      .eq('project_id', (row as any).project_id)
+      .eq('pr_number', prNumber)
+      .eq('pr_provider', 'github')
+      .in('status', ['completed']);
+
+    // Phase 16: Update fix outcome on merge/close
+    try {
+      const { updateOutcomeOnMerge } = await import('../lib/learning/outcome-recorder');
+      await updateOutcomeOnMerge(
+        (row as any).project_id, prNumber, 'github',
+        isMerged, isMerged ? (pr.merged_at || new Date().toISOString()) : undefined,
+      );
+    } catch { /* non-fatal */ }
+  }
+
+  console.log(`[webhook] PR #${prNumber} ${isMerged ? 'merged' : 'closed'} on ${repoFullName}`);
 }
 
 // Also mount on router for backwards compatibility
@@ -1668,17 +1976,21 @@ async function handlePullRequestEvent(payload: any): Promise<void> {
   const headSha = pr?.head?.sha;
   const prNumber = pr?.number;
   const installationId = payload?.installation?.id?.toString();
+  const isFork = pr?.head?.repo?.fork === true || (pr?.head?.repo?.full_name !== pr?.base?.repo?.full_name);
 
   if (!repoFullName || !baseSha || !headSha || !prNumber || !installationId) {
-    console.log('[PR guardrails] Missing repo, refs, pr number, or installation; skipping.');
+    console.log('[PR check] Missing repo, refs, pr number, or installation; skipping.');
     return;
   }
+
+  // 8E.5: Only PRs targeting default branch
+  const targetBranch = pr?.base?.ref;
 
   let token: string;
   try {
     token = await createInstallationToken(installationId);
   } catch (err: any) {
-    console.error('[PR guardrails] Failed to get installation token:', err?.message);
+    console.error('[PR check] Failed to get installation token:', err?.message);
     return;
   }
 
@@ -1686,259 +1998,426 @@ async function handlePullRequestEvent(payload: any): Promise<void> {
   try {
     changedFiles = await getCompareChangedFiles(token, repoFullName, baseSha, headSha);
   } catch (err: any) {
-    console.error('[PR guardrails] getCompareChangedFiles failed:', err?.message);
-    return;
-  }
-
-  const affectedWorkspaces = new Set<string>();
-  for (const filePath of changedFiles) {
-    if (filePath === 'package.json' || filePath === 'package-lock.json') {
-      affectedWorkspaces.add('');
-      continue;
+    if (err?.message?.includes('422')) {
+      console.warn('[PR check] Force push on PR, using base-branch-only analysis');
+    } else {
+      console.error('[PR check] getCompareChangedFiles failed:', err?.message);
+      return;
     }
-    const match = filePath.match(/^(.+)\/(?:package\.json|package-lock\.json)$/);
-    if (match) affectedWorkspaces.add(match[1]);
-  }
-  if (affectedWorkspaces.size === 0) {
-    console.log('[PR guardrails] No package.json or package-lock.json changed; skipping.');
-    return;
   }
 
-  const packageJsonPaths = [...affectedWorkspaces];
+  // 8D.1: Multi-ecosystem workspace detection
+  const affectedWorkspaceMap = detectAffectedWorkspaces(changedFiles);
 
   const { data: projectRows, error: fetchError } = await supabase
     .from('project_repositories')
-    .select('project_id, package_json_path, installation_id, projects(name, organization_id)')
-    .eq('repo_full_name', repoFullName)
-    .in('package_json_path', packageJsonPaths);
+    .select('project_id, package_json_path, installation_id, default_branch, pull_request_comments_enabled, projects(name, organization_id)')
+    .eq('repo_full_name', repoFullName);
 
   if (fetchError || !projectRows?.length) {
-    console.log('[PR guardrails] No linked projects for this repo and affected paths.');
+    console.log('[PR check] No linked projects for this repo.');
     return;
   }
 
-  type WorkspaceResult = {
+  // 8E.5: Filter to projects where PR targets their default branch
+  const matchedRows = (projectRows as any[]).filter(r => r.default_branch === targetBranch);
+  if (matchedRows.length === 0) return;
+
+  type ProjectResult = {
+    projectId: string;
     projectName: string;
-    packageJsonPath: string;
-    commentBody: string;
+    workspace: string;
+    section: string;
     blocked: boolean;
+    depsAdded: number;
+    depsUpdated: number;
+    depsRemoved: number;
+    transitiveChanges: number;
+    blockedBy: Record<string, number>;
+    commentsEnabled: boolean;
   };
 
-  const results: WorkspaceResult[] = [];
-  let anyBlocked = false;
+  const results: ProjectResult[] = [];
 
-  for (const row of projectRows as any[]) {
+  for (const row of matchedRows) {
     const projectId = row.project_id;
-    const packageJsonPath = (row.package_json_path ?? '').trim();
-    const organizationId = row.projects?.organization_id;
-    const projectName = row.projects?.name || 'Project';
+    const workspace = (row.package_json_path ?? '').trim();
+    const organizationId = Array.isArray(row.projects) ? row.projects[0]?.organization_id : row.projects?.organization_id;
+    const projectName = (Array.isArray(row.projects) ? row.projects[0]?.name : row.projects?.name) || 'Project';
+    const commentsEnabled = row.pull_request_comments_enabled !== false;
 
     if (!organizationId) continue;
 
-    const { data: guardrailsRow } = await supabase
-      .from('project_pr_guardrails')
-      .select('*')
-      .eq('project_id', projectId)
-      .single();
-    const guardrails = guardrailsRow as {
-      block_critical_vulns?: boolean;
-      block_high_vulns?: boolean;
-      block_medium_vulns?: boolean;
-      block_low_vulns?: boolean;
-      block_policy_violations?: boolean;
-      block_transitive_vulns?: boolean;
-    } | null;
+    const workspaceAffected = affectedWorkspaceMap.has(workspace) || affectedWorkspaceMap.has('');
+    const checkName = `Deptex - ${projectName}`;
 
-    const hasVulnBlocking =
-      guardrails?.block_critical_vulns ||
-      guardrails?.block_high_vulns ||
-      guardrails?.block_medium_vulns ||
-      guardrails?.block_low_vulns;
-    if (!guardrails || (!hasVulnBlocking && !guardrails.block_policy_violations && !guardrails.block_transitive_vulns)) {
-      continue;
+    // 8E.2: Create check run as in_progress immediately
+    let checkRunId: number | undefined;
+    try {
+      const cr = await createCheckRun(token, repoFullName, headSha, checkName, {
+        status: 'in_progress',
+      });
+      checkRunId = cr.id;
+    } catch (err: any) {
+      console.error(`[PR check] Failed to create check run for ${projectName}:`, err?.message);
     }
-
-    const { acceptedLicenses } = await getEffectivePolicies(organizationId, projectId);
-
-    const pkgPath = packageJsonPath ? `${packageJsonPath}/package.json` : 'package.json';
-    const lockPath = packageJsonPath ? `${packageJsonPath}/package-lock.json` : 'package-lock.json';
-
-    let basePkg: Record<string, string> = {};
-    let headPkg: Record<string, string> = {};
-    let baseLock: any = null;
-    let headLock: any = null;
 
     try {
-      const basePkgContent = await getRepositoryFileContent(token, repoFullName, pkgPath, baseSha);
-      basePkg = getDirectDepsFromPackageJson(JSON.parse(basePkgContent));
-    } catch {
-      // base might not have this workspace
-    }
-    try {
-      const headPkgContent = await getRepositoryFileContent(token, repoFullName, pkgPath, headSha);
-      headPkg = getDirectDepsFromPackageJson(JSON.parse(headPkgContent));
-    } catch {
-      // skip this workspace
-      continue;
-    }
-    try {
-      const baseLockContent = await getRepositoryFileContent(token, repoFullName, lockPath, baseSha);
-      baseLock = JSON.parse(baseLockContent);
-    } catch {
-      // no base lock
-    }
-    try {
-      const headLockContent = await getRepositoryFileContent(token, repoFullName, lockPath, headSha);
-      headLock = JSON.parse(headLockContent);
-    } catch {
-      // no head lock
-    }
+      if (!workspaceAffected) {
+        // No dependency changes for this project
+        if (checkRunId) {
+          await updateCheckRun(token, repoFullName, checkRunId, {
+            status: 'completed',
+            conclusion: 'success',
+            output: { title: 'Passed — no dependency changes', summary: 'No manifest or lockfile changes detected for this project.' },
+          });
+        }
+        results.push({
+          projectId, projectName, workspace, section: `### ${projectName}\n\nNo dependency changes detected.\n`,
+          blocked: false, depsAdded: 0, depsUpdated: 0, depsRemoved: 0, transitiveChanges: 0,
+          blockedBy: {}, commentsEnabled,
+        });
 
-    const directAdded: Array<{ name: string; version: string }> = [];
-    const directBumped: Array<{ name: string; oldVersion: string; newVersion: string }> = [];
+        await supabase.from('project_pull_requests').upsert({
+          project_id: projectId, pr_number: prNumber, title: pr?.title, author_login: pr?.user?.login,
+          author_avatar_url: pr?.user?.avatar_url, status: 'open', check_result: 'passed',
+          check_summary: 'No dependency changes', provider: 'github', provider_url: pr?.html_url,
+          base_branch: targetBranch, head_branch: pr?.head?.ref, head_sha: headSha,
+          opened_at: pr?.created_at, last_checked_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+        }, { onConflict: 'project_id,pr_number,provider' }).catch(() => {});
+        continue;
+      }
 
-    for (const [name, _spec] of Object.entries(headPkg)) {
-      const newVersion = headLock ? getResolvedVersion(headLock, name) : null;
-      if (!newVersion) continue;
-      if (!(name in basePkg)) {
-        directAdded.push({ name, version: newVersion });
+      // 8D.2: Check which ecosystems are affected
+      const ecosystems = affectedWorkspaceMap.get(workspace) ?? affectedWorkspaceMap.get('') ?? new Set<EcosystemId>();
+      const hasNpm = ecosystems.has('npm');
+
+      const lines: string[] = [];
+      lines.push(`### ${projectName}`);
+      lines.push('');
+
+      let blocked = false;
+      let depsAdded = 0;
+      let depsUpdated = 0;
+      let depsRemoved = 0;
+      let transitiveChanges = 0;
+      const blockedBy: Record<string, number> = {};
+
+      if (hasNpm) {
+        // Deep npm analysis
+        const pkgPath = workspace ? `${workspace}/package.json` : 'package.json';
+        const lockPath = workspace ? `${workspace}/package-lock.json` : 'package-lock.json';
+
+        let basePkg: Record<string, string> = {};
+        let headPkg: Record<string, string> = {};
+        let baseLock: any = null;
+        let headLock: any = null;
+
+        try {
+          if (isFork) {
+            try {
+              const content = await getRepositoryFileContent(token, repoFullName, pkgPath, headSha);
+              headPkg = getDirectDepsFromPackageJson(JSON.parse(content));
+            } catch {
+              lines.push('*Fork repository — head branch analysis unavailable.*');
+            }
+          } else {
+            const content = await getRepositoryFileContent(token, repoFullName, pkgPath, headSha);
+            headPkg = getDirectDepsFromPackageJson(JSON.parse(content));
+          }
+          try {
+            const content = await getRepositoryFileContent(token, repoFullName, pkgPath, baseSha);
+            basePkg = getDirectDepsFromPackageJson(JSON.parse(content));
+          } catch {}
+          try { baseLock = JSON.parse(await getRepositoryFileContent(token, repoFullName, lockPath, baseSha)); } catch {}
+          try { headLock = JSON.parse(await getRepositoryFileContent(token, repoFullName, lockPath, headSha)); } catch {}
+        } catch {}
+
+        const directAddedPkgs: Array<{ name: string; version: string }> = [];
+        const directBumpedPkgs: Array<{ name: string; oldVersion: string; newVersion: string }> = [];
+
+        for (const [name] of Object.entries(headPkg)) {
+          const newVersion = headLock ? getResolvedVersion(headLock, name) : null;
+          if (!newVersion) continue;
+          if (!(name in basePkg)) {
+            directAddedPkgs.push({ name, version: newVersion });
+          } else {
+            const oldVersion = baseLock ? getResolvedVersion(baseLock, name) : null;
+            if (oldVersion && oldVersion !== newVersion) {
+              directBumpedPkgs.push({ name, oldVersion, newVersion });
+            }
+          }
+        }
+
+        // Removed packages
+        for (const name of Object.keys(basePkg)) {
+          if (!(name in headPkg)) depsRemoved++;
+        }
+
+        const { acceptedLicenses } = await getEffectivePolicies(organizationId, projectId);
+
+        // Load guardrails config (Phase 8H: policy engine or legacy)
+        let prCheckCode: string | null = null;
+        try {
+          const { data: proj } = await supabase.from('projects').select('effective_pr_check_code').eq('id', projectId).single();
+          prCheckCode = proj?.effective_pr_check_code;
+        } catch {}
+        if (!prCheckCode) {
+          try {
+            const { data: orgPrCheck } = await supabase.from('organization_pr_checks').select('pr_check_code').eq('organization_id', organizationId).single();
+            prCheckCode = orgPrCheck?.pr_check_code;
+          } catch {}
+        }
+
+        const { data: guardrailsRow } = await supabase.from('project_pr_guardrails').select('*').eq('project_id', projectId).single();
+        const guardrails = guardrailsRow as any;
+        const hasVulnBlocking = guardrails?.block_critical_vulns || guardrails?.block_high_vulns || guardrails?.block_medium_vulns || guardrails?.block_low_vulns;
+
+        const checkPackage = async (name: string, version: string) => {
+          const vulnCounts = await getVulnCountsForPackageVersion(supabase, name, version);
+          const license = await getLicenseForPackage(name, version);
+          const policyViolation = Boolean(guardrails?.block_policy_violations && acceptedLicenses.length > 0 && isLicenseAllowed(license, acceptedLicenses) === false);
+
+          if (policyViolation) { blocked = true; blockedBy.policy_violations = (blockedBy.policy_violations ?? 0) + 1; }
+          if (hasVulnBlocking) {
+            if (guardrails?.block_critical_vulns && exceedsThreshold(vulnCounts, 'critical')) { blocked = true; blockedBy.critical_vulns = (blockedBy.critical_vulns ?? 0) + vulnCounts.critical_vulns; }
+            if (guardrails?.block_high_vulns && exceedsThreshold(vulnCounts, 'high')) { blocked = true; blockedBy.high_vulns = (blockedBy.high_vulns ?? 0) + vulnCounts.high_vulns; }
+            if (guardrails?.block_medium_vulns && exceedsThreshold(vulnCounts, 'medium')) { blocked = true; blockedBy.medium_vulns = (blockedBy.medium_vulns ?? 0) + vulnCounts.medium_vulns; }
+            if (guardrails?.block_low_vulns && exceedsThreshold(vulnCounts, 'low')) { blocked = true; blockedBy.low_vulns = (blockedBy.low_vulns ?? 0) + vulnCounts.low_vulns; }
+          }
+          return { vulnCounts, license, policyViolation };
+        };
+
+        const fmtVuln = (v: VulnCounts) =>
+          [v.critical_vulns, v.high_vulns, v.medium_vulns, v.low_vulns].some(n => n > 0)
+            ? `${v.critical_vulns} critical, ${v.high_vulns} high, ${v.medium_vulns} medium, ${v.low_vulns} low vulnerabilities`
+            : '0 vulnerabilities';
+
+        // Phase 10B: Watchtower check for upgraded packages
+        const { data: wtProject } = await supabase.from('projects').select('watchtower_enabled').eq('id', projectId).single();
+        if (wtProject?.watchtower_enabled && directBumpedPkgs.length > 0) {
+          for (const { name: pkgName, newVersion } of directBumpedPkgs) {
+            const { data: dep } = await supabase.from('dependencies').select('id').eq('name', pkgName).single();
+            if (!dep) continue;
+
+            const { data: wlEntry } = await supabase
+              .from('organization_watchlist')
+              .select('id, quarantine_until, is_current_version_quarantined')
+              .eq('organization_id', organizationId)
+              .eq('dependency_id', dep.id)
+              .single();
+
+            if (!wlEntry) continue;
+
+            const isQuarantined = wlEntry.quarantine_until && new Date(wlEntry.quarantine_until) > new Date();
+            if (isQuarantined) {
+              const daysLeft = Math.ceil((new Date(wlEntry.quarantine_until).getTime() - Date.now()) / 86400000);
+              blocked = true;
+              blockedBy.watchtower_quarantine = (blockedBy.watchtower_quarantine ?? 0) + 1;
+              lines.push(`- **${pkgName}@${newVersion}** — blocked by Watchtower: quarantined (${daysLeft} day${daysLeft !== 1 ? 's' : ''} remaining)`);
+            }
+
+            const { data: wp } = await supabase.from('watched_packages').select('analysis_data').eq('name', pkgName).single();
+            if (wp) {
+              const ad = wp.analysis_data as any;
+              if (ad?.registryIntegrityStatus === 'fail' || ad?.installScriptsStatus === 'fail' || ad?.entropyAnalysisStatus === 'fail') {
+                blocked = true;
+                blockedBy.watchtower_check_failed = (blockedBy.watchtower_check_failed ?? 0) + 1;
+                const failedChecks = [
+                  ad?.registryIntegrityStatus === 'fail' ? 'registry integrity' : null,
+                  ad?.installScriptsStatus === 'fail' ? 'install scripts' : null,
+                  ad?.entropyAnalysisStatus === 'fail' ? 'entropy analysis' : null,
+                ].filter(Boolean).join(', ');
+                lines.push(`- **${pkgName}@${newVersion}** — blocked by Watchtower: ${failedChecks} check(s) failed`);
+              }
+            }
+          }
+        }
+
+        if (directBumpedPkgs.length > 0) {
+          depsUpdated = directBumpedPkgs.length;
+          lines.push('**Packages updated:**');
+          for (const { name, oldVersion, newVersion } of directBumpedPkgs.slice(0, 30)) {
+            const { vulnCounts } = await checkPackage(name, newVersion);
+            lines.push(`- **${name}** \`${oldVersion}\` -> \`${newVersion}\` — ${fmtVuln(vulnCounts)}`);
+          }
+          if (directBumpedPkgs.length > 30) lines.push(`- ...and ${directBumpedPkgs.length - 30} more`);
+          lines.push('');
+        }
+
+        if (directAddedPkgs.length > 0) {
+          depsAdded = directAddedPkgs.length;
+          lines.push('**Packages added:**');
+          for (const { name, version } of directAddedPkgs.slice(0, 30)) {
+            const { vulnCounts, license, policyViolation } = await checkPackage(name, version);
+            const licStr = license ?? 'Unknown';
+            const policyStr = policyViolation ? ' **(does not comply with project policy)**' : '';
+            lines.push(`- **${name}** \`${version}\` — license: ${licStr}; ${fmtVuln(vulnCounts)}${policyStr}`);
+          }
+          if (directAddedPkgs.length > 30) lines.push(`- ...and ${directAddedPkgs.length - 30} more`);
+          lines.push('');
+        }
+
+        // Transitive deps
+        if (headLock && baseLock) {
+          const baseSet = getLockfilePackagesSet(baseLock);
+          const headSet = getLockfilePackagesSet(headLock);
+          const directNames = new Set([...Object.keys(basePkg), ...Object.keys(headPkg)]);
+          const transitive: Array<{ name: string; version: string }> = [];
+          for (const key of headSet) {
+            if (baseSet.has(key)) continue;
+            const idx = key.lastIndexOf('@');
+            const name = idx >= 0 ? key.slice(0, idx) : key;
+            const version = idx >= 0 ? key.slice(idx + 1) : '';
+            if (directNames.has(name) || !version) continue;
+            transitive.push({ name, version });
+          }
+          if (transitive.length > 0) {
+            transitiveChanges = transitive.length;
+            lines.push('**Transitive dependencies (new/updated):**');
+            for (const { name, version } of transitive.slice(0, 20)) {
+              const { vulnCounts, license, policyViolation } = await checkPackage(name, version);
+              const licStr = license ?? 'Unknown';
+              const policyStr = policyViolation ? ' **(does not comply with project policy)**' : '';
+              lines.push(`- **${name}** \`${version}\` — license: ${licStr}; ${fmtVuln(vulnCounts)}${policyStr}`);
+            }
+            if (transitive.length > 20) lines.push(`- ...and ${transitive.length - 20} more`);
+            lines.push('');
+          }
+        }
+
+        if (!headLock && !baseLock) {
+          lines.push('*No lockfile found — transitive dependency analysis unavailable.*');
+          lines.push('');
+        }
       } else {
-        const oldVersion = baseLock ? getResolvedVersion(baseLock, name) : null;
-        if (oldVersion && oldVersion !== newVersion) {
-          directBumped.push({ name, oldVersion, newVersion });
+        // 8D.2: Shallow analysis for non-npm ecosystems
+        const manifestFiles = changedFiles.filter(f => {
+          const match = detectAffectedWorkspaces([f]);
+          return match.size > 0;
+        }).filter(f => {
+          const w = (workspace ? workspace + '/' : '');
+          return f.startsWith(w) || workspace === '';
+        });
+
+        if (manifestFiles.length > 0) {
+          lines.push('**Manifest files changed:**');
+          for (const f of manifestFiles) {
+            lines.push(`- \`${f}\``);
+          }
+          lines.push('');
+          lines.push('*Detailed dependency diff analysis for this ecosystem will be available once full extraction support lands.*');
+          lines.push('');
         }
       }
-    }
 
-    let transitiveToCheck: Array<{ name: string; version: string }> = [];
-    if (guardrails.block_transitive_vulns && headLock && baseLock) {
-      const baseSet = getLockfilePackagesSet(baseLock);
-      const headSet = getLockfilePackagesSet(headLock);
-      const directNames = new Set([...Object.keys(basePkg), ...Object.keys(headPkg)]);
-      for (const key of headSet) {
-        if (baseSet.has(key)) continue;
-        const idx = key.lastIndexOf('@');
-        const name = idx >= 0 ? key.slice(0, idx) : key;
-        const version = idx >= 0 ? key.slice(idx + 1) : '';
-        if (directNames.has(name) || !version) continue;
-        transitiveToCheck.push({ name, version });
-      }
-    }
-
-    const lines: string[] = [];
-    const workspaceLabel = packageJsonPath || 'Root';
-    lines.push(`## Deptex — ${projectName} (${workspaceLabel})`);
-    lines.push('');
-
-    let workspaceBlocked = false;
-
-    const checkPackage = async (
-      name: string,
-      version: string
-    ): Promise<{ vulnCounts: VulnCounts; license: string | null; policyViolation: boolean }> => {
-      const vulnCounts = await getVulnCountsForPackageVersion(supabase, name, version);
-      const license = await getLicenseForPackage(name, version);
-      const policyViolation = Boolean(
-        guardrails.block_policy_violations &&
-        acceptedLicenses.length > 0 &&
-        isLicenseAllowed(license, acceptedLicenses) === false
-      );
-
-      if (guardrails.block_policy_violations && acceptedLicenses.length > 0 && policyViolation) {
-        workspaceBlocked = true;
-      }
-      if (hasVulnBlocking) {
-        if (guardrails.block_critical_vulns && exceedsThreshold(vulnCounts, 'critical')) workspaceBlocked = true;
-        if (guardrails.block_high_vulns && exceedsThreshold(vulnCounts, 'high')) workspaceBlocked = true;
-        if (guardrails.block_medium_vulns && exceedsThreshold(vulnCounts, 'medium')) workspaceBlocked = true;
-        if (guardrails.block_low_vulns && exceedsThreshold(vulnCounts, 'low')) workspaceBlocked = true;
+      if (blocked) {
+        lines.push('---');
+        lines.push('');
+        lines.push('**This project cannot be merged until the above issues are resolved.**');
+        lines.push('');
       }
 
-      return { vulnCounts, license, policyViolation };
-    };
+      // Update check run to completed
+      const checkConclusion = blocked ? 'failure' : 'success';
+      const issueCount = Object.values(blockedBy).reduce((a, b) => a + b, 0);
+      const checkTitle = blocked ? `Failed — ${issueCount} issues found` : 'Passed — all checks clear';
+      const checkSummary = blocked
+        ? Object.entries(blockedBy).map(([k, v]) => `${v} ${k.replace(/_/g, ' ')}`).join(', ')
+        : 'All checked dependencies meet this project\'s guardrails.';
 
-    const fmtVuln = (v: VulnCounts) =>
-      [v.critical_vulns, v.high_vulns, v.medium_vulns, v.low_vulns].some((n) => n > 0)
-        ? `${v.critical_vulns} critical, ${v.high_vulns} high, ${v.medium_vulns} medium, ${v.low_vulns} low vulnerabilities`
-        : '0 vulnerabilities';
-
-    if (directBumped.length > 0) {
-      lines.push('### Packages updated');
-      for (const { name, oldVersion, newVersion } of directBumped) {
-        const { vulnCounts } = await checkPackage(name, newVersion);
-        lines.push(`- **${name}** \`${oldVersion}\` → \`${newVersion}\` — ${fmtVuln(vulnCounts)}`);
+      if (checkRunId) {
+        try {
+          const textContent = lines.join('\n').slice(0, MAX_CHECK_RUN_TEXT);
+          await updateCheckRun(token, repoFullName, checkRunId, {
+            status: 'completed',
+            conclusion: checkConclusion,
+            output: { title: checkTitle, summary: checkSummary, text: textContent },
+          });
+        } catch (err: any) {
+          console.error(`[PR check] Failed to update check run for ${projectName}:`, err?.message);
+        }
       }
-      lines.push('');
-    }
 
-    if (directAdded.length > 0) {
-      lines.push('### Packages added');
-      for (const { name, version } of directAdded) {
-        const { vulnCounts, license, policyViolation } = await checkPackage(name, version);
-        const licStr = license ?? 'Unknown';
-        const policyStr = policyViolation ? ' **(does not comply with project policy)**' : '';
-        lines.push(`- **${name}** \`${version}\` — license: ${licStr}; ${fmtVuln(vulnCounts)}${policyStr}`);
-      }
-      lines.push('');
-    }
+      // 8G.2: Track PR
+      await supabase.from('project_pull_requests').upsert({
+        project_id: projectId, pr_number: prNumber, title: pr?.title, author_login: pr?.user?.login,
+        author_avatar_url: pr?.user?.avatar_url, status: 'open', check_result: blocked ? 'failed' : 'passed',
+        check_summary: checkSummary, deps_added: depsAdded, deps_updated: depsUpdated,
+        deps_removed: depsRemoved, transitive_changes: transitiveChanges,
+        blocked_by: Object.keys(blockedBy).length > 0 ? blockedBy : null,
+        provider: 'github', provider_url: pr?.html_url,
+        base_branch: targetBranch, head_branch: pr?.head?.ref, head_sha: headSha,
+        opened_at: pr?.created_at, last_checked_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      }, { onConflict: 'project_id,pr_number,provider' }).catch((err: any) => {
+        console.warn('[PR check] Failed to upsert PR tracking:', err?.message);
+      });
 
-    if (transitiveToCheck.length > 0) {
-      lines.push('### Transitive dependencies (new/updated)');
-      for (const { name, version } of transitiveToCheck) {
-        const { vulnCounts, license, policyViolation } = await checkPackage(name, version);
-        const licStr = license ?? 'Unknown';
-        const policyStr = policyViolation ? ' **(does not comply with project policy)**' : '';
-        lines.push(`- **${name}** \`${version}\` — license: ${licStr}; ${fmtVuln(vulnCounts)}${policyStr}`);
-      }
-      lines.push('');
-    }
-
-    if (workspaceBlocked) {
-      lines.push('---');
-      lines.push('**This PR cannot be merged until the above issues are resolved.**');
-      anyBlocked = true;
-    }
-
-    results.push({
-      projectName,
-      packageJsonPath,
-      commentBody: lines.join('\n'),
-      blocked: workspaceBlocked,
-    });
-  }
-
-  for (const r of results) {
-    try {
-      await createIssueComment(token, repoFullName, prNumber, r.commentBody);
+      results.push({
+        projectId, projectName, workspace, section: lines.join('\n'),
+        blocked, depsAdded, depsUpdated, depsRemoved, transitiveChanges, blockedBy, commentsEnabled,
+      });
     } catch (err: any) {
-      console.error('[PR guardrails] Failed to post comment:', err?.message);
+      console.error(`[PR check] Error processing ${projectName}:`, err?.message);
+      if (checkRunId) {
+        await updateCheckRun(token, repoFullName, checkRunId, {
+          status: 'completed', conclusion: 'failure',
+          output: { title: 'Internal error', summary: `Analysis failed: ${err?.message?.slice(0, 200)}` },
+        }).catch(() => {});
+      }
     }
+
+    await supabase.from('project_repositories').update({
+      last_webhook_at: new Date().toISOString(),
+      last_webhook_event: 'pull_request',
+      webhook_status: 'active',
+    }).eq('project_id', projectId);
   }
 
-  const checkRunOutput: CheckRunOutput = {
-    title: anyBlocked ? 'PR guardrails — failed' : 'PR guardrails — passed',
-    summary: anyBlocked
-      ? 'One or more dependencies do not meet this project\'s guardrails (vulnerabilities or policy).'
-      : 'All checked dependencies meet this project\'s guardrails.',
-  };
+  // 8F: Smart comment system — single aggregated comment with per-project sections
+  const commentableResults = results.filter(r => r.commentsEnabled);
+  if (commentableResults.length > 0) {
+    const { data: repoSettings } = await supabase
+      .from('project_repositories')
+      .select('pull_request_comments_enabled')
+      .eq('repo_full_name', repoFullName)
+      .limit(1);
 
-  try {
-    const existing = await listCheckRunsForRef(token, repoFullName, headSha, PR_GUARDRAILS_CHECK_NAME);
-    if (existing.length > 0) {
-      await updateCheckRun(token, repoFullName, existing[0].id, {
-        status: 'completed',
-        conclusion: anyBlocked ? 'failure' : 'success',
-        output: checkRunOutput,
-      });
-    } else {
-      await createCheckRun(token, repoFullName, headSha, PR_GUARDRAILS_CHECK_NAME, {
-        status: 'completed',
-        conclusion: anyBlocked ? 'failure' : 'success',
-        output: checkRunOutput,
-      });
+    let commentBody = `${DEPTEX_COMMENT_MARKER}\n## Deptex Dependency Check\n\n`;
+    for (const r of commentableResults) {
+      commentBody += r.section + '\n---\n\n';
     }
-  } catch (err: any) {
-    console.error('[PR guardrails] Failed to create/update check run:', err?.message);
+
+    const { data: lastExtraction } = await supabase
+      .from('project_repositories')
+      .select('last_extracted_at')
+      .eq('repo_full_name', repoFullName)
+      .limit(1)
+      .single();
+    const lastScanned = lastExtraction?.last_extracted_at
+      ? new Date(lastExtraction.last_extracted_at).toISOString().replace('T', ' ').slice(0, 16) + ' UTC'
+      : 'Never';
+
+    commentBody += `*Last updated: ${new Date().toISOString().replace('T', ' ').slice(0, 16)} UTC | Last scanned: ${lastScanned}*`;
+
+    // Truncate if needed
+    if (commentBody.length > MAX_COMMENT_LENGTH) {
+      commentBody = commentBody.slice(0, MAX_COMMENT_LENGTH - 200) + '\n\n---\n*Comment truncated. View full results in Deptex.*';
+    }
+
+    try {
+      // 8F.2: Find existing Deptex comment and edit it
+      const comments = await listIssueComments(token, repoFullName, prNumber);
+      const existingComment = comments.find(c => c.body?.includes(DEPTEX_COMMENT_MARKER));
+
+      if (existingComment) {
+        await updateIssueComment(token, repoFullName, existingComment.id, commentBody);
+      } else {
+        await createIssueComment(token, repoFullName, prNumber, commentBody);
+      }
+    } catch (err: any) {
+      console.error('[PR check] Failed to post/edit comment:', err?.message);
+    }
   }
 }
 
@@ -2089,6 +2568,12 @@ async function handleInstallationDeleted(
   if (integrationError) {
     console.error('Failed to update integration status:', integrationError);
   }
+
+  // 8P.3: Mark all project repos using this installation as disconnected
+  await supabase
+    .from('project_repositories')
+    .update({ status: 'installation_removed', updated_at: new Date().toISOString() })
+    .eq('installation_id', installationId);
   
   // Log the disconnection event
   console.log('GitHub App disconnected via webhook:', {
@@ -2279,6 +2764,8 @@ router.get('/gitlab/org-callback', async (req, res) => {
       return res.redirect(`${frontendUrl}/organizations/${orgId}/settings?section=integrations&error=gitlab&message=Failed to save integration`);
     }
 
+    try { await emitEvent({ type: 'integration_connected', organizationId: orgId, payload: { provider: 'gitlab', displayName: userData.username || userData.name || 'GitLab' }, source: 'system', priority: 'normal' }); } catch (e) {}
+
     res.redirect(`${frontendUrl}/organizations/${orgId}/settings?section=integrations&connected=gitlab`);
   } catch (err: any) {
     console.error('GitLab org callback error:', err);
@@ -2412,6 +2899,8 @@ router.get('/bitbucket/org-callback', async (req, res) => {
       console.error('Bitbucket org integration DB error:', dbError);
       return res.redirect(`${frontendUrl}/organizations/${orgId}/settings?section=integrations&error=bitbucket&message=Failed to save integration`);
     }
+
+    try { await emitEvent({ type: 'integration_connected', organizationId: orgId, payload: { provider: 'bitbucket', displayName: userData.display_name || userData.username || 'Bitbucket' }, source: 'system', priority: 'normal' }); } catch (e) {}
 
     res.redirect(`${frontendUrl}/organizations/${orgId}/settings?section=integrations&connected=bitbucket`);
   } catch (err: any) {
@@ -2603,6 +3092,7 @@ router.get('/slack/org-callback', async (req, res) => {
         console.error('Slack org integration DB error:', dbError);
         return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=slack&message=Failed to save integration`);
       }
+      try { await emitEvent({ type: 'integration_connected', organizationId: orgId, payload: { provider: 'slack', displayName: tokenData.team?.name || 'Slack Workspace' }, source: 'system', priority: 'normal' }); } catch (e) {}
       res.redirect(redirectOnSuccess);
     }
   } catch (err: any) {
@@ -2799,6 +3289,7 @@ router.get('/jira/org-callback', async (req, res) => {
         console.error('Jira org integration DB error:', dbError);
         return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=jira&message=Failed to save integration`);
       }
+      try { await emitEvent({ type: 'integration_connected', organizationId: orgId, payload: { provider: 'jira', displayName }, source: 'system', priority: 'normal' }); } catch (e) {}
       res.redirect(redirectOnSuccess);
     }
   } catch (err: any) {
@@ -3066,6 +3557,7 @@ router.get('/linear/org-callback', async (req, res) => {
         console.error('Linear org integration DB error:', dbError);
         return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=linear&message=Failed to save integration`);
       }
+      try { await emitEvent({ type: 'integration_connected', organizationId: orgId, payload: { provider: 'linear', displayName }, source: 'system', priority: 'normal' }); } catch (e) {}
       res.redirect(redirectOnSuccess);
     }
   } catch (err: any) {
@@ -3222,6 +3714,7 @@ router.get('/asana/org-callback', async (req, res) => {
         console.error('Asana org integration DB error:', dbError);
         return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=asana&message=Failed to save integration`);
       }
+      try { await emitEvent({ type: 'integration_connected', organizationId: orgId, payload: { provider: 'asana', displayName }, source: 'system', priority: 'normal' }); } catch (e) {}
       res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?connected=asana`);
     }
   } catch (err: any) {
@@ -3304,6 +3797,8 @@ router.delete('/organizations/:orgId/connections/:connectionId', authenticateUse
     if (deleteError) {
       return res.status(500).json({ error: deleteError.message });
     }
+
+    try { await emitEvent({ type: 'integration_disconnected', organizationId: orgId, payload: { provider: connection.provider, displayName: connection.display_name }, source: 'system', priority: 'normal' }); } catch (e) {}
 
     // Return URL for user to revoke/uninstall on provider side (GitHub uses installationId; GitLab/Bitbucket use revokeUrl)
     let revokeUrl: string | undefined;

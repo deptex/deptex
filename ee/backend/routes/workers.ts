@@ -20,6 +20,7 @@ import {
   invalidateLatestSafeVersionCacheByDependencyId,
   invalidateProjectCaches,
 } from '../lib/cache';
+import { emitEvent } from '../lib/event-bus';
 
 const router = express.Router();
 
@@ -1452,6 +1453,25 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
                 event_type: 'resolved',
                 metadata: {},
               });
+
+              // Phase 15: If PDV row still exists (e.g. not yet removed by extraction), set sla_status = met | resolved_late
+              const now = new Date().toISOString();
+              const { data: stillOpen } = await supabase
+                .from('project_dependency_vulnerabilities')
+                .select('id, sla_deadline_at')
+                .eq('project_id', projectId)
+                .eq('osv_id', prev.osv_id)
+                .in('sla_status', ['on_track', 'warning', 'breached']);
+              for (const row of stillOpen ?? []) {
+                const metInTime = !row.sla_deadline_at || new Date(row.sla_deadline_at) >= new Date();
+                await supabase
+                  .from('project_dependency_vulnerabilities')
+                  .update({
+                    sla_status: metInTime ? 'met' : 'resolved_late',
+                    sla_met_at: now,
+                  })
+                  .eq('id', row.id);
+              }
             }
           }
         }
@@ -1459,6 +1479,70 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
         console.log(`[Phase6] Vulnerability timeline events logged for project ${projectId}`);
       } catch (timelineErr: any) {
         console.error(`[Phase6] Failed to log timeline events:`, timelineErr?.message);
+      }
+
+      // Phase 15: Set SLA deadlines for open vulns that have no SLA yet (newly detected or backfill)
+      if (organizationId) {
+        try {
+          const { data: project } = await supabase
+            .from('projects')
+            .select('organization_id, asset_tier_id')
+            .eq('id', projectId)
+            .single();
+          if (!project) throw new Error('Project not found');
+
+          const { data: detectedEvents } = await supabase
+            .from('project_vulnerability_events')
+            .select('osv_id, created_at')
+            .eq('project_id', projectId)
+            .eq('event_type', 'detected')
+            .order('created_at', { ascending: true });
+
+          const detectedAtByOsv = new Map<string, string>();
+          for (const e of detectedEvents ?? []) {
+            if (!detectedAtByOsv.has(e.osv_id)) detectedAtByOsv.set(e.osv_id, e.created_at);
+          }
+
+          const { data: pdvRows } = await supabase
+            .from('project_dependency_vulnerabilities')
+            .select('id, osv_id, severity, created_at')
+            .eq('project_id', projectId)
+            .is('sla_status', null)
+            .or('suppressed.is.null,suppressed.eq.false')
+            .or('risk_accepted.is.null,risk_accepted.eq.false');
+
+          if (pdvRows?.length) {
+            for (const pdv of pdvRows) {
+              const detectedAt = detectedAtByOsv.get(pdv.osv_id) ?? pdv.created_at;
+              const { data: policyRows } = await supabase.rpc('get_effective_sla_policy', {
+                p_organization_id: project.organization_id,
+                p_severity: pdv.severity,
+                p_asset_tier_id: (project as any).asset_tier_id,
+              });
+              const policy = Array.isArray(policyRows) && policyRows.length > 0 ? policyRows[0] : null;
+              if (!policy?.max_hours) continue;
+
+              const maxHours = policy.max_hours as number;
+              const warningPct = (policy.warning_threshold_percent as number) ?? 75;
+              const detected = new Date(detectedAt);
+              const deadline = new Date(detected.getTime() + maxHours * 3600 * 1000);
+              const warningAt = new Date(detected.getTime() + (maxHours * warningPct / 100) * 3600 * 1000);
+
+              await supabase
+                .from('project_dependency_vulnerabilities')
+                .update({
+                  detected_at: detectedAt,
+                  sla_deadline_at: deadline.toISOString(),
+                  sla_warning_at: warningAt.toISOString(),
+                  sla_status: 'on_track',
+                })
+                .eq('id', pdv.id);
+            }
+            console.log(`[Phase15] SLA deadlines set for ${pdvRows.length} vulns in project ${projectId}`);
+          }
+        } catch (slaErr: any) {
+          console.error(`[Phase15] SLA deadline computation failed:`, slaErr?.message);
+        }
       }
     }
 
@@ -1607,10 +1691,113 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
         const evalResult = await evaluateProjectPolicies(projectId, organizationId);
         console.log(`[Policy] Project ${projectId}: status=${evalResult.statusName}, deps evaluated=${evalResult.depResults}, violations=${evalResult.violations.length}`);
 
+        try {
+          if (evalResult.statusName) {
+            await emitEvent({ type: 'status_changed', organizationId, projectId, payload: { statusName: evalResult.statusName, violationCount: evalResult.violations.length }, source: 'extraction-pipeline', priority: 'normal' });
+          }
+          if (evalResult.violations.length > 0) {
+            await emitEvent({ type: 'policy_violation', organizationId, projectId, payload: { violations: evalResult.violations.slice(0, 50) }, source: 'extraction-pipeline', priority: 'high' });
+          }
+        } catch (e) {}
+
         await supabase
           .from('project_repositories')
           .update({ status: 'ready' })
           .eq('project_id', projectId);
+
+        // Phase 10: compute health score and invalidate stats caches
+        try {
+          const { computeHealthScore } = await import('../lib/health-score');
+          const score = await computeHealthScore(projectId);
+          console.log(`[Health] Project ${projectId}: health_score=${score}`);
+        } catch (hsErr: any) {
+          console.warn(`[Health] Failed to compute health score for project ${projectId}:`, hsErr?.message);
+        }
+
+        const { invalidateCache } = await import('../lib/cache');
+        await invalidateCache(`project-stats:${projectId}`).catch(() => {});
+        await invalidateCache(`org-stats:${organizationId}`).catch(() => {});
+
+        // Phase 10B: auto-sync watchtower watchlist when project has watchtower enabled
+        try {
+          const { data: proj } = await supabase
+            .from('projects')
+            .select('watchtower_enabled')
+            .eq('id', projectId)
+            .single();
+
+          if (proj?.watchtower_enabled) {
+            const { data: currentDirect } = await supabase
+              .from('project_dependencies')
+              .select('dependency_id, name, version')
+              .eq('project_id', projectId)
+              .eq('is_direct', true);
+
+            const currentDepIds = new Set((currentDirect || []).map((d: any) => d.dependency_id));
+
+            const { data: existingPwRows } = await supabase
+              .from('project_watchlist')
+              .select('id, organization_watchlist_id, organization_watchlist:organization_watchlist_id(dependency_id)')
+              .eq('project_id', projectId);
+
+            const existingDepIds = new Set(
+              (existingPwRows || []).map((r: any) => (r as any).organization_watchlist?.dependency_id).filter(Boolean)
+            );
+
+            // Add new direct deps
+            const toAdd = (currentDirect || []).filter((d: any) => !existingDepIds.has(d.dependency_id));
+            const newJobs: any[] = [];
+
+            for (const dep of toAdd) {
+              const { data: wl } = await supabase
+                .from('organization_watchlist')
+                .upsert({ organization_id: organizationId, dependency_id: dep.dependency_id }, { onConflict: 'organization_id,dependency_id' })
+                .select('id')
+                .single();
+
+              if (wl) {
+                await supabase.from('project_watchlist')
+                  .upsert({ project_id: projectId, organization_watchlist_id: wl.id }, { onConflict: 'project_id,organization_watchlist_id' });
+
+                const { data: wp } = await supabase.from('watched_packages').select('id').eq('name', dep.name).single();
+                if (wp) {
+                  newJobs.push({
+                    packageName: dep.name,
+                    payload: { watchedPackageId: wp.id, currentVersion: dep.version },
+                    organizationId,
+                    projectId,
+                    dependencyId: dep.dependency_id,
+                  });
+                }
+              }
+            }
+
+            if (newJobs.length > 0) {
+              const { queueWatchtowerJobs: queueBatch } = await import('../lib/watchtower-queue');
+              await queueBatch(newJobs);
+              console.log(`[Watchtower] Auto-added ${newJobs.length} new packages to watchlist for project ${projectId}`);
+            }
+
+            // Remove deps that are no longer direct
+            const toRemove = (existingPwRows || []).filter((r: any) => {
+              const depId = (r as any).organization_watchlist?.dependency_id;
+              return depId && !currentDepIds.has(depId);
+            });
+
+            for (const row of toRemove) {
+              await supabase.from('project_watchlist').delete().eq('id', row.id);
+            }
+
+            if (toRemove.length > 0) {
+              console.log(`[Watchtower] Removed ${toRemove.length} packages from watchlist for project ${projectId}`);
+            }
+
+            await invalidateCache(`watchtower-project-stats:${projectId}`).catch(() => {});
+            await invalidateCache(`watchtower-org-stats:${organizationId}`).catch(() => {});
+          }
+        } catch (wtErr: any) {
+          console.warn(`[Watchtower] Auto-sync failed for project ${projectId}:`, wtErr?.message);
+        }
       } catch (policyErr: any) {
         console.error(`[Policy] Failed to evaluate policies for project ${projectId}:`, policyErr?.message);
       }
@@ -1728,6 +1915,266 @@ router.post('/extract-deps', async (req: express.Request, res: express.Response)
   } catch (error: any) {
     console.error('Dependency extraction worker failed:', error);
     res.status(500).json({ error: error.message || 'Dependency extraction failed' });
+  }
+});
+
+// ============================================================================
+// NOTIFICATION DISPATCH ENDPOINTS (Phase 9)
+// ============================================================================
+
+const verifyQStash = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const signature = req.headers['upstash-signature'] as string;
+  const internalKey = req.headers['x-internal-api-key'] as string;
+
+  if (internalKey && internalKey === process.env.INTERNAL_API_KEY) {
+    return next();
+  }
+
+  if (!signature) {
+    return res.status(401).json({ error: 'Missing signature' });
+  }
+
+  const body = (req as any).rawBody || JSON.stringify(req.body);
+  const valid = await verifyQStashSignature(signature, body);
+  if (!valid) {
+    return res.status(401).json({ error: 'Invalid signature' });
+  }
+  next();
+};
+
+router.post('/dispatch-notification', verifyQStash, async (req: express.Request, res: express.Response) => {
+  const { eventId } = req.body;
+  if (!eventId) return res.status(400).json({ error: 'eventId required' });
+
+  try {
+    const { dispatchNotification } = require('../lib/notification-dispatcher');
+    await dispatchNotification(eventId);
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Notification dispatch failed:', error);
+    res.status(503).json({ error: 'Dispatch failed, will retry' });
+  }
+});
+
+router.post('/dispatch-notification-batch', verifyQStash, async (req: express.Request, res: express.Response) => {
+  const { batchId } = req.body;
+  if (!batchId) return res.status(400).json({ error: 'batchId required' });
+
+  try {
+    const { dispatchNotificationBatch } = require('../lib/notification-dispatcher');
+    await dispatchNotificationBatch(batchId);
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Batch notification dispatch failed:', error);
+    res.status(503).json({ error: 'Dispatch failed, will retry' });
+  }
+});
+
+router.post('/reconcile-stuck-notifications', verifyQStash, async (req: express.Request, res: express.Response) => {
+  const TEN_MINUTES_AGO = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const MAX_DISPATCH_ATTEMPTS = 3;
+
+  try {
+    const { data: stuckEvents } = await supabase
+      .from('notification_events')
+      .select('id, priority, dispatch_attempts')
+      .eq('status', 'pending')
+      .lt('created_at', TEN_MINUTES_AGO)
+      .lt('dispatch_attempts', MAX_DISPATCH_ATTEMPTS)
+      .limit(100);
+
+    if (!stuckEvents || stuckEvents.length === 0) {
+      return res.json({ reconciled: 0 });
+    }
+
+    let reconciled = 0;
+    const { emitEvent } = require('../lib/event-bus');
+    for (const event of stuckEvents) {
+      try {
+        await supabase
+          .from('notification_events')
+          .update({ dispatch_attempts: (event.dispatch_attempts || 0) + 1 })
+          .eq('id', event.id);
+
+        const token = process.env.QSTASH_TOKEN;
+        if (token) {
+          const apiBaseUrl = process.env.API_BASE_URL || process.env.BACKEND_URL || 'http://localhost:3001';
+          const url = `${apiBaseUrl}/api/workers/dispatch-notification`;
+          await fetch('https://qstash.upstash.io/v2/publish/' + encodeURIComponent(url), {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              'Upstash-Method': 'POST',
+              'Upstash-Retries': '5',
+              'Upstash-Forward-Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ eventId: event.id }),
+          });
+          reconciled++;
+        }
+      } catch (error) {
+        console.error(`[reconcile] Failed to re-queue event ${event.id}:`, error);
+      }
+    }
+
+    await supabase
+      .from('notification_events')
+      .update({ status: 'failed' })
+      .eq('status', 'pending')
+      .lt('created_at', TEN_MINUTES_AGO)
+      .gte('dispatch_attempts', MAX_DISPATCH_ATTEMPTS);
+
+    res.json({ reconciled, total_stuck: stuckEvents.length });
+  } catch (error: any) {
+    console.error('Reconcile stuck notifications failed:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/digest-check', verifyQStash, async (req: express.Request, res: express.Response) => {
+  try {
+    const now = new Date();
+    const currentHourUtc = now.getUTCHours();
+    const currentDayOfWeek = now.getUTCDay();
+
+    const { data: digestRules } = await supabase
+      .from('organization_notification_rules')
+      .select('id, organization_id, destinations, schedule_config')
+      .eq('trigger_type', 'weekly_digest')
+      .eq('active', true);
+
+    if (!digestRules || digestRules.length === 0) {
+      return res.json({ processed: 0 });
+    }
+
+    let dispatched = 0;
+    for (const rule of digestRules) {
+      const config = rule.schedule_config || { frequency: 'weekly', day_of_week: 1, hour_utc: 9 };
+      const freq = config.frequency || 'weekly';
+      const targetHour = config.hour_utc ?? 9;
+      const targetDay = config.day_of_week ?? 1;
+
+      let shouldDispatch = false;
+      if (freq === 'daily' && currentHourUtc === targetHour) shouldDispatch = true;
+      if (freq === 'weekly' && currentDayOfWeek === targetDay && currentHourUtc === targetHour) shouldDispatch = true;
+
+      if (shouldDispatch) {
+        try {
+          await assembleAndSendDigest(rule.organization_id, rule);
+          dispatched++;
+        } catch (err) {
+          console.error(`Digest dispatch failed for org ${rule.organization_id}:`, err);
+        }
+      }
+    }
+
+    res.json({ processed: digestRules.length, dispatched });
+  } catch (error: any) {
+    console.error('Digest check failed:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+async function assembleAndSendDigest(orgId: string, rule: any): Promise<void> {
+  const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data: events } = await supabase
+    .from('notification_events')
+    .select('event_type, project_id, payload, priority, created_at')
+    .eq('organization_id', orgId)
+    .gte('created_at', oneWeekAgo)
+    .order('created_at', { ascending: false })
+    .limit(500);
+
+  if (!events || events.length === 0) return;
+
+  const byType: Record<string, number> = {};
+  const byProject: Record<string, { name: string; events: any[] }> = {};
+
+  for (const event of events) {
+    byType[event.event_type] = (byType[event.event_type] || 0) + 1;
+    const pid = event.project_id || 'org-wide';
+    if (!byProject[pid]) {
+      byProject[pid] = { name: event.payload?.projectName || pid, events: [] };
+    }
+    byProject[pid].events.push(event);
+  }
+
+  const topIssues = events
+    .filter((e: any) => e.priority === 'critical' || e.priority === 'high')
+    .slice(0, 3);
+
+  const title = `Weekly Security Digest - ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  const bodyLines = [`**Summary:** ${events.length} events across ${Object.keys(byProject).length} projects`];
+
+  if (topIssues.length > 0) {
+    bodyLines.push('', '**Top Issues:**');
+    for (const issue of topIssues) {
+      bodyLines.push(`- ${issue.priority.toUpperCase()}: ${issue.event_type} ${issue.payload?.osvId || issue.payload?.name || ''}`);
+    }
+  }
+
+  const message = {
+    title,
+    body: bodyLines.join('\n'),
+    severity: 'info' as const,
+    eventType: 'weekly_digest',
+    projectName: 'All Projects',
+    organizationId: orgId,
+    deptexUrl: `${process.env.FRONTEND_URL || 'https://app.deptex.io'}/organizations/${orgId}/security`,
+    metadata: { byType, totalEvents: events.length },
+  };
+
+  const destinations = rule.destinations || [];
+  const { dispatchToDestination, enforceMessageLimits } = require('../lib/destination-dispatchers');
+
+  for (const dest of destinations) {
+    try {
+      const table = dest.scope === 'team' ? 'team_integrations'
+        : dest.scope === 'project' ? 'project_integrations'
+        : 'organization_integrations';
+
+      const { data: connection } = await supabase
+        .from(table)
+        .select('*')
+        .eq('id', dest.targetId)
+        .single();
+
+      if (!connection) continue;
+
+      const limited = enforceMessageLimits(message, connection.provider);
+      await dispatchToDestination(connection, limited, { id: 'digest', event_type: 'weekly_digest', organization_id: orgId, payload: {} });
+    } catch (err) {
+      console.error(`Digest dispatch to ${dest.targetId} failed:`, err);
+    }
+  }
+}
+
+router.post('/notification-cleanup', verifyQStash, async (req: express.Request, res: express.Response) => {
+  try {
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
+
+    const [eventsResult, deliveriesResult, userNotifsResult, changesResult] = await Promise.all([
+      supabase.from('notification_events').delete().lt('created_at', ninetyDaysAgo),
+      supabase.from('notification_deliveries').delete().lt('created_at', ninetyDaysAgo),
+      supabase.from('user_notifications').delete().lt('created_at', thirtyDaysAgo),
+      supabase.from('notification_rule_changes').delete().lt('created_at', oneYearAgo),
+    ]);
+
+    res.json({
+      cleaned: {
+        events: eventsResult.error ? 'error' : 'ok',
+        deliveries: deliveriesResult.error ? 'error' : 'ok',
+        user_notifications: userNotifsResult.error ? 'error' : 'ok',
+        rule_changes: changesResult.error ? 'error' : 'ok',
+      },
+    });
+  } catch (error: any) {
+    console.error('Notification cleanup failed:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 

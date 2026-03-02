@@ -3,6 +3,11 @@ import { useSearchParams } from 'react-router-dom';
 import { Filter, X, Flame, Shield, CheckCircle } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
+export type ReachabilityFilterLevel = 'all' | 'data_flow' | 'function' | 'module' | 'unreachable';
+
+/** Phase 15: SLA status filter for vulnerability list/graph. */
+export type SlaStatusFilter = 'all' | 'on_track' | 'warning' | 'breached' | 'exempt';
+
 export interface SecurityFilters {
   severity: string[];
   depscoreMin: number | null;
@@ -10,7 +15,10 @@ export interface SecurityFilters {
   kevOnly: boolean;
   fixAvailable: boolean;
   reachableOnly: boolean;
+  reachabilityLevel: ReachabilityFilterLevel;
   depType: 'all' | 'direct' | 'transitive';
+  /** Phase 15: Filter by SLA status. */
+  slaStatus: SlaStatusFilter;
 }
 
 const DEFAULT_FILTERS: SecurityFilters = {
@@ -20,7 +28,9 @@ const DEFAULT_FILTERS: SecurityFilters = {
   kevOnly: false,
   fixAvailable: false,
   reachableOnly: false,
+  reachabilityLevel: 'all',
   depType: 'all',
+  slaStatus: 'all',
 };
 
 interface SecurityFilterBarProps {
@@ -39,9 +49,11 @@ function SecurityFilterBar({ filters, onFiltersChange }: SecurityFilterBarProps)
     const kevOnly = searchParams.get('kev') === 'true';
     const fixAvailable = searchParams.get('fix') === 'true';
     const reachableOnly = searchParams.get('reachable') === 'true';
+    const reachabilityLevel = (searchParams.get('reachability') as ReachabilityFilterLevel) || 'all';
     const depType = (searchParams.get('dep_type') as SecurityFilters['depType']) || 'all';
+    const slaStatus = (searchParams.get('sla') as SlaStatusFilter) || 'all';
 
-    onFiltersChange({ severity, depscoreMin, epssMin, kevOnly, fixAvailable, reachableOnly, depType });
+    onFiltersChange({ severity, depscoreMin, epssMin, kevOnly, fixAvailable, reachableOnly, reachabilityLevel, depType, slaStatus });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -54,7 +66,9 @@ function SecurityFilterBar({ filters, onFiltersChange }: SecurityFilterBarProps)
     if (newFilters.kevOnly) params.set('kev', 'true');
     if (newFilters.fixAvailable) params.set('fix', 'true');
     if (newFilters.reachableOnly) params.set('reachable', 'true');
+    if (newFilters.reachabilityLevel !== 'all') params.set('reachability', newFilters.reachabilityLevel);
     if (newFilters.depType !== 'all') params.set('dep_type', newFilters.depType);
+    if (newFilters.slaStatus !== 'all') params.set('sla', newFilters.slaStatus);
     setSearchParams(params, { replace: true });
   }, [onFiltersChange, setSearchParams]);
 
@@ -70,7 +84,9 @@ function SecurityFilterBar({ filters, onFiltersChange }: SecurityFilterBarProps)
     filters.kevOnly,
     filters.fixAvailable,
     filters.reachableOnly,
+    filters.reachabilityLevel !== 'all',
     filters.depType !== 'all',
+    filters.slaStatus !== 'all',
   ].filter(Boolean).length;
 
   const toggleSeverity = (sev: string) => {
@@ -197,6 +213,37 @@ function SecurityFilterBar({ filters, onFiltersChange }: SecurityFilterBarProps)
             />
           </div>
 
+          {/* Reachability Level (Phase 6B) */}
+          <div>
+            <div className="text-xs font-medium text-zinc-400 mb-2">Reachability Level</div>
+            <div className="flex gap-2 flex-wrap">
+              {([
+                { value: 'all', label: 'All', color: 'primary' },
+                { value: 'data_flow', label: 'Data flow', color: 'orange' },
+                { value: 'function', label: 'Function', color: 'yellow' },
+                { value: 'module', label: 'Module', color: 'zinc' },
+                { value: 'unreachable', label: 'Unreachable', color: 'green' },
+              ] as const).map(({ value, label, color }) => (
+                <button
+                  key={value}
+                  onClick={() => updateFilters({ ...filters, reachabilityLevel: value })}
+                  className={cn(
+                    'px-2 py-1 rounded text-xs transition-colors border',
+                    filters.reachabilityLevel === value
+                      ? color === 'orange' ? 'border-orange-500/30 bg-orange-500/10 text-orange-400'
+                        : color === 'yellow' ? 'border-yellow-500/30 bg-yellow-500/10 text-yellow-400'
+                        : color === 'green' ? 'border-green-500/30 bg-green-500/10 text-green-400'
+                        : color === 'zinc' ? 'border-zinc-500/30 bg-zinc-500/10 text-zinc-400'
+                        : 'border-primary/30 bg-primary/10 text-primary'
+                      : 'border-border text-zinc-500 hover:text-zinc-400'
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Dependency Type */}
           <div>
             <div className="text-xs font-medium text-zinc-400 mb-2">Dependency Type</div>
@@ -213,6 +260,35 @@ function SecurityFilterBar({ filters, onFiltersChange }: SecurityFilterBarProps)
                   )}
                 >
                   {type}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Phase 15: SLA Status */}
+          <div>
+            <div className="text-xs font-medium text-zinc-400 mb-2">SLA Status</div>
+            <div className="flex gap-2 flex-wrap">
+              {([
+                { value: 'all' as const, label: 'All' },
+                { value: 'on_track' as const, label: 'On track' },
+                { value: 'warning' as const, label: 'Warning' },
+                { value: 'breached' as const, label: 'Breached' },
+                { value: 'exempt' as const, label: 'Exempt' },
+              ]).map(({ value, label }) => (
+                <button
+                  key={value}
+                  onClick={() => updateFilters({ ...filters, slaStatus: value })}
+                  className={cn(
+                    'px-2 py-1 rounded text-xs transition-colors border',
+                    filters.slaStatus === value
+                      ? value === 'breached' ? 'border-red-500/30 bg-red-500/10 text-red-400'
+                        : value === 'warning' ? 'border-amber-500/30 bg-amber-500/10 text-amber-400'
+                        : 'border-primary/30 bg-primary/10 text-primary'
+                      : 'border-border text-zinc-500 hover:text-zinc-400'
+                  )}
+                >
+                  {label}
                 </button>
               ))}
             </div>

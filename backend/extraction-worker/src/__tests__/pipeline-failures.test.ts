@@ -64,9 +64,11 @@ jest.mock('../clone', () => ({
 
 const mockExecSync = jest.fn();
 const mockSpawnSync = jest.fn();
+const mockSpawn = jest.fn();
 jest.mock('child_process', () => ({
   execSync: (...args: unknown[]) => mockExecSync(...args),
   spawnSync: (...args: unknown[]) => mockSpawnSync(...args),
+  spawn: (...args: unknown[]) => mockSpawn(...args),
 }));
 
 jest.mock('../ast-parser', () => ({
@@ -188,7 +190,14 @@ describe('runPipeline', () => {
     const repoPath = path.join(process.cwd(), 'fake-repo');
     mockCloneByProvider.mockResolvedValue(repoPath);
     mockExecSync.mockReturnValue(undefined);
-    mockSpawnSync.mockReturnValue({ error: { code: 'ENOENT' }, status: null, stderr: '' });
+    mockSpawn.mockImplementation(() => {
+      const child = { stdout: { on: jest.fn() }, stderr: { on: jest.fn() }, on: jest.fn(), kill: jest.fn() };
+      setImmediate(() => {
+        const onError = (child as any).on.mock.calls.find((c: unknown[]) => c[0] === 'error')?.[1];
+        if (onError) onError({ code: 'ENOENT' });
+      });
+      return child;
+    });
     fsExistsSync = () => true;
     fsReadFileSync = (p: string) => (String(p).endsWith('sbom.json') ? SBOM_WITH_DEPS : '{"vulnerabilities":[]}');
     fsMkdirSync = () => {};
@@ -209,7 +218,24 @@ describe('runPipeline', () => {
       }
       return undefined;
     });
-    mockSpawnSync.mockReturnValue({ error: null, status: 0, stderr: '' });
+    mockSpawn.mockImplementation(() => {
+      const child: {
+        stdout: { on: jest.Mock };
+        stderr: { on: jest.Mock };
+        on: jest.Mock;
+        kill: jest.Mock;
+      } = {
+        stdout: { on: jest.fn() },
+        stderr: { on: jest.fn() },
+        on: jest.fn(),
+        kill: jest.fn(),
+      };
+      (child.on as jest.Mock).mockImplementation((ev: string, cb: (code?: number) => void) => {
+        if (ev === 'close') setImmediate(() => cb(0));
+        return child;
+      });
+      return child;
+    });
     fsExistsSync = () => true;
     fsReadFileSync = (p: string) => (String(p).endsWith('sbom.json') ? SBOM_WITH_DEPS : '{"vulnerabilities":[]}');
     fsMkdirSync = () => {};

@@ -21,15 +21,20 @@ function sanitize(message: string): string {
 
 export type LogStep =
   | 'cloning'
+  | 'clone'
   | 'sbom'
   | 'deps_sync'
   | 'vuln_scan'
+  | 'depscan'
+  | 'reachability'
   | 'semgrep'
   | 'trufflehog'
   | 'uploading'
+  | 'finalize'
   | 'complete'
   | 'ast_parsing'
-  | 'populate';
+  | 'populate'
+  | 'api';
 
 export type LogLevel = 'info' | 'success' | 'warning' | 'error';
 

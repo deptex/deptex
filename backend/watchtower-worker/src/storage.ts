@@ -166,20 +166,10 @@ export async function upsertDependencyVersionAnalysis(
   }
   console.log(`[${new Date().toISOString()}] ✅ Updated dependency_versions for ${results.name}@${version}`);
 
-  // Invalidate caches for this dependency (if cache module is available)
-  try {
-    const cacheModule = await import('../../src/lib/cache');
-    // Invalidate latest safe version cache
-    cacheModule.invalidateLatestSafeVersionCacheByDependencyId(dependencyId).catch((err: any) => {
-      console.warn(`[Cache] Failed to invalidate latest safe version cache for dependency ${dependencyId}:`, err.message);
-    });
-    // Invalidate watchtower summary cache
-    cacheModule.invalidateWatchtowerSummaryCache(results.name).catch((err: any) => {
-      console.warn(`[Cache] Failed to invalidate watchtower summary cache for ${results.name}:`, err.message);
-    });
-  } catch {
-    // Cache module not available in worker context - that's okay
-  }
+  // Invalidate caches (no-op in worker; backend invalidates on event/job completion)
+  const { invalidateLatestSafeVersionCacheByDependencyId, invalidateWatchtowerSummaryCache } = await import('./cache-stub');
+  invalidateLatestSafeVersionCacheByDependencyId(dependencyId).catch(() => {});
+  invalidateWatchtowerSummaryCache(results.name).catch(() => {});
 }
 
 /**
@@ -789,7 +779,7 @@ export async function updateWatchlistQuarantineNextRelease(
       .single();
     if (watchlist?.dependencies) {
       const packageName = (watchlist.dependencies as any).name;
-      const { invalidateWatchtowerSummaryCache } = await import('../../src/lib/cache');
+      const { invalidateWatchtowerSummaryCache } = await import('./cache-stub');
       await invalidateWatchtowerSummaryCache(packageName).catch(() => {});
     }
   } catch {
@@ -823,7 +813,7 @@ export async function updateWatchlistClearQuarantineAndSetLatest(
       .single();
     if (watchlist?.dependencies) {
       const packageName = (watchlist.dependencies as any).name;
-      const { invalidateWatchtowerSummaryCache } = await import('../../src/lib/cache');
+      const { invalidateWatchtowerSummaryCache } = await import('./cache-stub');
       await invalidateWatchtowerSummaryCache(packageName).catch(() => {});
     }
   } catch {

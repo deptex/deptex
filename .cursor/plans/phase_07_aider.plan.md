@@ -1,16 +1,18 @@
 ---
 name: Phase 7 - AI-Powered Security Fixing
-overview: Aider on Fly.io, 7 fix strategies, Aegis-driven fixes, safety measures.
+overview: Aider on Fly.io scale-to-zero Machines (poll-based, same pattern as extraction worker), fix orchestrator with atom reachability context, 7 strategies across all 11 ecosystems, Jules-like chat-driven planning via Aegis, safety measures (draft PRs, process watchdog, cost cap, audit trail), global fix status integration with real-time Supabase updates, duplicate fix prevention and Aegis awareness, fix-to-PR lifecycle integration with Phase 8, generalized Fly Machine utility, 22 edge cases with detection/recovery, ~120-test suite
 todos:
   - id: phase-7-aider
-    content: "Phase 7: AI-Powered Security Fixing - Aider on Fly.io Machines with BYOK keys, fix orchestrator with atom reachability context, 7 strategies (version bump, code patch, add wrapper, pin transitive, remove unused, fix Semgrep issue, remediate secret), Aegis-driven Semgrep/TruffleHog fixes, fix progress UI with live logs, safety measures (draft PRs, timeout, cost cap, audit trail), global fix status integration across all screens with real-time Supabase updates, duplicate fix prevention and Aegis awareness, fix-to-PR lifecycle integration with Phase 8, 16 edge cases with detection/recovery, 96-test suite"
+    content: "Phase 7: AI-Powered Security Fixing"
     status: pending
 isProject: false
 ---
 
 ## Phase 7: AI-Powered Vulnerability Fixing (Aider)
 
-**Goal:** Enable AI-powered vulnerability remediation using Aider on Fly.io Machines, with multiple fix strategies, PR creation, live progress tracking, and safety measures. Uses BYOK keys from Phase 6G.
+**Goal:** Enable AI-powered vulnerability remediation using Aider on Fly.io Machines, with a Jules-like chat-driven planning flow, multiple fix strategies across all 11 supported ecosystems, PR creation, live progress tracking, and comprehensive safety measures. Uses BYOK keys from Phase 6C.
+
+**Prerequisites:** Phase 6 Core, Phase 6B (reachability), Phase 6C (AI infrastructure + BYOK), Phase 8 (PR webhooks -- already built).
 
 ### Architecture
 
@@ -20,49 +22,228 @@ sequenceDiagram
     participant FE as Frontend
     participant BE as Backend
     participant DB as Supabase
+    participant RD as Redis
     participant FM as FlyMachine
     participant GH as GitProvider
 
     U->>FE: Click "Fix with AI"
-    FE->>BE: POST /api/projects/:id/fix-vulnerability
-    BE->>DB: Fetch org BYOK key (decrypt)
-    BE->>DB: Create fix job record
-    BE->>FM: Start Fly Machine via Machines API
-    FM->>FM: Clone repo (using git provider token)
-    FM->>FM: Run Aider with fix prompt + BYOK key
-    FM->>FM: Validate fix (run tests if available)
-    FM->>DB: Stream logs via Supabase Realtime
-    FM->>GH: Create draft PR with fix
+    FE->>FE: Open Aegis panel with vuln context
+    FE->>BE: POST /api/aegis/stream (Aegis proposes fix plan)
+    BE->>FE: SSE: strategy, files, estimated cost
+    U->>FE: Confirms "Execute Plan"
+    FE->>BE: POST /api/projects/:id/fix
+    BE->>RD: Check monthly budget (atomic INCR)
+    BE->>DB: queue_fix_job RPC (atomic: cap check + insert)
+    BE->>FM: startFlyMachine(aiderConfig)
+    FM->>FM: Boot, poll Supabase every 5s
+    FM->>DB: claim_fix_job RPC (FOR UPDATE SKIP LOCKED)
+    FM->>DB: Fetch org BYOK key, decrypt locally
+    FM->>FM: Clone repo, run Aider with fix prompt
+    FM->>FM: Validate (audit tool, tests with key cleared)
+    FM->>DB: Stream logs via extraction_logs (Realtime)
+    FM->>GH: Create draft PR
     FM->>DB: Update fix job status = completed
-    FM->>FM: Stop machine
-    BE->>FE: Fix complete, PR URL returned
-    FE->>U: Show PR link + diff preview
+    FM->>DB: Check for next queued job (same project)
+    Note over FM: If no more jobs, idle 30s then exit
+    FE->>U: Real-time: PR link + diff preview in Aegis panel
 ```
 
 
 
 ### 7A: Aider Fly.io Machine Template
 
-Separate Fly.io app: `deptex-aider-worker`
+Separate Fly.io app: `deptex-aider-worker`. Uses the **same poll-based pattern** as the extraction worker -- machine boots, polls Supabase for queued jobs, claims atomically, processes, then idles and exits.
 
-**Docker image:**
+**Worker architecture (mirrors extraction worker):**
 
-- Base: Python 3.11 slim
-- Pre-installed: `aider-chat` pip package, Git, Node.js 20 (for npm-based repos), pip (for Python repos)
-- No pre-installed LLM key - fetched at runtime from BYOK
+```
+backend/aider-worker/
+  src/
+    index.ts        -- Poll loop (5s), claim via RPC, process, 30s idle exit
+    job-db.ts       -- claimJob, sendHeartbeat, updateJobStatus, isJobCancelled
+    logger.ts       -- FixLogger -> extraction_logs table (reuses log infra)
+    executor.ts     -- Build Aider prompt, invoke subprocess, parse output
+    strategies.ts   -- Per-ecosystem strategy selection and file detection
+    validation.ts   -- Post-fix validation (audit, lint, test)
+    git-ops.ts      -- Clone, branch, commit, push, create PR via git provider API
+  Dockerfile
+  fly.toml
+  package.json
+```
 
-**Machine config:**
+The worker is a **Node.js process** that invokes Aider as a **Python subprocess**. This lets us reuse the exact same polling/heartbeat/logging patterns as the extraction worker while leveraging Aider's Python CLI.
 
-- Size: `shared-cpu-4x`, 4GB RAM (Aider is lighter than extraction - mainly LLM API calls)
-- Same scale-to-zero pattern as extraction worker: backend starts machine via Machines API, machine processes fix, stops itself
-- Safety timeout: machine exits after 10 minutes max regardless of state (enforced by both Aider `--timeout` and machine-level watchdog)
-- Secrets: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (for job status updates and log streaming). LLM key passed per-job via the job payload.
+**Poll loop:**
+
+```typescript
+const POLL_INTERVAL = 5_000;   // 5 seconds
+const IDLE_TIMEOUT = 30_000;   // 30 seconds (shorter than extraction's 60s)
+const HEARTBEAT_INTERVAL = 60_000;
+
+let lastJobTime = Date.now();
+while (true) {
+  const job = await claimJob(machineId);
+  if (job) {
+    lastJobTime = Date.now();
+    await processFixJob(job);
+    // After completion, immediately check for next queued job (same project gets priority)
+    continue;
+  }
+  if (Date.now() - lastJobTime > IDLE_TIMEOUT) {
+    logger.info('No jobs for 30s, exiting for scale-to-zero');
+    process.exit(0);
+  }
+  await sleep(POLL_INTERVAL);
+}
+```
+
+**Dockerfile:**
+
+```dockerfile
+FROM node:20-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl python3 python3-pip python3-venv && \
+    python3 -m venv /opt/aider-venv && \
+    /opt/aider-venv/bin/pip install --no-cache-dir aider-chat && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/opt/aider-venv/bin:$PATH"
+
+RUN git config --global user.name "Deptex AI" && \
+    git config --global user.email "ai@deptex.dev"
+
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --production
+COPY dist/ ./dist/
+
+USER node
+CMD ["node", "dist/index.js"]
+```
+
+**fly.toml:**
+
+```toml
+app = "deptex-aider-worker"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 4
+  memory = "8gb"
+```
+
+No HTTP service -- this is a pure worker. No auto_start/auto_stop in fly.toml since machines are managed via the Machines API (same as extraction worker).
+
+**Machine sizing: `shared-cpu-4x`, 8GB RAM:**
+
+- Aider itself is I/O-bound (waiting for LLM API responses), not CPU-bound. Shared CPU is fine and 60% cheaper than dedicated.
+- 8GB RAM (bumped from 4GB) to accommodate: git clone of large repos (500MB-2GB), Aider loading file contents into memory, validation tools (npm install, etc.), and Node.js runtime overhead (~200MB).
+- Disk: Fly.io default ~10GB root volume is sufficient for shallow clones.
+
+**Timeouts (three layers):**
+
+1. **Aider `--timeout 120`**: Per-LLM-API-call timeout (2 minutes). This is NOT total execution time -- it's per-request to the LLM provider. Prevents hanging on a single slow API call.
+2. **Process-level watchdog (10 minutes)**: The worker sets a `setTimeout` that sends `SIGTERM` to the Aider subprocess after 10 minutes of total execution. This is the primary safety limit.
+3. **Fly Machines `stop_config.timeout = "15m"`**: Ultimate backstop. If the worker process itself hangs (can't send SIGTERM), Fly destroys the machine after 15 minutes.
+
+**API key security model (BYOK keys never stored in job payload):**
+
+The Aider machine receives these as **Fly secrets** (set once at deploy time, not per-job):
+
+- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (for job polling, heartbeats, log streaming)
+- `AI_ENCRYPTION_KEY` (for decrypting BYOK keys at runtime)
+
+At job runtime, the worker:
+
+1. Reads `organization_id` from the claimed job record
+2. Queries `organization_ai_providers` for the org's default provider
+3. Decrypts the API key locally using `AI_ENCRYPTION_KEY` (same as Phase 6C's `decryptApiKey()`)
+4. Sets the key as an environment variable for the Aider subprocess (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY` depending on provider)
+5. **After Aider completes**: clears the key from the environment before running validation (install/test), so validation scripts cannot exfiltrate the key
+
+Git provider tokens are similarly fetched at runtime from `organization_integrations` -- never stored in the job payload.
+
+**Aider CLI invocation:**
+
+```typescript
+function getAiderEnvVars(provider: string, apiKey: string): Record<string, string> {
+  const envMap: Record<string, string> = {
+    openai: 'OPENAI_API_KEY',
+    anthropic: 'ANTHROPIC_API_KEY',
+    google: 'GEMINI_API_KEY',
+  };
+  return { [envMap[provider]]: apiKey };
+}
+
+function getAiderModelFlag(provider: string, model: string): string {
+  if (provider === 'google') return `gemini/${model}`;
+  return model;
+}
+```
+
+Key flags:
+
+- `--yes-always` (not `--yes`): fully non-interactive, auto-accepts all confirmations
+- `--no-auto-commits`: we commit manually after validation
+- `--message-file /tmp/fix-prompt.md` (not `--message`): avoids shell argument length limits for large prompts with reachability context
+- `--timeout 120`: per-API-call timeout in seconds
+- `--no-stream`: disable streaming output (we capture stdout for logging)
+- `--file <path>`: files to edit (ecosystem-specific, see 7C)
+
+**Generalized Fly Machine utility (`ee/backend/lib/fly-machines.ts`):**
+
+Refactor `startExtractionMachine()` into a generic `startFlyMachine()` that both extraction and aider workers use:
+
+```typescript
+interface FlyMachineConfig {
+  app: string;
+  image?: string;  // defaults to registry.fly.io/${app}:latest
+  guest: { cpus: number; memory_mb: number; cpu_kind: 'shared' | 'performance' };
+  maxBurst: number;
+  stopTimeout: string;  // '4h' for extraction, '15m' for aider
+  region?: string;      // defaults to 'iad'
+}
+
+const EXTRACTION_CONFIG: FlyMachineConfig = {
+  app: process.env.FLY_EXTRACTION_APP || 'deptex-extraction-worker',
+  guest: { cpus: 8, memory_mb: 65536, cpu_kind: 'performance' },
+  maxBurst: parseInt(process.env.FLY_MAX_BURST_MACHINES || '5'),
+  stopTimeout: '4h',
+};
+
+const AIDER_CONFIG: FlyMachineConfig = {
+  app: process.env.FLY_AIDER_APP || 'deptex-aider-worker',
+  guest: { cpus: 4, memory_mb: 8192, cpu_kind: 'shared' },
+  maxBurst: parseInt(process.env.FLY_AIDER_MAX_BURST || '3'),
+  stopTimeout: '15m',
+};
+
+export async function startFlyMachine(config: FlyMachineConfig): Promise<string | null> {
+  // 1. List machines for config.app
+  // 2. Try to start a stopped pool machine
+  // 3. If none available and under maxBurst: create burst machine with auto_destroy: true
+  // 4. Retry up to 3 times with backoff
+  // Same logic as current startExtractionMachine() but parameterized
+}
+
+// Convenience wrappers
+export const startExtractionMachine = () => startFlyMachine(EXTRACTION_CONFIG);
+export const startAiderMachine = () => startFlyMachine(AIDER_CONFIG);
+```
+
+New env vars: `FLY_AIDER_APP` (default: `deptex-aider-worker`), `FLY_AIDER_MAX_BURST` (default: 3).
 
 **Cost estimate per fix:**
 
-- Fly.io Machine: ~$0.01-0.03 (runs 1-5 minutes)
-- LLM tokens: ~$0.05-0.50 (varies by model and code size) - **BYOK, the org pays this directly to their provider**
-- Total infrastructure cost to Deptex: ~$0.01-0.03 per fix
+- Fly.io Machine (shared-cpu-4x, 8GB, ~$0.032/hr): ~$0.003-0.005 per fix (1-10 minutes)
+- LLM tokens: ~$0.05-0.50 (varies by model and code size) -- **BYOK, the org pays their provider directly**
+- Total infrastructure cost to Deptex per fix: **~$0.003-0.005** (negligible)
+- Stopped machines: ~$0.15/month each, 2 pool machines = $0.30/month idle
 
 ### 7B: Fix Orchestrator
 
@@ -73,291 +254,777 @@ interface FixRequest {
   projectId: string;
   organizationId: string;
   userId: string;
-  strategy: 'bump_version' | 'code_patch' | 'add_wrapper' | 'pin_transitive' | 'remove_unused' | 'fix_semgrep' | 'remediate_secret';
+  strategy: FixStrategy;
 
-  // For dependency vulnerability fixes (bump_version, code_patch, add_wrapper, pin_transitive, remove_unused)
+  // For dependency vulnerability fixes
   vulnerabilityOsvId?: string;
+  dependencyId?: string;
+  projectDependencyId?: string;
   targetVersion?: string;
 
-  // For Semgrep fixes (fix_semgrep)
-  semgrepFindingId?: string; // FK to project_semgrep_findings
+  // For Semgrep fixes
+  semgrepFindingId?: string;
 
-  // For TruffleHog fixes (remediate_secret)
-  secretFindingId?: string; // FK to project_secret_findings
+  // For TruffleHog fixes
+  secretFindingId?: string;
 }
+
+type FixStrategy = 'bump_version' | 'code_patch' | 'add_wrapper' | 'pin_transitive' | 'remove_unused' | 'fix_semgrep' | 'remediate_secret';
 
 interface FixResult {
   success: boolean;
+  jobId: string;
   prUrl?: string;
   prNumber?: number;
+  prBranch?: string;
   diffSummary?: string;
   error?: string;
+  errorCategory?: string;
   tokensUsed?: number;
   estimatedCost?: number;
+  validationResult?: ValidationResult;
+  introducedVulns?: string[];
+}
+
+interface ValidationResult {
+  auditPassed: boolean | null;  // null = skipped
+  lintPassed: boolean | null;
+  testsPassed: boolean | null;
+  testsSkipped: boolean;
+  notes: string[];
 }
 ```
 
-The fix engine handles three categories of security issues:
+The fix engine handles three categories:
 
-1. **Dependency vulnerabilities** (strategies: bump_version, code_patch, add_wrapper, pin_transitive, remove_unused) -- triggered from the Vulnerability Detail Sidebar "Fix with AI" button
-2. **Semgrep code issues** (strategy: fix_semgrep) -- triggered from the Project Security Sidebar or Aegis when user asks to fix a code issue
-3. **Exposed secrets** (strategy: remediate_secret) -- triggered from the Project Security Sidebar or Aegis when user asks to remediate a secret
+1. **Dependency vulnerabilities** (bump_version, code_patch, add_wrapper, pin_transitive, remove_unused) -- triggered from Aegis panel via "Fix with AI" button or chat
+2. **Semgrep code issues** (fix_semgrep) -- triggered from Aegis panel or chat
+3. **Exposed secrets** (remediate_secret) -- triggered from Aegis panel or chat
 
-**Flow:**
+**Jules-like chat-driven flow:**
 
-1. Validate request: check vulnerability exists, project has a connected repo, org has BYOK configured
-2. Fetch BYOK key for the org's default provider (decrypt via `getProviderForOrg`)
-3. Create job record in `project_security_fixes` table with status `queued`
-4. Gather rich context for the fix:
+Instead of a simple "click button → modal → execute" pattern, Phase 7 uses a conversational planning flow:
+
+1. User clicks **"Fix with AI"** on a vulnerability, Semgrep finding, or secret → Opens the **Aegis panel** with the relevant context pre-loaded
+2. Aegis **analyzes the issue** and proposes a fix plan:
+  - "I recommend upgrading lodash from 4.17.15 to 4.17.21 to fix CVE-2024-XXXX."
+  - "This will modify package.json and package-lock.json."
+  - "Your code uses lodash.merge() in 3 files -- I'll verify compatibility after upgrading."
+  - "Estimated cost: ~$0.10 (GPT-4o, ~2000 tokens)"
+  - **[Execute Plan]** button rendered as an action card in the chat
+3. User can **discuss and modify**: "What about a code patch instead?" → Aegis adjusts: "OK, I'll add input sanitization at handler.ts:42 before the lodash.merge() call instead."
+4. User clicks **"Execute Plan"** → Aegis calls the `triggerFix` tool → Job queued → Progress shown inline in chat
+5. **Live progress** in the Aegis panel: step indicator + log stream
+6. On completion: Aegis posts "Fix PR #42 created on branch fix/CVE-2024-XXXX" with a link
+
+The same flow works when Aegis proactively suggests fixes during regular conversation: "I noticed CVE-2024-XXXX in lodash. Want me to fix it?"
+
+**Orchestrator flow (backend):**
+
+1. Validate: project has connected repo, org has BYOK configured, vulnerability/finding exists
+2. Check budget: Phase 6C Redis INCR pattern (`ai:cost:${orgId}:${year}:${month}`)
+3. Call `queue_fix_job` RPC (atomic: concurrent cap + same-project serialization + insert)
+4. Gather rich context and store in job `payload` JSONB:
   - CVE details (osv_id, severity, description, fixed_versions)
-  - Affected project dependencies (name, version, direct/transitive)
-  - **Atom reachability data** (from `project_reachable_flows`): entry point file/line/method, full data-flow path through the code, sink function in the vulnerable dependency. This tells Aider exactly WHERE the vulnerability is exploitable.
-  - **Atom usage slices** (from `project_usage_slices`): which specific functions/exports the project uses from the vulnerable package. This tells Aider whether the project actually calls the vulnerable function or only uses safe parts of the package.
-  - **dep-scan LLMPrompts** (if available): AI-ready explanation text generated by dep-scan's `--explanation-mode LLMPrompts`, included directly in the Aider prompt for maximum context.
-  - **Code snippets** (from `project_code_snippets`): the actual source code at each step of the reachable flow, so Aider can see the code it needs to modify.
-5. Start Fly Machine via Machines API, passing:
-  - Job ID
-  - Repo clone URL + auth token (from git provider integration)
-  - All gathered context from step 4
-  - Fix strategy + target version
-  - LLM provider + model + API key (encrypted in transit)
-6. Machine runs the fix script (7C), streams logs via Supabase Realtime
-7. On completion: update job status to `completed` or `failed`, store PR URL
-8. Machine stops itself
+  - Affected dependencies (name, version, direct/transitive, ecosystem)
+  - Atom reachability data (from `project_reachable_flows`): entry points, data-flow paths, sink functions
+  - Atom usage slices (from `project_usage_slices`): which functions are called
+  - dep-scan LLMPrompts (from `project_reachable_flows.llm_prompt`): AI-ready context
+  - Repo info: clone URL, provider type, default branch, root_directory (for monorepos)
+  - Fix strategy + target version + affected file paths
+  - **NOT in payload**: API keys, git tokens (fetched at runtime by the worker)
+5. Call `startAiderMachine()` to wake a Fly machine (best-effort; job stays in DB if this fails)
+6. Return `{ success: true, jobId }` to the frontend
 
-**Database table for fix tracking:**
+**Database table:**
 
 ```sql
 CREATE TABLE project_security_fixes (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  fix_type TEXT NOT NULL, -- 'vulnerability', 'semgrep', 'secret'
-  strategy TEXT NOT NULL, -- 'bump_version', 'code_patch', 'add_wrapper', 'pin_transitive', 'remove_unused', 'fix_semgrep', 'remediate_secret'
-  status TEXT NOT NULL DEFAULT 'queued', -- 'queued', 'running', 'completed', 'failed'
+  run_id UUID NOT NULL DEFAULT gen_random_uuid(),
+
+  fix_type TEXT NOT NULL CHECK (fix_type IN ('vulnerability', 'semgrep', 'secret')),
+  strategy TEXT NOT NULL CHECK (strategy IN (
+    'bump_version', 'code_patch', 'add_wrapper', 'pin_transitive',
+    'remove_unused', 'fix_semgrep', 'remediate_secret'
+  )),
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN (
+    'queued', 'running', 'completed', 'failed', 'cancelled',
+    'pr_closed', 'merged', 'superseded'
+  )),
   triggered_by UUID NOT NULL REFERENCES auth.users(id),
 
-  -- For vulnerability fixes
-  osv_id TEXT, -- nullable, only for fix_type = 'vulnerability'
-  -- For Semgrep fixes
-  semgrep_finding_id UUID REFERENCES project_semgrep_findings(id), -- nullable
-  -- For secret fixes
-  secret_finding_id UUID REFERENCES project_secret_findings(id), -- nullable
+  -- Target identification
+  osv_id TEXT,
+  dependency_id UUID REFERENCES dependencies(id),
+  project_dependency_id UUID REFERENCES project_dependencies(id),
+  semgrep_finding_id UUID REFERENCES project_semgrep_findings(id),
+  secret_finding_id UUID REFERENCES project_secret_findings(id),
+  target_version TEXT,
 
-  fly_machine_id TEXT,
+  -- Job payload (context for the worker -- NO secrets)
+  payload JSONB NOT NULL DEFAULT '{}',
+
+  -- Machine lifecycle
+  machine_id TEXT,
+  heartbeat_at TIMESTAMPTZ,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+
+  -- Results
   pr_url TEXT,
   pr_number INTEGER,
+  pr_branch TEXT,
+  pr_provider TEXT,
+  pr_repo_full_name TEXT,
   diff_summary TEXT,
   tokens_used INTEGER,
-  estimated_cost NUMERIC(6, 4),
+  estimated_cost NUMERIC(10, 4),
   error_message TEXT,
+  error_category TEXT,
+  introduced_vulns TEXT[],
+  validation_result JSONB,
+
+  -- Timestamps
   started_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE INDEX idx_psf_project_status ON project_security_fixes(project_id, status);
+CREATE INDEX idx_psf_org_status ON project_security_fixes(organization_id, status);
+CREATE INDEX idx_psf_queued ON project_security_fixes(status, created_at) WHERE status = 'queued';
+CREATE INDEX idx_psf_running ON project_security_fixes(status, heartbeat_at) WHERE status = 'running';
+CREATE INDEX idx_psf_osv ON project_security_fixes(project_id, osv_id) WHERE osv_id IS NOT NULL;
+CREATE INDEX idx_psf_run ON project_security_fixes(run_id);
 ```
+
+`**claim_fix_job` RPC (atomic job claiming with same-project serialization):**
+
+```sql
+CREATE OR REPLACE FUNCTION claim_fix_job(p_machine_id TEXT)
+RETURNS SETOF project_security_fixes AS $$
+BEGIN
+  RETURN QUERY
+  WITH candidate AS (
+    SELECT psf.*
+    FROM project_security_fixes psf
+    WHERE psf.status = 'queued'
+      -- Same-project serialization: skip if another job is running for this project
+      AND NOT EXISTS (
+        SELECT 1 FROM project_security_fixes running
+        WHERE running.project_id = psf.project_id
+          AND running.status = 'running'
+      )
+    ORDER BY psf.created_at ASC
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+  )
+  UPDATE project_security_fixes
+  SET status = 'running',
+      machine_id = p_machine_id,
+      started_at = NOW(),
+      heartbeat_at = NOW(),
+      attempts = attempts + 1
+  FROM candidate
+  WHERE project_security_fixes.id = candidate.id
+  RETURNING project_security_fixes.*;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+`**queue_fix_job` RPC (atomic concurrent cap + insert):**
+
+```sql
+CREATE OR REPLACE FUNCTION queue_fix_job(
+  p_project_id UUID,
+  p_organization_id UUID,
+  p_fix_type TEXT,
+  p_strategy TEXT,
+  p_triggered_by UUID,
+  p_osv_id TEXT DEFAULT NULL,
+  p_dependency_id UUID DEFAULT NULL,
+  p_project_dependency_id UUID DEFAULT NULL,
+  p_semgrep_finding_id UUID DEFAULT NULL,
+  p_secret_finding_id UUID DEFAULT NULL,
+  p_target_version TEXT DEFAULT NULL,
+  p_payload JSONB DEFAULT '{}'
+) RETURNS UUID AS $$
+DECLARE
+  v_org_count INTEGER;
+  v_job_id UUID;
+BEGIN
+  -- Lock org row to serialize concurrent fix requests
+  PERFORM 1 FROM organizations WHERE id = p_organization_id FOR UPDATE;
+
+  -- Check org-level concurrent cap (max 5 active jobs)
+  SELECT COUNT(*) INTO v_org_count
+  FROM project_security_fixes
+  WHERE organization_id = p_organization_id
+    AND status IN ('queued', 'running');
+
+  IF v_org_count >= 5 THEN
+    RAISE EXCEPTION 'MAX_CONCURRENT_FIXES: Organization has reached the maximum of 5 concurrent fix jobs';
+  END IF;
+
+  -- Insert the job (same-project serialization handled at claim time, not queue time)
+  INSERT INTO project_security_fixes (
+    project_id, organization_id, fix_type, strategy, triggered_by,
+    osv_id, dependency_id, project_dependency_id,
+    semgrep_finding_id, secret_finding_id, target_version, payload
+  ) VALUES (
+    p_project_id, p_organization_id, p_fix_type, p_strategy, p_triggered_by,
+    p_osv_id, p_dependency_id, p_project_dependency_id,
+    p_semgrep_finding_id, p_secret_finding_id, p_target_version, p_payload
+  ) RETURNING id INTO v_job_id;
+
+  RETURN v_job_id;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+**Budget check (uses Phase 6C Redis INCR -- no Supabase RPC):**
+
+```typescript
+async function checkAndReserveBudget(orgId: string, estimatedCost: number): Promise<boolean> {
+  const now = new Date();
+  const key = `ai:cost:${orgId}:${now.getFullYear()}:${now.getMonth() + 1}`;
+  const estimatedCents = Math.ceil(estimatedCost * 100);
+
+  // Fetch monthly cap
+  const { data: provider } = await supabase
+    .from('organization_ai_providers')
+    .select('monthly_cost_cap')
+    .eq('organization_id', orgId)
+    .eq('is_default', true)
+    .single();
+
+  const capCents = Math.floor((provider?.monthly_cost_cap ?? 100) * 100);
+
+  // Atomic increment (Redis INCR is atomic, prevents race conditions)
+  const newTotal = await redis.incrby(key, estimatedCents);
+  await redis.expire(key, 35 * 24 * 60 * 60); // 35-day TTL
+
+  if (newTotal > capCents) {
+    await redis.decrby(key, estimatedCents); // rollback
+    return false;
+  }
+  return true;
+}
+```
+
+**Recovery endpoint: `POST /api/internal/recovery/fix-jobs`:**
+
+Protected by `X-Internal-Api-Key`. Called by QStash cron every 5 minutes (same pattern as extraction recovery).
+
+```sql
+CREATE OR REPLACE FUNCTION recover_stuck_fix_jobs()
+RETURNS SETOF project_security_fixes AS $$
+BEGIN
+  RETURN QUERY
+  UPDATE project_security_fixes
+  SET status = 'queued',
+      machine_id = NULL,
+      heartbeat_at = NULL,
+      run_id = gen_random_uuid()  -- New run_id for fresh log stream
+  WHERE status = 'running'
+    AND heartbeat_at < NOW() - INTERVAL '5 minutes'
+    AND attempts < max_attempts
+  RETURNING *;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION fail_exhausted_fix_jobs()
+RETURNS SETOF project_security_fixes AS $$
+BEGIN
+  RETURN QUERY
+  UPDATE project_security_fixes
+  SET status = 'failed',
+      error_message = 'Fix machine terminated unexpectedly after ' || attempts || ' attempt(s).',
+      error_category = 'machine_crash',
+      completed_at = NOW()
+  WHERE status = 'running'
+    AND heartbeat_at < NOW() - INTERVAL '5 minutes'
+    AND attempts >= max_attempts
+  RETURNING *;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+Recovery endpoint logic:
+
+1. Call `recover_stuck_fix_jobs()` -- requeue stale jobs
+2. Call `fail_exhausted_fix_jobs()` -- fail jobs that exceeded retries
+3. Insert warning/error rows into `extraction_logs` for each affected job
+4. Orphan handling: select up to 3 oldest `queued` jobs, call `startAiderMachine()` for each
+
+**Cancellation: `cancelFixJob(jobId, userId)`:**
+
+```typescript
+async function cancelFixJob(jobId: string, userId: string): Promise<void> {
+  const { data: job } = await supabase
+    .from('project_security_fixes')
+    .select('*')
+    .eq('id', jobId)
+    .single();
+
+  if (!job || !['queued', 'running'].includes(job.status)) return;
+
+  await supabase
+    .from('project_security_fixes')
+    .update({ status: 'cancelled', completed_at: new Date().toISOString() })
+    .eq('id', jobId);
+
+  // If running on a machine, stop it
+  if (job.status === 'running' && job.machine_id) {
+    await stopFlyMachine(AIDER_CONFIG.app, job.machine_id);
+  }
+}
+```
+
+Frontend: "Cancel Fix" button in the progress UI. The worker checks `isJobCancelled()` (queries DB for status = 'cancelled') before each major step (after clone, after Aider, before push).
+
+**Dequeue/continuation logic:**
+
+After a fix completes (success or failure), the worker checks for the next queued job before going idle:
+
+```typescript
+async function processFixJob(job: FixJob): Promise<void> {
+  try {
+    // ... run the fix ...
+  } finally {
+    // Check if there's a next job queued for the same project (priority)
+    // or any other queued job
+    // The main poll loop handles this by calling claimJob() immediately
+    // (no sleep between jobs)
+  }
+}
+```
+
+The `claim_fix_job` RPC already handles same-project serialization -- it skips projects with a running job. So after completing a job, the worker's next `claimJob()` call can immediately pick up the next queued job for that project (since the running one just completed).
 
 ### 7C: Fix Strategies
 
-**1. Version Bump** (`bump_version` -- most common, ~70% of fixes):
+**Ecosystem detection:**
 
-```bash
-# Inside the Fly Machine
-git clone $REPO_URL --depth 1
-cd $REPO_DIR
-git checkout -b fix/$OSV_ID
+The worker determines the ecosystem from the job payload's `ecosystem` field (populated from `dependencies.ecosystem` during context gathering). If missing, fall back to file-based detection:
 
-# Use Aider to perform the upgrade intelligently
-# Include reachability context so Aider knows what code to test after upgrading
-aider --yes --no-auto-commits \
-  --model $LLM_MODEL \
-  --message "Upgrade $PACKAGE_NAME from $CURRENT_VERSION to $TARGET_VERSION to fix $OSV_ID.
-    Update the package manifest and lockfile.
-    If there are breaking changes, make necessary code adjustments.
-
-    CONTEXT - How this package is used in the project:
-    $USAGE_SLICES_SUMMARY
-    (e.g., 'lodash.merge() is called in src/api/handler.ts:42, src/utils/config.ts:18')
-
-    CONTEXT - Reachable data flow:
-    $REACHABLE_FLOW_SUMMARY
-    (e.g., 'User input from req.body flows into lodash.merge() at handler.ts:42')
-
-    After upgrading, verify the usage sites above still work correctly.
-    Do NOT change any unrelated files." \
-  --file package.json --file package-lock.json $AFFECTED_FILES
-
-# Validate
-npm audit --json | jq ".vulnerabilities[\"$PACKAGE_NAME\"]" # should be null
-
-git add -A
-git commit -m "fix: upgrade $PACKAGE_NAME to $TARGET_VERSION ($OSV_ID)"
-git push origin fix/$OSV_ID
-# Create draft PR via GitHub/GitLab/Bitbucket API
+```typescript
+function detectEcosystem(repoRoot: string): string | null {
+  if (fs.existsSync(path.join(repoRoot, 'package.json'))) return 'npm';
+  if (fs.existsSync(path.join(repoRoot, 'requirements.txt')) ||
+      fs.existsSync(path.join(repoRoot, 'pyproject.toml'))) return 'pypi';
+  if (fs.existsSync(path.join(repoRoot, 'Cargo.toml'))) return 'cargo';
+  if (fs.existsSync(path.join(repoRoot, 'go.mod'))) return 'golang';
+  if (fs.existsSync(path.join(repoRoot, 'pom.xml'))) return 'maven';
+  if (fs.existsSync(path.join(repoRoot, 'Gemfile'))) return 'gem';
+  if (fs.existsSync(path.join(repoRoot, 'composer.json'))) return 'composer';
+  if (fs.existsSync(path.join(repoRoot, 'pubspec.yaml'))) return 'pub';
+  if (fs.existsSync(path.join(repoRoot, 'mix.exs'))) return 'hex';
+  if (fs.existsSync(path.join(repoRoot, 'Package.swift'))) return 'swift';
+  // nuget: look for *.csproj
+  const csprojs = glob.sync('*.csproj', { cwd: repoRoot });
+  if (csprojs.length > 0) return 'nuget';
+  return null;
+}
 ```
 
-**2. Code Patch** (`code_patch` -- for vulns without a fixed version):
+**Ecosystem reference table:**
 
-Uses the full atom reachability data to know exactly what to patch:
 
-```bash
-# Aider receives the exact data flow path from atom
-aider --yes --no-auto-commits \
-  --model $LLM_MODEL \
-  --message "The dependency $PACKAGE_NAME@$VERSION has vulnerability $OSV_ID: $VULN_DESCRIPTION.
-    No fixed version is available. Add mitigation at the application level.
+| Ecosystem | Manifest                          | Lock                           | Audit Tool                                   | Override/Pin             | Install (safe)                  |
+| --------- | --------------------------------- | ------------------------------ | -------------------------------------------- | ------------------------ | ------------------------------- |
+| npm       | package.json                      | package-lock.json              | `npm audit --json`                           | `overrides`              | `npm install --ignore-scripts`  |
+| yarn      | package.json                      | yarn.lock                      | `yarn audit --json`                          | `resolutions`            | `yarn install --ignore-scripts` |
+| pnpm      | package.json                      | pnpm-lock.yaml                 | `pnpm audit --json`                          | `pnpm.overrides`         | `pnpm install --ignore-scripts` |
+| pypi      | requirements.txt / pyproject.toml | requirements.txt / poetry.lock | `pip-audit --format=json`                    | constraints file         | `pip install --no-deps`         |
+| cargo     | Cargo.toml                        | Cargo.lock                     | `cargo audit --json`                         | `[patch.crates-io]`      | `cargo check`                   |
+| golang    | go.mod                            | go.sum                         | `govulncheck -json ./...`                    | `replace` directive      | `go mod tidy`                   |
+| maven     | pom.xml                           | n/a                            | `mvn org.owasp:dependency-check-maven:check` | `<dependencyManagement>` | `mvn compile -q`                |
+| gem       | Gemfile                           | Gemfile.lock                   | `bundle-audit check`                         | version pin in Gemfile   | `bundle install --no-install`   |
+| composer  | composer.json                     | composer.lock                  | `composer audit --format=json`               | version constraint       | `composer install --no-scripts` |
+| pub       | pubspec.yaml                      | pubspec.lock                   | n/a                                          | `dependency_overrides`   | `dart pub get`                  |
+| hex       | mix.exs                           | mix.lock                       | `mix_audit`                                  | override in mix.exs      | `mix deps.get`                  |
+| swift     | Package.swift                     | Package.resolved               | n/a                                          | n/a                      | `swift package resolve`         |
+| nuget     | *.csproj                          | packages.lock.json             | `dotnet list package --vulnerable`           | n/a                      | `dotnet restore`                |
 
-    REACHABLE DATA FLOW (from dep-scan analysis):
-    Entry point: $ENTRY_POINT_FILE:$ENTRY_POINT_LINE ($ENTRY_POINT_METHOD)
-    Flow: $FLOW_CHAIN_SUMMARY
-    Sink: $SINK_METHOD in $PACKAGE_NAME
 
-    CODE AT ENTRY POINT:
-    $ENTRY_POINT_CODE_SNIPPET
+**Strategy file mapping (what Aider edits per ecosystem):**
 
-    CODE AT VULNERABLE CALL:
-    $VULNERABLE_CALL_CODE_SNIPPET
-
-    Add input validation, sanitization, or a safe wrapper at or before the call
-    to $SINK_METHOD to prevent exploitation. Explain what you changed and why." \
-  --file $ENTRY_POINT_FILE --file $VULNERABLE_CALL_FILE
+```typescript
+function getStrategyFiles(ecosystem: string, strategy: FixStrategy, rootDir: string): string[] {
+  const manifests: Record<string, string[]> = {
+    npm: ['package.json', 'package-lock.json'],
+    yarn: ['package.json', 'yarn.lock'],
+    pnpm: ['package.json', 'pnpm-lock.yaml'],
+    pypi: ['requirements.txt', 'pyproject.toml', 'poetry.lock'],
+    cargo: ['Cargo.toml', 'Cargo.lock'],
+    golang: ['go.mod', 'go.sum'],
+    maven: ['pom.xml'],
+    gem: ['Gemfile', 'Gemfile.lock'],
+    composer: ['composer.json', 'composer.lock'],
+    pub: ['pubspec.yaml', 'pubspec.lock'],
+    hex: ['mix.exs', 'mix.lock'],
+    swift: ['Package.swift', 'Package.resolved'],
+    nuget: [], // detected dynamically (*.csproj)
+  };
+  // Filter to files that actually exist, prepend rootDir for monorepos
+  return manifests[ecosystem]
+    ?.map(f => path.join(rootDir, f))
+    .filter(f => fs.existsSync(f)) ?? [];
+}
 ```
 
-**3. Add Wrapper** (`add_wrapper` -- safer alternative to full upgrade):
+**Aider invocation (all strategies):**
 
-When the atom data shows only specific functions are called from a vulnerable package, add a safe wrapper around just those calls instead of upgrading the whole package (useful when upgrading would break things):
+All strategies use the same invocation pattern. The prompt varies by strategy; the ecosystem determines which files to edit.
 
-```bash
-aider --yes --no-auto-commits \
-  --model $LLM_MODEL \
-  --message "The function $VULNERABLE_FUNCTION in $PACKAGE_NAME@$VERSION has $OSV_ID.
-    Your code calls this function at these locations:
-    $USAGE_LOCATIONS_WITH_CODE
+```typescript
+async function invokeAider(
+  workDir: string,
+  promptFile: string,
+  files: string[],
+  model: string,
+  envVars: Record<string, string>,
+  logger: FixLogger,
+  watchdogMs: number = 10 * 60 * 1000,
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const args = [
+    '--yes-always',
+    '--no-auto-commits',
+    '--no-stream',
+    '--model', model,
+    '--message-file', promptFile,
+    ...files.flatMap(f => ['--file', f]),
+    '--timeout', '120',
+  ];
 
-    Create a safe wrapper function that sanitizes input before calling
-    $VULNERABLE_FUNCTION, then update all call sites to use the wrapper.
-    This avoids upgrading the package while mitigating the vulnerability." \
-  --file $WRAPPER_TARGET_FILE $USAGE_FILES
+  return new Promise((resolve, reject) => {
+    const child = spawn('aider', args, { cwd: workDir, env: { ...process.env, ...envVars } });
+    let stdout = '', stderr = '';
+
+    child.stdout.on('data', d => { stdout += d; logger.log('aider', d.toString().trim()); });
+    child.stderr.on('data', d => { stderr += d; });
+
+    // Process-level watchdog (primary timeout)
+    const watchdog = setTimeout(() => {
+      child.kill('SIGTERM');
+      setTimeout(() => child.kill('SIGKILL'), 5000);
+      reject(new Error('Aider execution timed out after 10 minutes'));
+    }, watchdogMs);
+
+    child.on('close', code => {
+      clearTimeout(watchdog);
+      resolve({ exitCode: code ?? 1, stdout, stderr });
+    });
+    child.on('error', err => { clearTimeout(watchdog); reject(err); });
+  });
+}
 ```
 
-**4. Pin Transitive** (`pin_transitive` -- for vulnerabilities in transitive dependencies):
+**Strategy 1: Version Bump** (`bump_version` -- most common, ~70% of fixes):
 
-```bash
-# For npm: add overrides in package.json
-# For pip: add constraint in requirements.txt
-# For yarn: add resolutions in package.json
-aider --yes --no-auto-commits \
-  --model $LLM_MODEL \
-  --message "The transitive dependency $PACKAGE_NAME@$CURRENT_VERSION (pulled in via $PARENT_PACKAGE)
-    has vulnerability $OSV_ID. Pin it to $SAFE_VERSION using the appropriate
-    mechanism for this ecosystem:
-    - npm: add to 'overrides' in package.json
-    - yarn: add to 'resolutions' in package.json
-    - pip: add to constraints file or override in requirements.txt
-    Regenerate the lockfile after pinning." \
-  --file package.json --file package-lock.json
+Prompt template (written to temp file, passed via `--message-file`):
+
+```
+Upgrade {PACKAGE_NAME} from {CURRENT_VERSION} to {TARGET_VERSION} to fix {OSV_ID}.
+Update the package manifest and lockfile for this {ECOSYSTEM} project.
+If there are breaking changes between these versions, make necessary code adjustments.
+
+CONTEXT - How this package is used in the project:
+{USAGE_SLICES_SUMMARY}
+
+CONTEXT - Reachable data flow:
+{REACHABLE_FLOW_SUMMARY}
+
+CONTEXT - dep-scan analysis:
+{LLM_PROMPT_FROM_DEPSCAN}
+
+After upgrading, verify the usage sites above still work correctly.
+Do NOT change any unrelated files.
 ```
 
-**5. Remove Unused Dependency** (`remove_unused` -- for zombie deps):
+**Strategy 2: Code Patch** (`code_patch` -- for vulns without a fixed version):
 
-```bash
-# Verify the dependency is truly unused via atom usage analysis
-aider --yes --no-auto-commits \
-  --model $LLM_MODEL \
-  --message "Remove the unused dependency $PACKAGE_NAME from this project.
-    Usage analysis confirms no code in this project imports or calls any
-    function from this package.
-    Remove it from the package manifest and lockfile.
-    Remove any remaining import statements that reference it.
-    Do NOT change any unrelated files." \
-  --file package.json --file package-lock.json
+```
+The dependency {PACKAGE_NAME}@{VERSION} has vulnerability {OSV_ID}: {VULN_DESCRIPTION}.
+No fixed version is available. Add mitigation at the application level.
+
+REACHABLE DATA FLOW (from static analysis):
+Entry point: {ENTRY_POINT_FILE}:{ENTRY_POINT_LINE} ({ENTRY_POINT_METHOD})
+Flow: {FLOW_CHAIN_SUMMARY}
+Sink: {SINK_METHOD} in {PACKAGE_NAME}
+
+CODE AT ENTRY POINT:
+{ENTRY_POINT_CODE_SNIPPET}
+
+CODE AT VULNERABLE CALL:
+{VULNERABLE_CALL_CODE_SNIPPET}
+
+Add input validation, sanitization, or a safe wrapper at or before the call
+to {SINK_METHOD} to prevent exploitation. Explain what you changed and why.
 ```
 
-**6. Fix Semgrep Issue** (`fix_semgrep` -- for code-level security issues):
+**Strategy 3: Add Wrapper** (`add_wrapper`):
 
-Triggered from the Project Security Sidebar or Aegis when a user asks to fix a Semgrep finding. Uses the Semgrep finding's rule, file/line, and code context:
+```
+The function {VULNERABLE_FUNCTION} in {PACKAGE_NAME}@{VERSION} has {OSV_ID}.
+Your code calls this function at these locations:
+{USAGE_LOCATIONS_WITH_CODE}
 
-```bash
-aider --yes --no-auto-commits \
-  --model $LLM_MODEL \
-  --message "Fix the security issue found by Semgrep rule $RULE_ID at $FILE_PATH:$LINE_RANGE.
-    Category: $CATEGORY (e.g., sql-injection, xss, insecure-crypto)
-    Severity: $SEVERITY
-    CWE: $CWE_IDS
-    Message: $SEMGREP_MESSAGE
-
-    Current code:
-    $CODE_SNIPPET
-
-    Fix the vulnerability while preserving the existing functionality.
-    Follow OWASP best practices for this category of issue." \
-  --file $FILE_PATH
+Create a safe wrapper function that sanitizes input before calling
+{VULNERABLE_FUNCTION}, then update all call sites to use the wrapper.
+This avoids upgrading the package while mitigating the vulnerability.
 ```
 
-**7. Remediate Secret** (`remediate_secret` -- for exposed secrets found by TruffleHog):
+**Strategy 4: Pin Transitive** (`pin_transitive`):
 
-Replaces the hardcoded secret with an environment variable reference. Does NOT modify .env files or handle the actual secret value.
+The prompt is ecosystem-aware, referencing the correct override mechanism:
 
-```bash
-aider --yes --no-auto-commits \
-  --model $LLM_MODEL \
-  --message "An exposed $DETECTOR_TYPE secret was found at $FILE_PATH:$LINE.
-    Replace the hardcoded secret value with an environment variable reference.
-    Use: process.env.$ENV_VAR_NAME (or os.environ['$ENV_VAR_NAME'] for Python).
-    Add a comment noting the env var that needs to be set.
-    If a .env.example file exists, add the variable name there (without the value).
-    Do NOT include the actual secret value anywhere in the code." \
-  --file $FILE_PATH
+```
+The transitive dependency {PACKAGE_NAME}@{CURRENT_VERSION} (pulled in via {PARENT_PACKAGE})
+has vulnerability {OSV_ID}. Pin it to {SAFE_VERSION} using the {ECOSYSTEM} override mechanism:
+{ECOSYSTEM_SPECIFIC_INSTRUCTION}
+```
+
+Where `ECOSYSTEM_SPECIFIC_INSTRUCTION` maps to:
+
+- npm: `Add to "overrides" in package.json`
+- yarn: `Add to "resolutions" in package.json`
+- pnpm: `Add to "pnpm.overrides" in package.json`
+- pip: `Add a constraint in requirements.txt or constraints.txt`
+- cargo: `Add a [patch.crates-io] section in Cargo.toml`
+- go: `Add a "replace" directive in go.mod`
+- maven: `Add to <dependencyManagement> in pom.xml`
+- Other ecosystems: `Pin the exact version in the manifest file`
+
+**Strategy 5: Remove Unused** (`remove_unused`):
+
+```
+Remove the unused dependency {PACKAGE_NAME} from this {ECOSYSTEM} project.
+Usage analysis confirms no code in this project imports or calls any function from this package.
+Remove it from the package manifest and lockfile.
+Remove any remaining import statements that reference it.
+Do NOT change any unrelated files.
+```
+
+**Strategy 6: Fix Semgrep Issue** (`fix_semgrep`):
+
+```
+Fix the security issue found by Semgrep rule {RULE_ID} at {FILE_PATH}:{LINE_RANGE}.
+Category: {CATEGORY}
+Severity: {SEVERITY}
+CWE: {CWE_IDS}
+Message: {SEMGREP_MESSAGE}
+
+Current code:
+{CODE_SNIPPET}
+
+Fix the vulnerability while preserving the existing functionality.
+Follow OWASP best practices for this category of issue.
+```
+
+**Strategy 7: Remediate Secret** (`remediate_secret`):
+
+```
+An exposed {DETECTOR_TYPE} secret was found at {FILE_PATH}:{LINE}.
+Replace the hardcoded secret value with an environment variable reference.
+Use the appropriate pattern for this language:
+- JavaScript/TypeScript: process.env.{ENV_VAR_NAME}
+- Python: os.environ['{ENV_VAR_NAME}']
+- Go: os.Getenv("{ENV_VAR_NAME}")
+- Java: System.getenv("{ENV_VAR_NAME}")
+- Ruby: ENV['{ENV_VAR_NAME}']
+Add a comment noting the env var that needs to be set.
+If a .env.example file exists, add the variable name there (without the value).
+Do NOT include the actual secret value anywhere in the code.
+```
+
+Note: Aider reads the file content via `--file`, so it will see the secret in the source. This is the org's own code running on their own BYOK key. The secret was already committed to git. The BYOK key is cleared from the environment before validation runs.
+
+**Post-fix validation:**
+
+After Aider completes and before committing:
+
+```typescript
+async function validateFix(
+  workDir: string,
+  ecosystem: string,
+  logger: FixLogger,
+): Promise<ValidationResult> {
+  const result: ValidationResult = {
+    auditPassed: null,
+    lintPassed: null,
+    testsPassed: null,
+    testsSkipped: false,
+    notes: [],
+  };
+
+  // 1. Clear LLM API key from environment BEFORE running any install/test
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.GEMINI_API_KEY;
+
+  // 2. Run safe install (lockfile regeneration)
+  try {
+    const installCmd = getSafeInstallCommand(ecosystem);
+    if (installCmd) {
+      execSync(installCmd, { cwd: workDir, timeout: 120_000, stdio: 'pipe' });
+    }
+  } catch (err) {
+    result.notes.push(`Install failed: ${err.message}. Lockfile may need manual regeneration.`);
+  }
+
+  // 3. Run audit tool
+  try {
+    const auditCmd = getAuditCommand(ecosystem);
+    if (auditCmd) {
+      execSync(auditCmd, { cwd: workDir, timeout: 60_000, stdio: 'pipe' });
+      result.auditPassed = true;
+    }
+  } catch {
+    result.auditPassed = false;
+    result.notes.push('Audit tool reports remaining vulnerabilities.');
+  }
+
+  // 4. Run tests (2-minute timeout, isolated container makes this safe)
+  try {
+    const testCmd = getTestCommand(ecosystem, workDir);
+    if (testCmd) {
+      execSync(testCmd, { cwd: workDir, timeout: 120_000, stdio: 'pipe' });
+      result.testsPassed = true;
+    } else {
+      result.testsSkipped = true;
+      result.notes.push('No test command detected.');
+    }
+  } catch {
+    result.testsPassed = false;
+    result.notes.push('Tests failed after fix. Please verify locally.');
+  }
+
+  return result;
+}
+```
+
+**PR description template:**
+
+```typescript
+function buildPRDescription(job: FixJob, result: FixResult): string {
+  return `## Security Fix: ${job.osv_id || job.strategy}
+
+**Strategy:** ${formatStrategy(job.strategy, job.target_version)}
+**Severity:** ${job.payload.severity || 'N/A'}
+**Ecosystem:** ${job.payload.ecosystem}
+**Generated by:** Deptex AI (Aider)
+
+### What changed
+${result.diffSummary || 'See diff below.'}
+
+### Validation
+- Audit: ${formatValidation(result.validationResult?.auditPassed)}
+- Tests: ${result.validationResult?.testsSkipped ? 'Skipped (no test command detected)' : formatValidation(result.validationResult?.testsPassed)}
+${result.validationResult?.notes.map(n => `- Note: ${n}`).join('\n') || ''}
+
+${result.introducedVulns?.length ? `### Warnings\n- This fix introduces: ${result.introducedVulns.join(', ')}` : ''}
+
+---
+*This is a draft PR created by [Deptex AI](https://deptex.dev). Review carefully before merging.*`;
+}
+```
+
+**Branch collision handling:**
+
+```typescript
+async function createFixBranch(provider: GitProvider, baseBranch: string, branchName: string): Promise<string> {
+  // Check if branch already exists
+  const exists = await provider.branchExists(branchName);
+  if (!exists) return branchName;
+
+  // Check if there's an open PR for this branch
+  const openPR = await provider.getOpenPRForBranch(branchName);
+  if (!openPR) {
+    // Old branch with no open PR -- delete and reuse name
+    await provider.deleteBranch(branchName);
+    return branchName;
+  }
+
+  // Branch has an open PR -- append suffix
+  for (let i = 2; i <= 10; i++) {
+    const suffixed = `${branchName}-${i}`;
+    if (!(await provider.branchExists(suffixed))) return suffixed;
+  }
+  throw new Error('Too many existing branches for this fix');
+}
+```
+
+**Disk cleanup between fixes:**
+
+After each fix job (success or failure), the worker cleans up:
+
+```typescript
+finally {
+  // Remove cloned repo to free disk and prevent file leakage between fixes
+  await fs.rm(workDir, { recursive: true, force: true });
+}
 ```
 
 ### 7D: Fix Progress UI
 
-In the Vulnerability Detail Sidebar (6D), when "Fix with AI" is clicked:
+**Chat-driven planning flow (replaces old modal pattern):**
 
-1. **Pre-fix confirmation**: Small inline card showing:
-  - Selected strategy (bump/patch/wrapper/pin/remove/semgrep fix/secret remediation)
-  - Target version (for bump), or affected file/line (for semgrep/secret fixes)
-  - Estimated cost based on model + typical token usage
-  - "Start Fix" confirmation button
-2. **Progress indicator** (replaces the confirmation card):
-  - Step indicator: Cloning â†’ Analyzing â†’ Fixing â†’ Testing â†’ Creating PR
+1. **"Fix with AI" button** on any vulnerability, Semgrep finding, or secret finding opens the Aegis panel (if not already open) and sends context to Aegis. The button behavior depends on state:
+  - No active fix + BYOK configured: green button "Fix with AI" → opens Aegis panel
+  - No BYOK: disabled button with tooltip "Configure AI keys in Organization Settings"
+  - Fix queued: "Fix Queued..." (disabled, gray, spinner)
+  - Fix running: "Fix in Progress" (disabled, animated border) + "View Logs" expandable
+  - Fix completed: "Fix PR Created" (green outline) with PR link + "Fix again" secondary link
+  - Fix failed: "Fix with AI" with amber "Previous attempt failed" warning badge
+2. **Aegis proposes the plan** (rendered as an action card in chat):
+  - Strategy recommendation with reasoning
+  - Files that will be modified
+  - Estimated cost (model + typical token usage range)
+  - **[Execute Plan]** button
+  - **[Modify Strategy]** button (opens strategy picker)
+3. **Progress indicator** (inline in Aegis panel after executing):
+  - Step indicator: Cloning → Analyzing → Fixing → Validating → Creating PR
   - Current step highlighted with spinner
-  - Live log stream below (reuses extraction worker log infrastructure from Phase 2 - Supabase Realtime on `extraction_logs` table keyed by fix job ID)
-  - Logs are color-coded: white for info, yellow for warnings, green for success, red for errors
-3. **Completion states:**
-  - **Success**: Green banner "Fix PR created" with PR link button + diff summary (files changed, lines added/removed)
-  - **Failure -- smart failure flow**: Instead of a generic error, Aegis analyzes the failure and provides actionable guidance:
-  1. Red banner with error category (e.g., "Build failed after upgrade", "No safe version exists", "Aider timed out")
-  2. **Aegis failure analysis** (auto-triggered): Aegis receives the error log and fix context, generates an explanation: "The version bump to 4.17.21 caused a TypeScript compilation error in handler.ts:42 because the merge() type signature changed. You can either: (a) pin to 4.17.20 which fixes CVE-A but not CVE-B, or (b) update the type annotation at handler.ts:42."
-  3. **Smart retry options**: Based on the failure mode, Aegis suggests:
-    - "Try a different version" (if version bump failed due to breaking changes)
-    - "Try code_patch instead" (if no safe version exists)
-    - "Try add_wrapper" (if the failure was in upgrading but the vulnerable call is isolated)
-  4. "Retry with suggested strategy" button (pre-fills the suggested alternative)
-  5. "Ask Aegis for help" button (opens Aegis panel with full failure context for conversational troubleshooting)
-4. **Fix history**: In the vulnerability detail sidebar, a "Past Fixes" collapsible section showing previous fix attempts with status, PR link, strategy used, and failure reason if applicable. Helps users see what's been tried and what worked.
+  - Live log stream below (Supabase Realtime on `extraction_logs` filtered by `run_id`)
+  - Logs color-coded: white info, yellow warnings, green success, red errors
+  - **"Cancel Fix"** button (calls `cancelFixJob()`)
+4. **Completion states** (inline in Aegis panel):
+  - **Success**: "Fix PR #42 created on branch fix/CVE-2024-XXXX" with PR link + diff summary
+  - **Failure -- smart failure flow**: Aegis analyzes the failure and provides:
+  1. Error category explanation
+  2. Suggested alternative strategy
+  3. "Retry with suggested strategy" button
+  4. "Ask Aegis for help" continues the conversation with full failure context
+5. **Fix history**: In the vulnerability/finding detail sidebar, a "Past Fixes" collapsible section showing previous attempts with status, PR link, strategy, and failure reason.
 
 ### 7E: Safety Measures
 
-- Machine auto-destroys after 10-minute timeout (enforced at machine level via Fly Machines API `auto_destroy` and Aider `--timeout`)
-- **Extraction worker machine**: auto-destroys after 4-hour timeout (see 6N)
+- **Three-layer timeout**: Aider `--timeout 120` (per-API-call), process watchdog 10 min (primary), Fly Machines `stop_config.timeout: 15m` (ultimate backstop)
 - PR created as **draft** for human review (never merged automatically)
-- Aider runs with `--no-auto-commits` - all changes reviewed before committing
-- Post-fix validation: run `npm audit` / `pip audit` / relevant tool to confirm vulnerability is resolved
-- Never push directly to main/master branch - creates `fix/$OSV_ID`, `fix/semgrep-$RULE_ID`, or `fix/secret-$DETECTOR_TYPE` branches
-- Rate limiting: max 5 concurrent fix jobs per organization (prevent runaway costs)
-- **Same-project serialization**: before starting a fix, check if another fix job for the SAME PROJECT is currently `running`. If yes, queue the new job (status = `queued`) rather than starting it in parallel. This prevents two fixes from modifying the same files simultaneously and creating merge conflicts. Sprint jobs already run sequentially; this guard applies to manual individual fixes.
-- Cost cap: configurable per-org maximum monthly AI spend (from `organization_ai_providers.monthly_cost_cap`, checked before starting each fix)
-- **Max attempts guard**: max 3 failed fix attempts per target (same osv_id/finding_id) per 24 hours. After 3 failures, block retry and show "Manual intervention required" (see 6N for details).
-- Audit trail: all fix jobs logged in `project_security_fixes` with user, strategy, cost, result. All LLM calls logged in `ai_usage_logs`.
-- Secret safety: for `remediate_secret` strategy, Aider never receives the actual secret value -- only the file, line, and detector type. The prompt instructs it to replace the hardcoded value with an env var reference. Only available for findings with `is_current = true` (see 6N).
-- **Re-extraction safety**: warn user before re-extraction if fix jobs are running (see 6N)
-- **BYOK deletion guard**: warn before deleting an AI provider key if active fix jobs exist (see 6G)
-- Repository access: uses the same git provider token as extraction (no additional permissions needed)
+- Aider runs with `--no-auto-commits` -- all changes reviewed before committing
+- Post-fix validation: audit tool per ecosystem + tests with 2-min timeout. LLM API key **cleared from environment** before validation runs (prevents exfiltration via install scripts)
+- Never push directly to main/master -- creates `fix/$OSV_ID`, `fix/semgrep-$RULE_ID`, or `fix/secret-$DETECTOR_TYPE` branches
+- **Rate limiting**: max 5 concurrent fix jobs per organization (enforced atomically by `queue_fix_job` RPC)
+- **Same-project serialization**: enforced at claim time by `claim_fix_job` RPC. Jobs queue rather than run in parallel for the same project. Dequeued jobs re-fetch context to handle stale state.
+- **Cost cap**: Phase 6C Redis INCR pattern. Atomic check-and-reserve before each fix. Rollback on failure.
+- **Max attempts guard**: max 3 failed fix attempts per target per 24 hours. After 3, block retry with "Manual intervention required."
+- **Cancellation**: `cancelFixJob()` sets status = 'cancelled', stops Fly machine if running. Worker checks `isJobCancelled()` before each major step.
+- Audit trail: all fix jobs in `project_security_fixes`, all LLM calls in `ai_usage_logs`
+- Secret safety: Aider sees the file content (necessary to modify it), but the BYOK key holder is authorizing their own LLM to see their own code. Key cleared before validation.
+- **Re-extraction safety**: warn user before re-extraction if fix jobs are running
+- **BYOK deletion guard**: warn before deleting an AI provider key if active fix jobs exist
+- **Recovery cron**: `POST /api/internal/recovery/fix-jobs` every 5 minutes via QStash (requeues stuck, fails exhausted, starts machines for orphans)
+- Repository access: uses the same git provider token as extraction (requires `contents: write` + `pull_requests: write` permissions on the GitHub App)
+- **Supabase token scoping** (future enhancement): use a limited-scope Supabase token for the Aider machine instead of the full service role key. The machine only needs: read/update `project_security_fixes`, insert `extraction_logs`, read `organization_ai_providers` and `organization_integrations`.
 
 ### 7G: Fix Status Integration Across All Screens
 
-Fix status from `project_security_fixes` must be visible globally -- not just inside the Security tab sidebar where the fix was triggered. Every screen that displays a vulnerability, dependency, or project should reflect active/completed/failed fix state in real time.
+Fix status from `project_security_fixes` must be visible globally -- not just inside the Aegis panel where the fix was triggered. Every screen that displays a vulnerability, dependency, or project should reflect active/completed/failed fix state in real time.
 
 **Graph Node Indicators (Security Tab -- project, org, and team graphs):**
 
@@ -372,119 +1039,81 @@ Fix status from `project_security_fixes` must be visible globally -- not just in
 - **Org/Team graph project nodes**: Same badge as center node -- sparkle with count if any fixes running for that project
 - **Org/Team graph team nodes**: Aggregate across team projects: "5 AI fixes in progress across 3 projects"
 
-**Vulnerability Detail Sidebar (6D) -- already partially covered in 7D, additions:**
+**Vulnerability Detail Sidebar (6D):**
 
-- "Fix with AI" button state changes based on active fixes:
-  - No active fix: normal green button "Fix with AI"
-  - Fix queued: button becomes "Fix Queued..." (disabled, gray, with spinner) + queue position indicator
-  - Fix running: button becomes "Fix in Progress" (disabled, animated border) + live step indicator + "View Logs" expandable
-  - Fix completed: button becomes "Fix PR Created" (green outline) with PR link. Below: "Fix again" secondary link for re-attempts
-  - Fix failed: button reverts to "Fix with AI" with a "Previous attempt failed" warning badge above it + expandable failure reason
-- **Past Fixes section** (already in 7D): add real-time status updates for running fixes within this section
+- "Fix with AI" button state changes per 7D
+- **Past Fixes section**: real-time status updates for running fixes
 
 **Dependency Detail Sidebar (6E):**
 
-- Under "Current Vulnerabilities" list (section 3): each vulnerability row gains a fix status badge inline:
-  - Running: small sparkle icon + "Fixing..." text in green-500 13px
-  - Completed: green check + "PR #42" link in green-500 13px
-  - Failed: amber warning + "Fix failed" in amber-500 13px
-- Under "Recommended Versions" (section 4): if a version bump fix is in progress targeting this package, show: "AI is currently upgrading to vX.Y.Z" inline status card with progress bar
+- Under "Current Vulnerabilities": each vulnerability row gains a fix status badge inline (running/completed/failed)
+- Under "Recommended Versions": if a version bump fix is in progress, show inline "AI is currently upgrading to vX.Y.Z"
 
 **Project Security Sidebar (6F -- center node click):**
 
 - New "Active AI Fixes" card between "Priority Actions" and "Actions Footer":
-  - Shows count of running/queued fixes: "2 running, 1 queued"
-  - Mini list: each fix with target name (CVE ID or Semgrep rule or secret type), strategy badge, current step
-  - Each item clickable -- navigates to the vulnerability/finding and opens its detail sidebar
-  - If no active fixes: card hidden entirely (don't show empty state)
+  - Count: "2 running, 1 queued"
+  - Mini list: each fix with target, strategy badge, current step
+  - Each item clickable -- navigates to the vulnerability/finding detail
+  - Hidden when no active fixes
 
-**Dependencies Tab (ProjectDependenciesPage):**
+**Dependencies Tab, Compliance Tab, Project Overview Page, Org/Team Security Pages, Aegis Full-Page Screen:**
 
-- **Dependency overview table/cards**: add a small "AI Fix" column/badge. If any vulnerability for this dependency has an active fix, show sparkle icon
-- **Supply chain graph**: dependency nodes with active fixes show the same sparkle badge as the Security tab graph nodes
-- **Dependency detail page** (`DependencyOverviewPage.tsx`): if the dependency has active fixes for its vulnerabilities, show an "Active Fixes" banner card at the top: "Aegis is fixing 2 vulnerabilities in this package"
-
-**Compliance Tab (ProjectCompliancePage):**
-
-- If a non-compliant package has an active AI fix, the compliance status cell shows "Fix in Progress" instead of just the violation badge. This prevents users from manually addressing something Aegis is already handling.
-- Compliance summary counts should note: "3 non-compliant (1 fix in progress)"
-
-**Project Overview Page (ProjectOverviewPage):**
-
-- Security summary card: add "X AI fixes active" count alongside vulnerability counts
-- Activity feed: fix events (started, completed, failed) appear as activity items with sparkle icon
-
-**Org/Team Security Pages (6M):**
-
-- Already covered by graph node indicators above
-- Summary statistics bar: include aggregate "X AI fixes in progress" count across all projects
-- "Run Security Sprint" button: if a sprint is already running, button changes to "Sprint in Progress (Step X/Y)" with progress bar
-
-**Aegis Full-Page Screen (7B-L):**
-
-- Left sidebar "Active Tasks" section: all running fix jobs appear as task cards with mini progress indicators
-- Chat interface: when a fix completes or fails, Aegis posts an update message in the relevant thread: "Fix for CVE-2024-XXXX completed. Draft PR #42 created on branch fix/CVE-2024-XXXX."
-- Fix events also appear in the Activity tab of the Aegis screen
+Same integration as described in the original plan (dependency badges, compliance "Fix in Progress" status, overview counts, activity feed, Aegis active tasks sidebar). No changes to these sections.
 
 ### 7H: Real-time Fix Status Infrastructure
 
-All fix status indicators across the app must update in real time without page refresh, using Supabase Realtime subscriptions.
+All fix status indicators update in real time via Supabase Realtime.
 
-**Supabase Realtime channel:**
-
-Subscribe to `project_security_fixes` table changes scoped to the user's current context:
+**Supabase Realtime channels:**
 
 ```typescript
-// Project-level subscription (for project pages)
-const channel = supabase.channel(`fix-status:${projectId}`)
+// Project-level: fix job status changes
+supabase.channel(`fix-status:${projectId}`)
   .on('postgres_changes', {
-    event: '*',
-    schema: 'public',
-    table: 'project_security_fixes',
+    event: '*', schema: 'public', table: 'project_security_fixes',
     filter: `project_id=eq.${projectId}`,
-  }, (payload) => {
-    // Update local fix status state
-    // payload.new contains updated row with status, fly_machine_id, pr_url, etc.
-  })
+  }, handleFixStatusUpdate)
   .subscribe();
 
-// Org-level subscription (for org pages, Aegis screen)
-const orgChannel = supabase.channel(`fix-status-org:${orgId}`)
+// Project-level: live fix logs (keyed by run_id)
+supabase.channel(`fix-logs:${runId}`)
   .on('postgres_changes', {
-    event: '*',
-    schema: 'public',
-    table: 'project_security_fixes',
+    event: 'INSERT', schema: 'public', table: 'extraction_logs',
+    filter: `run_id=eq.${runId}`,
+  }, handleLogEntry)
+  .subscribe();
+
+// Org-level: all fix jobs across projects
+supabase.channel(`fix-status-org:${orgId}`)
+  .on('postgres_changes', {
+    event: '*', schema: 'public', table: 'project_security_fixes',
     filter: `organization_id=eq.${orgId}`,
-  }, (payload) => {
-    // Update org-wide fix status state
-  })
+  }, handleOrgFixStatusUpdate)
   .subscribe();
 ```
 
-**React hooks:**
+Note: fix logs use the `extraction_logs` table with the fix job's `run_id`. The log streaming infrastructure from Phase 2 is fully reused -- the frontend subscribes to `extraction_logs` filtered by `run_id` for live log display.
 
-Create `frontend/src/hooks/useFixStatus.ts`:
+**React hooks** (create `frontend/src/hooks/useFixStatus.ts`):
 
 ```typescript
-// Returns fix status for all fixes in a project
 export function useProjectFixStatus(projectId: string): {
-  fixes: FixJob[];        // all active/recent fixes
-  runningCount: number;    // count of running fixes
-  queuedCount: number;     // count of queued fixes
+  fixes: FixJob[];
+  runningCount: number;
+  queuedCount: number;
   getFixForVuln: (osvId: string) => FixJob | null;
   getFixForSemgrep: (findingId: string) => FixJob | null;
   getFixForSecret: (findingId: string) => FixJob | null;
   getFixesForDep: (depName: string) => FixJob[];
 }
 
-// Returns fix status across all projects in an org
 export function useOrgFixStatus(orgId: string): {
   fixes: FixJob[];
   runningCount: number;
   getFixesForProject: (projectId: string) => FixJob[];
 }
 
-// Returns whether a specific target has an active fix
 export function useTargetFixStatus(target: {
   osvId?: string;
   semgrepFindingId?: string;
@@ -492,15 +1121,13 @@ export function useTargetFixStatus(target: {
   projectId: string;
 }): {
   activeFix: FixJob | null;
-  recentFixes: FixJob[];    // completed/failed in last 24h
-  canStartNewFix: boolean;  // false if active fix exists or max attempts reached
-  blockReason?: string;     // human-readable reason if canStartNewFix is false
+  recentFixes: FixJob[];
+  canStartNewFix: boolean;
+  blockReason?: string;
 }
 ```
 
-**Fix status context provider:**
-
-Wrap project and org layouts with a `FixStatusProvider` that manages the Realtime subscription and exposes fix data to all child components via React context. This avoids duplicate subscriptions when multiple components on the same page need fix status.
+**Context providers:**
 
 ```typescript
 // In ProjectLayout.tsx:
@@ -514,21 +1141,14 @@ Wrap project and org layouts with a `FixStatusProvider` that manages the Realtim
 </OrgFixStatusProvider>
 ```
 
-**Log streaming for active fixes:**
-
-Reuses the existing extraction log infrastructure (Supabase Realtime on `extraction_logs`). Fix jobs write logs with their job ID as the key. The Fix Progress UI (7D) subscribes to `extraction_logs` filtered by `fix_job_id` for live log display.
-
 ### 7I: Duplicate Fix Prevention & Aegis Awareness
 
-When a user attempts to fix something that already has an active fix (either through the "Fix with AI" button or by asking Aegis), the system must detect the duplicate and respond intelligently.
+When a user attempts to fix something that already has an active fix (via button or Aegis chat), the system detects the duplicate and responds intelligently.
 
-**Detection logic (shared by both button and Aegis paths):**
-
-Before initiating any fix, the fix orchestrator (`ai-fix-engine.ts`) checks:
+**Detection logic (shared by button and Aegis):**
 
 ```typescript
 async function checkExistingFix(projectId: string, target: FixTarget): Promise<ExistingFixCheck> {
-  // Check for active fix (queued or running) on the same target
   const activeFix = await supabase
     .from('project_security_fixes')
     .select('*')
@@ -541,13 +1161,11 @@ async function checkExistingFix(projectId: string, target: FixTarget): Promise<E
 
   if (activeFix.data) {
     return {
-      hasActiveFix: true,
-      fix: activeFix.data,
-      message: `This ${target.type} is already being fixed. Current status: ${activeFix.data.status} (started ${timeAgo(activeFix.data.started_at)}).`
+      hasActiveFix: true, fix: activeFix.data,
+      message: `This ${target.type} is already being fixed. Status: ${activeFix.data.status} (started ${timeAgo(activeFix.data.started_at)}).`
     };
   }
 
-  // Check for recent completed fix with open PR
   const recentCompleted = await supabase
     .from('project_security_fixes')
     .select('*')
@@ -561,9 +1179,8 @@ async function checkExistingFix(projectId: string, target: FixTarget): Promise<E
 
   if (recentCompleted.data) {
     return {
-      hasCompletedFix: true,
-      fix: recentCompleted.data,
-      message: `A fix PR already exists for this issue: PR #${recentCompleted.data.pr_number}. Merge it to resolve the vulnerability, or close it and retry.`
+      hasCompletedFix: true, fix: recentCompleted.data,
+      message: `A fix PR already exists: PR #${recentCompleted.data.pr_number}. Merge it to resolve, or close and retry.`
     };
   }
 
@@ -573,68 +1190,58 @@ async function checkExistingFix(projectId: string, target: FixTarget): Promise<E
 
 **"Fix with AI" button behavior:**
 
-The button uses `useTargetFixStatus` hook (from 7H) to determine its state. When an active fix exists, the button is replaced by a status card BEFORE the user even clicks:
+Uses `useTargetFixStatus` hook. States are rendered BEFORE the user clicks -- no need to click and get an error:
 
-- **Active fix exists (queued/running):** Button disabled. Shows inline: "Aegis is fixing this (Step X/Y)" with animated sparkle icon. "View Progress" link expands the live log viewer. No need to click and get an error -- the state is visible immediately.
-- **Completed fix with open PR:** Button replaced with "Fix PR #42 Created" green link to the PR. Below: "Try a different approach" secondary button (allows starting a new fix with a different strategy, useful if the PR was closed without merging).
-- **Recent failures exist (< 3):** Button still enabled but shows amber warning: "Previous attempt failed (code_patch strategy). Try a different approach?" with strategy suggestion.
-- **Max attempts reached (3 failures in 24h):** Button disabled. Shows: "3 attempts failed in the last 24 hours. Manual intervention required." with expandable failure history and Aegis guidance.
+- **Active fix (queued/running):** Disabled. Shows "Aegis is fixing this (Step X/Y)" with sparkle icon + "View Progress" link.
+- **Completed with open PR:** "Fix PR #42 Created" green link + "Try a different approach" secondary button.
+- **Recent failures (< 3):** Enabled with amber warning: "Previous attempt failed. Try a different approach?"
+- **Max attempts reached:** Disabled. "3 attempts failed in 24 hours. Manual intervention required."
 
 **Aegis chat awareness:**
 
-Aegis's `triggerFix` tool implementation calls `checkExistingFix()` before proceeding. Based on the result, Aegis responds naturally:
+Aegis's `triggerFix` tool calls `checkExistingFix()` first and responds naturally:
 
-- **Active fix running:** "I'm already working on fixing CVE-2024-XXXX -- it's currently at step 3 of 5 (analyzing the code). I'll let you know when it's done. You can also track progress in the Security tab."
-- **Active fix queued:** "I have a fix queued for CVE-2024-XXXX -- it's waiting for the current fix on [other-package] to complete (same-project serialization). It should start within a few minutes."
-- **Completed fix with open PR:** "I already created a fix for this -- PR #42 on branch `fix/CVE-2024-XXXX` is ready for review. Would you like me to summarize what the PR changes?"
-- **Recent failures:** "I tried fixing this earlier with a version bump strategy, but it failed because [reason]. Want me to try a code_patch approach instead?"
-- **Max attempts reached:** "I've tried 3 different approaches to fix this in the last 24 hours, but none succeeded. Here's what happened: [summary of each attempt]. I recommend [specific manual guidance based on failure patterns]."
+- Active fix running: "I'm already working on this -- currently at step 3/5. I'll let you know when it's done."
+- Completed with open PR: "I already created PR #42 for this. Want me to summarize what the PR changes?"
+- Recent failures: "I tried version bump earlier but it failed because [reason]. Want me to try code_patch instead?"
+- Max attempts: "I've tried 3 approaches in 24 hours. Here's what happened: [summary]. I recommend [manual guidance]."
 
-**Sprint-level awareness:**
+**Sprint-level awareness (Phase 7B integration point):**
 
-When Aegis is running a Security Sprint (7B-N) and the sprint plan includes a fix for vulnerability X, and the user separately asks Aegis to fix vulnerability X:
+When Phase 7B's Security Sprint includes a fix for vulnerability X and the user separately asks to fix X:
 
-- Aegis detects the overlap by checking `aegis_task_steps` for a step targeting the same osv_id/finding_id
-- Response: "This vulnerability is already part of the security sprint I'm running (step 4 of 12). It's scheduled to be fixed after the current item completes. Would you like me to prioritize it and move it to the front of the queue?"
+- Aegis checks `aegis_task_steps` for overlap
+- Response: "This is already part of the sprint I'm running (step 4/12). Want me to prioritize it?"
+
+This detection logic is implemented in Phase 7B, not Phase 7.
 
 **Cross-user awareness:**
 
-If User A triggered a fix and User B (same org) tries to fix the same thing:
+If User A triggered a fix and User B (same org) tries the same target:
 
-- Same detection logic applies -- `project_security_fixes` is org-scoped
-- Aegis/button shows: "This is already being fixed by [User A's name] (started X minutes ago). View progress."
-- Prevents duplicate effort and wasted BYOK spend across team members
+- `project_security_fixes` is org-scoped -- same detection logic applies
+- Shows: "This is being fixed by [User A's name] (started X minutes ago). View progress."
 
 ### 7J: Fix-to-PR Lifecycle Integration
 
-AI-generated fix PRs have a lifecycle that extends beyond the initial creation. This section covers the full journey from fix completion through PR merge and vulnerability resolution.
+AI-generated fix PRs have a lifecycle that extends beyond initial creation. Phase 8 (already built) provides the PR webhook infrastructure.
 
-**Phase 8 PR Tracking Integration:**
+**Phase 8 integration:**
 
-When a fix job creates a draft PR, the fix engine also creates a record in the Phase 8 PR tracking system:
-
-```sql
--- Add to project_security_fixes for the reverse lookup
-ALTER TABLE project_security_fixes
-  ADD COLUMN pr_provider TEXT,          -- 'github', 'gitlab', 'bitbucket'
-  ADD COLUMN pr_repo_full_name TEXT,    -- 'owner/repo'
-  ADD COLUMN pr_branch TEXT;            -- 'fix/CVE-2024-XXXX'
-```
-
-When Phase 8's PR webhook fires for the fix branch (push event or PR event), Phase 8 recognizes it as an AI fix PR by matching the branch name pattern (`fix/*`) against `project_security_fixes.pr_branch`. The PR tracking table stores:
+When a fix job creates a draft PR, the fix engine stores `pr_branch`, `pr_provider`, `pr_repo_full_name` on the `project_security_fixes` row. Phase 8's PR webhook recognizes AI fix PRs by matching the branch pattern (`fix/`*) against `project_security_fixes.pr_branch`. The PR tracking table stores:
 
 - `source = 'ai_fix'` to distinguish from regular PRs
 - `fix_job_id` FK back to `project_security_fixes`
-- All standard PR tracking fields (status, checks, merge status)
+- All standard PR tracking fields
 
 **PR table display:**
 
-In the Phase 8 PR tracking table, AI fix PRs appear with:
+In Phase 8's PR tracking table, AI fix PRs show:
 
-- "AI Fix" badge (sparkle icon + green-500 pill) next to the PR title
-- Linked vulnerability/finding ID (clickable, navigates to the Security tab detail sidebar)
-- Strategy used (e.g., "Version Bump to v4.17.21")
-- Fix cost (tokens used, estimated dollar amount)
+- "AI Fix" badge (sparkle icon + green-500 pill)
+- Linked vulnerability/finding ID (clickable)
+- Strategy used
+- Fix cost (tokens, estimated dollar amount)
 
 **Post-fix PR states and transitions:**
 
@@ -663,364 +1270,388 @@ stateDiagram-v2
 
 **PR merged -- vulnerability resolution flow:**
 
-1. PR webhook fires with `merged = true`
-2. Phase 8 triggers an extraction for the project (or waits for the next scheduled extraction)
-3. Extraction detects the vulnerability is no longer present (package version updated, code patched, etc.)
-4. `project_vulnerability_events` gets a `resolved` event with metadata: `{ resolved_by: 'ai_fix', fix_job_id, pr_number, strategy }`
-5. `project_security_fixes` status updated to `merged` (new status beyond `completed`)
-6. MTTR (Mean Time To Remediation) calculated: `resolved_at - detected_at`
-7. Security debt snapshot updated on next daily snapshot
+1. Phase 8 PR webhook fires with `merged = true`
+2. Phase 8 triggers extraction (or waits for next scheduled)
+3. Extraction confirms vulnerability resolved
+4. `project_vulnerability_events` gets `resolved` event: `{ resolved_by: 'ai_fix', fix_job_id, pr_number, strategy }`
+5. `project_security_fixes` status → `merged`
+6. MTTR calculated: `resolved_at - detected_at`
 
 **PR closed without merge:**
 
-1. PR webhook fires with `merged = false, state = closed`
-2. `project_security_fixes` status updated to `pr_closed`
-3. In the Vulnerability Detail Sidebar (6D): fix history shows "PR #42 was closed without merging" with "Retry Fix" button
-4. If Aegis is in the conversation context, it notes: "The fix PR for CVE-XXXX was closed. Would you like me to try a different approach?"
+1. Phase 8 webhook fires with `merged = false, state = closed`
+2. Status → `pr_closed`
+3. UI: fix history shows "PR #42 closed without merging" + "Retry Fix" button
+4. Aegis: "The fix PR was closed. Want me to try a different approach?"
 
-**PR stale detection:**
+**PR stale detection (7 days):**
 
-Background check (part of the vuln-check cron in 6H or a separate lightweight cron):
+Background check via recovery cron or Phase 8's daily sweep:
 
-1. Query `project_security_fixes` where `status = 'completed'` and `pr_url IS NOT NULL` and `completed_at < NOW() - INTERVAL '7 days'`
-2. For each: check PR status via git provider API
-3. If PR is still open (not merged, not closed):
-  - Create notification: "Your fix PR #42 for CVE-XXXX has been open for 7 days. Merge it to resolve the vulnerability, or close it if no longer needed."
-  - Deliver via configured channels (in-app inbox, Slack if configured)
-  - Aegis can proactively mention this in daily briefings (Phase 7B-E template)
+1. Query open fix PRs older than 7 days
+2. Create notification: "Your fix PR #42 has been open for 7 days."
+3. Deliver via configured channels (in-app inbox, Slack)
 
 **PR merge conflicts:**
 
-When the base branch (main/master) changes after the fix PR was created, the fix branch may have merge conflicts:
-
-1. Detected when: PR webhook reports `mergeable = false` or `mergeable_state = 'conflicting'`
-2. UI indicator: in the fix history section of the Vulnerability Detail Sidebar, show amber "Merge Conflict" badge
-3. User options:
-  - "Regenerate Fix" button: creates a NEW fix job that clones the latest base branch and re-applies the fix strategy. Old PR is closed.
-  - Manual resolution: user resolves conflicts in the PR directly
-4. Aegis awareness: "The fix PR for CVE-XXXX has merge conflicts because the main branch changed. Want me to regenerate the fix on the latest code?"
+1. Phase 8 webhook reports `mergeable = false`
+2. UI: amber "Merge Conflict" badge in fix history
+3. Options: "Regenerate Fix" (new job, closes old PR) or manual resolution
+4. Aegis: "Fix PR has merge conflicts. Want me to regenerate on the latest code?"
 
 **Fix superseded by manual fix:**
 
-When a user manually fixes a vulnerability (upgrades the package, patches the code) and the next extraction shows the vulnerability resolved:
-
-1. If an open fix PR exists for the same vulnerability, it becomes stale
-2. On next extraction: vuln resolved â†’ check if open fix PR exists â†’ mark `project_security_fixes` status as `superseded`
-3. UI: fix history shows "Superseded -- vulnerability was resolved manually" with gray badge
-4. Notification: "CVE-XXXX was resolved manually. The AI fix PR #42 is no longer needed." Suggest closing the PR.
+1. Extraction shows vuln resolved → check for open fix PR → status → `superseded`
+2. UI: "Superseded -- resolved manually" gray badge
+3. Notification suggests closing the PR
 
 **Fix introduces new vulnerability:**
 
-During the Aider fix validation step (7C), after making changes:
-
-1. Run `npm audit` / `pip audit` on the modified codebase
-2. If the fix introduced a NEW vulnerability (e.g., upgrading to a version that has a different CVE):
-  - Include a warning in the PR description: "WARNING: The target version v4.18.0 has 1 known vulnerability: CVE-2025-YYYY (Medium). The original CVE-2024-XXXX (Critical) is resolved."
-  - Fix job metadata includes `introduced_vulns: ['CVE-2025-YYYY']`
-  - UI shows amber warning in fix history: "This fix resolves CVE-XXXX but introduces CVE-YYYY"
-  - Aegis mentions this tradeoff in the completion message
-3. If the new vulnerability is MORE severe than the one being fixed: Aider aborts the fix, marks as failed with reason `fix_introduces_worse_vulnerability`. Smart failure flow suggests an alternative strategy.
+1. Post-fix audit detects new CVE
+2. If new CVE is LESS severe: PR created with warning in description, `introduced_vulns` populated
+3. If new CVE is MORE severe: abort fix, status → `failed`, error_category → `fix_introduces_worse_vulnerability`
 
 ### 7K: Edge Cases & Error Handling
 
-Comprehensive catalog of edge cases across the AI fix pipeline. Each edge case has a detection mechanism, user-facing behavior, and recovery path.
-
 **1. BYOK key revoked or expired mid-fix:**
 
-- Detection: Aider receives 401/403 from the LLM provider API
-- Fix job status: `failed`, error_message: `LLM API authentication failed. Your API key may have been revoked or expired.`
-- UI: failure card in sidebar with specific guidance: "Check your AI provider key in Organization Settings > AI Configuration. The key may need to be refreshed."
-- Aegis: "The fix failed because the API key was rejected by [provider]. Please verify your key in Organization Settings."
+- Detection: Aider receives 401/403 from LLM provider
+- Status: `failed`, error_category: `auth_failed`
+- UI: "Check your AI provider key in Organization Settings > AI Configuration."
 
 **2. Git provider token expired mid-fix:**
 
-- Detection: git clone or git push returns authentication error
-- Fix job status: `failed`, error_message: `Repository authentication failed. Your [GitHub/GitLab/Bitbucket] connection may have expired.`
-- UI: failure card with "Reconnect [provider]" link to project settings
-- Recovery: after reconnecting, user can retry the fix
+- Detection: git clone/push returns auth error
+- Status: `failed`, error_category: `repo_auth_failed`
+- UI: "Reconnect [provider]" link
 
-**3. Repository deleted or archived while fix is running:**
+**3. Repository deleted or archived:**
 
-- Detection: git clone fails with 404 or "archived repository" error
-- Fix job status: `failed`, error_message: `Repository not found or is archived.`
-- UI: failure card with "This project's repository may have been deleted or archived."
+- Detection: git clone fails with 404
+- Status: `failed`, error_category: `repo_not_found`
 
 **4. Multiple queued fixes targeting overlapping files:**
 
-- Scenario: Fix A (version bump for lodash) modifies package.json. Fix B (pin transitive for minimist) also modifies package.json. Both queued for the same project.
-- Same-project serialization (7E) already ensures they run sequentially. However, Fix B's context was gathered BEFORE Fix A ran -- its view of package.json is stale.
-- Solution: when a queued fix is dequeued for execution, re-fetch the target file checksums and compare against the context gathered at queue time. If any target files changed:
-  - Re-gather context from the current state of the repo (re-read affected files, re-check vulnerability status)
-  - If the vulnerability was already resolved by a prior fix: skip this fix, mark status `superseded`, log "Resolved by prior fix job [ID]"
-  - If the vulnerability still exists but files changed: proceed with updated context
+- Same-project serialization ensures sequential execution
+- On dequeue: re-fetch target file checksums. If files changed by prior fix:
+  - Re-gather context from current repo state
+  - If vulnerability already resolved: mark `superseded`
+  - If still exists: proceed with updated context
 
 **5. Monorepo-specific fix targeting:**
 
-- Scenario: project tracks `packages/api` within a monorepo. Fix must be scoped to that subdirectory.
-- Fix engine reads the project's `root_directory` setting (if configured in project settings) and passes it to the Aider machine
-- Aider clones the full repo but scopes changes: `aider --file packages/api/package.json --file packages/api/package-lock.json`
-- Branch name includes scope: `fix/packages-api/CVE-2024-XXXX`
-- PR title includes scope: "[packages/api] Fix CVE-2024-XXXX: upgrade lodash to 4.17.21"
+- Fix engine reads `root_directory` from project settings
+- Aider scopes changes: `--file packages/api/package.json`
+- Branch: `fix/packages-api/CVE-2024-XXXX`
+- PR title: "[packages/api] Fix CVE-2024-XXXX: upgrade lodash"
 
 **6. Aider produces empty or no-op changes:**
 
-- Detection: after Aider runs, `git diff` returns empty
-- Fix job status: `failed`, error_message: `AI could not determine changes to make. The fix strategy may not be applicable.`
-- Smart failure flow: suggest alternative strategy. E.g., if version bump produced no changes, the package.json may not directly reference the package (transitive dep) -- suggest `pin_transitive` instead.
+- Detection: `git diff` returns empty after Aider
+- Status: `failed`, error_category: `no_changes`
+- Smart failure: suggest alternative strategy
 
 **7. Very large repositories (>1GB shallow clone):**
 
-- Detection: git clone times out or machine runs out of disk space (4GB machine has ~6GB disk)
-- Mitigation: use `--depth 1 --single-branch` for shallow clone. If the repo has large binary files (detected by checking `.gitattributes` for LFS): add `--filter=blob:limit=10m` to skip large blobs.
-- If clone still fails: `failed` with message "Repository is too large for AI fixing. Consider using a shallower clone strategy or reducing repository size."
-- Future enhancement: sparse checkout to only pull the directories Aider needs to modify
+- Use `--depth 1 --single-branch --filter=blob:limit=10m`
+- Machine has ~10GB disk (8GB RAM machine gets proportional disk)
+- If clone fails: `failed` with "Repository is too large for AI fixing."
 
 **8. Private package registries:**
 
-- Scenario: project uses a private npm registry (e.g., Artifactory, GitHub Packages). Aider machine runs `npm install` during validation, which fails because it can't authenticate to the private registry.
-- Detection: `npm install` fails with 401/403 or ENOT FOUND for private packages
-- Fix job: still completes if Aider's code changes are correct. Mark validation as `skipped` with note: "Post-fix validation skipped: private registry authentication required."
-- PR description includes: "Note: This fix was not validated against your private registry. Please verify locally before merging."
-- Future enhancement: allow orgs to configure registry credentials for the Aider machine (encrypted, per-org)
+- Install fails with 401/403 → mark validation as `skipped`
+- PR description: "Note: Not validated against your private registry. Verify locally."
 
-**9. Rate limiting from git providers when creating multiple PRs:**
+**9. Rate limiting from git providers:**
 
-- Scenario: security sprint creates 10+ PRs rapidly, hitting GitHub's API rate limit (5000/hr with token, but PR creation has additional secondary rate limits)
-- Mitigation: add configurable delay between PR creations during sprints. Default: 5 seconds between PR API calls.
-- Detection: 429 response from git provider API
-- Retry: exponential backoff (5s, 10s, 20s, max 60s) with max 3 retries per PR creation
-- If still rate-limited: pause the sprint, notify user "Git provider rate limit reached. Sprint paused. Will resume automatically in [X minutes]."
+- Detection: 429 from git provider API
+- Retry: exponential backoff (5s, 10s, 20s, max 60s) with max 3 retries
+- If still rate-limited: fail the PR creation step, fix job completes but without PR. Error: "Changes made but PR creation rate-limited. Retry to push."
 
-**10. User changes BYOK provider while a fix is running:**
+**10. User changes BYOK provider while fix is running:**
 
-- Running fixes are unaffected -- the decrypted API key was passed to the Aider machine at job start time. The machine uses that key for the duration of the fix.
-- Queued fixes: when dequeued, fetch the CURRENT default BYOK provider (may be different from when the fix was queued). Log which provider was used.
-- Edge case: provider deleted while fix is queued. On dequeue: fetch fails â†’ mark fix `failed` with "AI provider configuration changed. The provider used when this fix was queued is no longer available."
+- Running: unaffected (key was decrypted at start)
+- Queued: on dequeue, fetch CURRENT provider. Log which provider was used.
+- Provider deleted while queued: `failed` with "AI provider no longer available."
 
 **11. Target version becomes banned during fix:**
 
-- Scenario: fix started targeting v4.17.21, but while running, org admin bans v4.17.21
-- Running fix completes as normal (ban happened after context was locked)
-- PR description includes a warning (added by the completion handler): "NOTE: The target version v4.17.21 has been banned by your organization since this fix was created. Review the ban policy before merging."
-- UI: fix history shows amber "Target version now banned" badge
-- Aegis: "Heads up -- the version I upgraded to (v4.17.21) was banned after the fix started. You may want to close this PR and fix to a different version."
+- Running fix completes normally
+- PR description includes warning: "Target version was banned since this fix was created."
+- UI: amber badge in fix history
 
 **12. Concurrent BYOK budget exhaustion:**
 
-- Scenario: two fixes start simultaneously, both pass the budget check, but together they exceed the monthly cap
-- Current check is non-atomic (read balance â†’ start fix â†’ deduct after completion)
-- Solution: use Supabase RPC function for atomic budget reservation:
-
-```sql
-CREATE OR REPLACE FUNCTION reserve_ai_budget(
-  p_org_id UUID,
-  p_estimated_cost NUMERIC
-) RETURNS BOOLEAN AS $$
-DECLARE
-  v_remaining NUMERIC;
-  v_cap NUMERIC;
-  v_spent NUMERIC;
-BEGIN
-  SELECT monthly_cost_cap INTO v_cap
-  FROM organization_ai_providers
-  WHERE organization_id = p_org_id AND is_default = true;
-
-  SELECT COALESCE(SUM(estimated_cost), 0) INTO v_spent
-  FROM ai_usage_logs
-  WHERE organization_id = p_org_id
-    AND tier = 'byok'
-    AND created_at >= date_trunc('month', NOW());
-
-  v_remaining := v_cap - v_spent;
-
-  IF v_remaining >= p_estimated_cost THEN
-    RETURN true;
-  ELSE
-    RETURN false;
-  END IF;
-END;
-$$ LANGUAGE plpgsql;
-```
-
-- If budget check fails: fix not started, user sees "Monthly AI budget would be exceeded by this fix (estimated $X.XX, remaining budget: $Y.YY). An admin can increase the limit in Organization Settings."
+- Uses Phase 6C Redis INCR pattern (atomic). No race condition.
+- If budget check fails: "Monthly AI budget exceeded ($X/$Y). Admin can increase in Organization Settings."
 
 **13. LLM produces code with syntax errors or failing tests:**
 
-- Detection: post-fix validation step. Aider has built-in linting, but if it fails:
-  - Run the project's lint command (if detectable from package.json scripts) or basic syntax check
-  - Run `npm test` / `pytest` if test scripts exist and project size is manageable (< 5 min test suite)
-- If validation fails: two-tier handling:
-  - **Tier 1 (auto-retry)**: Aider automatically retries with the error output as context (built into Aider's workflow). Max 2 internal retries.
-  - **Tier 2 (fail with context)**: if retries exhausted, mark fix as `failed` with the lint/test error output. Smart failure flow analyzes the error.
-- PR description always includes validation result: "Validation: npm audit passed, ESLint passed, tests: N/A (no test script detected)"
+- Aider's built-in auto-lint retries (max 2 internal retries)
+- If still fails: `failed` with lint/test output in error_message
+- Smart failure flow analyzes the error
+- PR description always includes validation result
 
-**14. Fix job orphaned (machine crashed without reporting):**
+**14. Fix job orphaned (machine crashed):**
 
-- Detection: cleanup cron runs every 5 minutes, queries:
-
-```sql
-  SELECT * FROM project_security_fixes
-  WHERE status = 'running'
-  AND started_at < NOW() - INTERVAL '15 minutes';
-  
-
-```
-
-  (15 min > 10 min machine timeout, provides buffer)
-
-- For each orphaned job: check Fly Machines API for machine status. If machine is stopped/destroyed:
-  - Update fix status to `failed`, error_message: `Fix machine terminated unexpectedly. This may indicate a crash or resource exhaustion.`
-  - Notify user via in-app notification
-- For machines still running past 15 min (should not happen due to 10-min auto-destroy): force-stop via Fly Machines API, then mark as failed
+- Recovery cron every 5 minutes: `recover_stuck_fix_jobs()` requeues jobs with stale heartbeat (>5 min)
+- `fail_exhausted_fix_jobs()` fails jobs exceeding max_attempts
+- Orphan handling: start machines for queued jobs with no running machine
 
 **15. Fix for suppressed/accepted vulnerability:**
 
-- Should we allow fixing a vulnerability that was suppressed or risk-accepted? Yes, but with context:
-- If suppressed: "Fix with AI" button still available, but shows info banner: "This vulnerability is currently suppressed. Fixing it will automatically unsuppress it."
-- If risk-accepted: button shows warning: "Your team previously accepted the risk for this vulnerability. Fixing it will reset the risk acceptance."
-- On successful fix completion: automatically clear `suppressed` and `risk_accepted` flags, log events to `project_vulnerability_events`
+- Allowed, but with context banners
+- On success: automatically clear `suppressed`/`risk_accepted` flags
 
-**16. Network partition during fix (machine loses connectivity):**
+**16. Network partition during fix:**
 
-- Aider depends on: (a) LLM API access, (b) git push to create PR, (c) Supabase for status updates
-- If LLM API unreachable: Aider fails with timeout â†’ captured by machine watchdog
-- If git push fails: fix changes are made but PR not created â†’ mark as `failed` with "Changes were made but PR creation failed. Retry to push the changes."
-- If Supabase unreachable: machine can't update status â†’ orphan detection (edge case 14) catches it
-- Machine-level timeout (10 min) is the ultimate safety net for all network issues
+- LLM unreachable: Aider fails → process watchdog catches
+- Git push fails: `failed` with "Changes made but PR creation failed."
+- Supabase unreachable: orphan detection catches it
+- 10-min process watchdog is the ultimate safety net
+
+**17. Branch name collision (NEW):**
+
+- Check if branch exists before push
+- If old PR is closed: delete branch, reuse name
+- If PR is open: append `-2`, `-3`, etc.
+- Max 10 attempts before failing
+
+**18. Disk space exhaustion (NEW):**
+
+- Check `df` before clone. If <2GB free: log warning.
+- After each fix: `rm -rf` the work directory
+- If clone fails with disk space error: `failed` with "Insufficient disk space."
+
+**19. Ecosystem detection failure (NEW):**
+
+- If ecosystem not in job payload AND not detectable from files: `failed` with "Could not determine project ecosystem."
+- Smart failure suggests manually setting ecosystem in project settings
+
+**20. Aider produces partial changes (NEW):**
+
+- If Aider modifies some files but errors on others: commit what we have
+- PR description notes: "Partial fix -- some files could not be modified."
+- error_category: `partial_fix`
+
+**21. Worker claims job but can't decrypt BYOK key (NEW):**
+
+- `AI_ENCRYPTION_KEY` mismatch or `organization_ai_providers` row missing
+- Status: `failed`, error_category: `key_decryption_failed`
+- UI: "AI provider configuration issue. Verify your API key in Organization Settings."
+
+**22. Concurrent fix request race condition (NEW):**
+
+- `queue_fix_job` RPC locks the org row with `FOR UPDATE`, preventing two concurrent requests from both passing the cap check
+- If the lock contention is too high (unlikely at 5 concurrent max): retry the RPC call once after 1s
 
 ### 7F: Phase 7 Test Suite
 
 #### Backend Tests (`backend/src/__tests__/ai-fix-engine.test.ts`)
 
-Tests 1-5 (Fix Orchestrator):
+Tests 1-7 (Fix Orchestrator):
 
-1. Fix request creates job record with status `queued`
-2. Fix request fails if org has no BYOK key configured (returns 400 with helpful message)
+1. Fix request creates job record with status `queued` via `queue_fix_job` RPC
+2. Fix request fails if org has no BYOK key configured (returns 400)
 3. Fix request fails if vulnerability doesn't exist (returns 404)
 4. Fix request fails if project has no connected repo (returns 400)
-5. Rate limiting: 6th concurrent fix returns 429
+5. `queue_fix_job` RPC: 6th concurrent fix returns error (max 5 cap)
+6. `queue_fix_job` RPC: concurrent requests are serialized by org lock (no race condition)
+7. Budget check via Redis INCR blocks fix when monthly cap exceeded, rolls back counter
 
-Tests 6-10 (Fly Machine Lifecycle):
-6. Machine starts with correct config (size, timeout, environment)
-7. Machine receives correct job payload including atom reachability context (flow paths, usage slices, code snippets, LLMPrompts)
-8. Machine stops after completing fix
-9. Machine auto-destroys after 10-minute timeout
-10. Machine failure updates job status to `failed` with error message
+Tests 8-14 (Fly Machine Lifecycle):
 
-Tests 11-18 (Fix Strategies):
-11. Version bump strategy: PR contains updated package.json with target version
-12. Code patch strategy: PR contains code changes at the entry point / vulnerable call identified by atom reachability
-13. Add wrapper strategy: PR contains new wrapper function + updated call sites
-14. Pin transitive strategy: PR contains overrides/resolutions in package.json for transitive dep
-15. Remove unused strategy: PR removes dependency from manifest
-16. Fix Semgrep issue: PR contains code fix at the Semgrep finding file/line
-17. Remediate secret: PR replaces hardcoded value with env var reference (never includes the actual secret)
-18. Post-fix validation runs appropriate audit tool and reports result
+1. `startFlyMachine(AIDER_CONFIG)` starts with correct sizing (shared-cpu-4x, 8GB)
+2. Worker polls Supabase every 5s via `claim_fix_job` RPC
+3. `claim_fix_job` returns null when project already has a running fix (serialization)
+4. `claim_fix_job` atomically claims oldest queued job (FOR UPDATE SKIP LOCKED)
+5. Worker sends heartbeat every 60s during fix execution
+6. Worker exits after 30s idle (scale-to-zero)
+7. Machine failure: recovery cron marks as failed after heartbeat stale >5 min
 
-Tests 19-22 (Reachability Context):
-19. Fix request for vulnerability includes atom reachable flow data in Aider prompt
-20. Fix request for vulnerability includes usage slice data (which functions are called)
-21. Fix request gracefully handles missing atom data (falls back to basic file list)
-22. Fix creates draft PR on correct branch (`fix/$OSV_ID`, `fix/semgrep-$RULE`, or `fix/secret-$TYPE`)
+Tests 15-22 (Fix Strategies):
 
-Tests 23-25 (Cost and Safety):
-23. Cost estimate calculated before fix starts based on model + estimated tokens
-24. Cost cap prevents fix if org has exceeded monthly limit
-25. Secret remediation Aider prompt does NOT contain the actual secret value
+1. Version bump: Aider invoked with correct manifest files per ecosystem
+2. Code patch: prompt includes atom reachability entry point + sink
+3. Add wrapper: prompt includes usage locations
+4. Pin transitive: prompt includes correct override mechanism per ecosystem
+5. Remove unused: prompt confirms no imports exist
+6. Fix Semgrep: prompt includes rule ID, file, line, CWE
+7. Remediate secret: prompt references env var pattern per language
+8. Ecosystem detection falls back to file-based when payload missing
+
+Tests 23-26 (Validation):
+
+1. LLM API key cleared from environment before validation runs
+2. Audit tool runs per ecosystem and result stored in `validation_result`
+3. Tests run with 2-minute timeout; timeout does not fail the fix
+4. Private registry: validation skipped with note
+
+Tests 27-30 (Reachability Context):
+
+1. Fix request includes atom reachable flow data in Aider prompt
+2. Fix request includes usage slice data
+3. Fix request gracefully handles missing atom data (falls back to basic file list)
+4. Fix request includes dep-scan LLMPrompts when available
+
+Tests 31-34 (Safety):
+
+1. Cost estimate calculated before fix; budget reserved atomically
+2. Secret remediation prompt does NOT contain actual secret value
+3. Aider invoked with `--yes-always`, `--no-auto-commits`, `--message-file`, `--timeout 120`
+4. Process-level watchdog terminates Aider after 10 minutes
+
+Tests 35-38 (Cancellation and Recovery):
+
+1. `cancelFixJob` sets status = 'cancelled' and stops Fly machine
+2. Worker checks `isJobCancelled()` before push and skips if cancelled
+3. Recovery cron requeues stuck jobs (heartbeat >5 min, attempts < max)
+4. Recovery cron fails exhausted jobs (attempts >= max)
+
+Tests 39-42 (Dequeue and Branch Handling):
+
+1. After fix completes, worker immediately claims next queued job for same project
+2. Branch collision: old branch with closed PR is deleted and reused
+3. Branch collision: old branch with open PR gets `-2` suffix
+4. PR description includes validation results, warnings, and Deptex branding
+
+Tests 43-44 (Model Mapping):
+
+1. `getAiderModelFlag('google', 'gemini-2.5-flash')` returns `'gemini/gemini-2.5-flash'`
+2. `getAiderEnvVars` returns correct env var name per provider
 
 #### Frontend Tests (`frontend/src/__tests__/ai-fix-ui.test.ts`)
 
-Tests 26-30 (Fix Flow):
-26. "Fix with AI" button disabled when no BYOK key configured (shows tooltip)
-27. Pre-fix confirmation shows strategy, target version or file/line, estimated cost
-28. Progress indicator shows correct step transitions with log streaming
-29. Success state shows PR link and diff summary
-30. Strategy selector shows relevant options based on fix type (vuln vs. semgrep vs. secret)
+Tests 45-50 (Jules-like Fix Flow):
 
-Tests 31-35 (Semgrep/Secret Fix UI):
-31. "Ask Aegis" button on Semgrep finding sends finding context to Aegis panel
-32. Aegis offers "Want me to try fixing this?" when it determines the issue is auto-fixable
-33. Accepting Aegis fix suggestion triggers fix_semgrep strategy and shows progress
-34. "Ask Aegis" button on TruffleHog finding sends redacted context (no secret value)
-35. Aegis secret remediation guidance includes "Replace with env var" option that triggers remediate_secret
+1. "Fix with AI" button opens Aegis panel with vulnerability context
+2. Aegis proposes fix plan with strategy, files, estimated cost, and [Execute Plan] button
+3. Clicking [Execute Plan] triggers fix and shows progress in panel
+4. Progress indicator shows correct step transitions with live log stream
+5. Success state shows PR link and diff summary inline in Aegis panel
+6. "Cancel Fix" button calls cancellation endpoint and updates UI
 
-Tests 36-38 (Fix History):
-36. Past fixes section shows fix attempts with status and PR links (for all fix types)
-37. Failed fix shows error message and retry button
-38. Fix history sorted by most recent first
+Tests 51-55 (Button States):
+
+1. "Fix with AI" disabled when no BYOK key configured (tooltip)
+2. Button shows "Fix Queued..." when fix is queued
+3. Button shows "Fix in Progress" when fix is running
+4. Button shows "Fix PR Created" with link when completed
+5. Button shows amber warning when recent failures exist
+
+Tests 56-60 (Semgrep/Secret Fix UI):
+
+1. "Ask Aegis" on Semgrep finding opens Aegis panel with finding context
+2. Aegis offers "Want me to fix this?" for auto-fixable issues
+3. Accepting triggers fix_semgrep and shows progress
+4. "Ask Aegis" on TruffleHog sends redacted context (no secret value)
+5. Aegis secret remediation includes env var option that triggers remediate_secret
+
+Tests 61-63 (Fix History):
+
+1. Past fixes section shows attempts with status and PR links
+2. Failed fix shows error message and retry button
+3. Fix history sorted by most recent first
 
 #### Fix Status Integration Tests (`frontend/src/__tests__/fix-status-integration.test.ts`)
 
-Tests 39-46 (Graph Node Indicators -- 7G):
-39. Vulnerability node shows sparkle badge with pulse animation when fix is running
-40. Vulnerability node shows green check badge when fix completed with PR
-41. Vulnerability node shows amber warning badge when fix failed
-42. Dependency node shows sparkle badge when any child vulnerability has active fix
-43. Project center node shows sparkle badge with count when any fix running for project
-44. Org graph project nodes show aggregate fix count badges
-45. All badges clear when fix is resolved (PR merged + re-extraction confirms fix)
-46. Graph node badges update in real time via Supabase Realtime (no page refresh)
+Tests 64-71 (Graph Node Indicators -- 7G):
 
-Tests 47-52 (Cross-Screen Status -- 7G):
-47. Dependencies tab shows "AI Fix" badge on dependencies with active fixes
-48. Dependency overview page shows "Active Fixes" banner when fixes are running for its vulns
-49. Compliance tab shows "Fix in Progress" status for non-compliant packages with active AI fixes
-50. Project Overview security summary card shows "X AI fixes active" count
-51. Org/Team Security pages show aggregate "X AI fixes in progress" count
-52. Aegis full-page screen Active Tasks sidebar shows running fix jobs with progress
+1. Vulnerability node shows sparkle badge when fix is running
+2. Vulnerability node shows green check when fix completed with PR
+3. Vulnerability node shows amber warning when fix failed
+4. Dependency node shows sparkle when any child vuln has active fix
+5. Project center node shows sparkle with count
+6. Org graph project nodes show aggregate fix count badges
+7. All badges clear on resolution (PR merged + re-extraction)
+8. Badges update in real time via Supabase Realtime
 
-Tests 53-58 (Real-time Infrastructure -- 7H):
-53. `useProjectFixStatus` hook returns correct running/queued counts
-54. `useTargetFixStatus` returns active fix and `canStartNewFix = false` when fix exists
-55. `useTargetFixStatus` returns `canStartNewFix = false` with `blockReason` when max attempts reached
-56. `FixStatusProvider` manages single Realtime subscription for all child components
-57. Fix status updates propagate to multiple components on same page without duplicate subscriptions
-58. Log streaming works for active fix jobs via `extraction_logs` Realtime subscription
+Tests 72-77 (Cross-Screen Status -- 7G):
 
-Tests 59-66 (Duplicate Fix Prevention -- 7I):
-59. "Fix with AI" button shows "Fix in Progress" state when active fix exists (before user clicks)
-60. "Fix with AI" button shows "Fix PR Created" state with PR link when completed fix with open PR exists
-61. "Fix with AI" button shows amber warning with failure history when recent failures exist (< 3)
-62. "Fix with AI" button disabled with "Manual intervention required" when max attempts (3) reached
-63. Aegis `triggerFix` tool responds "I'm already working on this" when active fix for same target
-64. Aegis detects sprint overlap: "This is part of the sprint I'm running (step X/Y)"
-65. Cross-user detection: User B sees "Being fixed by User A" when User A started the fix
-66. Completed fix with open PR: Aegis responds with PR summary instead of starting new fix
+1. Dependencies tab shows "AI Fix" badge on deps with active fixes
+2. Dependency overview shows "Active Fixes" banner
+3. Compliance tab shows "Fix in Progress" for non-compliant with active fix
+4. Project Overview shows "X AI fixes active" count
+5. Org/Team Security pages show aggregate count
+6. Aegis Active Tasks sidebar shows running fix jobs
 
-Tests 67-74 (Fix-to-PR Lifecycle -- 7J):
-67. Fix completion creates record in Phase 8 PR tracking table with `source = 'ai_fix'` badge
-68. PR table shows "AI Fix" badge, linked vulnerability ID, strategy, and cost
-69. PR merged triggers re-extraction, vuln resolution creates `resolved` event with `resolved_by: 'ai_fix'`
-70. PR closed without merge updates `project_security_fixes.status` to `pr_closed`, shows "Retry Fix" button
-71. Stale PR detection: open fix PR > 7 days triggers nudge notification
-72. PR merge conflict detected: sidebar shows amber "Merge Conflict" badge with "Regenerate Fix" button
-73. Fix superseded by manual fix: status updated to `superseded`, notification suggests closing PR
-74. Fix introducing a worse vulnerability aborts with `fix_introduces_worse_vulnerability` error
+Tests 78-83 (Real-time Infrastructure -- 7H):
+
+1. `useProjectFixStatus` returns correct running/queued counts
+2. `useTargetFixStatus` returns `canStartNewFix = false` when fix exists
+3. `useTargetFixStatus` returns `blockReason` when max attempts reached
+4. `FixStatusProvider` manages single Realtime subscription
+5. Fix status updates propagate to multiple components without duplicate subscriptions
+6. Log streaming works via `extraction_logs` filtered by `run_id`
+
+Tests 84-91 (Duplicate Fix Prevention -- 7I):
+
+1. Button shows "Fix in Progress" when active fix exists (before click)
+2. Button shows "Fix PR Created" with link when completed fix with open PR
+3. Button shows amber warning when recent failures (< 3)
+4. Button disabled with "Manual intervention required" at max attempts
+5. Aegis `triggerFix` responds "I'm already working on this" for active fix
+6. Cross-user detection: "Being fixed by [User A]" for different user's fix
+7. Completed with open PR: Aegis responds with PR summary
+8. Aegis responds "This is part of the sprint" for sprint overlap (**Phase 7B integration test**)
+
+Tests 92-99 (Fix-to-PR Lifecycle -- 7J):
+
+1. Fix completion creates Phase 8 PR tracking record with `source = 'ai_fix'`
+2. PR table shows "AI Fix" badge, linked vuln ID, strategy, cost
+3. PR merged → re-extraction → `resolved` event with `resolved_by: 'ai_fix'`
+4. PR closed without merge → status `pr_closed` → "Retry Fix" button
+5. Stale PR (>7 days) triggers nudge notification
+6. PR merge conflict → amber badge + "Regenerate Fix" button
+7. Fix superseded → status `superseded` → notification suggests closing PR
+8. Fix introducing worse vulnerability → abort with `fix_introduces_worse_vulnerability`
 
 #### Edge Case Tests (`backend/src/__tests__/ai-fix-edge-cases.test.ts`)
 
-Tests 75-90 (Edge Cases -- 7K):
-75. BYOK key revoked mid-fix: job fails with "LLM API authentication failed" error message
-76. Git provider token expired mid-fix: job fails with "Repository authentication failed" error
-77. Repo deleted/archived: job fails with "Repository not found or is archived" error
-78. Queued fix re-fetches context on dequeue when target files changed by prior fix
-79. Queued fix auto-supersedes when prior fix already resolved the vulnerability
-80. Monorepo fix scoped to correct subdirectory via `root_directory` project setting
-81. Monorepo fix branch name includes package scope: `fix/packages-api/CVE-...`
-82. Aider empty diff (no-op) detected and marked failed with strategy suggestion
-83. Large repo (>1GB) uses `--depth 1 --single-branch --filter=blob:limit=10m` for clone
-84. Private registry: validation skipped with note when `npm install` fails with auth error
-85. Git provider rate limit (429): exponential backoff with max 3 retries per PR creation
-86. Sprint pauses on rate limit and resumes automatically after cooldown
-87. BYOK provider changed while fix queued: dequeued fix uses CURRENT provider, not original
-88. BYOK provider deleted while fix queued: dequeued fix fails with "provider no longer available"
-89. Target version banned during fix: PR created with "version now banned" warning in description
-90. `reserve_ai_budget` RPC prevents concurrent BYOK budget exhaustion (atomic check)
+Tests 100-121 (Edge Cases -- 7K):
 
-Tests 91-96 (More Edge Cases -- 7K continued):
-91. LLM produces code with syntax errors: Aider retries internally, then fails with lint output
-92. Orphaned fix job (machine crashed): cleanup cron marks as failed after 15 minutes
-93. Fix for suppressed vulnerability: proceeds with banner "will unsuppress on success"
-94. Fix for accepted-risk vulnerability: proceeds with warning "will reset risk acceptance"
-95. Network partition (Supabase unreachable from machine): orphan detection catches it
-96. Fix job metadata includes `introduced_vulns` array when post-fix audit detects new CVEs
+1. BYOK key revoked: `failed` with error_category `auth_failed`
+2. Git token expired: `failed` with `repo_auth_failed`
+3. Repo deleted: `failed` with `repo_not_found`
+4. Queued fix re-fetches context on dequeue when files changed
+5. Queued fix auto-supersedes when vulnerability already resolved
+6. Monorepo fix scoped to correct subdirectory
+7. Monorepo branch includes scope: `fix/packages-api/CVE-...`
+8. Empty diff detected → `failed` with `no_changes`
+9. Large repo uses `--depth 1 --single-branch --filter=blob:limit=10m`
+10. Private registry: validation skipped with note
+11. Git provider 429: exponential backoff with max 3 retries
+12. BYOK provider changed while queued: uses CURRENT provider
+13. BYOK provider deleted while queued: `failed` with provider error
+14. Target version banned during fix: PR created with warning
+15. Budget check atomic via Redis INCR (concurrent test)
+16. LLM syntax errors: Aider retries, then fails with lint output
+17. Orphaned job: recovery cron marks failed after stale heartbeat
+18. Suppressed vulnerability: proceeds with "will unsuppress" banner
+19. Accepted-risk vulnerability: proceeds with "will reset acceptance" warning
+20. Network partition: orphan detection catches it
+21. `introduced_vulns` populated when audit detects new CVEs
+22. Branch collision: suffix appended when branch exists with open PR
+23. Disk space check before clone; cleanup after each fix
+24. Ecosystem detection failure → `failed` with clear message
+25. Partial Aider changes: committed with "partial fix" note
+26. BYOK key decryption failure: `failed` with `key_decryption_failed`
+27. `queue_fix_job` org lock prevents concurrent cap race condition
+
+### 7L: Recommended Implementation Order
+
+1. **Database migration**: `project_security_fixes` table + `claim_fix_job` + `queue_fix_job` + recovery RPCs
+2. **Generalized Fly Machine utility**: refactor `startExtractionMachine()` → `startFlyMachine(config)`
+3. **Fix orchestrator** (`ee/backend/lib/ai-fix-engine.ts`): queue logic, budget check, context gathering, cancellation
+4. **Aider worker**: `backend/aider-worker/` (index.ts poll loop, job-db, logger, executor, strategies, validation, git-ops)
+5. **Aider worker Docker image + fly.toml**: build and deploy to Fly.io
+6. **Recovery endpoint**: `POST /api/internal/recovery/fix-jobs`
+7. **API endpoints**: POST fix, GET fix status, POST cancel, in projects.ts routes
+8. **Frontend: useFixStatus hooks + FixStatusProvider**: real-time subscriptions
+9. **Frontend: Aegis integration**: Jules-like chat flow, triggerFix action, plan proposal
+10. **Frontend: Fix Progress UI**: step indicator, log stream, cancel button, completion states
+11. **Frontend: Fix Status across all screens**: graph badges, sidebar badges, overview counts
+12. **Frontend: Duplicate fix prevention**: button states, Aegis awareness
+13. **Phase 8 integration**: AI fix PR recognition, `source = 'ai_fix'` tracking
+14. **Test suite**: ~126 tests across backend and frontend
+

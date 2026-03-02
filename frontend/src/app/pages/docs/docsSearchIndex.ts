@@ -116,8 +116,22 @@ export const docsSearchIndex: SearchEntry[] = [
     slug: "vulnerabilities",
     section: "Core Concepts",
     heading: "Reachability Analysis",
-    content: "Static analysis determines if vulnerable code paths are reachable. Tiers: Reachable (confirmed call path), Potentially Reachable, Unreachable (0.4x multiplier), Unknown.",
-    keywords: ["reachability", "reachable", "static analysis", "code path", "semgrep"],
+    content: "Code-level reachability (Phase 6B). Tiers: confirmed, data_flow, function, module, unreachable. Depscore uses tier weights; filter by level in the Security tab.",
+    keywords: ["reachability", "reachable", "data_flow", "confirmed", "module", "unreachable", "static analysis", "code path"],
+  },
+  {
+    slug: "watchtower",
+    section: "Features",
+    heading: "Watchtower",
+    content: "Supply chain monitoring and forensic analysis. Enable per project; org-level overview shows all projects with Watchtower enabled, aggregated alerts, and cross-project package coverage.",
+    keywords: ["watchtower", "supply chain", "registry integrity", "quarantine", "anomaly", "forensic"],
+  },
+  {
+    slug: "aegis",
+    section: "Features",
+    heading: "Aegis",
+    content: "Autonomous security agent: chat, threads, tasks, approvals, automations, memory, Slack bot, PR security review. BYOK AI (OpenAI, Anthropic, Google). Management console for settings and audit.",
+    keywords: ["aegis", "security agent", "chat", "automation", "slack", "byok", "ai", "copilot"],
   },
   {
     slug: "vulnerabilities",
@@ -272,6 +286,22 @@ export const docsSearchIndex: SearchEntry[] = [
     heading: "Trigger Events",
     content: "20 event types including vulnerability_discovered, dependency_added, compliance_violation, malicious_package_detected, pr_check_completed, ai_fix_completed.",
     keywords: ["event", "trigger", "vulnerability_discovered", "malicious_package_detected", "pr_check"],
+  },
+
+  // Administration - Enterprise Security
+  {
+    slug: "enterprise-security",
+    section: "Administration",
+    heading: "Enterprise Security",
+    content: "MFA (TOTP), SSO (SAML 2.0), session management, IP allowlist, API tokens, security audit log, and SCIM provisioning. Configure under Organization Settings → Security.",
+    keywords: ["mfa", "2fa", "sso", "saml", "single sign-on", "session", "ip allowlist", "api token", "audit log", "scim", "enterprise", "security"],
+  },
+  {
+    slug: "enterprise-security",
+    section: "Administration",
+    heading: "Enterprise Security API Reference",
+    content: "API endpoints for audit log, MFA enforcement, SSO config, user sessions, API tokens, IP allowlist, session policy, SCIM. All org security routes require manage_security.",
+    keywords: ["api", "endpoints", "audit-log", "mfa-status", "sso", "sessions", "api-tokens", "ip-allowlist", "scim"],
   },
 
   // Legal

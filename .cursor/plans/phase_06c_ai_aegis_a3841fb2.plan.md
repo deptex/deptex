@@ -4,52 +4,52 @@ overview: Complete rewrite of Phase 6C plan addressing all identified security c
 todos:
   - id: phase6c-db-migration
     content: "Database migration: organization_ai_providers, ai_usage_logs, aegis_chat_threads additions, projects vuln check columns, permission migration"
-    status: pending
+    status: completed
   - id: phase6c-encryption
     content: "Encryption utilities: AES-256-GCM encrypt/decrypt with multi-version key rotation support"
-    status: pending
+    status: completed
   - id: phase6c-provider-abstraction
     content: "Provider abstraction: AIProvider interface + OpenAI/Anthropic/Google implementations + shared error types + model/pricing tables"
-    status: pending
+    status: completed
   - id: phase6c-platform-provider
     content: "Platform AI provider: getPlatformProvider() unifying GOOGLE_AI_API_KEY usage across docs-assistant, apply-exception, and new features"
-    status: pending
+    status: completed
   - id: phase6c-usage-logging
     content: "AI usage logging middleware: wraps all AI calls, records tokens/cost/duration, fire-and-forget inserts"
-    status: pending
+    status: completed
   - id: phase6c-byok-api
     content: "BYOK API endpoints: CRUD, test connection, set default, with manage_integrations permission checks"
-    status: pending
+    status: completed
   - id: phase6c-rate-limits
     content: "Rate limits: Tier 1 per-feature limits via checkRateLimit, Tier 2 monthly cost cap with Redis atomic counter"
-    status: pending
+    status: completed
   - id: phase6c-permission-enforcement
     content: "AI permission enforcement: interact_with_security_agent checks on backend (403) and frontend (conditional rendering)"
-    status: pending
+    status: completed
   - id: phase6c-org-settings-ui
     content: "Org Settings UI: AI Configuration section with provider cards, connect modal, usage dashboard"
-    status: pending
+    status: completed
   - id: phase6c-aegis-sse
     content: "Aegis SSE streaming endpoint: /api/aegis/stream with heartbeat, lifecycle management, concurrent stream limiting"
-    status: pending
+    status: completed
   - id: phase6c-aegis-panel
     content: "Aegis Copilot panel: collapsible component, context switching, streaming markdown with fence guard, responsive overlay"
-    status: pending
+    status: completed
   - id: phase6c-security-actions
     content: "Security actions: 11 new actions in registry + system prompt update with prompt injection defenses"
-    status: pending
+    status: completed
   - id: phase6c-background-monitoring
     content: "Background vulnerability monitoring: QStash endpoint with batch processing, timeout handling, idempotency"
-    status: pending
+    status: completed
   - id: phase6c-light-up-buttons
     content: "Light up disabled buttons: connect Phase 6 Core disabled buttons to Aegis panel and AI features"
-    status: pending
+    status: completed
   - id: phase6c-safety-cutoffs
     content: "Safety cutoffs: conversation limits, provider failure handling, SSE cleanup, re-extraction warning"
-    status: pending
+    status: completed
   - id: phase6c-tests
     content: "Test suite: 22 backend tests + 24 frontend tests covering BYOK, streaming, rate limits, safety, and edge cases"
-    status: pending
+    status: completed
 isProject: false
 ---
 
@@ -605,7 +605,7 @@ The existing `getSystemPrompt()` continues to work for non-security Aegis chat.
 
 **Endpoint:** `POST /api/internal/vuln-check` (protected by `X-Internal-Api-Key`, same pattern as [recovery.ts](backend/src/routes/recovery.ts))
 
-**Scheduling:** QStash cron `0 * `* * * (hourly). Document setup in `DEVELOPERS.md` (manual QStash dashboard config, same as existing recovery cron pattern).
+**Scheduling:** QStash cron `0` * * * * (hourly). Document setup in `DEVELOPERS.md` (manual QStash dashboard config, same as existing recovery cron pattern).
 
 **Due-for-scan logic:** Query projects where `last_vuln_check_at IS NULL` or `last_vuln_check_at + vuln_check_frequency < NOW()`. Process up to 10 projects per invocation. If more are due, process the 10 with the oldest `last_vuln_check_at` first.
 

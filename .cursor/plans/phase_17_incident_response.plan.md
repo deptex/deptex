@@ -1,12 +1,46 @@
 ---
 name: Phase 17 - Incident Response Orchestration
-overview: Multi-phase security incident playbooks with automated containment, assessment, communication, remediation, verification, and reporting. Customizable playbooks for zero-day, supply chain compromise, secret leak, and compliance breach scenarios.
+overview: Full incident response framework with async playbook execution, auto-triggers via Phase 9 event bus, 4 pre-built templates, org-configurable autonomous containment, escalation chains, deduplication, post-mortem generation (template + optional AI), and management console integration. Builds on Aegis task system (7B), fix engine (7), notifications (9), and SLAs (15).
 todos:
-  - id: phase-17-incident-response
-    content: "Phase 17: Incident Response Orchestration - 6-phase IR framework (Contain, Assess, Communicate, Remediate, Verify, Report), 4 pre-built playbook templates (zero-day, supply chain compromise, secret exposure, compliance breach), custom playbook builder via Aegis chat or management console, playbook execution as aegis_task with per-phase steps, automated containment actions (emergency package lock, branch protection), stakeholder communication templates (Slack, email, status page), multi-project parallel assessment, remediation via Phase 7 fix sprints, verification via re-extraction, auto-generated incident post-mortem report, incident timeline with audit trail, Aegis autonomous mode for time-critical incidents, incident history dashboard, 36-test suite"
-    status: pending
+  - id: 17-prereq-7b-fix
+    content: "Fix Phase 7B gap: approveTask() must queue first step via QStash. Fix sprint tool name triggerAiFix -> triggerFix."
+    status: completed
+  - id: 17a-migration
+    content: "17A: Write phase17_incident_response.sql (incident_playbooks, security_incidents, incident_timeline, incident_notes, RLS, indexes, org column)"
+    status: completed
+  - id: 17b-triggers
+    content: "17B: Build trigger system (ee/backend/lib/incident-triggers.ts) + hook into notification dispatcher + add secret_exposure_verified event type"
+    status: completed
+  - id: 17c-engine
+    content: "17C: Build execution engine (ee/backend/lib/incident-engine.ts) with async QStash-driven phase execution, variable resolution, condition evaluation, escalation scheduling"
+    status: completed
+  - id: 17d-templates
+    content: "17D: Build 4 pre-built playbook templates (ee/backend/lib/incident-templates.ts) with correct tool names and parameters"
+    status: completed
+  - id: 17e-postmortem
+    content: "17E: Build post-mortem generator (ee/backend/lib/incident-postmortem.ts) with template-based fallback + optional AI enhancement"
+    status: completed
+  - id: 17f-api
+    content: "17F: Build API endpoints (ee/backend/routes/incidents.ts) for incident CRUD, playbook CRUD, stats, notes, post-mortem, dry-run + CE escalation route"
+    status: completed
+  - id: 17g-aegis-tools
+    content: "17G: Register new Aegis tools (declareIncident, getIncidentStatus, listActiveIncidents) in tools registry"
+    status: completed
+  - id: 17h-frontend-sidebar
+    content: "17H: Add ACTIVE INCIDENTS section to AegisPage left sidebar with Supabase Realtime subscription + incident cards"
+    status: completed
+  - id: 17i-frontend-detail
+    content: "17I: Build incident detail view (main panel replacement) with phase progress bar, timeline, right panel scope, approval inline, notes"
+    status: completed
+  - id: 17j-frontend-console
+    content: "17J: Replace AegisManagementConsole Incidents placeholder with playbook management + incident history table + stats cards"
+    status: completed
+  - id: 17k-tests
+    content: "17K: Write 44-test suite (34 backend + 10 frontend) covering triggers, execution, autonomy, escalation, post-mortem, API, concurrent incidents, UI"
+    status: completed
 isProject: false
 ---
+
 ## Phase 17: Incident Response Orchestration
 
 **Goal:** Transform Aegis's existing zero-day rapid response (7B-I) into a full incident response framework with multi-phase playbooks, automated containment, stakeholder communication, and post-mortem generation. When a critical security event occurs -- zero-day CVE, supply chain compromise, leaked secret, compliance breach -- Aegis executes a structured playbook that handles everything from locking down affected packages to generating the final incident report.
@@ -14,6 +48,8 @@ isProject: false
 **Prerequisites:** Phase 7 (fix engine), Phase 7B (Aegis task system + tools + automations + Slack), Phase 8 (PR webhooks for branch protection), Phase 9 (notification events for alerting), Phase 15 (SLAs for deadline-aware triage).
 
 **Timeline:** ~3-4 weeks. Builds heavily on the existing Aegis task system (7B-C) -- playbooks are specialized task types with domain-specific steps.
+
+---
 
 ### The 6-Phase Incident Response Model
 
@@ -27,7 +63,15 @@ CONTAIN --> ASSESS --> COMMUNICATE --> REMEDIATE --> VERIFY --> REPORT
 
 Each phase maps to Aegis tools and actions. Playbooks define which tools run in each phase, in what order, and what decisions require human approval.
 
+---
+
 ### 17A: Incident & Playbook Data Model
+
+**Migration file:** `backend/database/phase17_incident_response.sql`
+
+**Run after:** Phase 15 (SLA tables), Phase 7B (Aegis tables).
+
+#### incident_playbooks
 
 ```sql
 CREATE TABLE incident_playbooks (
@@ -35,50 +79,76 @@ CREATE TABLE incident_playbooks (
   organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT,
-  trigger_type TEXT NOT NULL,           -- 'zero_day', 'supply_chain', 'secret_exposure',
-                                        -- 'compliance_breach', 'custom'
-  trigger_criteria JSONB,               -- auto-trigger conditions (e.g., severity >= critical AND kev = true)
-  phases JSONB NOT NULL,                -- ordered array of phase definitions (see below)
+  trigger_type TEXT NOT NULL CHECK (trigger_type IN (
+    'zero_day', 'supply_chain', 'secret_exposure', 'compliance_breach', 'custom'
+  )),
+  trigger_criteria JSONB,               -- auto-trigger conditions (see 17B)
+  phases JSONB NOT NULL,                -- ordered array of PlaybookPhase (see below)
   auto_execute BOOLEAN DEFAULT false,   -- if true, runs autonomously when triggered
-  requires_approval_at TEXT[],          -- which phases need human approval before proceeding
   notification_channels JSONB,          -- per-phase notification config
   is_template BOOLEAN DEFAULT false,    -- pre-built templates
   enabled BOOLEAN DEFAULT true,
+  version INTEGER DEFAULT 1,
+  usage_count INTEGER DEFAULT 0,
+  last_used_at TIMESTAMPTZ,
+  created_by UUID,
+  updated_by UUID,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE INDEX idx_ip_org ON incident_playbooks(organization_id);
+CREATE INDEX idx_ip_org_trigger ON incident_playbooks(organization_id, trigger_type)
+  WHERE enabled = true;
+```
+
+#### security_incidents
+
+```sql
 CREATE TABLE security_incidents (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  playbook_id UUID REFERENCES incident_playbooks(id),
-  task_id UUID REFERENCES aegis_tasks(id),        -- the Aegis task executing this incident
+  playbook_id UUID REFERENCES incident_playbooks(id) ON DELETE SET NULL,
+  task_id UUID REFERENCES aegis_tasks(id) ON DELETE SET NULL,
   title TEXT NOT NULL,
   incident_type TEXT NOT NULL,
-  severity TEXT NOT NULL,                           -- 'critical', 'high', 'medium'
-  status TEXT NOT NULL DEFAULT 'active',            -- 'active', 'contained', 'remediating',
-                                                    -- 'verifying', 'resolved', 'closed'
-  current_phase TEXT NOT NULL DEFAULT 'contain',    -- which IR phase we're in
-  trigger_source TEXT,                              -- what triggered: 'cve_alert', 'watchtower',
-                                                    -- 'manual', 'aegis_automation'
-  trigger_data JSONB,                               -- the triggering event data
-  
+  severity TEXT NOT NULL CHECK (severity IN ('critical', 'high', 'medium')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN (
+    'active', 'contained', 'assessing', 'communicating',
+    'remediating', 'verifying', 'resolved', 'closed', 'aborted'
+  )),
+  current_phase TEXT NOT NULL DEFAULT 'contain' CHECK (current_phase IN (
+    'contain', 'assess', 'communicate', 'remediate', 'verify', 'report'
+  )),
+  trigger_source TEXT,                    -- 'cve_alert', 'watchtower', 'manual', 'aegis_automation'
+  trigger_data JSONB,                     -- the triggering event data
+  dedup_key TEXT,                         -- deduplication key (see 17B)
+
+  -- People
+  declared_by UUID,                       -- user or null for auto-triggered
+  assigned_to UUID,                       -- responsible person (optional)
+  escalation_level INTEGER DEFAULT 0,     -- incremented on phase timeout
+
   -- Scope
-  affected_projects UUID[],                         -- projects impacted
-  affected_packages TEXT[],                         -- package names
-  affected_cves TEXT[],                             -- CVE/OSV IDs
-  
+  affected_projects UUID[],
+  affected_packages TEXT[],
+  affected_cves TEXT[],
+
   -- Metrics
   time_to_contain_ms BIGINT,
   time_to_remediate_ms BIGINT,
   total_duration_ms BIGINT,
   fixes_created INTEGER DEFAULT 0,
   prs_merged INTEGER DEFAULT 0,
-  
+
+  -- Autonomy tracking
+  autonomous_actions_taken JSONB DEFAULT '[]',  -- log of auto-approved dangerous tool calls
+  is_false_positive BOOLEAN DEFAULT false,
+
   -- Output
-  post_mortem TEXT,                                 -- generated post-mortem markdown
-  post_mortem_url TEXT,                             -- link to stored PDF
-  
+  post_mortem TEXT,                        -- generated post-mortem markdown
+
+  -- Timestamps
   declared_at TIMESTAMPTZ DEFAULT NOW(),
   contained_at TIMESTAMPTZ,
   remediated_at TIMESTAMPTZ,
@@ -87,21 +157,78 @@ CREATE TABLE security_incidents (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE UNIQUE INDEX idx_si_dedup ON security_incidents(organization_id, dedup_key)
+  WHERE dedup_key IS NOT NULL AND status NOT IN ('resolved', 'closed', 'aborted');
+CREATE INDEX idx_si_org_status ON security_incidents(organization_id, status);
+CREATE INDEX idx_si_org_created ON security_incidents(organization_id, created_at DESC);
+```
+
+Key design decisions:
+- `dedup_key` with partial unique index prevents duplicate active incidents for the same trigger event.
+- Granular `status` values track all 6 phases plus terminal states.
+- `autonomous_actions_taken` provides audit trail for auto-bypassed approvals.
+- `post_mortem` stored as markdown (PDF export is client-side via browser print).
+
+#### incident_timeline
+
+```sql
 CREATE TABLE incident_timeline (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   incident_id UUID NOT NULL REFERENCES security_incidents(id) ON DELETE CASCADE,
   phase TEXT NOT NULL,
   event_type TEXT NOT NULL,    -- 'phase_started', 'action_taken', 'approval_requested',
                                -- 'approval_granted', 'notification_sent', 'fix_started',
-                               -- 'fix_completed', 'verification_passed', 'note_added'
+                               -- 'fix_completed', 'verification_passed', 'note_added',
+                               -- 'escalation_fired', 'scope_expanded'
   description TEXT NOT NULL,
   actor TEXT,                  -- 'aegis', user name, or 'system'
   metadata JSONB,
+  duration_ms INTEGER,         -- how long this action took (for performance metrics)
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_si_org_status ON security_incidents(organization_id, status);
 CREATE INDEX idx_it_incident ON incident_timeline(incident_id, created_at);
+```
+
+#### incident_notes (manual observations during response)
+
+```sql
+CREATE TABLE incident_notes (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  incident_id UUID NOT NULL REFERENCES security_incidents(id) ON DELETE CASCADE,
+  author_id UUID NOT NULL,
+  content TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_in_incident ON incident_notes(incident_id, created_at);
+```
+
+#### Organization column (autonomous containment setting)
+
+```sql
+ALTER TABLE organizations
+  ADD COLUMN IF NOT EXISTS allow_autonomous_containment BOOLEAN DEFAULT false;
+```
+
+When `true` and a playbook has `auto_execute = true`, critical-severity incidents auto-execute their Contain phase without human approval -- even for `dangerous` tools like `emergencyLockdownPackage`. All autonomous actions are logged.
+
+#### RLS Policies
+
+```sql
+ALTER TABLE incident_playbooks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE security_incidents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE incident_timeline ENABLE ROW LEVEL SECURITY;
+ALTER TABLE incident_notes ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role full access on incident_playbooks" ON incident_playbooks FOR ALL
+  USING (auth.role() = 'service_role');
+CREATE POLICY "Service role full access on security_incidents" ON security_incidents FOR ALL
+  USING (auth.role() = 'service_role');
+CREATE POLICY "Service role full access on incident_timeline" ON incident_timeline FOR ALL
+  USING (auth.role() = 'service_role');
+CREATE POLICY "Service role full access on incident_notes" ON incident_notes FOR ALL
+  USING (auth.role() = 'service_role');
 ```
 
 **Phase definition structure** (stored in `incident_playbooks.phases` JSONB):
@@ -117,166 +244,800 @@ interface PlaybookPhase {
 
 interface PlaybookStep {
   id: string;
-  tool: string;               // Aegis tool name
+  tool: string;               // Aegis tool name (must be a registered tool)
   params: Record<string, any>; // tool parameters (can reference incident context via $variables)
-  condition?: string;          // skip if condition is false (e.g., "$affected_projects.length > 5")
+  condition?: string;          // skip if condition is false (safe JSON-based, see 17C)
   onFailure: 'continue' | 'pause' | 'abort';
 }
 ```
 
-### 17B: Pre-Built Playbook Templates
+---
+
+### 17B: Trigger System
+
+**File:** `ee/backend/lib/incident-triggers.ts` (new)
+
+The trigger system bridges Phase 9 events to incident creation. It runs inside the notification dispatcher pipeline -- when an event is dispatched, also check if it matches any active playbook triggers.
+
+**Hook point:** In `ee/backend/lib/notification-dispatcher.ts`, after `resolveMatchingRules()`, add a call to `checkIncidentTriggers(event)`.
+
+#### Triggerable event types
+
+Only specific event types can trigger incidents:
+
+| Event Type | Playbook Type | Example Trigger Criteria |
+|------------|---------------|--------------------------|
+| `vulnerability_discovered` | `zero_day` | `{ severity: 'critical', cisa_kev: true }` or `{ epss_score: { $gt: 0.7 } }` |
+| `supply_chain_anomaly` | `supply_chain` | `{ anomaly_score: { $gt: 80 } }` |
+| `malicious_package_detected` | `supply_chain` | (always triggers if playbook enabled) |
+| `secret_exposure_verified` | `secret_exposure` | `{ is_verified: true }` |
+| `sla_breached` | `compliance_breach` | (always triggers if playbook enabled) |
+| `policy_violation` | `compliance_breach` | `{ violations_count: { $gt: 5 } }` |
+
+**New event type needed:** `secret_exposure_verified` -- emitted by the extraction worker pipeline after TruffleHog parsing when `is_verified = true` findings are detected. Add to extraction-worker/src/pipeline.ts in the TruffleHog step:
+
+```typescript
+if (verifiedSecrets.length > 0) {
+  await emitEvent({
+    type: 'secret_exposure_verified',
+    organizationId,
+    projectId,
+    payload: {
+      count: verifiedSecrets.length,
+      detector_types: [...new Set(verifiedSecrets.map(s => s.detector_type))],
+      project_name: projectName,
+    },
+    source: 'extraction_worker',
+    priority: 'critical',
+  });
+}
+```
+
+#### Trigger evaluation logic
+
+```typescript
+async function checkIncidentTriggers(event: NotificationEvent): Promise<void> {
+  const TRIGGERABLE_EVENTS = [
+    'vulnerability_discovered', 'supply_chain_anomaly', 'malicious_package_detected',
+    'secret_exposure_verified', 'sla_breached', 'policy_violation',
+  ];
+  if (!TRIGGERABLE_EVENTS.includes(event.event_type)) return;
+
+  const { data: playbooks } = await supabase
+    .from('incident_playbooks')
+    .select('*')
+    .eq('organization_id', event.organization_id)
+    .eq('enabled', true)
+    .not('auto_execute', 'is', null); // only auto-execute playbooks
+
+  for (const playbook of playbooks || []) {
+    if (!matchesTriggerCriteria(playbook.trigger_criteria, event)) continue;
+
+    // Deduplication: one active incident per dedup_key
+    const dedupKey = buildDedupKey(playbook.trigger_type, event);
+    const { data: existing } = await supabase
+      .from('security_incidents')
+      .select('id')
+      .eq('organization_id', event.organization_id)
+      .eq('dedup_key', dedupKey)
+      .not('status', 'in', '("resolved","closed","aborted")')
+      .maybeSingle();
+
+    if (existing) {
+      await expandIncidentScope(existing.id, event);
+      continue;
+    }
+
+    // Rate limit: max 5 incidents per org per hour
+    const { count } = await supabase
+      .from('security_incidents')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', event.organization_id)
+      .gte('declared_at', new Date(Date.now() - 3600_000).toISOString());
+    if ((count || 0) >= 5) continue;
+
+    await declareIncident(event.organization_id, playbook, event);
+  }
+}
+```
+
+#### Dedup key format
+
+- Zero-day: `zero_day:{osv_id}` (one incident per CVE)
+- Supply chain: `supply_chain:{package_name}` (one per compromised package)
+- Secret exposure: `secret_exposure:{detector_type}:{sha256(file_path)}` (one per finding location)
+- Compliance breach: `compliance_breach:{project_id}` (one per project)
+
+#### Trigger criteria matching
+
+```typescript
+function matchesTriggerCriteria(criteria: any, event: NotificationEvent): boolean {
+  if (!criteria) return true; // no criteria = always match
+  for (const [key, condition] of Object.entries(criteria)) {
+    const eventValue = event.payload?.[key];
+    if (typeof condition === 'object' && condition !== null) {
+      if ('$gt' in condition && !(eventValue > condition.$gt)) return false;
+      if ('$gte' in condition && !(eventValue >= condition.$gte)) return false;
+      if ('$lt' in condition && !(eventValue < condition.$lt)) return false;
+      if ('$in' in condition && !condition.$in.includes(eventValue)) return false;
+    } else {
+      if (eventValue !== condition) return false;
+    }
+  }
+  return true;
+}
+```
+
+#### Scope expansion (dedup merge)
+
+When a new trigger matches an existing active incident, expand the scope:
+
+```typescript
+async function expandIncidentScope(incidentId: string, event: NotificationEvent): Promise<void> {
+  const { data: incident } = await supabase
+    .from('security_incidents').select('*').eq('id', incidentId).single();
+  if (!incident) return;
+
+  const updates: any = {};
+  if (event.payload?.project_id && !incident.affected_projects?.includes(event.payload.project_id)) {
+    updates.affected_projects = [...(incident.affected_projects || []), event.payload.project_id];
+  }
+  if (event.payload?.package_name && !incident.affected_packages?.includes(event.payload.package_name)) {
+    updates.affected_packages = [...(incident.affected_packages || []), event.payload.package_name];
+  }
+  if (event.payload?.osv_id && !incident.affected_cves?.includes(event.payload.osv_id)) {
+    updates.affected_cves = [...(incident.affected_cves || []), event.payload.osv_id];
+  }
+
+  if (Object.keys(updates).length > 0) {
+    await supabase.from('security_incidents').update(updates).eq('id', incidentId);
+    await addTimelineEvent(incidentId, incident.current_phase, 'scope_expanded',
+      `Scope expanded: new affected ${Object.keys(updates).join(', ')} added`);
+  }
+}
+```
+
+#### Phase 9 event types for incident lifecycle
+
+Emitted by the incident engine during lifecycle transitions:
+
+| Event Type | Priority | When |
+|------------|----------|------|
+| `incident_declared` | critical | New incident created |
+| `incident_contained` | high | Contain phase completed |
+| `incident_resolved` | normal | All phases completed, incident resolved |
+| `incident_escalated` | critical | Phase timeout fired |
+| `incident_aborted` | high | Incident aborted due to critical failure |
+
+These integrate with existing Phase 9 notification rules -- orgs can configure Slack/email/PagerDuty delivery for incident events.
+
+---
+
+### 17C: Playbook Execution Engine
+
+**File:** `ee/backend/lib/incident-engine.ts` (new)
+
+The execution engine is **async and event-driven via QStash**, matching the existing Aegis task step pattern. No synchronous for-loops.
+
+#### How it works
+
+```
+declareIncident() → create security_incidents + aegis_task + aegis_task_steps
+                  → if auto_execute: queue first step via QStash
+                  → else: wait for manual approval
+
+execute-task-step → run tool → check if next step is new phase
+                  → if new phase needs approval: pause, request approval
+                  → if no approval needed: queue next step via QStash
+                  → if phase complete: update incident timestamps + emit events
+                  → if all phases done: resolve incident + generate post-mortem
+
+escalate endpoint → check if incident still in timed-out phase
+                  → increment escalation_level → emit incident_escalated event
+```
+
+#### declareIncident()
+
+```typescript
+async function declareIncident(
+  orgId: string,
+  playbook: IncidentPlaybook,
+  triggerEvent: NotificationEvent
+): Promise<string> {
+  // 1. Build incident scope from trigger event
+  const scope = extractScope(triggerEvent);
+
+  // 2. Create security_incidents record
+  const { data: incident } = await supabase
+    .from('security_incidents')
+    .insert({
+      organization_id: orgId,
+      playbook_id: playbook.id,
+      title: buildIncidentTitle(playbook.trigger_type, triggerEvent),
+      incident_type: playbook.trigger_type,
+      severity: determineSeverity(triggerEvent),
+      trigger_source: triggerEvent.source,
+      trigger_data: triggerEvent.payload,
+      dedup_key: buildDedupKey(playbook.trigger_type, triggerEvent),
+      affected_projects: scope.projects,
+      affected_packages: scope.packages,
+      affected_cves: scope.cves,
+    })
+    .select().single();
+
+  // 3. Convert playbook phases into aegis_task + aegis_task_steps
+  const taskId = await createIncidentTask(orgId, incident, playbook);
+  await supabase.from('security_incidents')
+    .update({ task_id: taskId }).eq('id', incident.id);
+
+  // 4. Timeline entry
+  await addTimelineEvent(incident.id, 'contain', 'phase_started',
+    `Incident declared: ${incident.title}`);
+
+  // 5. Emit Phase 9 notification event
+  await emitEvent({
+    type: 'incident_declared',
+    organizationId: orgId,
+    payload: {
+      incident_id: incident.id,
+      title: incident.title,
+      severity: incident.severity,
+      incident_type: incident.incident_type,
+      affected_projects_count: scope.projects.length,
+      affected_packages: scope.packages,
+    },
+    source: 'incident_engine',
+    priority: 'critical',
+  });
+
+  // 6. Security audit log
+  await logSecurityEvent({
+    organizationId: orgId,
+    action: 'incident_declared',
+    targetType: 'security_incident',
+    targetId: incident.id,
+    metadata: { severity: incident.severity, trigger_type: playbook.trigger_type, auto_execute: playbook.auto_execute },
+    severity: 'critical',
+  });
+
+  // 7. Auto-start or wait for approval
+  const shouldAutoStart = playbook.auto_execute;
+  if (shouldAutoStart) {
+    await autoStartIncident(incident, playbook, orgId);
+  }
+
+  // 8. Update playbook usage stats
+  await supabase.from('incident_playbooks')
+    .update({
+      usage_count: playbook.usage_count + 1,
+      last_used_at: new Date().toISOString(),
+    })
+    .eq('id', playbook.id);
+
+  return incident.id;
+}
+```
+
+#### createIncidentTask()
+
+Converts playbook phases into flattened `aegis_task_steps`:
+
+```typescript
+async function createIncidentTask(
+  orgId: string, incident: any, playbook: IncidentPlaybook
+): Promise<string> {
+  // Create aegis_task
+  const { data: task } = await supabase
+    .from('aegis_tasks')
+    .insert({
+      organization_id: orgId,
+      title: `Incident Response: ${incident.title}`,
+      mode: playbook.auto_execute ? 'autonomous' : 'plan',
+      status: playbook.auto_execute ? 'running' : 'awaiting_approval',
+      plan_json: playbook.phases,
+      total_steps: playbook.phases.reduce((sum, p) => sum + p.steps.length, 0),
+    })
+    .select().single();
+
+  // Flatten phases into task steps
+  let stepNumber = 1;
+  for (const phase of playbook.phases) {
+    for (const step of phase.steps) {
+      await supabase.from('aegis_task_steps').insert({
+        task_id: task.id,
+        step_number: stepNumber++,
+        title: `[${phase.phase.toUpperCase()}] ${step.tool}`,
+        tool_name: step.tool,
+        tool_params: {
+          ...step.params,
+          __incident_id: incident.id,
+          __incident_phase: phase.phase,
+          __requires_approval: phase.requiresApproval,
+          __on_failure: step.onFailure,
+          __condition: step.condition,
+          __timeout_minutes: phase.timeoutMinutes,
+        },
+        status: 'pending',
+      });
+    }
+  }
+
+  return task.id;
+}
+```
+
+Step metadata fields prefixed with `__` are consumed by the execution engine, not passed to the tool.
+
+#### Autonomous containment override
+
+When `org.allow_autonomous_containment = true` and incident severity is critical:
+
+```typescript
+async function autoStartIncident(
+  incident: any, playbook: IncidentPlaybook, orgId: string
+): Promise<void> {
+  const { data: org } = await supabase
+    .from('organizations').select('allow_autonomous_containment').eq('id', orgId).single();
+
+  const taskId = incident.task_id || (await supabase
+    .from('security_incidents').select('task_id').eq('id', incident.id).single()).data?.task_id;
+
+  // If org allows autonomous containment AND incident is critical,
+  // mark task as running and queue first step
+  if (org?.allow_autonomous_containment && incident.severity === 'critical') {
+    await supabase.from('aegis_tasks')
+      .update({ status: 'running', started_at: new Date().toISOString() })
+      .eq('id', taskId);
+
+    const firstStepId = await getNextPendingStep(taskId);
+    if (firstStepId) {
+      await qstashClient.publishJSON({
+        url: `${BACKEND_URL}/api/internal/aegis/execute-task-step`,
+        body: { taskId, stepId: firstStepId },
+      });
+    }
+
+    await logSecurityEvent({
+      organizationId: orgId,
+      action: 'incident_auto_started',
+      targetType: 'security_incident',
+      targetId: incident.id,
+      metadata: { autonomous: true, severity: incident.severity },
+      severity: 'critical',
+    });
+  } else {
+    // Non-critical or org doesn't allow autonomous: still need approval on contain phase
+    // Task stays in awaiting_approval -- user must approve from Aegis UI
+  }
+}
+```
+
+#### Phase transition logic
+
+Added to the `execute-task-step` handler in `backend/src/routes/aegis-task-step.ts`:
+
+After a step completes successfully, check if the next step is in a different phase:
+
+```typescript
+// After executeTaskStep returns successfully:
+if (result.hasMore) {
+  const nextStepId = await getNextPendingStep(taskId);
+  if (nextStepId) {
+    const nextStep = await loadStep(nextStepId);
+    const currentPhase = completedStep.tool_params.__incident_phase;
+    const nextPhase = nextStep.tool_params.__incident_phase;
+    const incidentId = completedStep.tool_params.__incident_id;
+
+    if (incidentId && currentPhase !== nextPhase) {
+      // Phase transition
+      await advanceIncidentPhase(incidentId, nextPhase, currentPhase);
+
+      // Check if next phase requires approval
+      if (nextStep.tool_params.__requires_approval) {
+        await requestPhaseApproval(incidentId, nextPhase, taskId);
+        return; // Don't queue next step -- wait for approval
+      }
+
+      // Schedule escalation timeout for new phase
+      if (nextStep.tool_params.__timeout_minutes) {
+        await scheduleEscalation(incidentId, nextPhase, nextStep.tool_params.__timeout_minutes);
+      }
+    }
+
+    // Queue next step
+    await qstashClient.publishJSON({
+      url: `${BACKEND_URL}/api/internal/aegis/execute-task-step`,
+      body: { taskId, stepId: nextStepId },
+    });
+  }
+} else if (result.taskCompleted) {
+  // All steps done -- resolve incident
+  const incidentId = completedStep.tool_params.__incident_id;
+  if (incidentId) {
+    await resolveIncident(incidentId);
+  }
+}
+```
+
+#### Variable resolution (safe, no eval)
+
+```typescript
+function resolveVariables(params: Record<string, any>, incident: SecurityIncident): Record<string, any> {
+  const context: Record<string, any> = {
+    incident_id: incident.id,
+    organization_id: incident.organization_id,
+    affected_projects: incident.affected_projects || [],
+    affected_packages: incident.affected_packages || [],
+    affected_cves: incident.affected_cves || [],
+    severity: incident.severity,
+    incident_type: incident.incident_type,
+    title: incident.title,
+  };
+  return JSON.parse(
+    JSON.stringify(params).replace(/"\$(\w+)"/g, (_, key) =>
+      context[key] !== undefined ? JSON.stringify(context[key]) : `"$${key}"`
+    )
+  );
+}
+```
+
+Only string values matching `"$variableName"` are replaced. No arbitrary code execution.
+
+#### Condition evaluation (safe, JSON-based)
+
+```typescript
+function evaluateCondition(condition: string, incident: SecurityIncident): boolean {
+  // Supports: "$field.length > N", "$field === 'value'", "$field > N"
+  const arrayLengthMatch = condition.match(/^\$(\w+)\.length\s*(>|<|>=|<=|===|==)\s*(\d+)$/);
+  if (arrayLengthMatch) {
+    const [, field, op, val] = arrayLengthMatch;
+    const arr = (incident as any)[field];
+    if (!Array.isArray(arr)) return true;
+    const num = parseInt(val);
+    switch (op) {
+      case '>': return arr.length > num;
+      case '<': return arr.length < num;
+      case '>=': return arr.length >= num;
+      case '<=': return arr.length <= num;
+      case '===': case '==': return arr.length === num;
+    }
+  }
+
+  const stringMatch = condition.match(/^\$(\w+)\s*===\s*'([^']+)'$/);
+  if (stringMatch) {
+    const [, field, val] = stringMatch;
+    return (incident as any)[field] === val;
+  }
+
+  return true; // Unknown format = execute (safe default)
+}
+```
+
+#### Escalation via QStash
+
+```typescript
+async function scheduleEscalation(incidentId: string, phase: string, timeoutMinutes: number) {
+  await qstashClient.publishJSON({
+    url: `${BACKEND_URL}/api/internal/incidents/escalate`,
+    body: { incidentId, phase },
+    delay: timeoutMinutes * 60,
+    headers: { 'X-Internal-Api-Key': process.env.INTERNAL_API_KEY! },
+  });
+}
+```
+
+Escalation endpoint behavior:
+1. Check if incident is still in the same phase (if not, discard -- phase already advanced)
+2. Increment `escalation_level` on the incident
+3. Emit `incident_escalated` Phase 9 event (priority: critical -- triggers PagerDuty)
+4. Add timeline entry: "Phase {phase} timed out after {X} minutes -- escalated to level {N}"
+
+#### Concurrent incident handling
+
+When multiple incidents are active simultaneously:
+- Each incident is an independent Aegis task -- they execute in parallel via QStash
+- **Fix deduplication:** Before `triggerFix` in a remediation step, check `project_security_fixes` for an active fix on the same target. If found, skip and log "Fix already in progress from incident {X}"
+- **Priority ordering:** Higher severity incidents get QStash priority (0s delay vs 30s for medium)
+
+---
+
+### 17D: Pre-Built Playbook Templates
+
+**File:** `ee/backend/lib/incident-templates.ts` (new)
+
+Four templates seeded as `is_template = true` playbooks that orgs can clone and customize. Defined as TypeScript objects; seeded when org enables incident response or on first Aegis setup.
 
 **1. Zero-Day CVE Response** (`trigger_type: 'zero_day'`):
 
 Auto-trigger: critical CVE with `cisa_kev = true` or EPSS > 0.7 affecting any org project.
 
-| Phase | Steps | Approval |
-|-------|-------|----------|
-| Contain | `emergencyLockdownPackage` -- pin affected package across all projects to prevent further spread | Yes (dangerous) |
-| Assess | `assessBlastRadius` -- which projects, how used, reachable?; `getSLAStatus` -- any approaching SLA deadlines? | No |
-| Communicate | `sendSlackMessage` to #security with blast radius summary; `sendEmail` to org admins; create `incident_timeline` entry | No |
-| Remediate | `createSecuritySprint` for affected projects ranked by Depscore; execute sprint (sequential fixes) | Propose mode: Yes |
-| Verify | `triggerExtraction` for each affected project; verify CVE no longer appears in results | No |
-| Report | `generateSecurityReport` for the incident; compute MTTR; generate post-mortem | No |
+| Phase | Steps | Tool | Approval |
+|-------|-------|------|----------|
+| Contain | Lock affected package across all projects | `emergencyLockdownPackage` | Yes (dangerous) |
+| Assess | Blast radius: which projects, how used, reachable? | `assessBlastRadius` | No |
+| Assess | SLA deadline check | `getSLAStatus` | No |
+| Communicate | Slack alert to #security with blast radius summary | `createSlackMessage` | No |
+| Communicate | Email to org admins | `sendEmail` | No |
+| Remediate | Security sprint for affected projects ranked by Depscore | `createSecuritySprint` | Propose mode: Yes |
+| Verify | Re-extract all affected projects | `triggerExtraction` (per project) | No |
+| Report | Generate security report + post-mortem | `generateSecurityReport` | No |
 
 **2. Supply Chain Compromise** (`trigger_type: 'supply_chain'`):
 
 Auto-trigger: Watchtower anomaly score > 80 for a package, or malicious indicator detected.
 
-| Phase | Steps |
-|-------|-------|
-| Contain | `emergencyLockdownPackage` -- block the compromised version org-wide; flag in all PRs |
-| Assess | `assessBlastRadius` -- full usage analysis across org; check if malicious payload was executed (via atom reachability) |
-| Communicate | Alert: "Potential supply chain compromise detected in [package]"; include confidence level and evidence |
-| Remediate | If safe version exists: sprint to downgrade/remove; if no safe version: `remove_unused` or `add_wrapper` strategies |
-| Verify | Re-extract all affected projects; verify compromised version no longer in dependency tree |
-| Report | Supply chain incident report with: detection timeline, affected scope, actions taken, residual risk |
+| Phase | Steps | Tool |
+|-------|-------|------|
+| Contain | Block compromised version org-wide | `emergencyLockdownPackage` |
+| Assess | Full usage analysis across org | `assessBlastRadius` |
+| Assess | Watchtower evidence summary | `getWatchtowerSummary` |
+| Communicate | Alert with confidence level and evidence | `createSlackMessage` + `sendEmail` |
+| Remediate | If safe version exists: sprint to downgrade. If none: remove strategies | `createSecuritySprint` |
+| Verify | Re-extract all affected projects | `triggerExtraction` (per project) |
+| Report | Supply chain incident report | `generateSecurityReport` |
 
 **3. Secret Exposure** (`trigger_type: 'secret_exposure'`):
 
 Auto-trigger: TruffleHog finding with `is_verified = true` (confirmed active credential).
 
-| Phase | Steps |
-|-------|-------|
-| Contain | Alert: "Active credential exposed in [repo]"; guidance: "Rotate this credential immediately" |
-| Assess | Check if secret is in git history only or current code; identify all repos that might share the credential |
-| Communicate | Notify project owner + security team; include redacted finding details (never the actual secret) |
-| Remediate | `remediate_secret` strategy to replace hardcoded value with env var; remind user to rotate the actual credential |
-| Verify | Re-extract; verify `is_current = false` for the finding |
-| Report | Secret exposure report with: detection time, exposure window, rotation confirmation |
+| Phase | Steps | Tool |
+|-------|-------|------|
+| Contain | Alert with rotation guidance (no lockdown needed for secrets) | `createSlackMessage` + `sendEmail` |
+| Assess | Check if secret is in current code vs git history only | `getSecretFindings` |
+| Communicate | Notify project owner + security team (redacted only) | `createSlackMessage` |
+| Remediate | Replace hardcoded value with env var | `triggerFix` (strategy: `remediate_secret`) |
+| Verify | Re-extract; verify finding gone or `is_current = false` | `triggerExtraction` |
+| Report | Secret exposure report: detection time, exposure window | `generateSecurityReport` |
 
 **4. Compliance Breach** (`trigger_type: 'compliance_breach'`):
 
-Auto-trigger: policy evaluation changes a project's status from passing to non-passing, OR SLA breach occurs.
+Auto-trigger: policy evaluation changes project status from passing to non-passing, OR SLA breach.
 
-| Phase | Steps |
-|-------|-------|
-| Contain | Identify scope: which projects, which policies, which violations |
-| Assess | Impact analysis: "12 packages across 3 projects are now non-compliant due to new GPL policy" |
-| Communicate | Notify compliance team; include violation details and estimated remediation effort |
-| Remediate | Generate exception requests for low-risk items; create sprint for remaining violations |
-| Verify | Re-run policy evaluation; confirm all projects back to passing |
-| Report | Compliance incident report with: root cause, scope, actions, time to resolution |
+| Phase | Steps | Tool |
+|-------|-------|------|
+| Contain | Identify scope: which projects, policies, violations | `getComplianceStatus` |
+| Assess | Impact analysis: "X packages across Y projects non-compliant" | `evaluatePolicy` |
+| Communicate | Notify compliance team with violation details | `createSlackMessage` + `sendEmail` |
+| Remediate | Generate exception requests for low-risk items | `listPolicyExceptions` |
+| Verify | Re-run policy evaluation; confirm passing | `evaluatePolicy` |
+| Report | Compliance incident report: root cause, scope, resolution | `generateSecurityReport` |
 
-### 17C: Playbook Execution Engine
+---
 
-Playbooks execute as specialized Aegis tasks (reuses 7B-C task system):
+### 17E: Post-Mortem Generation
+
+**File:** `ee/backend/lib/incident-postmortem.ts` (new)
+
+**Strategy: Markdown-first, client-side PDF export.**
+
+Server-side PDF via puppeteer requires Chromium binaries -- too heavy and fragile. Instead:
+- Generate structured markdown from incident data + timeline (always works, no AI needed)
+- Optionally enhance "Root Cause" and "Recommendations" via BYOK AI (if org has provider)
+- Store markdown in `security_incidents.post_mortem`
+- Frontend provides "Download PDF" via browser `window.print()` with print-optimized CSS
 
 ```typescript
-async function executePlaybook(incident: SecurityIncident, playbook: IncidentPlaybook) {
-  // Create Aegis task
-  const task = await createAegisTask({
-    title: `Incident Response: ${incident.title}`,
-    mode: playbook.auto_execute ? 'autonomous' : 'plan',
-    plan_json: playbook.phases,
-  });
-  
-  // Update incident with task reference
-  await updateIncident(incident.id, { task_id: task.id });
-  
-  for (const phase of playbook.phases) {
-    // Log phase start
-    await addTimelineEvent(incident.id, phase.phase, 'phase_started', `Starting ${phase.name}`);
-    await updateIncident(incident.id, { current_phase: phase.phase });
-    
-    // Check if approval is needed
-    if (phase.requiresApproval) {
-      await requestApproval(incident, phase);
-      // Pause until approved -- approval comes via Aegis approval system (7B-B)
+async function generatePostMortem(incidentId: string): Promise<string> {
+  const incident = await loadIncidentWithTimeline(incidentId);
+  let markdown = buildTemplatePostMortem(incident); // always works, no AI
+
+  // Optional AI enhancement (if org has BYOK provider)
+  try {
+    const provider = await getProviderForOrg(incident.organization_id);
+    if (provider) {
+      const enhanced = await enhanceWithAI(provider, markdown, incident);
+      if (enhanced) markdown = enhanced;
     }
-    
-    // Execute steps
-    for (const step of phase.steps) {
-      // Evaluate condition
-      if (step.condition && !evaluateCondition(step.condition, incident)) {
-        await addTimelineEvent(incident.id, phase.phase, 'action_taken', 
-          `Skipped ${step.tool}: condition not met`);
-        continue;
-      }
-      
-      // Resolve $variables in params
-      const resolvedParams = resolveVariables(step.params, incident);
-      
-      // Execute the Aegis tool
-      const result = await executeTool(step.tool, resolvedParams);
-      
-      await addTimelineEvent(incident.id, phase.phase, 'action_taken',
-        `${step.tool}: ${result.success ? 'success' : 'failed'}`);
-      
-      if (!result.success && step.onFailure === 'pause') {
-        await pauseIncident(incident, step, result.error);
-        break;
-      }
-      if (!result.success && step.onFailure === 'abort') {
-        await abortIncident(incident, step, result.error);
-        return;
-      }
-    }
-    
-    // Update phase timestamp
-    if (phase.phase === 'contain') await updateIncident(incident.id, { contained_at: new Date() });
-    if (phase.phase === 'remediate') await updateIncident(incident.id, { remediated_at: new Date() });
-    
-    // Phase timeout escalation
-    if (phase.timeoutMinutes) {
-      scheduleEscalation(incident.id, phase.phase, phase.timeoutMinutes);
-    }
+  } catch {
+    // AI enhancement failed -- template version is fine
   }
-  
-  // Incident resolved
-  await updateIncident(incident.id, {
-    status: 'resolved',
-    resolved_at: new Date(),
-    total_duration_ms: Date.now() - incident.declared_at.getTime(),
-  });
+
+  await supabase.from('security_incidents')
+    .update({ post_mortem: markdown })
+    .eq('id', incidentId);
+
+  return markdown;
 }
 ```
 
-### 17D: Incident UI
+**Template-based post-mortem (no AI required):**
 
-**Aegis screen integration:**
+```markdown
+# Security Incident Report: [Title]
 
-Incidents appear as high-priority items in the Aegis left sidebar, above Active Tasks:
+## Summary
+- **Type**: [incident_type]
+- **Severity**: [severity]
+- **Declared**: [declared_at]
+- **Resolved**: [resolved_at]
+- **Duration**: [total_duration formatted]
 
-- "ACTIVE INCIDENTS" section with red indicator when any incident is active
-- Each incident card: severity badge (red/amber) + title + current phase badge + time since declared
-- Clicking opens the incident detail view in the main panel
+## Impact
+- **Affected Projects**: [count] ([names])
+- **Affected Packages**: [list]
+- **Vulnerabilities**: [CVE IDs]
 
-**Incident detail view** (replaces chat view when incident selected):
+## Timeline
+| Time | Phase | Action |
+|------|-------|--------|
+[generated from incident_timeline entries]
 
-- Header: incident title + severity badge + status badge + declared time + "Resolve" / "Close" buttons
-- Phase progress bar: six segments (Contain -> Assess -> Communicate -> Remediate -> Verify -> Report), current phase highlighted, completed phases green
-- Timeline: full chronological event log from `incident_timeline`. Each event: timestamp + phase badge + actor (Aegis/user) + description. Expandable for metadata.
-- Right panel: affected projects list, affected packages, affected CVEs (clickable to their detail sidebars)
+## Metrics
+- **Time to Contain**: [time_to_contain formatted]
+- **Time to Remediate**: [time_to_remediate formatted]
+- **Fixes Created**: [fixes_created]
+- **PRs Merged**: [prs_merged]
+- **SLA Status**: [from Phase 15 data]
 
-**Incident history:**
+## Root Cause
+[If AI available: generated analysis. If not: "See incident timeline for details."]
 
-Accessible from Aegis management console > new "Incidents" tab:
+## Recommendations
+[If AI available: generated recommendations. If not: "Review incident timeline and affected scope for preventive measures."]
+```
 
-- Table of past incidents: date, type, severity, duration, affected projects count, resolution
-- Click to view full timeline and post-mortem
-- Filter by type, severity, date range
-- Export for audit purposes
+---
+
+### 17F: Custom Playbook Builder
+
+Users can create custom playbooks via:
+
+1. **Aegis chat**: "Create an incident response playbook for when a critical CVE affects our Crown Jewels projects." Aegis generates a playbook definition using the template structure, user reviews and approves.
+
+2. **Management console**: "Incidents" tab > "Create Playbook" button > step-by-step form:
+   - Name + description
+   - Trigger type (from presets or custom)
+   - Auto-trigger criteria (optional, JSON builder or natural language via Aegis)
+   - Per-phase step configuration: pick tools from the Aegis tool registry, configure parameters, set approval requirements
+   - Notification channels per phase
+   - Test playbook with dry run (simulates execution without taking actions)
+
+3. **Playbook validation** on save: All tool names in steps must be registered Aegis tools. Invalid tool names rejected.
+
+---
+
+### 17G: API Endpoints
+
+#### EE Routes (`ee/backend/routes/incidents.ts`, new file, registered in isEeEdition block)
+
+| Method | Path | Purpose | Permission |
+|--------|------|---------|------------|
+| `GET` | `/api/organizations/:id/incidents` | List incidents (paginated, filter: status, type, severity, date range) | `interact_with_aegis` |
+| `GET` | `/api/organizations/:id/incidents/stats` | Metrics: active count, avg resolution time, monthly count, severity breakdown | `interact_with_aegis` |
+| `GET` | `/api/organizations/:id/incidents/:incidentId` | Get incident detail + timeline + notes | `interact_with_aegis` |
+| `POST` | `/api/organizations/:id/incidents` | Manually declare an incident (body: title, severity, incident_type, affected_projects, playbook_id?) | `manage_incidents` |
+| `PATCH` | `/api/organizations/:id/incidents/:incidentId/resolve` | Resolve incident (triggers post-mortem generation) | `manage_incidents` |
+| `PATCH` | `/api/organizations/:id/incidents/:incidentId/close` | Close incident (body: is_false_positive?) | `manage_incidents` |
+| `PATCH` | `/api/organizations/:id/incidents/:incidentId/abort` | Abort incident + cancel remaining steps | `manage_incidents` |
+| `POST` | `/api/organizations/:id/incidents/:incidentId/notes` | Add manual note (body: content) | `interact_with_aegis` |
+| `GET` | `/api/organizations/:id/incidents/:incidentId/post-mortem` | Get/generate post-mortem markdown | `interact_with_aegis` |
+| `GET` | `/api/organizations/:id/playbooks` | List playbooks (templates + custom) | `interact_with_aegis` |
+| `POST` | `/api/organizations/:id/playbooks` | Create custom playbook | `manage_incidents` |
+| `PUT` | `/api/organizations/:id/playbooks/:playbookId` | Update playbook | `manage_incidents` |
+| `DELETE` | `/api/organizations/:id/playbooks/:playbookId` | Delete custom playbook (blocks template deletion) | `manage_incidents` |
+| `POST` | `/api/organizations/:id/playbooks/:playbookId/dry-run` | Simulate playbook (no real actions) | `manage_incidents` |
+
+#### CE Routes (`backend/src/routes/incident-cron.ts`, new file, mounted in index.ts outside isEeEdition)
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| `POST` | `/api/internal/incidents/escalate` | QStash delayed: escalate timed-out phase | QStash / X-Internal-Api-Key |
+
+The escalation route handles QStash delayed publish callbacks for phase timeouts:
+
+```typescript
+router.post('/api/internal/incidents/escalate', requireInternalAuth, async (req, res) => {
+  const { incidentId, phase } = req.body;
+  if (!incidentId || !phase) return res.status(400).json({ error: 'Missing incidentId or phase' });
+
+  const { data: incident } = await supabase
+    .from('security_incidents').select('*').eq('id', incidentId).single();
+
+  if (!incident) return res.status(404).json({ error: 'Incident not found' });
+
+  // Discard stale escalation (phase already advanced)
+  if (incident.current_phase !== phase) return res.json({ skipped: true, reason: 'Phase already advanced' });
+  if (['resolved', 'closed', 'aborted'].includes(incident.status)) return res.json({ skipped: true });
+
+  // Escalate
+  await supabase.from('security_incidents')
+    .update({ escalation_level: (incident.escalation_level || 0) + 1 })
+    .eq('id', incidentId);
+
+  await addTimelineEvent(incidentId, phase, 'escalation_fired',
+    `Phase "${phase}" timed out -- escalated to level ${(incident.escalation_level || 0) + 1}`);
+
+  await emitEvent({
+    type: 'incident_escalated',
+    organizationId: incident.organization_id,
+    payload: {
+      incident_id: incidentId,
+      title: incident.title,
+      severity: incident.severity,
+      phase,
+      escalation_level: (incident.escalation_level || 0) + 1,
+    },
+    source: 'incident_engine',
+    priority: 'critical',
+  });
+
+  res.json({ escalated: true, level: (incident.escalation_level || 0) + 1 });
+});
+```
+
+The trigger checking does NOT need its own cron -- it piggybacks on the Phase 9 notification dispatcher (inline during event dispatch).
+
+---
+
+### 17H: Aegis Tool Registration
+
+**File:** `ee/backend/lib/aegis/tools/incidents.ts` (new, imported in `ee/backend/lib/aegis/tools/index.ts`)
+
+Register 3 new tools so Aegis can interact with incidents via chat:
+
+```typescript
+registerAegisTool({
+  name: 'declareIncident',
+  description: 'Manually declare a security incident and optionally start a response playbook.',
+  category: 'security_ops',
+  permissionLevel: 'dangerous',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      severity: { type: 'string', enum: ['critical', 'high', 'medium'] },
+      incidentType: { type: 'string', enum: ['zero_day', 'supply_chain', 'secret_exposure', 'compliance_breach', 'custom'] },
+      affectedPackages: { type: 'array', items: { type: 'string' } },
+      playbookId: { type: 'string', description: 'Optional: playbook to execute' },
+    },
+    required: ['title', 'severity', 'incidentType'],
+  },
+  execute: async (params, context) => { /* create incident via engine */ },
+});
+
+registerAegisTool({
+  name: 'getIncidentStatus',
+  description: 'Get the current status of a security incident including phase, timeline, and affected scope.',
+  category: 'security_ops',
+  permissionLevel: 'read',
+  parameters: { /* incidentId */ },
+  execute: async (params, context) => { /* load incident + timeline */ },
+});
+
+registerAegisTool({
+  name: 'listActiveIncidents',
+  description: 'List all active security incidents for the organization.',
+  category: 'security_ops',
+  permissionLevel: 'read',
+  parameters: {},
+  execute: async (params, context) => { /* query active incidents */ },
+});
+```
+
+---
+
+### 17I: Frontend UI
+
+**Active incident integration in AegisPage:**
+
+In `frontend/src/app/pages/AegisPage.tsx`, add an "ACTIVE INCIDENTS" section above the existing "Active Tasks" in the left panel:
+- Fetch `GET /api/organizations/:id/incidents?status=active,contained,assessing,communicating,remediating,verifying`
+- Subscribe to `security_incidents` via Supabase Realtime for live status updates
+- Render incident cards: severity badge (red critical / amber high) + title + current phase badge + time since declared
+- Clicking an incident switches the main panel from chat to the incident detail view
+
+**Supabase Realtime hooks:**
+- `useIncidentStatus(orgId)` -- subscribes to `security_incidents` UPDATE for org's active incidents
+- `useIncidentTimeline(incidentId)` -- subscribes to `incident_timeline` INSERT for selected incident
+
+**Incident detail view** (main panel replacement when incident selected):
+
+- Header bar: severity badge + title + status badge + "Declared Xm ago" + "Resolve" / "Close" buttons
+- Phase progress bar: six connected segments (Contain -> Assess -> Communicate -> Remediate -> Verify -> Report). States: completed (green), current (amber with spinner), upcoming (zinc-900). Thin connecting lines between segments.
+- Timeline: chronological event log grouped by phase. Each event: timestamp + phase badge + actor badge ("Aegis" or user name) + description. Expandable metadata. Vertical timeline line with colored dots (green complete, amber current, red failure).
+- Approval card: inline card when current phase needs approval. "Approve" and "Reject" buttons.
+- "Add Note" button for manual observations.
+- Right panel (conditional, 320px): Affected Scope -- projects list (red/green dots), packages, CVE links, fix status during remediation.
 
 **Stitch AI Prompt for Incident Detail View (Aegis Screen):**
 
@@ -312,6 +1073,27 @@ Accessible from Aegis management console > new "Incidents" tab:
 > - Section 3 -- "Vulnerabilities" (count badge): OSV IDs as clickable links (green-500, JetBrains Mono 12px) that open the vulnerability detail sidebar.
 > - Section 4 -- "Fixes" (appears during/after Remediate phase): list of fix jobs with status badges (running spinner, completed check, failed x).
 
+**Management Console Incidents tab:**
+
+Replace the placeholder in `frontend/src/components/settings/AegisManagementConsole.tsx` (lines 788-796). Two sub-sections:
+
+**Section 1 -- Incident Metrics** (three cards):
+- Card 1: "Active Incidents" -- count (red if > 0, green if 0) + severity breakdown
+- Card 2: "Avg Resolution Time" -- formatted duration + total count
+- Card 3: "Incidents This Month" -- count + resolved/active breakdown
+
+**Section 2 -- Playbooks** card:
+- Header: "Response Playbooks" + "Create Playbook" button
+- List of playbooks: icon + name + trigger criteria summary + auto-execute toggle + usage count + overflow menu (Edit, Dry Run, Duplicate, Delete)
+- Templates labeled with "Template" pill; custom playbooks below
+
+**Section 3 -- Incident History** card:
+- Header: "Incident History" + filter row (type, severity, date range) + "Export" button
+- Table: Date, Incident title, Type badge, Severity badge, Duration, Projects count, Resolution status
+- Click opens incident detail in Aegis screen
+- Pagination
+- Empty state: "No incidents recorded yet."
+
 **Stitch AI Prompt for Incidents Tab (Management Console):**
 
 > Design an "Incidents" tab inside the Aegis AI management console for Deptex (dark theme: bg #09090b, cards #18181b, borders #27272a 1px, text #fafafa, secondary #a1a1aa, accent green #22c55e, critical red #ef4444, high amber #f59e0b). This tab is one of 9 tabs in the management console. Content area is ~900px wide. Font: Inter body, JetBrains Mono for timestamps/IDs. 8px border-radius.
@@ -338,116 +1120,153 @@ Accessible from Aegis management console > new "Incidents" tab:
 > - Pagination: "Showing 1-20 of 42" with prev/next (zinc-700 bg, 28px rounded-md).
 > - Empty state: "No incidents recorded yet. Incidents are created automatically when playbook triggers fire, or manually via Aegis chat." in 14px zinc-500 centered.
 
-### 17E: Post-Mortem Generation
+---
 
-After an incident is resolved, Aegis auto-generates a structured post-mortem document:
+### 17J: Phase 7B Gap Fix (Prerequisite)
 
-```markdown
-# Security Incident Report: [Title]
+**Must be fixed before Phase 17 works.** Two issues:
 
-## Summary
-- **Type**: Zero-Day CVE Response
-- **Severity**: Critical
-- **Declared**: 2026-02-28 14:30 UTC
-- **Resolved**: 2026-02-28 18:45 UTC
-- **Duration**: 4h 15m
+**1. approveTask() must queue first step:**
 
-## Impact
-- **Affected Projects**: 5 (payments-api, user-service, admin-dashboard, ...)
-- **Affected Package**: lodash@4.17.15
-- **Vulnerability**: CVE-2024-XXXX (Prototype Pollution, Depscore 94)
-- **Reachable**: Yes, confirmed data-flow in 3 projects
+In `ee/backend/lib/aegis/tasks.ts`, `approveTask()` sets `status = 'running'` but never queues the first step via QStash. Add:
 
-## Timeline
-| Time | Phase | Action |
-|------|-------|--------|
-| 14:30 | Contain | Emergency lockdown: lodash pinned to 4.17.21 across all projects |
-| 14:32 | Assess | Blast radius: 5/12 projects affected, 3 with confirmed reachability |
-| 14:35 | Communicate | Slack alert sent to #security, email to org admins |
-| 14:40 | Remediate | Security sprint started: 5 fixes queued |
-| 15:10 | Remediate | 4/5 fixes completed (1 requires manual review) |
-| 16:00 | Verify | Re-extraction completed for all 5 projects |
-| 18:45 | Report | All projects verified clean. Incident resolved. |
+```typescript
+async function approveTask(taskId: string): Promise<void> {
+  await supabase.from('aegis_tasks').update({
+    status: 'running', started_at: new Date().toISOString()
+  }).eq('id', taskId);
 
-## Metrics
-- **Time to Contain**: 2 minutes
-- **Time to Remediate**: 4 hours 10 minutes
-- **Fixes Created**: 5 (4 auto-merged, 1 manual)
-- **SLA Status**: All within SLA (critical = 48h deadline)
-
-## Root Cause
-[Auto-generated by Aegis based on CVE details and impact analysis]
-
-## Recommendations
-[Auto-generated based on incident patterns and prevention opportunities]
+  const firstStepId = await getNextPendingStep(taskId);
+  if (firstStepId) {
+    await qstashClient.publishJSON({
+      url: `${BACKEND_URL}/api/internal/aegis/execute-task-step`,
+      body: { taskId, stepId: firstStepId },
+    });
+  }
+}
 ```
 
-Stored as markdown in `security_incidents.post_mortem` and as PDF in Supabase storage (`post_mortem_url`). Included in audit packages generated by `generateAuditPackage` tool.
+**2. Sprint tool name mismatch:**
 
-### 17F: Custom Playbook Builder
+In `ee/backend/lib/aegis/sprint-orchestrator.ts`, `buildSprintPlan()` uses `toolName: 'triggerAiFix'` but the tool is registered as `triggerFix` in `security-ops.ts`. Fix:
 
-Users can create custom playbooks via:
+```typescript
+// sprint-orchestrator.ts ~line 316
+toolName: 'triggerFix', // was: 'triggerAiFix'
+```
 
-1. **Aegis chat**: "Create an incident response playbook for when a critical CVE affects our Crown Jewels projects." Aegis generates a playbook definition using the template structure, user reviews and approves.
+---
 
-2. **Management console**: "Incidents" tab > "Create Playbook" button > step-by-step form:
-   - Name + description
-   - Trigger type (from presets or custom)
-   - Auto-trigger criteria (optional, JSON builder or natural language via Aegis)
-   - Per-phase step configuration: pick tools from the Aegis tool registry, configure parameters, set approval requirements
-   - Notification channels per phase
-   - Test playbook with dry run (simulates execution without taking actions)
+### 17K: Hosting & Infrastructure Summary
 
-### 17G: Phase 17 Test Suite
+| Resource | Change | Cost |
+|----------|--------|------|
+| **Fly.io** | No new machines. Playbooks execute as Aegis task steps in the backend process. | $0 |
+| **QStash** | 0 new cron schedules. Trigger checking is inline with notification dispatch. Escalation uses QStash delayed publish (per-incident, on demand). | $0 (free tier) |
+| **Supabase** | 4 new tables (~5 indexes), RLS policies. Enable Realtime on `security_incidents` + `incident_timeline`. | $0 additional |
+| **Redis** | Cache: `incident-stats:{orgId}` (60s TTL). Rate limit: `incident-rate:{orgId}` (1h window). | Negligible |
+| **Storage** | Not needed (post-mortem markdown in column, PDF export is client-side). | $0 |
+| **New npm deps** | None for backend. Frontend: optionally `jspdf` + `html2canvas` (~150KB) for PDF export, or use `window.print()` (zero deps). | $0 |
+| **New env vars** | None. Uses existing `INTERNAL_API_KEY`, `QSTASH_TOKEN`, etc. | -- |
+| **Total** | | **$0/month** |
 
-#### Backend Tests (`backend/src/__tests__/incident-response.test.ts`)
+Data retention: `incident_timeline` ~1KB per event. A 50-event incident ~50KB. 100 incidents/year ~5MB. No cleanup needed for years.
 
-Tests 1-8 (Playbook Execution):
-1. Zero-day playbook executes all 6 phases in correct order
-2. Phase with `requiresApproval = true` pauses until approved
-3. Step with failed condition is skipped and logged
-4. Step failure with `onFailure: 'pause'` pauses the incident
-5. Step failure with `onFailure: 'abort'` aborts the entire incident
-6. Incident timestamps set correctly at each phase completion
-7. `total_duration_ms` computed correctly on resolution
-8. Playbook execution creates correct `incident_timeline` entries
+---
 
-Tests 9-14 (Pre-Built Playbooks):
-9. Zero-day template: `emergencyLockdownPackage` called during contain phase
-10. Zero-day template: `assessBlastRadius` returns affected projects list
-11. Supply chain template: Watchtower anomaly > 80 auto-triggers playbook
-12. Secret exposure template: notification includes redacted values only (never raw secret)
-13. Compliance breach template: exception requests generated for low-risk items
-14. All templates produce valid post-mortem reports on completion
+### 17L: Phase 17 Test Suite (44 tests)
 
-Tests 15-20 (Auto-Trigger):
-15. Critical CVE with CISA KEV auto-triggers zero-day playbook (if auto_execute enabled)
-16. Malicious indicator auto-triggers supply chain playbook
-17. Verified secret finding auto-triggers secret exposure playbook
-18. SLA breach auto-triggers compliance breach playbook
-19. Auto-trigger respects org's `operating_mode` (readonly = no auto-trigger)
-20. Auto-trigger creates incident record with correct `trigger_source` and `trigger_data`
+#### Backend Tests (`ee/backend/routes/__tests__/incident-response.test.ts`)
 
-Tests 21-24 (Post-Mortem):
-21. Post-mortem includes all timeline events in chronological order
-22. Post-mortem metrics (time-to-contain, time-to-remediate) computed correctly
-23. Post-mortem stored as markdown and PDF
-24. Post-mortem included in `generateAuditPackage` output
+**Trigger System (1-6):**
+1. `vulnerability_discovered` with CISA KEV + critical severity triggers zero-day playbook
+2. `supply_chain_anomaly` with anomaly score > 80 triggers supply chain playbook
+3. `secret_exposure_verified` triggers secret exposure playbook
+4. `sla_breached` triggers compliance breach playbook
+5. Deduplication: second trigger for same CVE expands existing incident scope (not new incident)
+6. Rate limit: 6th incident in 1 hour is rejected
+
+**Playbook Execution (7-14):**
+7. Zero-day playbook executes all 6 phases via QStash step chain
+8. Phase with `requiresApproval = true` pauses until approved
+9. Step with failed condition is skipped and logged
+10. Step failure with `onFailure: 'pause'` pauses the incident
+11. Step failure with `onFailure: 'abort'` aborts the entire incident
+12. Phase timestamps set correctly at each phase completion
+13. `total_duration_ms` computed correctly on resolution
+14. Playbook execution creates correct `incident_timeline` entries
+
+**Autonomous Containment (15-18):**
+15. Org with `allow_autonomous_containment = true`: critical incident auto-executes contain phase without approval
+16. Org with `allow_autonomous_containment = false`: critical incident pauses for approval on contain phase
+17. Autonomous actions logged in `autonomous_actions_taken` and `security_audit_logs`
+18. Non-critical incidents always respect approval requirements regardless of org setting
+
+**Escalation (19-21):**
+19. Phase timeout fires QStash escalation after configured minutes
+20. Escalation increments `escalation_level` and emits `incident_escalated` event
+21. Escalation for already-advanced phase is discarded (stale escalation)
+
+**Post-Mortem (22-25):**
+22. Post-mortem includes all timeline events in chronological order
+23. Post-mortem metrics (time-to-contain, time-to-remediate) computed correctly
+24. Post-mortem generates without BYOK (template-based fallback)
+25. Post-mortem AI-enhanced when BYOK available
+
+**API Endpoints (26-31):**
+26. `POST /incidents` creates incident with correct initial state
+27. `PATCH /incidents/:id/resolve` sets resolved_at and generates post-mortem
+28. `PATCH /incidents/:id/close` with `is_false_positive = true` marks correctly
+29. `GET /incidents` returns paginated results filtered by status/type/severity
+30. `GET /incidents/stats` returns correct metrics
+31. Playbook CRUD: create, update, delete (blocks template deletion)
+
+**Concurrent/Edge Cases (32-34):**
+32. Two incidents for different CVEs run in parallel without interference
+33. Two incidents trying to fix same package: second deduplicates fix
+34. Incident with no matching playbook: manual incident created with no auto-steps
 
 #### Frontend Tests (`frontend/src/__tests__/incident-response-ui.test.ts`)
 
-Tests 25-32 (Incident UI):
-25. Active incident appears in Aegis left sidebar with red indicator
-26. Incident detail view shows 6-phase progress bar with current phase highlighted
-27. Timeline renders all events with correct phase badges and timestamps
-28. Right panel shows affected projects, packages, and CVEs
-29. Approval request card appears inline when phase needs approval
-30. "Resolve" button transitions incident to resolved state
-31. Incident history table renders past incidents with correct data
-32. Custom playbook builder form creates valid playbook definition
+**Incident UI (35-40):**
+35. Active incident appears in Aegis left sidebar with red indicator
+36. Incident detail view shows 6-phase progress bar with current phase highlighted
+37. Timeline renders all events with correct phase badges and timestamps
+38. Right panel shows affected projects, packages, and CVEs
+39. "Resolve" button transitions incident to resolved state
+40. Incident history table renders past incidents with correct data
 
-Tests 33-36 (Integration):
-33. Incident notification events dispatch correctly via Phase 9
-34. Incident remediation phase triggers Phase 7 fix sprint
-35. Incident verification phase triggers re-extraction and checks results
-36. Incident SLA integration: triage considers SLA deadlines from Phase 15
+**Integration (41-44):**
+41. Phase 9 notification events dispatch for incident lifecycle events
+42. Remediation phase triggers Phase 7 fix sprint
+43. Verification phase triggers re-extraction
+44. SLA deadlines from Phase 15 shown in Assess phase output
+
+---
+
+### Setup Checklist
+
+1. **Fix Phase 7B gap:** `approveTask()` must queue first step via QStash (17J above). Fix sprint tool name `triggerAiFix` -> `triggerFix`.
+2. **Run database migration:** `backend/database/phase17_incident_response.sql` (4 tables, indexes, RLS, org column).
+3. **Add `secret_exposure_verified` event type:** In extraction worker pipeline, emit when TruffleHog finds `is_verified = true` findings.
+4. **Enable Supabase Realtime** on `security_incidents` and `incident_timeline` tables (Supabase dashboard > Database > Replication).
+5. **No new QStash cron schedules.** Escalation uses on-demand QStash delayed publish.
+6. **No new env vars.** Uses existing `INTERNAL_API_KEY`, `QSTASH_TOKEN`, etc.
+7. **No new npm dependencies** (backend). Frontend PDF export: use `window.print()` (zero deps) or optionally add `jspdf`.
+8. **Deploy:** Backend API + frontend bundle. No new workers, no new Fly.io machines.
+
+---
+
+### Dependency Map
+
+```mermaid
+graph LR
+    P7["Phase 7 - Fix Engine"] --> P17
+    P7B["Phase 7B - Task System + Tools"] --> P17
+    P8["Phase 8 - PR Webhooks"] --> P17
+    P9["Phase 9 - Event Bus + Notifications"] --> P17
+    P15["Phase 15 - SLA Management"] --> P17
+    P17["Phase 17 - Incident Response"]
+```
+
+Phase 16 (Learning) is NOT a prerequisite but will benefit from incident fix outcomes being recorded as `fix_outcomes`.

@@ -435,7 +435,19 @@ export default function ProjectVulnerabilitiesPage() {
       }
     : null;
 
-  const vulnerableCount = effectiveGraphDepNodes.length;
+  // Phase 15: Apply SLA filter to graph nodes (filter vulns by sla_status; drop deps with none left)
+  const graphDepNodesForLayout = useMemo(() => {
+    const sla = securityFilters.slaStatus;
+    if (sla === 'all') return effectiveGraphDepNodes;
+    return effectiveGraphDepNodes
+      .map((node) => ({
+        ...node,
+        vulnerabilities: node.vulnerabilities.filter((v) => (v.sla_status ?? null) === sla),
+      }))
+      .filter((node) => node.vulnerabilities.length > 0);
+  }, [effectiveGraphDepNodes, securityFilters.slaStatus]);
+
+  const vulnerableCount = graphDepNodesForLayout.length;
   const vulnerableDependenciesLabel =
     vulnerableCount === 0
       ? 'No vulnerable dependencies'
@@ -477,7 +489,7 @@ export default function ProjectVulnerabilitiesPage() {
             projectName={project?.name ?? 'Project'}
             vulnerableDependenciesLabel={vulnerableDependenciesLabel}
             framework={project?.framework}
-            graphDepNodes={effectiveGraphDepNodes}
+            graphDepNodes={graphDepNodesForLayout}
             graphLoading={graphLoading}
             vulnerabilitiesLoading={loading}
             centerExtras={centerExtras}

@@ -8,6 +8,7 @@ import LearnTutorialPage from "./pages/docs/LearnTutorialPage";
 import HelpCenterPage from "./pages/docs/HelpCenterPage";
 import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/LoginPage";
+import SSOCallbackPage from "./pages/SSOCallbackPage";
 import OrganizationsPage from "./pages/OrganizationsPage";
 import OrganizationLayout from "./pages/OrganizationLayout";
 import OrganizationDetailPage from "./pages/OrganizationDetailPage";
@@ -36,6 +37,10 @@ import DevOpsTeamsPage from "./pages/solutions/DevOpsTeamsPage";
 import OpenSourceMaintainersPage from "./pages/solutions/OpenSourceMaintainersPage";
 import CTOLeadershipPage from "./pages/solutions/CTOLeadershipPage";
 import StartupsScaleupsPage from "./pages/solutions/StartupsScaleupsPage";
+import PricingPage from "./pages/PricingPage";
+import DataProcessingAgreementPage from "./pages/legal/DataProcessingAgreementPage";
+import TransferImpactAssessmentPage from "./pages/legal/TransferImpactAssessmentPage";
+import CookiePolicyPage from "./pages/legal/CookiePolicyPage";
 import ProtectedRoute from "../components/ProtectedRoute";
 import PublicRoute from "../components/PublicRoute";
 import NotFoundRedirect from "../components/NotFoundRedirect";
@@ -47,6 +52,9 @@ import ProjectVulnerabilitiesPage from "./pages/ProjectVulnerabilitiesPage";
 import ProjectCompliancePage from "./pages/ProjectCompliancePage";
 
 import ProjectSettingsPage from "./pages/ProjectSettingsPage";
+import ProjectWatchtowerPage from "./pages/ProjectWatchtowerPage";
+import OrganizationWatchtowerPage from "./pages/OrganizationWatchtowerPage";
+import AegisPage from "./pages/AegisPage";
 // Team-level imports
 import TeamLayout from "./pages/TeamLayout";
 import TeamOverviewPage from "./pages/TeamOverviewPage";
@@ -140,6 +148,18 @@ export const router = createBrowserRouter([
         element: <CompliancePage />,
       },
       {
+        path: "watchtower",
+        element: <OrganizationWatchtowerPage />,
+      },
+      {
+        path: "aegis",
+        element: <AegisPage />,
+      },
+      {
+        path: "aegis/:threadId",
+        element: <AegisPage />,
+      },
+      {
         path: ":tab",
         element: <OrganizationDetailPage />,
       },
@@ -183,7 +203,11 @@ export const router = createBrowserRouter([
       },
       {
         path: "dependencies/:dependencyId/watchtower",
-        element: <ProjectDependenciesPage />,
+        element: <Navigate to="../../../watchtower" replace />,
+      },
+      {
+        path: "watchtower",
+        element: <ProjectWatchtowerPage />,
       },
       {
         path: "dependencies/:dependencyId/supply-chain",
@@ -302,6 +326,22 @@ export const router = createBrowserRouter([
       </ProtectedRoute>
     ),
   },
+  {
+    path: "/settings/notifications",
+    element: (
+      <ProtectedRoute>
+        <SettingsPage />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: "/settings/security",
+    element: (
+      <ProtectedRoute>
+        <SettingsPage />
+      </ProtectedRoute>
+    ),
+  },
 
   // ============================================
   // PUBLIC ROUTES
@@ -314,6 +354,10 @@ export const router = createBrowserRouter([
         <LoginPage />
       </PublicRoute>
     ),
+  },
+  {
+    path: "/sso-callback",
+    element: <SSOCallbackPage />,
   },
   {
     path: "/",
@@ -398,6 +442,22 @@ export const router = createBrowserRouter([
       {
         path: "security",
         element: <Navigate to="/docs/security" replace />,
+      },
+      {
+        path: "pricing",
+        element: <PricingPage />,
+      },
+      {
+        path: "legal/dpa",
+        element: <DataProcessingAgreementPage />,
+      },
+      {
+        path: "legal/tia",
+        element: <TransferImpactAssessmentPage />,
+      },
+      {
+        path: "legal/cookies",
+        element: <CookiePolicyPage />,
       },
       {
         path: "open-source",

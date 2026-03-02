@@ -13,6 +13,8 @@ export interface VulnProjectNodeData {
   worstSeverity?: WorstSeverity;
   /** When true, render as a team node (Users icon) instead of a project (framework/folder icon). */
   isTeamNode?: boolean;
+  /** Phase 15: Number of vulnerabilities with SLA breached. Shown as "SLA: X breached" when > 0. */
+  slaBreachCount?: number;
 }
 
 const NODE_WIDTH = 220;
@@ -66,11 +68,12 @@ function getColorScheme(worstSeverity: WorstSeverity | undefined) {
 }
 
 function VulnProjectNodeComponent({ data }: NodeProps) {
-  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode } =
+  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount } =
     (data as unknown as VulnProjectNodeData) ?? {};
   const hasKnownFramework = framework && framework.toLowerCase() !== 'unknown';
   const frameworkIdForIcon = hasKnownFramework ? framework : undefined;
   const colorScheme = getColorScheme(worstSeverity);
+  const showSlaBreach = typeof slaBreachCount === 'number' && slaBreachCount > 0;
 
   return (
     <div className="relative" style={{ minWidth: NODE_WIDTH, minHeight: NODE_HEIGHT }}>
@@ -84,31 +87,38 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
       <Handle id="source-left" type="source" position={Position.Left} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
 
       <div
-        className={`relative rounded-xl border-2 bg-background-card px-3 py-2.5 shadow-sm h-full flex items-center gap-2 min-w-0 overflow-hidden ${colorScheme.border} ${colorScheme.shadow}`}
+        className={`relative rounded-xl border-2 bg-background-card px-3 py-2.5 shadow-sm h-full flex flex-col justify-center gap-0.5 min-w-0 overflow-hidden ${colorScheme.border} ${colorScheme.shadow}`}
       >
         <div className={`absolute inset-0 rounded-xl blur-xl opacity-15 -z-10 ${colorScheme.glow}`} />
-        {isTeamNode ? (
-          <div
-            className={`flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0 ${colorScheme.iconBg} ${colorScheme.iconText}`}
-          >
-            <Users className="w-4 h-4" />
-          </div>
-        ) : frameworkIdForIcon ? (
-          <div
-            className={`flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0 ${colorScheme.iconBg} ${colorScheme.iconText}`}
-          >
-            <FrameworkIcon frameworkId={frameworkIdForIcon} size={18} className="text-current" />
-          </div>
-        ) : (
-          <div
-            className={`flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0 ${colorScheme.iconBg} ${colorScheme.iconText}`}
-          >
-            <Folder className="w-4 h-4" />
-          </div>
+        <div className="flex items-center gap-2 min-w-0">
+          {isTeamNode ? (
+            <div
+              className={`flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0 ${colorScheme.iconBg} ${colorScheme.iconText}`}
+            >
+              <Users className="w-4 h-4" />
+            </div>
+          ) : frameworkIdForIcon ? (
+            <div
+              className={`flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0 ${colorScheme.iconBg} ${colorScheme.iconText}`}
+            >
+              <FrameworkIcon frameworkId={frameworkIdForIcon} size={18} className="text-current" />
+            </div>
+          ) : (
+            <div
+              className={`flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0 ${colorScheme.iconBg} ${colorScheme.iconText}`}
+            >
+              <Folder className="w-4 h-4" />
+            </div>
+          )}
+          <p className="text-sm font-medium text-foreground truncate" title={projectName}>
+            {projectName}
+          </p>
+        </div>
+        {showSlaBreach && (
+          <p className="text-[10px] text-red-400 font-medium truncate" title={`${slaBreachCount} SLA breach(es)`}>
+            SLA: {slaBreachCount} breached
+          </p>
         )}
-        <p className="text-sm font-medium text-foreground truncate" title={projectName}>
-          {projectName}
-        </p>
       </div>
     </div>
   );

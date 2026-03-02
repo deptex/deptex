@@ -31,6 +31,14 @@ export const docNavGroups: DocNavGroup[] = [
     ],
   },
   {
+    title: "Features",
+    icon: "Shield",
+    items: [
+      { label: "Aegis", slug: "aegis", description: "Autonomous security agent: chat, tasks, automations, Slack, and PR review." },
+      { label: "Watchtower", slug: "watchtower", description: "Supply chain monitoring and forensic analysis." },
+    ],
+  },
+  {
     title: "Administration",
     icon: "Settings",
     items: [
@@ -39,6 +47,7 @@ export const docNavGroups: DocNavGroup[] = [
       { label: "Policies", slug: "policies", description: "Define security and compliance policies." },
       { label: "Integrations", slug: "integrations", description: "Connect with GitHub, Slack, CI/CD, and more." },
       { label: "Notification Rules", slug: "notification-rules", description: "Configure automated alerts and notification triggers." },
+      { label: "Enterprise Security", slug: "enterprise-security", description: "MFA, SSO, sessions, IP allowlist, API tokens, audit log, and SCIM." },
     ],
   },
   {

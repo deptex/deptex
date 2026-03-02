@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 
 const evaluationFlow = [
   { step: 1, title: "Extraction completes", description: "Deptex finishes parsing manifests and lockfiles, producing the full dependency inventory." },
-  { step: 2, title: "Policy code runs", description: "The organization\u2019s projectCompliance(context) function executes against the dependency data." },
+  { step: 2, title: "Policy code runs", description: "The organization\u2019s projectStatus(context) function executes against the dependency data." },
   { step: 3, title: "Status assigned", description: "Based on the policy result, a custom status is assigned to the project (e.g. \u201cCompliant\u201d, \u201cAction Required\u201d)." },
   { step: 4, title: "Violations stored", description: "Any violation messages returned by the policy are persisted and surfaced in the Compliance tab." },
   { step: 5, title: "Badges updated", description: "The project\u2019s compliance badge and dashboard indicators reflect the new status." },
@@ -115,6 +115,7 @@ export default function ComplianceContent() {
         <p className="text-foreground-secondary leading-relaxed mt-3 text-sm">
           See <Link to="/docs/policies" className="text-primary hover:underline">Policies</Link> for
           how to write policy functions and the full context API reference.
+          The Compliance tab also includes <strong className="text-foreground">Pull Requests</strong> and <strong className="text-foreground">Commits</strong> sub-tabs for project-level PR check history and commit-triggered extraction status.
         </p>
       </div>
 

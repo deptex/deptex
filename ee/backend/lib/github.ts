@@ -733,3 +733,58 @@ export async function createIssueComment(
   const data = (await response.json()) as { id: number; html_url: string };
   return data;
 }
+
+export async function listIssueComments(
+  installationToken: string,
+  repoFullName: string,
+  issueNumber: number
+): Promise<Array<{ id: number; body: string; user: { login: string; id: number } | null }>> {
+  const allComments: Array<{ id: number; body: string; user: { login: string; id: number } | null }> = [];
+  let page = 1;
+  while (true) {
+    const response = await fetch(
+      `${GITHUB_API_BASE}/repos/${repoFullName}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
+      {
+        headers: {
+          Authorization: `Bearer ${installationToken}`,
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'Deptex-App',
+        },
+      }
+    );
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to list comments: ${response.status} ${errorText}`);
+    }
+    const data = (await response.json()) as Array<{ id: number; body: string; user: { login: string; id: number } | null }>;
+    allComments.push(...data);
+    if (data.length < 100) break;
+    page++;
+  }
+  return allComments;
+}
+
+export async function updateIssueComment(
+  installationToken: string,
+  repoFullName: string,
+  commentId: number,
+  body: string
+): Promise<void> {
+  const response = await fetch(
+    `${GITHUB_API_BASE}/repos/${repoFullName}/issues/comments/${commentId}`,
+    {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${installationToken}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'Deptex-App',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ body }),
+    }
+  );
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to update comment: ${response.status} ${errorText}`);
+  }
+}

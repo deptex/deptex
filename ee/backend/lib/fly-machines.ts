@@ -1,12 +1,34 @@
 const FLY_API_BASE = 'https://api.machines.dev/v1';
 
-function getConfig() {
-  return {
-    token: process.env.FLY_API_TOKEN ?? '',
-    app: process.env.FLY_EXTRACTION_APP ?? 'deptex-extraction-worker',
-    maxBurstMachines: parseInt(process.env.FLY_MAX_BURST_MACHINES ?? '5', 10),
-  };
+export interface FlyMachineConfig {
+  app: string;
+  image?: string;
+  guest: { cpus: number; memory_mb: number; cpu_kind: 'shared' | 'performance' };
+  maxBurst: number;
+  stopTimeout: string;
+  region?: string;
 }
+
+export const EXTRACTION_CONFIG: FlyMachineConfig = {
+  app: process.env.FLY_EXTRACTION_APP || 'deptex-extraction-worker',
+  guest: { cpus: 8, memory_mb: 65536, cpu_kind: 'performance' },
+  maxBurst: parseInt(process.env.FLY_MAX_BURST_MACHINES || '5', 10),
+  stopTimeout: '4h',
+};
+
+export const AIDER_CONFIG: FlyMachineConfig = {
+  app: process.env.FLY_AIDER_APP || 'deptex-aider-worker',
+  guest: { cpus: 4, memory_mb: 8192, cpu_kind: 'shared' },
+  maxBurst: parseInt(process.env.FLY_AIDER_MAX_BURST || '3', 10),
+  stopTimeout: '15m',
+};
+
+export const WATCHTOWER_CONFIG: FlyMachineConfig = {
+  app: process.env.FLY_WATCHTOWER_APP || 'deptex-watchtower-worker',
+  guest: { cpus: 1, memory_mb: 1024, cpu_kind: 'shared' },
+  maxBurst: 1,
+  stopTimeout: '4h',
+};
 
 interface FlyMachine {
   id: string;
@@ -16,13 +38,16 @@ interface FlyMachine {
   config?: Record<string, unknown>;
 }
 
-async function flyFetch(path: string, options: RequestInit = {}): Promise<Response> {
-  const { token, app } = getConfig();
+function getToken(): string {
+  return process.env.FLY_API_TOKEN ?? '';
+}
+
+async function flyFetch(app: string, path: string, options: RequestInit = {}): Promise<Response> {
   const url = `${FLY_API_BASE}/apps/${app}${path}`;
   return fetch(url, {
     ...options,
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${getToken()}`,
       'Content-Type': 'application/json',
       ...options.headers,
     },
@@ -33,39 +58,45 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function listMachines(): Promise<FlyMachine[]> {
-  const res = await flyFetch('/machines');
+async function listMachines(app: string): Promise<FlyMachine[]> {
+  const res = await flyFetch(app, '/machines');
   if (!res.ok) {
     throw new Error(`Failed to list machines: ${res.status} ${res.statusText}`);
   }
   return res.json() as Promise<FlyMachine[]>;
 }
 
-async function startMachine(machineId: string): Promise<void> {
-  const res = await flyFetch(`/machines/${machineId}/start`, { method: 'POST' });
+async function startMachine(app: string, machineId: string): Promise<void> {
+  const res = await flyFetch(app, `/machines/${machineId}/start`, { method: 'POST' });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Failed to start machine ${machineId}: ${res.status} ${text}`);
   }
 }
 
-async function createBurstMachine(): Promise<string> {
-  const { app } = getConfig();
-  const res = await flyFetch('/machines', {
+export async function stopFlyMachine(app: string, machineId: string): Promise<void> {
+  const res = await flyFetch(app, `/machines/${machineId}/stop`, { method: 'POST' });
+  if (!res.ok) {
+    const text = await res.text();
+    console.warn(`[FLY] Failed to stop machine ${machineId}: ${res.status} ${text}`);
+  }
+}
+
+async function createBurstMachine(config: FlyMachineConfig): Promise<string> {
+  const image = config.image || `registry.fly.io/${config.app}:latest`;
+  const region = config.region || 'iad';
+
+  const res = await flyFetch(config.app, '/machines', {
     method: 'POST',
     body: JSON.stringify({
-      name: `${app}-burst-${Date.now()}`,
-      region: 'iad',
+      name: `${config.app}-burst-${Date.now()}`,
+      region,
       config: {
         auto_destroy: true,
         restart: { policy: 'no' },
-        image: `registry.fly.io/${app}:latest`,
-        guest: {
-          cpu_kind: 'performance',
-          cpus: 8,
-          memory_mb: 65536,
-        },
-        stop_config: { timeout: '4h' },
+        image,
+        guest: config.guest,
+        stop_config: { timeout: config.stopTimeout },
       },
     }),
   });
@@ -80,15 +111,15 @@ async function createBurstMachine(): Promise<string> {
 }
 
 /**
- * Start an extraction machine from the pool, or create a burst machine if all are busy.
+ * Start a Fly machine from the pool, or create a burst machine if all are busy.
  * Returns the machine ID on success, or null if unable to start any machine.
- * Failures are logged but never throw — the job stays queued in Supabase for recovery.
+ * Failures are logged but never throw — the job stays queued for recovery.
  */
-export async function startExtractionMachine(): Promise<string | null> {
-  const { token, maxBurstMachines } = getConfig();
+export async function startFlyMachine(config: FlyMachineConfig): Promise<string | null> {
+  const token = getToken();
 
   if (!token) {
-    console.error('[FLY] FLY_API_TOKEN not configured — cannot start extraction machines');
+    console.error(`[FLY] FLY_API_TOKEN not configured — cannot start ${config.app} machines`);
     return null;
   }
 
@@ -96,14 +127,14 @@ export async function startExtractionMachine(): Promise<string | null> {
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const machines = await listMachines();
+      const machines = await listMachines(config.app);
       const stopped = machines.filter((m) => m.state === 'stopped');
 
       if (stopped.length > 0) {
         for (const machine of stopped) {
           try {
-            await startMachine(machine.id);
-            console.log(`[FLY] Started machine ${machine.id} (pool)`);
+            await startMachine(config.app, machine.id);
+            console.log(`[FLY] Started ${config.app} machine ${machine.id} (pool)`);
             return machine.id;
           } catch (e: any) {
             console.warn(`[FLY] Failed to start machine ${machine.id}, trying next: ${e.message}`);
@@ -111,16 +142,16 @@ export async function startExtractionMachine(): Promise<string | null> {
         }
       }
 
-      if (machines.length < maxBurstMachines) {
+      if (machines.length < config.maxBurst) {
         try {
-          const machineId = await createBurstMachine();
-          console.log(`[FLY] Created burst machine ${machineId} (total: ${machines.length + 1}/${maxBurstMachines})`);
+          const machineId = await createBurstMachine(config);
+          console.log(`[FLY] Created ${config.app} burst machine ${machineId} (total: ${machines.length + 1}/${config.maxBurst})`);
           return machineId;
         } catch (e: any) {
           console.error(`[FLY] Failed to create burst machine: ${e.message}`);
         }
       } else {
-        console.warn(`[FLY] All ${machines.length} machines busy and at burst limit (${maxBurstMachines})`);
+        console.warn(`[FLY] All ${machines.length} ${config.app} machines busy and at burst limit (${config.maxBurst})`);
       }
 
       return null;
@@ -140,3 +171,7 @@ export async function startExtractionMachine(): Promise<string | null> {
 
   return null;
 }
+
+export const startExtractionMachine = () => startFlyMachine(EXTRACTION_CONFIG);
+export const startAiderMachine = () => startFlyMachine(AIDER_CONFIG);
+export const startWatchtowerMachine = () => startFlyMachine(WATCHTOWER_CONFIG);

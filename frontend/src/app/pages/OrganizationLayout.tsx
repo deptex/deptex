@@ -3,11 +3,13 @@ import { useParams, Outlet, useNavigate, Link } from 'react-router-dom';
 import { User, HelpCircle, Settings, LogOut, BookOpen, Mail, ChevronRight } from 'lucide-react';
 import OrganizationHeader from '../../components/OrganizationHeader';
 import OrganizationSidebar from '../../components/OrganizationSidebar';
+import PlanLimitBanner from '../../components/PlanLimitBanner';
 import { api, Organization, RolePermissions } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { useUserProfile } from '../../hooks/useUserProfile';
 import { Toaster } from '../../components/ui/toaster';
+import { PlanProvider } from '../../contexts/PlanContext';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -304,9 +306,12 @@ export default function OrganizationLayout() {
             <div className="h-12"></div>
           </>
         ) : null}
-        <main className={organization ? 'pl-12' : ''}>
-          <Outlet context={{ organization, reloadOrganization }} />
-        </main>
+        <PlanProvider organizationId={id || ''}>
+          {id && <PlanLimitBanner organizationId={id} />}
+          <main className={organization ? 'pl-12' : ''}>
+            <Outlet context={{ organization, reloadOrganization }} />
+          </main>
+        </PlanProvider>
       </div>
       <Toaster position="bottom-right" />
     </>
