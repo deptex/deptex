@@ -13,7 +13,7 @@ const allTabs = [
   { id: 'overview', label: 'Overview', path: 'overview', icon: LayoutDashboard, requiredPermission: null }, // Overview is always visible
   { id: 'projects', label: 'Projects', path: 'projects', icon: FolderKanban, requiredPermission: null },
   { id: 'members', label: 'Members', path: 'members', icon: Users, requiredPermission: null }, // Members is always visible
-  { id: 'alerts', label: 'Vulnerabilities', path: 'alerts', icon: ShieldAlert, requiredPermission: null },
+  { id: 'alerts', label: 'Security', path: 'alerts', icon: ShieldAlert, requiredPermission: null },
   { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: 'view_settings' as const },
 ];
 

@@ -13,7 +13,7 @@ interface ProjectSidebarProps {
 const allNavItems = [
   { id: 'overview', label: 'Overview', path: 'overview', icon: LayoutDashboard, requiredPermission: null },
   { id: 'dependencies', label: 'Dependencies', path: 'dependencies', icon: Package, requiredPermission: null },
-  { id: 'vulnerabilities', label: 'Vulnerabilities', path: 'vulnerabilities', icon: ShieldAlert, requiredPermission: null },
+  { id: 'security', label: 'Security', path: 'security', icon: ShieldAlert, requiredPermission: null },
   { id: 'compliance', label: 'Compliance', path: 'compliance', icon: Shield, requiredPermission: null },
   { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: 'view_settings' as const },
 ];

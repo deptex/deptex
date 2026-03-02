@@ -9696,6 +9696,545 @@ router.get('/:id/projects/:projectId/license-obligations', async (req: AuthReque
   }
 });
 
+// ===== Phase 6: Security Tab API Endpoints =====
+
+// GET /api/organizations/:id/projects/:projectId/semgrep-findings
+router.get('/:id/projects/:projectId/semgrep-findings', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
+    const perPage = Math.min(200, Math.max(1, parseInt(String(req.query.per_page ?? '50'), 10) || 50));
+    const offset = (page - 1) * perPage;
+
+    const { count } = await supabase
+      .from('project_semgrep_findings')
+      .select('id', { count: 'exact', head: true })
+      .eq('project_id', projectId);
+
+    const { data, error } = await supabase
+      .from('project_semgrep_findings')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('severity', { ascending: true })
+      .order('created_at', { ascending: false })
+      .range(offset, offset + perPage - 1);
+
+    if (error) throw error;
+
+    res.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage });
+  } catch (error: any) {
+    console.error('Error fetching semgrep findings:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch semgrep findings' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/secret-findings (permission-gated)
+router.get('/:id/projects/:projectId/secret-findings', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const canManage = await checkWatchtowerManagePermission(userId, id, projectId);
+    if (!canManage) {
+      return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
+    }
+
+    const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
+    const perPage = Math.min(100, Math.max(1, parseInt(String(req.query.per_page ?? '50'), 10) || 50));
+    const offset = (page - 1) * perPage;
+
+    const { count } = await supabase
+      .from('project_secret_findings')
+      .select('id', { count: 'exact', head: true })
+      .eq('project_id', projectId);
+
+    const { data, error } = await supabase
+      .from('project_secret_findings')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('is_verified', { ascending: false })
+      .order('created_at', { ascending: false })
+      .range(offset, offset + perPage - 1);
+
+    if (error) throw error;
+
+    res.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage });
+  } catch (error: any) {
+    console.error('Error fetching secret findings:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch secret findings' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/vulnerabilities/:osvId/detail
+router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, osvId } = req.params;
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const { data: vulns, error: vulnError } = await supabase
+      .from('project_dependency_vulnerabilities')
+      .select('*')
+      .eq('project_id', projectId)
+      .eq('osv_id', osvId);
+
+    if (vulnError) throw vulnError;
+    if (!vulns || vulns.length === 0) {
+      return res.status(404).json({ error: 'Vulnerability not found in this project' });
+    }
+
+    const vuln = vulns[0];
+
+    const pdIds = vulns.map((v: any) => v.project_dependency_id).filter(Boolean);
+    let affectedDeps: any[] = [];
+    if (pdIds.length > 0) {
+      const { data: deps } = await supabase
+        .from('project_dependencies')
+        .select('id, name, version, is_direct, dependency_id, files_importing_count')
+        .in('id', pdIds);
+      affectedDeps = deps ?? [];
+    }
+
+    const depIds = affectedDeps.map((d: any) => d.id);
+    let filesByDep: Record<string, any[]> = {};
+    if (depIds.length > 0) {
+      const { data: files } = await supabase
+        .from('project_dependency_files')
+        .select('project_dependency_id, file_path')
+        .in('project_dependency_id', depIds);
+      for (const f of files ?? []) {
+        if (!filesByDep[f.project_dependency_id]) filesByDep[f.project_dependency_id] = [];
+        filesByDep[f.project_dependency_id].push(f.file_path);
+      }
+    }
+
+    const depName = affectedDeps[0]?.name;
+    let versionCandidates: any[] = [];
+    if (depName) {
+      const { data: candidates } = await supabase
+        .from('project_version_candidates')
+        .select('*')
+        .eq('project_id', projectId)
+        .eq('package_name', depName);
+      versionCandidates = candidates ?? [];
+    }
+
+    const { data: events } = await supabase
+      .from('project_vulnerability_events')
+      .select('*')
+      .eq('project_id', projectId)
+      .eq('osv_id', osvId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    const { data: globalVuln } = await supabase
+      .from('dependency_vulnerabilities')
+      .select('summary, details, aliases, fixed_versions, published_at, modified_at')
+      .eq('osv_id', osvId)
+      .limit(1)
+      .single();
+
+    res.json({
+      vulnerability: {
+        ...vuln,
+        summary: globalVuln?.summary ?? vuln.summary ?? null,
+        details: globalVuln?.details ?? vuln.details ?? null,
+        aliases: globalVuln?.aliases ?? vuln.aliases ?? [],
+        fixed_versions: globalVuln?.fixed_versions ?? vuln.fixed_versions ?? [],
+        published_at: globalVuln?.published_at ?? vuln.published_at ?? null,
+      },
+      affected_dependencies: affectedDeps.map((d: any) => ({
+        ...d,
+        files: filesByDep[d.id] ?? [],
+      })),
+      version_candidates: versionCandidates,
+      timeline_events: events ?? [],
+    });
+  } catch (error: any) {
+    console.error('Error fetching vulnerability detail:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch vulnerability detail' });
+  }
+});
+
+// PATCH /api/organizations/:id/projects/:projectId/vulnerabilities/:osvId/suppress
+router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/suppress', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, osvId } = req.params;
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const canManage = await checkWatchtowerManagePermission(userId, id, projectId);
+    if (!canManage) {
+      return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
+    }
+
+    const { error } = await supabase
+      .from('project_dependency_vulnerabilities')
+      .update({ suppressed: true, suppressed_by: userId, suppressed_at: new Date().toISOString() })
+      .eq('project_id', projectId)
+      .eq('osv_id', osvId);
+
+    if (error) throw error;
+
+    await supabase.from('project_vulnerability_events').insert({
+      project_id: projectId,
+      osv_id: osvId,
+      event_type: 'suppressed',
+      metadata: { suppressed_by: userId },
+    });
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Error suppressing vulnerability:', error);
+    res.status(500).json({ error: error.message || 'Failed to suppress vulnerability' });
+  }
+});
+
+// PATCH /api/organizations/:id/projects/:projectId/vulnerabilities/:osvId/unsuppress
+router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unsuppress', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, osvId } = req.params;
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const canManage = await checkWatchtowerManagePermission(userId, id, projectId);
+    if (!canManage) {
+      return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
+    }
+
+    const { error } = await supabase
+      .from('project_dependency_vulnerabilities')
+      .update({ suppressed: false, suppressed_by: null, suppressed_at: null })
+      .eq('project_id', projectId)
+      .eq('osv_id', osvId);
+
+    if (error) throw error;
+
+    await supabase.from('project_vulnerability_events').insert({
+      project_id: projectId,
+      osv_id: osvId,
+      event_type: 'unsuppressed',
+      metadata: { unsuppressed_by: userId },
+    });
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Error unsuppressing vulnerability:', error);
+    res.status(500).json({ error: error.message || 'Failed to unsuppress vulnerability' });
+  }
+});
+
+// PATCH /api/organizations/:id/projects/:projectId/vulnerabilities/:osvId/accept-risk
+router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/accept-risk', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, osvId } = req.params;
+    const { reason } = req.body ?? {};
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const canManage = await checkWatchtowerManagePermission(userId, id, projectId);
+    if (!canManage) {
+      return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
+    }
+
+    const { error } = await supabase
+      .from('project_dependency_vulnerabilities')
+      .update({
+        risk_accepted: true,
+        risk_accepted_by: userId,
+        risk_accepted_at: new Date().toISOString(),
+        risk_accepted_reason: reason ?? null,
+      })
+      .eq('project_id', projectId)
+      .eq('osv_id', osvId);
+
+    if (error) throw error;
+
+    await supabase.from('project_vulnerability_events').insert({
+      project_id: projectId,
+      osv_id: osvId,
+      event_type: 'accepted',
+      metadata: { accepted_by: userId, reason: reason ?? null },
+    });
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Error accepting risk:', error);
+    res.status(500).json({ error: error.message || 'Failed to accept risk' });
+  }
+});
+
+// PATCH /api/organizations/:id/projects/:projectId/vulnerabilities/:osvId/unaccept-risk
+router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unaccept-risk', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, osvId } = req.params;
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const canManage = await checkWatchtowerManagePermission(userId, id, projectId);
+    if (!canManage) {
+      return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
+    }
+
+    const { error } = await supabase
+      .from('project_dependency_vulnerabilities')
+      .update({
+        risk_accepted: false,
+        risk_accepted_by: null,
+        risk_accepted_at: null,
+        risk_accepted_reason: null,
+      })
+      .eq('project_id', projectId)
+      .eq('osv_id', osvId);
+
+    if (error) throw error;
+
+    await supabase.from('project_vulnerability_events').insert({
+      project_id: projectId,
+      osv_id: osvId,
+      event_type: 'risk_unaccepted',
+      metadata: { unaccepted_by: userId },
+    });
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Error revoking risk acceptance:', error);
+    res.status(500).json({ error: error.message || 'Failed to revoke risk acceptance' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/dependencies/:depId/security-summary
+router.get('/:id/projects/:projectId/dependencies/:depId/security-summary', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, depId } = req.params;
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const { data: projDep, error: depError } = await supabase
+      .from('project_dependencies')
+      .select('id, name, version, license, is_direct, dependency_id, files_importing_count, ecosystem')
+      .eq('project_id', projectId)
+      .eq('id', depId)
+      .single();
+
+    if (depError || !projDep) {
+      return res.status(404).json({ error: 'Dependency not found' });
+    }
+
+    const { data: files } = await supabase
+      .from('project_dependency_files')
+      .select('file_path')
+      .eq('project_dependency_id', depId);
+
+    const { data: vulns } = await supabase
+      .from('project_dependency_vulnerabilities')
+      .select('osv_id, severity, depscore, is_reachable, epss_score, cisa_kev, fixed_versions, suppressed, risk_accepted')
+      .eq('project_id', projectId)
+      .eq('project_dependency_id', depId)
+      .order('depscore', { ascending: false, nullsFirst: false });
+
+    const { data: candidates } = await supabase
+      .from('project_version_candidates')
+      .select('*')
+      .eq('project_id', projectId)
+      .eq('package_name', projDep.name);
+
+    let watchtowerSummary = null;
+    if (projDep.dependency_id) {
+      const { data: watched } = await supabase
+        .from('watched_packages')
+        .select('status, analysis_data')
+        .eq('dependency_id', projDep.dependency_id)
+        .limit(1)
+        .single();
+      if (watched) {
+        watchtowerSummary = watched;
+      }
+    }
+
+    res.json({
+      dependency: projDep,
+      files: (files ?? []).map((f: any) => f.file_path),
+      vulnerabilities: vulns ?? [],
+      version_candidates: candidates ?? [],
+      watchtower: watchtowerSummary,
+    });
+  } catch (error: any) {
+    console.error('Error fetching dependency security summary:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch dependency security summary' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/version-candidates
+router.get('/:id/projects/:projectId/version-candidates', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
+    const perPage = Math.min(200, Math.max(1, parseInt(String(req.query.per_page ?? '50'), 10) || 50));
+    const offset = (page - 1) * perPage;
+    const packageName = req.query.package_name ? String(req.query.package_name) : null;
+
+    let countQuery = supabase
+      .from('project_version_candidates')
+      .select('id', { count: 'exact', head: true })
+      .eq('project_id', projectId);
+    if (packageName) countQuery = countQuery.eq('package_name', packageName);
+    const { count } = await countQuery;
+
+    let query = supabase
+      .from('project_version_candidates')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('package_name', { ascending: true })
+      .order('candidate_type', { ascending: true })
+      .range(offset, offset + perPage - 1);
+    if (packageName) query = query.eq('package_name', packageName);
+    const { data, error } = await query;
+
+    if (error) throw error;
+
+    res.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage });
+  } catch (error: any) {
+    console.error('Error fetching version candidates:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch version candidates' });
+  }
+});
+
+// GET /api/organizations/:id/security-summary (org-level aggregate)
+router.get('/:id/security-summary', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const { data: projects } = await supabase
+      .from('projects')
+      .select('id, name')
+      .eq('organization_id', id);
+
+    if (!projects || projects.length === 0) {
+      return res.json({ projects: [] });
+    }
+
+    const projectIds = projects.map((p: any) => p.id);
+
+    const { data: projectTeams } = await supabase
+      .from('project_teams')
+      .select('project_id, team_id, is_owner')
+      .in('project_id', projectIds);
+
+    const ownerTeamMap = new Map<string, string>();
+    for (const pt of projectTeams ?? []) {
+      if (pt.is_owner) ownerTeamMap.set(pt.project_id, pt.team_id);
+    }
+
+    const { data: vulnRows } = await supabase
+      .from('project_dependency_vulnerabilities')
+      .select('project_id, severity, depscore, is_reachable, suppressed')
+      .in('project_id', projectIds)
+      .eq('suppressed', false);
+
+    const { data: semgrepRows } = await supabase
+      .from('project_semgrep_findings')
+      .select('project_id')
+      .in('project_id', projectIds);
+
+    const { data: secretRows } = await supabase
+      .from('project_secret_findings')
+      .select('project_id, is_verified')
+      .in('project_id', projectIds);
+
+    const vulnByProject = new Map<string, any[]>();
+    for (const v of vulnRows ?? []) {
+      if (!vulnByProject.has(v.project_id)) vulnByProject.set(v.project_id, []);
+      vulnByProject.get(v.project_id)!.push(v);
+    }
+
+    const semgrepByProject = new Map<string, number>();
+    for (const s of semgrepRows ?? []) {
+      semgrepByProject.set(s.project_id, (semgrepByProject.get(s.project_id) ?? 0) + 1);
+    }
+
+    const secretByProject = new Map<string, { total: number; verified: number }>();
+    for (const s of secretRows ?? []) {
+      const entry = secretByProject.get(s.project_id) ?? { total: 0, verified: 0 };
+      entry.total++;
+      if (s.is_verified) entry.verified++;
+      secretByProject.set(s.project_id, entry);
+    }
+
+    const result = projects.map((p: any) => {
+      const vulns = vulnByProject.get(p.id) ?? [];
+      const criticalCount = vulns.filter((v: any) => v.severity === 'critical').length;
+      const reachableCount = vulns.filter((v: any) => v.is_reachable).length;
+      const worstDepscore = vulns.reduce((max: number, v: any) => Math.max(max, v.depscore ?? 0), 0);
+      const secrets = secretByProject.get(p.id) ?? { total: 0, verified: 0 };
+
+      return {
+        project_id: p.id,
+        project_name: p.name,
+        team_id: ownerTeamMap.get(p.id) ?? null,
+        vuln_count: vulns.length,
+        critical_count: criticalCount,
+        reachable_count: reachableCount,
+        worst_depscore: worstDepscore,
+        semgrep_count: semgrepByProject.get(p.id) ?? 0,
+        secret_count: secrets.total,
+        verified_secret_count: secrets.verified,
+      };
+    });
+
+    res.json({ projects: result });
+  } catch (error: any) {
+    console.error('Error fetching org security summary:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch security summary' });
+  }
+});
+
 // Export compliance update functions for use in other routes
 export { updateProjectCompliance, updateAllProjectsCompliance };
 

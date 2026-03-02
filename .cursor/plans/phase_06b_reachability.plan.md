@@ -7,6 +7,7 @@ todos:
     status: pending
 isProject: false
 ---
+
 ## Phase 6B: Code-Level Reachability Engine
 
 **Goal:** Unlock deep code-level reachability analysis by leveraging dep-scan's built-in research profile and the atom static analysis engine. This transforms our current module-level reachability ("Your code imports lodash") into source-to-sink data-flow tracing ("User input from req.body flows through processInput() into lodash.merge(), which has a prototype pollution vulnerability"). All without building custom call graph tools from scratch -- dep-scan + atom already does this; we just need to enable and parse it.

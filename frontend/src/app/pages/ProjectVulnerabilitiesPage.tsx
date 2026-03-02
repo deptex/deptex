@@ -21,6 +21,11 @@ import { VulnerabilityNode } from '../../components/supply-chain/VulnerabilityNo
 import { useVulnerabilitiesGraphLayout, createVulnerabilitiesCenterNode, type VulnGraphDepNode, type VulnGraphCenterExtras, VULN_CENTER_NODE_WIDTH, VULN_CENTER_NODE_HEIGHT, VULN_CENTER_ID } from '../../components/vulnerabilities-graph/useVulnerabilitiesGraphLayout';
 import { VulnerabilitiesSimulationCard } from '../../components/vulnerabilities-graph/VulnerabilitiesSimulationCard';
 import { ShowOnlyReachableCard } from '../../components/vulnerabilities-graph/ShowOnlyReachableCard';
+import SecuritySidebar, { type ActiveSidebar } from '../../components/security/SecuritySidebar';
+import VulnerabilityDetailContent from '../../components/security/VulnerabilityDetailContent';
+import DependencySecurityContent from '../../components/security/DependencySecurityContent';
+import ProjectSecurityContent from '../../components/security/ProjectSecurityContent';
+import SecurityFilterBar, { type SecurityFilters, DEFAULT_FILTERS } from '../../components/security/SecurityFilterBar';
 import type { NodeTypes } from '@xyflow/react';
 
 interface ProjectContextType {
@@ -167,6 +172,13 @@ export default function ProjectVulnerabilitiesPage() {
   const [simulateLoading, setSimulateLoading] = useState(false);
   const [createPrLoading, setCreatePrLoading] = useState(false);
   const [showOnlyReachable, setShowOnlyReachable] = useState(false);
+  const [activeSidebar, setActiveSidebar] = useState<ActiveSidebar>(null);
+  const [securityFilters, setSecurityFilters] = useState<SecurityFilters>(DEFAULT_FILTERS);
+
+  const canManage = useMemo(() => {
+    if (!userPermissions) return false;
+    return userPermissions.can_manage_watchtower === true || userPermissions.edit_settings === true;
+  }, [userPermissions]);
 
   // Permission check
   useEffect(() => {
@@ -448,6 +460,10 @@ export default function ProjectVulnerabilitiesPage() {
 
   return (
     <main className="relative flex flex-col min-h-[calc(100vh-3rem)] w-full bg-background-content">
+      {/* Phase 6: Security filter bar */}
+      <div className="flex-shrink-0 px-4 pt-3">
+        <SecurityFilterBar filters={securityFilters} onFiltersChange={setSecurityFilters} />
+      </div>
       {graphError && (
         <div className="flex-shrink-0 px-4 pt-3">
           <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-3 text-sm text-destructive">
@@ -521,6 +537,57 @@ export default function ProjectVulnerabilitiesPage() {
           onToggle={setShowOnlyReachable}
         />
       </div>
+
+      {/* Phase 6: Security sidebars */}
+      {activeSidebar?.type === 'vulnerability' && (
+        <SecuritySidebar
+          isOpen
+          onClose={() => setActiveSidebar(null)}
+          title={activeSidebar.id}
+          subtitle="Vulnerability Detail"
+        >
+          <VulnerabilityDetailContent
+            organizationId={organizationId ?? ''}
+            projectId={projectId ?? ''}
+            osvId={activeSidebar.id}
+            canManage={canManage}
+            onNavigateToDep={(depId) => setActiveSidebar({ type: 'dependency', id: depId })}
+          />
+        </SecuritySidebar>
+      )}
+      {activeSidebar?.type === 'dependency' && (
+        <SecuritySidebar
+          isOpen
+          onClose={() => setActiveSidebar(null)}
+          title="Dependency Security"
+          subtitle="Security summary for this dependency"
+        >
+          <DependencySecurityContent
+            organizationId={organizationId ?? ''}
+            projectId={projectId ?? ''}
+            depId={activeSidebar.id}
+            onNavigateToVuln={(osvId) => setActiveSidebar({ type: 'vulnerability', id: osvId })}
+            onNavigateToFullDetail={() => {
+              navigate(`/organizations/${organizationId}/projects/${projectId}/dependencies/${activeSidebar.id}/overview`);
+            }}
+          />
+        </SecuritySidebar>
+      )}
+      {activeSidebar?.type === 'project' && (
+        <SecuritySidebar
+          isOpen
+          onClose={() => setActiveSidebar(null)}
+          title="Project Security Overview"
+          subtitle={project?.name}
+        >
+          <ProjectSecurityContent
+            organizationId={organizationId ?? ''}
+            projectId={projectId ?? ''}
+            canManage={canManage}
+            onNavigateToVuln={(osvId) => setActiveSidebar({ type: 'vulnerability', id: osvId })}
+          />
+        </SecuritySidebar>
+      )}
     </main>
   );
 }

@@ -7,7 +7,11 @@ export type WorstSeverity = 'critical' | 'high' | 'medium' | 'low' | 'none';
 export interface ProjectCenterNodeData {
   projectName: string;
   worstVulnerabilitySeverity?: WorstSeverity;
+  worstDepscore?: number;
   frameworkName?: string;
+  vulnCount?: number;
+  semgrepCount?: number;
+  secretCount?: number;
 }
 
 function getColorScheme(worstVulnerabilitySeverity: WorstSeverity) {
@@ -60,15 +64,20 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
   const {
     projectName = 'Project',
     worstVulnerabilitySeverity = 'none',
+    worstDepscore,
     frameworkName,
+    vulnCount,
+    semgrepCount,
+    secretCount,
   } = (data as unknown as ProjectCenterNodeData) ?? {};
   const colorScheme = getColorScheme(worstVulnerabilitySeverity);
   const hasKnownFramework = frameworkName && frameworkName.toLowerCase() !== 'unknown';
   const frameworkIdForIcon = hasKnownFramework ? frameworkName : undefined;
 
+  const hasCounts = (vulnCount ?? 0) > 0 || (semgrepCount ?? 0) > 0 || (secretCount ?? 0) > 0;
+
   return (
-    <div className="relative">
-      {/* Handles for edges (same positions as supply chain center for layout compatibility) */}
+    <div className="relative cursor-pointer">
       <Handle id="top" type="source" position={Position.Top} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
       <Handle id="right" type="source" position={Position.Right} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
       <Handle id="bottom" type="source" position={Position.Bottom} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
@@ -87,6 +96,15 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-foreground truncate">{projectName}</p>
+              {hasCounts && (
+                <p className="text-[10px] text-foreground-secondary mt-0.5">
+                  {[
+                    vulnCount ? `${vulnCount} vulns` : null,
+                    semgrepCount ? `${semgrepCount} code issues` : null,
+                    secretCount ? `${secretCount} secrets` : null,
+                  ].filter(Boolean).join(' · ')}
+                </p>
+              )}
             </div>
           </div>
         </div>

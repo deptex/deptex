@@ -28,6 +28,11 @@ export interface VulnGraphDepNode {
     aliases: string[];
     /** When false, vulnerability is not reachable from app code. Optional; default true. */
     is_reachable?: boolean;
+    depscore?: number | null;
+    epss_score?: number | null;
+    cvss_score?: number | null;
+    cisa_kev?: boolean | null;
+    fixed_versions?: string[] | null;
   }>;
   /** When true, package is zombie (never imported); show at opacity 0.5. */
   isZombie?: boolean;
@@ -69,6 +74,54 @@ function getVulnEdgeColor(severity: string): string {
     case 'none':
       return 'rgba(100, 116, 139, 0.30)';
     default: return 'rgba(100, 116, 139, 0.30)';
+  }
+}
+
+export type DepscoreBracket = 'urgent' | 'moderate' | 'low' | 'healthy';
+
+export function getDepscoreBracket(score: number | null | undefined): DepscoreBracket {
+  if (score == null || score <= 0) return 'healthy';
+  if (score >= 75) return 'urgent';
+  if (score >= 40) return 'moderate';
+  return 'low';
+}
+
+export function getDepscoreEdgeColor(score: number | null | undefined): string {
+  const bracket = getDepscoreBracket(score);
+  switch (bracket) {
+    case 'urgent': return 'rgba(239, 68, 68, 0.55)';
+    case 'moderate': return 'rgba(249, 115, 22, 0.50)';
+    case 'low': return 'rgba(100, 116, 139, 0.35)';
+    case 'healthy': return 'rgba(34, 197, 94, 0.35)';
+  }
+}
+
+export function getWorstDepscore(depNodes: VulnGraphDepNode[]): number {
+  let worst = 0;
+  for (const dep of depNodes) {
+    if (dep.isZombie) continue;
+    for (const v of reachableVulns(dep.vulnerabilities)) {
+      if ((v.depscore ?? 0) > worst) worst = v.depscore ?? 0;
+    }
+  }
+  return worst;
+}
+
+export function getDepscoreColorScheme(score: number): {
+  border: string;
+  shadow: string;
+  glow: string;
+} {
+  const bracket = getDepscoreBracket(score);
+  switch (bracket) {
+    case 'urgent':
+      return { border: 'border-red-500/50', shadow: 'shadow-red-500/20', glow: 'ring-red-500/30' };
+    case 'moderate':
+      return { border: 'border-orange-500/50', shadow: 'shadow-orange-500/20', glow: 'ring-orange-500/30' };
+    case 'low':
+      return { border: 'border-zinc-500/30', shadow: '', glow: '' };
+    case 'healthy':
+      return { border: 'border-green-500/30', shadow: 'shadow-green-500/10', glow: 'ring-green-500/20' };
   }
 }
 
@@ -303,6 +356,11 @@ export function buildDepAndVulnNodesAndEdges(
           severity: vuln.severity,
           summary: vuln.summary,
           aliases: vuln.aliases,
+          depscore: vuln.depscore ?? undefined,
+          epss_score: vuln.epss_score,
+          cisa_kev: vuln.cisa_kev,
+          is_reachable: vuln.is_reachable,
+          fixed_versions: vuln.fixed_versions,
         } satisfies VulnerabilityNodeData,
         draggable: true,
         selectable: false,

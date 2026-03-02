@@ -77,6 +77,11 @@ export interface VulnerabilityNodeData {
   aliases: string[];
   /** Depscore (0-100) when asset tier is available for layout. */
   depscore?: number;
+  epss_score?: number | null;
+  cvss_score?: number | null;
+  cisa_kev?: boolean | null;
+  is_reachable?: boolean | null;
+  fixed_versions?: string[] | null;
 }
 
 /**

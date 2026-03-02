@@ -1393,6 +1393,212 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
       }
     }
 
+    // Phase 6: Log vulnerability timeline events (detected/resolved) with dedup guard
+    if (projectId && successful > 0) {
+      try {
+        const { data: currentVulns } = await supabase
+          .from('project_dependency_vulnerabilities')
+          .select('osv_id')
+          .eq('project_id', projectId);
+
+        const currentOsvIds = new Set((currentVulns ?? []).map((v: any) => v.osv_id));
+
+        const { data: prevDetected } = await supabase
+          .from('project_vulnerability_events')
+          .select('osv_id')
+          .eq('project_id', projectId)
+          .eq('event_type', 'detected');
+
+        const prevDetectedIds = new Set((prevDetected ?? []).map((e: any) => e.osv_id));
+        const oneHourAgo = new Date(Date.now() - 3600_000).toISOString();
+
+        for (const osvId of currentOsvIds) {
+          if (!prevDetectedIds.has(osvId)) {
+            const { data: recent } = await supabase
+              .from('project_vulnerability_events')
+              .select('id')
+              .eq('project_id', projectId)
+              .eq('osv_id', osvId)
+              .eq('event_type', 'detected')
+              .gte('created_at', oneHourAgo)
+              .limit(1);
+
+            if (!recent?.length) {
+              await supabase.from('project_vulnerability_events').insert({
+                project_id: projectId,
+                osv_id: osvId,
+                event_type: 'detected',
+                metadata: {},
+              });
+            }
+          }
+        }
+
+        for (const prev of prevDetected ?? []) {
+          if (!currentOsvIds.has(prev.osv_id)) {
+            const { data: recent } = await supabase
+              .from('project_vulnerability_events')
+              .select('id')
+              .eq('project_id', projectId)
+              .eq('osv_id', prev.osv_id)
+              .eq('event_type', 'resolved')
+              .gte('created_at', oneHourAgo)
+              .limit(1);
+
+            if (!recent?.length) {
+              await supabase.from('project_vulnerability_events').insert({
+                project_id: projectId,
+                osv_id: prev.osv_id,
+                event_type: 'resolved',
+                metadata: {},
+              });
+            }
+          }
+        }
+
+        console.log(`[Phase6] Vulnerability timeline events logged for project ${projectId}`);
+      } catch (timelineErr: any) {
+        console.error(`[Phase6] Failed to log timeline events:`, timelineErr?.message);
+      }
+    }
+
+    // Phase 6: Compute version candidates for vulnerable packages
+    if (projectId && organizationId && successful > 0) {
+      try {
+        const { data: projVulns } = await supabase
+          .from('project_dependency_vulnerabilities')
+          .select('osv_id, project_dependency_id, severity, fixed_versions')
+          .eq('project_id', projectId);
+
+        const { data: projDeps } = await supabase
+          .from('project_dependencies')
+          .select('id, name, version, dependency_id, ecosystem')
+          .eq('project_id', projectId);
+
+        if (projVulns?.length && projDeps?.length) {
+          const depById = new Map<string, any>();
+          for (const d of projDeps) depById.set(d.id, d);
+
+          const vulnsByPkg = new Map<string, { cves: string[]; fixVersions: string[]; depId: string; version: string; ecosystem: string }>();
+          for (const v of projVulns) {
+            const dep = depById.get(v.project_dependency_id);
+            if (!dep) continue;
+            const key = dep.name;
+            if (!vulnsByPkg.has(key)) {
+              vulnsByPkg.set(key, { cves: [], fixVersions: [], depId: dep.dependency_id, version: dep.version, ecosystem: dep.ecosystem || 'npm' });
+            }
+            const entry = vulnsByPkg.get(key)!;
+            entry.cves.push(v.osv_id);
+            for (const fv of v.fixed_versions ?? []) {
+              if (!entry.fixVersions.includes(fv)) entry.fixVersions.push(fv);
+            }
+          }
+
+          const { data: bannedVersions } = await supabase
+            .from('banned_versions')
+            .select('package_name, version')
+            .eq('organization_id', organizationId);
+          const bannedSet = new Set((bannedVersions ?? []).map((b: any) => `${b.package_name}@${b.version}`));
+
+          const candidateRows: any[] = [];
+
+          for (const [pkgName, info] of vulnsByPkg) {
+            const currentMajor = semver.major(semver.coerce(info.version) ?? '0.0.0');
+            const validFixes = info.fixVersions
+              .map(v => semver.valid(semver.coerce(v)))
+              .filter(Boolean) as string[];
+
+            const sameMajorFixes = validFixes.filter(v => semver.major(v) === currentMajor);
+            const sameMajorSafe = sameMajorFixes.length > 0
+              ? semver.rsort([...sameMajorFixes])[0]
+              : null;
+
+            const allSorted = validFixes.length > 0 ? semver.sort([...validFixes]) : [];
+            const fullySafe = allSorted.length > 0 ? allSorted[allSorted.length - 1] : null;
+
+            const { data: depRow } = await supabase
+              .from('dependencies')
+              .select('latest_version')
+              .eq('id', info.depId)
+              .single();
+            const latest = depRow?.latest_version ?? null;
+
+            const osvQueries: Array<{ package: { ecosystem: string; name: string }; version: string }> = [];
+            const candidateVersions: Array<{ type: string; version: string }> = [];
+
+            if (sameMajorSafe) {
+              osvQueries.push({ package: { ecosystem: info.ecosystem, name: pkgName }, version: sameMajorSafe });
+              candidateVersions.push({ type: 'same_major_safe', version: sameMajorSafe });
+            }
+            if (fullySafe && fullySafe !== sameMajorSafe) {
+              osvQueries.push({ package: { ecosystem: info.ecosystem, name: pkgName }, version: fullySafe });
+              candidateVersions.push({ type: 'fully_safe', version: fullySafe });
+            }
+            if (latest && latest !== sameMajorSafe && latest !== fullySafe) {
+              osvQueries.push({ package: { ecosystem: info.ecosystem, name: pkgName }, version: latest });
+              candidateVersions.push({ type: 'latest', version: latest });
+            }
+
+            let osvResults: Array<{ vulns?: any[] }> = [];
+            if (osvQueries.length > 0) {
+              try {
+                const osvRes = await fetch('https://api.osv.dev/v1/querybatch', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ queries: osvQueries }),
+                });
+                if (osvRes.ok) {
+                  const body = await osvRes.json() as { results?: Array<{ vulns?: any[] }> };
+                  osvResults = body.results ?? [];
+                }
+              } catch { /* OSV query failure is non-fatal */ }
+            }
+
+            for (let i = 0; i < candidateVersions.length; i++) {
+              const cv = candidateVersions[i];
+              const newCves = osvResults[i]?.vulns ?? [];
+              const isBanned = bannedSet.has(`${pkgName}@${cv.version}`);
+              const fixesCveIds = info.cves.filter(cve => {
+                const fixVer = info.fixVersions.find(fv => {
+                  const parsed = semver.valid(semver.coerce(fv));
+                  return parsed && semver.lte(parsed, cv.version);
+                });
+                return !!fixVer;
+              });
+
+              candidateRows.push({
+                project_id: projectId,
+                package_name: pkgName,
+                ecosystem: info.ecosystem,
+                current_version: info.version,
+                candidate_type: cv.type,
+                candidate_version: cv.version,
+                fixes_cve_count: fixesCveIds.length,
+                total_current_cves: info.cves.length,
+                fixes_cve_ids: fixesCveIds,
+                known_new_cves: newCves.length,
+                known_new_cve_ids: newCves.map((v: any) => v.id).slice(0, 20),
+                is_major_bump: semver.major(semver.coerce(cv.version) ?? '0.0.0') !== currentMajor,
+                is_org_banned: isBanned,
+                verified_at: new Date().toISOString(),
+              });
+            }
+          }
+
+          if (candidateRows.length > 0) {
+            for (let i = 0; i < candidateRows.length; i += 50) {
+              await supabase.from('project_version_candidates').upsert(candidateRows.slice(i, i + 50), {
+                onConflict: 'project_id,package_name,ecosystem,candidate_type',
+              });
+            }
+            console.log(`[Phase6] Computed ${candidateRows.length} version candidates for project ${projectId}`);
+          }
+        }
+      } catch (versionErr: any) {
+        console.error(`[Phase6] Failed to compute version candidates:`, versionErr?.message);
+      }
+    }
+
     // Run policy evaluation after populate completes (Phase 4)
     if (projectId && organizationId && successful > 0) {
       try {

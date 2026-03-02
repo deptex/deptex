@@ -112,8 +112,12 @@ export const router = createBrowserRouter([
         element: <TeamsPage />,
       },
       {
-        path: "vulnerabilities",
+        path: "security",
         element: <OrganizationVulnerabilitiesPage />,
+      },
+      {
+        path: "vulnerabilities",
+        element: <Navigate to="../security" replace />,
       },
       {
         path: "projects",
@@ -158,8 +162,12 @@ export const router = createBrowserRouter([
         element: <ProjectOverviewPage />,
       },
       {
-        path: "vulnerabilities",
+        path: "security",
         element: <ProjectVulnerabilitiesPage />,
+      },
+      {
+        path: "vulnerabilities",
+        element: <Navigate to="../security" replace />,
       },
       {
         path: "dependencies",

@@ -63,7 +63,7 @@ isProject: false
 
 After reviewing all 18 existing phases and analyzing what Snyk AppRisk, Aikido Security, Endor Labs, AccuKnox, and other leading ASPM platforms offer, here are the gaps and opportunities organized into themed phases.
 
-Note: add [socket.dev data](http://socket.io)
+Note: add [socket.dev data, add container scanning?](http://socket.io)
 
 ---
 

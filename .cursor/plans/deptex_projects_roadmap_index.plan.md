@@ -17,8 +17,11 @@ todos:
   - id: phase-5-compliance
     content: "Phase 5: Compliance Tab Overhaul - New Project Status subtab, preflight package check sidebar, AI-powered one-click license exceptions, SBOM/notice verification, Stitch AI prompt"
     status: pending
-  - id: phase-6-vulns
-    content: "Phase 6: Security Tab Overhaul (renamed from Vulnerabilities) - Tab rename, Depscore-based graph coloring, richer graph nodes (Depscore/EPSS/KEV/reachability), Semgrep+TruffleHog parsing (with is_current flag), 3 clickable sidebars with banned version integration, advanced filtering, two-tier AI model (BYOK for Aegis/fixes + Gemini Flash for platform features), AI usage logging + admin dashboard, Tier 1 rate limits, Aegis AI Security Copilot panel with contextual actions, Org & Team Security page overhaul (No Team bug fix), background vuln monitoring with batching, historical timeline, safety cutoffs & runaway prevention, Stitch AI prompts, test suite"
+  - id: phase-6-core
+    content: "Phase 6: Security Tab Core - Tab rename, Depscore-based graph coloring, richer graph nodes (Depscore/EPSS/KEV/reachability), Semgrep+TruffleHog parsing (extraction_run_id safety, conservative redaction, Raw stripping), 3 clickable sidebars with banned version integration (AI buttons disabled until 6C), advanced filtering with URL params, historical timeline with MTTR, smart version recommendation engine (OSV verification + release notes), Org & Team Security page overhaul (No Team bug fix), test suite"
+    status: pending
+  - id: phase-6c-ai
+    content: "Phase 6C: AI Infrastructure & Aegis Copilot - BYOK with AES-256-GCM (IV/nonce + key rotation), provider abstraction (OpenAI/Anthropic/Google), platform AI (Gemini Flash), AI usage logging + dashboard, rate limits, interact_with_aegis permission (Tier 2 only), Aegis Security Copilot panel with SSE streaming, 10+ security actions, background vuln monitoring via QStash, safety cutoffs, light up Phase 6 disabled AI buttons"
     status: pending
   - id: phase-6b-reachability
     content: "Phase 6B: Code-Level Reachability Engine - Leverage dep-scan research profile + atom engine for deep reachability (call graphs, data-flow tracing, source-to-sink analysis), parse reachables + usages slices, performance-8x 64GB Fly.io machines, CodeImpactView UI, LLMPrompts mode for Aegis, integration with Phase 6 sidebars, test suite"
@@ -79,12 +82,14 @@ graph TD
     P1 --> P4[Phase 4: Policy-as-Code Engine]
     P4 --> P5[Phase 5: Compliance and License Mgmt]
     P4 --> P8[Phase 8: PR Management and Webhooks]
-    P3 --> P6["Phase 6: Security Tab Overhaul (UI + Aegis Copilot + BYOK)"]
+    P3 --> P6["Phase 6: Security Tab Core (Graph + Sidebars + Semgrep/TruffleHog)"]
+    P6 --> P6C["Phase 6C: AI Infrastructure + Aegis Copilot + BYOK"]
     P6 --> P6B["Phase 6B: Code-Level Reachability Engine"]
-    P6B --> P7[Phase 7: AI-Powered Fixing with Aider]
-    P6 --> P7
+    P6C --> P7[Phase 7: AI-Powered Fixing with Aider]
+    P6B --> P7
     P7 --> P7B["Phase 7B: Aegis Autonomous Security Platform"]
     P6B --> P7B
+    P6C --> P7B
     P8 --> P7B
     P9 --> P7B
     P8 --> P9[Phase 9: Notifications and Sinks]
@@ -119,8 +124,9 @@ graph TD
 - [Phase 3: Extraction Worker Enhancements](phase_03_extraction.plan.md)
 - [Phase 4: Policy-as-Code Engine + Custom Statuses](phase_04_policy.plan.md)
 - [Phase 5: Compliance Tab Overhaul](phase_05_compliance.plan.md)
-- [Phase 6: Security Tab Overhaul](phase_06_security.plan.md)
+- [Phase 6: Security Tab Core](phase_06_security.plan.md)
 - [Phase 6B: Code-Level Reachability Engine](phase_06b_reachability.plan.md)
+- [Phase 6C: AI Infrastructure & Aegis Copilot](phase_06c_ai_aegis.plan.md)
 - [Phase 7: AI-Powered Vulnerability Fixing (Aider)](phase_07_aider.plan.md)
 - [Phase 7B: Aegis Autonomous Security Platform](phase_07b_aegis.plan.md)
 - [Phase 8: PR Management and Webhooks](phase_08_pr_webhooks.plan.md)
@@ -162,12 +168,18 @@ New columns needed (across all phases):
 - `project_dependency_vulnerabilities.risk_accepted` BOOLEAN DEFAULT false
 - `project_dependency_vulnerabilities.risk_accepted_by` UUID (FK to auth.users)
 - `project_dependency_vulnerabilities.risk_accepted_at` TIMESTAMPTZ
+- `project_dependency_vulnerabilities.risk_accepted_reason` TEXT
+- `project_semgrep_findings.extraction_run_id` TEXT NOT NULL (upsert-then-delete-stale pattern)
+- `project_secret_findings.extraction_run_id` TEXT NOT NULL (upsert-then-delete-stale pattern)
 - `project_secret_findings.is_current` BOOLEAN DEFAULT true (true if in HEAD, false if only in git history)
 - `aegis_chat_threads.project_id` UUID (nullable FK to projects - for project-scoped Aegis threads)
 - `aegis_chat_threads.context_type` TEXT (nullable - 'vulnerability', 'dependency', 'project_overview')
 - `aegis_chat_threads.context_id` TEXT (nullable - OSV ID or dependency ID)
 - `aegis_chat_threads.total_tokens_used` INTEGER DEFAULT 0 (running token count for per-thread budget enforcement)
 - `organization_ai_providers.monthly_cost_cap` NUMERIC(8, 2) DEFAULT 100.00 (configurable monthly BYOK spend limit)
+- `organization_ai_providers.encryption_key_version` INTEGER DEFAULT 1 (tracks which AI_ENCRYPTION_KEY version encrypted this row)
+- `projects.last_vuln_check_at` TIMESTAMPTZ (background vuln monitoring timestamp)
+- `projects.vuln_check_frequency` TEXT DEFAULT '24h' (configurable monitoring frequency)
 - `aegis_automations.cron_expression` TEXT (cron schedule expression)
 - `aegis_automations.timezone` TEXT DEFAULT 'UTC'
 - `aegis_automations.automation_type` TEXT DEFAULT 'custom' (template name or 'custom')

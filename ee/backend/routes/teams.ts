@@ -1933,5 +1933,100 @@ router.post('/:id/teams/:teamId/transfer-ownership', async (req: AuthRequest, re
   }
 });
 
+// GET /api/organizations/:id/teams/:teamId/security-summary
+router.get('/:id/teams/:teamId/security-summary', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, teamId } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const { data: projectTeams } = await supabase
+      .from('project_teams')
+      .select('project_id')
+      .eq('team_id', teamId);
+
+    const projectIds = (projectTeams ?? []).map((pt: any) => pt.project_id);
+    if (projectIds.length === 0) {
+      return res.json({ projects: [] });
+    }
+
+    const { data: projects } = await supabase
+      .from('projects')
+      .select('id, name')
+      .in('id', projectIds);
+
+    const { data: vulnRows } = await supabase
+      .from('project_dependency_vulnerabilities')
+      .select('project_id, severity, depscore, is_reachable, suppressed')
+      .in('project_id', projectIds)
+      .eq('suppressed', false);
+
+    const { data: semgrepRows } = await supabase
+      .from('project_semgrep_findings')
+      .select('project_id')
+      .in('project_id', projectIds);
+
+    const { data: secretRows } = await supabase
+      .from('project_secret_findings')
+      .select('project_id, is_verified')
+      .in('project_id', projectIds);
+
+    const vulnByProject = new Map<string, any[]>();
+    for (const v of vulnRows ?? []) {
+      if (!vulnByProject.has(v.project_id)) vulnByProject.set(v.project_id, []);
+      vulnByProject.get(v.project_id)!.push(v);
+    }
+
+    const semgrepByProject = new Map<string, number>();
+    for (const s of semgrepRows ?? []) {
+      semgrepByProject.set(s.project_id, (semgrepByProject.get(s.project_id) ?? 0) + 1);
+    }
+
+    const secretByProject = new Map<string, { total: number; verified: number }>();
+    for (const s of secretRows ?? []) {
+      const entry = secretByProject.get(s.project_id) ?? { total: 0, verified: 0 };
+      entry.total++;
+      if (s.is_verified) entry.verified++;
+      secretByProject.set(s.project_id, entry);
+    }
+
+    const result = (projects ?? []).map((p: any) => {
+      const vulns = vulnByProject.get(p.id) ?? [];
+      const criticalCount = vulns.filter((v: any) => v.severity === 'critical').length;
+      const reachableCount = vulns.filter((v: any) => v.is_reachable).length;
+      const worstDepscore = vulns.reduce((max: number, v: any) => Math.max(max, v.depscore ?? 0), 0);
+      const secrets = secretByProject.get(p.id) ?? { total: 0, verified: 0 };
+
+      return {
+        project_id: p.id,
+        project_name: p.name,
+        team_id: teamId,
+        vuln_count: vulns.length,
+        critical_count: criticalCount,
+        reachable_count: reachableCount,
+        worst_depscore: worstDepscore,
+        semgrep_count: semgrepByProject.get(p.id) ?? 0,
+        secret_count: secrets.total,
+        verified_secret_count: secrets.verified,
+      };
+    });
+
+    res.json({ projects: result });
+  } catch (error: any) {
+    console.error('Error fetching team security summary:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch team security summary' });
+  }
+});
+
 export default router;
 

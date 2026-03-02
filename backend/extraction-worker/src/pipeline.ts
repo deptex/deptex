@@ -794,15 +794,50 @@ export async function runPipeline(
       const semgrepPath = path.join(workspaceRoot, 'semgrep.json');
       if (fs.existsSync(semgrepPath)) {
         const content = fs.readFileSync(semgrepPath, 'utf8');
+        let semgrepParsed: any = null;
         try {
-          const parsed = JSON.parse(content);
-          semgrepFindings = Array.isArray(parsed?.results) ? parsed.results.length : 0;
+          semgrepParsed = JSON.parse(content);
+          semgrepFindings = Array.isArray(semgrepParsed?.results) ? semgrepParsed.results.length : 0;
         } catch { /* ignore parse errors */ }
         try {
           await supabase.storage
             .from('project-imports')
             .upload(`${projectId}/${runId}/semgrep.json`, content, { contentType: 'application/json', upsert: true });
         } catch { /* upload failure non-fatal */ }
+
+        if (semgrepParsed && Array.isArray(semgrepParsed.results) && semgrepParsed.results.length > 0) {
+          try {
+            const sanitizeMetadata = (metadata: any) => {
+              if (!metadata) return {};
+              const safe = { ...metadata };
+              delete safe.source;
+              delete safe.fix;
+              return safe;
+            };
+            const findings = semgrepParsed.results.map((r: any) => ({
+              project_id: projectId,
+              extraction_run_id: runId,
+              rule_id: r.check_id ?? 'unknown',
+              file_path: r.path ?? 'unknown',
+              start_line: r.start?.line ?? null,
+              end_line: r.end?.line ?? null,
+              severity: r.extra?.severity ?? 'INFO',
+              message: r.extra?.message ?? null,
+              cwe_ids: r.extra?.metadata?.cwe ?? [],
+              owasp_ids: r.extra?.metadata?.owasp ?? [],
+              category: r.extra?.metadata?.category ?? 'security',
+              metadata: sanitizeMetadata(r.extra?.metadata),
+            }));
+            for (let i = 0; i < findings.length; i += 100) {
+              await supabase.from('project_semgrep_findings').upsert(findings.slice(i, i + 100), {
+                onConflict: 'project_id,rule_id,file_path,start_line',
+              });
+            }
+          } catch (parseErr: any) {
+            await log.warn('semgrep', `Failed to parse findings into DB: ${parseErr.message}`);
+          }
+        }
+
         await log.success('semgrep', `Static analysis complete — ${semgrepFindings} findings`, Date.now() - semgrepStart);
       } else {
         await log.warn('semgrep', 'Static analysis skipped (Semgrep not installed)');
@@ -831,12 +866,57 @@ export async function runPipeline(
       }
       if (fs.existsSync(trufflehogOut)) {
         const content = fs.readFileSync(trufflehogOut, 'utf8');
+        const lines = content.trim().split('\n').filter(Boolean);
+        let secretCount = 0;
+
+        if (lines.length > 0 && lines[0].startsWith('{')) {
+          try {
+            const findings = lines.map((line: string) => {
+              const f = JSON.parse(line);
+              const raw = f.Raw ?? '';
+              const redacted = raw.length >= 20 ? `${raw.slice(0, 4)}...${raw.slice(-4)}` : '****';
+              return {
+                project_id: projectId,
+                extraction_run_id: runId,
+                detector_type: f.DetectorName ?? 'Unknown',
+                file_path: f.SourceMetadata?.Data?.Filesystem?.file ?? f.SourceMetadata?.Data?.Git?.file ?? 'unknown',
+                start_line: f.SourceMetadata?.Data?.Filesystem?.line ?? f.SourceMetadata?.Data?.Git?.line ?? null,
+                is_verified: f.Verified ?? false,
+                is_current: !!(f.SourceMetadata?.Data?.Filesystem),
+                description: `${f.DetectorName ?? 'Secret'} detected`,
+                redacted_value: redacted,
+              };
+            }).filter((f: any) => f.detector_type !== 'Unknown' || f.file_path !== 'unknown');
+
+            secretCount = findings.length;
+            if (findings.length > 0) {
+              for (let i = 0; i < findings.length; i += 100) {
+                await supabase.from('project_secret_findings').upsert(findings.slice(i, i + 100), {
+                  onConflict: 'project_id,detector_type,file_path,start_line',
+                });
+              }
+            }
+
+            const sanitized = lines.map((line: string) => {
+              try {
+                const f = JSON.parse(line);
+                delete f.Raw;
+                return JSON.stringify(f);
+              } catch { return line; }
+            }).join('\n');
+            fs.writeFileSync(trufflehogOut, sanitized, 'utf8');
+          } catch (parseErr: any) {
+            await log.warn('trufflehog', `Failed to parse findings into DB: ${parseErr.message}`);
+          }
+        }
+
+        const sanitizedContent = fs.readFileSync(trufflehogOut, 'utf8');
         try {
           await supabase.storage
             .from('project-imports')
-            .upload(`${projectId}/${runId}/trufflehog.json`, content, { contentType: 'application/json', upsert: true });
+            .upload(`${projectId}/${runId}/trufflehog.json`, sanitizedContent, { contentType: 'application/json', upsert: true });
         } catch { /* upload failure non-fatal */ }
-        await log.success('trufflehog', 'Secret scan complete — no secrets found', Date.now() - thStart);
+        await log.success('trufflehog', `Secret scan complete — ${secretCount} secrets found`, Date.now() - thStart);
       } else {
         await log.warn('trufflehog', 'Secret scanning unavailable (TruffleHog not installed)');
       }
@@ -869,6 +949,23 @@ export async function runPipeline(
       })
       .eq('id', projectId)
       .eq('organization_id', organizationId);
+
+    // Post-pipeline finalization: clean up stale findings from previous runs
+    try {
+      await supabase.from('project_semgrep_findings')
+        .delete()
+        .eq('project_id', projectId)
+        .neq('extraction_run_id', runId);
+
+      await supabase.from('project_secret_findings')
+        .delete()
+        .eq('project_id', projectId)
+        .neq('extraction_run_id', runId);
+
+      await log.info('finalize', 'Cleaned up stale findings from previous extraction runs');
+    } catch (cleanupErr: any) {
+      await log.warn('finalize', `Stale findings cleanup failed: ${cleanupErr.message}`);
+    }
 
   } catch (error: any) {
     await setError(supabase, projectId, error.message);

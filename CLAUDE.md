@@ -65,12 +65,12 @@ backend/
 ee/backend/
   routes/
     organizations.ts            Org CRUD, members, invitations, roles, policies, notification rules, deprecations, join link. Phase 4: statuses CRUD, asset tiers CRUD, split policy code (package_policy, project_status, pr_check) PUT/GET, policy-changes (GET org history), revert (POST). Seed statuses and tiers on org creation.
-    teams.ts                    Team CRUD, roles, members, transfer ownership
-    projects.ts                 Project CRUD, repos, dependencies (list/overview/versions/supply-chain/safe-version), vulnerabilities, policies, exceptions, PR guardrails, Watchtower actions (bump/decrease/remove PRs), notes, contributing teams, AST import status. Extraction: POST extraction/cancel, GET extraction/logs, GET extraction/runs. Phase 5 compliance: GET sbom (real cdxgen from storage), GET legal-notice (grouped by license, Redis-cached), GET registry-search (proxy to npm/Maven/Cargo/RubyGems/PyPI/Go), POST apply-exception (Gemini AI policy exception), GET license-obligations. Policy engine: POST evaluate-policy, POST preflight-check (ecosystem param), POST validate-policy, policy-changes CRUD, revert-policy.
+    teams.ts                    Team CRUD, roles, members, transfer ownership. Phase 6: GET teams/:teamId/security-summary (aggregate security counts).
+    projects.ts                 Project CRUD, repos, dependencies (list/overview/versions/supply-chain/safe-version), vulnerabilities, policies, exceptions, PR guardrails, Watchtower actions (bump/decrease/remove PRs), notes, contributing teams, AST import status. Extraction: POST extraction/cancel, GET extraction/logs, GET extraction/runs. Phase 5 compliance: GET sbom (real cdxgen from storage), GET legal-notice (grouped by license, Redis-cached), GET registry-search (proxy to npm/Maven/Cargo/RubyGems/PyPI/Go), POST apply-exception (Gemini AI policy exception), GET license-obligations. Policy engine: POST evaluate-policy, POST preflight-check (ecosystem param), POST validate-policy, policy-changes CRUD, revert-policy. Phase 6 Security: GET semgrep-findings, GET secret-findings (permission-gated), GET vulnerabilities/:osvId/detail, PATCH suppress/unsuppress, PATCH accept-risk/unaccept-risk, GET dependencies/:depId/security-summary, GET version-candidates, GET security-summary (org aggregate).
     activities.ts               GET activities with date/type/team filters
     integrations.ts             OAuth flows + webhooks for GitHub App, GitLab, Bitbucket, Slack, Discord, Jira, Linear, Stripe, Asana. Org connections CRUD, custom integrations, email notifications
     aegis.ts                    Aegis AI: enable/status, chat (handle message with tool execution), threads, automations CRUD + run, inbox, activity logs
-    workers.ts                  Extraction pipeline: queue-populate, populate-dependencies (QStash), backfill-dependency-trees, extract-deps. Houses extractDependencies() for lockfile parsing
+    workers.ts                  Extraction pipeline: queue-populate, populate-dependencies (QStash), backfill-dependency-trees, extract-deps. Houses extractDependencies() for lockfile parsing. Phase 6: populates project_vulnerability_events (detected/resolved, dedup guard), project_version_candidates (same_major_safe, fully_safe, latest; OSV verification, banned exclusion).
     watchtower.ts               Supply-chain endpoints: full analysis, commits (with anomaly sort + touches_imported filter), contributors, anomalies, summary, AI commit analysis (GPT-4)
     internal.ts                 Internal API (X-Internal-Api-Key): create-bump-pr
     invitations.ts              GET pending invitations for current user
@@ -127,13 +127,13 @@ frontend/src/
 | `/organizations` | OrganizationsPage (list + create) |
 | `/organizations/:id` | OrganizationLayout with tabs |
 | `/organizations/:id/teams` | TeamsPage |
-| `/organizations/:id/vulnerabilities` | OrganizationVulnerabilitiesPage |
+| `/organizations/:id/security` | OrganizationVulnerabilitiesPage (Security tab). Redirect: `/vulnerabilities` → `/security` |
 | `/organizations/:id/projects` | ProjectsPage |
 | `/organizations/:id/settings` | OrganizationSettingsPage (general, members, roles, integrations, notifications, statuses, policies, audit_logs, etc.) |
 | `/organizations/:id/policies` | PoliciesPage (Package Policy, PR Check Monaco editors; Change History sub-tab) |
 | `/organizations/:id/compliance` | CompliancePage |
 | `/organizations/:orgId/projects/:projectId/overview` | ProjectOverviewPage |
-| `/organizations/:orgId/projects/:projectId/vulnerabilities` | ProjectVulnerabilitiesPage |
+| `/organizations/:orgId/projects/:projectId/security` | ProjectVulnerabilitiesPage (Security tab). Redirect: `/vulnerabilities` → `/security` |
 | `/organizations/:orgId/projects/:projectId/dependencies` | ProjectDependenciesPage |
 | `/organizations/:orgId/projects/:projectId/dependencies/:dependencyId/overview` | DependencyOverviewPage |
 | `/organizations/:orgId/projects/:projectId/dependencies/:dependencyId/watchtower` | DependencyWatchtowerPage |
@@ -189,7 +189,14 @@ Docs sections: introduction, quick-start, projects, dependencies, vulnerabilitie
 ### Dependency & Supply Chain
 - **PackageOverview** -- package metadata, score, downloads, versions
 - **supply-chain/** -- CenterNode, DependencyNode, BanVersionSidebar, RemoveBanSidebar, SafeVersionCard, UnusedInProjectCard, useGraphLayout (xyflow graph)
-- **vulnerabilities-graph/** -- ProjectCenterNode, VulnProjectNode, useTeamVulnerabilitiesGraphLayout, useOrganizationVulnerabilitiesGraphLayout, VulnerabilitiesSimulationCard
+- **vulnerabilities-graph/** -- ProjectCenterNode (Phase 6: security counts, clickable), VulnProjectNode, VulnerabilityNode (Phase 6: EPSS, KEV, reachability, fix indicators, Depscore coloring), useTeamVulnerabilitiesGraphLayout, useOrganizationVulnerabilitiesGraphLayout, VulnerabilitiesSimulationCard
+
+### Security (Phase 6)
+- **SecuritySidebar** -- shared slide-in sidebar wrapper for Security tab context (project, dependency, vulnerability)
+- **VulnerabilityDetailContent** -- full vulnerability detail with suppress/accept-risk actions
+- **DependencySecurityContent** -- dependency-level security summary (Semgrep, secrets, vulns, version candidates)
+- **ProjectSecurityContent** -- project-level Security tab content (graph, filters)
+- **SecurityFilterBar** -- filters with URL persistence (severity, KEV, suppressed, etc.)
 
 ### Sidebars & Panels
 - **VersionSidebar** -- version details with vuln counts
@@ -235,10 +242,11 @@ button, input, label, checkbox, switch, slider, progress, badge, avatar, card, d
 5. **Queue populate** -- call `POST /api/workers/queue-populate` for new direct deps
 6. **AST import analysis** -- oxc-parser on JS/TS files, extract ESM imports -> `project_dependency_functions`, `project_dependency_files`, `files_importing_count`
 7. **dep-scan** -- run dep-scan VDR analysis for vulnerabilities, fetch EPSS scores, CISA KEV status, compute depscore
-8. **Semgrep** -- `semgrep scan --config auto` for code security findings (optional)
-9. **TruffleHog** -- secret scanning (optional)
+8. **Semgrep** -- `semgrep scan --config auto` for code security findings (optional). Phase 6: parse JSON → upsert `project_semgrep_findings` (metadata sanitized: no source/fix in DB).
+9. **TruffleHog** -- secret scanning (optional). Phase 6: parse output → upsert `project_secret_findings` (redacted, Raw stripped before storage).
 10. **Upload** -- store sbom.json, dep-scan.json, semgrep.json, trufflehog.json to Supabase storage `project-imports/{projectId}/{runId}/`
 11. **Status** -- set `project_repositories.status = 'ready'`, `extraction_step = 'completed'`
+12. **Finalization (Phase 6)** -- after successful run, delete findings from prior runs (stale Semgrep/secret records).
 
 **Live logs:** `ExtractionLogger` writes to `extraction_logs` (Supabase Realtime). Frontend SyncDetailSidebar subscribes for live streaming.
 
@@ -324,7 +332,7 @@ button, input, label, checkbox, switch, slider, progress, badge, avatar, card, d
 | `dependency_versions` | Versions per dependency: vuln counts, watchtower analysis statuses, slsa_level (0-4, Phase 3) | FK dependency_id, UNIQUE(dependency_id, version) |
 | `project_dependencies` | Project-level deps: version, is_direct, source, environment, files_importing_count, ai_usage_summary, policy_result (JSONB: { allowed, reasons } from packagePolicy), is_outdated, versions_behind (Phase 3) | FK project_id, dependency_id, dependency_version_id |
 | `dependency_vulnerabilities` | Global vuln data from OSV/GHSA: osv_id, severity, affected_versions, fixed_versions | FK dependency_id, UNIQUE(dependency_id, osv_id) |
-| `project_dependency_vulnerabilities` | Project-specific vulns: is_reachable, epss_score, cvss_score, cisa_kev, depscore | FK project_id, project_dependency_id |
+| `project_dependency_vulnerabilities` | Project-specific vulns: is_reachable, epss_score, cvss_score, cisa_kev, depscore. Phase 6: suppressed, suppressed_by, suppressed_at, risk_accepted, risk_accepted_by, risk_accepted_at, risk_accepted_reason | FK project_id, project_dependency_id |
 | `dependency_version_edges` | Global dependency graph (parent -> child version) | FK parent_version_id, child_version_id |
 | `project_dependency_functions` | AST: imported functions per project dependency | FK project_dependency_id |
 | `project_dependency_files` | AST: files importing each dependency | FK project_dependency_id |
@@ -375,6 +383,10 @@ button, input, label, checkbox, switch, slider, progress, badge, avatar, card, d
 | `dependency_notes` | Collaborative notes on dependencies |
 | `dependency_note_reactions` | Reactions on notes |
 | `dependency_prs` | Tracked PRs: type (bump/decrease/remove), target_version, pr_url |
+| `project_semgrep_findings` | Phase 6: Semgrep code findings (rule_id, severity, path, message; metadata sanitized). FK project_id. | FK project_id |
+| `project_secret_findings` | Phase 6: TruffleHog secret findings (redacted, no Raw in DB). Permission-gated in API. | FK project_id |
+| `project_vulnerability_events` | Phase 6: vuln lifecycle (event_type: detected/resolved, osv_id, project_dependency_id). For timeline/MTTR. | FK project_id |
+| `project_version_candidates` | Phase 6: upgrade suggestions (same_major_safe, fully_safe, latest). OSV-verified, respects banned_versions. | FK project_id, dependency_id |
 
 ### Aegis Tables
 | Table | Purpose |
@@ -428,6 +440,8 @@ organizations
        |-- project_integrations, project_notification_rules
        |-- project_pr_guardrails, project_policy_exceptions, project_policy_changes
        |-- dependency_notes, dependency_prs
+       |-- project_semgrep_findings, project_secret_findings (Phase 6)
+       |-- project_vulnerability_events, project_version_candidates (Phase 6)
 
 dependencies (global)
   |-- dependency_versions
@@ -500,6 +514,18 @@ User views dependency supply chain (DependencySupplyChainPage)
   -> Reads dependency_version_edges (parent -> child)
   -> Frontend renders @xyflow/react graph with CenterNode + DependencyNodes
   -> BanVersionSidebar / RemoveBanSidebar / SafeVersionCard overlays
+```
+
+### Security Tab (Phase 6)
+```
+Project/Org/Team Security tab (renamed from Vulnerabilities; routes /security, redirects /vulnerabilities)
+  -> GET /api/.../security-summary (project, org, team)
+  -> GET /api/.../semgrep-findings, /secret-findings (permission-gated)
+  -> GET /api/.../vulnerabilities/:osvId/detail, PATCH suppress/unsuppress, accept-risk/unaccept-risk
+  -> GET /api/.../dependencies/:depId/security-summary, /version-candidates
+  -> Frontend: SecuritySidebar (VulnerabilityDetailContent, DependencySecurityContent, ProjectSecurityContent)
+  -> Graph: Depscore coloring, EPSS/KEV/reachability/fix indicators, SecurityFilterBar with URL persistence
+  -> Org graph: No Team fix — ungrouped projects rendered on org ring, linked from center
 ```
 
 ### Policy-as-Code (Phase 4)

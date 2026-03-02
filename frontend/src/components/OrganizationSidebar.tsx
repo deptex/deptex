@@ -11,7 +11,7 @@ interface OrganizationSidebarProps {
 
 const allNavItems = [
   { id: 'overview', label: 'Overview', path: 'overview', icon: LayoutDashboard, requiredPermission: null },
-  { id: 'vulnerabilities', label: 'Vulnerabilities', path: 'vulnerabilities', icon: ShieldAlert, requiredPermission: null },
+  { id: 'security', label: 'Security', path: 'security', icon: ShieldAlert, requiredPermission: null },
   { id: 'projects', label: 'Projects', path: 'projects', icon: FolderKanban, requiredPermission: null },
   { id: 'teams', label: 'Teams', path: 'teams', icon: Users, requiredPermission: null },
   { id: 'compliance', label: 'Compliance', path: 'compliance', icon: ClipboardCheck, requiredPermission: null },

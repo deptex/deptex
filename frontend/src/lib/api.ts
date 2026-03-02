@@ -1647,6 +1647,108 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities`);
   },
 
+  // Phase 6: Security Tab API functions
+  async getProjectSemgrepFindings(
+    organizationId: string,
+    projectId: string,
+    page = 1,
+    perPage = 50
+  ): Promise<PaginatedResponse<SemgrepFinding>> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/semgrep-findings?page=${page}&per_page=${perPage}`);
+  },
+
+  async getProjectSecretFindings(
+    organizationId: string,
+    projectId: string,
+    page = 1,
+    perPage = 50
+  ): Promise<PaginatedResponse<SecretFinding>> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/secret-findings?page=${page}&per_page=${perPage}`);
+  },
+
+  async getVulnerabilityDetail(
+    organizationId: string,
+    projectId: string,
+    osvId: string
+  ): Promise<VulnerabilityDetail> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/detail`);
+  },
+
+  async suppressVulnerability(
+    organizationId: string,
+    projectId: string,
+    osvId: string
+  ): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/suppress`, {
+      method: 'PATCH',
+    });
+  },
+
+  async unsuppressVulnerability(
+    organizationId: string,
+    projectId: string,
+    osvId: string
+  ): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/unsuppress`, {
+      method: 'PATCH',
+    });
+  },
+
+  async acceptVulnerabilityRisk(
+    organizationId: string,
+    projectId: string,
+    osvId: string,
+    reason?: string
+  ): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/accept-risk`, {
+      method: 'PATCH',
+      body: JSON.stringify({ reason }),
+    });
+  },
+
+  async unacceptVulnerabilityRisk(
+    organizationId: string,
+    projectId: string,
+    osvId: string
+  ): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/unaccept-risk`, {
+      method: 'PATCH',
+    });
+  },
+
+  async getDependencySecuritySummary(
+    organizationId: string,
+    projectId: string,
+    depId: string
+  ): Promise<DependencySecuritySummary> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/dependencies/${depId}/security-summary`);
+  },
+
+  async getProjectVersionCandidates(
+    organizationId: string,
+    projectId: string,
+    packageName?: string,
+    page = 1,
+    perPage = 50
+  ): Promise<PaginatedResponse<VersionCandidate>> {
+    const params = new URLSearchParams({ page: String(page), per_page: String(perPage) });
+    if (packageName) params.set('package_name', packageName);
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/version-candidates?${params}`);
+  },
+
+  async getOrgSecuritySummary(
+    organizationId: string
+  ): Promise<{ projects: ProjectSecuritySummary[] }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/security-summary`);
+  },
+
+  async getTeamSecuritySummary(
+    organizationId: string,
+    teamId: string
+  ): Promise<{ projects: ProjectSecuritySummary[] }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/security-summary`);
+  },
+
   async addProjectContributingTeam(organizationId: string, projectId: string, teamId: string): Promise<ProjectContributingTeam> {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/contributing-teams`, {
       method: 'POST',
@@ -3068,4 +3170,138 @@ export interface WatchtowerCommitsResponse {
   total: number;
   limit: number;
   offset: number;
+}
+
+// Phase 6: Security Tab types
+
+export interface SemgrepFinding {
+  id: string;
+  project_id: string;
+  extraction_run_id: string;
+  rule_id: string;
+  file_path: string;
+  start_line: number | null;
+  end_line: number | null;
+  severity: string;
+  message: string | null;
+  cwe_ids: string[];
+  owasp_ids: string[];
+  category: string;
+  metadata: Record<string, any> | null;
+  created_at: string;
+}
+
+export interface SecretFinding {
+  id: string;
+  project_id: string;
+  extraction_run_id: string;
+  detector_type: string;
+  file_path: string;
+  start_line: number | null;
+  is_verified: boolean;
+  is_current: boolean;
+  description: string | null;
+  redacted_value: string | null;
+  created_at: string;
+}
+
+export interface VulnerabilityEvent {
+  id: string;
+  project_id: string;
+  osv_id: string;
+  event_type: string;
+  metadata: Record<string, any> | null;
+  created_at: string;
+}
+
+export interface VersionCandidate {
+  id: string;
+  project_id: string;
+  package_name: string;
+  ecosystem: string;
+  current_version: string;
+  candidate_type: 'same_major_safe' | 'fully_safe' | 'latest';
+  candidate_version: string;
+  fixes_cve_count: number;
+  total_current_cves: number;
+  fixes_cve_ids: string[];
+  known_new_cves: number;
+  known_new_cve_ids: string[];
+  is_major_bump: boolean;
+  is_org_banned: boolean;
+  release_notes: string | null;
+  release_notes_url: string | null;
+  published_at: string | null;
+  verified_at: string | null;
+  created_at: string;
+}
+
+export interface VulnerabilityDetail {
+  vulnerability: ProjectVulnerability & {
+    suppressed?: boolean;
+    suppressed_by?: string;
+    suppressed_at?: string;
+    risk_accepted?: boolean;
+    risk_accepted_by?: string;
+    risk_accepted_at?: string;
+    risk_accepted_reason?: string;
+  };
+  affected_dependencies: Array<{
+    id: string;
+    name: string;
+    version: string;
+    is_direct: boolean;
+    dependency_id: string;
+    files_importing_count: number;
+    files: string[];
+  }>;
+  version_candidates: VersionCandidate[];
+  timeline_events: VulnerabilityEvent[];
+}
+
+export interface DependencySecuritySummary {
+  dependency: {
+    id: string;
+    name: string;
+    version: string;
+    license: string | null;
+    is_direct: boolean;
+    dependency_id: string;
+    files_importing_count: number;
+    ecosystem: string | null;
+  };
+  files: string[];
+  vulnerabilities: Array<{
+    osv_id: string;
+    severity: string;
+    depscore: number | null;
+    is_reachable: boolean | null;
+    epss_score: number | null;
+    cisa_kev: boolean | null;
+    fixed_versions: string[] | null;
+    suppressed: boolean;
+    risk_accepted: boolean;
+  }>;
+  version_candidates: VersionCandidate[];
+  watchtower: { status: string; analysis_data: any } | null;
+}
+
+export interface ProjectSecuritySummary {
+  project_id: string;
+  project_name: string;
+  team_id: string | null;
+  vuln_count: number;
+  critical_count: number;
+  reachable_count: number;
+  worst_depscore: number;
+  semgrep_count: number;
+  secret_count: number;
+  verified_secret_count: number;
+}
+
+export interface PaginatedResponse<T> {
+  data: T[];
+  total: number;
+  page: number;
+  per_page: number;
 }

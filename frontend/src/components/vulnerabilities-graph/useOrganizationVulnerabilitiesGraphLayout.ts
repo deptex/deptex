@@ -1,19 +1,24 @@
 import { useMemo } from 'react';
 import { type Node, type Edge, MarkerType } from '@xyflow/react';
-import { buildDepAndVulnNodesAndEdges, getWorstSeverity } from './useVulnerabilitiesGraphLayout';
+import { buildDepAndVulnNodesAndEdges, getWorstSeverity, getWorstDepscore } from './useVulnerabilitiesGraphLayout';
 import type { VulnGraphDepNode, WorstSeverity } from './useVulnerabilitiesGraphLayout';
 import { VULN_CENTER_NODE_WIDTH, VULN_CENTER_NODE_HEIGHT } from './useVulnerabilitiesGraphLayout';
 import { VULN_PROJECT_NODE_WIDTH, VULN_PROJECT_NODE_HEIGHT } from './VulnProjectNode';
 import type { ProjectWithGraphData } from './useTeamVulnerabilitiesGraphLayout';
 
 export const ORG_CENTER_ID = 'org-center';
-/** Synthetic team id for projects with no owner_team_id and no team_ids (display team = org). */
+/** @deprecated Synthetic team id for ungrouped projects. Phase 6 places these directly at team ring level. */
 export const UNGROUPED_TEAM_ID = 'org-ungrouped';
 
 export interface TeamWithProjectsData {
   teamId: string;
   teamName: string;
   projects: (ProjectWithGraphData & { worstSeverity?: WorstSeverity })[];
+}
+
+/** Projects not assigned to any team; rendered at the same ring as team nodes. */
+export interface UngroupedProject extends ProjectWithGraphData {
+  worstSeverity?: WorstSeverity;
 }
 
 function getHandlePair(angle: number): { sourceHandle: string; targetHandle: string } {
@@ -32,7 +37,8 @@ export function useOrganizationVulnerabilitiesGraphLayout(
   orgName: string,
   teamsWithProjects: TeamWithProjectsData[],
   orgAvatarUrl?: string | null,
-  showOnlyReachable = false
+  showOnlyReachable = false,
+  ungroupedProjects?: UngroupedProject[]
 ): { nodes: Node[]; edges: Edge[] } {
   return useMemo(() => {
     const nodes: Node[] = [];
@@ -42,9 +48,15 @@ export function useOrganizationVulnerabilitiesGraphLayout(
 
     const grayStroke = 'rgba(100, 116, 139, 0.4)';
 
-    const allDepNodes: VulnGraphDepNode[] = teamsWithProjects.flatMap((team) =>
-      team.projects.flatMap((p) => p.graphDepNodes)
-    );
+    const realTeams = teamsWithProjects.filter(t => t.teamId !== UNGROUPED_TEAM_ID);
+    const ungrouped = ungroupedProjects ?? teamsWithProjects
+      .filter(t => t.teamId === UNGROUPED_TEAM_ID)
+      .flatMap(t => t.projects);
+
+    const allDepNodes: VulnGraphDepNode[] = [
+      ...realTeams.flatMap((team) => team.projects.flatMap((p) => p.graphDepNodes)),
+      ...ungrouped.flatMap((p) => p.graphDepNodes),
+    ];
     const orgIsHealthy = allDepNodes.length === 0 || getWorstSeverity(allDepNodes) === 'none';
 
     nodes.push({
@@ -65,13 +77,74 @@ export function useOrganizationVulnerabilitiesGraphLayout(
       selectable: false,
     });
 
-    if (teamsWithProjects.length === 0) return { nodes, edges };
+    const totalRingItems = realTeams.length + ungrouped.length;
+    if (totalRingItems === 0) return { nodes, edges };
 
     const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-    const teamRingRadius = Math.max(900, 700 + teamsWithProjects.length * 100);
+    const teamRingRadius = Math.max(900, 700 + totalRingItems * 100);
 
-    teamsWithProjects.forEach((teamData, teamIdx) => {
-      const teamAngle = teamIdx * goldenAngle;
+    let ringIdx = 0;
+
+    // Place ungrouped projects directly at team ring level (no "No Team" intermediary)
+    ungrouped.forEach((proj) => {
+      const angle = ringIdx * goldenAngle;
+      ringIdx++;
+      const projectNodeId = `project-${proj.projectId}`;
+      const px = centerX + Math.cos(angle) * teamRingRadius;
+      const py = centerY + Math.sin(angle) * teamRingRadius;
+      const projectWorstSeverity = proj.worstSeverity ?? getWorstSeverity(proj.graphDepNodes);
+
+      nodes.push({
+        id: projectNodeId,
+        type: 'vulnProjectNode',
+        position: {
+          x: px - VULN_PROJECT_NODE_WIDTH / 2,
+          y: py - VULN_PROJECT_NODE_HEIGHT / 2,
+        },
+        data: {
+          projectName: proj.projectName,
+          projectId: proj.projectId,
+          framework: proj.framework ?? undefined,
+          worstSeverity: projectWorstSeverity,
+        },
+        draggable: true,
+        selectable: false,
+      });
+
+      const { sourceHandle, targetHandle } = getHandlePair(angle);
+      edges.push({
+        id: `edge-org-${projectNodeId}`,
+        source: ORG_CENTER_ID,
+        target: projectNodeId,
+        sourceHandle,
+        targetHandle,
+        type: 'default',
+        style: { stroke: grayStroke, strokeWidth: 1.2 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: grayStroke, width: 12, height: 12 },
+      });
+
+      if (proj.graphDepNodes.length > 0) {
+        const prefix = `project-${proj.projectId}-`;
+        const namespacedDepNodes: VulnGraphDepNode[] = proj.graphDepNodes.map((d) => ({
+          ...d,
+          id: prefix + d.id,
+          parentId: d.parentId === 'project' ? projectNodeId : prefix + d.parentId,
+        }));
+        const sub = buildDepAndVulnNodesAndEdges(projectNodeId, namespacedDepNodes, showOnlyReachable);
+        sub.nodes.forEach((n) => {
+          nodes.push({ ...n, position: { x: (n.position.x ?? 0) + px, y: (n.position.y ?? 0) + py } } as Node);
+        });
+        sub.edges.forEach((e) => {
+          const edge: Edge = { ...e, id: prefix + e.id } as Edge;
+          if (e.source === projectNodeId && e.sourceHandle) edge.sourceHandle = 'source-' + e.sourceHandle;
+          edges.push(edge);
+        });
+      }
+    });
+
+    realTeams.forEach((teamData) => {
+      const teamAngle = ringIdx * goldenAngle;
+      ringIdx++;
       const teamNodeId = `team-${teamData.teamId}`;
       const tx = centerX + Math.cos(teamAngle) * teamRingRadius;
       const ty = centerY + Math.sin(teamAngle) * teamRingRadius;
@@ -150,20 +223,6 @@ export function useOrganizationVulnerabilitiesGraphLayout(
           markerEnd: { type: MarkerType.ArrowClosed, color: grayStroke, width: 12, height: 12 },
         });
 
-        if (teamData.teamId === UNGROUPED_TEAM_ID) {
-          const { sourceHandle: orgSourceHandle, targetHandle: orgTargetHandle } = getHandlePair(projAngle);
-          edges.push({
-            id: `edge-org-direct-${projectNodeId}`,
-            source: ORG_CENTER_ID,
-            target: projectNodeId,
-            sourceHandle: orgSourceHandle,
-            targetHandle: orgTargetHandle,
-            type: 'default',
-            style: { stroke: grayStroke, strokeWidth: 1.2 },
-            markerEnd: { type: MarkerType.ArrowClosed, color: grayStroke, width: 12, height: 12 },
-          });
-        }
-
         if (proj.graphDepNodes.length === 0) return;
 
         const prefix = `project-${proj.projectId}-`;
@@ -197,5 +256,5 @@ export function useOrganizationVulnerabilitiesGraphLayout(
     });
 
     return { nodes, edges };
-  }, [orgName, teamsWithProjects, showOnlyReachable]);
+  }, [orgName, teamsWithProjects, showOnlyReachable, ungroupedProjects]);
 }
