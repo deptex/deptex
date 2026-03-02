@@ -2,7 +2,8 @@ import { supabase } from '../../../backend/src/lib/supabase';
 
 export interface CreateActivityParams {
   organization_id: string;
-  user_id: string;
+  /** When omitted (e.g. policy-engine automated fetch), activity is skipped - DB requires user_id. */
+  user_id?: string;
   activity_type: string;
   description: string;
   metadata?: Record<string, any>;
@@ -12,6 +13,7 @@ export interface CreateActivityParams {
  * Create an activity log entry
  */
 export async function createActivity(params: CreateActivityParams): Promise<void> {
+  if (!params.user_id) return; // Skip when no user (e.g. policy-engine automated fetch)
   try {
     const { error } = await supabase
       .from('activities')
