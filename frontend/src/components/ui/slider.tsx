@@ -3,9 +3,10 @@ import * as SliderPrimitive from "@radix-ui/react-slider"
 
 import { cn } from "../../lib/utils"
 
+type SliderPrimitiveProps = React.ComponentPropsWithoutRef<typeof SliderPrimitive.Root>;
 const Slider = React.forwardRef<
   React.ElementRef<typeof SliderPrimitive.Root>,
-  React.ComponentPropsWithoutRef<typeof SliderPrimitive.Root> & {
+  Omit<SliderPrimitiveProps, 'value' | 'onValueChange'> & {
     /** Single value mode - pass number for value and (n: number) => void for onValueChange */
     value?: number
     onValueChange?: (value: number) => void

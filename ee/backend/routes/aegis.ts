@@ -942,7 +942,6 @@ router.post('/stream', async (req: AuthRequest, res) => {
           updated_at: new Date().toISOString(),
           context_type: aegisContext?.type || undefined,
           context_id: aegisContext?.id || undefined,
-          total_tokens_used: supabase.rpc ? undefined : undefined,
         })
         .eq('id', currentThreadId);
 
@@ -1079,7 +1078,7 @@ router.post('/v2/stream', async (req: AuthRequest, res) => {
     res.setHeader('X-Thread-Id', resolvedThreadId);
 
     // Use AI SDK data stream response
-    const response = result.toDataStreamResponse();
+    const response = result.toTextStreamResponse();
     
     // Forward the response
     res.status(response.status || 200);

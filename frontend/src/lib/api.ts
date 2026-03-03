@@ -48,6 +48,23 @@ export interface RolePermissions {
   view_all_teams_and_projects?: boolean;
 }
 
+/** Default all-false RolePermissions for tests and initial state. */
+export const DEFAULT_ROLE_PERMISSIONS: RolePermissions = {
+  view_settings: false,
+  manage_billing: false,
+  view_activity: false,
+  manage_compliance: false,
+  interact_with_aegis: false,
+  manage_aegis: false,
+  view_members: false,
+  add_members: false,
+  edit_roles: false,
+  edit_permissions: false,
+  kick_members: false,
+  manage_teams_and_projects: false,
+  manage_integrations: false,
+};
+
 export interface OrganizationRole {
   id: string;
   organization_id: string;
@@ -112,7 +129,7 @@ export interface OrganizationAssetTier {
   updated_at: string;
 }
 
-export type CiCdProvider = 'github' | 'gitlab' | 'bitbucket' | 'slack' | 'discord' | 'jira' | 'linear' | 'asana' | 'custom_notification' | 'custom_ticketing' | 'email';
+export type CiCdProvider = 'github' | 'gitlab' | 'bitbucket' | 'slack' | 'discord' | 'jira' | 'linear' | 'asana' | 'pagerduty' | 'custom_notification' | 'custom_ticketing' | 'email';
 
 export interface CiCdConnection {
   id: string;
@@ -240,6 +257,14 @@ export const api = {
   _supplyChainPrefetchCache: new Map<string, Promise<[SupplyChainResponse, ProjectEffectivePolicies | null]>>(),
   _watchtowerPrefetchCache: new Map<string, Promise<[WatchtowerSummary | null, WatchtowerCommitsResponse]>>(),
   _notesPrefetchCache: new Map<string, Promise<{ notes: DependencyNote[] }>>(),
+
+  async authenticatedGet<T = unknown>(url: string): Promise<T> {
+    return fetchWithAuth(url);
+  },
+
+  async authenticatedPost<T = unknown>(url: string, body?: object): Promise<T> {
+    return fetchWithAuth(url, { method: 'POST', body: body ? JSON.stringify(body) : undefined });
+  },
 
   async getOrganizations(): Promise<Organization[]> {
     const orgs = await fetchWithAuth('/api/organizations');
@@ -515,7 +540,7 @@ export const api = {
   async createTeamNotificationRule(
     organizationId: string,
     teamId: string,
-    data: { name: string; triggerType: string; minDepscoreThreshold?: number; customCode?: string; destinations: any[]; createdByName?: string }
+    data: { name: string; triggerType: string; minDepscoreThreshold?: number; customCode?: string; destinations: any[]; createdByName?: string; dryRun?: boolean }
   ): Promise<OrganizationNotificationRule> {
     return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/notification-rules`, {
       method: 'POST',
@@ -527,7 +552,7 @@ export const api = {
     organizationId: string,
     teamId: string,
     ruleId: string,
-    data: Partial<{ name: string; triggerType: string; minDepscoreThreshold?: number; customCode?: string; destinations: any[] }>
+    data: Partial<{ name: string; triggerType: string; minDepscoreThreshold?: number; customCode?: string; destinations: any[]; dryRun?: boolean }>
   ): Promise<OrganizationNotificationRule> {
     return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/notification-rules/${ruleId}`, {
       method: 'PUT',
@@ -678,6 +703,7 @@ export const api = {
       customCode?: string;
       destinations: Array<{ integrationType: string; targetId: string }>;
       createdByName?: string;
+      dryRun?: boolean;
     }
   ): Promise<OrganizationNotificationRule> {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/notification-rules`, {
@@ -696,6 +722,7 @@ export const api = {
       minDepscoreThreshold?: number;
       customCode?: string;
       destinations?: Array<{ integrationType: string; targetId: string }>;
+      dryRun?: boolean;
     }
   ): Promise<OrganizationNotificationRule> {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/notification-rules/${ruleId}`, {
@@ -839,6 +866,7 @@ export const api = {
       customCode?: string;
       destinations: Array<{ integrationType: string; targetId: string }>;
       createdByName?: string;
+      dryRun?: boolean;
     }
   ): Promise<OrganizationNotificationRule> {
     return fetchWithAuth(`/api/organizations/${organizationId}/notification-rules`, {
@@ -856,6 +884,7 @@ export const api = {
       minDepscoreThreshold?: number;
       customCode?: string;
       destinations?: Array<{ integrationType: string; targetId: string }>;
+      dryRun?: boolean;
     }
   ): Promise<OrganizationNotificationRule> {
     return fetchWithAuth(`/api/organizations/${organizationId}/notification-rules/${ruleId}`, {
@@ -1357,7 +1386,7 @@ export const api = {
   async updateProjectRepositorySettings(
     organizationId: string,
     projectId: string,
-    data: { pull_request_comments_enabled?: boolean; auto_fix_vulnerabilities_enabled?: boolean }
+    data: { pull_request_comments_enabled?: boolean; auto_fix_vulnerabilities_enabled?: boolean; sync_frequency?: string }
   ): Promise<ProjectRepository> {
     const result = await fetchWithAuth(
       `/api/organizations/${organizationId}/projects/${projectId}/repositories/settings`,
@@ -2717,7 +2746,7 @@ export interface Project {
 export interface ProjectRepository {
   repo_full_name: string;
   default_branch: string;
-  status: 'pending' | 'initializing' | 'extracting' | 'analyzing' | 'finalizing' | 'ready' | 'error';
+  status: 'pending' | 'initializing' | 'extracting' | 'analyzing' | 'finalizing' | 'ready' | 'error' | 'repo_deleted' | 'access_revoked' | 'installation_removed';
   dependencies_count?: number;
   analyzing_count?: number;
   package_json_path?: string;
@@ -2726,6 +2755,8 @@ export interface ProjectRepository {
   pull_request_comments_enabled?: boolean;
   auto_fix_vulnerabilities_enabled?: boolean;
   connected_at?: string | null;
+  updated_at?: string;
+  sync_frequency?: string;
 }
 
 export interface OpenssfCheck {

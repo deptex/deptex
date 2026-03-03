@@ -1,25 +1,89 @@
-Create schedule:
+================================================================================
+QStash: CONSOLIDATED CRON SCHEDULES (5 total)
+================================================================================
+Use only these 5 schedules to stay under QStash limits and minimize messages.
+Each dispatcher runs multiple jobs internally (1 QStash message per run).
 
+Auth for all: Header  X-Internal-Api-Key: YOUR_INTERNAL_API_KEY
+(same value as INTERNAL_API_KEY in backend .env).
 
+Base URL: https://YOUR_BACKEND_HOST   (e.g. https://api.deptex.dev)
 
+--------------------------------------------------------------------------------
+1. EVERY 5 MINUTES  (recovery + Aegis automations)
+--------------------------------------------------------------------------------
+Cron:  */5 * * * *
+URL:   POST https://YOUR_BACKEND_HOST/api/internal/cron/every-5-min
 
+Runs:  extraction-jobs recovery, fix-jobs recovery, watchtower-jobs recovery,
+       Aegis check-due-automations.
 
-Cron expression: 0 * * * * (hourly at minute 0).
+--------------------------------------------------------------------------------
+2. EVERY 15 MINUTES  (notifications + SLA)
+--------------------------------------------------------------------------------
+Cron:  */15 * * * *
+URL:   POST https://YOUR_BACKEND_HOST/api/internal/cron/every-15-min
 
+Runs:  reconcile-stuck-notifications, sla-check (EE).
+       (In CE mode these return 404 and are skipped.)
 
+--------------------------------------------------------------------------------
+3. HOURLY
+--------------------------------------------------------------------------------
+Cron:  0 * * * *
+URL:   POST https://YOUR_BACKEND_HOST/api/internal/cron/hourly
 
-Destination URL:
-POST https://YOUR_BACKEND_HOST/api/workers/reset-sync-counters
+Runs:  vuln-check, reset-sync-counters, learning check-feedback-prompts,
+       digest-check (EE).
 
+--------------------------------------------------------------------------------
+4. DAILY at 4 AM UTC
+--------------------------------------------------------------------------------
+Cron:  0 4 * * *
+URL:   POST https://YOUR_BACKEND_HOST/api/internal/cron/daily
 
+Runs:  Aegis snapshot-debt, learning recompute-patterns,
+       notification-cleanup (EE), watchtower-daily-poll.
 
-Headers:
-X-Internal-Api-Key: YOUR_INTERNAL_API_KEY
-(same value as INTERNAL_API_KEY in backend).
+--------------------------------------------------------------------------------
+5. EVERY 6 HOURS
+--------------------------------------------------------------------------------
+Cron:  0 */6 * * *
+URL:   POST https://YOUR_BACKEND_HOST/api/internal/cron/every-6h
 
+Runs:  scheduled-extraction (daily/weekly sync_frequency projects).
 
-and for https://api.deptex.dev/api/internal/sla-check
+================================================================================
+MESSAGES PER DAY (approx)
+================================================================================
+  every-5-min:  288
+  every-15-min:  96
+  hourly:        24
+  daily:           1
+  every-6h:       4
+  -----------------
+  Total:        413  (vs 10+ separate schedules with more messages if each had its own cron)
 
+================================================================================
+LEGACY / MANUAL TRIGGERS
+================================================================================
+The original endpoints still exist for one-off or manual calls. You do NOT need
+to create separate QStash schedules for them if you use the 5 dispatchers above.
 
-Pattern recomputation	0 3 * * * (daily 3AM UTC)	POST https://<your-backend>/api/internal/learning/recompute-patterns	Aggregates fix outcomes into strategy patterns, backfills missing outcomes
-Feedback prompts	0 * * * * (hourly)	POST https://<your-backend>/api/internal/learning/check-feedback-prompts	Sends in-app notifications asking users to rate merged fix quality
+  POST /api/internal/recovery/extraction-jobs
+  POST /api/internal/recovery/fix-jobs
+  POST /api/internal/recovery/watchtower-jobs
+  POST /api/internal/aegis/check-due-automations
+  POST /api/internal/aegis/snapshot-debt
+  POST /api/internal/vuln-check
+  POST /api/internal/learning/recompute-patterns
+  POST /api/internal/learning/check-feedback-prompts
+  POST /api/workers/reset-sync-counters
+  POST /api/workers/scheduled-extraction
+  POST /api/workers/watchtower-daily-poll
+  POST /api/workers/reconcile-stuck-notifications
+  POST /api/workers/digest-check
+  POST /api/workers/notification-cleanup
+  POST /api/internal/sla-check
+
+================================================================================

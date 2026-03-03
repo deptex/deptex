@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import React from 'react';
+import { DEFAULT_ROLE_PERMISSIONS } from '../lib/api';
 
 vi.mock('../../lib/supabase', () => ({
   supabase: {
@@ -101,7 +102,7 @@ describe('Phase 7B: Aegis frontend', () => {
       render(
         <AegisManagementConsole
           organizationId="org-1"
-          userPermissions={{ manage_aegis: true, interact_with_aegis: true }}
+          userPermissions={{ ...DEFAULT_ROLE_PERMISSIONS, manage_aegis: true, interact_with_aegis: true }}
         />
       );
       const configButtons = screen.getAllByRole('button', { name: /configuration/i });
@@ -114,7 +115,7 @@ describe('Phase 7B: Aegis frontend', () => {
       render(
         <AegisManagementConsole
           organizationId="org-1"
-          userPermissions={{ manage_aegis: true }}
+          userPermissions={{ ...DEFAULT_ROLE_PERMISSIONS, manage_aegis: true }}
         />
       );
       expect(screen.getByRole('button', { name: 'Read-Only' })).toBeInTheDocument();
@@ -125,7 +126,7 @@ describe('Phase 7B: Aegis frontend', () => {
     it('99: Automations tab label is present', async () => {
       const { AegisManagementConsole } = await import('../components/settings/AegisManagementConsole');
       render(
-        <AegisManagementConsole organizationId="org-1" userPermissions={{ manage_aegis: true }} />
+        <AegisManagementConsole organizationId="org-1" userPermissions={{ ...DEFAULT_ROLE_PERMISSIONS, manage_aegis: true }} />
       );
       expect(screen.getByText(/automations/i)).toBeInTheDocument();
     });
@@ -133,7 +134,7 @@ describe('Phase 7B: Aegis frontend', () => {
     it('Audit Log tab is present', async () => {
       const { AegisManagementConsole } = await import('../components/settings/AegisManagementConsole');
       render(
-        <AegisManagementConsole organizationId="org-1" userPermissions={{ manage_aegis: true }} />
+        <AegisManagementConsole organizationId="org-1" userPermissions={{ ...DEFAULT_ROLE_PERMISSIONS, manage_aegis: true }} />
       );
       expect(screen.getByText(/audit log/i)).toBeInTheDocument();
     });

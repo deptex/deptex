@@ -9,7 +9,7 @@ registerAegisTool('createScheduledJob', {
   requiredRbacPermissions: ['manage_aegis'],
 }, tool({
   description: 'Create a scheduled automation that runs Aegis with a specific prompt on a cron schedule. Supports templates like daily security briefing, weekly digest, etc.',
-  parameters: z.object({
+  inputSchema: z.object({
     organizationId: z.string().uuid(),
     name: z.string(),
     prompt: z.string().describe('The prompt Aegis will execute on each run'),
@@ -56,7 +56,7 @@ registerAegisTool('updateScheduledJob', {
   requiredRbacPermissions: ['manage_aegis'],
 }, tool({
   description: 'Update an existing scheduled automation.',
-  parameters: z.object({
+  inputSchema: z.object({
     automationId: z.string().uuid(),
     name: z.string().optional(),
     prompt: z.string().optional(),
@@ -99,7 +99,7 @@ registerAegisTool('deleteScheduledJob', {
   requiredRbacPermissions: ['manage_aegis'],
 }, tool({
   description: 'Delete a scheduled automation.',
-  parameters: z.object({
+  inputSchema: z.object({
     automationId: z.string().uuid(),
   }),
   execute: async ({ automationId }) => {

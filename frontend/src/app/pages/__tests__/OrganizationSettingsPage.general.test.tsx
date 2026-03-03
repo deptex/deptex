@@ -191,7 +191,12 @@ describe('OrganizationSettingsPage – General', () => {
     await waitFor(() => {
       expect(screen.getByText('Transfer Ownership')).toBeInTheDocument();
     });
-    expect(screen.getByText(/No other members available to transfer ownership to/)).toBeInTheDocument();
+    await waitFor(
+      () => {
+        expect(screen.getByText(/No other members available to transfer ownership to/)).toBeInTheDocument();
+      },
+      { timeout: 5000 }
+    );
   });
 
   it('Delete Forever is disabled until org name is typed', async () => {

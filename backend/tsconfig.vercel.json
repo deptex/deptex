@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "incremental": true,
+    "tsBuildInfoFile": "./.tsbuildinfo.vercel",
+    "types": ["node"]
+  },
+  "exclude": ["node_modules", "dist", "**/__tests__/**", "**/__mocks__/**", "src/test", "../ee"]
+}

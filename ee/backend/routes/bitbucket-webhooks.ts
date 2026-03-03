@@ -309,7 +309,7 @@ async function handleBitbucketPushEvent(payload: any): Promise<void> {
           extraction_triggered: isAffected && row.sync_frequency === 'on_commit',
           provider: 'bitbucket',
           provider_url: commitInfo.links?.html?.href,
-        }, { onConflict: 'project_id,sha' }).catch(() => {});
+        }, { onConflict: 'project_id,sha' }).then(() => {}, () => {});
       }
 
       await supabase.from('project_repositories').update({

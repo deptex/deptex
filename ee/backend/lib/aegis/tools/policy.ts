@@ -13,7 +13,7 @@ registerAegisTool(
   { category: 'policy', permissionLevel: 'safe', requiredRbacPermissions: [] },
   tool({
     description: 'Get organization policies. Returns package policy, project status, and PR check policy summaries.',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
     }),
     execute: async ({ organizationId }) => {
@@ -38,7 +38,7 @@ registerAegisTool(
   { category: 'policy', permissionLevel: 'safe', requiredRbacPermissions: [] },
   tool({
     description: 'Get specific policy code by type (package_policy, project_status, pr_check).',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       codeType: codeTypeSchema,
     }),
@@ -61,7 +61,7 @@ registerAegisTool(
   { category: 'policy', permissionLevel: 'moderate', requiredRbacPermissions: ['manage_compliance'] },
   tool({
     description: 'Create or update a policy. Upserts into the appropriate organization policy table.',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       codeType: codeTypeSchema,
       code: z.string(),
@@ -88,7 +88,7 @@ registerAegisTool(
   { category: 'policy', permissionLevel: 'moderate', requiredRbacPermissions: ['manage_compliance'] },
   tool({
     description: 'Update policy code and record the change in organization_policy_changes.',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       codeType: codeTypeSchema,
       code: z.string(),
@@ -132,7 +132,7 @@ registerAegisTool(
   { category: 'policy', permissionLevel: 'dangerous', requiredRbacPermissions: ['manage_compliance'] },
   tool({
     description: 'Reset a policy to its default. Deletes custom code.',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       codeType: codeTypeSchema,
     }),
@@ -161,7 +161,7 @@ registerAegisTool(
   { category: 'policy', permissionLevel: 'safe', requiredRbacPermissions: [] },
   tool({
     description: 'Test a policy against a hypothetical package. Returns allowed/reasons.',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       projectId: z.string().uuid(),
       packageName: z.string(),
@@ -191,7 +191,7 @@ registerAegisTool(
   { category: 'policy', permissionLevel: 'safe', requiredRbacPermissions: ['manage_compliance'] },
   tool({
     description: 'Generate policy code from a natural language description. Returns the generated code as a string for the LLM to present.',
-    parameters: z.object({
+    inputSchema: z.object({
       description: z.string(),
     }),
     execute: async ({ description }) => {

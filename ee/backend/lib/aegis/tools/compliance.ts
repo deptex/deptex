@@ -9,7 +9,7 @@ registerAegisTool(
   { category: 'compliance', permissionLevel: 'safe', requiredRbacPermissions: [] },
   tool({
     description: 'Get compliance summary for a project. Counts policy violations from project_dependencies.policy_result.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
     }),
     execute: async ({ projectId }) => {
@@ -45,7 +45,7 @@ registerAegisTool(
   { category: 'compliance', permissionLevel: 'safe', requiredRbacPermissions: [] },
   tool({
     description: 'Return a link or path to the SBOM JSON for a project from Supabase Storage.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
     }),
     execute: async ({ projectId }) => {
@@ -76,7 +76,7 @@ registerAegisTool(
   { category: 'compliance', permissionLevel: 'moderate', requiredRbacPermissions: ['manage_compliance'] },
   tool({
     description: 'Generate a VEX (Vulnerability Exploitability eXchange) document. Unreachable vulns -> not_affected, reachable -> affected.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
       osvIds: z.array(z.string()).optional(),
     }),
@@ -111,7 +111,7 @@ registerAegisTool(
   { category: 'compliance', permissionLevel: 'safe', requiredRbacPermissions: [] },
   tool({
     description: 'Get the license notice (THIRD-PARTY-NOTICES) for a project. Reuses cached logic.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
     }),
     execute: async ({ projectId }) => {
@@ -174,7 +174,7 @@ registerAegisTool(
   { category: 'compliance', permissionLevel: 'moderate', requiredRbacPermissions: ['manage_compliance'] },
   tool({
     description: 'Bundle SBOM + VEX + license notice into an audit package and store in Supabase Storage.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
       framework: z.string().optional(),
     }),

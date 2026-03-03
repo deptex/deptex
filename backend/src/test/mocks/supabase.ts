@@ -1,7 +1,14 @@
 
-// Helper to create a chainable mock for Supabase
-export const createMockSupabase = () => {
+// Table-aware registry: responses keyed by table name so route call order doesn't matter
+export type TableRegistry = Record<string, {
+  single?: { data: any; error: any };
+  then?: { data: any; error: any };
+  maybeSingle?: { data: any; error: any };
+}>;
+
+export const createMockSupabase = (registry: TableRegistry = {}) => {
   const queryBuilder: any = {
+    _table: '' as string,
     select: jest.fn().mockReturnThis(),
     insert: jest.fn().mockReturnThis(),
     update: jest.fn().mockReturnThis(),
@@ -9,22 +16,27 @@ export const createMockSupabase = () => {
     eq: jest.fn().mockReturnThis(),
     neq: jest.fn().mockReturnThis(),
     in: jest.fn().mockReturnThis(),
-    single: jest.fn(), // Should return promise
-    maybeSingle: jest.fn(), // Should return promise
+    is: jest.fn().mockReturnThis(),
+    gt: jest.fn().mockReturnThis(),
+    single: jest.fn().mockImplementation(function (this: any) {
+      const r = registry[this._table]?.single;
+      if (r !== undefined) return Promise.resolve(r);
+      return Promise.resolve({ data: null, error: null });
+    }),
+    maybeSingle: jest.fn().mockImplementation(function (this: any) {
+      const r = registry[this._table]?.maybeSingle ?? registry[this._table]?.single;
+      if (r !== undefined) return Promise.resolve(r);
+      return Promise.resolve({ data: null, error: null });
+    }),
     order: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
     upsert: jest.fn().mockReturnThis(),
-    // Make it Thenable
-    then: jest.fn((resolve, reject) => {
-      // Default behavior: resolve with empty success
-      // Tests should override this with mockImplementation
-      return Promise.resolve({ data: {}, error: null }).then(resolve, reject);
+    then: jest.fn().mockImplementation(function (this: any, resolve: any) {
+      const r = registry[this._table]?.then;
+      if (r !== undefined) return resolve(r);
+      return resolve({ data: [], error: null });
     }),
   };
-
-  // Make end-of-chain methods return a Promise resolving to data/error structure
-  queryBuilder.single.mockResolvedValue({ data: {}, error: null });
-  queryBuilder.maybeSingle.mockResolvedValue({ data: {}, error: null });
 
   const supabase = {
     auth: {
@@ -34,7 +46,10 @@ export const createMockSupabase = () => {
         listUsers: jest.fn(),
       },
     },
-    from: jest.fn().mockReturnValue(queryBuilder),
+    from: jest.fn().mockImplementation((table: string) => {
+      queryBuilder._table = table;
+      return queryBuilder;
+    }),
   };
 
   return { supabase, queryBuilder };

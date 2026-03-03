@@ -2,7 +2,7 @@ import { authenticateUser, AuthRequest } from '../auth';
 import { Response, NextFunction } from 'express';
 import { supabase } from '../../test/mocks/supabaseSingleton';
 
-jest.mock('../../lib/supabase');
+jest.mock('../../lib/supabase', () => ({ ...require('../../test/mocks/supabaseSingleton'), createUserClient: jest.fn() }));
 
 describe('Auth Middleware', () => {
   let req: Partial<AuthRequest>;

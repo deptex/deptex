@@ -1105,10 +1105,14 @@ const verifyWorkerSecret = async (req: express.Request, res: express.Response, n
   next();
 };
 
-// Middleware to verify QStash signatures
+// Middleware to verify QStash signatures or X-Internal-Api-Key (used by worker + notification endpoints)
 const verifyQStash = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const signature = req.headers['upstash-signature'] as string;
+  const internalKey = req.headers['x-internal-api-key'] as string;
+  if (internalKey && internalKey === process.env.INTERNAL_API_KEY) {
+    return next();
+  }
 
+  const signature = req.headers['upstash-signature'] as string;
   if (!signature) {
     // Allow requests without signature in dev mode (when QStash not configured)
     if (!isQStashConfigured()) {
@@ -1118,10 +1122,8 @@ const verifyQStash = async (req: express.Request, res: express.Response, next: e
   }
 
   // Use the raw body captured by express.json verify callback
-  // This is critical - QStash signs the exact raw body, not re-stringified JSON
   const rawBody = (req as any).rawBody || JSON.stringify(req.body);
   const isValid = await verifyQStashSignature(signature, rawBody);
-
   if (!isValid) {
     return res.status(401).json({ error: 'Invalid QStash signature' });
   }
@@ -1921,26 +1923,6 @@ router.post('/extract-deps', async (req: express.Request, res: express.Response)
 // ============================================================================
 // NOTIFICATION DISPATCH ENDPOINTS (Phase 9)
 // ============================================================================
-
-const verifyQStash = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const signature = req.headers['upstash-signature'] as string;
-  const internalKey = req.headers['x-internal-api-key'] as string;
-
-  if (internalKey && internalKey === process.env.INTERNAL_API_KEY) {
-    return next();
-  }
-
-  if (!signature) {
-    return res.status(401).json({ error: 'Missing signature' });
-  }
-
-  const body = (req as any).rawBody || JSON.stringify(req.body);
-  const valid = await verifyQStashSignature(signature, body);
-  if (!valid) {
-    return res.status(401).json({ error: 'Invalid signature' });
-  }
-  next();
-};
 
 router.post('/dispatch-notification', verifyQStash, async (req: express.Request, res: express.Response) => {
   const { eventId } = req.body;

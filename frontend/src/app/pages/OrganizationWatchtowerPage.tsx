@@ -45,11 +45,11 @@ export default function OrganizationWatchtowerPage() {
     if (!orgId) return;
     try {
       const [overviewRes, usageRes] = await Promise.all([
-        api.authenticatedGet(`/api/organizations/${orgId}/watchtower/overview`),
-        api.authenticatedGet(`/api/organizations/${orgId}/watchtower/package-usage`).catch(() => []),
+        api.authenticatedGet<OrgWatchtowerOverview>(`/api/organizations/${orgId}/watchtower/overview`),
+        api.authenticatedGet<PackageUsage[]>(`/api/organizations/${orgId}/watchtower/package-usage`).catch(() => []),
       ]);
       setOverview(overviewRes);
-      setPackageUsage(usageRes || []);
+      setPackageUsage(Array.isArray(usageRes) ? usageRes : []);
     } catch {
       setOverview(null);
     } finally {

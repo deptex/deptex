@@ -62,7 +62,11 @@ function mockChain(finalData: any = null, finalError: any = null) {
     limit: jest.fn().mockReturnThis(),
     maybeSingle: jest.fn().mockResolvedValue({ data: finalData, error: finalError }),
     single: jest.fn().mockResolvedValue({ data: finalData, error: finalError }),
-    then: (fn: any) => Promise.resolve(fn({ data: finalData ? [finalData] : [], error: finalError, count: finalData ? 1 : 0 })),
+    then: (fn: any) => Promise.resolve(fn({
+      data: Array.isArray(finalData) ? finalData : (finalData ? [finalData] : []),
+      error: finalError,
+      count: Array.isArray(finalData) ? finalData.length : (finalData ? 1 : 0),
+    })),
   };
   return chain;
 }

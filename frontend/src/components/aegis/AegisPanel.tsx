@@ -175,7 +175,10 @@ export function AegisPanel({
   }, [context]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = messagesEndRef.current;
+    if (el && typeof (el as HTMLElement).scrollIntoView === 'function') {
+      (el as HTMLElement).scrollIntoView({ behavior: 'smooth' });
+    }
   }, [messages, streamingContent]);
 
   useEffect(() => {

@@ -19,7 +19,7 @@ registerAegisTool(
   tool({
     description:
       'Manually declare a security incident and optionally start a response playbook. Use for zero-day CVEs, supply chain compromises, secret exposures, or compliance breaches.',
-    parameters: z.object({
+    inputSchema: z.object({
       title: z.string().describe('Short incident title'),
       severity: z.enum(['critical', 'high', 'medium']),
       incidentType: z.enum([
@@ -110,7 +110,7 @@ registerAegisTool(
   tool({
     description:
       'Get the current status of a security incident including phase, timeline, and affected scope.',
-    parameters: z.object({
+    inputSchema: z.object({
       incidentId: z.string().uuid(),
     }),
     execute: async ({ incidentId }) => {
@@ -161,7 +161,7 @@ registerAegisTool(
   tool({
     description:
       'List all active security incidents for the organization.',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
     }),
     execute: async ({ organizationId }) => {

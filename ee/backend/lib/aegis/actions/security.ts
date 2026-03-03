@@ -171,7 +171,11 @@ registerAction(
 
     if (!vuln) return { success: false, error: 'Vulnerability not found in project' };
 
-    const pdId = vuln.project_dependencies?.id;
+    const pdRaw = vuln.project_dependencies;
+    const pd = Array.isArray(pdRaw) ? pdRaw[0] : pdRaw;
+    const depRaw = pd?.dependencies;
+    const dep = Array.isArray(depRaw) ? depRaw[0] : depRaw;
+    const pdId = pd?.id;
     const { data: files } = await supabase
       .from('project_dependency_files')
       .select('file_path')
@@ -185,9 +189,9 @@ registerAction(
       .limit(20);
 
     return { success: true, data: {
-      package: vuln.project_dependencies?.dependencies?.name,
+      package: dep?.name,
       isReachable: vuln.is_reachable,
-      filesImporting: vuln.project_dependencies?.files_importing_count || 0,
+      filesImporting: pd?.files_importing_count || 0,
       importingFiles: (files || []).map(f => f.file_path),
       importedFunctions: (functions || []).map(f => ({ name: f.function_name, type: f.import_type })),
     }};
@@ -316,13 +320,21 @@ registerAction(
         semgrepFindings: semgrepCount ?? 0,
         secretExposures: secretCount ?? 0,
       },
-      topVulnerabilities: (topVulns || []).map(v => ({
-        osvId: v.dependency_vulnerabilities?.osv_id,
-        severity: v.dependency_vulnerabilities?.severity,
-        summary: v.dependency_vulnerabilities?.summary,
-        package: v.project_dependencies?.dependencies?.name,
-        depscore: v.depscore,
-      })),
+      topVulnerabilities: (topVulns || []).map(v => {
+        const dvRaw = v.dependency_vulnerabilities;
+        const dv = Array.isArray(dvRaw) ? dvRaw[0] : dvRaw;
+        const pdRaw = v.project_dependencies;
+        const pd = Array.isArray(pdRaw) ? pdRaw[0] : pdRaw;
+        const depRaw = pd?.dependencies;
+        const dep = Array.isArray(depRaw) ? depRaw[0] : depRaw;
+        return {
+          osvId: dv?.osv_id,
+          severity: dv?.severity,
+          summary: dv?.summary,
+          package: dep?.name,
+          depscore: v.depscore,
+        };
+      }),
     }};
   }
 );

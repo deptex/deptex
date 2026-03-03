@@ -1,3 +1,4 @@
+// supabase resolved via backend/jest.config.js moduleNameMapper -> lib-supabase-mock.js (singleton)
 import {
   runPackagePolicy,
   runProjectStatus,

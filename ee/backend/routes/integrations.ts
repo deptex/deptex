@@ -1571,7 +1571,7 @@ async function handlePushEvent(payload: any): Promise<void> {
         files_changed: (c.added?.length ?? 0) + (c.modified?.length ?? 0) + (c.removed?.length ?? 0),
         provider: 'github',
         provider_url: c.url,
-      }, { onConflict: 'project_id,sha' }).catch((err: any) => {
+      }, { onConflict: 'project_id,sha' }).then(() => {}, (err: any) => {
         console.warn('[webhook push] Commit record failed:', err?.message);
       });
     }
@@ -2084,7 +2084,7 @@ async function handlePullRequestEvent(payload: any): Promise<void> {
           check_summary: 'No dependency changes', provider: 'github', provider_url: pr?.html_url,
           base_branch: targetBranch, head_branch: pr?.head?.ref, head_sha: headSha,
           opened_at: pr?.created_at, last_checked_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-        }, { onConflict: 'project_id,pr_number,provider' }).catch(() => {});
+        }, { onConflict: 'project_id,pr_number,provider' }).then(() => {}, () => {});
         continue;
       }
 
@@ -2349,7 +2349,7 @@ async function handlePullRequestEvent(payload: any): Promise<void> {
         provider: 'github', provider_url: pr?.html_url,
         base_branch: targetBranch, head_branch: pr?.head?.ref, head_sha: headSha,
         opened_at: pr?.created_at, last_checked_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-      }, { onConflict: 'project_id,pr_number,provider' }).catch((err: any) => {
+      }, { onConflict: 'project_id,pr_number,provider' }).then(() => {}, (err: any) => {
         console.warn('[PR check] Failed to upsert PR tracking:', err?.message);
       });
 

@@ -153,9 +153,9 @@ describe('ProjectSettingsPage – Access', () => {
   it('shows Additional Members with Add Member button', async () => {
     render(<ProjectSettingsPage />);
     await waitFor(() => {
-      expect(screen.getByText('Additional Members')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Add Member/ })).toBeInTheDocument();
     });
-    expect(screen.getByRole('button', { name: /Add Member/ })).toBeInTheDocument();
+    expect(screen.getByText('Additional Members')).toBeInTheDocument();
   });
 
   it('shows direct member in list', async () => {
@@ -200,7 +200,7 @@ describe('ProjectSettingsPage – Access', () => {
     ]);
     render(<ProjectSettingsPage />);
     await waitFor(() => {
-      expect(screen.getByText('Additional Members')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Add Member/ })).toBeInTheDocument();
     });
     const addMemberBtn = screen.getByRole('button', { name: /Add Member/ });
     await userEvent.click(addMemberBtn);

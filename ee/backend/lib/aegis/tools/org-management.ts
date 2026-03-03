@@ -13,7 +13,7 @@ registerAegisTool(
   },
   tool({
     description: 'List all teams in the organization with project and member counts',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
     }),
     execute: async ({ organizationId }) => {
@@ -78,7 +78,7 @@ registerAegisTool(
   },
   tool({
     description: 'Create a new team. Default owner and member roles are auto-created. Pass createdBy to add the creator as team owner.',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       name: z.string().min(1),
       description: z.string().optional(),
@@ -132,7 +132,7 @@ registerAegisTool(
   },
   tool({
     description: 'Update a team name and/or description',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       teamId: z.string().uuid(),
       name: z.string().min(1).optional(),
@@ -169,7 +169,7 @@ registerAegisTool(
   },
   tool({
     description: 'Delete a team by ID. Projects with this team as primary team are moved to org-level (team_id set to null).',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       teamId: z.string().uuid(),
     }),
@@ -211,7 +211,7 @@ registerAegisTool(
   },
   tool({
     description: 'List all organization members with role info and user profile (name, avatar)',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
     }),
     execute: async ({ organizationId }) => {
@@ -271,7 +271,7 @@ registerAegisTool(
   },
   tool({
     description: 'Create an invitation for a new member to join the organization. Use invitedBy as the current acting user ID.',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       email: z.string().email(),
       role: z.enum(['owner', 'admin', 'member']).default('member'),
@@ -320,7 +320,7 @@ registerAegisTool(
   },
   tool({
     description: 'Remove a member from the organization',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       userId: z.string().uuid(),
     }),
@@ -356,7 +356,7 @@ registerAegisTool(
   },
   tool({
     description: 'Update a member\'s organization role (owner, admin, or member)',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       userId: z.string().uuid(),
       role: z.enum(['owner', 'admin', 'member']),

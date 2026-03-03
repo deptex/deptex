@@ -57,6 +57,7 @@ import {
   getTemplateDefinitions,
   seedPlaybookTemplates,
 } from '../../lib/incident-templates';
+import request from 'supertest';
 
 function mockChain(finalData: any = null, finalError: any = null) {
   const chain: any = {
@@ -572,7 +573,7 @@ describe('Escalation', () => {
 
     process.env.INTERNAL_API_KEY = 'test-key';
 
-    const res = await require('supertest')(app)
+    const res = await request(app)
       .post('/api/internal/incidents/escalate')
       .set('X-Internal-Api-Key', 'test-key')
       .send({ incidentId: 'inc-1', phase: 'contain' });
@@ -611,7 +612,7 @@ describe('Escalation', () => {
 
     process.env.INTERNAL_API_KEY = 'test-key';
 
-    const res = await require('supertest')(app)
+    const res = await request(app)
       .post('/api/internal/incidents/escalate')
       .set('X-Internal-Api-Key', 'test-key')
       .send({ incidentId: 'inc-1', phase: 'contain' });
@@ -922,7 +923,7 @@ describe('API Endpoints', () => {
       return mockChain(null);
     });
 
-    const res = await require('supertest')(app)
+    const res = await request(app)
       .patch('/api/organizations/org-1/incidents/inc-1/close')
       .set('Authorization', 'Bearer token')
       .send({ is_false_positive: true });
@@ -955,7 +956,7 @@ describe('API Endpoints', () => {
     app.use(express.json());
     app.use('/api/organizations', incidentsRouter);
 
-    const res = await require('supertest')(app)
+    const res = await request(app)
       .get('/api/organizations/org-1/incidents?status=active&page=1&limit=20')
       .set('Authorization', 'Bearer token');
 
@@ -998,7 +999,7 @@ describe('API Endpoints', () => {
     app.use(express.json());
     app.use('/api/organizations', incidentsRouter);
 
-    const res = await require('supertest')(app)
+    const res = await request(app)
       .get('/api/organizations/org-1/incidents/stats')
       .set('Authorization', 'Bearer token');
 

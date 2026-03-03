@@ -10,7 +10,7 @@ registerAegisTool(
   { category: 'reporting', permissionLevel: 'safe', requiredRbacPermissions: [] },
   tool({
     description: 'Generate a comprehensive security report in markdown. Aggregates vulns, semgrep, secrets, compliance for a project.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
     }),
     execute: async ({ projectId }) => {
@@ -65,7 +65,7 @@ registerAegisTool(
   { category: 'reporting', permissionLevel: 'safe', requiredRbacPermissions: [] },
   tool({
     description: 'Generate a compliance-focused report. License compliance, policy adherence, SBOM freshness.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
     }),
     execute: async ({ projectId }) => {
@@ -109,7 +109,7 @@ registerAegisTool(
   { category: 'reporting', permissionLevel: 'safe', requiredRbacPermissions: [] },
   tool({
     description: 'Generate a non-technical C-suite summary. Overall status, key metrics, trends.',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       timeRange: timeRangeSchema,
     }),
@@ -156,7 +156,7 @@ registerAegisTool(
   { category: 'reporting', permissionLevel: 'safe', requiredRbacPermissions: [] },
   tool({
     description: 'Calculate ROI metrics. Counts fixes, reports, PRs reviewed. Applies heuristic hour/dollar savings.',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       timeRange: timeRangeSchema,
     }),
@@ -206,7 +206,7 @@ registerAegisTool(
   { category: 'reporting', permissionLevel: 'safe', requiredRbacPermissions: [] },
   tool({
     description: 'Get SLA compliance report for the organization. Summary metrics and violation counts suitable for briefing or reports.',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       timeRange: z.enum(['30d', '90d', '6m', '12m']).optional(),
     }),

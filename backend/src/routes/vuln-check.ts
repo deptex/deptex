@@ -125,7 +125,7 @@ async function checkProjectVulnerabilities(
         continue;
       }
 
-      const result = await response.json();
+      const result = (await response.json()) as { results?: Array<{ vulns?: { id: string }[] }> };
       const results = result.results || [];
 
       for (let i = 0; i < results.length; i++) {

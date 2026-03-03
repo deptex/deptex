@@ -1,4 +1,5 @@
 import { supabase } from '../../../../backend/src/lib/supabase';
+import type { ToolContext } from './tools';
 
 export interface TaskPlan {
   title: string;
@@ -152,7 +153,7 @@ export async function executeTaskStep(taskId: string, stepId: string): Promise<{
   if (!task) return { success: false, hasMore: false, taskCompleted: false };
 
   try {
-    const { buildToolSet, ToolContext } = await import('./tools');
+    const { buildToolSet } = await import('./tools');
     const toolContext: ToolContext = {
       organizationId: task.organization_id,
       userId: task.user_id,

@@ -2,8 +2,7 @@ import request from 'supertest';
 import app from '../../index';
 import { supabase, queryBuilder } from '../../test/mocks/supabaseSingleton';
 
-// Mock dependencies
-jest.mock('../../lib/supabase');
+jest.mock('../../lib/supabase', () => ({ ...require('../../test/mocks/supabaseSingleton'), createUserClient: jest.fn() }));
 
 describe('Integration Routes', () => {
   const mockUser = { id: 'user-123', email: 'test@example.com' };

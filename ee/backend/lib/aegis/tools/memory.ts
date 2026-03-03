@@ -9,7 +9,7 @@ registerAegisTool('storeMemory', {
   requiredRbacPermissions: [],
 }, tool({
   description: 'Store a piece of knowledge, decision, preference, or outcome in long-term memory for future retrieval. Use this to remember important organizational context.',
-  parameters: z.object({
+  inputSchema: z.object({
     organizationId: z.string().uuid(),
     category: z.enum(['decision', 'preference', 'knowledge', 'outcome', 'note']),
     key: z.string().describe('Short descriptive key for this memory'),
@@ -62,7 +62,7 @@ registerAegisTool('queryMemory', {
   requiredRbacPermissions: [],
 }, tool({
   description: 'Search organizational memory for relevant context. Returns the most relevant memories based on semantic similarity to the query.',
-  parameters: z.object({
+  inputSchema: z.object({
     organizationId: z.string().uuid(),
     query: z.string().describe('Natural language query to search memories'),
     category: z.enum(['decision', 'preference', 'knowledge', 'outcome', 'note']).optional(),
@@ -136,7 +136,7 @@ registerAegisTool('listMemories', {
   requiredRbacPermissions: [],
 }, tool({
   description: 'List all stored memories for the organization, optionally filtered by category.',
-  parameters: z.object({
+  inputSchema: z.object({
     organizationId: z.string().uuid(),
     category: z.enum(['decision', 'preference', 'knowledge', 'outcome', 'note']).optional(),
     limit: z.number().min(1).max(100).default(20),

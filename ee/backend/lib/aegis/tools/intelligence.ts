@@ -8,7 +8,7 @@ registerAegisTool(
   { category: 'intelligence', permissionLevel: 'safe', requiredRbacPermissions: [] },
   tool({
     description: 'Get reputation score and breakdown for a package. Queries dependencies and optionally package_reputation_scores.',
-    parameters: z.object({
+    inputSchema: z.object({
       packageName: z.string(),
     }),
     execute: async ({ packageName }) => {
@@ -44,7 +44,7 @@ registerAegisTool(
   { category: 'intelligence', permissionLevel: 'safe', requiredRbacPermissions: [] },
   tool({
     description: 'Analyze upgrade options for a package. Finds safe versions considering vulnerabilities.',
-    parameters: z.object({
+    inputSchema: z.object({
       packageName: z.string(),
       currentVersion: z.string(),
     }),
@@ -86,7 +86,7 @@ registerAegisTool(
   { category: 'intelligence', permissionLevel: 'safe', requiredRbacPermissions: [] },
   tool({
     description: 'Get EPSS score data for a vulnerability across projects.',
-    parameters: z.object({
+    inputSchema: z.object({
       osvId: z.string(),
     }),
     execute: async ({ osvId }) => {
@@ -106,7 +106,7 @@ registerAegisTool(
   { category: 'intelligence', permissionLevel: 'safe', requiredRbacPermissions: [] },
   tool({
     description: 'Check if a vulnerability is in CISA KEV catalog.',
-    parameters: z.object({
+    inputSchema: z.object({
       osvId: z.string(),
     }),
     execute: async ({ osvId }) => {
@@ -131,7 +131,7 @@ registerAegisTool(
   { category: 'intelligence', permissionLevel: 'safe', requiredRbacPermissions: [] },
   tool({
     description: 'Search for packages by name. Uses ILIKE on dependencies table.',
-    parameters: z.object({
+    inputSchema: z.object({
       query: z.string(),
       ecosystem: z.string().optional(),
     }),
@@ -154,7 +154,7 @@ registerAegisTool(
   { category: 'intelligence', permissionLevel: 'safe', requiredRbacPermissions: [] },
   tool({
     description: 'Risk assessment for adding a new dependency. Aggregates reputation, vulnerabilities, license.',
-    parameters: z.object({
+    inputSchema: z.object({
       packageName: z.string(),
       ecosystem: z.string().optional(),
     }),
