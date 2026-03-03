@@ -1594,6 +1594,7 @@ export default function OrganizationSettingsPage() {
     view_activity: false,
     manage_compliance: false,
     interact_with_security_agent: false,
+    interact_with_aegis: false,
     manage_aegis: false,
     view_members: false,
     add_members: false,
@@ -1710,7 +1711,7 @@ export default function OrganizationSettingsPage() {
   // Use fresh permissions from loadRoles() if available, otherwise fallback to cached/org permissions
   // This allows the page to render immediately while loadRoles() is in progress
   const basePermissions = userRolePermissions || getCachedPermissions();
-  const effectivePermissions = isOrgOwner ? {
+  const effectivePermissions: RolePermissions | null = isOrgOwner ? {
     ...basePermissions,
     view_settings: true,
     manage_billing: true,
@@ -1718,6 +1719,7 @@ export default function OrganizationSettingsPage() {
     view_activity: true,
     manage_compliance: true,
     interact_with_security_agent: true,
+    interact_with_aegis: true,
     manage_aegis: true,
     view_members: true,
     add_members: true,
@@ -1727,7 +1729,7 @@ export default function OrganizationSettingsPage() {
     manage_teams_and_projects: true,
     manage_integrations: true,
     manage_notifications: true,
-  } : basePermissions;
+  } : (basePermissions ? { ...basePermissions, interact_with_aegis: basePermissions.interact_with_aegis ?? false } : null);
   const canManageCompliance = effectivePermissions?.manage_compliance ?? (effectivePermissions as { view_compliance?: boolean; edit_policies?: boolean } | undefined)?.view_compliance ?? (effectivePermissions as { view_compliance?: boolean; edit_policies?: boolean } | undefined)?.edit_policies;
 
   // Permission check - redirect if user doesn't have view_settings
@@ -2321,6 +2323,7 @@ export default function OrganizationSettingsPage() {
         view_activity: false,
         manage_compliance: false,
         interact_with_security_agent: false,
+        interact_with_aegis: false,
         manage_aegis: false,
         view_members: false,
         add_members: false,
@@ -2531,6 +2534,7 @@ export default function OrganizationSettingsPage() {
       view_activity: false,
       manage_compliance: false,
       interact_with_security_agent: false,
+      interact_with_aegis: false,
       manage_aegis: false,
       view_members: false,
       add_members: false,
@@ -4485,7 +4489,7 @@ export default function OrganizationSettingsPage() {
                                             <span className="text-xs">{new Date(f.created_at).toLocaleString()}</span>
                                           </div>
                                         </td>
-                                        <td className="px-4 py-3 text-foreground text-xs">{f.event_type.replaceAll('_', ' ')}</td>
+                                        <td className="px-4 py-3 text-foreground text-xs">{f.event_type.replace(/_/g, ' ')}</td>
                                         <td className="px-4 py-3 text-foreground text-xs">{f.destination_type}</td>
                                         <td className="px-4 py-3 text-red-400 text-xs truncate max-w-[300px]">{f.error_message}</td>
                                       </tr>

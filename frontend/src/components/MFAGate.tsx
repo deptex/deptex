@@ -60,7 +60,7 @@ export default function MFAGate({ children, enforceMfa = false }: MFAGateProps) 
       }
 
       // aal1 + aal1: no factors enrolled
-      if (currentLevel === 'aal1' && nextLevel === 'aal1') {
+      if (currentLevel === 'aal1' && (nextLevel as string) === 'aal1') {
         if (enforceMfa) {
           setMfaState('enroll');
         } else {

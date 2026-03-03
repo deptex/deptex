@@ -1,6 +1,8 @@
-import { Fragment } from 'react';
+import { Fragment, useState } from 'react';
 import { HelpCircle, Settings, LogOut, BookOpen, Mail, Search, Plus, ChevronRight } from 'lucide-react';
 import NotificationBell from './NotificationBell';
+import FeedbackPopover from './FeedbackPopover';
+import CommandPalette from './CommandPalette';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useUserProfile } from '../hooks/useUserProfile';
@@ -32,6 +34,7 @@ export default function AppHeader({ breadcrumb, showSearch = false, showNewOrg =
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const [commandOpen, setCommandOpen] = useState(false);
   const isOrganizationsPage = location.pathname === '/organizations';
   const isOrganizationDetailPage = location.pathname.startsWith('/organizations/') && location.pathname !== '/organizations';
   const currentOrgId = location.pathname.match(/^\/organizations\/([^/]+)/)?.[1];
@@ -81,7 +84,21 @@ export default function AppHeader({ breadcrumb, showSearch = false, showNewOrg =
 
           {/* Right side: Actions */}
           <div className="flex items-center gap-4">
-            {/* Search bar (optional) */}
+            {/* Command palette trigger (Ctrl+K) */}
+            <button
+              type="button"
+              onClick={() => setCommandOpen(true)}
+              className="hidden sm:flex items-center gap-2 px-3 py-1.5 h-9 rounded-md border border-border bg-background-card text-sm text-foreground-secondary hover:text-foreground hover:border-foreground-secondary/50 transition-colors"
+              title="Search or run a command (Ctrl+K)"
+            >
+              <Search className="h-4 w-4" />
+              <span>Search...</span>
+              <kbd className="hidden md:inline-flex items-center gap-0.5 h-4 min-w-[1.75rem] px-1.5 rounded bg-background border border-border font-mono text-[10px] text-foreground-secondary">
+                ⌘K
+              </kbd>
+            </button>
+            <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} />
+            {/* Search bar (optional, when showSearch is true) */}
             {showSearch && (
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-foreground-secondary" />
@@ -106,6 +123,9 @@ export default function AppHeader({ breadcrumb, showSearch = false, showNewOrg =
 
             {/* Notifications */}
             <NotificationBell organizationId={currentOrgId} />
+
+            {/* Feedback */}
+            <FeedbackPopover />
 
             {/* Help dropdown */}
             <DropdownMenu>

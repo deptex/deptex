@@ -313,7 +313,7 @@ async function handleGitLabPushEvent(payload: any): Promise<void> {
         files_changed: (c.added?.length ?? 0) + (c.modified?.length ?? 0) + (c.removed?.length ?? 0),
         provider: 'gitlab',
         provider_url: c.url,
-      }, { onConflict: 'project_id,sha' }).then(() => {}).catch(() => {});
+      }, { onConflict: 'project_id,sha' }).then(() => {}, () => {});
     }
 
     await supabase.from('project_repositories').update({

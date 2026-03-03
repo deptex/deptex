@@ -11,7 +11,7 @@ function getStripe(): Stripe {
   if (!stripeClient) {
     const key = process.env.STRIPE_SECRET_KEY;
     if (!key) throw new Error('STRIPE_SECRET_KEY is not configured');
-    stripeClient = new Stripe(key, { apiVersion: '2025-12-18.acacia' });
+    stripeClient = new Stripe(key, { apiVersion: '2025-02-24.acacia' });
   }
   return stripeClient;
 }
@@ -143,7 +143,7 @@ export async function getInvoices(orgId: string, limit = 10, startingAfter?: str
   const result = await stripe.invoices.list(params);
 
   return {
-    invoices: result.data.map((inv) => ({
+    invoices: result.data.map((inv: Stripe.Invoice) => ({
       id: inv.id,
       number: inv.number,
       amount_due: inv.amount_due,

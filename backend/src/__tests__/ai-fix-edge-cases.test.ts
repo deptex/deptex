@@ -1,5 +1,3 @@
-import { describe, it, expect, vi } from 'vitest';
-
 describe('Phase 7: AI Fix Edge Cases (7K)', () => {
   describe('Error Categories', () => {
     it('1. BYOK key revoked maps to auth_failed category', () => {

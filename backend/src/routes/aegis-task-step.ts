@@ -1,4 +1,5 @@
 import express from 'express';
+import { getEeModulePath } from '../lib/ee-loader';
 
 const router = express.Router();
 
@@ -24,7 +25,7 @@ router.post('/execute-task-step', async (req, res) => {
     }
 
     const { executeTaskStep, getNextPendingStep } = await import(
-      '../../../ee/backend/lib/aegis/tasks'
+      getEeModulePath('aegis/tasks')
     );
 
     const result = await executeTaskStep(taskId, stepId);
@@ -40,7 +41,7 @@ router.post('/execute-task-step', async (req, res) => {
     if (completedStep?.tool_params?.__incident_id) {
       try {
         const { handleIncidentStepCompletion } = await import(
-          '../../../ee/backend/lib/incident-engine'
+          getEeModulePath('incident-engine')
         );
         incidentHandled = await handleIncidentStepCompletion(taskId, completedStep, result);
       } catch (err) {
@@ -94,7 +95,7 @@ router.post('/check-due-automations', async (req, res) => {
     }
 
     const { checkDueAutomations } = await import(
-      '../../../ee/backend/lib/aegis/automations-engine'
+      getEeModulePath('aegis/automations-engine')
     );
 
     await checkDueAutomations();
@@ -120,7 +121,7 @@ router.post('/run-automation/:id', async (req, res) => {
     }
 
     const { runAutomation } = await import(
-      '../../../ee/backend/lib/aegis/automations-engine'
+      getEeModulePath('aegis/automations-engine')
     );
 
     await runAutomation(req.params.id);
@@ -151,7 +152,7 @@ router.post('/snapshot-debt', async (req, res) => {
 
     if (orgs?.length) {
       const { snapshotDebt } = await import(
-        '../../../ee/backend/lib/aegis/security-debt'
+        getEeModulePath('aegis/security-debt')
       );
       for (const org of orgs) {
         try {

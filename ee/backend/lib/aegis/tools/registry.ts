@@ -1,11 +1,11 @@
-import { tool, CoreTool } from 'ai';
+import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import { AegisToolMeta, ToolContext, PermissionLevel, TOOL_PROFILES } from './types';
 import { supabase } from '../../../../../backend/src/lib/supabase';
 
 interface RegisteredTool {
   meta: AegisToolMeta;
-  aiTool: CoreTool<any, any>;
+  aiTool: Tool<any, any>;
 }
 
 const toolStore = new Map<string, RegisteredTool>();
@@ -13,7 +13,7 @@ const toolStore = new Map<string, RegisteredTool>();
 export function registerAegisTool(
   name: string,
   meta: AegisToolMeta,
-  aiTool: CoreTool<any, any>,
+  aiTool: Tool<any, any>,
 ) {
   toolStore.set(name, { meta, aiTool });
 }
@@ -62,7 +62,7 @@ async function checkToolPermission(
 ): Promise<{ allowed: boolean; reason?: string; requiresApproval?: boolean }> {
   if (meta.permissionLevel === 'safe') return { allowed: true };
 
-  if (context.operatingMode === 'readonly' && meta.permissionLevel !== 'safe') {
+  if (context.operatingMode === 'readonly') {
     return { allowed: false, reason: 'Organization is in read-only mode.' };
   }
 
@@ -133,20 +133,21 @@ async function logToolExecution(
 export function buildToolSet(
   context: ToolContext,
   messageHint?: string,
-): Record<string, CoreTool<any, any>> {
+): Record<string, Tool<any, any>> {
   const profiles = resolveActiveProfiles(context, messageHint);
   const activeNames = getActiveToolNames(profiles);
-  const tools: Record<string, CoreTool<any, any>> = {};
+  const tools: Record<string, Tool<any, any>> = {};
 
   for (const [name, registered] of toolStore) {
     if (!activeNames.has(name)) continue;
 
-    const original = registered.aiTool;
+    const original = registered.aiTool as any;
+    const inputSchema = original.inputSchema ?? original.parameters;
 
     tools[name] = tool({
-      description: (original as any).description,
-      parameters: (original as any).parameters,
-      execute: async (params: any) => {
+      description: original.description,
+      inputSchema,
+      execute: async (params: any, _options?: any) => {
         const perm = await checkToolPermission(name, registered.meta, context);
         if (!perm.allowed) {
           return JSON.stringify({ error: perm.reason, blocked: true });

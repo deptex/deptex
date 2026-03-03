@@ -6537,8 +6537,8 @@ router.patch('/:id/projects/:projectId/dependencies/:dependencyId/watching', asy
               projectDependencyId: dependencyId,
               currentVersion: depDetails.version,
             },
-            organizationId: orgId,
-            dependencyId: depDetails.dependency_id,
+            organizationId,
+            dependencyId: dependencyIdForWatch,
           });
           if (!queueResult.success) {
             console.warn(`Failed to queue Watchtower job for ${depDetails.name}: ${queueResult.error}`);

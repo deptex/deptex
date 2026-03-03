@@ -59,6 +59,7 @@ jest.mock('../../lib/rate-limit', () => ({
 }));
 
 
+let aegisTableRows: any[] = [];
 function setupSupabaseForOrgMember() {
   mockFrom.mockImplementation((table: string) => {
     if (table === 'organization_members') {
@@ -68,7 +69,7 @@ function setupSupabaseForOrgMember() {
       return chainableQuery(membershipData ? { permissions: rolePermissions } : null, null);
     }
     if (table === 'aegis_org_settings' || table === 'aegis_tasks' || table === 'aegis_task_steps' || table === 'aegis_tool_executions' || table === 'aegis_approval_requests') {
-      return chainableQuery(Array.isArray(mockFrom._lastResult) ? mockFrom._lastResult : [], null, 0);
+      return chainableQuery(Array.isArray(aegisTableRows) ? aegisTableRows : [], null, 0);
     }
     if (table === 'projects') {
       return chainableQuery([]);

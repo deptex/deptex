@@ -26,9 +26,14 @@ export default function SSOCallbackPage() {
 
     const verify = async () => {
       try {
+        const email = searchParams.get('email');
         const { error } = tokenHash
           ? await supabase.auth.verifyOtp({ token_hash: tokenHash, type })
-          : await supabase.auth.verifyOtp({ token: token!, type });
+          : await supabase.auth.verifyOtp(
+              type === 'email' && email
+                ? { token: token!, type, email }
+                : ({ token: token!, type } as Parameters<typeof supabase.auth.verifyOtp>[0])
+            );
         if (error) {
           setErrorMessage(error.message);
           setStatus('error');

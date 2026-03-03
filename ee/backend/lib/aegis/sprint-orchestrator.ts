@@ -96,7 +96,7 @@ export async function confirmInteractiveSprint(
   selectedCandidates: SprintCandidate[],
 ): Promise<{ taskId: string }> {
   const plan = buildSprintPlan(
-    { organizationId, userId, mode: 'auto' },
+    { organizationId, userId },
     selectedCandidates
   );
   const taskId = await createTask(organizationId, userId, null, plan);
@@ -187,16 +187,20 @@ async function discoverVulnerabilityCandidates(
 
   const results: SprintCandidate[] = [];
   for (const v of vulns) {
-    const pd = v.project_dependencies;
-    const dep = pd?.dependencies;
+    const pdRaw = v.project_dependencies;
+    const pd = Array.isArray(pdRaw) ? pdRaw[0] : pdRaw;
+    const depRaw = pd?.dependencies;
+    const dep = Array.isArray(depRaw) ? depRaw[0] : depRaw;
+    const projRaw = pd?.projects;
+    const proj = Array.isArray(projRaw) ? projRaw[0] : projRaw;
     const strategy = organizationId
       ? await determineFixStrategyWithRecommendations(v, dep, organizationId)
       : determineFixStrategy(v, dep);
     results.push({
       type: 'vulnerability' as const,
       id: v.id,
-      projectId: pd?.projects?.id,
-      projectName: pd?.projects?.name || 'Unknown',
+      projectId: proj?.id,
+      projectName: proj?.name || 'Unknown',
       severity: v.severity || 'medium',
       depscore: v.depscore,
       isReachable: v.is_reachable || false,

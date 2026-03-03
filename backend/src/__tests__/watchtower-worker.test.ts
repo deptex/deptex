@@ -3,10 +3,12 @@
  * Covers scenarios W1–W14 and E from test.md.
  */
 
-// Mock environment so the module can be imported without Redis
+// Mock environment so the module can be imported without Redis or real Supabase
 process.env.NODE_ENV = 'test';
 process.env.UPSTASH_REDIS_URL = '';
 process.env.UPSTASH_REDIS_TOKEN = '';
+process.env.SUPABASE_URL = process.env.SUPABASE_URL || 'https://test.supabase.co';
+process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'test-service-role-key';
 
 // ── Mock all external dependencies BEFORE importing the module ──────────────
 // Use explicit factories to prevent loading real modules with problematic deps (oxc-parser ESM)

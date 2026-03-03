@@ -5,7 +5,7 @@
 
 import express from 'express';
 import { supabase } from '../../../backend/src/lib/supabase';
-import { authenticateUser } from '../../../backend/src/middleware/auth';
+import { authenticateUser, AuthRequest } from '../../../backend/src/middleware/auth';
 import { recommendStrategies, getDashboardData } from '../lib/learning/recommendation-engine';
 import { recomputePatterns } from '../lib/learning/pattern-engine';
 
@@ -25,7 +25,7 @@ async function checkOrgMember(userId: string, orgId: string): Promise<{ isMember
 }
 
 // GET /api/organizations/:id/learning/recommendations
-router.get('/:id/learning/recommendations', authenticateUser, async (req, res) => {
+router.get('/:id/learning/recommendations', authenticateUser, async (req: AuthRequest, res) => {
   try {
     const orgId = req.params.id;
     const { isMember, permissions } = await checkOrgMember(req.user!.id, orgId);
@@ -48,7 +48,7 @@ router.get('/:id/learning/recommendations', authenticateUser, async (req, res) =
 });
 
 // GET /api/organizations/:id/learning/dashboard
-router.get('/:id/learning/dashboard', authenticateUser, async (req, res) => {
+router.get('/:id/learning/dashboard', authenticateUser, async (req: AuthRequest, res) => {
   try {
     const orgId = req.params.id;
     const { isMember, permissions } = await checkOrgMember(req.user!.id, orgId);
@@ -67,7 +67,7 @@ router.get('/:id/learning/dashboard', authenticateUser, async (req, res) => {
 });
 
 // GET /api/organizations/:id/learning/outcomes
-router.get('/:id/learning/outcomes', authenticateUser, async (req, res) => {
+router.get('/:id/learning/outcomes', authenticateUser, async (req: AuthRequest, res) => {
   try {
     const orgId = req.params.id;
     const { isMember, permissions } = await checkOrgMember(req.user!.id, orgId);
@@ -108,7 +108,7 @@ router.get('/:id/learning/outcomes', authenticateUser, async (req, res) => {
 });
 
 // POST /api/organizations/:id/learning/feedback
-router.post('/:id/learning/feedback', authenticateUser, async (req, res) => {
+router.post('/:id/learning/feedback', authenticateUser, async (req: AuthRequest, res) => {
   try {
     const orgId = req.params.id;
     const { isMember } = await checkOrgMember(req.user!.id, orgId);

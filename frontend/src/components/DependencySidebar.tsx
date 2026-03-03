@@ -12,6 +12,7 @@ interface DependencySidebarProps {
   notesSidebarOpen?: boolean;
   onNotesClick?: () => void;
   notesCount?: number;
+  watchtowerStatus?: 'safe' | 'warning' | 'alert' | 'unsafe' | 'not-good' | null;
 }
 
 const navItems = [
@@ -19,7 +20,7 @@ const navItems = [
   { id: 'supply-chain', label: 'Supply Chain', path: 'supply-chain', icon: GitBranch },
 ];
 
-function DependencySidebar({ organizationId, projectId, dependencyId, dependencyName, notesSidebarOpen = false, onNotesClick, notesCount = 0 }: DependencySidebarProps) {
+function DependencySidebar({ organizationId, projectId, dependencyId, dependencyName, notesSidebarOpen = false, onNotesClick, notesCount = 0, watchtowerStatus }: DependencySidebarProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [isHovered, setIsHovered] = useState(false);

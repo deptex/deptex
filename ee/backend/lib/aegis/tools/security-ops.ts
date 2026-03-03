@@ -13,7 +13,7 @@ registerAegisTool(
   },
   tool({
     description: 'Get full detail for a specific vulnerability by OSV ID. Joins dependency_vulnerabilities with project_dependency_vulnerabilities.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
       osvId: z.string(),
     }),
@@ -89,7 +89,7 @@ registerAegisTool(
   },
   tool({
     description: 'Mark a vulnerability as suppressed. Use suppressedBy (userId) - caller injects from context.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
       osvId: z.string(),
       reason: z.string().optional(),
@@ -137,7 +137,7 @@ registerAegisTool(
   },
   tool({
     description: 'Accept risk for a vulnerability. Use acceptedBy (userId) - caller injects from context.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
       osvId: z.string(),
       reason: z.string(),
@@ -186,7 +186,7 @@ registerAegisTool(
   },
   tool({
     description: 'Revert suppression for a vulnerability.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
       osvId: z.string(),
     }),
@@ -228,7 +228,7 @@ registerAegisTool(
   },
   tool({
     description: 'Trigger AI fix via the Aider engine. Calls queue_fix_job RPC. For vulnerability: targetId=osvId. For semgrep: targetId=semgrepFindingId. For secret: targetId=secretFindingId.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
       fixType: z.enum(['vulnerability', 'semgrep', 'secret']),
       strategy: z.string(),
@@ -275,7 +275,7 @@ registerAegisTool(
   },
   tool({
     description: 'Get fix job statuses for a project. Optional status filter: queued, running, completed, failed, cancelled.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
       status: z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']).optional(),
     }),
@@ -312,7 +312,7 @@ registerAegisTool(
   },
   tool({
     description: 'Create a security sprint (batch fix task). Creates aegis_tasks record with fix steps. Use triggeredBy (userId) - caller injects from context.',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       projectId: z.string().uuid().optional(),
       maxFixes: z.number().optional(),
@@ -423,7 +423,7 @@ registerAegisTool(
   },
   tool({
     description: 'Get sprint/task status from aegis_tasks and aegis_task_steps.',
-    parameters: z.object({
+    inputSchema: z.object({
       taskId: z.string().uuid(),
     }),
     execute: async ({ taskId }) => {
@@ -458,7 +458,7 @@ registerAegisTool(
   },
   tool({
     description: 'Cross-project blast radius for a package. Query project_dependencies across all org projects for a given dependency name.',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       packageName: z.string(),
     }),
@@ -529,7 +529,7 @@ registerAegisTool(
   },
   tool({
     description: 'Pin/ban a package version across all org projects. Inserts into banned_versions. bumpToVersion optional (defaults to latest); bannedBy (userId) - caller injects from context.',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       packageName: z.string(),
       version: z.string(),
@@ -589,7 +589,7 @@ registerAegisTool(
   },
   tool({
     description: 'Get SLA compliance summary for the organization or a specific project. Returns counts (on_track, warning, breached) and lists of breached/approaching items.',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       projectId: z.string().uuid().optional(),
       severity: z.enum(['critical', 'high', 'medium', 'low']).optional(),

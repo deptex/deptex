@@ -80,7 +80,7 @@ afterAll(() => {
 
 // Mock ghsa to avoid real API and speed up tests
 jest.mock('../ghsa', () => ({
-  fetchGHSABatchVulnerabilities: jest.fn().mockResolvedValue(new Map()),
+  fetchGhsaVulnerabilitiesBatch: jest.fn().mockResolvedValue(new Map()),
 }));
 
 import { runDependencyRefresh, runPollSweep } from '../watchtower-poll';

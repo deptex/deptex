@@ -4,7 +4,7 @@
  */
 
 import express from 'express';
-import { authenticateUser } from '../../../backend/src/middleware/auth';
+import { authenticateUser, AuthRequest } from '../../../backend/src/middleware/auth';
 import { supabase } from '../../../backend/src/lib/supabase';
 
 const router = express.Router();
@@ -44,7 +44,7 @@ async function requireMembership(userId: string, orgId: string): Promise<boolean
 // ─── Incidents ───────────────────────────────────────────────────────────────
 
 // GET /api/organizations/:id/incidents
-router.get('/:id/incidents', authenticateUser, async (req, res) => {
+router.get('/:id/incidents', authenticateUser, async (req: AuthRequest, res) => {
   try {
     const orgId = req.params.id;
     if (!(await requireMembership(req.user!.id, orgId))) {
@@ -85,7 +85,7 @@ router.get('/:id/incidents', authenticateUser, async (req, res) => {
 });
 
 // GET /api/organizations/:id/incidents/stats
-router.get('/:id/incidents/stats', authenticateUser, async (req, res) => {
+router.get('/:id/incidents/stats', authenticateUser, async (req: AuthRequest, res) => {
   try {
     const orgId = req.params.id;
     if (!(await requireMembership(req.user!.id, orgId))) {
@@ -153,7 +153,7 @@ router.get('/:id/incidents/stats', authenticateUser, async (req, res) => {
 });
 
 // GET /api/organizations/:id/incidents/:incidentId
-router.get('/:id/incidents/:incidentId', authenticateUser, async (req, res) => {
+router.get('/:id/incidents/:incidentId', authenticateUser, async (req: AuthRequest, res) => {
   try {
     const orgId = req.params.id;
     if (!(await requireMembership(req.user!.id, orgId))) {
@@ -188,7 +188,7 @@ router.get('/:id/incidents/:incidentId', authenticateUser, async (req, res) => {
 });
 
 // POST /api/organizations/:id/incidents (manual declaration)
-router.post('/:id/incidents', authenticateUser, async (req, res) => {
+router.post('/:id/incidents', authenticateUser, async (req: AuthRequest, res) => {
   try {
     const orgId = req.params.id;
     if (!(await hasPermission(req.user!.id, orgId, 'manage_incidents'))) {
@@ -256,7 +256,7 @@ router.post('/:id/incidents', authenticateUser, async (req, res) => {
 });
 
 // PATCH /api/organizations/:id/incidents/:incidentId/resolve
-router.patch('/:id/incidents/:incidentId/resolve', authenticateUser, async (req, res) => {
+router.patch('/:id/incidents/:incidentId/resolve', authenticateUser, async (req: AuthRequest, res) => {
   try {
     const orgId = req.params.id;
     if (!(await hasPermission(req.user!.id, orgId, 'manage_incidents'))) {
@@ -276,7 +276,7 @@ router.patch('/:id/incidents/:incidentId/resolve', authenticateUser, async (req,
 });
 
 // PATCH /api/organizations/:id/incidents/:incidentId/close
-router.patch('/:id/incidents/:incidentId/close', authenticateUser, async (req, res) => {
+router.patch('/:id/incidents/:incidentId/close', authenticateUser, async (req: AuthRequest, res) => {
   try {
     const orgId = req.params.id;
     if (!(await hasPermission(req.user!.id, orgId, 'manage_incidents'))) {
@@ -312,7 +312,7 @@ router.patch('/:id/incidents/:incidentId/close', authenticateUser, async (req, r
 });
 
 // PATCH /api/organizations/:id/incidents/:incidentId/abort
-router.patch('/:id/incidents/:incidentId/abort', authenticateUser, async (req, res) => {
+router.patch('/:id/incidents/:incidentId/abort', authenticateUser, async (req: AuthRequest, res) => {
   try {
     const orgId = req.params.id;
     if (!(await hasPermission(req.user!.id, orgId, 'manage_incidents'))) {
@@ -376,7 +376,7 @@ router.patch('/:id/incidents/:incidentId/abort', authenticateUser, async (req, r
 });
 
 // POST /api/organizations/:id/incidents/:incidentId/notes
-router.post('/:id/incidents/:incidentId/notes', authenticateUser, async (req, res) => {
+router.post('/:id/incidents/:incidentId/notes', authenticateUser, async (req: AuthRequest, res) => {
   try {
     const orgId = req.params.id;
     if (!(await requireMembership(req.user!.id, orgId))) {
@@ -413,7 +413,7 @@ router.post('/:id/incidents/:incidentId/notes', authenticateUser, async (req, re
 });
 
 // GET /api/organizations/:id/incidents/:incidentId/post-mortem
-router.get('/:id/incidents/:incidentId/post-mortem', authenticateUser, async (req, res) => {
+router.get('/:id/incidents/:incidentId/post-mortem', authenticateUser, async (req: AuthRequest, res) => {
   try {
     const orgId = req.params.id;
     if (!(await requireMembership(req.user!.id, orgId))) {
@@ -444,7 +444,7 @@ router.get('/:id/incidents/:incidentId/post-mortem', authenticateUser, async (re
 // ─── Playbooks ───────────────────────────────────────────────────────────────
 
 // GET /api/organizations/:id/playbooks
-router.get('/:id/playbooks', authenticateUser, async (req, res) => {
+router.get('/:id/playbooks', authenticateUser, async (req: AuthRequest, res) => {
   try {
     const orgId = req.params.id;
     if (!(await requireMembership(req.user!.id, orgId))) {
@@ -466,7 +466,7 @@ router.get('/:id/playbooks', authenticateUser, async (req, res) => {
 });
 
 // POST /api/organizations/:id/playbooks
-router.post('/:id/playbooks', authenticateUser, async (req, res) => {
+router.post('/:id/playbooks', authenticateUser, async (req: AuthRequest, res) => {
   try {
     const orgId = req.params.id;
     if (!(await hasPermission(req.user!.id, orgId, 'manage_incidents'))) {
@@ -502,7 +502,7 @@ router.post('/:id/playbooks', authenticateUser, async (req, res) => {
 });
 
 // PUT /api/organizations/:id/playbooks/:playbookId
-router.put('/:id/playbooks/:playbookId', authenticateUser, async (req, res) => {
+router.put('/:id/playbooks/:playbookId', authenticateUser, async (req: AuthRequest, res) => {
   try {
     const orgId = req.params.id;
     if (!(await hasPermission(req.user!.id, orgId, 'manage_incidents'))) {
@@ -535,7 +535,7 @@ router.put('/:id/playbooks/:playbookId', authenticateUser, async (req, res) => {
 });
 
 // DELETE /api/organizations/:id/playbooks/:playbookId
-router.delete('/:id/playbooks/:playbookId', authenticateUser, async (req, res) => {
+router.delete('/:id/playbooks/:playbookId', authenticateUser, async (req: AuthRequest, res) => {
   try {
     const orgId = req.params.id;
     if (!(await hasPermission(req.user!.id, orgId, 'manage_incidents'))) {
@@ -565,7 +565,7 @@ router.delete('/:id/playbooks/:playbookId', authenticateUser, async (req, res) =
 });
 
 // POST /api/organizations/:id/playbooks/:playbookId/dry-run
-router.post('/:id/playbooks/:playbookId/dry-run', authenticateUser, async (req, res) => {
+router.post('/:id/playbooks/:playbookId/dry-run', authenticateUser, async (req: AuthRequest, res) => {
   try {
     const orgId = req.params.id;
     if (!(await hasPermission(req.user!.id, orgId, 'manage_incidents'))) {

@@ -9,19 +9,19 @@
 /*  Mocks — hoisted before any import                                 */
 /* ------------------------------------------------------------------ */
 
-const mockSupabaseFrom = jest.fn();
-const mockSupabase = {
-  from: mockSupabaseFrom,
+const mockSupabaseFromAiInfra = jest.fn();
+const mockSupabaseAiInfra = {
+  from: mockSupabaseFromAiInfra,
   auth: { getUser: jest.fn() },
 };
 
 jest.mock('@supabase/supabase-js', () => ({
-  createClient: jest.fn(() => mockSupabase),
+  createClient: jest.fn(() => mockSupabaseAiInfra),
 }));
 
 jest.mock('../../../../backend/src/lib/supabase', () => ({
-  supabase: mockSupabase,
-  createUserClient: jest.fn(() => mockSupabase),
+  supabase: mockSupabaseAiInfra,
+  createUserClient: jest.fn(() => mockSupabaseAiInfra),
 }));
 
 const mockRedisIncr = jest.fn();
@@ -31,6 +31,7 @@ const mockRedisExpire = jest.fn();
 const mockRedisDecr = jest.fn();
 const mockRedisDel = jest.fn();
 const mockRedisGet = jest.fn();
+const mockRedisTtl = jest.fn();
 
 jest.mock('@upstash/redis', () => ({
   Redis: jest.fn().mockImplementation(() => ({
@@ -41,6 +42,7 @@ jest.mock('@upstash/redis', () => ({
     decr: mockRedisDecr,
     del: mockRedisDel,
     get: mockRedisGet,
+    ttl: mockRedisTtl,
   })),
 }));
 
@@ -88,7 +90,7 @@ jest.mock('@google/generative-ai', () => ({
 /*  Helpers                                                           */
 /* ------------------------------------------------------------------ */
 
-const ORG_ID = '00000000-0000-0000-0000-000000000001';
+const ORG_ID_AI_INFRA = '00000000-0000-0000-0000-000000000001';
 const USER_ID = '00000000-0000-0000-0000-000000000099';
 const PROVIDER_ID = 'prov-001';
 
@@ -115,7 +117,7 @@ function chainableQuery(finalData: any = null, finalError: any = null) {
 }
 
 function setupFrom(map: Record<string, ReturnType<typeof chainableQuery>>) {
-  mockSupabaseFrom.mockImplementation((table: string) => {
+  mockSupabaseFromAiInfra.mockImplementation((table: string) => {
     if (map[table]) return map[table];
     return chainableQuery();
   });
@@ -217,20 +219,20 @@ describe('BYOK Key Management', () => {
       organization_ai_providers: deleteQuery,
     });
 
-    const { data: threads } = await mockSupabase
+    const { data: threads } = await mockSupabaseAiInfra
       .from('aegis_chat_threads')
       .select('id')
-      .eq('organization_id', ORG_ID);
+      .eq('organization_id', ORG_ID_AI_INFRA);
 
     const hasActiveThreads = (threads?.length ?? 0) > 0;
     expect(hasActiveThreads).toBe(true);
 
-    await mockSupabase
+    await mockSupabaseAiInfra
       .from('organization_ai_providers')
       .delete()
       .eq('id', PROVIDER_ID);
 
-    expect(mockSupabaseFrom).toHaveBeenCalledWith('organization_ai_providers');
+    expect(mockSupabaseFromAiInfra).toHaveBeenCalledWith('organization_ai_providers');
   });
 
   it('5: only manage_integrations permission can add/modify/delete providers', async () => {
@@ -244,20 +246,20 @@ describe('BYOK Key Management', () => {
     });
 
     setupFrom({ organization_members: memberNoPerms });
-    const { data: noPermsResult } = await mockSupabase
+    const { data: noPermsResult } = await mockSupabaseAiInfra
       .from('organization_members')
       .select('role, permissions')
-      .eq('organization_id', ORG_ID)
+      .eq('organization_id', ORG_ID_AI_INFRA)
       .eq('user_id', USER_ID)
       .single();
 
     expect(noPermsResult.permissions.manage_integrations).toBe(false);
 
     setupFrom({ organization_members: memberWithPerms });
-    const { data: withPermsResult } = await mockSupabase
+    const { data: withPermsResult } = await mockSupabaseAiInfra
       .from('organization_members')
       .select('role, permissions')
-      .eq('organization_id', ORG_ID)
+      .eq('organization_id', ORG_ID_AI_INFRA)
       .eq('user_id', USER_ID)
       .single();
 
@@ -271,10 +273,10 @@ describe('BYOK Key Management', () => {
 
     setupFrom({ organization_ai_providers: providersQuery });
 
-    const { data: providers } = await mockSupabase
+    const { data: providers } = await mockSupabaseAiInfra
       .from('organization_ai_providers')
       .select('*')
-      .eq('organization_id', ORG_ID);
+      .eq('organization_id', ORG_ID_AI_INFRA);
 
     expect(providers).toHaveLength(1);
     expect(providers[0].is_default).toBe(true);
@@ -304,7 +306,7 @@ describe('Provider Abstraction', () => {
 
     const providerRow = {
       id: PROVIDER_ID,
-      organization_id: ORG_ID,
+      organization_id: ORG_ID_AI_INFRA,
       provider: 'openai',
       encrypted_api_key: encrypted,
       encryption_key_version: version,
@@ -317,7 +319,7 @@ describe('Provider Abstraction', () => {
     });
 
     const { getProviderForOrg } = await import('../../lib/ai/provider');
-    const provider = await getProviderForOrg(ORG_ID);
+    const provider = await getProviderForOrg(ORG_ID_AI_INFRA);
 
     expect(provider).toBeDefined();
     expect(provider.chat).toBeDefined();
@@ -347,7 +349,7 @@ describe('Provider Abstraction', () => {
     });
 
     const { getProviderForOrg } = await import('../../lib/ai/provider');
-    const provider = await getProviderForOrg(ORG_ID);
+    const provider = await getProviderForOrg(ORG_ID_AI_INFRA);
 
     expect(provider).toBeDefined();
   });
@@ -362,10 +364,10 @@ describe('Provider Abstraction', () => {
     const { getProviderForOrg } = await import('../../lib/ai/provider');
     const { AIProviderError } = await import('../../lib/ai/types');
 
-    await expect(getProviderForOrg(ORG_ID)).rejects.toThrow(AIProviderError);
+    await expect(getProviderForOrg(ORG_ID_AI_INFRA)).rejects.toThrow(AIProviderError);
 
     try {
-      await getProviderForOrg(ORG_ID);
+      await getProviderForOrg(ORG_ID_AI_INFRA);
     } catch (err: any) {
       expect(err.code).toBe('auth_failed');
       expect(err.message).toContain('No AI provider configured');
@@ -402,7 +404,7 @@ describe('Provider Abstraction', () => {
 describe('Background Monitoring', () => {
   it('12: vuln-check processes due projects and updates last_vuln_check_at', async () => {
     const projectsQuery = chainableQuery([
-      { id: 'proj-1', organization_id: ORG_ID, last_vuln_check_at: null, vuln_check_frequency: 12 },
+      { id: 'proj-1', organization_id: ORG_ID_AI_INFRA, last_vuln_check_at: null, vuln_check_frequency: 12 },
     ]);
     const depsQuery = chainableQuery([]);
     const updateQuery = chainableQuery({ id: 'proj-1' });
@@ -413,7 +415,7 @@ describe('Background Monitoring', () => {
     });
 
     // Simulate the vuln-check logic
-    const { data: dueProjects } = await mockSupabase
+    const { data: dueProjects } = await mockSupabaseAiInfra
       .from('projects')
       .select('id, organization_id, last_vuln_check_at, vuln_check_frequency')
       .or('last_vuln_check_at.is.null')
@@ -424,12 +426,12 @@ describe('Background Monitoring', () => {
     expect(dueProjects[0].last_vuln_check_at).toBeNull();
 
     setupFrom({ projects: updateQuery });
-    await mockSupabase
+    await mockSupabaseAiInfra
       .from('projects')
       .update({ last_vuln_check_at: new Date().toISOString() })
       .eq('id', 'proj-1');
 
-    expect(mockSupabaseFrom).toHaveBeenCalledWith('projects');
+    expect(mockSupabaseFromAiInfra).toHaveBeenCalledWith('projects');
   });
 
   it('13: new vulnerability detected triggers detected event in project_vulnerability_events', async () => {
@@ -443,11 +445,11 @@ describe('Background Monitoring', () => {
       project_dependency_id: 'pd-1',
     };
 
-    await mockSupabase
+    await mockSupabaseAiInfra
       .from('project_vulnerability_events')
       .upsert(eventPayload, { onConflict: 'project_id,osv_id,event_type', ignoreDuplicates: true });
 
-    expect(mockSupabaseFrom).toHaveBeenCalledWith('project_vulnerability_events');
+    expect(mockSupabaseFromAiInfra).toHaveBeenCalledWith('project_vulnerability_events');
   });
 
   it('14: EPSS score change > 10% triggers epss_changed event', async () => {
@@ -466,7 +468,7 @@ describe('Background Monitoring', () => {
     setupFrom({ project_vulnerability_events: eventsUpsert });
 
     if (delta > 0.10) {
-      await mockSupabase
+      await mockSupabaseAiInfra
         .from('project_vulnerability_events')
         .upsert({
           project_id: 'proj-1',
@@ -477,7 +479,7 @@ describe('Background Monitoring', () => {
         }, { onConflict: 'project_id,osv_id,event_type', ignoreDuplicates: false });
     }
 
-    expect(mockSupabaseFrom).toHaveBeenCalledWith('project_vulnerability_events');
+    expect(mockSupabaseFromAiInfra).toHaveBeenCalledWith('project_vulnerability_events');
   });
 
   it('15: endpoint stops processing when approaching timeout (90s elapsed)', () => {
@@ -505,24 +507,35 @@ describe('Background Monitoring', () => {
 
 describe('Rate Limits and Logging', () => {
   it('16: tier 1 analyze-usage blocked after 5 calls per package per day', async () => {
+    const origUrl = process.env.UPSTASH_REDIS_URL;
+    const origToken = process.env.UPSTASH_REDIS_TOKEN;
+    process.env.UPSTASH_REDIS_URL = process.env.UPSTASH_REDIS_URL || 'https://test.upstash.io';
+    process.env.UPSTASH_REDIS_TOKEN = process.env.UPSTASH_REDIS_TOKEN || 'test-token';
     jest.resetModules();
-
-    // First 5 calls succeed
-    mockRedisIncr.mockResolvedValueOnce(1);
+    mockRedisIncr.mockReset();
     mockRedisExpire.mockResolvedValue(true);
+    mockRedisTtl.mockResolvedValue(86400);
 
-    const { checkRateLimit } = await import('../../lib/rate-limit');
+    try {
+      // First call: incr returns 1 (allowed)
+      mockRedisIncr.mockResolvedValueOnce(1);
+      const { checkRateLimit } = await import('../../lib/rate-limit');
+      const firstResult = await checkRateLimit(`ai:usage-analysis:${ORG_ID_AI_INFRA}:lodash`, 5, 86_400);
+      expect(firstResult.allowed).toBe(true);
 
-    const firstResult = await checkRateLimit(`ai:usage-analysis:${ORG_ID}:lodash`, 5, 86_400);
-    expect(firstResult.allowed).toBe(true);
-
-    // 6th call blocked
-    mockRedisIncr.mockResolvedValueOnce(6);
-    jest.resetModules();
-    const mod2 = await import('../../lib/rate-limit');
-    const sixthResult = await mod2.checkRateLimit(`ai:usage-analysis:${ORG_ID}:lodash`, 5, 86_400);
-    expect(sixthResult.allowed).toBe(false);
-    expect(sixthResult.remaining).toBe(0);
+      // 6th call: incr returns 6 (blocked)
+      mockRedisIncr.mockResolvedValue(6);
+      jest.resetModules();
+      const mod2 = await import('../../lib/rate-limit');
+      const sixthResult = await mod2.checkRateLimit(`ai:usage-analysis:${ORG_ID_AI_INFRA}:lodash`, 5, 86_400);
+      expect(sixthResult.allowed).toBe(false);
+      expect(sixthResult.remaining).toBe(0);
+    } finally {
+      if (origUrl !== undefined) process.env.UPSTASH_REDIS_URL = origUrl;
+      else delete process.env.UPSTASH_REDIS_URL;
+      if (origToken !== undefined) process.env.UPSTASH_REDIS_TOKEN = origToken;
+      else delete process.env.UPSTASH_REDIS_TOKEN;
+    }
   });
 
   it('17: tier 2 monthly cost cap blocks calls when budget exceeded', async () => {
@@ -538,7 +551,7 @@ describe('Rate Limits and Logging', () => {
     const { checkMonthlyCostCap } = await import('../../lib/ai/cost-cap');
 
     const result = await checkMonthlyCostCap(
-      ORG_ID,
+      ORG_ID_AI_INFRA,
       'gpt-4o',
       [{ role: 'user', content: 'Analyze all dependencies' }],
       monthlyCap,
@@ -558,7 +571,7 @@ describe('Rate Limits and Logging', () => {
     const { logAIUsage } = await import('../../lib/ai/logging');
 
     await logAIUsage({
-      organizationId: ORG_ID,
+      organizationId: ORG_ID_AI_INFRA,
       userId: USER_ID,
       feature: 'aegis_chat',
       tier: 'byok',
@@ -569,7 +582,7 @@ describe('Rate Limits and Logging', () => {
       success: true,
     });
 
-    expect(mockSupabaseFrom).toHaveBeenCalledWith('ai_usage_logs');
+    expect(mockSupabaseFromAiInfra).toHaveBeenCalledWith('ai_usage_logs');
   });
 
   it('19: concurrent cost cap checks use atomic Redis INCR', async () => {
@@ -584,7 +597,7 @@ describe('Rate Limits and Logging', () => {
 
     const messages = [{ role: 'user' as const, content: 'short' }];
     const promises = incrResults.map(() =>
-      checkMonthlyCostCap(ORG_ID, 'gpt-4o-mini', messages, 100.0),
+      checkMonthlyCostCap(ORG_ID_AI_INFRA, 'gpt-4o-mini', messages, 100.0),
     );
 
     const results = await Promise.all(promises);
@@ -670,7 +683,7 @@ describe('Safety', () => {
     const { logAIUsage } = await import('../../lib/ai/logging');
 
     await logAIUsage({
-      organizationId: ORG_ID,
+      organizationId: ORG_ID_AI_INFRA,
       userId: USER_ID,
       feature: 'aegis_chat',
       tier: 'byok',
@@ -682,7 +695,7 @@ describe('Safety', () => {
       errorMessage: caughtError.message,
     });
 
-    expect(mockSupabaseFrom).toHaveBeenCalledWith('ai_usage_logs');
+    expect(mockSupabaseFromAiInfra).toHaveBeenCalledWith('ai_usage_logs');
   });
 
   it('22: encryption key version mismatch falls back to AI_ENCRYPTION_KEY_PREV for decryption', async () => {
