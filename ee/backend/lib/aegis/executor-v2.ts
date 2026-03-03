@@ -1,4 +1,4 @@
-import { streamText, CoreMessage } from 'ai';
+import { streamText, stepCountIs, type ModelMessage } from 'ai';
 import { getLanguageModelForOrg, getProviderInfoForOrg } from './llm-provider';
 import { buildToolSet, ToolContext } from './tools';
 import { supabase } from '../../../../backend/src/lib/supabase';
@@ -18,7 +18,7 @@ export interface AegisStreamConfig {
 
 export interface AegisStreamResult {
   threadId: string;
-  dataStream: ReturnType<Awaited<ReturnType<typeof streamText>>['toDataStreamResponse']>;
+  result: Awaited<ReturnType<typeof streamText>>;
 }
 
 async function getOrgSettings(organizationId: string) {
@@ -70,7 +70,7 @@ async function getOrCreateThread(
   return data!.id;
 }
 
-async function loadThreadHistory(threadId: string): Promise<CoreMessage[]> {
+async function loadThreadHistory(threadId: string): Promise<ModelMessage[]> {
   const { data: messages } = await supabase
     .from('aegis_chat_messages')
     .select('role, content, metadata')
@@ -166,7 +166,7 @@ export async function createAegisStream(config: AegisStreamConfig) {
     system: systemPrompt,
     messages: [...history, { role: 'user' as const, content: message }],
     tools,
-    maxSteps: 25,
+    stopWhen: stepCountIs(25),
     onStepFinish: async ({ toolCalls, toolResults, usage }) => {
       if (toolCalls?.length) {
         for (const tc of toolCalls) {
@@ -217,8 +217,8 @@ export async function createAegisStream(config: AegisStreamConfig) {
           tier: 'byok',
           provider: providerInfo?.provider || 'unknown',
           model: providerInfo?.model || 'unknown',
-          inputTokens: usage?.promptTokens || 0,
-          outputTokens: usage?.completionTokens || 0,
+          inputTokens: usage?.inputTokens ?? 0,
+          outputTokens: usage?.outputTokens ?? 0,
           contextType: context?.type,
           contextId: context?.id,
           durationMs: 0,

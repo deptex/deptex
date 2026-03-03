@@ -35,6 +35,7 @@ lerna-debug.log*
 *.js.map
 *.d.ts.map
 backend/src/**/*.js
+!backend/src/test/mocks/lib-supabase-mock.js
 backend/src/**/*.d.ts
 backend/watchtower-*/src/**/*.js
 backend/watchtower-*/src/**/*.d.ts

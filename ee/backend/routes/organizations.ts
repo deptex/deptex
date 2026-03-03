@@ -3949,7 +3949,7 @@ router.put('/:id/notification-rules/:ruleId', async (req: AuthRequest, res) => {
         new_destinations: updated.destinations,
         changed_by_user_id: userId,
         changed_by_name: profile?.full_name || req.user!.email,
-      }).then(() => {}).catch(() => {});
+      }).then(() => {}, () => {});
     }
 
     if (error) throw error;

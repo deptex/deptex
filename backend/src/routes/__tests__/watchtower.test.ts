@@ -6,7 +6,7 @@ import request from 'supertest';
 import app from '../../index';
 import { supabase, queryBuilder } from '../../test/mocks/supabaseSingleton';
 
-jest.mock('../../lib/supabase');
+jest.mock('../../lib/supabase', () => ({ ...require('../../test/mocks/supabaseSingleton'), createUserClient: jest.fn() }));
 jest.mock('../../../../ee/backend/lib/cache', () => ({
   getWatchtowerSummaryCacheKey: jest.fn((name: string, depId?: string) => `watchtower-summary:${name}:${depId || 'none'}`),
   getCached: jest.fn().mockResolvedValue(null),

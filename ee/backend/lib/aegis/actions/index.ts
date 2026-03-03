@@ -12,6 +12,7 @@ export interface ActionDefinition {
       type: string;
       description: string;
       required?: boolean;
+      enum?: string[];
     }>;
     required?: string[];
   };

@@ -5,7 +5,7 @@ import { Redis } from '@upstash/redis';
 
 let redisClient: Redis | null = null;
 
-function getRedisClient(): Redis | null {
+export function getRedisClient(): Redis | null {
   if (!redisClient) {
     const url = process.env.UPSTASH_REDIS_URL;
     const token = process.env.UPSTASH_REDIS_TOKEN;

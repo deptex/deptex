@@ -12,7 +12,7 @@ registerAegisTool(
   },
   tool({
     description: 'Get ranked fix strategy recommendations based on historical outcomes for this organization. Call this before planning any fix to provide context-aware strategy selection.',
-    parameters: z.object({
+    inputSchema: z.object({
       ecosystem: z.string().describe('Package ecosystem (npm, pip, maven, etc.)'),
       vulnerabilityType: z.string().optional().describe('Vulnerability type from CWE (xss, sql-injection, etc.)'),
       isDirect: z.boolean().optional().describe('Whether the dependency is direct'),

@@ -387,7 +387,7 @@ export default function NotificationHistorySection({ organizationId }: Notificat
                           {/* Event type */}
                           <div className="w-[18%] pr-2">
                             <Badge className={cn('text-[11px] whitespace-nowrap', EVENT_TYPE_COLORS[d.event_type] ?? 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20')}>
-                              {EVENT_TYPE_LABELS[d.event_type] ?? d.event_type.replaceAll('_', ' ')}
+                              {EVENT_TYPE_LABELS[d.event_type] ?? d.event_type.replace(/_/g, ' ')}
                             </Badge>
                           </div>
 

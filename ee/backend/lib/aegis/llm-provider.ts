@@ -78,5 +78,5 @@ export async function getProviderInfoForOrg(organizationId: string): Promise<{
 export function getEmbeddingModel() {
   const apiKey = process.env.GOOGLE_AI_API_KEY;
   if (!apiKey) throw new Error('GOOGLE_AI_API_KEY required for memory embeddings');
-  return createGoogleGenerativeAI({ apiKey })('text-embedding-004');
+  return createGoogleGenerativeAI({ apiKey }).embeddingModel('text-embedding-004');
 }

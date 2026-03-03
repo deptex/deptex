@@ -11,7 +11,7 @@ registerAegisTool(
   { category: 'external', permissionLevel: 'moderate', requiredRbacPermissions: ['manage_integrations'] },
   tool({
     description: 'Send a message to a Slack channel. Requires Slack integration to be connected.',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       channel: z.string(),
       message: z.string(),
@@ -52,7 +52,7 @@ registerAegisTool(
   { category: 'external', permissionLevel: 'moderate', requiredRbacPermissions: ['manage_integrations'] },
   tool({
     description: 'Send an email via the configured nodemailer/SMTP.',
-    parameters: z.object({
+    inputSchema: z.object({
       to: z.string().email(),
       subject: z.string(),
       body: z.string(),
@@ -72,7 +72,7 @@ registerAegisTool(
   { category: 'external', permissionLevel: 'moderate', requiredRbacPermissions: ['manage_integrations'] },
   tool({
     description: 'Create a Jira ticket. Requires Jira integration to be connected.',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       summary: z.string(),
       description: z.string(),
@@ -133,7 +133,7 @@ registerAegisTool(
   { category: 'external', permissionLevel: 'moderate', requiredRbacPermissions: ['manage_integrations'] },
   tool({
     description: 'Create a Linear issue. Requires Linear integration to be connected.',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       title: z.string(),
       description: z.string(),
@@ -198,7 +198,7 @@ registerAegisTool(
   { category: 'external', permissionLevel: 'moderate', requiredRbacPermissions: ['manage_integrations'] },
   tool({
     description: 'Post a comment on a GitHub pull request. Requires GitHub App integration and project with connected repo.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
       prNumber: z.number(),
       body: z.string(),
@@ -241,7 +241,7 @@ registerAegisTool(
   { category: 'external', permissionLevel: 'moderate', requiredRbacPermissions: ['manage_integrations'] },
   tool({
     description: 'Send a webhook payload to a custom URL.',
-    parameters: z.object({
+    inputSchema: z.object({
       url: z.string().url(),
       payload: z.string(),
     }),

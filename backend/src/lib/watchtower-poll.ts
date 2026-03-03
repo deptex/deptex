@@ -145,27 +145,23 @@ export async function runDependencyRefresh(): Promise<{ processed: number; error
 
   let vulnsUpdated = 0;
   try {
-    const { fetchGHSABatchVulnerabilities } = await import('./ghsa');
+    const { fetchGhsaVulnerabilitiesBatch, ghsaVulnToRow } = await import('./ghsa');
     const allNames = Array.from(byName.keys());
     for (let i = 0; i < allNames.length; i += GHSA_BATCH_SIZE) {
       const chunk = allNames.slice(i, i + GHSA_BATCH_SIZE);
       await delay(DELAY_MS);
-      const vulnMap = await fetchGHSABatchVulnerabilities(chunk);
+      const vulnMap = await fetchGhsaVulnerabilitiesBatch(chunk);
       for (const [name, vulns] of vulnMap.entries()) {
         const group = byName.get(name);
         if (!group) continue;
         for (const v of vulns) {
           for (const depId of group.ids) {
+            const row = ghsaVulnToRow(depId, v) as Record<string, unknown>;
             const { error } = await supabase
               .from('dependency_vulnerabilities')
               .upsert({
-                dependency_id: depId,
-                osv_id: v.osv_id,
-                severity: v.severity,
-                summary: v.summary,
-                affected_versions: v.affected_versions,
-                fixed_versions: v.fixed_versions,
-                updated_at: new Date().toISOString(),
+                ...row,
+                modified_at: new Date().toISOString(),
               }, { onConflict: 'dependency_id,osv_id' });
             if (!error) vulnsUpdated++;
           }
@@ -176,10 +172,11 @@ export async function runDependencyRefresh(): Promise<{ processed: number; error
     console.error('[watchtower-poll] GHSA sync error:', err?.message);
   }
 
-  // Start watchtower machine if we inserted new-version jobs
+  // Start watchtower machine if we inserted new-version jobs (EE only; path is runtime so tsc does not compile ee/)
   if (newVersionJobsInserted > 0) {
     try {
-      const { startWatchtowerMachine } = require('../../../ee/backend/lib/fly-machines');
+      const { getEeModulePath } = await import('./ee-loader');
+      const { startWatchtowerMachine } = require(getEeModulePath('fly-machines'));
       await startWatchtowerMachine();
     } catch {
       // fly-machines not available in CE mode

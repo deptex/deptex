@@ -54,7 +54,7 @@ function CollapsibleSection({ title, icon: Icon, defaultOpen = false, badge, chi
   );
 }
 
-function ProjectSecurityContent({ organizationId, projectId, canManage, onNavigateToVuln }: ProjectSecurityContentProps) {
+function ProjectSecurityContent({ organizationId, projectId, canManage, onNavigateToVuln, hasByokProvider, hasAegisPermission, onOpenAegis }: ProjectSecurityContentProps) {
   const [vulns, setVulns] = useState<ProjectVulnerability[]>([]);
   const [semgrepFindings, setSemgrepFindings] = useState<SemgrepFinding[]>([]);
   const [secretFindings, setSecretFindings] = useState<SecretFinding[]>([]);

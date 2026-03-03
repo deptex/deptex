@@ -7,6 +7,7 @@ import { Switch } from '../ui/switch';
 import { Slider } from '../ui/slider';
 import { Label } from '../ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
+import { Badge } from '../ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { useToast } from '../../hooks/use-toast';
 import {
@@ -304,11 +305,11 @@ export default function SLAConfigurationSection({ organizationId }: SLAConfigura
                               <TooltipContent>Alert when this percentage of the SLA time has elapsed (e.g. 75% = 36h for 48h critical).</TooltipContent>
                             </Tooltip>
                             <Slider
-                              value={[row.warning_threshold_percent]}
+                              value={row.warning_threshold_percent}
                               min={10}
                               max={95}
                               step={5}
-                              onValueCommit={([v]) => {
+                              onValueChange={(v) => {
                                 const newRows = rows.map((r) =>
                                   r.severity === row.severity ? { ...r, warning_threshold_percent: v } : r
                                 );

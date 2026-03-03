@@ -34,7 +34,7 @@ export function useRealtimeStatus(
         setState({
           status: repo.status ?? 'not_connected',
           extractionStep: repo.extraction_step ?? null,
-          lastSynced: repo.status === 'ready' ? repo.updated_at : null,
+          lastSynced: repo.status === 'ready' ? repo.updated_at ?? null : null,
           lastError: null,
           isLoading: false,
         });

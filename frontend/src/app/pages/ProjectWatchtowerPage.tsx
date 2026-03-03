@@ -98,8 +98,8 @@ export default function ProjectWatchtowerPage() {
     if (!orgId || !projectId) return;
     try {
       const [statsRes, pkgsRes] = await Promise.all([
-        api.authenticatedGet(`/api/organizations/${orgId}/projects/${projectId}/watchtower/stats`),
-        api.authenticatedGet(`/api/organizations/${orgId}/projects/${projectId}/watchtower/packages`).catch(() => ({ packages: [], total_direct_deps: 0 })),
+        api.authenticatedGet<WatchtowerStats>(`/api/organizations/${orgId}/projects/${projectId}/watchtower/stats`),
+        api.authenticatedGet<{ packages: WatchtowerPackage[]; total_direct_deps: number }>(`/api/organizations/${orgId}/projects/${projectId}/watchtower/packages`).catch(() => ({ packages: [], total_direct_deps: 0 })),
       ]);
       setStats(statsRes);
       setPackages(pkgsRes.packages || []);

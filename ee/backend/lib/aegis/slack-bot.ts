@@ -144,7 +144,7 @@ export async function sendSlackResponse(
     return false;
   }
 
-  const data = await res.json();
+  const data = (await res.json()) as { ok?: boolean };
   if (!data.ok) {
     console.error('[Slack] chat.postMessage API error:', data);
     return false;

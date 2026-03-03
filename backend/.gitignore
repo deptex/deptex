@@ -6,10 +6,14 @@ dist/
 
 *.pem
 
+# TypeScript incremental build (Vercel)
+.tsbuildinfo.vercel
+
 # TypeScript compiled outputs and source maps
 *.js.map
 *.d.ts.map
 src/**/*.js
+!src/test/mocks/lib-supabase-mock.js
 src/**/*.d.ts
 watchtower-*/src/**/*.js
 watchtower-*/src/**/*.d.ts

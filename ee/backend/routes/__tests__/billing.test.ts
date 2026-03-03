@@ -1,48 +1,53 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-
 // ─── Mocks ───
 
+// Inline Stripe mock so CI does not depend on backend/src/__mocks__/stripe.js
+jest.mock('stripe', () => ({
+  __esModule: true,
+  default: function StripeMock() {
+    return (global as any).__STRIPE_MOCK__ ?? {};
+  },
+}));
+
 const mockSupabase = {
-  from: vi.fn().mockReturnThis(),
-  select: vi.fn().mockReturnThis(),
-  eq: vi.fn().mockReturnThis(),
-  in: vi.fn().mockReturnThis(),
-  match: vi.fn().mockReturnThis(),
-  single: vi.fn(),
-  maybeSingle: vi.fn(),
-  order: vi.fn().mockReturnThis(),
-  limit: vi.fn().mockReturnThis(),
-  lt: vi.fn().mockReturnThis(),
-  gt: vi.fn().mockReturnThis(),
-  neq: vi.fn().mockReturnThis(),
-  insert: vi.fn().mockReturnThis(),
-  update: vi.fn().mockReturnThis(),
-  rpc: vi.fn(),
+  from: jest.fn().mockReturnThis(),
+  select: jest.fn().mockReturnThis(),
+  eq: jest.fn().mockReturnThis(),
+  in: jest.fn().mockReturnThis(),
+  match: jest.fn().mockReturnThis(),
+  single: jest.fn(),
+  maybeSingle: jest.fn(),
+  order: jest.fn().mockReturnThis(),
+  limit: jest.fn().mockReturnThis(),
+  lt: jest.fn().mockReturnThis(),
+  gt: jest.fn().mockReturnThis(),
+  neq: jest.fn().mockReturnThis(),
+  insert: jest.fn().mockReturnThis(),
+  update: jest.fn().mockReturnThis(),
+  rpc: jest.fn(),
 };
 
-vi.mock('../../../../backend/src/lib/supabase', () => ({
+jest.mock('../../../../backend/src/lib/supabase', () => ({
   supabase: mockSupabase,
 }));
 
-vi.mock('../../lib/activities', () => ({
-  createActivity: vi.fn(),
+jest.mock('../../lib/activities', () => ({
+  createActivity: jest.fn(),
 }));
 
 const mockStripe = {
-  customers: { create: vi.fn() },
-  checkout: { sessions: { create: vi.fn() } },
-  subscriptions: { retrieve: vi.fn() },
-  billingPortal: { sessions: { create: vi.fn() } },
-  invoices: { list: vi.fn() },
-  webhooks: { constructEvent: vi.fn() },
+  customers: { create: jest.fn() },
+  checkout: { sessions: { create: jest.fn() } },
+  subscriptions: { retrieve: jest.fn() },
+  billingPortal: { sessions: { create: jest.fn() } },
+  invoices: { list: jest.fn() },
+  webhooks: { constructEvent: jest.fn() },
 };
 
-vi.mock('stripe', () => ({
-  default: vi.fn().mockImplementation(() => mockStripe),
-}));
+// mockStripe is set in beforeEach as global.__STRIPE_MOCK__; Stripe is mocked above
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  jest.clearAllMocks();
+  (global as any).__STRIPE_MOCK__ = mockStripe;
 
   mockSupabase.from.mockReturnThis();
   mockSupabase.select.mockReturnThis();
@@ -107,9 +112,11 @@ describe('Phase 13: Plan Limits Engine', () => {
       error: null,
     });
 
-    // Count: projects
+    // getOrgPlan: from().select().eq().single() — first select() must return chain (mockSupabase)
+    mockSupabase.select.mockReturnValueOnce(mockSupabase);
+    // getResourceCount: from().select().match() — second select() returns { match }
     mockSupabase.select.mockReturnValueOnce({
-      match: vi.fn().mockReturnValue({ count: 3, error: null }),
+      match: jest.fn().mockReturnValue({ count: 3, error: null }),
     });
 
     const result = await checkPlanLimit('org-1', 'projects');
@@ -126,8 +133,9 @@ describe('Phase 13: Plan Limits Engine', () => {
       error: null,
     });
 
+    mockSupabase.select.mockReturnValueOnce(mockSupabase);
     mockSupabase.select.mockReturnValueOnce({
-      match: vi.fn().mockReturnValue({ count: 3, error: null }),
+      match: jest.fn().mockReturnValue({ count: 3, error: null }),
     });
 
     const result = await checkPlanLimit('org-at-limit', 'projects');
@@ -144,6 +152,7 @@ describe('Phase 13: Plan Limits Engine', () => {
       error: null,
     });
 
+    mockSupabase.select.mockReturnValueOnce(mockSupabase);
     const result = await checkPlanLimit('org-enterprise', 'projects');
     expect(result.allowed).toBe(true);
     expect(result.limit).toBe(-1);
@@ -194,6 +203,7 @@ describe('Phase 13: Plan Limits Engine', () => {
     const { getOrgPlan, invalidatePlanCache } = await import('../../lib/plan-limits');
     invalidatePlanCache('org-no-plan');
 
+    mockSupabase.select.mockReturnValueOnce(mockSupabase);
     mockSupabase.single.mockResolvedValueOnce({ data: null, error: { message: 'not found' } });
 
     const plan = await getOrgPlan('org-no-plan');
@@ -210,12 +220,11 @@ describe('Phase 13: Downgrade Validation', () => {
   it('11. checkDowngradeAllowed blocks when over project limit', async () => {
     const { checkDowngradeAllowed } = await import('../../lib/plan-limits');
 
-    // Count calls: projects=15, members=3, teams=2, watchtower=1, notification_rules=1, integrations=2, automations=0
-    const counts = [15, 3, 2, 1, 1, 2, 0];
-    let callIndex = 0;
-    mockSupabase.select.mockImplementation(() => ({
-      match: vi.fn().mockReturnValue({ count: counts[callIndex++] || 0, error: null }),
-    }));
+    mockSupabase.select
+      .mockReturnValueOnce({ match: jest.fn().mockReturnValue({ count: 15, error: null }) })
+      .mockReturnValueOnce({ match: jest.fn().mockReturnValue({ count: 3, error: null }) })
+      .mockReturnValueOnce(mockSupabase);
+    mockSupabase.eq.mockImplementation(() => Promise.resolve({ count: 0, error: null }));
 
     const result = await checkDowngradeAllowed('org-1', 'free');
     expect(result.allowed).toBe(false);
@@ -225,11 +234,11 @@ describe('Phase 13: Downgrade Validation', () => {
   it('12. checkDowngradeAllowed allows when usage fits', async () => {
     const { checkDowngradeAllowed } = await import('../../lib/plan-limits');
 
-    const counts = [2, 3, 1, 1, 1, 1, 0];
-    let callIndex = 0;
-    mockSupabase.select.mockImplementation(() => ({
-      match: vi.fn().mockReturnValue({ count: counts[callIndex++] || 0, error: null }),
-    }));
+    mockSupabase.select
+      .mockReturnValueOnce({ match: jest.fn().mockReturnValue({ count: 2, error: null }) })
+      .mockReturnValueOnce({ match: jest.fn().mockReturnValue({ count: 3, error: null }) })
+      .mockReturnValueOnce(mockSupabase);
+    mockSupabase.eq.mockImplementation(() => Promise.resolve({ count: 0, error: null }));
 
     const result = await checkDowngradeAllowed('org-fits', 'free');
     expect(result.allowed).toBe(true);
@@ -299,7 +308,7 @@ describe('Phase 13: Stripe Integration', () => {
       current_period_end: Math.floor(Date.now() / 1000) + 30 * 86400,
     });
 
-    mockSupabase.update.mockReturnValueOnce({ eq: vi.fn().mockReturnValue({ error: null }) });
+    mockSupabase.update.mockReturnValueOnce({ eq: jest.fn().mockReturnValue({ error: null }) });
 
     await handleCheckoutCompleted({
       metadata: { organization_id: 'org-1' },
@@ -314,7 +323,7 @@ describe('Phase 13: Stripe Integration', () => {
   it('19. handleSubscriptionDeleted downgrades to free', async () => {
     const { handleSubscriptionDeleted } = await import('../../lib/stripe');
 
-    mockSupabase.update.mockReturnValueOnce({ eq: vi.fn().mockReturnValue({ error: null }) });
+    mockSupabase.update.mockReturnValueOnce({ eq: jest.fn().mockReturnValue({ error: null }) });
 
     await handleSubscriptionDeleted({
       metadata: { organization_id: 'org-1' },
@@ -330,7 +339,7 @@ describe('Phase 13: Stripe Integration', () => {
       data: { organization_id: 'org-1' },
       error: null,
     });
-    mockSupabase.update.mockReturnValueOnce({ eq: vi.fn().mockReturnValue({ error: null }) });
+    mockSupabase.update.mockReturnValueOnce({ eq: jest.fn().mockReturnValue({ error: null }) });
 
     await handlePaymentFailed({
       customer: 'cus_123',
@@ -347,7 +356,7 @@ describe('Phase 13: Stripe Integration', () => {
       data: { organization_id: 'org-1', subscription_status: 'past_due' },
       error: null,
     });
-    mockSupabase.update.mockReturnValueOnce({ eq: vi.fn().mockReturnValue({ error: null }) });
+    mockSupabase.update.mockReturnValueOnce({ eq: jest.fn().mockReturnValue({ error: null }) });
 
     await handlePaymentSucceeded({
       customer: 'cus_123',
@@ -369,9 +378,9 @@ describe('Phase 13: Sync Counter', () => {
 
     // First call: paid orgs past period
     mockSupabase.select.mockReturnValueOnce({
-      lt: vi.fn().mockReturnValue({
-        neq: vi.fn().mockReturnValue({
-          gt: vi.fn().mockReturnValue({
+      lt: jest.fn().mockReturnValue({
+        neq: jest.fn().mockReturnValue({
+          gt: jest.fn().mockReturnValue({
             data: [{ organization_id: 'org-1' }],
             error: null,
           }),
@@ -379,13 +388,13 @@ describe('Phase 13: Sync Counter', () => {
       }),
     });
 
-    mockSupabase.update.mockReturnValueOnce({ eq: vi.fn().mockReturnValue({ error: null }) });
+    mockSupabase.update.mockReturnValueOnce({ eq: jest.fn().mockReturnValue({ error: null }) });
 
     // Second call: free orgs past 30 days
     mockSupabase.select.mockReturnValueOnce({
-      eq: vi.fn().mockReturnValue({
-        lt: vi.fn().mockReturnValue({
-          gt: vi.fn().mockReturnValue({
+      eq: jest.fn().mockReturnValue({
+        lt: jest.fn().mockReturnValue({
+          gt: jest.fn().mockReturnValue({
             data: [],
             error: null,
           }),
@@ -412,11 +421,11 @@ describe('Phase 13: Usage Summary', () => {
       error: null,
     });
 
+    for (let i = 0; i < 7; i++) mockSupabase.select.mockReturnValueOnce(mockSupabase);
+    mockSupabase.eq.mockReturnValueOnce(mockSupabase);
     const countResults = [5, 8, 3, 4, 2, 3, 1];
     let idx = 0;
-    mockSupabase.select.mockImplementation(() => ({
-      match: vi.fn().mockReturnValue({ count: countResults[idx++] || 0, error: null }),
-    }));
+    mockSupabase.eq.mockImplementation(() => Promise.resolve({ count: countResults[idx++] ?? 0, error: null }));
 
     const summary = await getUsageSummary('org-usage');
     expect(summary.tier).toBe('pro');
@@ -497,14 +506,15 @@ describe('Phase 13: Middleware', () => {
       error: null,
     });
 
+    mockSupabase.select.mockReturnValueOnce(mockSupabase);
     mockSupabase.select.mockReturnValueOnce({
-      match: vi.fn().mockReturnValue({ count: 3, error: null }),
+      match: jest.fn().mockReturnValue({ count: 3, error: null }),
     });
 
     const middleware = requirePlanLimit('projects');
     const req = { params: { id: 'org-limit-test' }, user: { id: 'u1' } } as any;
-    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as any;
-    const next = vi.fn();
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() } as any;
+    const next = jest.fn();
 
     await middleware(req, res, next);
 
@@ -524,8 +534,8 @@ describe('Phase 13: Middleware', () => {
 
     const middleware = requirePlanFeature('aegis_chat');
     const req = { params: { id: 'org-feat-test' }, user: { id: 'u1' } } as any;
-    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as any;
-    const next = vi.fn();
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() } as any;
+    const next = jest.fn();
 
     await middleware(req, res, next);
 
@@ -544,8 +554,8 @@ describe('Phase 13: Middleware', () => {
 
     const middleware = requirePlanLimit('projects');
     const req = { params: { id: 'org-ok' }, user: { id: 'u1' } } as any;
-    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as any;
-    const next = vi.fn();
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() } as any;
+    const next = jest.fn();
 
     await middleware(req, res, next);
 
@@ -557,8 +567,8 @@ describe('Phase 13: Middleware', () => {
 
     const middleware = requirePlanLimit('projects');
     const req = { params: {}, user: { id: 'u1' } } as any;
-    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as any;
-    const next = vi.fn();
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() } as any;
+    const next = jest.fn();
 
     await middleware(req, res, next);
     expect(next).toHaveBeenCalled();
@@ -573,7 +583,7 @@ describe('Phase 13: Billing Lifecycle', () => {
   it('36. handleSubscriptionUpdated syncs tier', async () => {
     const { handleSubscriptionUpdated } = await import('../../lib/stripe');
 
-    mockSupabase.update.mockReturnValueOnce({ eq: vi.fn().mockReturnValue({ error: null }) });
+    mockSupabase.update.mockReturnValueOnce({ eq: jest.fn().mockReturnValue({ error: null }) });
 
     await handleSubscriptionUpdated({
       metadata: { organization_id: 'org-1' },
@@ -649,7 +659,7 @@ describe('Phase 13: Plan Cache', () => {
   it('43. invalidatePlanCache clears cached data', async () => {
     const { getOrgPlan, invalidatePlanCache } = await import('../../lib/plan-limits');
 
-    // First call populates cache
+    mockSupabase.select.mockReturnValueOnce(mockSupabase);
     mockSupabase.single.mockResolvedValueOnce({
       data: { plan_tier: 'pro', subscription_status: 'active', syncs_used: 10, syncs_reset_at: new Date().toISOString(), current_period_end: null, cancel_at_period_end: false, custom_limits: null },
       error: null,
@@ -657,10 +667,9 @@ describe('Phase 13: Plan Cache', () => {
     const plan1 = await getOrgPlan('org-cache');
     expect(plan1.plan_tier).toBe('pro');
 
-    // Invalidate
     invalidatePlanCache('org-cache');
 
-    // Second call should fetch again
+    mockSupabase.select.mockReturnValueOnce(mockSupabase);
     mockSupabase.single.mockResolvedValueOnce({
       data: { plan_tier: 'team', subscription_status: 'active', syncs_used: 20, syncs_reset_at: new Date().toISOString(), current_period_end: null, cancel_at_period_end: false, custom_limits: null },
       error: null,

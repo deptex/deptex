@@ -131,7 +131,7 @@ export default function ProjectOverviewPage() {
     }
   }, [realtime.status]);
 
-  const canManage = userPermissions?.manage_project === true ||
+  const canManage = userPermissions?.edit_settings === true ||
     (userPermissions as any)?.manage_teams_and_projects === true;
 
   const handleSync = async () => {

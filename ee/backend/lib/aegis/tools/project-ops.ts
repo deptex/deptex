@@ -22,7 +22,7 @@ registerAegisTool(
   safeProjectOpsMeta,
   tool({
     description: 'List all projects in the organization with basic stats (health_score, status, framework). Optionally filter by team.',
-    parameters: z.object({
+    inputSchema: z.object({
       organizationId: z.string().uuid(),
       teamId: z.string().uuid().optional(),
     }),
@@ -72,7 +72,7 @@ registerAegisTool(
   safeProjectOpsMeta,
   tool({
     description: 'Get detailed project info including dep count, vuln count, semgrep findings.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
     }),
     execute: async ({ projectId }) => {
@@ -135,7 +135,7 @@ registerAegisTool(
   safeProjectOpsMeta,
   tool({
     description: 'List project dependencies with name, version, license, is_direct.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
       isDirect: z.boolean().optional(),
       limit: z.number().min(1).max(200).default(50),
@@ -186,7 +186,7 @@ registerAegisTool(
   safeProjectOpsMeta,
   tool({
     description: 'List vulnerabilities for a project sorted by depscore. Optional filters: severity, reachabilityLevel.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
       severity: z.enum(['critical', 'high', 'medium', 'low']).optional(),
       reachabilityLevel: z.enum(['unreachable', 'module', 'function', 'data_flow', 'confirmed']).optional(),
@@ -248,7 +248,7 @@ registerAegisTool(
   safeProjectOpsMeta,
   tool({
     description: "Get dependency graph edges for a project's dependencies. Optionally filter by dependencyId.",
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
       dependencyId: z.string().uuid().optional(),
     }),
@@ -311,7 +311,7 @@ registerAegisTool(
   safeProjectOpsMeta,
   tool({
     description: 'Get reachability data-flow paths for a project. Optionally filter by dependencyId.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
       dependencyId: z.string().uuid().optional(),
       limit: z.number().min(1).max(100).default(20),
@@ -347,7 +347,7 @@ registerAegisTool(
   safeProjectOpsMeta,
   tool({
     description: 'Get comprehensive security posture: vuln counts by severity, semgrep findings, secrets, compliance rate.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
     }),
     execute: async ({ projectId }) => {
@@ -402,7 +402,7 @@ registerAegisTool(
   moderateProjectOpsMeta,
   tool({
     description: 'Trigger a re-extraction for a project. Requires manage_teams_and_projects permission.',
-    parameters: z.object({
+    inputSchema: z.object({
       projectId: z.string().uuid(),
     }),
     execute: async ({ projectId }) => {

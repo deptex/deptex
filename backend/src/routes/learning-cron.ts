@@ -6,6 +6,7 @@
 
 import express from 'express';
 import { supabase } from '../lib/supabase';
+import { getEeModulePath } from '../lib/ee-loader';
 
 const router = express.Router();
 
@@ -42,7 +43,7 @@ router.post('/recompute-patterns', async (req, res) => {
 
     try {
       const { backfillMissingOutcomes } = await import(
-        '../../../ee/backend/lib/learning/outcome-recorder'
+        getEeModulePath('learning/outcome-recorder')
       );
       backfilledCount = await backfillMissingOutcomes();
     } catch (e) {
@@ -51,7 +52,7 @@ router.post('/recompute-patterns', async (req, res) => {
 
     try {
       const { recomputeAllStaleOrgs } = await import(
-        '../../../ee/backend/lib/learning/pattern-engine'
+        getEeModulePath('learning/pattern-engine')
       );
       recomputedOrgs = await recomputeAllStaleOrgs();
     } catch (e) {
