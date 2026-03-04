@@ -3,8 +3,6 @@ import { AuthProvider } from "../contexts/AuthContext";
 import App from "./App";
 import DocsApp from "./DocsApp";
 import DocsLayout from "./pages/DocsLayout";
-import LearnPage from "./pages/docs/LearnPage";
-import LearnTutorialPage from "./pages/docs/LearnTutorialPage";
 import HelpCenterPage from "./pages/docs/HelpCenterPage";
 import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/LoginPage";
@@ -23,21 +21,13 @@ import OrganizationVulnerabilitiesPage from "./pages/OrganizationVulnerabilities
 import InvitePage from "./pages/InvitePage";
 import JoinPage from "./pages/JoinPage";
 import SettingsPage from "./pages/SettingsPage";
-import AutonomousAgentPage from "./pages/AutonomousAgentPage";
-import RepositoryTrackingPage from "./pages/RepositoryTrackingPage";
-import AnomalyDetectionPage from "./pages/AnomalyDetectionPage";
-import VulnerabilityIntelligencePage from "./pages/VulnerabilityIntelligencePage";
-import SBOMCompliancePage from "./pages/SBOMCompliancePage";
+import PlatformFeaturesPage from "./pages/PlatformFeaturesPage";
 import ProjectHealthPage from "./pages/ProjectHealthPage";
 import IntegrationsPage from "./pages/IntegrationsPage";
+import GetDemoPage from "./pages/GetDemoPage";
 import OpenSourcePage from "./pages/OpenSourcePage";
-import EngineeringTeamsPage from "./pages/solutions/EngineeringTeamsPage";
-import SecurityTeamsPage from "./pages/solutions/SecurityTeamsPage";
-import DevOpsTeamsPage from "./pages/solutions/DevOpsTeamsPage";
-import OpenSourceMaintainersPage from "./pages/solutions/OpenSourceMaintainersPage";
-import CTOLeadershipPage from "./pages/solutions/CTOLeadershipPage";
-import StartupsScaleupsPage from "./pages/solutions/StartupsScaleupsPage";
 import PricingPage from "./pages/PricingPage";
+import ContactEnterprisePage from "./pages/ContactEnterprisePage";
 import DataProcessingAgreementPage from "./pages/legal/DataProcessingAgreementPage";
 import TransferImpactAssessmentPage from "./pages/legal/TransferImpactAssessmentPage";
 import CookiePolicyPage from "./pages/legal/CookiePolicyPage";
@@ -372,44 +362,44 @@ export const router = createBrowserRouter([
         ),
       },
       {
+        path: "platform-features",
+        element: (
+          <PublicRoute>
+            <PlatformFeaturesPage />
+          </PublicRoute>
+        ),
+      },
+      {
+        path: "platform-features/:featureSlug",
+        element: (
+          <PublicRoute>
+            <PlatformFeaturesPage />
+          </PublicRoute>
+        ),
+      },
+      {
+        path: "ai-security-agent",
+        element: <Navigate to="/platform-features/ai-security-agent" replace />,
+      },
+      {
         path: "autonomous-agent",
-        element: (
-          <PublicRoute>
-            <AutonomousAgentPage />
-          </PublicRoute>
-        ),
-      },
-      {
-        path: "repository-tracking",
-        element: (
-          <PublicRoute>
-            <RepositoryTrackingPage />
-          </PublicRoute>
-        ),
-      },
-      {
-        path: "anomaly-detection",
-        element: (
-          <PublicRoute>
-            <AnomalyDetectionPage />
-          </PublicRoute>
-        ),
+        element: <Navigate to="/platform-features/ai-security-agent" replace />,
       },
       {
         path: "vulnerability-intelligence",
-        element: (
-          <PublicRoute>
-            <VulnerabilityIntelligencePage />
-          </PublicRoute>
-        ),
+        element: <Navigate to="/platform-features/vulnerability-intelligence" replace />,
       },
       {
         path: "sbom-compliance",
-        element: (
-          <PublicRoute>
-            <SBOMCompliancePage />
-          </PublicRoute>
-        ),
+        element: <Navigate to="/platform-features/customizable-compliance" replace />,
+      },
+      {
+        path: "anomaly-detection",
+        element: <Navigate to="/platform-features/advanced-upstream-insights" replace />,
+      },
+      {
+        path: "repository-tracking",
+        element: <Navigate to="/docs/quick-start" replace />,
       },
       {
         path: "project-health",
@@ -424,6 +414,14 @@ export const router = createBrowserRouter([
         element: (
           <PublicRoute>
             <IntegrationsPage />
+          </PublicRoute>
+        ),
+      },
+      {
+        path: "get-demo",
+        element: (
+          <PublicRoute>
+            <GetDemoPage />
           </PublicRoute>
         ),
       },
@@ -448,6 +446,10 @@ export const router = createBrowserRouter([
         element: <PricingPage />,
       },
       {
+        path: "contact-enterprise",
+        element: <ContactEnterprisePage />,
+      },
+      {
         path: "legal/dpa",
         element: <DataProcessingAgreementPage />,
       },
@@ -468,52 +470,8 @@ export const router = createBrowserRouter([
         ),
       },
       {
-        path: "solutions/engineering-teams",
-        element: (
-          <PublicRoute>
-            <EngineeringTeamsPage />
-          </PublicRoute>
-        ),
-      },
-      {
-        path: "solutions/security-teams",
-        element: (
-          <PublicRoute>
-            <SecurityTeamsPage />
-          </PublicRoute>
-        ),
-      },
-      {
-        path: "solutions/devops-teams",
-        element: (
-          <PublicRoute>
-            <DevOpsTeamsPage />
-          </PublicRoute>
-        ),
-      },
-      {
-        path: "solutions/open-source-maintainers",
-        element: (
-          <PublicRoute>
-            <OpenSourceMaintainersPage />
-          </PublicRoute>
-        ),
-      },
-      {
-        path: "solutions/cto-leadership",
-        element: (
-          <PublicRoute>
-            <CTOLeadershipPage />
-          </PublicRoute>
-        ),
-      },
-      {
-        path: "solutions/startups-scaleups",
-        element: (
-          <PublicRoute>
-            <StartupsScaleupsPage />
-          </PublicRoute>
-        ),
+        path: "solutions/*",
+        element: <Navigate to="/" replace />,
       },
     ],
   },
@@ -529,14 +487,6 @@ export const router = createBrowserRouter([
       {
         index: true,
         element: <Navigate to="/docs/introduction" replace />,
-      },
-      {
-        path: "learn",
-        element: <LearnPage />,
-      },
-      {
-        path: "learn/:tutorial",
-        element: <LearnTutorialPage />,
       },
       {
         path: "help",
@@ -557,6 +507,6 @@ export const router = createBrowserRouter([
     path: "*",
     element: <NotFoundRedirect />,
   },
-    ],
+  ],
   },
 ]);

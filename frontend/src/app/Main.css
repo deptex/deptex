@@ -3,6 +3,22 @@
 @tailwind utilities;
 
 @layer utilities {
+  /* Get Demo page: all inputs and textarea same color; placeholder and labels more subtle */
+  .demo-page-input,
+  input.demo-page-input,
+  textarea.demo-page-input {
+    background-color: #16191d !important;
+    border: 1px solid #2c3138;
+  }
+  .demo-page-input::placeholder,
+  input.demo-page-input::placeholder,
+  textarea.demo-page-input::placeholder {
+    color: rgba(255, 255, 255, 0.28);
+  }
+  .demo-page-label {
+    color: rgba(255, 255, 255, 0.5);
+  }
+
   /* Chrome, Safari and Opera */
   .no-scrollbar::-webkit-scrollbar {
     display: none;
@@ -81,6 +97,129 @@
 
   .border-gradient-primary > * {
     background: #0D0F12;
+  }
+
+  /* AI Security Agent / marketing section: soft green glow around text block */
+  .aegis-text-glow {
+    box-shadow: 0 0 50px -12px rgba(2, 82, 48, 0.25), 0 0 0 1px rgba(2, 82, 48, 0.08);
+  }
+
+  /* Gradient line under section headings (green to transparent) */
+  .section-heading-line {
+    height: 2px;
+    background: linear-gradient(90deg, #025230 0%, #025230 40%, transparent 100%);
+    margin-top: 0.75rem;
+    margin-bottom: 1rem;
+    border-radius: 1px;
+  }
+
+  /* Optional hero background image (when you add frontend/public/images/hero-bg.png) */
+  .hero-bg-image {
+    background-size: cover;
+    background-position: center bottom;
+    background-repeat: no-repeat;
+  }
+
+  /* Undulating wave: blurred chain of nodes, staggered animation-delay for ripple. (replaces 3 blobs, blur on container, different shift animations (fluid “shifting” effect) */
+  .wave-gradient {
+    position: absolute;
+    top: 48%;
+    left: 0;
+    width: 100%;
+    height: 200px;
+    transform: translateY(-50%);
+    z-index: 0;
+    pointer-events: none;
+    filter: blur(50px);
+  }
+
+  .wave-node {
+    position: absolute;
+    top: 50%;
+    width: 35vw;
+    height: 60px;
+    border-radius: 50px;
+    opacity: 0.8;
+    animation: undulate 6s ease-in-out infinite;
+  }
+
+  .wave-node.node-1 {
+    left: -10%;
+    background: #013d1f;
+    animation-delay: 0s;
+  }
+
+  .wave-node.node-2 {
+    left: 15%;
+    background: #025230;
+    animation-delay: -1.5s;
+  }
+
+  .wave-node.node-3 {
+    left: 40%;
+    background: #034d28;
+    animation-delay: -3s;
+  }
+
+  .wave-node.node-4 {
+    left: 65%;
+    background: #025230;
+    animation-delay: -4.5s;
+  }
+
+  .wave-node.node-5 {
+    left: 90%;
+    background: #013d1f;
+    animation-delay: -6s;
+  }
+
+  @keyframes undulate {
+    0%, 100% { transform: translateY(-50px); }
+    50% { transform: translateY(50px); }
+  }
+
+  /* Pipeline showcase: subtle pulse on the scanner node */
+  .scanner-node-pulse {
+    animation: scanner-pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes scanner-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(2, 82, 48, 0.5); }
+    50% { box-shadow: 0 0 0 8px rgba(2, 82, 48, 0); }
+  }
+
+  /* Landing bridge card: fade-in-up on load */
+  .hero-bridge-enter {
+    animation: hero-bridge-enter 0.7s ease-out forwards;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hero-bridge-enter {
+      animation: none;
+    }
+  }
+  @keyframes hero-bridge-enter {
+    from {
+      opacity: 0;
+      transform: translateY(16px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* Marquee strip for ecosystem names */
+  .hero-bridge-marquee {
+    animation: hero-bridge-marquee 35s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hero-bridge-marquee {
+      animation: none;
+    }
+  }
+  @keyframes hero-bridge-marquee {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-25%); }
   }
 }
 

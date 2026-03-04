@@ -10,9 +10,9 @@ const TIER_MAP: Record<string, number> = {
 export type PlanTier = 'free' | 'pro' | 'team' | 'enterprise';
 
 export const PLAN_LIMITS: Record<PlanTier, { projects: number; members: number; syncs: number; automations: number; api_rpm: number }> = {
-  free: { projects: 3, members: 5, syncs: 10, automations: 0, api_rpm: 60 },
-  pro: { projects: 15, members: 20, syncs: 100, automations: 5, api_rpm: 300 },
-  team: { projects: 50, members: -1, syncs: 500, automations: 20, api_rpm: 1000 },
+  free: { projects: 3, members: 5, syncs: 10, automations: -1, api_rpm: 60 },
+  pro: { projects: 15, members: 20, syncs: 100, automations: -1, api_rpm: 300 },
+  team: { projects: 50, members: -1, syncs: 500, automations: -1, api_rpm: 1000 },
   enterprise: { projects: -1, members: -1, syncs: -1, automations: -1, api_rpm: 5000 },
 };
 

@@ -1,5 +1,5 @@
 import { Link, useParams } from "react-router-dom";
-import { Rocket, BookOpen, Sparkles, Settings, FileCheck } from "lucide-react";
+import { Rocket, BookOpen, Zap, Building2, Scale } from "lucide-react";
 import { cn } from "../../lib/utils";
 import DocsPage from "./DocsPage";
 import { docNavGroups } from "./docsConfig";
@@ -7,9 +7,9 @@ import { docNavGroups } from "./docsConfig";
 const groupIcons: Record<string, React.ComponentType<{ className?: string }>> = {
   Rocket,
   BookOpen,
-  Sparkles,
-  Settings,
-  FileCheck,
+  Zap,
+  Building2,
+  Scale,
 };
 
 export default function DocsLayout() {
@@ -20,7 +20,7 @@ export default function DocsLayout() {
       {/* Sidebar - fixed so it stays put, only content scrolls */}
       <aside
         className={cn(
-          "hidden lg:flex flex-col w-64 shrink-0 border-r border-border bg-background-card-header fixed overflow-y-auto custom-scrollbar",
+          "hidden lg:flex flex-col w-64 shrink-0 border-r border-border bg-background fixed overflow-y-auto custom-scrollbar",
           "left-0 top-14 h-[calc(100vh-3.5rem)] z-40"
         )}
       >

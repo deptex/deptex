@@ -1,6 +1,5 @@
-import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Check, ArrowRight } from 'lucide-react';
+import { Check } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 
 const tiers = [
@@ -9,7 +8,7 @@ const tiers = [
     name: 'Free',
     description: 'For individual developers and open-source projects.',
     price: { monthly: 0, annual: 0 },
-    cta: 'Get Started Free',
+    cta: 'Start for free',
     features: [
       '3 projects',
       '5 members',
@@ -19,7 +18,7 @@ const tiers = [
       'Policy-as-code engine',
       'Dependency graph visualization',
       'Platform AI summaries (Gemini)',
-      'Community support',
+      'All integrations',
     ],
   },
   {
@@ -27,7 +26,7 @@ const tiers = [
     name: 'Pro',
     description: 'For growing teams that need full automation and AI.',
     price: { monthly: 25, annual: 250 },
-    cta: 'Start Pro',
+    cta: 'Upgrade now',
     popular: true,
     features: [
       '15 projects',
@@ -40,16 +39,14 @@ const tiers = [
       'Watchtower supply-chain forensics',
       'Configurable sync frequency',
       'All integrations (Slack, Jira, Linear, etc.)',
-      '10 teams, 20 notification rules',
-      '5 Aegis automations',
     ],
   },
   {
     id: 'team',
     name: 'Team',
-    description: 'For organizations with compliance and security needs.',
+    description: 'Compliance and security for growing organizations.',
     price: { monthly: 300, annual: 3000 },
-    cta: 'Start Team',
+    cta: 'Upgrade now',
     features: [
       '50 projects',
       'Unlimited members & teams',
@@ -60,9 +57,6 @@ const tiers = [
       'Audit logs',
       'Legal documents (DPA, TIA)',
       'Aegis management console',
-      'Unlimited notification rules',
-      '50 Aegis automations',
-      'Priority support',
     ],
   },
   {
@@ -70,7 +64,7 @@ const tiers = [
     name: 'Enterprise',
     description: 'Custom solutions for large organizations.',
     price: { monthly: -1, annual: -1 },
-    cta: 'Contact Sales',
+    cta: 'Contact us',
     features: [
       'Unlimited everything',
       'Everything in Team',
@@ -85,14 +79,13 @@ const tiers = [
 ];
 
 export default function PricingPage() {
-  const [cycle, setCycle] = useState<'monthly' | 'annual'>('monthly');
   const navigate = useNavigate();
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
-        {/* Header */}
-        <div className="text-center max-w-2xl mx-auto mb-12">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-28 pb-20 lg:pt-32 lg:pb-24">
+        {/* Header - extra spacing above title */}
+        <div className="text-center max-w-2xl mx-auto mb-14">
           <h1 className="text-4xl font-bold text-foreground tracking-tight">
             Simple, transparent pricing
           </h1>
@@ -101,140 +94,87 @@ export default function PricingPage() {
           </p>
         </div>
 
-        {/* Billing toggle */}
-        <div className="flex justify-center mb-10">
-          <div className="flex items-center gap-1 rounded-lg border border-border p-1 bg-muted/50">
-            <button
-              onClick={() => setCycle('monthly')}
-              className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-                cycle === 'monthly' ? 'bg-background text-foreground shadow-sm' : 'text-foreground-secondary hover:text-foreground'
-              }`}
-            >
-              Monthly
-            </button>
-            <button
-              onClick={() => setCycle('annual')}
-              className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-                cycle === 'annual' ? 'bg-background text-foreground shadow-sm' : 'text-foreground-secondary hover:text-foreground'
-              }`}
-            >
-              Annual <span className="text-green-500 ml-1 text-xs font-semibold">Save 17%</span>
-            </button>
-          </div>
-        </div>
+        {/* Tier Cards - Free has no right radius so it connects to Pro; Pro taller; grid overflow-visible so Pro top border isn't clipped */}
+        <div className="overflow-visible pt-[1px] -mt-[1px]">
+          <div className="grid grid-cols-1 md:grid-cols-[1fr_1.35fr_1fr_1fr] gap-0 md:items-center">
+            {tiers.map((tier, index) => {
+              const isCustom = tier.price.monthly === -1;
+              const price = tier.price.monthly;
+              const isPro = tier.popular;
+              const isFirst = index === 0;
+              const isLast = index === tiers.length - 1;
+              const mobileRounded = isFirst
+                ? 'rounded-t-2xl md:rounded-l-2xl md:rounded-tr-none md:rounded-br-none'
+                : isLast
+                  ? 'rounded-b-2xl md:rounded-r-2xl md:rounded-tl-none md:rounded-bl-none'
+                  : index === 2
+                    ? 'rounded-none border-t-0 md:border-t md:rounded-none'
+                    : 'rounded-none border-t-0 md:rounded-2xl';
 
-        {/* Tier Cards */}
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-          {tiers.map((tier) => {
-            const isCustom = tier.price.monthly === -1;
-            const price = cycle === 'annual' ? tier.price.annual : tier.price.monthly;
-
-            return (
-              <div
-                key={tier.id}
-                className={`relative rounded-xl border p-6 flex flex-col ${
-                  tier.popular
-                    ? 'border-primary bg-primary/5 ring-1 ring-primary'
-                    : 'border-border bg-background-card'
-                }`}
-              >
-                {tier.popular && (
-                  <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                    <span className="text-[10px] font-bold uppercase tracking-widest bg-primary text-primary-foreground px-3 py-1 rounded-full">
-                      Most Popular
-                    </span>
+              return (
+                <div
+                  key={tier.id}
+                  className={`relative flex flex-col min-w-0 border border-border bg-background-card
+                    ${mobileRounded}
+                    ${index > 0 ? 'md:-ml-px' : ''}
+                    ${isPro
+                      ? 'md:py-10 md:px-7 md:min-h-[620px] md:z-10 md:ring-2 md:ring-primary'
+                      : 'py-6 px-5 md:px-6 md:h-[580px]'
+                    }
+                  `}
+                >
+                <div className={isPro ? 'mb-5' : 'mb-4'}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className={`font-semibold text-foreground ${isPro ? 'text-xl' : 'text-lg'}`}>{tier.name}</h3>
+                    {isPro && (
+                      <span className="text-[10px] font-bold uppercase tracking-widest bg-primary text-primary-foreground px-2.5 py-1 rounded-full border border-primary-foreground/20 hover:border-primary-foreground/40 transition-colors">
+                        Most Popular
+                      </span>
+                    )}
                   </div>
-                )}
-
-                <div className="mb-4">
-                  <h3 className="text-lg font-semibold text-foreground">{tier.name}</h3>
-                  <p className="text-sm text-foreground-secondary mt-1">{tier.description}</p>
+                  <p className="text-sm text-foreground-secondary mt-1.5">{tier.description}</p>
                 </div>
-
-                <div className="mb-6">
-                  {isCustom ? (
-                    <span className="text-3xl font-bold text-foreground">Custom</span>
-                  ) : price === 0 ? (
-                    <span className="text-3xl font-bold text-foreground">$0</span>
-                  ) : (
-                    <>
-                      <span className="text-3xl font-bold text-foreground">
-                        ${cycle === 'annual' ? price.toLocaleString() : price}
-                      </span>
-                      <span className="text-sm text-foreground-secondary ml-1">
-                        {cycle === 'annual' ? '/yr' : '/mo'}
-                      </span>
-                    </>
-                  )}
-                </div>
-
-                <ul className="space-y-2.5 mb-6 flex-1">
-                  {tier.features.map((f) => (
-                    <li key={f} className="flex items-start gap-2 text-sm text-foreground-secondary">
-                      <Check className="h-4 w-4 text-green-500 mt-0.5 flex-shrink-0" />
-                      {f}
-                    </li>
-                  ))}
-                </ul>
 
                 <Button
-                  className="w-full"
-                  variant={tier.popular ? 'default' : 'outline'}
+                  className={`w-full mb-5 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 font-semibold text-sm rounded-lg ${isPro ? 'mt-3' : ''}`}
                   onClick={() => {
                     if (tier.id === 'enterprise') {
-                      window.location.href = 'mailto:sales@deptex.io';
+                      navigate('/contact-enterprise');
                     } else {
                       navigate('/login');
                     }
                   }}
                 >
                   {tier.cta}
-                  <ArrowRight className="h-4 w-4 ml-1" />
                 </Button>
+
+                <div className={isPro ? 'mb-6' : 'mb-5'}>
+                  {isCustom ? (
+                    <span className={`font-bold text-foreground ${isPro ? 'text-3xl' : 'text-2xl'}`}>Custom</span>
+                  ) : price === 0 ? (
+                    <span className={`font-bold text-foreground ${isPro ? 'text-3xl' : 'text-2xl'}`}>$0</span>
+                  ) : (
+                    <>
+                      <span className={`font-bold text-foreground ${isPro ? 'text-3xl' : 'text-2xl'}`}>
+                        ${price.toLocaleString()}
+                      </span>
+                      <span className="text-sm text-foreground-secondary ml-1">/mo</span>
+                    </>
+                  )}
+                </div>
+
+                <ul className={`space-y-2.5 flex-1 ${isPro ? 'space-y-3' : ''}`}>
+                  {tier.features.map((f) => (
+                    <li key={f} className="flex items-start gap-2.5 text-sm text-foreground-secondary">
+                      <Check className="h-4 w-4 text-primary mt-0.5 flex-shrink-0" />
+                      {f}
+                    </li>
+                  ))}
+                </ul>
               </div>
             );
           })}
-        </div>
-
-        {/* FAQ Section */}
-        <div className="mt-20 max-w-3xl mx-auto">
-          <h2 className="text-2xl font-bold text-foreground text-center mb-8">Frequently Asked Questions</h2>
-          <div className="space-y-6">
-            {[
-              {
-                q: 'What counts as a sync?',
-                a: 'A sync is a full extraction run for one project repository. This includes SBOM generation, vulnerability scanning, reachability analysis, and all post-processing. Both manual and automated (webhook, scheduled) extractions count.',
-              },
-              {
-                q: 'Do I need my own AI API keys?',
-                a: 'Platform AI features (summaries, policy assistance, docs Q&A) are free and powered by Google Gemini. For Aegis AI Security Copilot and AI-powered fixes, you need to bring your own API key (OpenAI, Anthropic, or Google).',
-              },
-              {
-                q: 'What happens when I hit a limit?',
-                a: "You'll see a warning when approaching limits. Once reached, the specific action is blocked until usage resets (syncs reset each billing period) or you upgrade. Existing data is never deleted.",
-              },
-              {
-                q: 'Can I downgrade my plan?',
-                a: "Yes, but you'll need to reduce your usage to fit within the lower tier's limits first (e.g., reduce projects, remove team members). Downgrade takes effect at the end of your current billing period.",
-              },
-              {
-                q: 'Is there a free trial for Pro or Team?',
-                a: 'Not currently. The Free plan gives you full access to core features so you can evaluate the platform before upgrading.',
-              },
-            ].map(({ q, a }) => (
-              <div key={q} className="border-b border-border pb-4">
-                <h3 className="text-sm font-semibold text-foreground">{q}</h3>
-                <p className="text-sm text-foreground-secondary mt-1.5">{a}</p>
-              </div>
-            ))}
           </div>
-        </div>
-
-        {/* CTA */}
-        <div className="mt-16 text-center">
-          <p className="text-foreground-secondary text-sm mb-4">
-            Stripe processes all payments securely. 2.9% + $0.30 per transaction. No hidden fees.
-          </p>
         </div>
       </div>
     </div>

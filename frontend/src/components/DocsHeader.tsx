@@ -1,6 +1,5 @@
-import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
-import { LogOut, Settings, Search, X } from "lucide-react";
+import { LogOut, Settings } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { useUserProfile } from "../hooks/useUserProfile";
 import { Button } from "./ui/button";
@@ -12,18 +11,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
-import {
-  Dialog,
-  DialogContent,
-} from "./ui/dialog";
-import { docNavGroups } from "../app/pages/docsConfig";
-import { docsSearchIndex } from "../app/pages/docs/docsSearchIndex";
 
 const HEADER_HEIGHT = "h-14";
 
 const docTabs = [
   { label: "Docs", path: "/docs", slug: null },
-  { label: "Learn", path: "/docs/learn", slug: "learn" },
   { label: "Help", path: "/docs/help", slug: "help" },
 ];
 
@@ -32,41 +24,14 @@ export default function DocsHeader() {
   const location = useLocation();
   const { avatarUrl } = useUserProfile();
   const navigate = useNavigate();
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const searchInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-        e.preventDefault();
-        setSearchOpen((o) => !o);
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []);
-
-  const query = searchQuery.trim().toLowerCase();
-  const searchResults = query
-    ? docsSearchIndex.filter(
-        (entry) =>
-          entry.heading.toLowerCase().includes(query) ||
-          entry.content.toLowerCase().includes(query) ||
-          entry.keywords.some((k) => k.includes(query))
-      )
-    : [];
-
-  const navItems = query
-    ? []
-    : docNavGroups.flatMap((g) => g.items);
 
   return (
     <>
       <header
-        className={`${HEADER_HEIGHT} fixed left-0 right-0 top-0 z-50 flex items-center justify-between border-b border-border bg-background px-6`}
+        className={`${HEADER_HEIGHT} fixed left-0 right-0 top-0 z-50 flex items-center border-b border-border bg-background px-6`}
       >
-        <div className="flex items-center gap-6">
+        {/* Left: logo + nav */}
+        <div className="flex items-center gap-6 flex-1 min-w-0">
           <Link
             to="/"
             className="flex items-center hover:opacity-80 transition-opacity shrink-0"
@@ -82,7 +47,7 @@ export default function DocsHeader() {
             {docTabs.map((tab) => {
               const path = location.pathname;
               const isDocsTab = tab.path === "/docs";
-              const isTopLevelSection = ["learn", "help"].includes(path.split("/")[2] || "");
+              const isTopLevelSection = ["help"].includes(path.split("/")[2] || "");
               const isActive = isDocsTab
                 ? path === "/docs" || (path.startsWith("/docs/") && !isTopLevelSection)
                 : path.startsWith(tab.path);
@@ -93,7 +58,7 @@ export default function DocsHeader() {
                   className={`relative flex items-center px-3 py-2 text-sm font-medium transition-colors rounded-md ${
                     isActive
                       ? "text-foreground"
-                      : "text-foreground-secondary hover:text-foreground"
+                      : "text-foreground/80 hover:text-foreground"
                   }`}
                 >
                   {tab.label}
@@ -106,24 +71,18 @@ export default function DocsHeader() {
           </nav>
         </div>
 
-        <div className="flex items-center gap-4 flex-1 justify-center max-w-xl mx-4">
-          <button
-            onClick={() => setSearchOpen(true)}
-            className="w-full flex items-center gap-3 px-4 py-2 rounded-md bg-background-card border border-border text-foreground-secondary hover:border-foreground-secondary/50 hover:text-foreground transition-colors text-sm min-h-9"
-          >
-            <Search className="h-4 w-4 shrink-0" />
-            <span className="flex-1 text-left">Search docs...</span>
-            <kbd className="hidden sm:inline-flex items-center justify-center gap-0.5 h-4 min-w-[1.75rem] px-1.5 rounded bg-white/[0.06] border border-white/10 font-mono font-medium text-foreground-secondary">
-              <span className="text-[9.5px] leading-none" aria-hidden>⌘</span>
-              <span className="text-[11px] leading-none">K</span>
-            </kbd>
-          </button>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <Button variant="outline" size="sm" asChild>
-            <Link to="/organizations">Dashboard</Link>
-          </Button>
+        {/* Right: sign in / user */}
+        <div className="flex items-center gap-3 flex-1 justify-end min-w-0">
+          {user && (
+            <Button
+              asChild
+              size="default"
+              variant="secondary"
+              className="font-semibold text-sm px-5 py-2.5 rounded-lg h-9"
+            >
+              <Link to="/organizations">Dashboard</Link>
+            </Button>
+          )}
           {user ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -157,7 +116,7 @@ export default function DocsHeader() {
                           {user.user_metadata.full_name}
                         </span>
                       )}
-                      <span className="text-xs text-foreground-secondary truncate">{user.email}</span>
+                      <span className="text-xs text-foreground/80 truncate">{user.email}</span>
                     </div>
                   </div>
                 </DropdownMenuLabel>
@@ -165,7 +124,7 @@ export default function DocsHeader() {
                 <DropdownMenuItem asChild>
                   <Link
                     to="/settings"
-                    className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary transition-colors"
+                    className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground/80 transition-colors"
                   >
                     <Settings className="h-4 w-4" />
                     Settings
@@ -177,7 +136,7 @@ export default function DocsHeader() {
                     await signOut();
                     navigate("/");
                   }}
-                  className="cursor-pointer text-foreground-secondary hover:text-foreground focus:bg-transparent focus:text-foreground flex items-center gap-2 transition-colors"
+                  className="cursor-pointer text-foreground/80 hover:text-foreground focus:bg-transparent focus:text-foreground flex items-center gap-2 transition-colors"
                 >
                   <LogOut className="h-4 w-4" />
                   Sign out
@@ -185,77 +144,16 @@ export default function DocsHeader() {
               </DropdownMenuContent>
             </DropdownMenu>
           ) : (
-            <Button asChild size="sm">
-              <Link to="/login">Sign in</Link>
+            <Button
+              asChild
+              size="sm"
+              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 font-semibold rounded-lg h-8 px-3.5"
+            >
+              <Link to="/login">Get started</Link>
             </Button>
           )}
         </div>
       </header>
-
-      <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
-        <DialogContent
-          hideClose
-          className="max-w-xl w-[90vw] p-0 gap-0 bg-background-card border-border overflow-hidden"
-        >
-          <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
-            <Search className="h-4 w-4 text-foreground-secondary shrink-0" />
-            <input
-              ref={searchInputRef}
-              type="text"
-              placeholder="Search docs..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="flex-1 bg-transparent text-sm text-foreground placeholder:text-foreground-secondary border-0 min-h-8 outline-none focus:outline-none focus:ring-0 focus:ring-offset-0 focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
-              autoFocus
-            />
-            <button
-              onClick={() => setSearchOpen(false)}
-              className="flex items-center justify-center w-8 h-8 rounded-md text-foreground-muted hover:text-foreground hover:bg-white/[0.04] transition-colors shrink-0"
-              aria-label="Close"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-          <div className="max-h-[60vh] overflow-y-auto custom-scrollbar py-3">
-            {query ? (
-              <>
-                {searchResults.length > 0 ? (
-                  searchResults.map((entry, i) => (
-                    <Link
-                      key={`${entry.slug}-${i}`}
-                      to={`/docs/${entry.slug}`}
-                      onClick={() => { setSearchOpen(false); setSearchQuery(""); }}
-                      className="flex flex-col gap-1 px-4 py-3 mx-2 rounded-md hover:bg-table-hover transition-colors text-left"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-foreground">{entry.heading}</span>
-                        <span className="text-[10px] text-foreground-muted bg-white/[0.06] px-1.5 py-0.5 rounded">{entry.section}</span>
-                      </div>
-                      <span className="text-xs text-foreground-secondary line-clamp-2">{entry.content}</span>
-                    </Link>
-                  ))
-                ) : (
-                  <p className="px-4 py-4 text-sm text-foreground-secondary">No results found.</p>
-                )}
-              </>
-            ) : (
-              navItems.map((item) => (
-                <Link
-                  key={item.slug}
-                  to={`/docs/${item.slug}`}
-                  onClick={() => setSearchOpen(false)}
-                  className="flex flex-col gap-0.5 px-4 py-2.5 mx-2 rounded-md hover:bg-table-hover transition-colors text-left"
-                >
-                  <span className="text-sm font-medium text-foreground">{item.label}</span>
-                  {item.description && (
-                    <span className="text-xs text-foreground-secondary">{item.description}</span>
-                  )}
-                </Link>
-              ))
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
     </>
   );
 }

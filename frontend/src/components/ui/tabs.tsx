@@ -2,6 +2,7 @@ import * as React from "react"
 import { cn } from "../../lib/utils"
 
 const TabsContext = React.createContext<{ value: string; onValueChange: (v: string) => void } | null>(null)
+const TabsListVariantContext = React.createContext<"default" | "line">("default")
 
 const Tabs = React.forwardRef<
   HTMLDivElement,
@@ -23,26 +24,33 @@ Tabs.displayName = "Tabs"
 
 const TabsList = React.forwardRef<
   HTMLDivElement,
-  React.HTMLAttributes<HTMLDivElement>
->(({ className, ...props }, ref) => (
-  <div
-    ref={ref}
-    className={cn(
-      "inline-flex h-9 items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground",
-      className
-    )}
-    {...props}
-  />
+  React.HTMLAttributes<HTMLDivElement> & { variant?: "default" | "line" }
+>(({ className, variant = "default", ...props }, ref) => (
+  <TabsListVariantContext.Provider value={variant}>
+    <div
+      ref={ref}
+      data-variant={variant}
+      className={cn(
+        "inline-flex items-center text-muted-foreground",
+        variant === "default" && "h-9 justify-center rounded-lg bg-muted p-1",
+        variant === "line" && "gap-0 border-b border-border rounded-none",
+        className
+      )}
+      {...props}
+    />
+  </TabsListVariantContext.Provider>
 ))
 TabsList.displayName = "TabsList"
 
 const TabsTrigger = React.forwardRef<
   HTMLButtonElement,
-  React.ButtonHTMLAttributes<HTMLButtonElement> & { value: string }
->(({ className, value, ...props }, ref) => {
+  React.ButtonHTMLAttributes<HTMLButtonElement> & { value: string; variant?: "default" | "line" }
+>(({ className, value, variant: triggerVariant, children, ...props }, ref) => {
   const ctx = React.useContext(TabsContext)
+  const listVariant = React.useContext(TabsListVariantContext)
   if (!ctx) throw new Error("TabsTrigger must be used within Tabs")
   const isSelected = ctx.value === value
+  const variant = triggerVariant ?? listVariant
   return (
     <button
       ref={ref}
@@ -51,13 +59,23 @@ const TabsTrigger = React.forwardRef<
       aria-selected={isSelected}
       data-state={isSelected ? "active" : "inactive"}
       className={cn(
-        "inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
-        isSelected && "bg-background text-foreground shadow",
+        "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
+        variant === "default" && "rounded-md px-3 py-1",
+        variant === "default" && isSelected && "bg-background text-foreground shadow",
+        variant === "line" && "rounded-none px-4 py-3 -mb-px",
+        variant === "line" && isSelected && "text-foreground",
+        variant === "line" && !isSelected && "text-foreground-secondary hover:text-foreground",
         className
       )}
       onClick={() => ctx.onValueChange(value)}
       {...props}
-    />
+    >
+      {variant === "line" ? (
+        <span className="inline-block">{children}</span>
+      ) : (
+        children
+      )}
+    </button>
   )
 })
 TabsTrigger.displayName = "TabsTrigger"

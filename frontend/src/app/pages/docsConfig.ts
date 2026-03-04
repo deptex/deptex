@@ -32,7 +32,7 @@ export const docNavGroups: DocNavGroup[] = [
   },
   {
     title: "Features",
-    icon: "Shield",
+    icon: "Zap",
     items: [
       { label: "Aegis", slug: "aegis", description: "Autonomous security agent: chat, tasks, automations, Slack, and PR review." },
       { label: "Watchtower", slug: "watchtower", description: "Supply chain monitoring and forensic analysis." },
@@ -40,7 +40,7 @@ export const docNavGroups: DocNavGroup[] = [
   },
   {
     title: "Administration",
-    icon: "Settings",
+    icon: "Building2",
     items: [
       { label: "Organizations", slug: "organizations", description: "Manage organization and settings." },
       { label: "Teams", slug: "teams", description: "Organize members with scoped visibility." },
@@ -52,7 +52,7 @@ export const docNavGroups: DocNavGroup[] = [
   },
   {
     title: "Legal",
-    icon: "FileCheck",
+    icon: "Scale",
     items: [
       { label: "Terms of Service", slug: "terms", description: "Terms governing your use of Deptex." },
       { label: "Privacy Policy", slug: "privacy", description: "How we collect, use, and protect your data." },

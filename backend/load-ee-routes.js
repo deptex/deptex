@@ -3,9 +3,13 @@
  * Called from src/index.ts when DEPTEX_EDITION=ee.
  */
 const path = require('path');
+const fs = require('fs');
 
 module.exports = function mountEeRoutes(app) {
-  const eeRoutes = path.join(__dirname, '../ee/backend/routes');
+  // Use compiled EE when present (Vercel/production); otherwise source for tsx dev
+  const eeDistRoutes = path.join(__dirname, '../ee/backend/dist/routes');
+  const eeSrcRoutes = path.join(__dirname, '../ee/backend/routes');
+  const eeRoutes = fs.existsSync(eeDistRoutes) ? eeDistRoutes : eeSrcRoutes;
   app.use('/api/organizations', require(path.join(eeRoutes, 'organizations')).default);
   app.use('/api/organizations', require(path.join(eeRoutes, 'teams')).default);
   app.use('/api/organizations', require(path.join(eeRoutes, 'projects')).default);

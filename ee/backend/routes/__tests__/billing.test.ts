@@ -460,9 +460,9 @@ describe('Phase 13: Feature Gates', () => {
     expect(PLAN_FEATURES.team.sso).toBe(true);
   });
 
-  it('28. Free tier has 0 automations', async () => {
+  it('28. Free tier has unlimited automations (-1)', async () => {
     const { PLAN_LIMITS } = await import('../../lib/plan-limits');
-    expect(PLAN_LIMITS.free.automations).toBe(0);
+    expect(PLAN_LIMITS.free.automations).toBe(-1);
   });
 
   it('29. Team tier has unlimited members (-1)', async () => {

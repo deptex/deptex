@@ -7,11 +7,11 @@
     "postinstall": "node -e \"var p=require('path').join(process.cwd(),'../ee/backend');try{require('child_process').execSync('npm install --ignore-scripts',{cwd:p,stdio:'inherit'})}catch(e){}\"",
     "dev": "cross-env NODE_PATH=node_modules tsx watch src/index.ts",
     "dev:ce": "cross-env DEPTEX_EDITION=ce tsx watch src/index.ts",
-    "build": "tsc --extendedDiagnostics",
+    "build": "tsc && node -e \"var p=require('path').join(process.cwd(),'../ee/backend'); require('child_process').execSync('npx tsc', { cwd: p, stdio: 'inherit' })\"",
     "start": "cross-env NODE_PATH=node_modules tsx src/index.ts",
     "test": "cross-env NODE_PATH=node_modules DEPTEX_EDITION=ee jest",
     "type-check": "tsc --noEmit"
-  }, 
+  },
   "keywords": [
     "dependency-tracking",
     "security",
@@ -52,6 +52,6 @@
     "ts-jest": "^29.4.6",
     "ts-node": "^10.9.2",
     "tsx": "^4.7.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.9.3"
   }
 }

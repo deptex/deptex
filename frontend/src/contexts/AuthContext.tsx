@@ -69,35 +69,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    // Get initial session
+    // Get initial session (for fast first paint). Do NOT set loading=false here —
+    // getSession() can return null during token refresh; wait for INITIAL_SESSION.
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       const user = session?.user ?? null;
       setUser(user);
-      setLoading(false);
-      
       // Check and restore avatar if needed
       if (user) {
         checkAndRestoreAvatar(user);
       }
     });
 
-    // Listen for auth changes
+    // Only consider auth "ready" when Supabase emits INITIAL_SESSION (after any refresh).
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       setSession(session);
       const user = session?.user ?? null;
       setUser(user);
-      setLoading(false);
-      
+      if (event === 'INITIAL_SESSION') {
+        setLoading(false);
+      }
       // Check and restore avatar when user logs in or session is restored
       if (user) {
         checkAndRestoreAvatar(user);
       }
     });
 
-    return () => subscription.unsubscribe();
+    // Safety: if INITIAL_SESSION hasn't fired within 2s, stop loading (edge cases).
+    const fallbackTimer = setTimeout(() => setLoading(false), 2000);
+
+    return () => {
+      subscription.unsubscribe();
+      clearTimeout(fallbackTimer);
+    };
   }, [checkAndRestoreAvatar]);
 
   const signInWithGoogle = async () => {

@@ -30,6 +30,8 @@ import learningCronRouter from './routes/learning-cron';
 import incidentCronRouter from './routes/incident-cron';
 import cronDispatcherRouter from './routes/cron-dispatcher';
 import feedbackRouter from './routes/feedback';
+import demoRequestRouter from './routes/demo-request';
+import enterpriseContactRouter from './routes/enterprise-contact';
 
 const app = express();
 app.set('trust proxy', true);
@@ -107,6 +109,8 @@ app.use('/api/internal/learning', learningCronRouter);
 app.use('/api/internal/incidents', incidentCronRouter);
 app.use('/api/internal/cron', cronDispatcherRouter);
 app.use('/api/feedback', feedbackRouter);
+app.use('/api/demo-request', demoRequestRouter);
+app.use('/api/enterprise-contact', enterpriseContactRouter);
 
 // API Routes - EE (mounted only when DEPTEX_EDITION=ee, loaded from ee/backend/routes/)
 if (isEeEdition()) {

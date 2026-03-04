@@ -3834,20 +3834,6 @@ router.post('/:id/notification-rules', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'triggerType must be one of: weekly_digest, vulnerability_discovered, custom_code_pipeline' });
     }
 
-    // Plan limit check: notification rules
-    try {
-      const { checkPlanLimit, TIER_DISPLAY_NAMES } = require('../lib/plan-limits');
-      const planCheck = await checkPlanLimit(id, 'notification_rules');
-      if (!planCheck.allowed) {
-        return res.status(403).json({
-          error: 'PLAN_LIMIT',
-          message: `Your ${TIER_DISPLAY_NAMES[planCheck.tier]} plan supports up to ${planCheck.limit} notification rules.`,
-          resource: 'notification_rules', current: planCheck.current, limit: planCheck.limit,
-          tier: planCheck.tier, upgradeTier: planCheck.upgradeTier,
-        });
-      }
-    } catch (e) { /* fail open */ }
-
     const dests = Array.isArray(destinations) ? destinations : [];
     const insertData: Record<string, unknown> = {
       organization_id: id,

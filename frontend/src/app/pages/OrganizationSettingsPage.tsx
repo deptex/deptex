@@ -73,7 +73,7 @@ const planTiers: PlanTier[] = [
       { name: 'Vulnerability scanning' },
       { name: 'Policy-as-code' },
       { name: 'Platform AI summaries' },
-      { name: 'Community support' },
+      { name: 'All integrations' },
     ],
   },
   {
@@ -109,7 +109,6 @@ const planTiers: PlanTier[] = [
       { name: 'Audit logs' },
       { name: 'Legal documents (DPA, TIA)' },
       { name: 'Aegis management console' },
-      { name: 'Priority support' },
     ],
   },
   {
@@ -6141,11 +6140,8 @@ function UsageSectionContent({ organizationId }: { organizationId: string }) {
     { label: 'Projects', key: 'projects', current: plan.usage.projects, limit: plan.limits.projects },
     { label: 'Members', key: 'members', current: plan.usage.members, limit: plan.limits.members },
     { label: 'Syncs this period', key: 'syncs', current: plan.usage.syncs, limit: plan.limits.syncs },
-    { label: 'Watched packages', key: 'watchtower', current: plan.usage.watchtower, limit: plan.limits.watchtower },
-    { label: 'Teams', key: 'teams', current: plan.usage.teams, limit: plan.limits.teams },
-    { label: 'Notification rules', key: 'notification_rules', current: plan.usage.notification_rules, limit: plan.limits.notification_rules },
-    { label: 'Integrations', key: 'integrations', current: plan.usage.integrations, limit: plan.limits.integrations },
-    { label: 'Aegis automations', key: 'automations', current: plan.usage.automations, limit: plan.limits.automations },
+    { label: 'Watched packages', key: 'watchtower', current: plan.usage.watchtower, limit: plan.limits.watchtower ?? -1 },
+    { label: 'Teams', key: 'teams', current: plan.usage.teams, limit: plan.limits.teams ?? -1 },
   ];
 
   return (
