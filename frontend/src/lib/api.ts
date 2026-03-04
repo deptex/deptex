@@ -4113,7 +4113,16 @@ export const billingApi = {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
       body: JSON.stringify({ priceId, billingEmail }),
     });
-    if (!res.ok) throw new Error('Failed to create checkout');
+    if (!res.ok) {
+      let message = 'Failed to create checkout';
+      try {
+        const body = await res.json();
+        if (typeof body?.error === 'string') message = body.error;
+      } catch {
+        // non-JSON or empty body: keep default message
+      }
+      throw new Error(message);
+    }
     return res.json();
   },
 

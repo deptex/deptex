@@ -261,9 +261,9 @@ const POLICY_MONARCH: languages.IMonarchLanguage = {
   defaultToken: 'source',
   tokenPostfix: '.js',
   brackets: [
-    ['{', '}', 'delimiter.curly'],
-    ['[', ']', 'delimiter.square'],
-    ['(', ')', 'delimiter.parenthesis'],
+    { open: '{', close: '}', token: 'delimiter.curly' },
+    { open: '[', close: ']', token: 'delimiter.square' },
+    { open: '(', close: ')', token: 'delimiter.parenthesis' },
   ],
   keywords: [
     'function', 'return', 'const', 'let', 'var', 'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'break', 'continue',
@@ -382,7 +382,7 @@ export function PolicyCodeEditor({
 
     monaco.editor.defineTheme('deptex', DEPTEX_THEME);
 
-    if (!monaco.languages.getLanguages().some((l) => l.id === POLICY_LANGUAGE_ID)) {
+    if (!monaco.languages.getLanguages().some((l: { id: string }) => l.id === POLICY_LANGUAGE_ID)) {
       monaco.languages.register({ id: POLICY_LANGUAGE_ID });
       monaco.languages.setMonarchTokensProvider(POLICY_LANGUAGE_ID, POLICY_MONARCH);
     }
