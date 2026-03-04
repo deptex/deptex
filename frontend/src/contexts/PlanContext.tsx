@@ -7,8 +7,8 @@ export type PlanTier = 'free' | 'pro' | 'team' | 'enterprise';
 
 export type GatableFeature =
   | 'aegis_chat' | 'ai_fixes' | 'background_monitoring' | 'watchtower_forensics'
-  | 'sso' | 'mfa_enforcement' | 'legal_docs' | 'aegis_management' | 'audit_logs'
-  | 'custom_sla' | 'sync_frequency';
+  | 'sso' | 'mfa_enforcement' | 'ip_allowlist' | 'legal_docs' | 'aegis_management' | 'audit_logs'
+  | 'custom_sla' | 'security_slas' | 'sync_frequency';
 
 export type LimitableResource =
   | 'projects' | 'members' | 'syncs' | 'watchtower' | 'teams'
@@ -33,10 +33,12 @@ interface TierFeatures {
   watchtower_forensics: boolean;
   sso: boolean;
   mfa_enforcement: boolean;
+  ip_allowlist: boolean;
   legal_docs: boolean;
   aegis_management: boolean;
   audit_logs: boolean;
   custom_sla: boolean;
+  security_slas: boolean;
   sync_frequency: boolean;
 }
 
@@ -103,10 +105,12 @@ const FEATURE_REQUIRED_TIER: Record<GatableFeature, PlanTier> = {
   sync_frequency: 'pro',
   sso: 'team',
   mfa_enforcement: 'team',
+  ip_allowlist: 'team',
   legal_docs: 'team',
-  aegis_management: 'team',
+  aegis_management: 'pro',
   audit_logs: 'team',
   custom_sla: 'enterprise',
+  security_slas: 'team',
 };
 
 export const TIER_DISPLAY: Record<PlanTier, string> = {
@@ -128,22 +132,35 @@ export function PlanProvider({ organizationId, children }: { organizationId: str
   const [error, setError] = useState<string | null>(null);
 
   const fetchPlan = useCallback(async () => {
-    if (!organizationId) return;
+    if (!organizationId) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setError(null);
     try {
-      setLoading(true);
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
+      if (!session) {
+        setLoading(false);
+        return;
+      }
 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
       const res = await fetch(`${API_BASE_URL}/api/organizations/${organizationId}/billing/plan`, {
         headers: { Authorization: `Bearer ${session.access_token}` },
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
-      if (!res.ok) throw new Error('Failed to fetch plan');
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error((errBody as { error?: string }).error || `Failed to fetch plan (${res.status})`);
+      }
       const data = await res.json();
       setPlan(data);
-      setError(null);
     } catch (e: any) {
-      setError(e.message);
+      setError(e?.message || 'Failed to load plan');
     } finally {
       setLoading(false);
     }

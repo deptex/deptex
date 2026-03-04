@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Plus, Trash2, Check, Pencil, MoreVertical, Mail, ChevronDown, Loader2, Webhook, BookOpen, X, Clock, Play, Info, LayoutGrid } from 'lucide-react';
+import { Plus, Trash2, Check, Pencil, MoreVertical, Mail, ChevronDown, Loader2, Webhook, BookOpen, X, Clock, Play, Info, LayoutGrid, Calendar, ShieldAlert, FileWarning, BarChart2, Bell } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '../../components/ui/button';
-import { Switch } from '../../components/ui/switch';
 import { cn } from '../../lib/utils';
 import { PolicyCodeEditor } from '../../components/PolicyCodeEditor';
 import { NotificationAIAssistant } from '../../components/NotificationAIAssistant';
@@ -122,6 +122,14 @@ const DEFAULT_CUSTOM_CODE = `// Return true to trigger notification, false to sk
 return false;
 `;
 
+/** Default samples when API returns none or fails */
+const DEFAULT_SAMPLES: { id: string; name: string; description: string; code: string; icon: LucideIcon }[] = [
+  { id: 'weekly-digest', name: 'Weekly digest', description: 'Weekly summary of security events across projects', code: "// Fires on weekly_digest batch\nreturn context.event?.type === 'weekly_digest' || (context.batch && context.batch.total > 0);", icon: Calendar },
+  { id: 'vuln-above-score', name: 'New vulnerability with score above 70', description: 'Notify when a vulnerability is discovered with Depscore greater than 70 (higher = more severe)', code: "if (context.event.type !== 'vulnerability_discovered') return false;\nif (!context.vulnerability) return false;\nreturn (context.vulnerability.depscore || 0) > 70;", icon: ShieldAlert },
+  { id: 'policy-violation', name: 'Policy violation', description: 'Alert when a dependency violates package or license policy', code: "return context.event.type === 'policy_violation';", icon: FileWarning },
+  { id: 'new-dep-low-score', name: 'New dependency with low score', description: 'Alert when a new dependency is added with a low reputation score', code: "if (context.event.type !== 'dependency_added') return false;\nreturn context.dependency && context.dependency.score < 50;", icon: BarChart2 },
+];
+
 /** Connection dropdown with icon */
 function ConnectionDropdown({
   value,
@@ -220,13 +228,15 @@ interface NotificationRulesSectionProps {
   teamId?: string;
   /** When true, hide the header (title + Create Rule button) for use in Project Settings where they appear above the tabs */
   hideTitle?: boolean;
+  /** When true, hide only the rules list so the Create Rule sidebar can still open (e.g. when on History sub-tab in Org Settings) */
+  hideListContent?: boolean;
   /** Ref to register the create-rule handler so the parent can trigger it (e.g. button above tabs) */
   createHandlerRef?: React.MutableRefObject<(() => void) | null>;
   /** Pre-loaded connections when in project context (org + project merged) */
   connections?: CiCdConnection[];
 }
 
-export default function NotificationRulesSection({ organizationId = '', projectId, teamId, hideTitle, createHandlerRef, connections: externalConnections }: NotificationRulesSectionProps) {
+export default function NotificationRulesSection({ organizationId = '', projectId, teamId, hideTitle, hideListContent, createHandlerRef, connections: externalConnections }: NotificationRulesSectionProps) {
   const { user } = useAuth();
   const { fullName } = useUserProfile();
   const { toast } = useToast();
@@ -247,14 +257,16 @@ export default function NotificationRulesSection({ organizationId = '', projectI
   const [destinations, setDestinations] = useState<DestinationAction[]>([
     { id: crypto.randomUUID(), connectionId: '' },
   ]);
-  const [dryRun, setDryRun] = useState(false);
   const [validationChecks, setValidationChecks] = useState<{ name: string; pass: boolean; error?: string }[] | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResults, setTestResults] = useState<{ eventType: string; wouldNotify: boolean; message?: string; executionTime?: number; error?: string }[] | null>(null);
   const [snoozingRuleId, setSnoozingRuleId] = useState<string | null>(null);
   const [templates, setTemplates] = useState<{ id: string; name: string; description: string; code: string }[]>([]);
   const [showTemplatePicker, setShowTemplatePicker] = useState(false);
+  const [createRuleMode, setCreateRuleMode] = useState<'ai' | 'samples'>('ai');
   const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
+  const aiAssistantRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!organizationId) {
@@ -368,10 +380,11 @@ export default function NotificationRulesSection({ organizationId = '', projectI
     setCustomCode(DEFAULT_CUSTOM_CODE);
     setDestinations([{ id: crypto.randomUUID(), connectionId: destinationConnections[0]?.id ?? '' }]);
     setEditingRuleId(null);
-    setDryRun(false);
     setValidationChecks(null);
     setTestResults(null);
     setShowTemplatePicker(false);
+    setCreateRuleMode('ai');
+    setSelectedSampleId(null);
   };
 
   const closeSidebar = () => {
@@ -411,6 +424,10 @@ export default function NotificationRulesSection({ organizationId = '', projectI
       toast({ title: 'Add a destination', description: 'Select at least one integration to receive notifications.', variant: 'destructive' });
       return;
     }
+    if (createRuleMode === 'samples' && !editingRuleId && !selectedSampleId) {
+      toast({ title: 'Select a sample', description: 'Choose a sample from the list above.', variant: 'destructive' });
+      return;
+    }
     const createdByName = fullName || user?.user_metadata?.full_name || user?.email || 'Unknown';
     const payload = { name, triggerType: 'custom_code_pipeline' as const, customCode, destinations: dests };
 
@@ -419,14 +436,14 @@ export default function NotificationRulesSection({ organizationId = '', projectI
     try {
       if (editingRuleId) {
         const updated = teamId
-          ? await api.updateTeamNotificationRule(organizationId, teamId, editingRuleId, { ...payload, dryRun })
+          ? await api.updateTeamNotificationRule(organizationId, teamId, editingRuleId, payload)
           : projectId
-            ? await api.updateProjectNotificationRule(organizationId, projectId, editingRuleId, { ...payload, dryRun })
-            : await api.updateOrganizationNotificationRule(organizationId, editingRuleId, { ...payload, dryRun });
+            ? await api.updateProjectNotificationRule(organizationId, projectId, editingRuleId, payload)
+            : await api.updateOrganizationNotificationRule(organizationId, editingRuleId, payload);
         setRules((prev) => prev.map((r) => (r.id === editingRuleId ? updated : r)));
         toast({ title: 'Rule updated', description: 'Notification rule saved successfully.' });
       } else {
-        const createPayload = { ...payload, createdByName, dryRun };
+        const createPayload = { ...payload, createdByName };
         const newRule = teamId
           ? await api.createTeamNotificationRule(organizationId, teamId, createPayload)
           : projectId
@@ -500,14 +517,28 @@ export default function NotificationRulesSection({ organizationId = '', projectI
     if (!organizationId) return;
     setTesting(true);
     setTestResults(null);
+    const apiBase = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:3001';
     try {
       const token = await getToken();
-      const res = await fetch(`${import.meta.env.VITE_API_URL || ''}/api/organizations/${organizationId}/test-notification-rule`, {
+      const res = await fetch(`${apiBase}/api/organizations/${organizationId}/test-notification-rule`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ code: customCode }),
       });
-      const data = await res.json();
+      const text = await res.text();
+      let data: { results?: unknown[]; error?: string } = {};
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          toast({ title: 'Test failed', description: 'Invalid response from server', variant: 'destructive' });
+          return;
+        }
+      }
+      if (!res.ok) {
+        toast({ title: 'Test failed', description: (data as { error?: string }).error || res.statusText || 'Request failed', variant: 'destructive' });
+        return;
+      }
       if (data.results && Array.isArray(data.results)) {
         setTestResults(data.results);
       } else if (data.error) {
@@ -599,13 +630,8 @@ export default function NotificationRulesSection({ organizationId = '', projectI
         </div>
       )}
 
-      {/* Table-style list */}
-      <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-        <div className="px-4 py-2.5 bg-background-card-header border-b border-border">
-          <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
-            Notification Rules
-          </span>
-        </div>
+      {/* Table-style list (hidden when hideListContent so Create Rule sidebar can open from History tab) */}
+      <div style={hideListContent ? { display: 'none' } : undefined} className="rounded-lg border border-border bg-background-card overflow-hidden">
         <div className="divide-y divide-border">
           {loading && (
             <>
@@ -626,13 +652,13 @@ export default function NotificationRulesSection({ organizationId = '', projectI
             </>
           )}
 
-          {/* Empty state - None row */}
+          {/* Empty state - None row (colour matches delivery history empty state) */}
           {!loading && rules.length === 0 && (
             <div className="px-4 py-4 flex items-center gap-3">
-              <div className="h-8 w-8 rounded-md border border-border bg-background-card flex items-center justify-center text-foreground-muted">
+              <div className="h-8 w-8 rounded-md border border-border bg-background-card flex items-center justify-center text-foreground-secondary">
                 <Mail className="h-4 w-4" />
               </div>
-              <span className="text-sm font-medium text-foreground-muted">None</span>
+              <span className="text-sm font-medium text-foreground-secondary">None</span>
             </div>
           )}
 
@@ -750,52 +776,39 @@ export default function NotificationRulesSection({ organizationId = '', projectI
                     <div className="grid grid-cols-2 gap-3">
                       <button
                         type="button"
-                        onClick={() => { setShowTemplatePicker(false); setCustomCode(DEFAULT_CUSTOM_CODE); }}
-                        className="p-4 rounded-lg border border-border bg-background-card hover:border-foreground-secondary/40 transition-colors text-left group"
+                        onClick={() => {
+                          setShowTemplatePicker(false);
+                          setCreateRuleMode('ai');
+                          setCustomCode(DEFAULT_CUSTOM_CODE);
+                          requestAnimationFrame(() => {
+                            requestAnimationFrame(() => aiAssistantRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
+                          });
+                        }}
+                        className="p-4 rounded-lg border border-border bg-background-card hover:border-foreground-secondary/40 hover:bg-muted/30 transition-colors text-left group"
                       >
-                        <div className="flex items-center gap-2 mb-1.5">
-                          <Plus className="h-4 w-4 text-foreground-secondary group-hover:text-foreground" />
-                          <span className="text-sm font-medium text-foreground">Start from scratch</span>
+                        <div className="rounded-md bg-[#0a0c0e] border border-border/60 w-9 h-9 flex items-center justify-center mb-3 text-foreground-secondary group-hover:text-foreground transition-colors">
+                          <Info className="h-4 w-4" />
                         </div>
-                        <p className="text-xs text-foreground-secondary">Write your own trigger logic from an empty template.</p>
+                        <span className="text-sm font-medium text-foreground block mb-0.5">Use AI Assistant</span>
+                        <p className="text-xs text-foreground-secondary group-hover:text-foreground transition-colors">Describe what you want and let AI write the rule.</p>
                       </button>
                       <button
                         type="button"
-                        onClick={() => { setShowTemplatePicker(false); setCustomCode(DEFAULT_CUSTOM_CODE); }}
-                        className="p-4 rounded-lg border border-border bg-background-card hover:border-foreground-secondary/40 transition-colors text-left group"
+                        onClick={() => {
+                          setShowTemplatePicker(false);
+                          setCreateRuleMode('samples');
+                          setSelectedSampleId(null);
+                          setCustomCode(DEFAULT_CUSTOM_CODE);
+                        }}
+                        className="p-4 rounded-lg border border-border bg-background-card hover:border-foreground-secondary/40 hover:bg-muted/30 transition-colors text-left group"
                       >
-                        <div className="flex items-center gap-2 mb-1.5">
-                          <Info className="h-4 w-4 text-foreground-secondary group-hover:text-foreground" />
-                          <span className="text-sm font-medium text-foreground">Use AI Assistant</span>
+                        <div className="rounded-md bg-[#0a0c0e] border border-border/60 w-9 h-9 flex items-center justify-center mb-3 text-foreground-secondary group-hover:text-foreground transition-colors">
+                          <LayoutGrid className="h-4 w-4" />
                         </div>
-                        <p className="text-xs text-foreground-secondary">Describe what you want and let AI write the rule.</p>
+                        <span className="text-sm font-medium text-foreground block mb-0.5">Choose from samples</span>
+                        <p className="text-xs text-foreground-secondary group-hover:text-foreground transition-colors">Weekly digest, new vulnerabilities, and more.</p>
                       </button>
                     </div>
-                    {loadingTemplates ? (
-                      <div className="flex items-center justify-center py-8">
-                        <Loader2 className="h-5 w-5 animate-spin text-foreground-secondary" />
-                      </div>
-                    ) : templates.length > 0 && (
-                      <>
-                        <div className="flex items-center gap-2 pt-2">
-                          <LayoutGrid className="h-3.5 w-3.5 text-foreground-secondary" />
-                          <span className="text-xs font-medium text-foreground-secondary uppercase tracking-wider">Templates</span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
-                          {templates.map((tpl) => (
-                            <button
-                              key={tpl.id}
-                              type="button"
-                              onClick={() => { setShowTemplatePicker(false); setCustomCode(tpl.code); }}
-                              className="p-4 rounded-lg border border-border bg-background-card hover:border-primary/40 transition-colors text-left"
-                            >
-                              <span className="text-sm font-medium text-foreground block mb-1">{tpl.name}</span>
-                              <p className="text-xs text-foreground-secondary line-clamp-2">{tpl.description}</p>
-                            </button>
-                          ))}
-                        </div>
-                      </>
-                    )}
                   </div>
                 </div>
               ) : (
@@ -815,47 +828,100 @@ export default function NotificationRulesSection({ organizationId = '', projectI
 
                       <div>
                         <label className="block text-sm font-medium text-foreground mb-2 text-left">Destinations</label>
-                        <div className="space-y-2">
-                          {destinations.map((dest) => (
-                            <div key={dest.id} className="flex gap-2 items-center">
-                              <ConnectionDropdown
-                                value={dest.connectionId}
-                                connections={destinationConnections}
-                                onChange={(connectionId) => updateDestination(dest.id, connectionId)}
-                                placeholder="Select integration"
-                                className="flex-1 min-w-0"
-                              />
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-9 w-9 shrink-0 text-foreground-secondary hover:text-destructive rounded-lg"
-                                onClick={() => removeDestination(dest.id)}
-                                disabled={destinations.length <= 1}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          ))}
-                        </div>
-                        {destinationConnections.length === 0 && (
-                          <p className="text-xs text-foreground-muted mt-1">
-                            Connect Slack, Jira, Linear, or other integrations in Organization Settings first.
+                        {destinationConnections.length === 0 ? (
+                          <p className="text-sm text-foreground-secondary">
+                            Connect integrations in Organization Settings first.
                           </p>
+                        ) : (
+                          <>
+                            <div className="space-y-2">
+                              {destinations.map((dest) => (
+                                <div key={dest.id} className="flex gap-2 items-center">
+                                  <ConnectionDropdown
+                                    value={dest.connectionId}
+                                    connections={destinationConnections}
+                                    onChange={(connectionId) => updateDestination(dest.id, connectionId)}
+                                    placeholder="Select integration"
+                                    className="flex-1 min-w-0"
+                                  />
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-9 w-9 shrink-0 text-foreground-secondary hover:text-destructive rounded-lg"
+                                    onClick={() => removeDestination(dest.id)}
+                                    disabled={destinations.length <= 1}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              ))}
+                            </div>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={addDestination}
+                              className="mt-2 rounded-lg"
+                            >
+                              <Plus className="h-4 w-4" />
+                              Add destination
+                            </Button>
+                          </>
                         )}
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={addDestination}
-                          className="mt-2 rounded-lg"
-                          disabled={destinationConnections.length === 0}
-                        >
-                          <Plus className="h-4 w-4" />
-                          Add destination
-                        </Button>
                       </div>
 
+                      {createRuleMode === 'samples' && !editingRuleId ? (
+                        <div>
+                          <label className="block text-sm font-medium text-foreground mb-2 text-left">Sample</label>
+                          {loadingTemplates ? (
+                            <div className="flex items-center justify-center py-8">
+                              <Loader2 className="h-5 w-5 animate-spin text-foreground-secondary" />
+                            </div>
+                          ) : (() => {
+                            const withCode = templates.filter((t): t is typeof t & { code: string } => !!t.code);
+                            const samplesToShow = withCode.length > 0 ? withCode : DEFAULT_SAMPLES;
+                            return (
+                              <div className="grid grid-cols-1 gap-2">
+                                {samplesToShow.map((tpl) => {
+                                  const Icon = (('icon' in tpl && tpl.icon ? tpl.icon : Bell) as LucideIcon);
+                                  const isSelected = selectedSampleId === tpl.id;
+                                  return (
+                                    <button
+                                      key={tpl.id}
+                                      type="button"
+                                      onClick={() => {
+                                        setCustomCode(tpl.code);
+                                        setSelectedSampleId(tpl.id);
+                                      }}
+                                      className={cn(
+                                        'p-4 rounded-lg border text-left transition-colors flex items-start gap-3 group',
+                                        isSelected
+                                          ? 'border-foreground/50 bg-muted/50 ring-2 ring-foreground/20 ring-inset'
+                                          : 'border-border bg-background-card hover:border-foreground-secondary/40 hover:bg-muted/30'
+                                      )}
+                                    >
+                                      <div className={cn(
+                                        'h-10 w-10 rounded-md flex items-center justify-center flex-shrink-0 border border-border/60 transition-colors',
+                                        isSelected ? 'bg-[#0a0c0e] text-foreground' : 'bg-[#0a0c0e] text-foreground-secondary group-hover:text-foreground'
+                                      )}>
+                                        <Icon className="h-5 w-5" />
+                                      </div>
+                                      <div className="min-w-0 flex-1">
+                                        <span className="text-sm font-medium text-foreground block">{tpl.name}</span>
+                                        {tpl.description && (
+                                          <p className="text-xs text-foreground-secondary group-hover:text-foreground transition-colors mt-1 line-clamp-2">{tpl.description}</p>
+                                        )}
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      ) : (
+                        <>
                       <div>
                         <label className="block text-sm font-medium text-foreground mb-2 text-left">Trigger logic</label>
                         <div className="rounded-lg border border-border overflow-hidden">
@@ -931,20 +997,15 @@ export default function NotificationRulesSection({ organizationId = '', projectI
                           )}
                         </div>
                       </div>
+                        </>
+                      )}
 
-                      {/* Dry Run toggle */}
-                      <div className="flex items-center justify-between py-2 px-3 rounded-lg border border-border bg-background-card">
-                        <div className="flex-1 min-w-0 mr-3">
-                          <span className="text-sm font-medium text-foreground block">Dry Run</span>
-                          <span className="text-xs text-foreground-secondary">Evaluate against real events without sending notifications.</span>
-                        </div>
-                        <Switch checked={dryRun} onCheckedChange={setDryRun} />
-                      </div>
                     </div>
                   </div>
 
-                  <div className="flex-shrink-0 flex flex-col">
-                    <NotificationAIAssistant
+                  {(createRuleMode === 'ai' || editingRuleId) && (
+                    <div ref={aiAssistantRef} className="flex-shrink-0 flex flex-col">
+                      <NotificationAIAssistant
                       organizationId={organizationId}
                       currentCode={customCode}
                       onUpdateCode={setCustomCode}
@@ -952,7 +1013,8 @@ export default function NotificationRulesSection({ organizationId = '', projectI
                       embedded
                       variant="inline"
                     />
-                  </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -968,9 +1030,7 @@ export default function NotificationRulesSection({ organizationId = '', projectI
               >
                 {saving ? (
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                ) : (
-                  <Plus className="h-4 w-4 mr-2" />
-                )}
+                ) : null}
                 {editingRuleId ? 'Save' : 'Create Rule'}
               </Button>
             </div>

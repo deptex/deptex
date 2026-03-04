@@ -78,7 +78,7 @@ router.get('/', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
 
-    // Get organizations with user's role in a single query using join
+    // Get organizations with user's role in a single query using join (plan comes from organization_plans)
     const { data: memberships, error: membershipError } = await supabase
       .from('organization_members')
       .select(`
@@ -87,7 +87,6 @@ router.get('/', async (req: AuthRequest, res) => {
         organizations!inner (
           id,
           name,
-          plan,
           avatar_url,
           created_at,
           updated_at
@@ -104,6 +103,16 @@ router.get('/', async (req: AuthRequest, res) => {
     }
 
     const organizationIds = memberships.map(m => m.organization_id);
+
+    // Plan tier from organization_plans (single source of truth)
+    const { data: planRows } = await supabase
+      .from('organization_plans')
+      .select('organization_id, plan_tier')
+      .in('organization_id', organizationIds);
+    const planByOrgId = new Map<string, string>();
+    (planRows || []).forEach((row: { organization_id: string; plan_tier: string }) => {
+      planByOrgId.set(row.organization_id, row.plan_tier ?? 'free');
+    });
 
     // Get member counts for all organizations in parallel using count queries
     const memberCountPromises = organizationIds.map(async (orgId) => {
@@ -152,6 +161,7 @@ router.get('/', async (req: AuthRequest, res) => {
 
         return {
           ...org,
+          plan: planByOrgId.get(m.organization_id) ?? 'free',
           role: m.role || 'member',
           role_display_name: roleData?.displayName || null,
           role_color: roleData?.color || null,
@@ -179,18 +189,25 @@ router.post('/', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'Organization name is required' });
     }
 
-    // Create organization
+    // Create organization (plan tier lives in organization_plans only)
     const { data: organization, error: orgError } = await supabase
       .from('organizations')
-      .insert({
-        name: name.trim(),
-        plan: 'free',
-      })
+      .insert({ name: name.trim() })
       .select()
       .single();
 
     if (orgError) {
       throw orgError;
+    }
+
+    // Create organization_plans row (single source of truth for plan tier and billing)
+    const { error: planError } = await supabase
+      .from('organization_plans')
+      .insert({ organization_id: organization.id, plan_tier: 'free' });
+
+    if (planError) {
+      await supabase.from('organizations').delete().eq('id', organization.id);
+      throw planError;
     }
 
     // Add creator as owner
@@ -315,6 +332,7 @@ router.post('/', async (req: AuthRequest, res) => {
 
     res.status(201).json({
       ...organization,
+      plan: 'free',
       role: 'owner',
     });
   } catch (error: any) {
@@ -352,6 +370,13 @@ router.get('/:id', async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Organization not found' });
     }
 
+    // Plan tier comes from organization_plans (single source of truth)
+    const { data: planRow } = await supabase
+      .from('organization_plans')
+      .select('plan_tier')
+      .eq('organization_id', id)
+      .single();
+
     // Get role display name, color, and rank (display_order)
     const { data: roleData } = await supabase
       .from('organization_roles')
@@ -362,6 +387,7 @@ router.get('/:id', async (req: AuthRequest, res) => {
 
     res.json({
       ...organization,
+      plan: planRow?.plan_tier ?? 'free',
       role: membership.role,
       role_display_name: roleData?.display_name || null,
       role_color: roleData?.color || null,
@@ -1648,7 +1674,13 @@ router.put('/:id', async (req: AuthRequest, res) => {
       });
     }
 
-    res.json(organization);
+    const { data: planRow } = await supabase
+      .from('organization_plans')
+      .select('plan_tier')
+      .eq('organization_id', id)
+      .single();
+
+    res.json({ ...organization, plan: planRow?.plan_tier ?? 'free' });
   } catch (error: any) {
     console.error('Error updating organization:', error);
     res.status(500).json({ error: error.message || 'Failed to update organization' });
@@ -2503,12 +2535,13 @@ router.post('/:id/statuses', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'Status name is required' });
     }
 
+    const colorVal = (color != null && String(color).trim() !== '') ? String(color).trim() : null;
     const { data: status, error } = await supabase
       .from('organization_statuses')
       .insert({
         organization_id: id,
         name: name.trim(),
-        color: color || '#6b7280',
+        color: colorVal,
         description: description || null,
         is_passing: is_passing ?? false,
         rank: rank ?? 50,
@@ -2539,6 +2572,44 @@ router.post('/:id/statuses', async (req: AuthRequest, res) => {
   }
 });
 
+// PUT /api/organizations/:id/statuses/reorder - Bulk reorder (must be before /:statusId so "reorder" is not matched as id)
+router.put('/:id/statuses/reorder', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    if (!(await canManageStatuses(id, userId))) {
+      return res.status(403).json({ error: 'Permission denied' });
+    }
+
+    const { order } = req.body;
+    if (!Array.isArray(order)) {
+      return res.status(400).json({ error: 'order must be an array of { id, rank }' });
+    }
+
+    for (const item of order) {
+      const { error } = await supabase
+        .from('organization_statuses')
+        .update({ rank: item.rank })
+        .eq('id', item.id)
+        .eq('organization_id', id);
+      if (error) throw error;
+    }
+
+    const { data: statuses, error: fetchError } = await supabase
+      .from('organization_statuses')
+      .select('*')
+      .eq('organization_id', id)
+      .order('rank', { ascending: true });
+
+    if (fetchError) throw fetchError;
+    res.json({ statuses: statuses ?? [] });
+  } catch (error: any) {
+    console.error('Error reordering statuses:', error);
+    res.status(500).json({ error: error.message || 'Failed to reorder statuses' });
+  }
+});
+
 // PUT /api/organizations/:id/statuses/:statusId
 router.put('/:id/statuses/:statusId', async (req: AuthRequest, res) => {
   try {
@@ -2551,7 +2622,10 @@ router.put('/:id/statuses/:statusId', async (req: AuthRequest, res) => {
 
     const updates: Record<string, unknown> = {};
     if (req.body.name !== undefined) updates.name = req.body.name;
-    if (req.body.color !== undefined) updates.color = req.body.color;
+    if (req.body.color !== undefined) {
+      const v = req.body.color;
+      updates.color = (v != null && String(v).trim() !== '') ? String(v).trim() : null;
+    }
     if (req.body.description !== undefined) updates.description = req.body.description;
     if (req.body.is_passing !== undefined) updates.is_passing = req.body.is_passing;
     if (req.body.rank !== undefined) updates.rank = req.body.rank;
@@ -2571,42 +2645,6 @@ router.put('/:id/statuses/:statusId', async (req: AuthRequest, res) => {
   } catch (error: any) {
     console.error('Error updating status:', error);
     res.status(500).json({ error: error.message || 'Failed to update status' });
-  }
-});
-
-// PUT /api/organizations/:id/statuses/reorder - Bulk reorder statuses
-router.put('/:id/statuses/reorder', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const { id } = req.params;
-
-    if (!(await canManageStatuses(id, userId))) {
-      return res.status(403).json({ error: 'Permission denied' });
-    }
-
-    const { order } = req.body;
-    if (!Array.isArray(order)) {
-      return res.status(400).json({ error: 'order must be an array of { id, rank }' });
-    }
-
-    for (const item of order) {
-      await supabase
-        .from('organization_statuses')
-        .update({ rank: item.rank })
-        .eq('id', item.id)
-        .eq('organization_id', id);
-    }
-
-    const { data: statuses } = await supabase
-      .from('organization_statuses')
-      .select('*')
-      .eq('organization_id', id)
-      .order('rank', { ascending: true });
-
-    res.json(statuses ?? []);
-  } catch (error: any) {
-    console.error('Error reordering statuses:', error);
-    res.status(500).json({ error: error.message || 'Failed to reorder statuses' });
   }
 });
 
@@ -3207,6 +3245,73 @@ router.post('/:id/sla-policies/resume', async (req: AuthRequest, res) => {
   }
 });
 
+// POST /api/organizations/:id/sla-policies/disable
+router.post('/:id/sla-policies/disable', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    if (!(await canManageStatuses(id, userId))) {
+      return res.status(403).json({ error: 'Permission denied.' });
+    }
+
+    const { data: projectIds } = await supabase
+      .from('projects')
+      .select('id')
+      .eq('organization_id', id);
+
+    const ids = (projectIds ?? []).map((p: { id: string }) => p.id);
+    if (ids.length > 0) {
+      const { error: clearErr } = await supabase
+        .from('project_dependency_vulnerabilities')
+        .update({
+          detected_at: null,
+          sla_deadline_at: null,
+          sla_warning_at: null,
+          sla_status: null,
+          sla_breached_at: null,
+          sla_met_at: null,
+          sla_exempt_reason: null,
+          sla_warning_notified_at: null,
+          sla_breach_notified_at: null,
+        })
+        .in('project_id', ids);
+      if (clearErr) throw clearErr;
+    }
+
+    const { error: deleteErr } = await supabase
+      .from('organization_sla_policies')
+      .delete()
+      .eq('organization_id', id);
+    if (deleteErr) throw deleteErr;
+
+    await supabase.from('organizations').update({ sla_paused_at: null }).eq('id', id);
+
+    await supabase.from('sla_policy_changes').insert({
+      organization_id: id,
+      changed_by: userId,
+      change_type: 'disabled',
+      new_values: { action: 'disable' },
+    });
+
+    res.status(200).json({ ok: true });
+  } catch (error: any) {
+    console.error('Error disabling SLA policies:', error);
+    res.status(500).json({ error: error.message || 'Failed to disable SLA policies' });
+  }
+});
+
 // GET /api/organizations/:id/sla-compliance
 router.get('/:id/sla-compliance', async (req: AuthRequest, res) => {
   try {
@@ -3458,7 +3563,25 @@ router.get('/:id/sla-policy-changes', async (req: AuthRequest, res) => {
       .limit(50);
 
     if (error) throw error;
-    res.json(changes ?? []);
+
+    const rows = changes ?? [];
+    const userIds = [...new Set(rows.map((r: any) => r.changed_by).filter(Boolean))];
+    const profiles: Record<string, { full_name: string | null }> = {};
+    if (userIds.length > 0) {
+      const { data: profileRows } = await supabase
+        .from('user_profiles')
+        .select('user_id, full_name')
+        .in('user_id', userIds);
+      for (const p of profileRows ?? []) {
+        profiles[p.user_id] = { full_name: p.full_name ?? null };
+      }
+    }
+
+    const withUser = rows.map((r: any) => ({
+      ...r,
+      changed_by_user: profiles[r.changed_by] ?? { full_name: null },
+    }));
+    res.json(withUser);
   } catch (error: any) {
     console.error('Error fetching SLA policy changes:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch SLA policy changes' });
@@ -3643,7 +3766,46 @@ router.get('/:id/policy-changes', async (req: AuthRequest, res) => {
     const { data: changes, error } = await query;
     if (error) throw error;
 
-    res.json(changes ?? []);
+    const list = changes ?? [];
+    const authorIds = [...new Set(list.map((c: any) => c.author_id).filter(Boolean))];
+    let profiles: Record<string, { full_name: string | null; avatar_url: string | null }> = {};
+    if (authorIds.length > 0) {
+      const { data: profileRows } = await supabase
+        .from('user_profiles')
+        .select('user_id, full_name, avatar_url')
+        .in('user_id', authorIds);
+      for (const p of profileRows ?? []) {
+        profiles[p.user_id] = { full_name: p.full_name ?? null, avatar_url: p.avatar_url ?? null };
+      }
+      // Fallback: where full_name is missing, use Auth user metadata (OAuth often has name/email)
+      for (const uid of authorIds) {
+        if (!profiles[uid]?.full_name?.trim()) {
+          const { data: { user: authUser } } = await supabase.auth.admin.getUserById(uid);
+          const fallbackName = authUser?.user_metadata?.full_name
+            || authUser?.user_metadata?.name
+            || authUser?.email
+            || null;
+          if (fallbackName) {
+            if (!profiles[uid]) profiles[uid] = { full_name: null, avatar_url: null };
+            profiles[uid].full_name = fallbackName;
+          }
+          if (profiles[uid] && !profiles[uid].avatar_url && authUser?.user_metadata?.picture) {
+            profiles[uid].avatar_url = authUser.user_metadata.picture;
+          }
+          if (profiles[uid] && !profiles[uid].avatar_url && authUser?.user_metadata?.avatar_url) {
+            profiles[uid].avatar_url = authUser.user_metadata.avatar_url;
+          }
+        }
+      }
+    }
+
+    const enriched = list.map((c: any) => ({
+      ...c,
+      author_display_name: profiles[c.author_id]?.full_name ?? null,
+      author_avatar_url: profiles[c.author_id]?.avatar_url ?? null,
+    }));
+
+    res.json(enriched);
   } catch (error: any) {
     console.error('Error fetching policy changes:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch policy changes' });
@@ -4093,7 +4255,7 @@ router.get('/:id/notification-history', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id } = req.params;
-    const { event_type, destination_type, status, timeframe, page: pageStr, per_page: perPageStr } = req.query;
+    const { event_type, destination_type, destination_id, status, timeframe, page: pageStr, per_page: perPageStr } = req.query;
 
     const { data: membership } = await supabase
       .from('organization_members')
@@ -4116,6 +4278,7 @@ router.get('/:id/notification-history', async (req: AuthRequest, res) => {
 
     if (event_type) query = query.eq('notification_events.event_type', event_type as string);
     if (destination_type) query = query.eq('destination_type', destination_type as string);
+    if (destination_id) query = query.eq('destination_id', destination_id as string);
     if (status && status !== 'all') query = query.eq('status', status as string);
     if (timeframe) {
       const hours = timeframe === '24h' ? 24 : timeframe === '7d' ? 168 : timeframe === '30d' ? 720 : 168;
@@ -5708,12 +5871,18 @@ router.post('/:id/ai-providers', async (req: AuthRequest, res) => {
       return res.status(403).json({ error: 'You do not have permission to manage integrations' });
     }
 
-    const { provider, api_key, model_preference, monthly_cost_cap } = req.body;
+    const { provider, api_key, model_preference, monthly_cost_cap, display_name, api_base_url } = req.body;
     if (!provider || !api_key) {
       return res.status(400).json({ error: 'provider and api_key are required' });
     }
-    if (!['openai', 'anthropic', 'google'].includes(provider)) {
-      return res.status(400).json({ error: 'Invalid provider. Must be openai, anthropic, or google' });
+    if (!['openai', 'anthropic', 'google', 'custom'].includes(provider)) {
+      return res.status(400).json({ error: 'Invalid provider. Must be openai, anthropic, google, or custom' });
+    }
+    if (provider === 'custom' && (!display_name || typeof display_name !== 'string' || !display_name.trim())) {
+      return res.status(400).json({ error: 'display_name is required for custom provider' });
+    }
+    if (provider === 'custom' && (!api_base_url || typeof api_base_url !== 'string' || !api_base_url.trim())) {
+      return res.status(400).json({ error: 'api_base_url is required for custom provider' });
     }
 
     const { encrypted, version } = encryptApiKey(api_key);
@@ -5724,6 +5893,27 @@ router.post('/:id/ai-providers', async (req: AuthRequest, res) => {
       .eq('organization_id', orgId);
 
     const isOnlyProvider = !existing || existing.length === 0;
+
+    if (provider === 'custom') {
+      const { data, error } = await supabase
+        .from('organization_ai_providers')
+        .insert({
+          organization_id: orgId,
+          provider: 'custom',
+          encrypted_api_key: encrypted,
+          encryption_key_version: version,
+          display_name: (display_name || '').trim(),
+          api_base_url: (api_base_url || '').trim().replace(/\/$/, ''),
+          model_preference: model_preference || null,
+          monthly_cost_cap: monthly_cost_cap ?? 100,
+          is_default: isOnlyProvider,
+          updated_at: new Date().toISOString(),
+        })
+        .select('id, provider, model_preference, is_default, monthly_cost_cap, display_name, api_base_url, created_at, updated_at')
+        .single();
+      if (error) throw error;
+      return res.json({ ...data, connected: true });
+    }
 
     const { data, error } = await supabase
       .from('organization_ai_providers')
@@ -5737,7 +5927,7 @@ router.post('/:id/ai-providers', async (req: AuthRequest, res) => {
         is_default: isOnlyProvider ? true : undefined,
         updated_at: new Date().toISOString(),
       }, { onConflict: 'organization_id,provider' })
-      .select('id, provider, model_preference, is_default, monthly_cost_cap')
+      .select('id, provider, model_preference, is_default, monthly_cost_cap, display_name, api_base_url, created_at, updated_at')
       .single();
 
     if (error) throw error;
@@ -5759,7 +5949,7 @@ router.get('/:id/ai-providers', async (req: AuthRequest, res) => {
 
     const { data, error } = await supabase
       .from('organization_ai_providers')
-      .select('id, provider, model_preference, is_default, monthly_cost_cap, created_at, updated_at')
+      .select('id, provider, model_preference, is_default, monthly_cost_cap, display_name, api_base_url, created_at, updated_at')
       .eq('organization_id', orgId);
 
     if (error) throw error;
@@ -5811,7 +6001,6 @@ router.delete('/:id/ai-providers/:providerId', async (req: AuthRequest, res) => 
 router.post('/:id/ai-providers/test', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
-    const orgId = req.params.id;
 
     const { checkRateLimit } = await import('../lib/rate-limit');
     const rl = await checkRateLimit(`ai:test:${userId}`, 5, 60);
@@ -5819,13 +6008,14 @@ router.post('/:id/ai-providers/test', async (req: AuthRequest, res) => {
       return res.status(429).json({ error: 'Too many test requests. Try again in a minute.' });
     }
 
-    const { provider, api_key, model } = req.body;
+    const { provider, api_key, model, api_base_url } = req.body;
     if (!provider || !api_key) {
       return res.status(400).json({ error: 'provider and api_key are required' });
     }
 
     const { createProviderFromKey } = await import('../lib/ai/provider');
-    const aiProvider = createProviderFromKey(provider, api_key, model);
+    const baseURL = provider === 'custom' ? (api_base_url || '').trim().replace(/\/$/, '') : undefined;
+    const aiProvider = createProviderFromKey(provider, api_key, model, baseURL);
 
     const result = await aiProvider.chat([
       { role: 'user', content: 'Say hello in exactly one word.' }
@@ -5838,6 +6028,38 @@ router.post('/:id/ai-providers/test', async (req: AuthRequest, res) => {
       return res.json({ success: false, error: error.message, code: error.code });
     }
     res.json({ success: false, error: error.message || 'Connection test failed' });
+  }
+});
+
+// PATCH /api/organizations/:id/ai-providers/:providerId -- update model_preference, or (custom) display_name, api_base_url
+router.patch('/:id/ai-providers/:providerId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    const providerId = req.params.providerId;
+    if (!(await hasManageIntegrations(orgId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+    }
+
+    const { model_preference, display_name, api_base_url } = req.body;
+    const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (model_preference !== undefined) updates.model_preference = model_preference === '' ? null : model_preference;
+    if (display_name !== undefined) updates.display_name = display_name === '' ? null : (display_name || '').trim();
+    if (api_base_url !== undefined) updates.api_base_url = api_base_url === '' ? null : (api_base_url || '').trim().replace(/\/$/, '');
+
+    const { data, error } = await supabase
+      .from('organization_ai_providers')
+      .update(updates)
+      .eq('id', providerId)
+      .eq('organization_id', orgId)
+      .select('id, provider, model_preference, is_default, monthly_cost_cap, display_name, api_base_url, updated_at')
+      .single();
+
+    if (error) throw error;
+    res.json({ ...data, connected: true });
+  } catch (error: any) {
+    console.error('Error updating AI provider:', error);
+    res.status(500).json({ error: error.message || 'Failed to update provider' });
   }
 });
 
@@ -6914,73 +7136,6 @@ router.delete('/:id/security/mfa-exemptions/:userId', async (req: AuthRequest, r
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Failed to remove exemption' });
-  }
-});
-
-// --- 14C: Session Management ---
-
-router.patch('/:id/security/session-policy', async (req: AuthRequest, res) => {
-  try {
-    const orgId = req.params.id;
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const hasAccess = await checkSecurityPermission(orgId, userId);
-    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
-
-    const { max_session_duration_hours, require_reauth_for_sensitive } = req.body;
-
-    const updates: Record<string, unknown> = {};
-    if (typeof max_session_duration_hours === 'number') {
-      updates.max_session_duration_hours = Math.max(1, Math.min(720, max_session_duration_hours));
-    }
-    if (typeof require_reauth_for_sensitive === 'boolean') {
-      updates.require_reauth_for_sensitive = require_reauth_for_sensitive;
-    }
-
-    const { error } = await supabase
-      .from('organizations')
-      .update(updates)
-      .eq('id', orgId);
-
-    if (error) return res.status(500).json({ error: 'Failed to update session policy' });
-
-    const { logSecurityEvent } = require('../lib/security-audit');
-    await logSecurityEvent({
-      organizationId: orgId,
-      actorId: userId,
-      action: 'session_policy_changed',
-      req,
-      metadata: updates,
-    });
-
-    res.json({ success: true, ...updates });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to update session policy' });
-  }
-});
-
-router.get('/:id/security/session-policy', async (req: AuthRequest, res) => {
-  try {
-    const orgId = req.params.id;
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const hasAccess = await checkSecurityPermission(orgId, userId);
-    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
-
-    const { data: org } = await supabase
-      .from('organizations')
-      .select('max_session_duration_hours, require_reauth_for_sensitive')
-      .eq('id', orgId)
-      .single();
-
-    res.json({
-      max_session_duration_hours: org?.max_session_duration_hours ?? 168,
-      require_reauth_for_sensitive: org?.require_reauth_for_sensitive ?? false,
-    });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch session policy' });
   }
 });
 

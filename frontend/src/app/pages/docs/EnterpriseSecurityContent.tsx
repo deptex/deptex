@@ -55,9 +55,6 @@ export default function EnterpriseSecurityContent() {
           <p className="text-foreground/90 leading-relaxed">
             Users see <strong className="text-foreground">Active Sessions</strong> under Settings → Security and can revoke individual sessions or sign out all other devices.
           </p>
-          <p className="text-foreground/90 leading-relaxed">
-            Admins configure <strong className="text-foreground">Session Policy</strong>: max session duration, require re-authentication for sensitive actions, force logout all members.
-          </p>
         </div>
       </div>
 

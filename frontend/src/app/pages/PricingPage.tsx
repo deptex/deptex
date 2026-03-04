@@ -55,7 +55,6 @@ const tiers = [
       'SSO (SAML)',
       'MFA enforcement',
       'Audit logs',
-      'Legal documents (DPA, TIA)',
       'Aegis management console',
     ],
   },

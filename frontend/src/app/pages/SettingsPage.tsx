@@ -7,50 +7,14 @@ import { Button } from '../../components/ui/button';
 import { Switch } from '../../components/ui/switch';
 import { Toaster } from '../../components/ui/toaster';
 import { useToast } from '../../hooks/use-toast';
-import { Save, Edit2, Loader2, ChevronDown, Check, Shield, Key, Monitor, Trash2, RefreshCw, Plus } from 'lucide-react';
-import { api, type Organization } from '../../lib/api';
+import { Save, Edit2, Loader2, Shield, Monitor, Trash2 } from 'lucide-react';
+import { api } from '../../lib/api';
 import { useSearchParams, useLocation } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
-
-const EVENT_TYPES = [
-  { id: 'vulnerability_detected', label: 'Vulnerability detected' },
-  { id: 'vulnerability_resolved', label: 'Vulnerability resolved' },
-  { id: 'dependency_outdated', label: 'Dependency outdated' },
-  { id: 'policy_violation', label: 'Policy violation' },
-  { id: 'extraction_complete', label: 'Extraction complete' },
-  { id: 'extraction_failed', label: 'Extraction failed' },
-  { id: 'pr_check_failed', label: 'PR check failed' },
-  { id: 'anomaly_detected', label: 'Anomaly detected' },
-  { id: 'status_changed', label: 'Project status changed' },
-];
-
-const DELIVERY_OPTIONS = [
-  { id: 'instant', label: 'Instant' },
-  { id: 'daily_digest', label: 'Daily Digest' },
-  { id: 'weekly_digest', label: 'Weekly Digest' },
-  { id: 'off', label: 'Off' },
-] as const;
-
-interface NotificationPrefs {
-  email_enabled: boolean;
-  event_types: string[];
-  dnd_start_hour: number;
-  dnd_end_hour: number;
-  delivery_preference: string;
-}
-
-const DEFAULT_PREFS: NotificationPrefs = {
-  email_enabled: true,
-  event_types: EVENT_TYPES.map((e) => e.id),
-  dnd_start_hour: 0,
-  dnd_end_hour: 0,
-  delivery_preference: 'instant',
-};
 
 export default function SettingsPage() {
   const { pathname } = useLocation();
   const isConnectedAccounts = pathname === '/settings/general/connected-accounts';
-  const isNotifications = pathname === '/settings/notifications';
   const isSecurity = pathname === '/settings/security';
   const { user, signInWithGitHub, signInWithGoogle } = useAuth();
   const { toast } = useToast();
@@ -64,14 +28,6 @@ export default function SettingsPage() {
     google: false,
   });
 
-  // Notification preferences state
-  const [orgs, setOrgs] = useState<Organization[]>([]);
-  const [selectedOrgId, setSelectedOrgId] = useState('');
-  const [notifPrefs, setNotifPrefs] = useState<NotificationPrefs>(DEFAULT_PREFS);
-  const [loadingPrefs, setLoadingPrefs] = useState(false);
-  const [savingPrefs, setSavingPrefs] = useState(false);
-  const [orgDropdownOpen, setOrgDropdownOpen] = useState(false);
-
   // Security tab state
   const [mfaEnabled, setMfaEnabled] = useState(false);
   const [mfaLoading, setMfaLoading] = useState(false);
@@ -83,15 +39,6 @@ export default function SettingsPage() {
     is_current?: boolean;
   }>>([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
-  const [tokens, setTokens] = useState<Array<{
-    id: string;
-    name: string;
-    token_prefix?: string;
-    scopes?: string[];
-    last_used_at?: string;
-    expires_at?: string;
-  }>>([]);
-  const [loadingTokens, setLoadingTokens] = useState(false);
 
   // Sync display name from hook
   useEffect(() => {
@@ -252,102 +199,6 @@ export default function SettingsPage() {
     return () => { cancelled = true; };
   }, [isSecurity]);
 
-  // Load API tokens when Security tab is active
-  useEffect(() => {
-    if (!isSecurity) return;
-    let cancelled = false;
-    setLoadingTokens(true);
-    (async () => {
-      try {
-        const token = (await supabase.auth.getSession()).data.session?.access_token;
-        const apiBase = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:3001';
-        const res = await fetch(`${apiBase}/api/user/api-tokens`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.ok && !cancelled) {
-          const data = await res.json();
-          setTokens(Array.isArray(data) ? data : data.tokens || []);
-        } else if (!cancelled) {
-          setTokens([]);
-        }
-      } catch {
-        if (!cancelled) setTokens([]);
-      } finally {
-        if (!cancelled) setLoadingTokens(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [isSecurity]);
-
-  // Load orgs for notification preferences
-  useEffect(() => {
-    if (!isNotifications) return;
-    api.getOrganizations().then((data) => {
-      setOrgs(data);
-      if (data.length > 0 && !selectedOrgId) setSelectedOrgId(data[0].id);
-    }).catch(() => {});
-  }, [isNotifications]);
-
-  // Load notification preferences for selected org
-  useEffect(() => {
-    if (!isNotifications || !selectedOrgId) return;
-    let cancelled = false;
-    setLoadingPrefs(true);
-    (async () => {
-      try {
-        const token = (await supabase.auth.getSession()).data.session?.access_token;
-        const apiBase = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:3001';
-        const res = await fetch(`${apiBase}/api/user-notifications/preferences/${selectedOrgId}`, {
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        });
-        if (res.ok && !cancelled) {
-          const data = await res.json();
-          setNotifPrefs({
-            email_enabled: data.email_enabled ?? true,
-            event_types: data.event_types ?? EVENT_TYPES.map((e) => e.id),
-            dnd_start_hour: data.dnd_start_hour ?? 0,
-            dnd_end_hour: data.dnd_end_hour ?? 0,
-            delivery_preference: data.delivery_preference ?? 'instant',
-          });
-        }
-      } catch {
-        if (!cancelled) setNotifPrefs(DEFAULT_PREFS);
-      } finally {
-        if (!cancelled) setLoadingPrefs(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [isNotifications, selectedOrgId]);
-
-  const handleSaveNotifPrefs = async () => {
-    if (!selectedOrgId) return;
-    setSavingPrefs(true);
-    try {
-      const token = (await supabase.auth.getSession()).data.session?.access_token;
-      const apiBase = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:3001';
-      const res = await fetch(`${apiBase}/api/user-notifications/preferences/${selectedOrgId}`, {
-        method: 'PUT',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(notifPrefs),
-      });
-      if (!res.ok) throw new Error('Failed to save');
-      toast({ title: 'Preferences saved', description: 'Your notification preferences have been updated.' });
-    } catch (err: any) {
-      toast({ title: 'Failed to save', description: err.message || 'Could not save preferences', variant: 'destructive' });
-    } finally {
-      setSavingPrefs(false);
-    }
-  };
-
-  const toggleEventType = (eventId: string) => {
-    setNotifPrefs((prev) => ({
-      ...prev,
-      event_types: prev.event_types.includes(eventId)
-        ? prev.event_types.filter((e) => e !== eventId)
-        : [...prev.event_types, eventId],
-    }));
-  };
-
   const integrationList = [
     { id: 'github', name: 'GitHub', image: '/images/integrations/github.png', description: 'Use GitHub to sign in to your account' },
     { id: 'google', name: 'Google', image: '/images/integrations/google.png', description: 'Use Google to sign in to your account' },
@@ -369,7 +220,7 @@ export default function SettingsPage() {
 
             {/* Content */}
             <div className="flex-1">
-              {!isConnectedAccounts && !isNotifications && !isSecurity && (
+              {!isConnectedAccounts && !isSecurity && (
                 <div className="space-y-6">
                   <div>
                     <h2 className="text-2xl font-bold text-foreground">General</h2>
@@ -521,7 +372,7 @@ export default function SettingsPage() {
                   <div>
                     <h2 className="text-2xl font-bold text-foreground">Security</h2>
                     <p className="text-foreground-secondary mt-1">
-                      Manage two-factor authentication, active sessions, and API tokens.
+                      Manage two-factor authentication and active sessions.
                     </p>
                   </div>
 
@@ -660,98 +511,10 @@ export default function SettingsPage() {
                       )}
                     </div>
                   </div>
-
-                  {/* API Tokens */}
-                  <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                    <div className="p-6">
-                      <div className="flex items-center justify-between mb-4">
-                        <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
-                          <Key className="h-4 w-4" />
-                          API Tokens
-                        </h3>
-                        <Button
-                          size="sm"
-                          onClick={() => {
-                            toast({ title: 'Coming soon', description: 'Create token form will be implemented.' });
-                          }}
-                        >
-                          <Plus className="h-3.5 w-3.5 mr-1.5" />
-                          Create Token
-                        </Button>
-                      </div>
-                      {loadingTokens ? (
-                        <div className="flex items-center justify-center py-8">
-                          <Loader2 className="h-5 w-5 animate-spin text-foreground-secondary" />
-                        </div>
-                      ) : tokens.length === 0 ? (
-                        <p className="text-sm text-foreground-secondary py-4">No API tokens. Create one to access the API.</p>
-                      ) : (
-                        <table className="w-full">
-                          <thead className="border-b border-border">
-                            <tr>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Name</th>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Token</th>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Scopes</th>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Last Used</th>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Expires</th>
-                              <th className="w-32"></th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-border">
-                            {tokens.map((t) => (
-                              <tr key={t.id} className="hover:bg-table-hover transition-colors">
-                                <td className="px-4 py-3 text-sm font-medium text-foreground">{t.name}</td>
-                                <td className="px-4 py-3 text-sm text-foreground-secondary font-mono">
-                                  {t.token_prefix ? `${t.token_prefix}••••••••` : '—'}
-                                </td>
-                                <td className="px-4 py-3">
-                                  <div className="flex flex-wrap gap-1">
-                                    {(t.scopes || []).map((scope) => (
-                                      <span
-                                        key={scope}
-                                        className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-foreground-secondary/10 text-foreground-secondary border border-foreground-secondary/20"
-                                      >
-                                        {scope}
-                                      </span>
-                                    ))}
-                                    {(!t.scopes || t.scopes.length === 0) && <span className="text-foreground-secondary">—</span>}
-                                  </div>
-                                </td>
-                                <td className="px-4 py-3 text-sm text-foreground-secondary">
-                                  {t.last_used_at ? new Date(t.last_used_at).toLocaleString() : 'Never'}
-                                </td>
-                                <td className="px-4 py-3 text-sm text-foreground-secondary">
-                                  {t.expires_at ? new Date(t.expires_at).toLocaleDateString() : 'Never'}
-                                </td>
-                                <td className="px-4 py-3">
-                                  <div className="flex items-center gap-1">
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      onClick={() => toast({ title: 'Coming soon', description: 'Rotate token will be implemented.' })}
-                                    >
-                                      <RefreshCw className="h-3.5 w-3.5" />
-                                    </Button>
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      onClick={() => toast({ title: 'Coming soon', description: 'Revoke token will be implemented.' })}
-                                    >
-                                      <Trash2 className="h-3.5 w-3.5" />
-                                    </Button>
-                                  </div>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      )}
-                    </div>
-                  </div>
                 </div>
               )}
 
-              {isConnectedAccounts && !isNotifications && (
+              {isConnectedAccounts && (
                 <div className="space-y-6">
                   <div>
                     <h2 className="text-2xl font-bold text-foreground">Connected Accounts</h2>
@@ -834,171 +597,11 @@ export default function SettingsPage() {
                   </div>
                 </div>
               )}
-
-              {isNotifications && (
-                <div className="space-y-6">
-                  <div>
-                    <h2 className="text-2xl font-bold text-foreground">Notifications</h2>
-                    <p className="text-foreground-secondary mt-1">
-                      Configure how and when you receive notifications for each organization.
-                    </p>
-                  </div>
-
-                  {/* Organization selector */}
-                  <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                    <div className="p-6 space-y-5">
-                      <div>
-                        <label className="block text-sm font-medium text-foreground mb-1.5">Organization</label>
-                        <div className="relative max-w-sm">
-                          <button
-                            type="button"
-                            onClick={() => setOrgDropdownOpen((o) => !o)}
-                            className="w-full px-3 py-2.5 border border-border rounded-lg bg-background hover:border-foreground-secondary/30 flex items-center justify-between gap-2 text-sm text-foreground transition-all text-left"
-                          >
-                            <span className={selectedOrgId ? 'text-foreground' : 'text-foreground-secondary'}>
-                              {orgs.find((o) => o.id === selectedOrgId)?.name || 'Select organization'}
-                            </span>
-                            <ChevronDown className={`h-4 w-4 text-foreground-secondary transition-transform ${orgDropdownOpen ? 'rotate-180' : ''}`} />
-                          </button>
-                          {orgDropdownOpen && (
-                            <div className="absolute z-50 left-0 right-0 mt-1 py-0.5 bg-background-card border border-border rounded-lg shadow-xl overflow-hidden max-h-60 overflow-y-auto animate-in fade-in-0 zoom-in-95 duration-100">
-                              {orgs.map((org) => (
-                                <button
-                                  key={org.id}
-                                  type="button"
-                                  className="w-full px-3 py-2.5 flex items-center justify-between hover:bg-table-hover transition-colors text-left text-sm"
-                                  onClick={() => { setSelectedOrgId(org.id); setOrgDropdownOpen(false); }}
-                                >
-                                  <span className="text-foreground">{org.name}</span>
-                                  {selectedOrgId === org.id && <Check className="h-4 w-4 text-foreground" />}
-                                </button>
-                              ))}
-                              {orgs.length === 0 && (
-                                <div className="px-3 py-2.5 text-sm text-foreground-secondary">No organizations</div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {loadingPrefs ? (
-                        <div className="flex items-center justify-center py-8">
-                          <Loader2 className="h-5 w-5 animate-spin text-foreground-secondary" />
-                        </div>
-                      ) : selectedOrgId ? (
-                        <div className="space-y-6">
-                          {/* Email notifications */}
-                          <div className="flex items-center justify-between py-2">
-                            <div>
-                              <span className="text-sm font-medium text-foreground block">Email Notifications</span>
-                              <span className="text-xs text-foreground-secondary">Receive notifications via email.</span>
-                            </div>
-                            <Switch
-                              checked={notifPrefs.email_enabled}
-                              onCheckedChange={(v) => setNotifPrefs((p) => ({ ...p, email_enabled: v }))}
-                            />
-                          </div>
-
-                          {/* Event type filters */}
-                          <div>
-                            <label className="block text-sm font-medium text-foreground mb-2">Event Types</label>
-                            <p className="text-xs text-foreground-secondary mb-3">Select which events trigger notifications.</p>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                              {EVENT_TYPES.map((evt) => (
-                                <label
-                                  key={evt.id}
-                                  className="flex items-center gap-2.5 px-3 py-2 rounded-lg border border-border bg-background hover:bg-table-hover cursor-pointer transition-colors"
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={notifPrefs.event_types.includes(evt.id)}
-                                    onChange={() => toggleEventType(evt.id)}
-                                    className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
-                                  />
-                                  <span className="text-sm text-foreground">{evt.label}</span>
-                                </label>
-                              ))}
-                            </div>
-                          </div>
-
-                          {/* Do Not Disturb */}
-                          <div>
-                            <label className="block text-sm font-medium text-foreground mb-2">Do Not Disturb</label>
-                            <p className="text-xs text-foreground-secondary mb-3">Silence notifications during these hours (UTC).</p>
-                            <div className="flex items-center gap-3 max-w-xs">
-                              <div className="flex-1">
-                                <label className="block text-xs text-foreground-secondary mb-1">Start (UTC)</label>
-                                <input
-                                  type="number"
-                                  min={0}
-                                  max={23}
-                                  value={notifPrefs.dnd_start_hour}
-                                  onChange={(e) => setNotifPrefs((p) => ({ ...p, dnd_start_hour: Math.max(0, Math.min(23, parseInt(e.target.value) || 0)) }))}
-                                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                                />
-                              </div>
-                              <span className="text-foreground-secondary mt-5">—</span>
-                              <div className="flex-1">
-                                <label className="block text-xs text-foreground-secondary mb-1">End (UTC)</label>
-                                <input
-                                  type="number"
-                                  min={0}
-                                  max={23}
-                                  value={notifPrefs.dnd_end_hour}
-                                  onChange={(e) => setNotifPrefs((p) => ({ ...p, dnd_end_hour: Math.max(0, Math.min(23, parseInt(e.target.value) || 0)) }))}
-                                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                                />
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Delivery preference */}
-                          <div>
-                            <label className="block text-sm font-medium text-foreground mb-2">Delivery Preference</label>
-                            <div className="flex flex-wrap gap-2">
-                              {DELIVERY_OPTIONS.map((opt) => (
-                                <button
-                                  key={opt.id}
-                                  type="button"
-                                  onClick={() => setNotifPrefs((p) => ({ ...p, delivery_preference: opt.id }))}
-                                  className={`px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors ${
-                                    notifPrefs.delivery_preference === opt.id
-                                      ? 'border-primary bg-primary/10 text-primary'
-                                      : 'border-border bg-background text-foreground-secondary hover:text-foreground hover:border-foreground-secondary/30'
-                                  }`}
-                                >
-                                  {opt.label}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        <p className="text-sm text-foreground-secondary py-4">Select an organization to configure notification preferences.</p>
-                      )}
-                    </div>
-
-                    {selectedOrgId && !loadingPrefs && (
-                      <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
-                        <Button
-                          onClick={handleSaveNotifPrefs}
-                          disabled={savingPrefs}
-                          size="sm"
-                          className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-                        >
-                          {savingPrefs && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
-                          Save
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         </div>
       </div>
-      
+
       <Toaster position="bottom-right" />
     </>
   );

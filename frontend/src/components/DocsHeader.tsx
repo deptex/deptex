@@ -77,7 +77,7 @@ export default function DocsHeader() {
             <Button
               asChild
               size="default"
-              variant="secondary"
+              variant="outline"
               className="font-semibold text-sm px-5 py-2.5 rounded-lg h-9"
             >
               <Link to="/organizations">Dashboard</Link>

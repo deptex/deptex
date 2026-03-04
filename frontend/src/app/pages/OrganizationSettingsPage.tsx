@@ -2,8 +2,8 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useParams, useOutletContext, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
-import { api, Organization, OrganizationMember, OrganizationRole, RolePermissions, CiCdConnection, type CiCdProvider, billingApi, type StripeInvoice } from '../../lib/api';
-import { usePlan, TIER_DISPLAY } from '../../contexts/PlanContext';
+import { api, Organization, OrganizationMember, OrganizationRole, RolePermissions, CiCdConnection, type CiCdProvider, billingApi, type StripeInvoice, type Team } from '../../lib/api';
+import { usePlan, usePlanGate, TIER_DISPLAY } from '../../contexts/PlanContext';
 import { supabase } from '../../lib/supabase';
 import { Button } from '../../components/ui/button';
 import { Toaster } from '../../components/ui/toaster';
@@ -13,19 +13,21 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle } from 'lucide-react';
+import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, ChevronRight, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle, FolderGit2, Code2, Megaphone } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
 import { PermissionEditor } from '../../components/PermissionEditor';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
+import { Progress } from '../../components/ui/progress';
 import { cn } from '../../lib/utils';
 import { RoleDropdown } from '../../components/RoleDropdown';
 import { RoleBadge } from '../../components/RoleBadge';
 import { Badge } from '../../components/ui/badge';
 import { Switch } from '../../components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
-import { UserCircle, FileText, Sparkles, Globe, KeyRound, Timer, Network } from 'lucide-react';
+import { UserCircle, FileText, Globe, Network } from 'lucide-react';
 import MembersPage from './MembersPage';
 import AuditLogsSection from './AuditLogsSection';
 import PoliciesPage from './PoliciesPage';
@@ -107,7 +109,6 @@ const planTiers: PlanTier[] = [
       { name: 'SSO (SAML)' },
       { name: 'MFA enforcement' },
       { name: 'Audit logs' },
-      { name: 'Legal documents (DPA, TIA)' },
       { name: 'Aegis management console' },
     ],
   },
@@ -131,11 +132,25 @@ const planTiers: PlanTier[] = [
 // In-memory cache for stale-while-revalidate (keyed by org id)
 const orgMembersCache: Record<string, OrganizationMember[]> = {};
 const orgRolesCache: Record<string, OrganizationRole[]> = {};
+const orgIntegrationsCache: Record<string, CiCdConnection[]> = {};
 
 const CACHE_KEY_MEMBERS = (orgId: string) => `org_members_${orgId}`;
 const CACHE_KEY_ROLES = (orgId: string) => `org_roles_${orgId}`;
+const CACHE_KEY_INTEGRATIONS = (orgId: string) => `org_integrations_${orgId}`;
+const CACHE_KEY_WEBHOOKS = (orgId: string) => `org_webhooks_${orgId}`;
 
-const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'integrations', 'webhooks', 'notifications', 'policies', 'statuses', 'security_slas', 'audit_logs', 'sso', 'mfa', 'ip_allowlist', 'api_tokens', 'session_policy', 'scim', 'legal_documents', 'usage', 'plan', 'ai_configuration', 'aegis_management']);
+type WebhookCacheSnapshot = {
+  provider: string;
+  status: string;
+  event: string;
+  timeframe: string;
+  page: number;
+  deliveries: any[];
+  totalCount: number;
+};
+const orgWebhooksCache: Record<string, WebhookCacheSnapshot> = {};
+
+const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'integrations', 'webhooks', 'notifications', 'policies', 'statuses', 'security_slas', 'audit_logs', 'sso', 'mfa', 'ip_allowlist', 'usage', 'plan', 'ai_configuration', 'aegis_management']);
 
 /** Renders a tab-specific content skeleton for the org settings loading state. */
 function OrgSettingsTabSkeleton({ section }: { section: string }) {
@@ -498,11 +513,7 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
       );
     case 'sso':
     case 'mfa':
-    case 'session_policy':
     case 'ip_allowlist':
-    case 'api_tokens':
-    case 'scim':
-    case 'legal_documents':
       return (
         <div className="space-y-6">
           <div>
@@ -537,7 +548,9 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
 
-function SSOSection({ organizationId }: { organizationId: string }) {
+function SSOSection({ organizationId, embedded }: { organizationId: string; embedded?: boolean }) {
+  const navigate = useNavigate();
+  const gate = usePlan().getPlanGate('sso');
   const [ssoLoading, setSsoLoading] = useState(true);
   const [ssoConfig, setSsoConfig] = useState<{ configured: boolean; provider_type?: string; domain?: string; verified?: boolean; enforce?: boolean; fallback?: boolean } | null>(null);
   const [verifyLoading, setVerifyLoading] = useState(false);
@@ -560,6 +573,10 @@ function SSOSection({ organizationId }: { organizationId: string }) {
   }, [organizationId]);
 
   useEffect(() => {
+    if (!gate.allowed) {
+      setSsoLoading(false);
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -582,7 +599,7 @@ function SSOSection({ organizationId }: { organizationId: string }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [organizationId]);
+  }, [organizationId, gate.allowed]);
 
   const handleVerifyDomain = async () => {
     setVerifyLoading(true);
@@ -675,14 +692,53 @@ function SSOSection({ organizationId }: { organizationId: string }) {
     }
   };
 
+  if (!gate.allowed) {
+    return (
+      <div className={embedded ? 'space-y-4' : 'space-y-6'}>
+        {!embedded && (
+          <div>
+            <h2 className="text-2xl font-bold text-foreground">Single Sign-On</h2>
+          </div>
+        )}
+        <div className="rounded-lg border border-border bg-background-card p-6">
+          <div className="flex gap-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
+              <Info className="h-4 w-4 text-foreground-secondary" />
+            </div>
+            <div className="flex-1 space-y-2">
+              <h3 className="text-sm font-semibold text-foreground">Upgrade to unlock SSO</h3>
+              <p className="text-sm text-foreground-secondary">
+                Allow members to sign in with your identity provider (Okta, Azure AD, Google Workspace, etc.) via SAML 2.0.
+              </p>
+              <Button
+                onClick={() => navigate(gate.upgradeUrl)}
+                className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm px-4"
+              >
+                Upgrade to {TIER_DISPLAY[gate.requiredTier]}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (ssoLoading) return <div className="flex items-center gap-2 pt-8 text-foreground-secondary"><Loader2 className="h-4 w-4 animate-spin" /> Loading...</div>;
   return (
-    <div className="space-y-6 pt-8">
-      <div>
-        <h2 className="text-2xl font-bold text-foreground">Single Sign-On</h2>
-        <p className="mt-1 text-sm text-foreground-secondary">Configure SAML 2.0 SSO for your organization</p>
-      </div>
-      <div className="rounded-lg border border-border bg-background-card p-6">
+    <div className={embedded ? 'space-y-4' : 'space-y-6 pt-8'}>
+      {!embedded && (
+        <div>
+          <h2 className="text-2xl font-bold text-foreground">Single Sign-On</h2>
+        </div>
+      )}
+      <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+        {embedded && (
+          <div className="px-4 py-3 border-b border-border bg-background-card-header">
+            <h3 className="text-base font-semibold text-foreground">Single sign-on</h3>
+            <p className="text-sm text-foreground-secondary mt-0.5">Sign in with your identity provider (Okta, Azure AD, etc.) via SAML 2.0.</p>
+          </div>
+        )}
+        <div className="p-6">
         {!ssoConfig?.configured ? (
           <div className="flex flex-col gap-4">
             <p className="text-sm text-foreground-secondary">SSO is not configured. Set up SAML 2.0 to allow members to sign in with your identity provider.</p>
@@ -726,6 +782,39 @@ function SSOSection({ organizationId }: { organizationId: string }) {
             </div>
           </div>
         )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MFASectionOrUpgrade({ organizationId }: { organizationId: string }) {
+  const gate = usePlanGate('mfa_enforcement');
+  const navigate = useNavigate();
+  if (gate.allowed) return <MFASection organizationId={organizationId} />;
+  return (
+    <div className="space-y-6 pt-8">
+      <div>
+        <h2 className="text-2xl font-bold text-foreground">Multi-Factor Authentication</h2>
+      </div>
+      <div className="rounded-lg border border-border bg-background-card p-6">
+        <div className="flex gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
+            <Info className="h-4 w-4 text-foreground-secondary" />
+          </div>
+          <div className="flex-1 space-y-2">
+            <h3 className="text-sm font-semibold text-foreground">Upgrade to unlock MFA enforcement</h3>
+            <p className="text-sm text-foreground-secondary">
+              Require multi-factor authentication for all organization members and manage exemptions. Available on the Team plan and above.
+            </p>
+            <Button
+              onClick={() => navigate(`/organizations/${organizationId}/settings/plan`)}
+              className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm px-4"
+            >
+              Upgrade to {TIER_DISPLAY[gate.requiredTier]}
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -790,7 +879,6 @@ function MFASection({ organizationId }: { organizationId: string }) {
     <div className="space-y-6 pt-8">
       <div>
         <h2 className="text-2xl font-bold text-foreground">Multi-Factor Authentication</h2>
-        <p className="mt-1 text-sm text-foreground-secondary">Require MFA for all members and manage exemptions</p>
       </div>
       <div className="rounded-lg border border-border bg-background-card p-6 space-y-6">
         <div className="flex items-center justify-between">
@@ -885,139 +973,34 @@ function MFASection({ organizationId }: { organizationId: string }) {
   );
 }
 
-const SESSION_DURATION_OPTIONS = [
-  { value: 1, label: '1 hour' },
-  { value: 4, label: '4 hours' },
-  { value: 8, label: '8 hours' },
-  { value: 24, label: '24 hours' },
-  { value: 168, label: '7 days' },
-  { value: 720, label: '30 days' },
-];
-
-function SessionPolicySection({ organizationId }: { organizationId: string }) {
-  const [loading, setLoading] = useState(true);
-  const [maxDurationHours, setMaxDurationHours] = useState(24);
-  const [requireReauth, setRequireReauth] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [showForceLogoutConfirm, setShowForceLogoutConfirm] = useState(false);
-  const [forceLogoutLoading, setForceLogoutLoading] = useState(false);
-  const { toast } = useToast();
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session?.access_token || cancelled) return;
-        const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/session-policy`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-        if (cancelled) return;
-        if (res.ok) {
-          const data = await res.json();
-          const hours = data.max_session_duration_hours ?? data.max_session_duration ?? 24;
-          setMaxDurationHours(typeof hours === 'number' ? hours : 24);
-          setRequireReauth(data.require_reauth_for_sensitive ?? false);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [organizationId]);
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-      const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/session-policy`, {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ max_session_duration_hours: maxDurationHours, require_reauth_for_sensitive: requireReauth }),
-      });
-      if (res.ok) {
-        toast({ title: 'Saved', description: 'Session policy updated.' });
-      } else {
-        toast({ title: 'Error', description: 'Failed to update session policy.', variant: 'destructive' });
-      }
-    } catch {
-      toast({ title: 'Error', description: 'Failed to update session policy.', variant: 'destructive' });
-    } finally {
-      setSaving(false);
-    }
-  };
-  const handleForceLogout = async () => {
-    setForceLogoutLoading(true);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-      const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/session-policy/force-logout`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
-      if (res.ok) {
-        setShowForceLogoutConfirm(false);
-        toast({ title: 'Done', description: 'All members have been logged out.' });
-      } else {
-        toast({ title: 'Error', description: 'Failed to force logout.', variant: 'destructive' });
-      }
-    } catch {
-      toast({ title: 'Error', description: 'Failed to force logout.', variant: 'destructive' });
-    } finally {
-      setForceLogoutLoading(false);
-    }
-  };
-  if (loading) return <div className="flex items-center gap-2 pt-8 text-foreground-secondary"><Loader2 className="h-4 w-4 animate-spin" /> Loading...</div>;
+function IPAllowlistSectionOrUpgrade({ organizationId }: { organizationId: string }) {
+  const gate = usePlanGate('ip_allowlist');
+  const navigate = useNavigate();
+  if (gate.allowed) return <IPAllowlistSection organizationId={organizationId} />;
   return (
-    <div className="space-y-6 pt-8">
+    <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-bold text-foreground">Session Policy</h2>
-        <p className="mt-1 text-sm text-foreground-secondary">Configure session duration and re-authentication requirements</p>
+        <h2 className="text-2xl font-bold text-foreground">IP Allowlist</h2>
       </div>
-      <div className="rounded-lg border border-border bg-background-card p-6 space-y-6">
-        <div className="flex items-center gap-2">
-          <Label className="text-sm text-foreground">Max session duration:</Label>
-          <Select value={String(maxDurationHours)} onValueChange={(v) => setMaxDurationHours(Number(v))}>
-            <SelectTrigger className="w-36">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {SESSION_DURATION_OPTIONS.map((opt) => (
-                <SelectItem key={opt.value} value={String(opt.value)}>{opt.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="flex items-center justify-between">
-          <Label className="text-sm text-foreground">Require re-authentication for sensitive actions</Label>
-          <Switch checked={requireReauth} onCheckedChange={setRequireReauth} />
-        </div>
-        <div className="flex gap-2">
-          <Button onClick={handleSave} disabled={saving} size="sm">
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
-          </Button>
-          <Button variant="destructive" size="sm" onClick={() => setShowForceLogoutConfirm(true)}>
-            Force Logout All Members
-          </Button>
+      <div className="rounded-lg border border-border bg-background-card p-6">
+        <div className="flex gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
+            <Info className="h-4 w-4 text-foreground-secondary" />
+          </div>
+          <div className="flex-1 space-y-2">
+            <h3 className="text-sm font-semibold text-foreground">Upgrade to unlock IP Allowlist</h3>
+            <p className="text-sm text-foreground-secondary">
+              Restrict organization API access to specific IP ranges. Available on the Team plan and above.
+            </p>
+            <Button
+              onClick={() => navigate(gate.upgradeUrl)}
+              className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm px-4"
+            >
+              Upgrade to {TIER_DISPLAY[gate.requiredTier]}
+            </Button>
+          </div>
         </div>
       </div>
-
-      <Dialog open={showForceLogoutConfirm} onOpenChange={setShowForceLogoutConfirm}>
-        <DialogContent className="sm:max-w-[425px] bg-background">
-          <DialogTitle>Force Logout All Members</DialogTitle>
-          <DialogDescription>
-            All members will be signed out and will need to sign in again. This action cannot be undone.
-          </DialogDescription>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setShowForceLogoutConfirm(false)} disabled={forceLogoutLoading}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={handleForceLogout} disabled={forceLogoutLoading}>
-              {forceLogoutLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-              Force Logout
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
@@ -1148,18 +1131,25 @@ function IPAllowlistSection({ organizationId }: { organizationId: string }) {
 
   if (loading) return <div className="flex items-center gap-2 pt-8 text-foreground-secondary"><Loader2 className="h-4 w-4 animate-spin" /> Loading...</div>;
   return (
-    <div className="space-y-6 pt-8">
+    <div className="space-y-6">
       <div>
         <h2 className="text-2xl font-bold text-foreground">IP Allowlist</h2>
-        <p className="mt-1 text-sm text-foreground-secondary">Restrict access to specific IP ranges</p>
       </div>
       <div className="rounded-lg border border-border bg-background-card p-6 space-y-6">
+        <div className="flex items-center justify-between">
+          <Label className="text-sm text-foreground">Enable IP allowlist</Label>
+          <Switch
+            checked={enabled}
+            onCheckedChange={(checked) => (checked ? setShowEnableWarning(true) : handleToggleEnabled(false))}
+            disabled={toggleLoading}
+          />
+        </div>
         {showEnableWarning && (
           <div className="flex items-start gap-3 p-4 rounded-lg border border-amber-500/50 bg-amber-500/10 text-foreground">
             <AlertTriangle className="h-5 w-5 shrink-0 text-amber-500" />
             <div>
               <p className="text-sm font-medium">Enable IP allowlist?</p>
-              <p className="text-sm text-foreground-secondary mt-1">Once enabled, only requests from allowed IP ranges will be accepted. Ensure you add your current IP before enabling, or you may lock yourself out.</p>
+              <p className="text-sm text-foreground-secondary mt-1">Only requests from allowed IP ranges will be accepted. Add your current IP before enabling or you may lock yourself out.</p>
               <div className="flex gap-2 mt-3">
                 <Button size="sm" onClick={() => handleToggleEnabled(true)} disabled={toggleLoading}>
                   {toggleLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" /> : null}
@@ -1172,14 +1162,6 @@ function IPAllowlistSection({ organizationId }: { organizationId: string }) {
             </div>
           </div>
         )}
-        <div className="flex items-center justify-between">
-          <Label className="text-sm text-foreground">Enable IP allowlist</Label>
-          <Switch
-            checked={enabled}
-            onCheckedChange={(checked) => (checked ? setShowEnableWarning(true) : handleToggleEnabled(false))}
-            disabled={toggleLoading}
-          />
-        </div>
         {showAdd && (
           <div className="flex gap-2 items-end flex-wrap">
             <div>
@@ -1239,99 +1221,7 @@ function IPAllowlistSection({ organizationId }: { organizationId: string }) {
   );
 }
 
-function APITokensSection({ organizationId }: { organizationId: string }) {
-  const [loading, setLoading] = useState(true);
-  const [tokens, setTokens] = useState<Array<{ id: string; user_id: string; user?: string; name: string; prefix: string; scopes?: string[]; last_used?: string }>>([]);
-  const { toast } = useToast();
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session?.access_token || cancelled) return;
-        const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/api-tokens`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-        if (cancelled) return;
-        if (res.ok) {
-          const data = await res.json();
-          setTokens(data.tokens ?? []);
-        }
-      } catch {
-        if (!cancelled) setTokens([]);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [organizationId]);
-  const handleRevoke = async (tokenId: string) => {
-    if (!confirm('Revoke this token?')) return;
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-      const res = await fetch(`${API_BASE}/api/organizations/${organizationId}/security/api-tokens/${tokenId}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
-      if (res.ok) {
-        setTokens((t) => t.filter((x) => x.id !== tokenId));
-        toast({ title: 'Revoked', description: 'Token revoked.' });
-      } else {
-        toast({ title: 'Error', description: 'Failed to revoke token.', variant: 'destructive' });
-      }
-    } catch {
-      toast({ title: 'Error', description: 'Failed to revoke token.', variant: 'destructive' });
-    }
-  };
-  if (loading) return <div className="flex items-center gap-2 pt-8 text-foreground-secondary"><Loader2 className="h-4 w-4 animate-spin" /> Loading...</div>;
-  return (
-    <div className="space-y-6 pt-8">
-      <div>
-        <h2 className="text-2xl font-bold text-foreground">API Tokens</h2>
-        <p className="mt-1 text-sm text-foreground-secondary">All API tokens used in this organization</p>
-      </div>
-      <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-background-card-header">
-            <tr>
-              <th className="text-left px-4 py-2 font-medium text-foreground">User</th>
-              <th className="text-left px-4 py-2 font-medium text-foreground">Name</th>
-              <th className="text-left px-4 py-2 font-medium text-foreground">Prefix</th>
-              <th className="text-left px-4 py-2 font-medium text-foreground">Scopes</th>
-              <th className="text-left px-4 py-2 font-medium text-foreground">Last used</th>
-              <th className="w-10"></th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
-            {tokens.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="px-4 py-4 text-center text-sm text-foreground-secondary">
-                  No API tokens in this organization.
-                </td>
-              </tr>
-            ) : (
-              tokens.map((t) => (
-              <tr key={t.id}>
-                <td className="px-4 py-2 text-foreground">{t.user || t.user_id}</td>
-                <td className="px-4 py-2 text-foreground">{t.name}</td>
-                <td className="px-4 py-2 text-foreground-secondary font-mono">{t.prefix}</td>
-                <td className="px-4 py-2 text-foreground-secondary">{t.scopes?.join(', ') || '-'}</td>
-                <td className="px-4 py-2 text-foreground-secondary">{t.last_used || '-'}</td>
-                <td className="px-4 py-2">
-                  <Button variant="ghost" size="sm" onClick={() => handleRevoke(t.id)}>Revoke</Button>
-                </td>
-              </tr>
-            ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function SCIMSection({ organizationId }: { organizationId: string }) {
+function SCIMSection({ organizationId, embedded }: { organizationId: string; embedded?: boolean }) {
   const [loading, setLoading] = useState(true);
   const [config, setConfig] = useState<{ configured: boolean; endpoint_url?: string; token_prefix?: string; last_sync?: string } | null>(null);
   const [enableLoading, setEnableLoading] = useState(false);
@@ -1423,12 +1313,21 @@ function SCIMSection({ organizationId }: { organizationId: string }) {
 
   if (loading) return <div className="flex items-center gap-2 pt-8 text-foreground-secondary"><Loader2 className="h-4 w-4 animate-spin" /> Loading...</div>;
   return (
-    <div className="space-y-6 pt-8">
-      <div>
-        <h2 className="text-2xl font-bold text-foreground">SCIM Provisioning</h2>
-        <p className="mt-1 text-sm text-foreground-secondary">Provision users and groups from your identity provider</p>
-      </div>
-      <div className="rounded-lg border border-border bg-background-card p-6">
+    <div className={embedded ? 'space-y-4' : 'space-y-6 pt-8'}>
+      {!embedded && (
+        <div>
+          <h2 className="text-2xl font-bold text-foreground">SCIM Provisioning</h2>
+          <p className="mt-1 text-sm text-foreground-secondary">Provision users and groups from your identity provider</p>
+        </div>
+      )}
+      <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+        {embedded && (
+          <div className="px-4 py-3 border-b border-border bg-background-card-header">
+            <h3 className="text-base font-semibold text-foreground">User provisioning (SCIM)</h3>
+            <p className="text-sm text-foreground-secondary mt-0.5">Sync who has access from your IdP — users are added and removed automatically when assigned in Okta, Azure AD, etc.</p>
+          </div>
+        )}
+        <div className="p-6">
         {!config?.configured ? (
           <div className="flex flex-col gap-4">
             <p className="text-sm text-foreground-secondary">SCIM is not configured. Enable SCIM to sync users and groups from your IdP.</p>
@@ -1457,6 +1356,7 @@ function SCIMSection({ organizationId }: { organizationId: string }) {
             </Button>
           </div>
         )}
+        </div>
       </div>
     </div>
   );
@@ -1488,6 +1388,32 @@ function getCachedRoles(orgId: string): OrganizationRole[] | null {
   }
 }
 
+function getCachedIntegrations(orgId: string): CiCdConnection[] | null {
+  if (orgIntegrationsCache[orgId]) return orgIntegrationsCache[orgId];
+  try {
+    const raw = localStorage.getItem(CACHE_KEY_INTEGRATIONS(orgId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CiCdConnection[];
+    orgIntegrationsCache[orgId] = parsed;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function getCachedWebhooks(orgId: string): WebhookCacheSnapshot | null {
+  if (orgWebhooksCache[orgId]) return orgWebhooksCache[orgId];
+  try {
+    const raw = localStorage.getItem(CACHE_KEY_WEBHOOKS(orgId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as WebhookCacheSnapshot;
+    orgWebhooksCache[orgId] = parsed;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 export default function OrganizationSettingsPage() {
   const { id, section: sectionParam } = useParams<{ id: string; section?: string }>();
   const { organization, reloadOrganization } = useOutletContext<OrganizationContextType>();
@@ -1502,7 +1428,7 @@ export default function OrganizationSettingsPage() {
   const [orgName, setOrgName] = useState(organization?.name || '');
   const [allRoles, setAllRoles] = useState<OrganizationRole[]>([]);
   const [loadingRoles, setLoadingRoles] = useState(false);
-  const [cicdConnections, setCicdConnections] = useState<CiCdConnection[]>([]);
+  const [cicdConnections, setCicdConnections] = useState<CiCdConnection[]>(() => getCachedIntegrations(id ?? '') ?? []);
   const [loadingConnections, setLoadingConnections] = useState(false);
   const notificationConnections = useMemo(
     () => cicdConnections.filter(c => c.provider === 'slack' || c.provider === 'discord' || c.provider === 'custom_notification' || c.provider === 'email'),
@@ -1579,8 +1505,9 @@ export default function OrganizationSettingsPage() {
   const [membersInviteModalOpen, setMembersInviteModalOpen] = useState(false);
   const [hasVisitedMembers, setHasVisitedMembers] = useState(false);
   const [hasVisitedIntegrations, setHasVisitedIntegrations] = useState(false);
+  const [hasVisitedWebhooks, setHasVisitedWebhooks] = useState(false);
   const [hasVisitedNotifications, setHasVisitedNotifications] = useState(false);
-  const [notifSubTab, setNotifSubTab] = useState<'rules' | 'history' | 'health'>('rules');
+  const [notifSubTab, setNotifSubTab] = useState<'rules' | 'history'>('rules');
   const [hasVisitedPolicies, setHasVisitedPolicies] = useState(false);
   const [selectedRoleForSettings, setSelectedRoleForSettings] = useState<OrganizationRole | null>(null);
   const [newRoleNameInput, setNewRoleNameInput] = useState('');
@@ -1640,6 +1567,7 @@ export default function OrganizationSettingsPage() {
   const [customIntegrationDetailsClosing, setCustomIntegrationDetailsClosing] = useState(false);
   const [customIntegrationSecretVisible, setCustomIntegrationSecretVisible] = useState(false);
   const customIntegrationDetailsCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const notifCreateRuleRef = useRef<(() => void) | null>(null);
 
   // Jira PAT dialog state
   const [showJiraPatDialog, setShowJiraPatDialog] = useState(false);
@@ -1658,25 +1586,16 @@ export default function OrganizationSettingsPage() {
   const [pagerDutySaving, setPagerDutySaving] = useState(false);
 
   const [notifPausedUntil, setNotifPausedUntil] = useState<string | null>(null);
-
-  const [notifStats, setNotifStats] = useState<{
-    success_rate_24h: number;
-    total_deliveries_7d: number;
-    total_events_7d: number;
-    recent_failures: { id: string; event_type: string; destination_type: string; error_message: string; created_at: string }[];
-  } | null>(null);
-  const [notifStatsLoading, setNotifStatsLoading] = useState(false);
+  const [notifPauseLoading, setNotifPauseLoading] = useState(false);
 
   // Usage screen state
   const [usageData, setUsageData] = useState<{ teamMembers: number; projectsCreated: number } | null>(null);
   const [loadingUsage, setLoadingUsage] = useState(false);
 
   // Webhooks section state
-  const [webhookStats, setWebhookStats] = useState<{ total: number; processed: number; errors: number; skipped: number } | null>(null);
   const [webhookDeliveries, setWebhookDeliveries] = useState<any[]>([]);
   const [webhookTotalCount, setWebhookTotalCount] = useState(0);
   const [webhookLoading, setWebhookLoading] = useState(false);
-  const [webhookStatsLoading, setWebhookStatsLoading] = useState(false);
   const [webhookProvider, setWebhookProvider] = useState('all');
   const [webhookStatus, setWebhookStatus] = useState('all');
   const [webhookEvent, setWebhookEvent] = useState('all');
@@ -1731,6 +1650,9 @@ export default function OrganizationSettingsPage() {
   } : (basePermissions ? { ...basePermissions, interact_with_aegis: basePermissions.interact_with_aegis ?? false } : null);
   const canManageCompliance = effectivePermissions?.manage_compliance ?? (effectivePermissions as { view_compliance?: boolean; edit_policies?: boolean } | undefined)?.view_compliance ?? (effectivePermissions as { view_compliance?: boolean; edit_policies?: boolean } | undefined)?.edit_policies;
 
+  const planGateAegisChat = usePlan().getPlanGate('aegis_chat');
+  const planGateAegisManagement = usePlan().getPlanGate('aegis_management');
+
   // Permission check - redirect if user doesn't have view_settings
   useEffect(() => {
     if (organization && id && !permissionsChecked) {
@@ -1769,7 +1691,7 @@ export default function OrganizationSettingsPage() {
   }, [id, sectionParam, permissionsChecked, canManageCompliance, navigate]);
 
   // Redirect away from security sections when user lacks manage_security
-  const securitySections = ['sso', 'mfa', 'ip_allowlist', 'api_tokens', 'session_policy', 'scim', 'legal_documents'];
+  const securitySections = ['sso', 'mfa', 'ip_allowlist', 'legal_documents'];
   useEffect(() => {
     if (id && sectionParam && securitySections.includes(sectionParam) && permissionsChecked && !effectivePermissions?.manage_security) {
       navigate(`/organizations/${id}/settings/general`, { replace: true });
@@ -1834,7 +1756,7 @@ export default function OrganizationSettingsPage() {
     }
   }, [id, searchParams, navigate]);
 
-  // Seed members and roles from cache when id is available so we show data immediately when returning to the page
+  // Seed members, roles, and integrations from cache when id is available so we show data immediately when returning to the page
   useEffect(() => {
     if (!id) return;
     const cachedMembers = getCachedMembers(id);
@@ -1848,6 +1770,8 @@ export default function OrganizationSettingsPage() {
         if (userRole?.permissions) setUserRolePermissions(userRole.permissions);
       }
     }
+    const cachedIntegrations = getCachedIntegrations(id);
+    if (cachedIntegrations?.length) setCicdConnections(cachedIntegrations);
   }, [id, organization?.role]);
 
   useEffect(() => {
@@ -1873,6 +1797,10 @@ export default function OrganizationSettingsPage() {
     try {
       const data = await api.getOrganizationConnections(id);
       setCicdConnections(data);
+      orgIntegrationsCache[id] = data;
+      try {
+        localStorage.setItem(CACHE_KEY_INTEGRATIONS(id), JSON.stringify(data));
+      } catch { /* ignore */ }
     } catch (err: any) {
       if (!silent) setCicdConnections([]);
     } finally {
@@ -1882,16 +1810,17 @@ export default function OrganizationSettingsPage() {
 
   useEffect(() => {
     if (activeSection === 'integrations' && id) {
-      // First visit: show loading. Revisit: silent background refresh (data already in state from cached mount)
-      const isRevisit = hasVisitedIntegrations && cicdConnections.length > 0;
-      loadConnections({ silent: isRevisit });
+      const cached = getCachedIntegrations(id);
+      const hasData = cicdConnections.length > 0 || cached !== null;
+      loadConnections({ silent: hasData });
     }
   }, [activeSection, id]);
 
-  // Track when user visits Members/Integrations/Notifications/Policies tabs so we can keep them mounted (cached) when switching away
+  // Track when user visits Members/Integrations/Webhooks/Notifications/Policies tabs so we can keep them mounted (cached) when switching away
   useEffect(() => {
     if (activeSection === 'members') setHasVisitedMembers(true);
     if (activeSection === 'integrations') setHasVisitedIntegrations(true);
+    if (activeSection === 'webhooks') setHasVisitedWebhooks(true);
     if (activeSection === 'notifications') setHasVisitedNotifications(true);
     if (activeSection === 'policies') setHasVisitedPolicies(true);
   }, [activeSection]);
@@ -1899,28 +1828,6 @@ export default function OrganizationSettingsPage() {
   useEffect(() => {
     setNotifPausedUntil((organization as any)?.notifications_paused_until ?? null);
   }, [organization]);
-
-  useEffect(() => {
-    if (activeSection !== 'notifications' || notifSubTab !== 'health' || !id || !session?.access_token) return;
-    let cancelled = false;
-    const fetchStats = async () => {
-      setNotifStatsLoading(true);
-      try {
-        const res = await fetch(`/api/organizations/${id}/notification-stats`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        if (!cancelled) setNotifStats(data);
-      } catch {
-        if (!cancelled) setNotifStats(null);
-      } finally {
-        if (!cancelled) setNotifStatsLoading(false);
-      }
-    };
-    fetchStats();
-    return () => { cancelled = true; };
-  }, [activeSection, notifSubTab, id, session?.access_token]);
 
   const loadUsage = async () => {
     if (!id) return;
@@ -1954,28 +1861,10 @@ export default function OrganizationSettingsPage() {
     }
   }, [activeSection, id]);
 
-  const loadWebhookStats = async () => {
+  const loadWebhookDeliveries = async (opts?: { silent?: boolean }) => {
     if (!id) return;
-    setWebhookStatsLoading(true);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
-      const res = await fetch(`${API_BASE_URL}/api/organizations/${id}/webhook-deliveries/stats?timeframe=${webhookTimeframe}`, {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setWebhookStats(data);
-      }
-    } catch { /* ignore */ } finally {
-      setWebhookStatsLoading(false);
-    }
-  };
-
-  const loadWebhookDeliveries = async () => {
-    if (!id) return;
-    setWebhookLoading(true);
+    const silent = opts?.silent ?? false;
+    if (!silent) setWebhookLoading(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) return;
@@ -1993,24 +1882,56 @@ export default function OrganizationSettingsPage() {
       });
       if (res.ok) {
         const data = await res.json();
-        setWebhookDeliveries(data.deliveries ?? data.items ?? data ?? []);
-        setWebhookTotalCount(data.total ?? data.total_count ?? (data.deliveries ?? data.items ?? data).length ?? 0);
+        const deliveries = data.deliveries ?? data.items ?? data ?? [];
+        const totalCount = data.total ?? data.total_count ?? deliveries.length ?? 0;
+        setWebhookDeliveries(deliveries);
+        setWebhookTotalCount(totalCount);
+        const snapshot: WebhookCacheSnapshot = {
+          provider: webhookProvider,
+          status: webhookStatus,
+          event: webhookEvent,
+          timeframe: webhookTimeframe,
+          page: webhookPage,
+          deliveries,
+          totalCount,
+        };
+        orgWebhooksCache[id] = snapshot;
+        try {
+          localStorage.setItem(CACHE_KEY_WEBHOOKS(id), JSON.stringify(snapshot));
+        } catch { /* ignore */ }
       }
     } catch { /* ignore */ } finally {
-      setWebhookLoading(false);
+      if (!silent) setWebhookLoading(false);
     }
   };
 
   useEffect(() => {
     if (activeSection === 'webhooks' && id) {
-      loadWebhookStats();
-      loadWebhookDeliveries();
+      const cached = getCachedWebhooks(id);
+      const paramsMatch = cached && cached.provider === webhookProvider && cached.status === webhookStatus && cached.event === webhookEvent && cached.timeframe === webhookTimeframe && cached.page === webhookPage;
+      if (paramsMatch && cached.deliveries.length >= 0) {
+        setWebhookDeliveries(cached.deliveries);
+        setWebhookTotalCount(cached.totalCount);
+        loadWebhookDeliveries({ silent: true });
+      } else {
+        const hasData = webhookDeliveries.length > 0;
+        loadWebhookDeliveries({ silent: hasData });
+      }
     }
   }, [activeSection, id, webhookTimeframe]);
 
   useEffect(() => {
     if (activeSection === 'webhooks' && id) {
-      loadWebhookDeliveries();
+      const cached = getCachedWebhooks(id);
+      const paramsMatch = cached && cached.provider === webhookProvider && cached.status === webhookStatus && cached.event === webhookEvent && cached.timeframe === webhookTimeframe && cached.page === webhookPage;
+      if (paramsMatch && cached.deliveries.length >= 0) {
+        setWebhookDeliveries(cached.deliveries);
+        setWebhookTotalCount(cached.totalCount);
+        loadWebhookDeliveries({ silent: true });
+      } else {
+        const hasData = webhookDeliveries.length > 0;
+        loadWebhookDeliveries({ silent: hasData });
+      }
     }
   }, [webhookProvider, webhookStatus, webhookEvent, webhookPage]);
 
@@ -2779,14 +2700,9 @@ export default function OrganizationSettingsPage() {
     }] : []),
     // Security sections - only show if user has manage_security permission
     ...(effectivePermissions?.manage_security ? [
-      { id: 'sso', label: 'Single Sign-On', icon: <LogIn className="h-4 w-4 tab-icon-shake" /> },
+      { id: 'sso', label: 'SSO', icon: <LogIn className="h-4 w-4 tab-icon-shake" /> },
       { id: 'mfa', label: 'Multi-Factor Authentication', icon: <Smartphone className="h-4 w-4 tab-icon-shake" /> },
-      { id: 'session_policy', label: 'Session Policy', icon: <Timer className="h-4 w-4 tab-icon-shake" /> },
       { id: 'ip_allowlist', label: 'IP Allowlist', icon: <Globe className="h-4 w-4 tab-icon-shake" /> },
-      { id: 'api_tokens', label: 'API Tokens', icon: <KeyRound className="h-4 w-4 tab-icon-shake" /> },
-      { id: 'scim', label: 'SCIM Provisioning', icon: <Network className="h-4 w-4 tab-icon-shake" /> },
-      { id: 'category_legal', label: 'Legal', isCategory: true as const },
-      { id: 'legal_documents', label: 'Legal Documents', icon: <BookOpen className="h-4 w-4 tab-icon-shake" /> },
     ] : []),
 
     // AI & Automation Category
@@ -2797,8 +2713,13 @@ export default function OrganizationSettingsPage() {
     }] : []),
     ...(effectivePermissions?.manage_aegis ? [{
       id: 'aegis_management',
-      label: 'Aegis AI',
-      icon: <Sparkles className="h-4 w-4 tab-icon-shake text-green-500" />,
+      label: 'Aegis',
+      icon: (
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 tab-icon-shake shrink-0" aria-hidden>
+          <path d="M12 2L4 6v5c0 5 4 8 8 10 4-2 8-5 8-10V6l-8-4z" />
+          <path d="M12 9l1 2 2 1-1 2-2 1-1-2-2-1 1-2 2-1z" fill="currentColor" stroke="none" />
+        </svg>
+      ),
     }] : []),
     ...(effectivePermissions?.manage_aegis ? [{
       id: 'ai_configuration',
@@ -2906,9 +2827,6 @@ export default function OrganizationSettingsPage() {
             <div className="flex-1 no-scrollbar">
               {activeSection === 'general' && (
                 <div className="space-y-6 pt-8">
-                  <div>
-                    <h2 className="text-2xl font-bold text-foreground">General</h2>
-                  </div>
 
                   {/* Organization details - Combined Card */}
                   <div className="bg-background-card border border-border rounded-lg overflow-hidden">
@@ -2925,7 +2843,7 @@ export default function OrganizationSettingsPage() {
                                 onChange={(e) => isOrgOwner && setOrgName(e.target.value)}
                                 placeholder="Enter organization name"
                                 disabled={!isOrgOwner}
-                                className={`w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${!isOrgOwner ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                className={`w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground-secondary placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${!isOrgOwner ? 'opacity-60 cursor-not-allowed' : ''}`}
                               />
                             </div>
                           ) : (
@@ -3328,131 +3246,11 @@ export default function OrganizationSettingsPage() {
               )}
 
               {activeSection === 'mfa' && id && (
-                <MFASection organizationId={id} />
-              )}
-
-              {activeSection === 'session_policy' && id && (
-                <SessionPolicySection organizationId={id} />
+                <MFASectionOrUpgrade organizationId={id} />
               )}
 
               {activeSection === 'ip_allowlist' && id && (
-                <IPAllowlistSection organizationId={id} />
-              )}
-
-              {activeSection === 'api_tokens' && id && (
-                <APITokensSection organizationId={id} />
-              )}
-
-              {activeSection === 'scim' && id && (
-                <SCIMSection organizationId={id} />
-              )}
-
-              {activeSection === 'legal_documents' && (
-                <div className="pt-8">
-                  <h2 className="text-2xl font-bold text-foreground">Legal Documents</h2>
-                  <div className="mt-8 divide-y divide-border">
-                    {/* Terms & Policies - available now */}
-                    <div className="py-6 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 first:pt-0">
-                      <div className="flex-1 min-w-0">
-                        <h3 className="text-base font-semibold text-foreground">Terms &amp; Policies</h3>
-                        <p className="mt-1 text-sm text-foreground-secondary">
-                          Terms of Service, Privacy Policy, and our Security overview.
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 flex-wrap gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-8 px-4 border border-border bg-background-card hover:bg-background-subtle hover:border-foreground-secondary/40 transition-colors"
-                          asChild
-                        >
-                          <Link to="/docs/terms" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2">
-                            <ExternalLink className="h-4 w-4" />
-                            Terms
-                          </Link>
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-8 px-4 border border-border bg-background-card hover:bg-background-subtle hover:border-foreground-secondary/40 transition-colors"
-                          asChild
-                        >
-                          <Link to="/docs/privacy" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2">
-                            <ExternalLink className="h-4 w-4" />
-                            Privacy
-                          </Link>
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-8 px-4 border border-border bg-background-card hover:bg-background-subtle hover:border-foreground-secondary/40 transition-colors"
-                          asChild
-                        >
-                          <Link to="/docs/security" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2">
-                            <ExternalLink className="h-4 w-4" />
-                            Security
-                          </Link>
-                        </Button>
-                      </div>
-                    </div>
-
-                    {/* SOC2 Type 2 - coming soon */}
-                    <div className="py-6 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-                      <div className="flex-1 min-w-0">
-                        <h3 className="text-base font-semibold text-foreground">SOC2 Type 2</h3>
-                        <p className="mt-1 text-sm text-foreground-secondary">
-                          Our SOC2 Type 2 report for security-conscious organizations evaluating Deptex.
-                        </p>
-                      </div>
-                      <span className="shrink-0 inline-flex h-8 items-center px-4 rounded-md border border-border bg-background-card text-sm text-foreground-secondary">
-                        Coming soon
-                      </span>
-                    </div>
-
-                    {/* Data Processing Addendum (DPA) - coming soon */}
-                    <div className="py-6 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-                      <div className="flex-1 min-w-0">
-                        <h3 className="text-base font-semibold text-foreground">Data Processing Addendum (DPA)</h3>
-                        <p className="mt-1 text-sm text-foreground-secondary">
-                          A DPA for customers who need GDPR-compliant data processing terms.
-                        </p>
-                      </div>
-                      <span className="shrink-0 inline-flex h-8 items-center px-4 rounded-md border border-border bg-background-card text-sm text-foreground-secondary">
-                        Coming soon
-                      </span>
-                    </div>
-
-                    {/* Transfer Impact Assessment (TIA) - coming soon */}
-                    <div className="py-6 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-                      <div className="flex-1 min-w-0">
-                        <h3 className="text-base font-semibold text-foreground">Transfer Impact Assessment (TIA)</h3>
-                        <p className="mt-1 text-sm text-foreground-secondary">
-                          Our TIA for GDPR-compliant international data transfers.
-                        </p>
-                      </div>
-                      <span className="shrink-0 inline-flex h-8 items-center px-4 rounded-md border border-border bg-background-card text-sm text-foreground-secondary">
-                        Coming soon
-                      </span>
-                    </div>
-
-                    {/* Footer note */}
-                    <div className="pt-6">
-                      <p className="text-sm text-foreground-secondary">
-                        Need other documents, such as a W-9 or tax forms? Reach out and we&apos;ll help.
-                      </p>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="mt-3 h-8 text-sm text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
-                        asChild
-                      >
-                        <a href="mailto:deptex.app@gmail.com?subject=Document%20Request" target="_blank" rel="noopener noreferrer">
-                          Contact Support
-                        </a>
-                      </Button>
-                    </div>
-                  </div>
-                </div>
+                <IPAllowlistSectionOrUpgrade organizationId={id} />
               )}
 
               {activeSection === 'roles' && (
@@ -3471,6 +3269,19 @@ export default function OrganizationSettingsPage() {
                       </Button>
                     )}
                   </div>
+
+                  <Card className="rounded-lg border border-border bg-background-card/80">
+                    <CardContent className="p-4 flex gap-3">
+                      <div className="flex-shrink-0 mt-0.5">
+                        <Info className="h-5 w-5 text-foreground-muted" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm text-foreground">
+                          Create customizable roles for your organization and control what permissions each role has. Permissions determine which screens and actions are visible and available—members see only what their role allows, so the app adapts to their access level.
+                        </p>
+                      </div>
+                    </CardContent>
+                  </Card>
 
                   {/* Roles List */}
                   {loadingRoles ? (
@@ -3672,6 +3483,9 @@ export default function OrganizationSettingsPage() {
                   <div className="flex items-start justify-between">
                     <div>
                       <h2 className="text-2xl font-bold text-foreground">Integrations</h2>
+                      <p className="mt-1.5 text-sm text-foreground-secondary">
+                        Manage your organization&apos;s integrations for syncing projects and sending notifications to Slack, Discord, Jira, and more.
+                      </p>
                     </div>
                     <Link to="/docs/integrations" target="_blank" rel="noopener noreferrer">
                       <Button variant="outline" size="sm" className="text-xs">
@@ -3906,6 +3720,19 @@ export default function OrganizationSettingsPage() {
                               size="sm"
                               className="text-xs"
                               onClick={() => {
+                                setPagerDutyServiceName('');
+                                setPagerDutyRoutingKey('');
+                                setShowPagerDutyDialog(true);
+                              }}
+                            >
+                              <span className="mr-1.5 text-sm leading-none">🚨</span>
+                              Set up PagerDuty
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-xs"
+                              onClick={() => {
                                 setCustomIntegrationType('notification');
                                 setEditingCustomIntegration(null);
                                 setCustomIntegrationName('');
@@ -3918,19 +3745,6 @@ export default function OrganizationSettingsPage() {
                             >
                               <Webhook className="h-3.5 w-3.5 mr-1.5" />
                               Add Custom
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="text-xs"
-                              onClick={() => {
-                                setPagerDutyServiceName('');
-                                setPagerDutyRoutingKey('');
-                                setShowPagerDutyDialog(true);
-                              }}
-                            >
-                              <span className="mr-1.5 text-sm leading-none">🚨</span>
-                              Add PagerDuty
                             </Button>
                           </div>
                         </div>
@@ -4345,56 +4159,69 @@ export default function OrganizationSettingsPage() {
               {/* Keep Notifications mounted after first visit so it doesn't reload when switching tabs (like Integrations) */}
               {(activeSection === 'notifications' || hasVisitedNotifications) && id && (
                 <div className="pt-8 space-y-6" style={{ display: activeSection === 'notifications' ? undefined : 'none' }}>
-                  {/* Header with Pause button */}
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h2 className="text-2xl font-bold text-foreground">Notifications</h2>
-                      <p className="text-sm text-foreground-secondary mt-1">Configure notification rules, view delivery history, and monitor health.</p>
+                  {/* Header: title only, Pause + Create Rule (no border under title) */}
+                  <div className="flex items-center justify-between pb-2">
+                    <h2 className="text-2xl font-bold text-foreground">Notifications</h2>
+                    <div className="flex items-center gap-2">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="outline" size="sm" className="text-xs gap-1.5" disabled={notifPauseLoading}>
+                            {notifPauseLoading ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <PauseCircle className="h-3.5 w-3.5" />
+                            )}
+                            {notifPausedUntil && new Date(notifPausedUntil) > new Date() ? 'Paused' : 'Pause All'}
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          {notifPausedUntil && new Date(notifPausedUntil) > new Date() ? (
+                            <DropdownMenuItem onClick={async () => {
+                              setNotifPauseLoading(true);
+                              try {
+                                await fetch(`${API_BASE}/api/organizations/${id}`, {
+                                  method: 'PATCH',
+                                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+                                  body: JSON.stringify({ notifications_paused_until: null }),
+                                });
+                                setNotifPausedUntil(null);
+                                toast({ title: 'Resumed', description: 'Notifications have been resumed.' });
+                              } catch { toast({ title: 'Error', description: 'Failed to resume notifications.', variant: 'destructive' }); }
+                              finally { setNotifPauseLoading(false); }
+                            }}>
+                              Resume notifications
+                            </DropdownMenuItem>
+                          ) : (
+                            <>
+                              {[{ label: 'Pause for 1 hour', hours: 1 }, { label: 'Pause for 4 hours', hours: 4 }, { label: 'Pause for 24 hours', hours: 24 }].map(({ label, hours }) => (
+                                <DropdownMenuItem key={hours} onClick={async () => {
+                                  setNotifPauseLoading(true);
+                                  try {
+                                    const until = new Date(Date.now() + hours * 3600000).toISOString();
+                                    await fetch(`${API_BASE}/api/organizations/${id}`, {
+                                      method: 'PATCH',
+                                      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+                                      body: JSON.stringify({ notifications_paused_until: until }),
+                                    });
+                                    setNotifPausedUntil(until);
+                                    toast({ title: 'Paused', description: `Notifications paused for ${hours} hour${hours > 1 ? 's' : ''}.` });
+                                  } catch { toast({ title: 'Error', description: 'Failed to pause notifications.', variant: 'destructive' }); }
+                                  finally { setNotifPauseLoading(false); }
+                                }}>
+                                  {label}
+                                </DropdownMenuItem>
+                              ))}
+                            </>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                      <Button
+                        onClick={() => notifCreateRuleRef.current?.()}
+                        className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
+                      >
+                        Create Rule
+                      </Button>
                     </div>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" className="text-xs">
-                          <PauseCircle className="h-3.5 w-3.5 mr-1.5" />
-                          {notifPausedUntil && new Date(notifPausedUntil) > new Date() ? 'Paused' : 'Pause All'}
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        {notifPausedUntil && new Date(notifPausedUntil) > new Date() ? (
-                          <DropdownMenuItem onClick={async () => {
-                            try {
-                              await fetch(`/api/organizations/${id}`, {
-                                method: 'PATCH',
-                                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-                                body: JSON.stringify({ notifications_paused_until: null }),
-                              });
-                              setNotifPausedUntil(null);
-                              toast({ title: 'Resumed', description: 'Notifications have been resumed.' });
-                            } catch { toast({ title: 'Error', description: 'Failed to resume notifications.', variant: 'destructive' }); }
-                          }}>
-                            Resume notifications
-                          </DropdownMenuItem>
-                        ) : (
-                          <>
-                            {[{ label: 'Pause for 1 hour', hours: 1 }, { label: 'Pause for 4 hours', hours: 4 }, { label: 'Pause for 24 hours', hours: 24 }].map(({ label, hours }) => (
-                              <DropdownMenuItem key={hours} onClick={async () => {
-                                const until = new Date(Date.now() + hours * 3600000).toISOString();
-                                try {
-                                  await fetch(`/api/organizations/${id}`, {
-                                    method: 'PATCH',
-                                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-                                    body: JSON.stringify({ notifications_paused_until: until }),
-                                  });
-                                  setNotifPausedUntil(until);
-                                  toast({ title: 'Paused', description: `Notifications paused for ${hours} hour${hours > 1 ? 's' : ''}.` });
-                                } catch { toast({ title: 'Error', description: 'Failed to pause notifications.', variant: 'destructive' }); }
-                              }}>
-                                {label}
-                              </DropdownMenuItem>
-                            ))}
-                          </>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
                   </div>
 
                   {/* Paused banner */}
@@ -4407,158 +4234,115 @@ export default function OrganizationSettingsPage() {
                     </div>
                   )}
 
-                  {/* Sub-tabs */}
-                  <div className="flex gap-1">
-                    {(['rules', 'history', 'health'] as const).map((tab) => (
+                  {/* Sub-tabs - Members style (border-b, underline active) */}
+                  <div className="flex items-center justify-between border-b border-border mb-4">
+                    <div className="flex items-center gap-6">
                       <button
-                        key={tab}
-                        onClick={() => setNotifSubTab(tab)}
+                        onClick={() => setNotifSubTab('rules')}
                         className={cn(
-                          'px-3 py-1.5 text-sm rounded-md transition-colors',
-                          notifSubTab === tab
-                            ? 'bg-zinc-800 text-white'
-                            : 'text-zinc-400 hover:text-zinc-300'
+                          'pb-3 text-sm font-medium transition-colors',
+                          notifSubTab === 'rules'
+                            ? 'text-foreground border-b-2 border-foreground'
+                            : 'text-foreground-secondary hover:text-foreground'
                         )}
                       >
-                        {tab === 'rules' ? 'Rules' : tab === 'history' ? 'History' : 'Health'}
+                        Rules
                       </button>
-                    ))}
+                      <button
+                        onClick={() => setNotifSubTab('history')}
+                        className={cn(
+                          'pb-3 text-sm font-medium transition-colors',
+                          notifSubTab === 'history'
+                            ? 'text-foreground border-b-2 border-foreground'
+                            : 'text-foreground-secondary hover:text-foreground'
+                        )}
+                      >
+                        History
+                      </button>
+                    </div>
                   </div>
 
-                  {/* Tab content */}
-                  {notifSubTab === 'rules' && (
-                    <NotificationRulesSection organizationId={id} connections={cicdConnections} />
-                  )}
-                  {notifSubTab === 'history' && (
+                  {/* Tab content: Rules section always mounted (no display:none) so Create Rule sidebar opens from any tab; list hidden on History. */}
+                  <div>
+                    <NotificationRulesSection organizationId={id} connections={cicdConnections} hideTitle hideListContent={notifSubTab === 'history'} createHandlerRef={notifCreateRuleRef} />
+                  </div>
+                  <div style={{ display: notifSubTab === 'history' ? undefined : 'none' }}>
                     <NotificationHistorySection organizationId={id} />
-                  )}
-                  {notifSubTab === 'health' && (
-                    <div className="space-y-6">
-                      {notifStatsLoading ? (
-                        <div className="grid grid-cols-3 gap-4">
-                          {[1, 2, 3].map((i) => (
-                            <div key={i} className="rounded-lg border border-border bg-background-card p-5">
-                              <div className="h-4 w-24 bg-muted animate-pulse rounded mb-3" />
-                              <div className="h-8 w-16 bg-muted animate-pulse rounded" />
-                            </div>
-                          ))}
-                        </div>
-                      ) : notifStats ? (
-                        <>
-                          <div className="grid grid-cols-3 gap-4">
-                            <div className="rounded-lg border border-border bg-background-card p-5">
-                              <p className="text-xs font-medium text-foreground-secondary uppercase tracking-wider mb-1">Success Rate (24h)</p>
-                              <p className="text-2xl font-bold text-foreground">{notifStats.success_rate_24h.toFixed(1)}%</p>
-                              <div className="mt-2 h-1.5 bg-background-subtle rounded-full overflow-hidden">
-                                <div
-                                  className={cn('h-full rounded-full transition-all', notifStats.success_rate_24h >= 95 ? 'bg-green-500' : notifStats.success_rate_24h >= 80 ? 'bg-amber-500' : 'bg-red-500')}
-                                  style={{ width: `${Math.min(100, notifStats.success_rate_24h)}%` }}
-                                />
-                              </div>
-                            </div>
-                            <div className="rounded-lg border border-border bg-background-card p-5">
-                              <p className="text-xs font-medium text-foreground-secondary uppercase tracking-wider mb-1">Total Deliveries (7d)</p>
-                              <p className="text-2xl font-bold text-foreground">{notifStats.total_deliveries_7d.toLocaleString()}</p>
-                            </div>
-                            <div className="rounded-lg border border-border bg-background-card p-5">
-                              <p className="text-xs font-medium text-foreground-secondary uppercase tracking-wider mb-1">Total Events (7d)</p>
-                              <p className="text-2xl font-bold text-foreground">{notifStats.total_events_7d.toLocaleString()}</p>
-                            </div>
-                          </div>
-
-                          {notifStats.recent_failures.length > 0 ? (
-                            <div>
-                              <h3 className="text-sm font-semibold text-foreground mb-3">Recent Failures</h3>
-                              <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                                <table className="w-full text-sm">
-                                  <thead className="bg-background-card-header border-b border-border">
-                                    <tr>
-                                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Time</th>
-                                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Event</th>
-                                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Destination</th>
-                                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Error</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-border">
-                                    {notifStats.recent_failures.map((f) => (
-                                      <tr key={f.id} className="hover:bg-table-hover transition-colors">
-                                        <td className="px-4 py-3 text-foreground-secondary whitespace-nowrap">
-                                          <div className="flex items-center gap-1.5">
-                                            <Clock className="h-3.5 w-3.5" />
-                                            <span className="text-xs">{new Date(f.created_at).toLocaleString()}</span>
-                                          </div>
-                                        </td>
-                                        <td className="px-4 py-3 text-foreground text-xs">{f.event_type.replace(/_/g, ' ')}</td>
-                                        <td className="px-4 py-3 text-foreground text-xs">{f.destination_type}</td>
-                                        <td className="px-4 py-3 text-red-400 text-xs truncate max-w-[300px]">{f.error_message}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="text-center py-8">
-                              <Check className="h-8 w-8 text-green-400 mx-auto mb-2" />
-                              <p className="text-sm text-foreground-secondary">No recent delivery failures</p>
-                            </div>
-                          )}
-                        </>
-                      ) : (
-                        <div className="text-center py-8">
-                          <AlertTriangle className="h-8 w-8 text-foreground-secondary mx-auto mb-2" />
-                          <p className="text-sm text-foreground-secondary">Failed to load notification stats</p>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                  </div>
                 </div>
               )}
 
               {activeSection === 'ai_configuration' && id && (
                 <div className="pt-8">
-                  <AIConfigurationSection organizationId={id} />
+                  {!planGateAegisChat.allowed ? (
+                    <div className="space-y-6">
+                      <h2 className="text-2xl font-bold text-foreground">AI Configuration</h2>
+                      <div className="rounded-lg border border-border bg-background-card p-6">
+                        <div className="flex gap-3">
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
+                            <Info className="h-4 w-4 text-foreground-secondary" />
+                          </div>
+                          <div className="flex-1 space-y-2">
+                            <h3 className="text-sm font-semibold text-foreground">Upgrade to unlock AI Configuration</h3>
+                            <p className="text-sm text-foreground-secondary">
+                              Connect your own API keys for Aegis and Aider. Your keys are encrypted at rest and never shared.
+                            </p>
+                            <Button
+                              onClick={() => navigate(planGateAegisChat.upgradeUrl || (id ? `/organizations/${id}/settings/plan` : '#'))}
+                              className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm px-4"
+                            >
+                              Upgrade to {planGateAegisChat.requiredTier === 'free' ? 'Pro' : TIER_DISPLAY[planGateAegisChat.requiredTier]}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <AIConfigurationSection organizationId={id} />
+                  )}
                 </div>
               )}
 
               {activeSection === 'aegis_management' && id && (
                 <div className="pt-8">
-                  <AegisManagementConsole organizationId={id} userPermissions={effectivePermissions} />
+                  {!planGateAegisManagement.allowed ? (
+                    <div className="space-y-6">
+                      <h2 className="text-2xl font-bold text-foreground">Aegis</h2>
+                      <div className="rounded-lg border border-border bg-background-card p-6">
+                        <div className="flex gap-3">
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
+                            <Info className="h-4 w-4 text-foreground-secondary" />
+                          </div>
+                          <div className="flex-1 space-y-2">
+                            <h3 className="text-sm font-semibold text-foreground">Upgrade to unlock Aegis</h3>
+                            <p className="text-sm text-foreground-secondary">
+                              Configure Aegis&apos;s behavior, permissions, and spending limits. Chat with Aegis and run automations.
+                            </p>
+                            <Button
+                              onClick={() => navigate(planGateAegisManagement.upgradeUrl || (id ? `/organizations/${id}/settings/plan` : '#'))}
+                              className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm px-4"
+                            >
+                              Upgrade to {planGateAegisManagement.requiredTier === 'free' ? 'Pro' : TIER_DISPLAY[planGateAegisManagement.requiredTier]}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <AegisManagementConsole organizationId={id} userPermissions={effectivePermissions} />
+                  )}
                 </div>
               )}
 
-              {activeSection === 'webhooks' && id && (
-                <div className="space-y-6 pt-8">
+              {/* Keep Webhooks mounted after first visit so it doesn't reload when switching tabs (like Integrations) */}
+              {(activeSection === 'webhooks' || hasVisitedWebhooks) && id && (
+                <div
+                  className="space-y-6 pt-8"
+                  style={{ display: activeSection === 'webhooks' ? undefined : 'none' }}
+                >
                   <div>
                     <h2 className="text-2xl font-bold text-foreground">Webhooks</h2>
-                    <p className="text-sm text-foreground-secondary mt-1">Monitor incoming webhook deliveries from connected Git providers.</p>
                   </div>
-
-                  {/* Summary Cards */}
-                  {webhookStatsLoading ? (
-                    <div className="grid grid-cols-4 gap-4">
-                      {[1, 2, 3, 4].map((i) => (
-                        <div key={i} className="bg-background-card border border-border rounded-lg p-4">
-                          <div className="h-3 w-16 bg-muted animate-pulse rounded mb-2" />
-                          <div className="h-7 w-12 bg-muted animate-pulse rounded" />
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-4 gap-4">
-                      {[
-                        { label: 'Total (30d)', value: webhookStats?.total ?? 0 },
-                        { label: 'Processed', value: webhookStats?.processed ?? 0, color: 'text-green-500' },
-                        { label: 'Errors', value: webhookStats?.errors ?? 0, color: webhookStats?.errors ? 'text-red-500' : undefined },
-                        { label: 'Skipped', value: webhookStats?.skipped ?? 0, color: webhookStats?.skipped ? 'text-amber-400' : undefined },
-                      ].map(({ label, value, color }) => (
-                        <div key={label} className="bg-background-card border border-border rounded-lg p-4">
-                          <p className="text-xs font-medium uppercase tracking-wider text-foreground-secondary">{label}</p>
-                          <p className={cn('mt-1 text-2xl font-semibold', color || 'text-foreground')}>{value.toLocaleString()}</p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
 
                   {/* Filters Row */}
                   <div className="flex items-center gap-3 flex-wrap">
@@ -4655,7 +4439,7 @@ export default function OrganizationSettingsPage() {
                     </DropdownMenu>
 
                     {/* Refresh */}
-                    <Button variant="ghost" size="sm" className="text-xs gap-1.5 ml-auto" onClick={() => { loadWebhookStats(); loadWebhookDeliveries(); }} disabled={webhookLoading}>
+                    <Button variant="ghost" size="sm" className="text-xs gap-1.5 ml-auto" onClick={() => loadWebhookDeliveries()} disabled={webhookLoading}>
                       <RefreshCw className={cn('h-3.5 w-3.5', webhookLoading && 'animate-spin')} />
                       Refresh
                     </Button>
@@ -4663,21 +4447,21 @@ export default function OrganizationSettingsPage() {
 
                   {/* Deliveries Table */}
                   <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                    {webhookLoading && webhookDeliveries.length === 0 ? (
-                      <table className="w-full">
-                        <thead className="bg-background-card-header border-b border-border">
-                          <tr>
-                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Time</th>
-                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Event</th>
-                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Repository</th>
-                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</th>
-                            <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Duration</th>
-                            <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Size</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border">
-                          {[1, 2, 3, 4, 5].map((i) => (
+                    <table className="w-full table-fixed">
+                      <thead className="bg-background-card-header border-b border-border">
+                        <tr>
+                          <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[90px]">Time</th>
+                          <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[100px]">Provider</th>
+                          <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[130px]">Event</th>
+                          <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider min-w-0">Repository</th>
+                          <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[90px]">Status</th>
+                          <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[80px]">Duration</th>
+                          <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[70px]">Size</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {webhookLoading && webhookDeliveries.length === 0 ? (
+                          [1, 2, 3, 4, 5].map((i) => (
                             <tr key={i}>
                               <td className="px-4 py-3"><div className="h-4 w-16 bg-muted animate-pulse rounded" /></td>
                               <td className="px-4 py-3"><div className="flex items-center gap-2"><div className="h-5 w-5 rounded-sm bg-muted animate-pulse" /><div className="h-4 w-14 bg-muted animate-pulse rounded" /></div></td>
@@ -4687,32 +4471,15 @@ export default function OrganizationSettingsPage() {
                               <td className="px-4 py-3 text-right"><div className="h-4 w-10 bg-muted animate-pulse rounded ml-auto" /></td>
                               <td className="px-4 py-3 text-right"><div className="h-4 w-10 bg-muted animate-pulse rounded ml-auto" /></td>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    ) : webhookDeliveries.length === 0 ? (
-                      <div className="px-6 py-16 flex flex-col items-center justify-center text-center">
-                        <div className="h-12 w-12 rounded-full bg-background-subtle flex items-center justify-center mb-4">
-                          <Webhook className="h-6 w-6 text-foreground-secondary" />
-                        </div>
-                        <p className="text-sm font-medium text-foreground mb-1">No webhook deliveries yet</p>
-                        <p className="text-xs text-foreground-secondary max-w-sm">Connect a repository and push a commit to see webhook activity here.</p>
-                      </div>
-                    ) : (
-                      <table className="w-full">
-                        <thead className="bg-background-card-header border-b border-border">
+                          ))
+                        ) : webhookDeliveries.length === 0 ? (
                           <tr>
-                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Time</th>
-                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Event</th>
-                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Repository</th>
-                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</th>
-                            <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Duration</th>
-                            <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Size</th>
+                            <td colSpan={7} className="px-4 py-8 text-center text-sm text-foreground-secondary">
+                              No deliveries
+                            </td>
                           </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border">
-                          {webhookDeliveries.map((d: any, idx: number) => {
+                        ) : (
+                          webhookDeliveries.map((d: any, idx: number) => {
                             const providerIcon = d.provider === 'github' ? '/images/integrations/github.png'
                               : d.provider === 'gitlab' ? '/images/integrations/gitlab.png'
                               : d.provider === 'bitbucket' ? '/images/integrations/bitbucket.png' : null;
@@ -4747,8 +4514,8 @@ export default function OrganizationSettingsPage() {
                                     )}
                                   </div>
                                 </td>
-                                <td className="px-4 py-3">
-                                  <span className="text-sm text-foreground truncate block max-w-[200px]" title={d.repo_full_name}>{d.repo_full_name ?? '—'}</span>
+                                <td className="px-4 py-3 min-w-0 overflow-hidden">
+                                  <span className="text-sm text-foreground truncate block" title={d.repo_full_name}>{d.repo_full_name ?? '—'}</span>
                                 </td>
                                 <td className="px-4 py-3">
                                   <div className="flex items-center gap-1.5">
@@ -4764,10 +4531,10 @@ export default function OrganizationSettingsPage() {
                                 </td>
                               </tr>
                             );
-                          })}
-                        </tbody>
-                      </table>
-                    )}
+                          })
+                        )}
+                      </tbody>
+                    </table>
                   </div>
 
                   {/* Pagination */}
@@ -6043,7 +5810,7 @@ export default function OrganizationSettingsPage() {
                       <div className="h-7 w-7 rounded flex items-center justify-center text-lg leading-none">🚨</div>
                       <div>
                         <DialogTitle>Connect PagerDuty</DialogTitle>
-                        <DialogDescription>Get paged for critical security events. PagerDuty pricing: $21/user/month on their side.</DialogDescription>
+                        <DialogDescription>Get paged for critical security events.</DialogDescription>
                       </div>
                     </div>
                   </div>
@@ -6121,69 +5888,272 @@ export default function OrganizationSettingsPage() {
 // ═══════════════════════════════════════════════════════════════════════
 
 function UsageSectionContent({ organizationId }: { organizationId: string }) {
-  const { plan, loading } = usePlan();
+  const navigate = useNavigate();
+  const { plan, loading, error, refetch } = usePlan();
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [teamsLoading, setTeamsLoading] = useState(true);
 
-  if (loading || !plan) {
+  useEffect(() => {
+    if (!organizationId) return;
+    api.getTeams(organizationId).then(setTeams).catch(() => setTeams([])).finally(() => setTeamsLoading(false));
+  }, [organizationId]);
+
+  if (loading) {
     return (
       <div className="space-y-8 pt-8">
         <h2 className="text-2xl font-bold text-foreground">Usage</h2>
-        <div className="space-y-4">
-          {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-16 bg-muted animate-pulse rounded-lg" />
+        <div className="grid gap-4 md:grid-cols-3">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-36 bg-muted animate-pulse rounded-lg" />
           ))}
         </div>
       </div>
     );
   }
 
-  const usageItems: { label: string; key: string; current: number; limit: number }[] = [
-    { label: 'Projects', key: 'projects', current: plan.usage.projects, limit: plan.limits.projects },
-    { label: 'Members', key: 'members', current: plan.usage.members, limit: plan.limits.members },
-    { label: 'Syncs this period', key: 'syncs', current: plan.usage.syncs, limit: plan.limits.syncs },
-    { label: 'Watched packages', key: 'watchtower', current: plan.usage.watchtower, limit: plan.limits.watchtower ?? -1 },
-    { label: 'Teams', key: 'teams', current: plan.usage.teams, limit: plan.limits.teams ?? -1 },
+  if (!plan && error) {
+    return (
+      <div className="space-y-8 pt-8">
+        <h2 className="text-2xl font-bold text-foreground">Usage</h2>
+        <Card>
+          <CardContent className="pt-6">
+            <p className="text-sm text-foreground-secondary mb-4">Failed to load plan and usage. {error}</p>
+            <Button variant="outline" onClick={() => refetch()}>Try again</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!plan) {
+    return (
+      <div className="space-y-8 pt-8">
+        <h2 className="text-2xl font-bold text-foreground">Usage</h2>
+        <div className="grid gap-4 md:grid-cols-3">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-36 bg-muted animate-pulse rounded-lg" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const periodLabel = plan.current_period_end
+    ? `Limits reset on ${new Date(plan.current_period_end).toLocaleDateString()}`
+    : 'Current period';
+
+  const mainMetrics: { label: string; current: number; limit: number; tooltip: string; remainingLabel: (n: number) => string }[] = [
+    { label: 'Projects', current: plan.usage.projects, limit: plan.limits.projects, tooltip: 'Connected repositories. Resets each billing period.', remainingLabel: (n) => `${n} slot${n === 1 ? '' : 's'} remaining` },
+    { label: 'Members', current: plan.usage.members, limit: plan.limits.members, tooltip: 'Organization members. Resets each billing period.', remainingLabel: (n) => `${n} seat${n === 1 ? '' : 's'} remaining` },
+    { label: 'Data syncs', current: plan.usage.syncs, limit: plan.limits.syncs, tooltip: 'Dependency extraction runs this period. Resets each billing period.', remainingLabel: (n) => `${n} sync${n === 1 ? '' : 's'} remaining` },
   ];
+
+  const secondaryMetrics: { label: string; current: number; limit: number }[] = [
+    { label: 'Watched packages', current: plan.usage.watchtower, limit: plan.limits.watchtower ?? -1 },
+    { label: 'Teams', current: plan.usage.teams, limit: plan.limits.teams ?? -1 },
+  ];
+
+  const totalMembers = teams.reduce((s, t) => s + (t.member_count ?? 0), 0);
 
   return (
     <div className="space-y-8 pt-8">
       <div>
-        <h2 className="text-2xl font-bold text-foreground">Usage</h2>
+        <h2 className="text-2xl font-bold text-foreground">Usage overview</h2>
         <p className="text-sm text-foreground-secondary mt-1">
-          Current usage for your {TIER_DISPLAY[plan.tier]} plan.
-          {plan.current_period_end && (
-            <> Resets {new Date(plan.current_period_end).toLocaleDateString()}.</>
-          )}
+          Manage and monitor your team’s resource consumption across all projects. {periodLabel}.
         </p>
       </div>
-      <div className="space-y-4">
-        {usageItems.map(({ label, current, limit }) => {
+
+      {/* Main metrics — no cards, single overview block */}
+      <div className="grid gap-8 md:grid-cols-3">
+        {mainMetrics.map(({ label, current, limit, tooltip, remainingLabel }) => {
           const isUnlimited = limit === -1;
           const pct = isUnlimited ? 0 : limit > 0 ? Math.min(100, Math.round((current / limit) * 100)) : 0;
-          const isWarning = !isUnlimited && pct >= 80;
+          const isWarning = !isUnlimited && pct >= 80 && pct < 100;
           const isAtLimit = !isUnlimited && pct >= 100;
+          const remaining = !isUnlimited && limit > 0 ? Math.max(0, limit - current) : 0;
+          const fillClass = isAtLimit ? 'text-destructive' : isWarning ? 'text-amber-500' : 'text-primary';
+          const detail = isUnlimited ? `${current} used` : `${current} of ${limit} used`;
           return (
-            <div key={label} className="space-y-1.5">
-              <div className="flex items-baseline justify-between">
-                <span className="text-sm font-medium text-foreground">{label}</span>
-                <span className="text-sm tabular-nums text-foreground-secondary">
-                  {current}{' '}
-                  <span className="text-foreground-tertiary">/ {isUnlimited ? '∞' : limit.toLocaleString()}</span>
-                </span>
-              </div>
-              {!isUnlimited && (
-                <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${
-                      isAtLimit ? 'bg-red-500' : isWarning ? 'bg-yellow-500' : 'bg-primary'
-                    }`}
-                    style={{ width: `${Math.min(100, pct)}%` }}
-                  />
+            <Tooltip key={label}>
+              <TooltipTrigger asChild>
+                <div className="cursor-default">
+                  <div className="flex flex-col items-center text-center">
+                    {!isUnlimited && (
+                      <div className="relative h-20 w-20 mb-3">
+                        <svg className="h-20 w-20 -rotate-90" viewBox="0 0 36 36">
+                          <circle cx="18" cy="18" r="16" fill="none" stroke="currentColor" strokeWidth="3" className="text-muted" />
+                          <circle
+                            cx="18" cy="18" r="16"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="3"
+                            strokeLinecap="round"
+                            className={fillClass}
+                            strokeDasharray={100.5}
+                            strokeDashoffset={100.5 - (pct / 100) * 100.5}
+                          />
+                        </svg>
+                        <span className="absolute inset-0 flex items-center justify-center text-sm font-semibold tabular-nums text-foreground">{pct}%</span>
+                      </div>
+                    )}
+                    <p className="text-sm font-medium text-foreground">{label}</p>
+                    <p className="text-base font-semibold tabular-nums text-foreground mt-0.5">{detail}</p>
+                    {!isUnlimited && remaining > 0 && !isAtLimit && (
+                      <p className={cn('text-sm mt-1', isWarning ? 'text-amber-500 flex items-center gap-1 justify-center' : 'text-primary')}>
+                        {isWarning && <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />}
+                        {isWarning ? 'Near limit' : remainingLabel(remaining)}
+                      </p>
+                    )}
+                    {isAtLimit && (
+                      <p className="text-sm text-destructive mt-1">At limit</p>
+                    )}
+                  </div>
                 </div>
-              )}
-            </div>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-xs">
+                <p>{tooltip}</p>
+              </TooltipContent>
+            </Tooltip>
           );
         })}
       </div>
+
+      {/* Secondary metrics — horizontal bars with percentage */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Secondary metrics</CardTitle>
+          <CardDescription>Other limits against your plan</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {secondaryMetrics.map(({ label, current, limit }) => {
+            const isUnlimited = limit === -1;
+            const pct = isUnlimited ? 0 : limit > 0 ? Math.min(100, Math.round((current / limit) * 100)) : 0;
+            const isWarning = !isUnlimited && pct >= 80;
+            const isAtLimit = !isUnlimited && pct >= 100;
+            return (
+              <div key={label} className="space-y-2">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-sm font-medium text-foreground">{label}</span>
+                  <span className="text-sm tabular-nums text-foreground-secondary flex-shrink-0">
+                    {current} of {isUnlimited ? '∞' : limit.toLocaleString()}
+                    {!isUnlimited && limit > 0 && (
+                      <span className="ml-2 text-foreground-tertiary">{pct}%</span>
+                    )}
+                  </span>
+                </div>
+                {!isUnlimited && (
+                  <Progress
+                    value={pct}
+                    className={cn(
+                      'h-2',
+                      isAtLimit && '[&>div]:bg-destructive',
+                      isWarning && !isAtLimit && '[&>div]:bg-amber-500'
+                    )}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+
+      {/* Usage by team */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Users className="h-4 w-4 text-foreground-secondary" />
+                Usage by team
+              </CardTitle>
+              <CardDescription>Teams and their resource usage</CardDescription>
+            </div>
+            <Button variant="link" className="text-primary h-auto p-0 font-medium text-sm" onClick={() => navigate(`/organizations/${organizationId}/teams`)}>
+              View detailed report
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {teamsLoading ? (
+            <div className="space-y-3">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-14 bg-muted animate-pulse rounded-lg" />
+              ))}
+            </div>
+          ) : teams.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <BarChart className="h-12 w-12 text-muted-foreground/50 mb-3" />
+              <p className="text-sm font-medium text-foreground">No team data available yet</p>
+              <p className="text-sm text-foreground-secondary mt-1 max-w-sm">
+                Data breakdown by team will appear here once your members start consuming resources.
+              </p>
+            </div>
+          ) : (
+            <ul className="space-y-1">
+              {teams.map((team) => {
+                const members = team.member_count ?? 0;
+                const projects = team.project_count ?? 0;
+                const memberPct = totalMembers > 0 ? Math.round((members / totalMembers) * 100) : 0;
+                const icons = [<Code2 key="c" className="h-4 w-4 text-foreground-secondary" />, <FolderGit2 key="f" className="h-4 w-4 text-foreground-secondary" />, <Megaphone key="m" className="h-4 w-4 text-foreground-secondary" />];
+                const icon = icons[teams.indexOf(team) % icons.length];
+                return (
+                  <li key={team.id}>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/organizations/${organizationId}/teams/${team.id}/overview`)}
+                      className={cn(
+                        'w-full flex items-center justify-between gap-4 rounded-lg border border-transparent px-3 py-3 text-left',
+                        'hover:bg-muted/50 hover:border-border transition-colors'
+                      )}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span className="flex h-9 w-9 items-center justify-center rounded-md bg-muted text-foreground-secondary flex-shrink-0">
+                          {icon}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-foreground truncate">{team.name}</p>
+                          <p className="text-xs text-foreground-secondary">
+                            {members} {members === 1 ? 'member' : 'members'} · {projects} {projects === 1 ? 'project' : 'projects'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span className="text-xs text-foreground-secondary tabular-nums">{memberPct}% total</span>
+                        <ChevronRight className="h-4 w-4 text-foreground-tertiary" />
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Need more power — CTA */}
+      <Card className="border-primary/20 bg-primary/5">
+        <CardContent className="pt-6 pb-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <h3 className="text-base font-semibold text-foreground">Need more power?</h3>
+              <p className="text-sm text-foreground-secondary mt-1">
+                Scale with more projects, members, syncs, and features like Aegis AI and SSO.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <Button variant="outline" size="sm" onClick={() => navigate(`/organizations/${organizationId}/settings/plan`)}>
+                Compare plans
+              </Button>
+              {plan.tier === 'free' && (
+                <Button size="sm" onClick={() => navigate(`/organizations/${organizationId}/settings/plan`)}>
+                  Upgrade plan
+                </Button>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -6193,7 +6163,7 @@ function UsageSectionContent({ organizationId }: { organizationId: string }) {
 // ═══════════════════════════════════════════════════════════════════════
 
 function PlanBillingSectionContent({ organizationId }: { organizationId: string }) {
-  const { plan, loading, refetch } = usePlan();
+  const { plan, loading, error, refetch } = usePlan();
   const { toast } = useToast();
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'annual'>('monthly');
   const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
@@ -6265,7 +6235,34 @@ function PlanBillingSectionContent({ organizationId }: { organizationId: string 
     }
   };
 
-  if (loading || !plan) {
+  if (loading) {
+    return (
+      <div className="space-y-8 pt-8">
+        <h2 className="text-2xl font-bold text-foreground">Plan & Billing</h2>
+        <div className="space-y-4">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-24 bg-muted animate-pulse rounded-lg" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (!plan && error) {
+    return (
+      <div className="space-y-8 pt-8">
+        <h2 className="text-2xl font-bold text-foreground">Plan & Billing</h2>
+        <div className="rounded-lg border border-border bg-background-card p-6 text-center">
+          <p className="text-sm text-foreground-secondary mb-4">Failed to load plan and billing. {error}</p>
+          <Button variant="outline" onClick={() => refetch()}>
+            Try again
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!plan) {
     return (
       <div className="space-y-8 pt-8">
         <h2 className="text-2xl font-bold text-foreground">Plan & Billing</h2>

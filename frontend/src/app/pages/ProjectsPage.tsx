@@ -527,9 +527,16 @@ export default function ProjectsPage() {
                         </Tooltip>
                       );
                     }
-                    if (statusColor) {
+                    if (project.status_name) {
+                      if (statusColor) {
+                        return (
+                          <span className="px-2 py-0.5 rounded text-xs font-medium border flex-shrink-0" style={{ backgroundColor: `${statusColor}20`, color: statusColor, borderColor: `${statusColor}40` }}>
+                            {label}
+                          </span>
+                        );
+                      }
                       return (
-                        <span className="px-2 py-0.5 rounded text-xs font-medium border flex-shrink-0" style={{ backgroundColor: `${statusColor}20`, color: statusColor, borderColor: `${statusColor}40` }}>
+                        <span className="px-2 py-0.5 rounded text-xs font-medium border flex-shrink-0 bg-transparent text-foreground-secondary border-foreground/20">
                           {label}
                         </span>
                       );
@@ -614,9 +621,16 @@ export default function ProjectsPage() {
                           </Tooltip>
                         );
                       }
-                      if (statusColor) {
+                      if (project.status_name) {
+                        if (statusColor) {
+                          return (
+                            <span className="px-2 py-0.5 rounded text-xs font-medium border w-fit" style={{ backgroundColor: `${statusColor}20`, color: statusColor, borderColor: `${statusColor}40` }}>
+                              {label}
+                            </span>
+                          );
+                        }
                         return (
-                          <span className="px-2 py-0.5 rounded text-xs font-medium border w-fit" style={{ backgroundColor: `${statusColor}20`, color: statusColor, borderColor: `${statusColor}40` }}>
+                          <span className="px-2 py-0.5 rounded text-xs font-medium border w-fit bg-transparent text-foreground-secondary border-foreground/20">
                             {label}
                           </span>
                         );

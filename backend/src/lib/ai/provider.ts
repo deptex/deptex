@@ -5,7 +5,7 @@ import { OpenAIProvider } from './providers/openai-provider';
 import { AnthropicProvider } from './providers/anthropic-provider';
 import { GoogleProvider } from './providers/google-provider';
 
-function createProvider(providerName: string, apiKey: string, model?: string): AIProvider {
+function createProvider(providerName: string, apiKey: string, model?: string, baseURL?: string): AIProvider {
   switch (providerName) {
     case 'openai':
       return new OpenAIProvider(apiKey, model);
@@ -13,6 +13,8 @@ function createProvider(providerName: string, apiKey: string, model?: string): A
       return new AnthropicProvider(apiKey, model);
     case 'google':
       return new GoogleProvider(apiKey, model);
+    case 'custom':
+      return new OpenAIProvider(apiKey, model || 'gpt-4o', baseURL);
     default:
       throw new AIProviderError(`Unknown provider: ${providerName}`, 'unknown', providerName, false);
   }
@@ -37,9 +39,10 @@ export async function getProviderForOrg(orgId: string): Promise<AIProvider> {
 
   const row = providers[0];
   const apiKey = decryptApiKey(row.encrypted_api_key, row.encryption_key_version);
-  const model = row.model_preference || DEFAULT_MODELS[row.provider];
+  const model = row.model_preference || (DEFAULT_MODELS as Record<string, string>)[row.provider] || 'gpt-4o';
+  const baseURL = row.api_base_url || undefined;
 
-  return createProvider(row.provider, apiKey, model);
+  return createProvider(row.provider, apiKey, model, baseURL);
 }
 
 export async function getProviderConfigForOrg(orgId: string): Promise<{ provider: string; model: string } | null> {
@@ -54,7 +57,8 @@ export async function getProviderConfigForOrg(orgId: string): Promise<{ provider
 
   if (!providers?.length) return null;
   const row = providers[0];
-  return { provider: row.provider, model: row.model_preference || DEFAULT_MODELS[row.provider] };
+  const model = row.model_preference || (DEFAULT_MODELS as Record<string, string>)[row.provider] || 'gpt-4o';
+  return { provider: row.provider, model };
 }
 
 class PlatformStubProvider implements AIProvider {
@@ -86,6 +90,7 @@ export function getPlatformProvider(): AIProvider {
   return platformProvider;
 }
 
-export function createProviderFromKey(providerName: string, apiKey: string, model?: string): AIProvider {
-  return createProvider(providerName, apiKey, model || DEFAULT_MODELS[providerName]);
+export function createProviderFromKey(providerName: string, apiKey: string, model?: string, baseURL?: string): AIProvider {
+  const defaultModel = (DEFAULT_MODELS as Record<string, string>)[providerName];
+  return createProvider(providerName, apiKey, model || defaultModel, baseURL);
 }

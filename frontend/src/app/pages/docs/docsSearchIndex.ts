@@ -300,7 +300,7 @@ export const docsSearchIndex: SearchEntry[] = [
     slug: "enterprise-security",
     section: "Administration",
     heading: "Enterprise Security API Reference",
-    content: "API endpoints for audit log, MFA enforcement, SSO config, user sessions, API tokens, IP allowlist, session policy, SCIM. All org security routes require manage_security.",
+    content: "API endpoints for audit log, MFA enforcement, SSO config, user sessions, API tokens, IP allowlist, SCIM. All org security routes require manage_security.",
     keywords: ["api", "endpoints", "audit-log", "mfa-status", "sso", "sessions", "api-tokens", "ip-allowlist", "scim"],
   },
 

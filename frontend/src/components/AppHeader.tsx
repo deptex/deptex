@@ -1,6 +1,5 @@
 import { Fragment, useState } from 'react';
 import { HelpCircle, Settings, LogOut, BookOpen, Mail, Search, Plus, ChevronRight } from 'lucide-react';
-import NotificationBell from './NotificationBell';
 import FeedbackPopover from './FeedbackPopover';
 import CommandPalette from './CommandPalette';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
@@ -37,7 +36,6 @@ export default function AppHeader({ breadcrumb, showSearch = false, showNewOrg =
   const [commandOpen, setCommandOpen] = useState(false);
   const isOrganizationsPage = location.pathname === '/organizations';
   const isOrganizationDetailPage = location.pathname.startsWith('/organizations/') && location.pathname !== '/organizations';
-  const currentOrgId = location.pathname.match(/^\/organizations\/([^/]+)/)?.[1];
   // Only remove border on organization detail pages (where tabs are shown)
   const showBorder = !isOrganizationDetailPage;
 
@@ -82,50 +80,26 @@ export default function AppHeader({ breadcrumb, showSearch = false, showNewOrg =
             )}
           </div>
 
-          {/* Right side: Actions */}
+          {/* Right side: Actions — order: Feedback, Search, Help, User */}
           <div className="flex items-center gap-4">
+            {/* Feedback */}
+            <FeedbackPopover />
+
             {/* Command palette trigger (Ctrl+K) */}
             <button
               type="button"
               onClick={() => setCommandOpen(true)}
-              className="hidden sm:flex items-center gap-2 px-3 py-1.5 h-9 rounded-md border border-border bg-background-card text-sm text-foreground-secondary hover:text-foreground hover:border-foreground-secondary/50 transition-colors"
+              className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 h-8 rounded-md border border-border bg-background-card text-sm text-foreground-secondary hover:text-foreground hover:border-foreground-secondary/50 transition-colors"
               title="Search or run a command (Ctrl+K)"
             >
-              <Search className="h-4 w-4" />
+              <Search className="h-3.5 w-3.5 shrink-0" />
               <span>Search...</span>
-              <kbd className="hidden md:inline-flex items-center gap-0.5 h-4 min-w-[1.75rem] px-1.5 rounded bg-background border border-border font-mono text-[10px] text-foreground-secondary">
-                ⌘K
-              </kbd>
+              <span className="hidden md:inline-flex items-center gap-0.5 h-4 shrink-0 text-foreground-secondary">
+                <img src="/images/commandicon.png" alt="⌘" className="h-3 w-3 invert opacity-90" aria-hidden />
+                <span className="font-mono text-[13px] leading-none font-medium">K</span>
+              </span>
             </button>
             <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} />
-            {/* Search bar (optional, when showSearch is true) */}
-            {showSearch && (
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-foreground-secondary" />
-                <input
-                  type="text"
-                  placeholder="Find..."
-                  className="pl-9 pr-4 py-1.5 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent w-48"
-                />
-              </div>
-            )}
-
-            {/* New organization button (optional) */}
-            {showNewOrg && (
-              <Button
-                onClick={() => navigate('/organizations')}
-                className="bg-primary text-primary-foreground hover:bg-primary/90 h-9"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                New organization
-              </Button>
-            )}
-
-            {/* Notifications */}
-            <NotificationBell organizationId={currentOrgId} />
-
-            {/* Feedback */}
-            <FeedbackPopover />
 
             {/* Help dropdown */}
             <DropdownMenu>
@@ -212,6 +186,29 @@ export default function AppHeader({ breadcrumb, showSearch = false, showNewOrg =
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+
+            {/* Search bar (optional, when showSearch is true) */}
+            {showSearch && (
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-foreground-secondary" />
+                <input
+                  type="text"
+                  placeholder="Find..."
+                  className="pl-9 pr-4 py-1.5 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent w-48"
+                />
+              </div>
+            )}
+
+            {/* New organization button (optional) */}
+            {showNewOrg && (
+              <Button
+                onClick={() => navigate('/organizations')}
+                className="bg-primary text-primary-foreground hover:bg-primary/90 h-9"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                New organization
+              </Button>
+            )}
           </div>
         </div>
       </div>

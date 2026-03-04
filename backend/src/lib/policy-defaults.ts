@@ -22,11 +22,12 @@ export const DEFAULT_STATUSES = [
   },
 ];
 
+// Asset tier colors: Crown Jewels = premium, External = teal, Internal = default/neutral (same as default role color), Non-Production = muted
 export const DEFAULT_ASSET_TIERS = [
   {
     name: 'Crown Jewels',
     description: 'Mission-critical systems with highest security requirements',
-    color: '#ef4444',
+    color: '#8b5cf6',
     rank: 1,
     is_system: true,
     environmental_multiplier: 1.5,
@@ -34,7 +35,7 @@ export const DEFAULT_ASSET_TIERS = [
   {
     name: 'External',
     description: 'External-facing applications',
-    color: '#f97316',
+    color: '#14b8a6',
     rank: 2,
     is_system: true,
     environmental_multiplier: 1.2,
@@ -42,7 +43,7 @@ export const DEFAULT_ASSET_TIERS = [
   {
     name: 'Internal',
     description: 'Internal tools and services',
-    color: '#3b82f6',
+    color: '#6b7280',
     rank: 3,
     is_system: true,
     environmental_multiplier: 1.0,
@@ -50,7 +51,7 @@ export const DEFAULT_ASSET_TIERS = [
   {
     name: 'Non-Production',
     description: 'Development, staging, and test environments',
-    color: '#6b7280',
+    color: '#64748b',
     rank: 4,
     is_system: true,
     environmental_multiplier: 0.6,

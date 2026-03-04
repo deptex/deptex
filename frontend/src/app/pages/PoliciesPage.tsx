@@ -12,8 +12,9 @@ import { Avatar, AvatarFallback, AvatarImage } from '../../components/ui/avatar'
 import { Toaster } from '../../components/ui/toaster';
 import { PolicyAIAssistant } from '../../components/PolicyAIAssistant';
 import { PolicyExceptionSidebar } from '../../components/PolicyExceptionSidebar';
+import { PolicyDiffViewer } from '../../components/PolicyDiffViewer';
 
-/** Legacy helpers for backward-compat with old policy_code format. */
+/** Extract the body of a named function from full code. */
 function extractFunctionBody(code: string, fnName: string): string | null {
   const regex = new RegExp(`function\\s+${fnName}\\s*\\([^)]*\\)\\s*\\{`, 'g');
   const match = regex.exec(code);
@@ -29,6 +30,22 @@ function extractFunctionBody(code: string, fnName: string): string | null {
   return code.slice(startIdx, i - 1).trim();
 }
 
+/** Wrap packagePolicy body into full function. */
+function wrapPackagePolicyBody(body: string): string {
+  const lines = body.trim().split('\n').map((l) => (l ? `  ${l}` : ''));
+  return `function packagePolicy(context) {\n${lines.join('\n')}\n}`;
+}
+
+/** Wrap pullRequestCheck body into full function. */
+function wrapPrCheckBody(body: string): string {
+  const lines = body.trim().split('\n').map((l) => (l ? `  ${l}` : ''));
+  return `function pullRequestCheck(context) {\n${lines.join('\n')}\n}`;
+}
+
+const DEFAULT_PACKAGE_POLICY_BODY = 'return { allowed: true, reasons: [] };';
+const DEFAULT_PR_CHECK_BODY = 'return { passed: true, violations: [] };';
+
+/** Legacy helpers for backward-compat with old policy_code format. */
 function assemblePolicyCode(pullRequestBody: string, complianceBody: string): string {
   const prLines = pullRequestBody.trim().split('\n').map((l) => (l ? `  ${l}` : ''));
   const compLines = complianceBody.trim().split('\n').map((l) => (l ? `  ${l}` : ''));
@@ -43,6 +60,18 @@ function parsePolicyCode(code: string): { pullRequestBody: string; complianceBod
     complianceBody: compBody ?? 'return { compliant: true };',
   };
 }
+
+function formatRelativeTime(dateStr: string): string {
+  const d = new Date(dateStr);
+  const now = new Date();
+  const sec = Math.floor((now.getTime() - d.getTime()) / 1000);
+  if (sec < 60) return 'just now';
+  if (sec < 3600) return `${Math.floor(sec / 60)} minutes ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)} hours ago`;
+  if (sec < 604800) return `${Math.floor(sec / 86400)} days ago`;
+  return d.toLocaleDateString();
+}
+
 
 type SubTab = 'package_policy' | 'pr_check' | 'change_history';
 
@@ -83,6 +112,9 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
   // Change history
   const [changes, setChanges] = useState<OrganizationPolicyChange[]>([]);
   const [loadingChanges, setLoadingChanges] = useState(false);
+  const [selectedChange, setSelectedChange] = useState<OrganizationPolicyChange | null>(null);
+  const [changeDetailVisible, setChangeDetailVisible] = useState(false);
+  const changeDetailCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Legacy exceptions (backward compat)
   const [exceptions, setExceptions] = useState<ProjectPolicyException[]>([]);
@@ -95,12 +127,14 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
     try {
       setLoading(true);
       const data = await api.getOrganizationPolicyCode(id);
-      const pkgCode = data.package_policy?.package_policy_code || '';
-      const prCode = data.pr_check?.pr_check_code || '';
-      setPackagePolicyCode(pkgCode);
-      setPackagePolicyOriginal(pkgCode);
-      setPrCheckCode(prCode);
-      setPrCheckOriginal(prCode);
+      const pkgFull = data.package_policy?.package_policy_code || '';
+      const prFull = data.pr_check?.pr_check_code || '';
+      const pkgBody = extractFunctionBody(pkgFull, 'packagePolicy') ?? DEFAULT_PACKAGE_POLICY_BODY;
+      const prBody = extractFunctionBody(prFull, 'pullRequestCheck') ?? DEFAULT_PR_CHECK_BODY;
+      setPackagePolicyCode(pkgBody);
+      setPackagePolicyOriginal(pkgBody);
+      setPrCheckCode(prBody);
+      setPrCheckOriginal(prBody);
     } catch (error: any) {
       console.error('Failed to load policy code:', error);
       toast({ title: 'Error', description: error.message || 'Failed to load policy code', variant: 'destructive' });
@@ -162,6 +196,29 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
 
   useEffect(() => () => {
     if (aiCloseTimeoutRef.current) clearTimeout(aiCloseTimeoutRef.current);
+    if (changeDetailCloseTimeoutRef.current) clearTimeout(changeDetailCloseTimeoutRef.current);
+  }, []);
+
+  // Change detail sidebar open/close
+  useEffect(() => {
+    if (selectedChange) {
+      setChangeDetailVisible(false);
+      const raf = requestAnimationFrame(() => {
+        requestAnimationFrame(() => setChangeDetailVisible(true));
+      });
+      return () => cancelAnimationFrame(raf);
+    } else {
+      setChangeDetailVisible(false);
+    }
+  }, [selectedChange]);
+
+  const closeChangeDetail = useCallback(() => {
+    setChangeDetailVisible(false);
+    if (changeDetailCloseTimeoutRef.current) clearTimeout(changeDetailCloseTimeoutRef.current);
+    changeDetailCloseTimeoutRef.current = setTimeout(() => {
+      changeDetailCloseTimeoutRef.current = null;
+      setSelectedChange(null);
+    }, 150);
   }, []);
 
   const closeAIPanel = useCallback(() => {
@@ -210,7 +267,8 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
 
   const handleSave = async (codeType: 'package_policy' | 'pr_check') => {
     if (!id) return;
-    const code = codeType === 'package_policy' ? packagePolicyCode : prCheckCode;
+    const body = codeType === 'package_policy' ? packagePolicyCode : prCheckCode;
+    const code = codeType === 'package_policy' ? wrapPackagePolicyBody(body) : wrapPrCheckBody(body);
 
     setSaving(true);
     setValidating(true);
@@ -232,9 +290,9 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
       await api.updateOrganizationPolicyCode(id, codeType, code, `Updated ${codeType.replace('_', ' ')}`);
 
       if (codeType === 'package_policy') {
-        setPackagePolicyOriginal(code);
+        setPackagePolicyOriginal(body);
       } else {
-        setPrCheckOriginal(code);
+        setPrCheckOriginal(body);
       }
 
       toast({ title: 'Policy saved', description: `${codeType === 'package_policy' ? 'Package policy' : 'PR check'} updated successfully.` });
@@ -293,9 +351,6 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
             ) : (
               <h1 className="text-3xl font-bold text-foreground">Policies</h1>
             )}
-            <p className="text-sm text-muted-foreground mt-1">
-              Define package policy and PR check code for your organization.
-            </p>
           </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" className="text-xs" onClick={() => setShowAI(true)}>
@@ -336,121 +391,260 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
         </div>
       ) : (
         <div className="pt-4">
-          {/* Package Policy editor */}
+          {/* Package Policy editor: header with function title + Save, body-only in editor */}
           {subTab === 'package_policy' && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">
-                  Runs per dependency. Determines whether each package is allowed based on license, score, tier, and other metadata.
-                </p>
-                <div className="flex items-center gap-2">
-                  {packagePolicyDirty && (
-                    <Button size="sm" variant="ghost" onClick={() => setPackagePolicyCode(packagePolicyOriginal)}>
-                      Discard
-                    </Button>
+              <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
+                  <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">packagePolicy(context)</span>
+                  {hasManageCompliance && (
+                    <div className="flex items-center gap-1.5">
+                      {packagePolicyDirty && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setPackagePolicyCode(packagePolicyOriginal)}
+                          disabled={saving}
+                          className="h-7 min-h-7 px-2 py-0 text-xs"
+                        >
+                          Discard
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        onClick={() => handleSave('package_policy')}
+                        disabled={!packagePolicyDirty || saving}
+                        className="h-7 min-h-7 px-2 py-0 text-xs"
+                      >
+                        {saving && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+                        Save
+                      </Button>
+                    </div>
                   )}
-                  <Button
-                    size="sm"
-                    onClick={() => handleSave('package_policy')}
-                    disabled={!packagePolicyDirty || saving}
-                  >
-                    {saving && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
-                    Save
-                  </Button>
+                </div>
+                <div className="bg-background-card">
+                  <PolicyCodeEditor
+                    value={packagePolicyCode}
+                    onChange={(val) => setPackagePolicyCode(val || '')}
+                    readOnly={!hasManageCompliance}
+                    fitContent
+                  />
                 </div>
               </div>
-
-              <div className="rounded-lg border border-border overflow-hidden">
-                <PolicyCodeEditor
-                  value={packagePolicyCode}
-                  onChange={(val) => setPackagePolicyCode(val || '')}
-                  readOnly={!hasManageCompliance}
-                />
-              </div>
-
+              <p className="text-sm text-muted-foreground">
+                Runs per dependency. Determines whether each package is allowed based on license, score, tier, and other metadata.
+              </p>
               {validationResult && subTab === 'package_policy' && (
                 <ValidationResultDisplay result={validationResult} />
               )}
             </div>
           )}
 
-          {/* PR Check editor */}
+          {/* PR Check editor: header with function title + Save, body-only in editor */}
           {subTab === 'pr_check' && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">
-                  Runs on pull requests that modify lockfiles. Determines whether the PR should pass or be blocked.
-                </p>
-                <div className="flex items-center gap-2">
-                  {prCheckDirty && (
-                    <Button size="sm" variant="ghost" onClick={() => setPrCheckCode(prCheckOriginal)}>
-                      Discard
-                    </Button>
+              <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
+                  <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">pullRequestCheck(context)</span>
+                  {hasManageCompliance && (
+                    <div className="flex items-center gap-1.5">
+                      {prCheckDirty && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setPrCheckCode(prCheckOriginal)}
+                          disabled={saving}
+                          className="h-7 min-h-7 px-2 py-0 text-xs"
+                        >
+                          Discard
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        onClick={() => handleSave('pr_check')}
+                        disabled={!prCheckDirty || saving}
+                        className="h-7 min-h-7 px-2 py-0 text-xs"
+                      >
+                        {saving && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+                        Save
+                      </Button>
+                    </div>
                   )}
-                  <Button
-                    size="sm"
-                    onClick={() => handleSave('pr_check')}
-                    disabled={!prCheckDirty || saving}
-                  >
-                    {saving && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
-                    Save
-                  </Button>
+                </div>
+                <div className="bg-background-card">
+                  <PolicyCodeEditor
+                    value={prCheckCode}
+                    onChange={(val) => setPrCheckCode(val || '')}
+                    readOnly={!hasManageCompliance}
+                    fitContent
+                  />
                 </div>
               </div>
-
-              <div className="rounded-lg border border-border overflow-hidden">
-                <PolicyCodeEditor
-                  value={prCheckCode}
-                  onChange={(val) => setPrCheckCode(val || '')}
-                  readOnly={!hasManageCompliance}
-                />
-              </div>
-
+              <p className="text-sm text-muted-foreground">
+                Runs on pull requests that modify lockfiles. Determines whether the PR should pass or be blocked.
+              </p>
               {validationResult && subTab === 'pr_check' && (
                 <ValidationResultDisplay result={validationResult} />
               )}
             </div>
           )}
 
-          {/* Change History */}
+          {/* Change History – table (matches Members table style) */}
           {subTab === 'change_history' && (
-            <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                History of package policy and PR check changes across the organization.
-              </p>
-
+            <div className="bg-background-card border border-border rounded-lg overflow-hidden">
               {loadingChanges ? (
-                <div className="flex items-center justify-center py-8">
-                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                </div>
+                <table className="w-full">
+                  <thead className="bg-background-card-header border-b border-border">
+                    <tr>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Message</th>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[140px]">Type</th>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[180px]">Changed by</th>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[120px]">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {[1, 2, 3].map((i) => (
+                      <tr key={i} className="animate-pulse">
+                        <td className="px-4 py-3">
+                          <div className="h-4 bg-muted rounded w-48" />
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="h-5 bg-muted rounded w-24" />
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <div className="h-6 w-6 rounded-full bg-muted flex-shrink-0" />
+                            <div className="h-4 bg-muted rounded w-24" />
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="h-4 bg-muted rounded w-16" />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               ) : changes.length === 0 ? (
-                <div className="text-sm text-muted-foreground text-center py-8 border border-border rounded-lg">
+                <div className="text-sm text-muted-foreground text-center py-12 px-4">
                   No changes recorded yet.
                 </div>
               ) : (
-                <div className="border border-border rounded-lg divide-y divide-border">
-                  {changes.map((change) => (
-                    <div key={change.id} className="px-4 py-3 flex items-center gap-3">
-                      {codeTypeBadge(change.code_type)}
-                      <span className="text-sm text-foreground flex-1 truncate">{change.message}</span>
-                      <span className="text-xs text-muted-foreground">{new Date(change.created_at).toLocaleDateString()}</span>
-                    </div>
-                  ))}
-                </div>
+                <table className="w-full">
+                  <thead className="bg-background-card-header border-b border-border">
+                    <tr>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Message</th>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[140px]">Type</th>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[180px]">Changed by</th>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[120px]">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {changes.map((change) => (
+                      <tr
+                        key={change.id}
+                        onClick={() => setSelectedChange(change)}
+                        className="hover:bg-table-hover transition-colors cursor-pointer"
+                      >
+                        <td className="px-4 py-3 text-sm text-foreground truncate max-w-[320px]">
+                          {change.message}
+                        </td>
+                        <td className="px-4 py-3">{codeTypeBadge(change.code_type)}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <Avatar className="h-6 w-6 flex-shrink-0">
+                              <AvatarImage src={change.author_avatar_url ?? undefined} alt="" />
+                              <AvatarFallback className="text-[10px] bg-muted text-muted-foreground">
+                                {(change.author_display_name || 'User').trim().slice(0, 2).toUpperCase() || '?'}
+                              </AvatarFallback>
+                            </Avatar>
+                            <span className="text-sm text-foreground truncate">
+                              {change.author_display_name || 'Unknown'}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-xs text-muted-foreground">
+                          {formatRelativeTime(change.created_at)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               )}
             </div>
           )}
         </div>
       )}
 
+      {/* Change detail sidebar – diff view */}
+      {selectedChange && createPortal(
+        <div className="fixed inset-0 z-50">
+          <div
+            className={cn(
+              'fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150',
+              changeDetailVisible ? 'opacity-100' : 'opacity-0'
+            )}
+            onClick={closeChangeDetail}
+          />
+          <div
+            className={cn(
+              'fixed right-4 top-4 bottom-4 w-full max-w-[560px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
+              changeDetailVisible ? 'translate-x-0' : 'translate-x-full'
+            )}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 pt-5 pb-3 flex-shrink-0">
+              <h2 className="text-xl font-semibold text-foreground">Policy change</h2>
+              <p className="text-sm text-muted-foreground mt-1 truncate">{selectedChange.message}</p>
+              <div className="flex items-center gap-2 mt-2">
+                {codeTypeBadge(selectedChange.code_type)}
+                <span className="text-xs text-muted-foreground">{formatRelativeTime(selectedChange.created_at)}</span>
+              </div>
+              <div className="flex items-center gap-2 mt-3">
+                <Avatar className="h-6 w-6 flex-shrink-0">
+                  <AvatarImage src={selectedChange.author_avatar_url ?? undefined} alt="" />
+                  <AvatarFallback className="text-[10px] bg-muted text-muted-foreground">
+                    {(selectedChange.author_display_name || 'User').trim().slice(0, 2).toUpperCase() || '?'}
+                  </AvatarFallback>
+                </Avatar>
+                <span className="text-sm text-muted-foreground">Changed by {selectedChange.author_display_name || 'Unknown'}</span>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto min-h-0 px-4 pb-4">
+              <div className="rounded-lg overflow-hidden border border-border">
+                <PolicyDiffViewer
+                  baseCode={selectedChange.previous_code}
+                  requestedCode={selectedChange.new_code}
+                  minHeight="200px"
+                  className="text-[11px]"
+                />
+              </div>
+            </div>
+            <div className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header flex items-center justify-end">
+              <Button variant="outline" size="sm" onClick={closeChangeDetail}>
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
       {/* AI Assistant */}
       {showAI && createPortal(
-        <div className="fixed inset-0 z-50 flex justify-end">
-          <div className="absolute inset-0 bg-black/40" onClick={closeAIPanel} />
-          <div className={cn(
-            'relative w-full max-w-[40rem] h-full transition-transform duration-150',
-            aiPanelVisible ? 'translate-x-0' : 'translate-x-full',
-          )}>
+        <div className="fixed inset-0 z-50">
+          <div
+            className={cn(
+              'fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150',
+              aiPanelVisible ? 'opacity-100' : 'opacity-0'
+            )}
+            onClick={closeAIPanel}
+          />
+          <div
+            className={cn(
+              'fixed right-4 top-4 bottom-4 w-full max-w-[680px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
+              aiPanelVisible ? 'translate-x-0' : 'translate-x-full'
+            )}
+          >
             <PolicyAIAssistant
               variant="edge"
               organizationId={id || ''}
