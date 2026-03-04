@@ -18,7 +18,7 @@ jest.mock('../../lib/supabase', () => ({
   },
 }));
 
-jest.mock('../../../../ee/backend/lib/fly-machines', () => ({
+jest.mock('../../lib/fly-machines', () => ({
   startExtractionMachine: jest.fn().mockResolvedValue('fly-id'),
 }));
 

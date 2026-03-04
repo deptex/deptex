@@ -54,7 +54,7 @@ router.delete('/:sessionId', authenticateUser, async (req: AuthRequest, res) => 
     await supabase.from('user_sessions').delete().eq('id', session.id);
 
     try {
-      const { logSecurityEvent } = require('../../../ee/backend/lib/security-audit');
+      const { logSecurityEvent } = require('../lib/security-audit');
       const orgId = req.query.organization_id as string;
       if (orgId) {
         await logSecurityEvent({

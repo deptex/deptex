@@ -4,10 +4,8 @@ import path from 'path';
 // Load .env file from the backend root directory (one level up from src/)
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
-// EE routes loaded via load-ee-routes.js (plain JS) so tsc never compiles ee/
 import express from 'express';
 import cors from 'cors';
-import { isEeEdition } from './lib/features';
 import userProfileRouter from './routes/userProfile';
 import docsAssistantRouter from './routes/docs-assistant';
 import recoveryRouter from './routes/recovery';
@@ -32,6 +30,20 @@ import cronDispatcherRouter from './routes/cron-dispatcher';
 import feedbackRouter from './routes/feedback';
 import demoRequestRouter from './routes/demo-request';
 import enterpriseContactRouter from './routes/enterprise-contact';
+import organizationsRouter from './routes/organizations';
+import teamsRouter from './routes/teams';
+import projectsRouter from './routes/projects';
+import activitiesRouter from './routes/activities';
+import integrationsRouter, { githubWebhookHandler } from './routes/integrations';
+import invitationsRouter from './routes/invitations';
+import aegisRouter from './routes/aegis';
+import workersRouter from './routes/workers';
+import watchtowerRouter from './routes/watchtower';
+import internalRouter from './routes/internal';
+import learningRouter from './routes/learning';
+import incidentsRouter from './routes/incidents';
+import gitlabWebhooksRouter from './routes/gitlab-webhooks';
+import bitbucketWebhooksRouter from './routes/bitbucket-webhooks';
 
 const app = express();
 app.set('trust proxy', true);
@@ -112,10 +124,22 @@ app.use('/api/feedback', feedbackRouter);
 app.use('/api/demo-request', demoRequestRouter);
 app.use('/api/enterprise-contact', enterpriseContactRouter);
 
-// API Routes - EE (mounted only when DEPTEX_EDITION=ee, loaded from ee/backend/routes/)
-if (isEeEdition()) {
-  require('../load-ee-routes')(app);
-}
+// API Routes (former EE - now merged)
+app.use('/api/organizations', organizationsRouter);
+app.use('/api/organizations', teamsRouter);
+app.use('/api/organizations', projectsRouter);
+app.use('/api/organizations', activitiesRouter);
+app.use('/api/integrations', integrationsRouter);
+app.use('/api/invitations', invitationsRouter);
+app.use('/api/aegis', aegisRouter);
+app.use('/api/workers', workersRouter);
+app.use('/api/watchtower', watchtowerRouter);
+app.use('/api/internal', internalRouter);
+app.use('/api/organizations', learningRouter);
+app.use('/api/organizations', incidentsRouter);
+app.post('/api/webhook/github', githubWebhookHandler);
+app.use('/api/integrations', gitlabWebhooksRouter);
+app.use('/api/integrations', bitbucketWebhooksRouter);
 
 // Error handling middleware
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {

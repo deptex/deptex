@@ -8,7 +8,7 @@ import { supabase, queryBuilder, setTableResponse, clearTableRegistry } from '..
 
 jest.mock('../../lib/supabase', () => ({ ...require('../../test/mocks/supabaseSingleton'), createUserClient: jest.fn() }));
 const mockGetCached = jest.fn().mockResolvedValue(null);
-jest.mock('../../../../ee/backend/lib/cache', () => ({
+jest.mock('../../lib/cache', () => ({
   getCached: (...args: unknown[]) => mockGetCached(...args),
   setCached: jest.fn().mockResolvedValue(undefined),
   CACHE_TTL_SECONDS: {},

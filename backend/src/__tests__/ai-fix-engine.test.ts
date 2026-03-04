@@ -19,7 +19,7 @@ jest.mock('../lib/supabase', () => ({
   supabase: mockSupabase,
 }));
 
-jest.mock('../../../ee/backend/lib/fly-machines', () => ({
+jest.mock('../lib/fly-machines', () => ({
   startAiderMachine: jest.fn().mockResolvedValue('machine-123'),
   stopFlyMachine: jest.fn(),
   AIDER_CONFIG: { app: 'test-aider', guest: { cpus: 4, memory_mb: 8192, cpu_kind: 'shared' }, maxBurst: 3, stopTimeout: '15m' },
@@ -60,7 +60,7 @@ describe('Phase 7: AI Fix Engine', () => {
   describe('Fix Orchestrator', () => {
     it('1. Fix request validates project has connected repo', async () => {
       mockSupabase.single.mockResolvedValueOnce({ data: null });
-      const { requestFix } = await import('../../../ee/backend/lib/ai-fix-engine');
+      const { requestFix } = await import('../lib/ai-fix-engine');
       const result = await requestFix({
         projectId: 'proj-1', organizationId: 'org-1', userId: 'user-1',
         strategy: 'bump_version', vulnerabilityOsvId: 'GHSA-test',
@@ -74,7 +74,7 @@ describe('Phase 7: AI Fix Engine', () => {
         data: { id: 'repo-1', repo_full_name: 'test/repo', default_branch: 'main', provider: 'github', status: 'ready' },
       });
       mockSupabase.maybeSingle.mockResolvedValueOnce({ data: null });
-      const { requestFix } = await import('../../../ee/backend/lib/ai-fix-engine');
+      const { requestFix } = await import('../lib/ai-fix-engine');
       const result = await requestFix({
         projectId: 'proj-1', organizationId: 'org-1', userId: 'user-1',
         strategy: 'bump_version', vulnerabilityOsvId: 'GHSA-test',
@@ -97,7 +97,7 @@ describe('Phase 7: AI Fix Engine', () => {
       async () => {
         mockSupabase.single.mockResolvedValue({ data: { monthly_cost_cap: 100 } });
         mockRedis.incrby.mockResolvedValue(15000); // 15000 > 100*100 => over cap
-        const { checkAndReserveBudget } = await import('../../../ee/backend/lib/ai-fix-engine');
+        const { checkAndReserveBudget } = await import('../lib/ai-fix-engine');
         const result = await checkAndReserveBudget('org-1', 0.20);
         // When @upstash/redis mock is used, result is false and decrby is called; in CI real Redis can be used and test would hang
         expect(typeof result).toBe('boolean');
@@ -110,7 +110,7 @@ describe('Phase 7: AI Fix Engine', () => {
   // Tests 8-14: Fly Machine Lifecycle
   describe('Fly Machine Lifecycle', () => {
     it('5. startFlyMachine uses correct sizing for AIDER_CONFIG', async () => {
-      const { AIDER_CONFIG } = await import('../../../ee/backend/lib/fly-machines');
+      const { AIDER_CONFIG } = await import('../lib/fly-machines');
       expect(AIDER_CONFIG.guest.cpus).toBe(4);
       expect(AIDER_CONFIG.guest.memory_mb).toBe(8192);
       expect(AIDER_CONFIG.guest.cpu_kind).toBe('shared');
@@ -118,7 +118,7 @@ describe('Phase 7: AI Fix Engine', () => {
     });
 
     it('6. EXTRACTION_CONFIG preserved after refactor', async () => {
-      const { EXTRACTION_CONFIG } = await import('../../../ee/backend/lib/fly-machines');
+      const { EXTRACTION_CONFIG } = await import('../lib/fly-machines');
       expect(EXTRACTION_CONFIG.guest.cpus).toBe(8);
       expect(EXTRACTION_CONFIG.guest.memory_mb).toBe(65536);
       expect(EXTRACTION_CONFIG.guest.cpu_kind).toBe('performance');
@@ -273,7 +273,7 @@ describe('Phase 7: AI Fix Engine', () => {
       mockSupabase.update.mockReturnValueOnce({
         eq: jest.fn().mockResolvedValue({ data: null, error: null }),
       });
-      const { cancelFixJob } = await import('../../../ee/backend/lib/ai-fix-engine');
+      const { cancelFixJob } = await import('../lib/ai-fix-engine');
       const result = await cancelFixJob('job-1', 'user-1');
       expect(result.success).toBe(true);
     });
@@ -315,7 +315,7 @@ describe('Phase 7: AI Fix Engine', () => {
       mockSupabase.maybeSingle.mockResolvedValueOnce({
         data: { id: 'fix-1', status: 'running', started_at: new Date().toISOString() },
       });
-      const { checkExistingFix } = await import('../../../ee/backend/lib/ai-fix-engine');
+      const { checkExistingFix } = await import('../lib/ai-fix-engine');
       const result = await checkExistingFix('proj-1', { type: 'vulnerability', osvId: 'GHSA-test' });
       expect(result.hasActiveFix).toBe(true);
     });
@@ -323,7 +323,7 @@ describe('Phase 7: AI Fix Engine', () => {
     it('22. checkExistingFix returns canProceed when no fix exists', async () => {
       mockSupabase.maybeSingle.mockResolvedValueOnce({ data: null });
       mockSupabase.maybeSingle.mockResolvedValueOnce({ data: null });
-      const { checkExistingFix } = await import('../../../ee/backend/lib/ai-fix-engine');
+      const { checkExistingFix } = await import('../lib/ai-fix-engine');
       const result = await checkExistingFix('proj-1', { type: 'vulnerability', osvId: 'GHSA-test' });
       expect(result.canProceed).toBe(true);
     });

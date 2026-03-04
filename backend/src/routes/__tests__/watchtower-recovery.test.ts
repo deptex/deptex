@@ -17,7 +17,7 @@ jest.mock('../../lib/supabase', () => ({
 }));
 
 const mockStartWatchtowerMachine = jest.fn().mockResolvedValue('fly-wt-id');
-jest.mock('../../../../ee/backend/lib/fly-machines', () => ({
+jest.mock('../../lib/fly-machines', () => ({
   startWatchtowerMachine: (...args: unknown[]) => mockStartWatchtowerMachine(...args),
 }));
 

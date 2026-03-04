@@ -195,7 +195,7 @@ router.post('/Users', authenticateSCIM, async (req: SCIMRequest, res) => {
     }
 
     try {
-      const { logSecurityEvent } = require('../../../ee/backend/lib/security-audit');
+      const { logSecurityEvent } = require('../lib/security-audit');
       await logSecurityEvent({
         organizationId: orgId,
         action: 'scim_user_provisioned',
@@ -274,7 +274,7 @@ router.patch('/Users/:id', authenticateSCIM, async (req: SCIMRequest, res) => {
             updates.deprovisioned_at = new Date().toISOString();
 
             try {
-              const { logSecurityEvent } = require('../../../ee/backend/lib/security-audit');
+              const { logSecurityEvent } = require('../lib/security-audit');
               await logSecurityEvent({
                 organizationId: orgId,
                 action: 'scim_user_deprovisioned',
@@ -344,7 +344,7 @@ router.delete('/Users/:id', authenticateSCIM, async (req: SCIMRequest, res) => {
       .eq('id', req.params.id);
 
     try {
-      const { logSecurityEvent } = require('../../../ee/backend/lib/security-audit');
+      const { logSecurityEvent } = require('../lib/security-audit');
       await logSecurityEvent({
         organizationId: orgId,
         action: 'scim_user_deprovisioned',

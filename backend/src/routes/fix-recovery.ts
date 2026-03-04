@@ -79,7 +79,7 @@ router.post('/fix-jobs', async (_req, res) => {
     if (orphanedJobs?.length) {
       let startAiderMachine: (() => Promise<string | null>) | null = null;
       try {
-        const flyMachines = require('../../../ee/backend/lib/fly-machines');
+        const flyMachines = require('../lib/fly-machines');
         startAiderMachine = flyMachines.startAiderMachine;
       } catch {
         // fly-machines not available

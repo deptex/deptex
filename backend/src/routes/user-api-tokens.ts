@@ -73,7 +73,7 @@ router.post('/', authenticateUser, async (req: AuthRequest, res) => {
     }
 
     try {
-      const { logSecurityEvent } = require('../../../ee/backend/lib/security-audit');
+      const { logSecurityEvent } = require('../lib/security-audit');
       await logSecurityEvent({
         organizationId: organization_id,
         actorId: userId,
@@ -119,7 +119,7 @@ router.delete('/:id', authenticateUser, async (req: AuthRequest, res) => {
       .eq('id', tokenId);
 
     try {
-      const { logSecurityEvent } = require('../../../ee/backend/lib/security-audit');
+      const { logSecurityEvent } = require('../lib/security-audit');
       await logSecurityEvent({
         organizationId: tokenRow.organization_id,
         actorId: userId,
@@ -182,7 +182,7 @@ router.post('/:id/rotate', authenticateUser, async (req: AuthRequest, res) => {
     }
 
     try {
-      const { logSecurityEvent } = require('../../../ee/backend/lib/security-audit');
+      const { logSecurityEvent } = require('../lib/security-audit');
       await logSecurityEvent({
         organizationId: oldToken.organization_id,
         actorId: userId,

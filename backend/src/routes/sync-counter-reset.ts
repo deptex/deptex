@@ -41,7 +41,7 @@ router.post('/reset-sync-counters', async (req: Request, res: Response) => {
   try {
     let resetCount = 0;
     try {
-      const { resetDueSyncCounters } = require('../../../ee/backend/lib/stripe');
+      const { resetDueSyncCounters } = require('../lib/stripe');
       resetCount = await resetDueSyncCounters();
     } catch {
       return res.status(503).json({ error: 'Billing module not available' });

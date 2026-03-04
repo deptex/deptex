@@ -179,7 +179,7 @@ router.post('/callback', async (req: Request, res: Response) => {
     const token = linkUrl.searchParams.get('token') || linkUrl.hash?.replace('#', '');
 
     try {
-      const { logSecurityEvent } = require('../../../ee/backend/lib/security-audit');
+      const { logSecurityEvent } = require('../lib/security-audit');
       await logSecurityEvent({
         organizationId: ssoProvider.organization_id,
         actorId: user.id,
@@ -256,7 +256,7 @@ router.post('/bypass', async (req: Request, res: Response) => {
     const magicToken = linkUrl.searchParams.get('token') || '';
 
     try {
-      const { logSecurityEvent } = require('../../../ee/backend/lib/security-audit');
+      const { logSecurityEvent } = require('../lib/security-audit');
       await logSecurityEvent({
         organizationId: bypassRow.organization_id,
         action: 'sso_bypass_used',

@@ -56,7 +56,7 @@ router.post('/escalate', async (req, res) => {
     });
 
     try {
-      const { emitEvent } = require('../../../ee/backend/lib/event-bus');
+      const { emitEvent } = require('../lib/event-bus');
       await emitEvent({
         type: 'incident_escalated',
         organizationId: incident.organization_id,

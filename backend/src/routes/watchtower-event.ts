@@ -38,7 +38,7 @@ router.post('/', async (req, res) => {
 
     if (isEeEdition()) {
       try {
-        const { emitEvent } = require('../../../ee/backend/lib/event-bus');
+        const { emitEvent } = require('../lib/event-bus');
         await emitEvent({
           event_type,
           organization_id,

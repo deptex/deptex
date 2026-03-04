@@ -5,7 +5,7 @@ const supabaseMockPath = '<rootDir>/src/test/mocks/lib-supabase-mock.js';
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
-  roots: ['<rootDir>/src', '<rootDir>/extraction-worker/src', '<rootDir>/../ee/backend'],
+  roots: ['<rootDir>/src', '<rootDir>/extraction-worker/src'],
   testMatch: ['**/__tests__/**/*.ts', '**/?(*.)+(spec|test).ts'],
   testPathIgnorePatterns: ['/node_modules/', 'src/test/aegis-analysis.test.ts', '/extraction-worker/node_modules/'],
   setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
