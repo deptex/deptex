@@ -16,4 +16,4 @@ src/**/*.js
 !src/test/mocks/lib-supabase-mock.js
 src/**/*.d.ts
 watchtower-*/src/**/*.js
-watchtower-*/src/**/*.d.ts 
+watchtower-*/src/**/*.d.ts
