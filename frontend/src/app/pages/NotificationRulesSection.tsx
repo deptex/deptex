@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Plus, Trash2, Check, Pencil, MoreVertical, Mail, ChevronDown, Loader2, Webhook, BookOpen, X, Clock, Play, Info, LayoutGrid, Calendar, ShieldAlert, FileWarning, BarChart2, Bell } from 'lucide-react';
+import { Plus, Trash2, Check, Pencil, MoreVertical, Mail, ChevronDown, Loader2, Webhook, BookOpen, X, Clock, Info, LayoutGrid, Calendar, ShieldAlert, FileWarning, BarChart2, Bell } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '../../components/ui/button';
@@ -10,7 +10,9 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useUserProfile } from '../../hooks/useUserProfile';
 import { useToast } from '../../hooks/use-toast';
 import { api, type OrganizationNotificationRule, type CiCdConnection, type CiCdProvider, type OrganizationMember } from '../../lib/api';
+import { supabase } from '../../lib/supabase';
 import { Avatar, AvatarImage, AvatarFallback } from '../../components/ui/avatar';
+import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,6 +22,8 @@ import {
   DropdownMenuSubContent,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 const DESTINATION_PROVIDERS = ['slack', 'discord', 'jira', 'linear', 'asana', 'pagerduty', 'custom_notification', 'custom_ticketing', 'email'] as const;
 
@@ -258,8 +262,6 @@ export default function NotificationRulesSection({ organizationId = '', projectI
     { id: crypto.randomUUID(), connectionId: '' },
   ]);
   const [validationChecks, setValidationChecks] = useState<{ name: string; pass: boolean; error?: string }[] | null>(null);
-  const [testing, setTesting] = useState(false);
-  const [testResults, setTestResults] = useState<{ eventType: string; wouldNotify: boolean; message?: string; executionTime?: number; error?: string }[] | null>(null);
   const [snoozingRuleId, setSnoozingRuleId] = useState<string | null>(null);
   const [templates, setTemplates] = useState<{ id: string; name: string; description: string; code: string }[]>([]);
   const [showTemplatePicker, setShowTemplatePicker] = useState(false);
@@ -267,6 +269,7 @@ export default function NotificationRulesSection({ organizationId = '', projectI
   const [loadingTemplates, setLoadingTemplates] = useState(false);
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
   const aiAssistantRef = useRef<HTMLDivElement>(null);
+  const validationCardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!organizationId) {
@@ -381,7 +384,6 @@ export default function NotificationRulesSection({ organizationId = '', projectI
     setDestinations([{ id: crypto.randomUUID(), connectionId: destinationConnections[0]?.id ?? '' }]);
     setEditingRuleId(null);
     setValidationChecks(null);
-    setTestResults(null);
     setShowTemplatePicker(false);
     setCreateRuleMode('ai');
     setSelectedSampleId(null);
@@ -412,7 +414,11 @@ export default function NotificationRulesSection({ organizationId = '', projectI
 
   const handleSaveRule = async () => {
     if (!organizationId) return;
-    const name = ruleName?.trim() || 'Untitled Rule';
+    const name = ruleName?.trim();
+    if (!name) {
+      toast({ title: 'Name required', description: 'Enter a name for this rule.', variant: 'destructive' });
+      return;
+    }
     const dests = destinations
       .filter((d) => d.connectionId)
       .map((d) => {
@@ -454,19 +460,14 @@ export default function NotificationRulesSection({ organizationId = '', projectI
       }
       closeSidebar();
     } catch (err: any) {
-      if (err.checks && Array.isArray(err.checks)) {
-        setValidationChecks(err.checks);
+      const responseBody = err?.responseBody;
+      const checks = Array.isArray(responseBody?.checks) ? responseBody.checks : (err.checks && Array.isArray(err.checks) ? err.checks : null);
+      if (checks) {
+        setValidationChecks(checks);
+        validationCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       } else {
-        try {
-          const parsed = typeof err.body === 'string' ? JSON.parse(err.body) : err.body;
-          if (parsed?.checks) {
-            setValidationChecks(parsed.checks);
-          }
-        } catch {
-          // not a validation error
-        }
+        toast({ title: 'Failed to save', description: err.message || 'Could not save rule', variant: 'destructive' });
       }
-      toast({ title: 'Failed to save', description: err.message || 'Could not save rule', variant: 'destructive' });
     } finally {
       setSaving(false);
     }
@@ -507,69 +508,89 @@ export default function NotificationRulesSection({ organizationId = '', projectI
     }
   };
 
-  const getToken = async () => {
-    const { supabase: sb } = await import('../../lib/supabase');
-    const session = await sb.auth.getSession();
-    return session.data.session?.access_token || '';
-  };
-
-  const handleTestRule = async () => {
-    if (!organizationId) return;
-    setTesting(true);
-    setTestResults(null);
-    const apiBase = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:3001';
-    try {
-      const token = await getToken();
-      const res = await fetch(`${apiBase}/api/organizations/${organizationId}/test-notification-rule`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ code: customCode }),
-      });
-      const text = await res.text();
-      let data: { results?: unknown[]; error?: string } = {};
-      if (text) {
-        try {
-          data = JSON.parse(text);
-        } catch {
-          toast({ title: 'Test failed', description: 'Invalid response from server', variant: 'destructive' });
-          return;
-        }
-      }
-      if (!res.ok) {
-        toast({ title: 'Test failed', description: (data as { error?: string }).error || res.statusText || 'Request failed', variant: 'destructive' });
-        return;
-      }
-      if (data.results && Array.isArray(data.results)) {
-        setTestResults(data.results);
-      } else if (data.error) {
-        toast({ title: 'Test failed', description: data.error, variant: 'destructive' });
-      }
-    } catch (err: any) {
-      toast({ title: 'Test failed', description: err.message || 'Could not test rule', variant: 'destructive' });
-    } finally {
-      setTesting(false);
-    }
-  };
-
   const handleSnooze = async (ruleId: string, duration: string) => {
     if (!organizationId) return;
+    const durationLabels: Record<string, string> = { '1h': '1 hour', '4h': '4 hours', '24h': '24 hours', '1w': '1 week' };
+    const label = durationLabels[duration] ?? duration;
+    let snoozedUntil: string;
+    const now = Date.now();
+    if (duration === '1h') snoozedUntil = new Date(now + 60 * 60 * 1000).toISOString();
+    else if (duration === '4h') snoozedUntil = new Date(now + 4 * 60 * 60 * 1000).toISOString();
+    else if (duration === '24h') snoozedUntil = new Date(now + 24 * 60 * 60 * 1000).toISOString();
+    else if (duration === '1w') snoozedUntil = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
+    else {
+      toast({ title: 'Snooze failed', description: 'Invalid duration', variant: 'destructive' });
+      return;
+    }
     setSnoozingRuleId(ruleId);
     try {
-      const token = await getToken();
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        toast({ title: 'Snooze failed', description: 'Not signed in', variant: 'destructive' });
+        return;
+      }
       const baseUrl = teamId
         ? `/api/organizations/${organizationId}/teams/${teamId}/notification-rules/${ruleId}/snooze`
         : projectId
           ? `/api/organizations/${organizationId}/projects/${projectId}/notification-rules/${ruleId}/snooze`
           : `/api/organizations/${organizationId}/notification-rules/${ruleId}/snooze`;
-      const res = await fetch(`${import.meta.env.VITE_API_URL || ''}${baseUrl}`, {
+      const res = await fetch(`${API_BASE}${baseUrl}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ duration }),
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ snoozedUntil }),
       });
-      if (!res.ok) throw new Error('Failed to snooze');
-      toast({ title: 'Rule snoozed', description: `Notifications paused for ${duration}.` });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const msg = data?.error || (res.status === 404 ? 'Snooze endpoint not found. Restart the backend to load the latest routes.' : `Failed to snooze (${res.status})`);
+        throw new Error(msg);
+      }
+      toast({ title: 'Rule snoozed', description: `Notifications paused for ${label}.` });
+      // Refetch rules so list shows updated snoozed_until
+      const rulesPromise = teamId
+        ? api.getTeamNotificationRules(organizationId, teamId)
+        : projectId
+          ? api.getProjectNotificationRules(organizationId, projectId)
+          : api.getOrganizationNotificationRules(organizationId);
+      rulesPromise.then(setRules).catch(() => {});
     } catch (err: any) {
       toast({ title: 'Snooze failed', description: err.message, variant: 'destructive' });
+    } finally {
+      setSnoozingRuleId(null);
+    }
+  };
+
+  const handleUnsnooze = async (ruleId: string) => {
+    if (!organizationId) return;
+    setSnoozingRuleId(ruleId);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        toast({ title: 'Unsnooze failed', description: 'Not signed in', variant: 'destructive' });
+        return;
+      }
+      const baseUrl = teamId
+        ? `/api/organizations/${organizationId}/teams/${teamId}/notification-rules/${ruleId}/snooze`
+        : projectId
+          ? `/api/organizations/${organizationId}/projects/${projectId}/notification-rules/${ruleId}/snooze`
+          : `/api/organizations/${organizationId}/notification-rules/${ruleId}/snooze`;
+      const res = await fetch(`${API_BASE}${baseUrl}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ snoozedUntil: null }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error || `Failed to unsnooze (${res.status})`);
+      }
+      toast({ title: 'Rule unsnoozed', description: 'Notifications for this rule are active again.' });
+      const rulesPromise = teamId
+        ? api.getTeamNotificationRules(organizationId, teamId)
+        : projectId
+          ? api.getProjectNotificationRules(organizationId, projectId)
+          : api.getOrganizationNotificationRules(organizationId);
+      rulesPromise.then(setRules).catch(() => {});
+    } catch (err: any) {
+      toast({ title: 'Unsnooze failed', description: err.message, variant: 'destructive' });
     } finally {
       setSnoozingRuleId(null);
     }
@@ -579,14 +600,15 @@ export default function NotificationRulesSection({ organizationId = '', projectI
     if (!organizationId) return;
     setLoadingTemplates(true);
     try {
-      const token = await getToken();
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
       const baseUrl = teamId
         ? `/api/organizations/${organizationId}/teams/${teamId}/notification-rule-templates`
         : projectId
           ? `/api/organizations/${organizationId}/projects/${projectId}/notification-rule-templates`
           : `/api/organizations/${organizationId}/notification-rule-templates`;
-      const res = await fetch(`${import.meta.env.VITE_API_URL || ''}${baseUrl}`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const res = await fetch(`${API_BASE}${baseUrl}`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
       });
       if (res.ok) {
         const data = await res.json();
@@ -668,7 +690,15 @@ export default function NotificationRulesSection({ organizationId = '', projectI
               <div key={rule.id} className="px-4 py-3 flex items-center gap-3 hover:bg-table-hover transition-colors">
                 <DestinationIcons destinations={rule.destinations} connections={connections} />
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-foreground truncate">{rule.name}</div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-medium text-foreground truncate">{rule.name}</span>
+                    {rule.snoozedUntil && new Date(rule.snoozedUntil) > new Date() && (
+                      <span className="inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 dark:bg-amber-500/15 px-1.5 py-0.5 rounded">
+                        <Clock className="h-3 w-3" />
+                        Snoozed until {new Date(rule.snoozedUntil).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
                   {rule.destinations.length > 0 && (
                     <div className="text-xs text-foreground-secondary truncate mt-0.5">
                       {formatDestinations(rule.destinations, connections)}
@@ -677,13 +707,27 @@ export default function NotificationRulesSection({ organizationId = '', projectI
                 </div>
                 {rule.createdByUserId && (() => {
                   const member = members.find(m => m.user_id === rule.createdByUserId);
+                  const displayName = member?.full_name || rule.createdByName || 'Unknown';
+                  const displayRole = member?.role_display_name || (member?.role ? member.role.charAt(0).toUpperCase() + member.role.slice(1) : null);
                   return (
-                    <Avatar className="h-6 w-6 flex-shrink-0 hidden sm:flex">
-                      <AvatarImage src={member?.avatar_url || undefined} alt={member?.full_name || rule.createdByName || ''} />
-                      <AvatarFallback className="text-[9px] bg-background-subtle">
-                        {(member?.full_name || rule.createdByName || '?').trim().slice(0, 2).toUpperCase()}
-                      </AvatarFallback>
-                    </Avatar>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="hidden sm:inline-flex">
+                          <Avatar className="h-6 w-6 flex-shrink-0">
+                            <AvatarImage src={member?.avatar_url || undefined} alt={displayName} />
+                            <AvatarFallback className="text-[9px] bg-background-subtle">
+                              {displayName.trim().slice(0, 2).toUpperCase()}
+                            </AvatarFallback>
+                          </Avatar>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="left">
+                        {displayName}
+                        {displayRole != null && (
+                          <span className="text-foreground-secondary font-normal"> · {displayRole}</span>
+                        )}
+                      </TooltipContent>
+                    </Tooltip>
                   );
                 })()}
                 <DropdownMenu>
@@ -701,6 +745,15 @@ export default function NotificationRulesSection({ organizationId = '', projectI
                       <Pencil className="h-3.5 w-3.5 mr-2" />
                       Edit
                     </DropdownMenuItem>
+                    {rule.snoozedUntil && new Date(rule.snoozedUntil) > new Date() ? (
+                      <DropdownMenuItem
+                        disabled={snoozingRuleId === rule.id}
+                        onClick={(e) => { e.stopPropagation(); handleUnsnooze(rule.id); }}
+                      >
+                        <Bell className="h-3.5 w-3.5 mr-2" />
+                        Unsnooze
+                      </DropdownMenuItem>
+                    ) : (
                     <DropdownMenuSub>
                       <DropdownMenuSubTrigger>
                         <Clock className="h-3.5 w-3.5 mr-2" />
@@ -723,6 +776,7 @@ export default function NotificationRulesSection({ organizationId = '', projectI
                         ))}
                       </DropdownMenuSubContent>
                     </DropdownMenuSub>
+                    )}
                     <DropdownMenuItem
                       onClick={(e) => handleDelete(rule.id, e)}
                       className="text-destructive focus:text-destructive"
@@ -932,70 +986,35 @@ export default function NotificationRulesSection({ organizationId = '', projectI
                             fitContent
                           />
                         </div>
-
-                        {/* Validation checks display */}
-                        {validationChecks && (
-                          <div className="mt-2 space-y-1">
-                            {validationChecks.map((check, i) => (
-                              <div key={i} className="flex items-start gap-2 text-xs">
-                                {check.pass ? (
-                                  <Check className="h-3.5 w-3.5 text-green-500 mt-0.5 flex-shrink-0" />
-                                ) : (
-                                  <X className="h-3.5 w-3.5 text-destructive mt-0.5 flex-shrink-0" />
-                                )}
-                                <div>
-                                  <span className={check.pass ? 'text-green-500' : 'text-destructive'}>{check.name}</span>
-                                  {check.error && <p className="text-foreground-secondary mt-0.5">{check.error}</p>}
-                                </div>
+                        {/* Validation result: only when Create Rule failed with validation errors */}
+                        {validationChecks && validationChecks.some((c) => !c.pass) && (
+                          <div
+                            ref={validationCardRef}
+                            className="mt-3 p-4 rounded-lg border border-destructive/30 bg-destructive/10"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="rounded-md bg-destructive/20 border border-destructive/40 w-9 h-9 flex items-center justify-center flex-shrink-0 text-destructive">
+                                <X className="h-4 w-4" />
                               </div>
-                            ))}
+                              <span className="text-base font-medium text-destructive">Validation failed</span>
+                            </div>
+                            <div className="mt-3 space-y-2 pl-12">
+                              {validationChecks
+                                .filter((c) => !c.pass)
+                                .map((check, i) => (
+                                  <div key={i} className="text-sm">
+                                    <span className="font-medium text-destructive">
+                                      {check.name === 'syntax' ? 'Syntax' : check.name === 'shape' ? 'Return value' : check.name === 'fetch_resilience' ? 'Fetch handling' : check.name.replace(/_/g, ' ')} failed
+                                    </span>
+                                    {check.error && (
+                                      <p className="text-foreground-secondary mt-0.5">{check.error}</p>
+                                    )}
+                                  </div>
+                                ))}
+                            </div>
                           </div>
                         )}
 
-                        {/* Test Rule button + results */}
-                        <div className="mt-3">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={handleTestRule}
-                            disabled={testing}
-                            className="rounded-lg"
-                          >
-                            {testing ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Play className="h-3.5 w-3.5 mr-1.5" />}
-                            Test Rule
-                          </Button>
-                          {testResults && (
-                            <div className="mt-2 rounded-lg border border-border bg-background-card overflow-hidden">
-                              <div className="px-3 py-2 bg-background-card-header border-b border-border">
-                                <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Test Results</span>
-                              </div>
-                              <div className="divide-y divide-border">
-                                {testResults.map((r, i) => (
-                                  <div key={i} className="px-3 py-2 flex items-start gap-2">
-                                    {r.error ? (
-                                      <X className="h-3.5 w-3.5 text-destructive mt-0.5 flex-shrink-0" />
-                                    ) : r.wouldNotify ? (
-                                      <Check className="h-3.5 w-3.5 text-green-500 mt-0.5 flex-shrink-0" />
-                                    ) : (
-                                      <span className="h-3.5 w-3.5 text-foreground-secondary mt-0.5 flex-shrink-0 text-center leading-[14px]">—</span>
-                                    )}
-                                    <div className="flex-1 min-w-0">
-                                      <div className="flex items-center gap-2">
-                                        <span className="text-xs font-medium text-foreground">{r.eventType}</span>
-                                        {r.executionTime != null && (
-                                          <span className="text-[10px] text-foreground-secondary">{r.executionTime}ms</span>
-                                        )}
-                                      </div>
-                                      {r.message && <p className="text-xs text-foreground-secondary mt-0.5 truncate">{r.message}</p>}
-                                      {r.error && <p className="text-xs text-destructive mt-0.5">{r.error}</p>}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
                       </div>
                         </>
                       )}
@@ -1025,7 +1044,7 @@ export default function NotificationRulesSection({ organizationId = '', projectI
               </Button>
               <Button
                 onClick={handleSaveRule}
-                disabled={saving}
+                disabled={saving || !ruleName?.trim()}
                 className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
               >
                 {saving ? (

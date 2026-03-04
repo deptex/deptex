@@ -1,7 +1,25 @@
 import { useMemo } from 'react';
 import * as Diff from 'diff';
+import Prism from 'prismjs';
+import 'prismjs/components/prism-javascript';
 
 const DIFF_OPTIONS = { ignoreWhitespace: true };
+
+/** Syntax-highlight a line of JS for display in the diff (unchanged lines only). */
+function highlightLine(text: string): string {
+  if (!text.trim()) return '';
+  try {
+    return Prism.highlight(text, Prism.languages.javascript, 'javascript');
+  } catch {
+    return escapeHtml(text);
+  }
+}
+
+function escapeHtml(s: string): string {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
 
 export function getDiffLineCounts(baseCode: string, requestedCode: string): { added: number; removed: number } {
   const chunks = Diff.diffLines(baseCode || '', requestedCode || '', DIFF_OPTIONS);
@@ -57,7 +75,7 @@ export function PolicyDiffViewer({
 
   return (
     <div
-      className={`rounded-none border-0 bg-[#1d1f21] overflow-auto font-mono text-sm ${className}`}
+      className={`policy-diff-viewer rounded-none border-0 bg-[#1d1f21] overflow-auto font-mono text-sm ${className}`}
       style={{ minHeight }}
     >
       <pre className="p-4 m-0">
@@ -66,17 +84,30 @@ export function PolicyDiffViewer({
             key={i}
             className={`flex ${
               line.type === 'add'
-                ? 'bg-green-500/20 text-green-200'
+                ? 'bg-emerald-500/25 text-emerald-100'
                 : line.type === 'remove'
-                  ? 'bg-red-500/20 text-red-200'
-                  : 'text-foreground-secondary'
+                  ? 'bg-red-500/25 text-red-100'
+                  : 'bg-transparent'
             }`}
           >
-            <span className="w-10 shrink-0 select-none pr-3 text-right text-foreground-secondary/60">
+            <span
+              className={`w-10 shrink-0 select-none pr-3 text-right ${
+                line.type === 'same' ? 'text-[#6e7175]' : 'text-inherit opacity-80'
+              }`}
+            >
               {line.type === 'remove' || line.type === 'same' ? line.lineNum : ''}
             </span>
             <span className={line.type === 'add' ? 'pl-2' : ''}>
-              {line.text || ' '}
+              {line.type === 'same' ? (
+                <span
+                  className="policy-diff-line-syntax"
+                  dangerouslySetInnerHTML={{
+                    __html: highlightLine(line.text) || ' ',
+                  }}
+                />
+              ) : (
+                <>{line.text || ' '}</>
+              )}
             </span>
           </div>
         ))}

@@ -237,7 +237,9 @@ async function fetchWithAuth(url: string, options: RequestInit = {}) {
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(error.error || `HTTP error! status: ${response.status}`);
+    const e = new Error(error.error || `HTTP error! status: ${response.status}`);
+    (e as Error & { responseBody?: unknown }).responseBody = error;
+    throw e;
   }
 
   if (response.status === 204) {
@@ -896,6 +898,16 @@ export const api = {
   async deleteOrganizationNotificationRule(organizationId: string, ruleId: string): Promise<{ message: string }> {
     return fetchWithAuth(`/api/organizations/${organizationId}/notification-rules/${ruleId}`, {
       method: 'DELETE',
+    });
+  },
+
+  async validateNotificationRule(
+    organizationId: string,
+    code: string,
+  ): Promise<{ passed: boolean; checks: Array<{ name: string; pass: boolean; error?: string }> }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/validate-notification-rule`, {
+      method: 'POST',
+      body: JSON.stringify({ code }),
     });
   },
 
@@ -2395,6 +2407,11 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/policy-changes${params}`);
   },
 
+  /** Pending project policy change requests (for org Policies > Project requests). */
+  async getOrganizationPolicyChangeRequests(orgId: string): Promise<ProjectPolicyChangeRequest[]> {
+    return fetchWithAuth(`/api/organizations/${orgId}/policy-change-requests`);
+  },
+
   // ───── Phase 15: Security SLA Management ─────
 
   async getSlaPolicies(orgId: string): Promise<{ policies: SlaPolicy[]; sla_paused_at: string | null }> {
@@ -3195,6 +3212,8 @@ export interface OrganizationNotificationRule {
   active: boolean;
   createdByUserId?: string;
   createdByName?: string;
+  /** ISO date string; when set and in the future, rule is snoozed */
+  snoozedUntil?: string | null;
 }
 
 export interface OrganizationPolicies {
@@ -3342,6 +3361,13 @@ export interface ProjectPolicyChange {
   has_conflict: boolean;
   created_at: string;
   reviewed_at: string | null;
+}
+
+/** Project policy change with org-list enrichment (project_name, author display). */
+export interface ProjectPolicyChangeRequest extends ProjectPolicyChange {
+  project_name: string;
+  author_display_name?: string | null;
+  author_avatar_url?: string | null;
 }
 
 export interface Activity {

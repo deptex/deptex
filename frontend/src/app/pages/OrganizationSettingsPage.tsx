@@ -13,7 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, ChevronRight, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle, FolderGit2, Code2, Megaphone } from 'lucide-react';
+import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
@@ -723,9 +723,9 @@ function SSOSection({ organizationId, embedded }: { organizationId: string; embe
     );
   }
 
-  if (ssoLoading) return <div className="flex items-center gap-2 pt-8 text-foreground-secondary"><Loader2 className="h-4 w-4 animate-spin" /> Loading...</div>;
+  if (ssoLoading) return <div className="flex items-center gap-2 text-foreground-secondary"><Loader2 className="h-4 w-4 animate-spin" /> Loading...</div>;
   return (
-    <div className={embedded ? 'space-y-4' : 'space-y-6 pt-8'}>
+    <div className={embedded ? 'space-y-4' : 'space-y-6'}>
       {!embedded && (
         <div>
           <h2 className="text-2xl font-bold text-foreground">Single Sign-On</h2>
@@ -1129,7 +1129,7 @@ function IPAllowlistSection({ organizationId }: { organizationId: string }) {
     }
   };
 
-  if (loading) return <div className="flex items-center gap-2 pt-8 text-foreground-secondary"><Loader2 className="h-4 w-4 animate-spin" /> Loading...</div>;
+  if (loading) return <div className="flex items-center gap-2 text-foreground-secondary"><Loader2 className="h-4 w-4 animate-spin" /> Loading...</div>;
   return (
     <div className="space-y-6">
       <div>
@@ -1509,6 +1509,7 @@ export default function OrganizationSettingsPage() {
   const [hasVisitedNotifications, setHasVisitedNotifications] = useState(false);
   const [notifSubTab, setNotifSubTab] = useState<'rules' | 'history'>('rules');
   const [hasVisitedPolicies, setHasVisitedPolicies] = useState(false);
+  const [hasVisitedStatuses, setHasVisitedStatuses] = useState(false);
   const [selectedRoleForSettings, setSelectedRoleForSettings] = useState<OrganizationRole | null>(null);
   const [newRoleNameInput, setNewRoleNameInput] = useState('');
   const [newRoleColor, setNewRoleColor] = useState(''); // No default color (plain gray)
@@ -1823,6 +1824,7 @@ export default function OrganizationSettingsPage() {
     if (activeSection === 'webhooks') setHasVisitedWebhooks(true);
     if (activeSection === 'notifications') setHasVisitedNotifications(true);
     if (activeSection === 'policies') setHasVisitedPolicies(true);
+    if (activeSection === 'statuses') setHasVisitedStatuses(true);
   }, [activeSection]);
 
   useEffect(() => {
@@ -3242,7 +3244,9 @@ export default function OrganizationSettingsPage() {
               )}
 
               {activeSection === 'sso' && id && (
-                <SSOSection organizationId={id} />
+                <div className="h-full pt-8">
+                  <SSOSection organizationId={id} />
+                </div>
               )}
 
               {activeSection === 'mfa' && id && (
@@ -3250,7 +3254,9 @@ export default function OrganizationSettingsPage() {
               )}
 
               {activeSection === 'ip_allowlist' && id && (
-                <IPAllowlistSectionOrUpgrade organizationId={id} />
+                <div className="h-full pt-8">
+                  <IPAllowlistSectionOrUpgrade organizationId={id} />
+                </div>
               )}
 
               {activeSection === 'roles' && (
@@ -3276,7 +3282,7 @@ export default function OrganizationSettingsPage() {
                         <Info className="h-5 w-5 text-foreground-muted" />
                       </div>
                       <div className="min-w-0">
-                        <p className="text-sm text-foreground">
+                        <p className="text-sm text-foreground-secondary">
                           Create customizable roles for your organization and control what permissions each role has. Permissions determine which screens and actions are visible and available—members see only what their role allows, so the app adapts to their access level.
                         </p>
                       </div>
@@ -3853,7 +3859,7 @@ export default function OrganizationSettingsPage() {
                                             )}>
                                               <span className="text-sm text-foreground truncate">{connectionDisplay.primary}</span>
                                               {connectionDisplay.secondary && (
-                                                <span className="text-xs text-foreground-muted truncate">{connectionDisplay.secondary}</span>
+                                                <span className="text-xs text-foreground-secondary truncate">{connectionDisplay.secondary}</span>
                                               )}
                                             </div>
                                           </td>
@@ -4234,6 +4240,19 @@ export default function OrganizationSettingsPage() {
                     </div>
                   )}
 
+                  <Card className="rounded-lg border border-border bg-background-card/80">
+                    <CardContent className="p-4 flex gap-3">
+                      <div className="flex-shrink-0 mt-0.5">
+                        <Info className="h-5 w-5 text-foreground-muted" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm text-foreground-secondary">
+                          Create custom rules with code to decide when to notify. Send alerts to Slack, email, Jira, webhooks, and more. The AI assistant can help you write the trigger logic.
+                        </p>
+                      </div>
+                    </CardContent>
+                  </Card>
+
                   {/* Sub-tabs - Members style (border-b, underline active) */}
                   <div className="flex items-center justify-between border-b border-border mb-4">
                     <div className="flex items-center gap-6">
@@ -4342,6 +4361,9 @@ export default function OrganizationSettingsPage() {
                 >
                   <div>
                     <h2 className="text-2xl font-bold text-foreground">Webhooks</h2>
+                    <p className="mt-1.5 text-sm text-foreground-secondary">
+                      View recent webhook deliveries and logs for your projects. Filter by provider, event type, and status to inspect push and PR events from GitHub, GitLab, and Bitbucket.
+                    </p>
                   </div>
 
                   {/* Filters Row */}
@@ -4613,8 +4635,10 @@ export default function OrganizationSettingsPage() {
                 </div>
               )}
 
-              {activeSection === 'statuses' && (
-                <StatusesSection />
+              {(activeSection === 'statuses' || hasVisitedStatuses) && (
+                <div style={{ display: activeSection === 'statuses' ? undefined : 'none' }}>
+                  <StatusesSection />
+                </div>
               )}
 
               {activeSection === 'security_slas' && id && (
@@ -5890,13 +5914,6 @@ export default function OrganizationSettingsPage() {
 function UsageSectionContent({ organizationId }: { organizationId: string }) {
   const navigate = useNavigate();
   const { plan, loading, error, refetch } = usePlan();
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [teamsLoading, setTeamsLoading] = useState(true);
-
-  useEffect(() => {
-    if (!organizationId) return;
-    api.getTeams(organizationId).then(setTeams).catch(() => setTeams([])).finally(() => setTeamsLoading(false));
-  }, [organizationId]);
 
   if (loading) {
     return (
@@ -5938,222 +5955,106 @@ function UsageSectionContent({ organizationId }: { organizationId: string }) {
     );
   }
 
-  const periodLabel = plan.current_period_end
-    ? `Limits reset on ${new Date(plan.current_period_end).toLocaleDateString()}`
-    : 'Current period';
+  // Billing period for display: start – end (e.g. 01 Mar 2026 – 01 Apr 2026)
+  const periodEnd = plan.current_period_end
+    ? new Date(plan.current_period_end)
+    : (() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth() + 1, 1); })();
+  const periodStart = new Date(periodEnd);
+  periodStart.setMonth(periodStart.getMonth() - 1);
+  periodStart.setDate(1);
+  const formatPeriodDate = (d: Date) => d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).replace(/ /g, ' ');
+  const periodRangeLabel = `${formatPeriodDate(periodStart)} – ${formatPeriodDate(periodEnd)}`;
+  const planLabel = TIER_DISPLAY[plan.tier as keyof typeof TIER_DISPLAY] ?? plan.tier;
 
-  const mainMetrics: { label: string; current: number; limit: number; tooltip: string; remainingLabel: (n: number) => string }[] = [
-    { label: 'Projects', current: plan.usage.projects, limit: plan.limits.projects, tooltip: 'Connected repositories. Resets each billing period.', remainingLabel: (n) => `${n} slot${n === 1 ? '' : 's'} remaining` },
-    { label: 'Members', current: plan.usage.members, limit: plan.limits.members, tooltip: 'Organization members. Resets each billing period.', remainingLabel: (n) => `${n} seat${n === 1 ? '' : 's'} remaining` },
-    { label: 'Data syncs', current: plan.usage.syncs, limit: plan.limits.syncs, tooltip: 'Dependency extraction runs this period. Resets each billing period.', remainingLabel: (n) => `${n} sync${n === 1 ? '' : 's'} remaining` },
+  const allMetrics: { label: string; current: number; limit: number; tooltip: string; description: string }[] = [
+    { label: 'Projects', current: plan.usage.projects, limit: plan.limits.projects, tooltip: 'Connected repositories. Resets each billing period.', description: 'Connected repositories' },
+    { label: 'Members', current: plan.usage.members, limit: plan.limits.members, tooltip: 'Organization members. Resets each billing period.', description: 'Active seat allocation' },
+    { label: 'Data syncs', current: plan.usage.syncs, limit: plan.limits.syncs, tooltip: 'Dependency extraction runs this period. Resets each billing period.', description: 'Extraction runs this period' },
+    { label: 'Watched packages', current: plan.usage.watchtower, limit: plan.limits.watchtower ?? -1, tooltip: 'Packages on organization watchlist. Resets each billing period.', description: 'Dependency monitoring' },
+    { label: 'Teams', current: plan.usage.teams, limit: plan.limits.teams ?? -1, tooltip: 'Teams in this organization. Resets each billing period.', description: 'Organizational groups' },
   ];
-
-  const secondaryMetrics: { label: string; current: number; limit: number }[] = [
-    { label: 'Watched packages', current: plan.usage.watchtower, limit: plan.limits.watchtower ?? -1 },
-    { label: 'Teams', current: plan.usage.teams, limit: plan.limits.teams ?? -1 },
-  ];
-
-  const totalMembers = teams.reduce((s, t) => s + (t.member_count ?? 0), 0);
 
   return (
     <div className="space-y-8 pt-8">
+      {/* Header: Usage + date range (left), Plan badge (right) */}
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-foreground">Usage</h2>
+          <p className="text-sm text-foreground-secondary mt-0.5">{periodRangeLabel}</p>
+        </div>
+        <div className="flex items-center gap-2 mt-2 sm:mt-0">
+          <span className="inline-flex items-center rounded-md border border-border bg-muted/50 px-2.5 py-1 text-sm font-medium text-foreground">
+            {planLabel} Plan
+          </span>
+        </div>
+      </div>
+
+      {/* CTA card: Scale with Aegis AI — title/description left, Upgrade button right */}
+      {plan.tier === 'free' && (
+        <Card className="border-border">
+          <CardContent className="pt-6 pb-6">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div className="flex-1">
+                <h3 className="text-base font-semibold text-foreground">Scale with Aegis AI</h3>
+                <p className="text-sm text-foreground-secondary mt-1 max-w-md">
+                  Get more projects, members, and unlock advanced features like Aegis AI automation by upgrading your plan today.
+                </p>
+              </div>
+              <Button
+                onClick={() => navigate(`/organizations/${organizationId}/settings/plan`)}
+                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-9 px-4 flex-shrink-0"
+              >
+                Upgrade plan
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Plan Limits: Supabase-style — title, description, rows with spinner on right */}
       <div>
-        <h2 className="text-2xl font-bold text-foreground">Usage overview</h2>
-        <p className="text-sm text-foreground-secondary mt-1">
-          Manage and monitor your team’s resource consumption across all projects. {periodLabel}.
+        <h3 className="text-base font-semibold text-foreground">Plan Limits</h3>
+        <p className="text-sm text-foreground-secondary mt-1 mb-4">
+          Your plan includes a limited amount of usage. If exceeded, you may experience restrictions until the next billing period.
         </p>
-      </div>
-
-      {/* Main metrics — no cards, single overview block */}
-      <div className="grid gap-8 md:grid-cols-3">
-        {mainMetrics.map(({ label, current, limit, tooltip, remainingLabel }) => {
-          const isUnlimited = limit === -1;
-          const pct = isUnlimited ? 0 : limit > 0 ? Math.min(100, Math.round((current / limit) * 100)) : 0;
-          const isWarning = !isUnlimited && pct >= 80 && pct < 100;
-          const isAtLimit = !isUnlimited && pct >= 100;
-          const remaining = !isUnlimited && limit > 0 ? Math.max(0, limit - current) : 0;
-          const fillClass = isAtLimit ? 'text-destructive' : isWarning ? 'text-amber-500' : 'text-primary';
-          const detail = isUnlimited ? `${current} used` : `${current} of ${limit} used`;
-          return (
-            <Tooltip key={label}>
-              <TooltipTrigger asChild>
-                <div className="cursor-default">
-                  <div className="flex flex-col items-center text-center">
-                    {!isUnlimited && (
-                      <div className="relative h-20 w-20 mb-3">
-                        <svg className="h-20 w-20 -rotate-90" viewBox="0 0 36 36">
-                          <circle cx="18" cy="18" r="16" fill="none" stroke="currentColor" strokeWidth="3" className="text-muted" />
-                          <circle
-                            cx="18" cy="18" r="16"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="3"
-                            strokeLinecap="round"
-                            className={fillClass}
-                            strokeDasharray={100.5}
-                            strokeDashoffset={100.5 - (pct / 100) * 100.5}
-                          />
-                        </svg>
-                        <span className="absolute inset-0 flex items-center justify-center text-sm font-semibold tabular-nums text-foreground">{pct}%</span>
-                      </div>
-                    )}
-                    <p className="text-sm font-medium text-foreground">{label}</p>
-                    <p className="text-base font-semibold tabular-nums text-foreground mt-0.5">{detail}</p>
-                    {!isUnlimited && remaining > 0 && !isAtLimit && (
-                      <p className={cn('text-sm mt-1', isWarning ? 'text-amber-500 flex items-center gap-1 justify-center' : 'text-primary')}>
-                        {isWarning && <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />}
-                        {isWarning ? 'Near limit' : remainingLabel(remaining)}
-                      </p>
-                    )}
-                    {isAtLimit && (
-                      <p className="text-sm text-destructive mt-1">At limit</p>
-                    )}
-                  </div>
-                </div>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="max-w-xs">
-                <p>{tooltip}</p>
-              </TooltipContent>
-            </Tooltip>
-          );
-        })}
-      </div>
-
-      {/* Secondary metrics — horizontal bars with percentage */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Secondary metrics</CardTitle>
-          <CardDescription>Other limits against your plan</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {secondaryMetrics.map(({ label, current, limit }) => {
+        <div className="space-y-1">
+          {allMetrics.map(({ label, current, limit, tooltip, description }) => {
             const isUnlimited = limit === -1;
             const pct = isUnlimited ? 0 : limit > 0 ? Math.min(100, Math.round((current / limit) * 100)) : 0;
-            const isWarning = !isUnlimited && pct >= 80;
+            const isWarning = !isUnlimited && pct >= 80 && pct < 100;
             const isAtLimit = !isUnlimited && pct >= 100;
+            const fillClass = isAtLimit ? 'text-destructive' : isWarning ? 'text-amber-500' : 'text-primary';
+            const limitLabel = isUnlimited ? '∞' : String(limit);
+            const pctLabel = isUnlimited ? '—' : limit > 0 ? `(${pct}%)` : '(0%)';
             return (
-              <div key={label} className="space-y-2">
-                <div className="flex items-baseline justify-between gap-2">
-                  <span className="text-sm font-medium text-foreground">{label}</span>
-                  <span className="text-sm tabular-nums text-foreground-secondary flex-shrink-0">
-                    {current} of {isUnlimited ? '∞' : limit.toLocaleString()}
-                    {!isUnlimited && limit > 0 && (
-                      <span className="ml-2 text-foreground-tertiary">{pct}%</span>
+              <Tooltip key={label}>
+                <TooltipTrigger asChild>
+                  <div className="flex items-center justify-between gap-4 py-3 px-2 rounded-md hover:bg-muted/50 cursor-default border-b border-border last:border-0">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-foreground">{label}</p>
+                      <p className="text-xs text-foreground-secondary mt-0.5">
+                        {current} / {limitLabel} · {description}
+                        {!isUnlimited && <span className="ml-1">{pctLabel}</span>}
+                      </p>
+                      {isWarning && !isAtLimit && <p className="text-xs text-amber-500 mt-0.5">Near limit</p>}
+                      {isAtLimit && <p className="text-xs text-destructive mt-0.5">At limit</p>}
+                    </div>
+                    {!isUnlimited && (
+                      <div className="h-10 w-10 flex-shrink-0">
+                        <svg className="h-10 w-10 -rotate-90" viewBox="0 0 36 36">
+                          <circle cx="18" cy="18" r="16" fill="none" stroke="currentColor" strokeWidth="3" className="text-muted" />
+                          <circle cx="18" cy="18" r="16" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" className={fillClass} strokeDasharray={100.5} strokeDashoffset={100.5 - (pct / 100) * 100.5} />
+                        </svg>
+                      </div>
                     )}
-                  </span>
-                </div>
-                {!isUnlimited && (
-                  <Progress
-                    value={pct}
-                    className={cn(
-                      'h-2',
-                      isAtLimit && '[&>div]:bg-destructive',
-                      isWarning && !isAtLimit && '[&>div]:bg-amber-500'
-                    )}
-                  />
-                )}
-              </div>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-xs"><p>{tooltip}</p></TooltipContent>
+              </Tooltip>
             );
           })}
-        </CardContent>
-      </Card>
-
-      {/* Usage by team */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <CardTitle className="text-base flex items-center gap-2">
-                <Users className="h-4 w-4 text-foreground-secondary" />
-                Usage by team
-              </CardTitle>
-              <CardDescription>Teams and their resource usage</CardDescription>
-            </div>
-            <Button variant="link" className="text-primary h-auto p-0 font-medium text-sm" onClick={() => navigate(`/organizations/${organizationId}/teams`)}>
-              View detailed report
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {teamsLoading ? (
-            <div className="space-y-3">
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="h-14 bg-muted animate-pulse rounded-lg" />
-              ))}
-            </div>
-          ) : teams.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <BarChart className="h-12 w-12 text-muted-foreground/50 mb-3" />
-              <p className="text-sm font-medium text-foreground">No team data available yet</p>
-              <p className="text-sm text-foreground-secondary mt-1 max-w-sm">
-                Data breakdown by team will appear here once your members start consuming resources.
-              </p>
-            </div>
-          ) : (
-            <ul className="space-y-1">
-              {teams.map((team) => {
-                const members = team.member_count ?? 0;
-                const projects = team.project_count ?? 0;
-                const memberPct = totalMembers > 0 ? Math.round((members / totalMembers) * 100) : 0;
-                const icons = [<Code2 key="c" className="h-4 w-4 text-foreground-secondary" />, <FolderGit2 key="f" className="h-4 w-4 text-foreground-secondary" />, <Megaphone key="m" className="h-4 w-4 text-foreground-secondary" />];
-                const icon = icons[teams.indexOf(team) % icons.length];
-                return (
-                  <li key={team.id}>
-                    <button
-                      type="button"
-                      onClick={() => navigate(`/organizations/${organizationId}/teams/${team.id}/overview`)}
-                      className={cn(
-                        'w-full flex items-center justify-between gap-4 rounded-lg border border-transparent px-3 py-3 text-left',
-                        'hover:bg-muted/50 hover:border-border transition-colors'
-                      )}
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <span className="flex h-9 w-9 items-center justify-center rounded-md bg-muted text-foreground-secondary flex-shrink-0">
-                          {icon}
-                        </span>
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-foreground truncate">{team.name}</p>
-                          <p className="text-xs text-foreground-secondary">
-                            {members} {members === 1 ? 'member' : 'members'} · {projects} {projects === 1 ? 'project' : 'projects'}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        <span className="text-xs text-foreground-secondary tabular-nums">{memberPct}% total</span>
-                        <ChevronRight className="h-4 w-4 text-foreground-tertiary" />
-                      </div>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Need more power — CTA */}
-      <Card className="border-primary/20 bg-primary/5">
-        <CardContent className="pt-6 pb-6">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div>
-              <h3 className="text-base font-semibold text-foreground">Need more power?</h3>
-              <p className="text-sm text-foreground-secondary mt-1">
-                Scale with more projects, members, syncs, and features like Aegis AI and SSO.
-              </p>
-            </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <Button variant="outline" size="sm" onClick={() => navigate(`/organizations/${organizationId}/settings/plan`)}>
-                Compare plans
-              </Button>
-              {plan.tier === 'free' && (
-                <Button size="sm" onClick={() => navigate(`/organizations/${organizationId}/settings/plan`)}>
-                  Upgrade plan
-                </Button>
-              )}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }
@@ -6279,11 +6180,46 @@ function PlanBillingSectionContent({ organizationId }: { organizationId: string 
 
   return (
     <div className="space-y-8 pt-8">
-      <div>
-        <h2 className="text-2xl font-bold text-foreground">Plan & Billing</h2>
-        <p className="text-sm text-foreground-secondary mt-1">
-          Manage your subscription and billing details.
-        </p>
+      <h2 className="text-2xl font-bold text-foreground">Plan and Billing</h2>
+
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-4">
+          <h3 className="text-base font-semibold text-foreground">Subscription Plan</h3>
+          <span className="inline-flex items-center rounded-md border border-border bg-muted/50 px-2.5 py-1 text-sm font-medium text-foreground">
+            {TIER_DISPLAY[plan.tier]} plan
+          </span>
+        </div>
+        {plan.tier !== 'free' && (
+          <div className="flex flex-wrap items-center gap-3 text-sm text-foreground-secondary">
+            {plan.current_period_end && (
+              <span>
+                {plan.cancel_at_period_end
+                  ? `Cancels ${new Date(plan.current_period_end).toLocaleDateString()}`
+                  : `Renews ${new Date(plan.current_period_end).toLocaleDateString()}`}
+              </span>
+            )}
+            {plan.payment_method_brand && plan.payment_method_last4 && (
+              <span>{plan.payment_method_brand.charAt(0).toUpperCase() + plan.payment_method_brand.slice(1)} ····{plan.payment_method_last4}</span>
+            )}
+            <Button variant="outline" size="sm" onClick={handlePortal} disabled={portalLoading} className="font-medium rounded-lg h-8">
+              {portalLoading ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+              Manage billing
+            </Button>
+          </div>
+        )}
+        <div className="rounded-lg border border-border bg-background-card p-6">
+          <div className="flex gap-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
+              <Info className="h-4 w-4 text-foreground-secondary" />
+            </div>
+            <div className="flex-1 space-y-2">
+              <h4 className="text-sm font-semibold text-foreground">This organization is limited by the included usage</h4>
+              <p className="text-sm text-foreground-secondary">
+                Projects may become unresponsive when this organization exceeds its included usage quota. To scale seamlessly, upgrade to a paid plan.
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
 
       {isPastDue && (
@@ -6302,150 +6238,134 @@ function PlanBillingSectionContent({ organizationId }: { organizationId: string 
         </div>
       )}
 
-      {/* Current Plan Card */}
-      <div className="rounded-lg border border-border bg-background-card p-5">
-        <div className="flex items-start justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <h3 className="text-base font-semibold text-foreground">{TIER_DISPLAY[plan.tier]} Plan</h3>
-              {plan.tier !== 'free' && (
-                <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
-                  {plan.billing_cycle === 'annual' ? 'Annual' : 'Monthly'}
-                </span>
-              )}
-            </div>
-            {plan.current_period_end && (
-              <p className="text-sm text-foreground-secondary mt-1">
-                {plan.cancel_at_period_end
-                  ? `Cancels ${new Date(plan.current_period_end).toLocaleDateString()}`
-                  : `Renews ${new Date(plan.current_period_end).toLocaleDateString()}`}
-              </p>
-            )}
+      {/* Plan Selector — same connected cards and styles as PricingPage (landing); no Monthly/Annual toggle */}
+      <div id="plan-selector-tiers">
+        <h3 className="text-lg font-semibold text-foreground mb-6">
+          {plan.tier === 'free' ? 'Upgrade your plan' : 'Change plan'}
+        </h3>
+
+        <div className="overflow-visible pt-[1px] -mt-[1px]">
+          <div className="grid grid-cols-1 md:grid-cols-[1fr_1.35fr_1fr_1fr] gap-0 md:items-center">
+            {planTiers.map((tier, index) => {
+              const isCurrent = tier.id === plan.tier;
+              const isEnterprise = tier.id === 'enterprise';
+              const price = billingCycle === 'annual' ? tier.price.annual : tier.price.monthly;
+              const isPro = tier.popular;
+              const isFirst = index === 0;
+              const isLast = index === planTiers.length - 1;
+              const mobileRounded = isFirst
+                ? 'rounded-t-2xl md:rounded-l-2xl md:rounded-tr-none md:rounded-br-none'
+                : isLast
+                  ? 'rounded-b-2xl md:rounded-r-2xl md:rounded-tl-none md:rounded-bl-none'
+                  : index === 2
+                    ? 'rounded-none border-t-0 md:border-t md:rounded-none'
+                    : 'rounded-none border-t-0 md:rounded-2xl';
+
+              return (
+                <div
+                  key={tier.id}
+                  className={`relative flex flex-col min-w-0 border border-border bg-background-card
+                    ${mobileRounded}
+                    ${index > 0 ? 'md:-ml-px' : ''}
+                    ${isPro
+                      ? 'md:py-10 md:px-7 md:min-h-[620px] md:z-10 md:ring-2 md:ring-primary'
+                      : 'py-6 px-5 md:px-6 md:min-h-[580px]'
+                    }
+                    ${isCurrent && !isPro && tier.id !== 'free' ? 'ring-2 ring-primary bg-primary/5' : ''}
+                    ${isCurrent && isPro ? 'bg-primary/5' : ''}
+                  `}
+                >
+                  <div className={isPro ? 'mb-5' : 'mb-4'}>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h4 className={`font-semibold text-foreground ${isPro ? 'text-xl' : 'text-lg'}`}>{tier.name}</h4>
+                      {isPro && (
+                        <span className="text-[10px] font-bold uppercase tracking-widest bg-primary text-primary-foreground px-2.5 py-1 rounded-full border border-primary-foreground/20">
+                          Most Popular
+                        </span>
+                      )}
+                      {isCurrent && (
+                        <span className="text-[10px] font-bold uppercase tracking-widest bg-primary text-primary-foreground px-2.5 py-1 rounded-full border border-primary-foreground/20">
+                          Current
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm text-foreground-secondary mt-1.5">{tier.description}</p>
+                  </div>
+
+                  <div className="mb-5">
+                    {isCurrent ? (
+                      <Button variant="outline" size="sm" className="w-full font-medium rounded-lg" disabled>
+                        Current plan
+                      </Button>
+                    ) : isEnterprise ? (
+                      <Button variant="outline" size="sm" className="w-full font-medium rounded-lg" asChild>
+                        <a href="mailto:sales@deptex.io">Contact Sales</a>
+                      </Button>
+                    ) : tier.id === 'free' ? (
+                      <Button variant="outline" size="sm" className="w-full font-medium rounded-lg" disabled>
+                        Free
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        className="w-full bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 font-semibold text-sm rounded-lg"
+                        onClick={() => handleCheckout(tier.id)}
+                        disabled={!!checkoutLoading}
+                      >
+                        {checkoutLoading === tier.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                        ) : null}
+                        {plan.tier === 'free' ? 'Upgrade' : 'Switch'}
+                      </Button>
+                    )}
+                  </div>
+
+                  <div className={isPro ? 'mb-6' : 'mb-5'}>
+                    {isEnterprise ? (
+                      <span className={`font-bold text-foreground ${isPro ? 'text-3xl' : 'text-2xl'}`}>Custom</span>
+                    ) : tier.id === 'free' ? (
+                      <span className={`font-bold text-foreground ${isPro ? 'text-3xl' : 'text-2xl'}`}>Free</span>
+                    ) : (
+                      <>
+                        <span className={`font-bold text-foreground ${isPro ? 'text-3xl' : 'text-2xl'}`}>
+                          {price}
+                        </span>
+                        {billingCycle === 'monthly' && (
+                          <span className="text-sm text-foreground-secondary ml-1">/mo</span>
+                        )}
+                      </>
+                    )}
+                  </div>
+
+                  <ul className={`space-y-2.5 flex-1 ${isPro ? 'space-y-3' : ''}`}>
+                    {tier.features.map((f) => (
+                      <li key={f.name} className="flex items-start gap-2.5 text-sm text-foreground-secondary">
+                        <Check className="h-4 w-4 text-primary mt-0.5 flex-shrink-0" />
+                        {f.name}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
           </div>
-          {plan.tier !== 'free' && (
-            <div className="flex items-center gap-2">
-              {plan.payment_method_brand && plan.payment_method_last4 && (
-                <span className="text-xs text-foreground-secondary">
-                  {plan.payment_method_brand.charAt(0).toUpperCase() + plan.payment_method_brand.slice(1)} ····{plan.payment_method_last4}
-                </span>
-              )}
-              <Button variant="outline" size="sm" onClick={handlePortal} disabled={portalLoading}>
-                {portalLoading ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
-                Manage
-              </Button>
-            </div>
-          )}
         </div>
       </div>
 
-      {/* Plan Selector */}
-      <div>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-base font-semibold text-foreground">
-            {plan.tier === 'free' ? 'Upgrade your plan' : 'Change plan'}
-          </h3>
-          <div className="flex items-center gap-1 rounded-lg border border-border p-0.5 bg-muted/50">
-            <button
-              onClick={() => setBillingCycle('monthly')}
-              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
-                billingCycle === 'monthly' ? 'bg-background text-foreground shadow-sm' : 'text-foreground-secondary hover:text-foreground'
-              }`}
-            >
-              Monthly
-            </button>
-            <button
-              onClick={() => setBillingCycle('annual')}
-              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
-                billingCycle === 'annual' ? 'bg-background text-foreground shadow-sm' : 'text-foreground-secondary hover:text-foreground'
-              }`}
-            >
-              Annual <span className="text-green-500 ml-1">Save 17%</span>
-            </button>
-          </div>
-        </div>
-
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          {planTiers.map((tier) => {
-            const isCurrent = tier.id === plan.tier;
-            const isEnterprise = tier.id === 'enterprise';
-            const price = billingCycle === 'annual' ? tier.price.annual : tier.price.monthly;
-
-            return (
-              <div
-                key={tier.id}
-                className={`rounded-lg border p-4 transition-colors ${
-                  isCurrent ? 'border-primary bg-primary/5' : 'border-border bg-background-card hover:border-foreground-tertiary'
-                } ${tier.popular ? 'ring-1 ring-primary' : ''}`}
-              >
-                {tier.popular && (
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-primary">Most Popular</span>
-                )}
-                <h4 className="text-sm font-semibold text-foreground mt-1">{tier.name}</h4>
-                <p className="text-xs text-foreground-secondary mt-0.5 line-clamp-2">{tier.description}</p>
-                <div className="mt-3">
-                  <span className="text-xl font-bold text-foreground">{price}</span>
-                  {!isEnterprise && tier.id !== 'free' && (
-                    <span className="text-xs text-foreground-secondary ml-1">
-                      {billingCycle === 'annual' ? '' : '/mo'}
-                    </span>
-                  )}
-                </div>
-                <ul className="mt-3 space-y-1">
-                  {tier.features.slice(0, 5).map((f) => (
-                    <li key={f.name} className="flex items-start gap-1.5 text-xs text-foreground-secondary">
-                      <Check className="h-3 w-3 text-green-500 mt-0.5 flex-shrink-0" />
-                      {f.name}
-                    </li>
-                  ))}
-                  {tier.features.length > 5 && (
-                    <li className="text-xs text-foreground-tertiary">+{tier.features.length - 5} more</li>
-                  )}
-                </ul>
-                <div className="mt-4">
-                  {isCurrent ? (
-                    <Button variant="outline" size="sm" className="w-full" disabled>
-                      Current plan
-                    </Button>
-                  ) : isEnterprise ? (
-                    <Button variant="outline" size="sm" className="w-full" asChild>
-                      <a href="mailto:sales@deptex.io">Contact Sales</a>
-                    </Button>
-                  ) : tier.id === 'free' ? (
-                    <Button variant="outline" size="sm" className="w-full" disabled>
-                      Free
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      className="w-full"
-                      onClick={() => handleCheckout(tier.id)}
-                      disabled={!!checkoutLoading}
-                    >
-                      {checkoutLoading === tier.id ? (
-                        <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                      ) : null}
-                      {plan.tier === 'free' ? 'Upgrade' : 'Switch'}
-                    </Button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Invoices */}
+      {/* Invoices — same card style as landing */}
       {plan.tier !== 'free' && (
         <div>
-          <h3 className="text-base font-semibold text-foreground mb-3">Invoices</h3>
+          <h3 className="text-lg font-semibold text-foreground mb-4">Invoices</h3>
           {invoicesLoading ? (
-            <div className="space-y-2">
+            <div className="rounded-2xl border border-border bg-background-card p-6 space-y-2" style={{ boxShadow: '0 0 0 1px rgba(255,255,255,0.03), 0 4px 24px -4px rgba(0,0,0,0.5)' }}>
               {[1, 2, 3].map((i) => <div key={i} className="h-10 bg-muted animate-pulse rounded" />)}
             </div>
           ) : invoices.length === 0 ? (
-            <p className="text-sm text-foreground-secondary">No invoices yet.</p>
+            <div className="rounded-2xl border border-border bg-background-card p-8 text-center" style={{ boxShadow: '0 0 0 1px rgba(255,255,255,0.03), 0 4px 24px -4px rgba(0,0,0,0.5)' }}>
+              <p className="text-sm text-foreground-secondary">No invoices yet.</p>
+            </div>
           ) : (
-            <div className="rounded-lg border border-border overflow-hidden">
+            <div className="rounded-2xl border border-border bg-background-card overflow-hidden" style={{ boxShadow: '0 0 0 1px rgba(255,255,255,0.03), 0 4px 24px -4px rgba(0,0,0,0.5)' }}>
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border bg-muted/30">
