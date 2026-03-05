@@ -8,8 +8,15 @@ primary_region = 'iad'
 
 [build]
 
+[mounts]
+source = "depscan_vdb"
+destination = "/data"
+initial_size = "10gb"
+
 [env]
   NODE_ENV = 'production'
+  VDB_HOME = '/data'
+  DEPSCAN_CACHE_DIR = '/data/cache'
 
 [http_service]
   internal_port = 3000

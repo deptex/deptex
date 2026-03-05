@@ -564,11 +564,15 @@ export async function runPipeline(
         const res = await runDepScan(depScanExe, depScanArgs, workspaceRoot, log, heartbeatFn);
 
         if (res.exitCode !== 0) {
-          const stderrFirst = (res.stderr ?? '').split('\n')[0] || 'unknown error';
+          const rawStderr = (res.stderr ?? '').trim();
+          const lines = rawStderr ? rawStderr.split(/\r?\n/) : [];
+          // Log last 20 lines (actual Python error is at the end; first line is "Traceback (most recent call last):")
+          const excerpt = lines.length > 20 ? lines.slice(-20).join('\n') : rawStderr;
+          const stderrSnippet = excerpt.slice(-2000) || 'unknown error';
           if (res.exitCode === 137) {
             await log.warn('vuln_scan', 'dep-scan out of memory during atom analysis — falling back to basic scan results');
           } else {
-            await log.warn('vuln_scan', `Vulnerability scan exited with code ${res.exitCode}: ${stderrFirst}`);
+            await log.warn('vuln_scan', `Vulnerability scan exited with code ${res.exitCode}: ${stderrSnippet}`);
           }
         } else {
           depScanSucceeded = true;

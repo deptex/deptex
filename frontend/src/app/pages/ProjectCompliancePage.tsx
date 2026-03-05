@@ -49,6 +49,7 @@ import { downloadFile } from '../../lib/compliance-utils';
 import { useToast } from '../../hooks/use-toast';
 import { Toaster } from '../../components/ui/toaster';
 import { cn } from '../../lib/utils';
+import { ComplianceSidepanel, type ComplianceSection } from '../../components/ComplianceSidepanel';
 
 interface ProjectContextType {
   project: ProjectWithRole | null;
@@ -57,11 +58,9 @@ interface ProjectContextType {
   userPermissions: ProjectPermissions | null;
 }
 
-type ComplianceTab = 'project' | 'policy-results' | 'updates';
-
-const VALID_SECTIONS: ComplianceTab[] = ['project', 'policy-results', 'updates'];
-function isValidSection(s: string | undefined): s is ComplianceTab {
-  return !!s && VALID_SECTIONS.includes(s as ComplianceTab);
+const VALID_SECTIONS: ComplianceSection[] = ['project', 'policy-results', 'updates', 'export-notice', 'export-sbom'];
+function isValidSection(s: string | undefined): s is ComplianceSection {
+  return !!s && VALID_SECTIONS.includes(s as ComplianceSection);
 }
 
 function formatTimeAgo(dateString: string | null | undefined): string {
@@ -419,7 +418,7 @@ export default function ProjectCompliancePage() {
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  const activeTab = isValidSection(urlSection) ? urlSection : 'project';
+  const activeSection: ComplianceSection = isValidSection(urlSection) ? urlSection : 'project';
   const [policyResultsTab, setPolicyResultsTab] = useState<'issues' | 'all'>('issues');
   const [policyResultFilter, setPolicyResultFilter] = useState<string>('all');
   const [directFilter, setDirectFilter] = useState<'all' | 'direct' | 'transitive'>('all');
@@ -501,8 +500,8 @@ export default function ProjectCompliancePage() {
     }
   }, [urlSection, navigate, organizationId, projectId]);
 
-  const handleTabChange = useCallback((tab: ComplianceTab) => {
-    navigate(`/organizations/${organizationId}/projects/${projectId}/compliance/${tab}`, { replace: true });
+  const handleSectionSelect = useCallback((section: ComplianceSection) => {
+    navigate(`/organizations/${organizationId}/projects/${projectId}/compliance/${section}`, { replace: true });
   }, [navigate, organizationId, projectId]);
 
   // Derived data
@@ -694,8 +693,8 @@ export default function ProjectCompliancePage() {
         page: prPage,
         perPage: PER_PAGE,
       });
-      setPullRequests(res.data);
-      setPrTotal(res.total);
+      setPullRequests(res?.data ?? []);
+      setPrTotal(res?.total ?? 0);
     } catch {
       setPullRequests([]);
       setPrTotal(0);
@@ -714,8 +713,8 @@ export default function ProjectCompliancePage() {
         page: commitsPage,
         perPage: PER_PAGE,
       });
-      setCommits(res.data);
-      setCommitsTotal(res.total);
+      setCommits(res?.data ?? []);
+      setCommitsTotal(res?.total ?? 0);
     } catch {
       setCommits([]);
       setCommitsTotal(0);
@@ -725,16 +724,16 @@ export default function ProjectCompliancePage() {
   }, [organizationId, projectId, commitsComplianceFilter, commitsSearch, commitsPage]);
 
   useEffect(() => {
-    if (activeTab === 'updates' && updatesSubTab === 'pull-requests') {
+    if (activeSection === 'updates' && updatesSubTab === 'pull-requests') {
       loadPullRequests();
     }
-  }, [activeTab, updatesSubTab, loadPullRequests]);
+  }, [activeSection, updatesSubTab, loadPullRequests]);
 
   useEffect(() => {
-    if (activeTab === 'updates' && updatesSubTab === 'commits') {
+    if (activeSection === 'updates' && updatesSubTab === 'commits') {
       loadCommits();
     }
-  }, [activeTab, updatesSubTab, loadCommits]);
+  }, [activeSection, updatesSubTab, loadCommits]);
 
   const prTotalPages = Math.max(1, Math.ceil(prTotal / PER_PAGE));
   const commitsTotalPages = Math.max(1, Math.ceil(commitsTotal / PER_PAGE));
@@ -775,68 +774,54 @@ export default function ProjectCompliancePage() {
 
   return (
     <>
-      <div className="min-h-[calc(100vh-3rem)] px-6 py-6 overflow-auto">
-        <div className="mx-auto max-w-7xl">
-          {/* Page header with export dropdown */}
-          <div className="flex items-center justify-between mb-6">
-            <h1 className="text-2xl font-bold text-foreground">Compliance</h1>
-            <div className="flex items-center gap-2">
-              {canManageSettings && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleReevaluate}
-                  disabled={reevaluating || isExtracting || Date.now() < reevalDisabledUntil}
-                  className="h-8 text-xs"
-                >
-                  {reevaluating ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
-                  Re-evaluate
-                </Button>
-              )}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-8 text-xs" disabled={!!exporting}>
-                    {exporting ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Download className="h-3.5 w-3.5 mr-1.5" />}
-                    Export
-                    <ChevronDown className="h-3 w-3 ml-1" />
+      <div className="flex min-h-[calc(100vh-3rem)] overflow-hidden">
+        {/* Sticky compliance sidebar */}
+        <ComplianceSidepanel
+          activeSection={activeSection}
+          onSelect={handleSectionSelect}
+          canViewSettings={!!canManageSettings}
+          disabledExports={noExtraction || isExtracting}
+        />
+
+        <div className="flex-1 min-w-0 overflow-auto">
+          <div className="px-6 py-6 mx-auto max-w-5xl">
+            {/* Page header - Re-evaluate only when on project/policy/updates and not extracting */}
+            {(activeSection === 'project' || activeSection === 'policy-results' || activeSection === 'updates') && (
+              <div className="flex items-center justify-between mb-6">
+                <h1 className="text-2xl font-bold text-foreground">Compliance</h1>
+                {canManageSettings && !isExtracting && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleReevaluate}
+                    disabled={reevaluating || Date.now() < reevalDisabledUntil}
+                    className="h-8 text-xs"
+                  >
+                    {reevaluating ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
+                    Re-evaluate
                   </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onClick={handleExportSBOM} disabled={noExtraction}>
-                    <FileText className="h-4 w-4 mr-2" />
-                    Export SBOM (CycloneDX)
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={handleExportNotice} disabled={noExtraction}>
-                    <Scale className="h-4 w-4 mr-2" />
-                    Export Legal Notice
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          </div>
-
-          {/* Top tabs */}
-          <div className="flex gap-6 border-b border-border mb-6">
-            {(['project', 'policy-results', 'updates'] as ComplianceTab[]).map((tab) => (
-              <button
-                key={tab}
-                onClick={() => handleTabChange(tab)}
-                className={cn(
-                  'pb-3 text-sm font-medium border-b-2 -mb-px transition-colors',
-                  activeTab === tab
-                    ? 'text-foreground border-foreground'
-                    : 'text-foreground-secondary border-transparent hover:text-foreground'
                 )}
-              >
-                {tab === 'project' ? 'Project' : tab === 'policy-results' ? 'Policy Results' : 'Updates'}
-              </button>
-            ))}
-          </div>
+              </div>
+            )}
 
-          {/* ─── PROJECT TAB ─── */}
-          {activeTab === 'project' && (
+            {/* ─── PROJECT SECTION ─── */}
+            {activeSection === 'project' && (
             <div className="space-y-6">
-              {noExtraction ? (
+              {isExtracting ? (
+                <div className="rounded-lg border border-border bg-background-card p-6">
+                  <div className="flex items-center gap-4">
+                    <div className="flex-1 space-y-2 min-w-0">
+                      <h3 className="text-sm font-semibold text-foreground">Project extraction still in progress</h3>
+                      <p className="text-sm text-foreground-secondary">
+                        Dependencies will appear here once extraction completes.
+                      </p>
+                    </div>
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
+                      <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" aria-hidden />
+                    </div>
+                  </div>
+                </div>
+              ) : noExtraction ? (
                 <div className="bg-background-card border border-border rounded-lg p-8 text-center">
                   <Package className="h-10 w-10 text-foreground-secondary mx-auto mb-3" />
                   <h3 className="text-lg font-semibold text-foreground mb-1">No scan data available</h3>
@@ -977,7 +962,7 @@ export default function ProjectCompliancePage() {
                         {violatedDeps.length > 20 && (
                           <div className="px-4 py-2 text-xs text-foreground-secondary border-t border-border">
                             Showing 20 of {violatedDeps.length} violations.{' '}
-                            <button onClick={() => handleTabChange('policy-results')} className="text-primary hover:underline">
+                            <button onClick={() => handleSectionSelect('policy-results')} className="text-primary hover:underline">
                               View all in Policy Results
                             </button>
                           </div>
@@ -1021,9 +1006,25 @@ export default function ProjectCompliancePage() {
             </div>
           )}
 
-          {/* ─── POLICY RESULTS TAB ─── */}
-          {activeTab === 'policy-results' && (
+          {/* ─── POLICY RESULTS SECTION ─── */}
+          {activeSection === 'policy-results' && (
             <div className="space-y-4">
+              {isExtracting ? (
+                <div className="rounded-lg border border-border bg-background-card p-6">
+                  <div className="flex items-center gap-4">
+                    <div className="flex-1 space-y-2 min-w-0">
+                      <h3 className="text-sm font-semibold text-foreground">Project extraction still in progress</h3>
+                      <p className="text-sm text-foreground-secondary">
+                        Policy results will appear here once extraction completes.
+                      </p>
+                    </div>
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
+                      <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" aria-hidden />
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <>
               {/* Sub-tabs */}
               <div className="flex items-center justify-between">
                 <div className="flex gap-4">
@@ -1238,12 +1239,30 @@ export default function ProjectCompliancePage() {
                   )}
                 </div>
               )}
+                </>
+              )}
             </div>
           )}
 
-          {/* ─── UPDATES TAB ─── */}
-          {activeTab === 'updates' && (
+          {/* ─── UPDATES SECTION ─── */}
+          {activeSection === 'updates' && (
             <div className="space-y-4">
+              {isExtracting ? (
+                <div className="rounded-lg border border-border bg-background-card p-6">
+                  <div className="flex items-center gap-4">
+                    <div className="flex-1 space-y-2 min-w-0">
+                      <h3 className="text-sm font-semibold text-foreground">Project extraction still in progress</h3>
+                      <p className="text-sm text-foreground-secondary">
+                        Pull requests and commits will appear here once extraction completes.
+                      </p>
+                    </div>
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
+                      <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" aria-hidden />
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <>
               {/* Sub-tabs */}
               <div className="flex items-center gap-4">
                 <button
@@ -1632,10 +1651,92 @@ export default function ProjectCompliancePage() {
                   )}
                 </div>
               )}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* ─── EXPORT LEGAL NOTICE SECTION ─── */}
+          {activeSection === 'export-notice' && (
+            <div className="space-y-6">
+              <h1 className="text-2xl font-bold text-foreground">Export Legal Notice</h1>
+              <p className="text-sm text-foreground-secondary">
+                Download a third-party notices file (THIRD-PARTY-NOTICES.txt) generated from your project&apos;s dependencies and license obligations.
+              </p>
+              <div className="bg-background-card border border-border rounded-lg p-6">
+                {isExtracting ? (
+                  <div className="flex items-center gap-4">
+                    <div className="flex-1 space-y-2 min-w-0">
+                      <h3 className="text-sm font-semibold text-foreground">Project extraction still in progress</h3>
+                      <p className="text-sm text-foreground-secondary">
+                        Export will be available once extraction completes.
+                      </p>
+                    </div>
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
+                      <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" aria-hidden />
+                    </div>
+                  </div>
+                ) : noExtraction ? (
+                  <div className="text-center py-4">
+                    <FileText className="h-10 w-10 text-foreground-secondary mx-auto mb-3" />
+                    <p className="text-sm text-foreground-secondary">Run an extraction first to generate a legal notice.</p>
+                  </div>
+                ) : (
+                  <Button
+                    onClick={handleExportNotice}
+                    disabled={!!exporting}
+                    className="gap-2"
+                  >
+                    {exporting === 'notice' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Scale className="h-4 w-4" />}
+                    {exporting === 'notice' ? 'Downloading...' : 'Download Legal Notice'}
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ─── EXPORT SBOM SECTION ─── */}
+          {activeSection === 'export-sbom' && (
+            <div className="space-y-6">
+              <h1 className="text-2xl font-bold text-foreground">Export SBOM</h1>
+              <p className="text-sm text-foreground-secondary">
+                Download a CycloneDX Software Bill of Materials (JSON) for this project.
+              </p>
+              <div className="bg-background-card border border-border rounded-lg p-6">
+                {isExtracting ? (
+                  <div className="flex items-center gap-4">
+                    <div className="flex-1 space-y-2 min-w-0">
+                      <h3 className="text-sm font-semibold text-foreground">Project extraction still in progress</h3>
+                      <p className="text-sm text-foreground-secondary">
+                        Export will be available once extraction completes.
+                      </p>
+                    </div>
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
+                      <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" aria-hidden />
+                    </div>
+                  </div>
+                ) : noExtraction ? (
+                  <div className="text-center py-4">
+                    <FileText className="h-10 w-10 text-foreground-secondary mx-auto mb-3" />
+                    <p className="text-sm text-foreground-secondary">Run an extraction first to generate an SBOM.</p>
+                  </div>
+                ) : (
+                  <Button
+                    onClick={handleExportSBOM}
+                    disabled={!!exporting}
+                    variant="outline"
+                    className="gap-2"
+                  >
+                    {exporting === 'sbom' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                    {exporting === 'sbom' ? 'Downloading...' : 'Download SBOM (CycloneDX)'}
+                  </Button>
+                )}
+              </div>
             </div>
           )}
         </div>
       </div>
+    </div>
 
       {/* Preflight Sidebar */}
       {showPreflight && (

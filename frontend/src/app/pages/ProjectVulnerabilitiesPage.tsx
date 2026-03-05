@@ -494,17 +494,6 @@ export default function ProjectVulnerabilitiesPage() {
 
   return (
     <main className="relative flex flex-col min-h-[calc(100vh-3rem)] w-full bg-background-content">
-      {/* Phase 6: Security filter bar */}
-      <div className="flex-shrink-0 px-4 pt-3">
-        <SecurityFilterBar filters={securityFilters} onFiltersChange={setSecurityFilters} />
-      </div>
-      {graphError && (
-        <div className="flex-shrink-0 px-4 pt-3">
-          <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-3 text-sm text-destructive">
-            {graphError}
-          </div>
-        </div>
-      )}
       <div className="flex-1 min-h-0 relative">
         <div className="absolute inset-0 overflow-hidden">
           <VulnerabilitiesGraph
@@ -519,7 +508,18 @@ export default function ProjectVulnerabilitiesPage() {
             extractionOngoing={isExtractionOngoing}
           />
         </div>
-        {/* Left card: Simulating (always visible); under sidebar (z-30). Empty = Preview fix, with items = Create PRs (transparent style). */}
+        {/* Filters as overlaid card (same pattern as Simulating card) */}
+        <div className="absolute top-3 left-3 z-30 rounded-lg border border-border bg-background-card/95 backdrop-blur-sm shadow-md overflow-hidden pointer-events-auto">
+          <div className="px-3 py-2">
+            <SecurityFilterBar filters={securityFilters} onFiltersChange={setSecurityFilters} />
+          </div>
+          {graphError && (
+            <div className="mx-3 mb-2 bg-destructive/10 border border-destructive/30 rounded-lg p-3 text-sm text-destructive">
+              {graphError}
+            </div>
+          )}
+        </div>
+        {/* Right card: Simulating (always visible); under sidebar (z-30). Empty = Preview fix, with items = Create PRs (transparent style). */}
         <VulnerabilitiesSimulationCard
           changeList={simulationChangeList}
           onResetItem={handleResetItem}

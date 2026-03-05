@@ -1,7 +1,7 @@
-import { Package, FileText, Download, History } from 'lucide-react';
+import { Package, FileText, Download, History, ShieldCheck } from 'lucide-react';
 import { cn } from '../lib/utils';
 
-export type ComplianceSection = 'project' | 'updates' | 'export-notice' | 'export-sbom';
+export type ComplianceSection = 'project' | 'policy-results' | 'updates' | 'export-notice' | 'export-sbom';
 
 interface ComplianceSidepanelProps {
   activeSection: ComplianceSection;
@@ -25,7 +25,7 @@ export function ComplianceSidepanel({
       </div>
 
       <nav className="flex-1" aria-label="Compliance navigation">
-        {/* Licenses */}
+        {/* Project / Licenses */}
         <div className="space-y-0.5">
           <button
             onClick={() => onSelect('project')}
@@ -38,7 +38,24 @@ export function ComplianceSidepanel({
             )}
           >
             <Package className="h-4 w-4 shrink-0" />
-            Licenses
+            Project
+          </button>
+        </div>
+
+        {/* Policy Results */}
+        <div className="space-y-0.5 mt-1">
+          <button
+            onClick={() => onSelect('policy-results')}
+            aria-current={activeSection === 'policy-results' ? 'page' : undefined}
+            className={cn(
+              'w-full flex items-center gap-2.5 h-9 px-3 text-sm font-medium transition-colors',
+              activeSection === 'policy-results'
+                ? 'text-foreground bg-background-card'
+                : 'text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50'
+            )}
+          >
+            <ShieldCheck className="h-4 w-4 shrink-0" />
+            Policy Results
           </button>
         </div>
 
@@ -78,7 +95,7 @@ export function ComplianceSidepanel({
                 )}
               >
                 <FileText className="h-4 w-4 shrink-0" />
-                Export Notice
+                Export Legal Notice
               </button>
             </div>
 

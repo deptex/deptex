@@ -1169,11 +1169,9 @@ export default function ProjectDependenciesPage() {
                 <div className="flex-1 space-y-2 min-w-0">
                   <h3 className="text-sm font-semibold text-foreground">Project extraction still in progress</h3>
                   <p className="text-sm text-foreground-secondary">
-                    {realtime.isLoading
-                      ? 'Checking status...'
-                      : realtime.status === 'not_connected'
-                        ? 'Connect a repository in Project Settings to see dependencies.'
-                        : 'Dependencies will appear here once extraction completes.'}
+                    {!realtime.isLoading && realtime.status === 'not_connected'
+                      ? 'Connect a repository in Project Settings to see dependencies.'
+                      : 'Dependencies will appear here once extraction completes.'}
                   </p>
                 </div>
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
