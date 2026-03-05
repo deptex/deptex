@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { useParams, useOutletContext, useNavigate } from 'react-router-dom';
+import { useParams, useOutletContext, useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus, Search, Grid3x3, List, ChevronRight, Bell, Check, Lock, Loader2, Save } from 'lucide-react';
 import { api, Project, Team, Organization, RolePermissions } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
@@ -56,6 +56,7 @@ const formatDate = (dateString: string): string => {
 
 export default function ProjectsPage() {
   const { id } = useParams<{ id: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { organization } = useOutletContext<OrganizationContextType>();
   const [projects, setProjects] = useState<Project[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -71,6 +72,15 @@ export default function ProjectsPage() {
   const { toast } = useToast();
   const navigate = useNavigate();
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (searchParams.get('openCreate') === '1') {
+      setShowCreateModal(true);
+      const next = new URLSearchParams(searchParams);
+      next.delete('openCreate');
+      setSearchParams(next, { replace: true });
+    }
+  }, []);
 
   // Get cached permissions
   const getCachedPermissions = (): RolePermissions | null => {

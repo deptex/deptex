@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Search, Check, Lock, Loader2, Save, Globe, Building2, FlaskConical, Crown, HelpCircle, ChevronDown } from 'lucide-react';
 import { api, Team, type AssetTier, type CiCdConnection, type RepoWithProvider } from '../lib/api';
+import { supabase } from '../lib/supabase';
 import { useToast } from '../hooks/use-toast';
 import { Button } from './ui/button';
 import { ProjectTeamSelect } from './ProjectTeamSelect';
@@ -353,6 +354,38 @@ export function CreateProjectSidebar({
   const displayRepos = sidebarRepoSearch.trim() ? filteredSidebarRepos : filteredSidebarRepos.slice(0, 5);
   const repoListLoading = sidebarReposLoading || (open && organizationId && !sidebarReposLoadAttempted && !sidebarReposError);
 
+  const [connectingProvider, setConnectingProvider] = useState<'github' | 'gitlab' | 'bitbucket' | null>(null);
+  const startGitProviderConnect = async (provider: 'github' | 'gitlab' | 'bitbucket') => {
+    if (!organizationId) return;
+    const endpoint = `${provider}/install`;
+    const returnUrl = `${window.location.origin}${window.location.pathname}${window.location.search ? `${window.location.search}&` : '?'}openCreate=1`;
+    setConnectingProvider(provider);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        toast({ title: 'Error', description: 'Please log in first.', variant: 'destructive' });
+        return;
+      }
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+      const response = await fetch(
+        `${API_BASE_URL}/api/integrations/${endpoint}?org_id=${encodeURIComponent(organizationId)}&success_redirect=${encodeURIComponent(returnUrl)}`,
+        { headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' } }
+      );
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ error: `Failed to connect ${provider}` }));
+        throw new Error(err.error || `Failed to start ${provider} connection`);
+      }
+      const data = await response.json();
+      if (data.redirectUrl) {
+        window.location.href = data.redirectUrl;
+      }
+    } catch (err: any) {
+      toast({ title: 'Error', description: err.message || `Failed to connect ${provider}.`, variant: 'destructive' });
+    } finally {
+      setConnectingProvider(null);
+    }
+  };
+
   return (
     <SlideInSidebar
       open={open}
@@ -484,14 +517,34 @@ export function CreateProjectSidebar({
               </div>
             </div>
 
-            {sidebarReposError && (sidebarReposError.includes('integration') || sidebarReposError.includes('GitHub App') || sidebarReposError.includes('No source')) ? (
-              <div className="bg-background-card border border-border rounded-lg overflow-hidden p-4 text-center">
-                <p className="text-sm font-semibold text-foreground mb-1">No source code connections</p>
-                <p className="text-xs text-foreground-secondary mb-3">
-                  Connect a Git provider in Organization Settings to start importing repositories.
-                </p>
-                <Button size="sm" variant="outline" onClick={() => navigate(`/organizations/${organizationId}/settings/integrations`)}>
-                  Go to Integrations
+            {gitConnections.length === 0 ? (
+              <div className="flex flex-wrap gap-2 justify-center">
+                <Button size="sm" variant="outline" className="gap-2" disabled={!!connectingProvider} onClick={() => startGitProviderConnect('github')}>
+                  {connectingProvider === 'github' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <img src="/images/integrations/github.png" alt="" className="h-3.5 w-3.5 rounded-sm" />}
+                  Add GitHub
+                </Button>
+                <Button size="sm" variant="outline" className="gap-2" disabled={!!connectingProvider} onClick={() => startGitProviderConnect('gitlab')}>
+                  {connectingProvider === 'gitlab' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <img src="/images/integrations/gitlab.png" alt="" className="h-3.5 w-3.5 rounded-sm" />}
+                  Add GitLab
+                </Button>
+                <Button size="sm" variant="outline" className="gap-2" disabled={!!connectingProvider} onClick={() => startGitProviderConnect('bitbucket')}>
+                  {connectingProvider === 'bitbucket' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <img src="/images/integrations/bitbucket.png" alt="" className="h-3.5 w-3.5 rounded-sm" />}
+                  Add Bitbucket
+                </Button>
+              </div>
+            ) : sidebarReposError && (sidebarReposError.includes('integration') || sidebarReposError.includes('GitHub App') || sidebarReposError.includes('No source')) ? (
+              <div className="flex flex-wrap gap-2 justify-center">
+                <Button size="sm" variant="outline" className="gap-2" disabled={!!connectingProvider} onClick={() => startGitProviderConnect('github')}>
+                  {connectingProvider === 'github' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <img src="/images/integrations/github.png" alt="" className="h-3.5 w-3.5 rounded-sm" />}
+                  Add GitHub
+                </Button>
+                <Button size="sm" variant="outline" className="gap-2" disabled={!!connectingProvider} onClick={() => startGitProviderConnect('gitlab')}>
+                  {connectingProvider === 'gitlab' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <img src="/images/integrations/gitlab.png" alt="" className="h-3.5 w-3.5 rounded-sm" />}
+                  Add GitLab
+                </Button>
+                <Button size="sm" variant="outline" className="gap-2" disabled={!!connectingProvider} onClick={() => startGitProviderConnect('bitbucket')}>
+                  {connectingProvider === 'bitbucket' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <img src="/images/integrations/bitbucket.png" alt="" className="h-3.5 w-3.5 rounded-sm" />}
+                  Add Bitbucket
                 </Button>
               </div>
             ) : sidebarReposError ? (

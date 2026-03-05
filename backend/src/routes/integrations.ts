@@ -1192,7 +1192,7 @@ router.post('/github/connect-installation', authenticateUser, async (req: AuthRe
 // Returns the GitHub App installation URL as JSON (frontend will redirect)
 router.get('/github/install', authenticateUser, async (req: AuthRequest, res) => {
   try {
-    const { org_id } = req.query;
+    const { org_id, success_redirect } = req.query;
     
     if (!org_id || typeof org_id !== 'string') {
       return res.status(400).json({ error: 'Organization ID is required' });
@@ -1220,10 +1220,14 @@ router.get('/github/install', authenticateUser, async (req: AuthRequest, res) =>
       console.warn('GITHUB_APP_NAME not set in environment variables. Using default "deptex".');
     }
     
-    // Store org_id in state for callback
+    const frontendUrl = getFrontendUrl();
+    const allowedRedirect = typeof success_redirect === 'string' && success_redirect && success_redirect.startsWith(frontendUrl);
+    
+    // Store org_id and optional success_redirect in state for callback
     const state = Buffer.from(JSON.stringify({ 
       userId: req.user!.id, 
-      orgId: org_id 
+      orgId: org_id,
+      ...(allowedRedirect && { successRedirect: success_redirect }),
     })).toString('base64');
     
     // GitHub App installation URL
@@ -1352,7 +1356,17 @@ router.get('/github/callback', async (req, res) => {
       await emitEvent({ type: 'integration_connected', organizationId: orgId, payload: { provider: 'github', displayName: githubAccountLogin || `GitHub #${installation_id}` }, source: 'system', priority: 'normal' });
     } catch (e) {}
 
-    const redirectUrl = `${frontendUrl}/organizations/${orgId}/settings/integrations?connected=github`;
+    let redirectUrl: string;
+    try {
+      const stateData = JSON.parse(Buffer.from(state as string, 'base64').toString());
+      if (stateData.successRedirect && typeof stateData.successRedirect === 'string' && stateData.successRedirect.startsWith(getFrontendUrl())) {
+        redirectUrl = stateData.successRedirect;
+      } else {
+        redirectUrl = `${frontendUrl}/organizations/${orgId}/settings/integrations?connected=github`;
+      }
+    } catch {
+      redirectUrl = `${frontendUrl}/organizations/${orgId}/settings/integrations?connected=github`;
+    }
     res.redirect(redirectUrl);
   } catch (error: any) {
     console.error('GitHub App callback error:', error);
@@ -2654,7 +2668,7 @@ async function handleInstallationUnsuspended(
 // ============================================================
 router.get('/gitlab/install', authenticateUser, async (req: AuthRequest, res) => {
   try {
-    const { org_id } = req.query;
+    const { org_id, success_redirect } = req.query;
     if (!org_id || typeof org_id !== 'string') {
       return res.status(400).json({ error: 'Organization ID is required' });
     }
@@ -2672,9 +2686,11 @@ router.get('/gitlab/install', authenticateUser, async (req: AuthRequest, res) =>
     if (!membership) {
       return res.status(403).json({ error: 'Not a member of this organization' });
     }
+    const frontendUrl = getFrontendUrl();
+    const allowedRedirect = typeof success_redirect === 'string' && success_redirect && success_redirect.startsWith(frontendUrl);
     const redirectUri = `${getBackendUrl()}/api/integrations/gitlab/org-callback`;
     const scopes = 'api read_user read_repository';
-    const state = Buffer.from(JSON.stringify({ userId: req.user!.id, orgId: org_id })).toString('base64');
+    const state = Buffer.from(JSON.stringify({ userId: req.user!.id, orgId: org_id, ...(allowedRedirect && { successRedirect: success_redirect }) })).toString('base64');
     const authUrl = `${gitlabUrl}/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scopes)}&state=${encodeURIComponent(state)}`;
     res.json({ redirectUrl: authUrl });
   } catch (error: any) {
@@ -2698,10 +2714,12 @@ router.get('/gitlab/org-callback', async (req, res) => {
   try {
     let userId: string;
     let orgId: string;
+    let successRedirect: string | undefined;
     try {
       const stateData = JSON.parse(Buffer.from(state as string, 'base64').toString());
       userId = stateData.userId;
       orgId = stateData.orgId;
+      successRedirect = stateData.successRedirect;
     } catch {
       return res.redirect(`${frontendUrl}?error=gitlab&message=Invalid state`);
     }
@@ -2767,7 +2785,10 @@ router.get('/gitlab/org-callback', async (req, res) => {
 
     try { await emitEvent({ type: 'integration_connected', organizationId: orgId, payload: { provider: 'gitlab', displayName: userData.username || userData.name || 'GitLab' }, source: 'system', priority: 'normal' }); } catch (e) {}
 
-    res.redirect(`${frontendUrl}/organizations/${orgId}/settings?section=integrations&connected=gitlab`);
+    const redirectOnSuccess = (successRedirect && successRedirect.startsWith(getFrontendUrl()))
+      ? successRedirect
+      : `${frontendUrl}/organizations/${orgId}/settings?section=integrations&connected=gitlab`;
+    res.redirect(redirectOnSuccess);
   } catch (err: any) {
     console.error('GitLab org callback error:', err);
     res.redirect(`${frontendUrl}?error=gitlab&message=${encodeURIComponent(err.message || 'Unknown error')}`);
@@ -2779,7 +2800,7 @@ router.get('/gitlab/org-callback', async (req, res) => {
 // ============================================================
 router.get('/bitbucket/install', authenticateUser, async (req: AuthRequest, res) => {
   try {
-    const { org_id } = req.query;
+    const { org_id, success_redirect } = req.query;
     if (!org_id || typeof org_id !== 'string') {
       return res.status(400).json({ error: 'Organization ID is required' });
     }
@@ -2796,8 +2817,10 @@ router.get('/bitbucket/install', authenticateUser, async (req: AuthRequest, res)
     if (!membership) {
       return res.status(403).json({ error: 'Not a member of this organization' });
     }
+    const frontendUrl = getFrontendUrl();
+    const allowedRedirect = typeof success_redirect === 'string' && success_redirect && success_redirect.startsWith(frontendUrl);
     const redirectUri = `${getBackendUrl()}/api/integrations/bitbucket/org-callback`;
-    const state = Buffer.from(JSON.stringify({ userId: req.user!.id, orgId: org_id })).toString('base64');
+    const state = Buffer.from(JSON.stringify({ userId: req.user!.id, orgId: org_id, ...(allowedRedirect && { successRedirect: success_redirect }) })).toString('base64');
     const authUrl = `https://bitbucket.org/site/oauth2/authorize?client_id=${clientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}`;
     res.json({ redirectUrl: authUrl });
   } catch (error: any) {
@@ -2820,10 +2843,12 @@ router.get('/bitbucket/org-callback', async (req, res) => {
   try {
     let userId: string;
     let orgId: string;
+    let successRedirect: string | undefined;
     try {
       const stateData = JSON.parse(Buffer.from(state as string, 'base64').toString());
       userId = stateData.userId;
       orgId = stateData.orgId;
+      successRedirect = stateData.successRedirect;
     } catch {
       return res.redirect(`${frontendUrl}?error=bitbucket&message=Invalid state`);
     }
@@ -2903,7 +2928,10 @@ router.get('/bitbucket/org-callback', async (req, res) => {
 
     try { await emitEvent({ type: 'integration_connected', organizationId: orgId, payload: { provider: 'bitbucket', displayName: userData.display_name || userData.username || 'Bitbucket' }, source: 'system', priority: 'normal' }); } catch (e) {}
 
-    res.redirect(`${frontendUrl}/organizations/${orgId}/settings?section=integrations&connected=bitbucket`);
+    const redirectOnSuccess = (successRedirect && successRedirect.startsWith(getFrontendUrl()))
+      ? successRedirect
+      : `${frontendUrl}/organizations/${orgId}/settings?section=integrations&connected=bitbucket`;
+    res.redirect(redirectOnSuccess);
   } catch (err: any) {
     console.error('Bitbucket org callback error:', err);
     res.redirect(`${frontendUrl}?error=bitbucket&message=${encodeURIComponent(err.message || 'Unknown error')}`);

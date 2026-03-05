@@ -1682,20 +1682,33 @@ export default function ProjectSettingsPage() {
                       </div>
                     </div>
                   ) : repositoriesError && (repositoriesError.includes('integration') || repositoriesError.includes('GitHub App') || repositoriesError.includes('No source')) ? (
-                    <div className="text-center py-12 px-6 rounded-lg border border-border/60 bg-background-content/30">
-                      <div className="inline-flex items-center justify-center w-14 h-14 rounded-xl bg-primary/10 mb-4">
-                        <FolderOpen className="h-7 w-7 text-primary" />
-                      </div>
-                      <h4 className="text-base font-semibold text-foreground mb-2">No Source Code Connections</h4>
-                      <p className="text-sm text-foreground-secondary mb-5 max-w-sm mx-auto">
-                        Connect a Git provider in Organization Settings to import repositories.
-                      </p>
+                    <div className="flex flex-wrap gap-2 justify-center">
                       <Button
                         variant="outline"
+                        size="sm"
                         onClick={() => navigate(`/organizations/${organizationId}/settings/integrations`)}
-                        className="border-border hover:bg-background-subtle"
+                        className="gap-2 border-border hover:bg-background-subtle"
                       >
-                        Go to Integrations
+                        <img src="/images/integrations/github.png" alt="" className="h-3.5 w-3.5 rounded-sm" />
+                        Add GitHub
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => navigate(`/organizations/${organizationId}/settings/integrations`)}
+                        className="gap-2 border-border hover:bg-background-subtle"
+                      >
+                        <img src="/images/integrations/gitlab.png" alt="" className="h-3.5 w-3.5 rounded-sm" />
+                        Add GitLab
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => navigate(`/organizations/${organizationId}/settings/integrations`)}
+                        className="gap-2 border-border hover:bg-background-subtle"
+                      >
+                        <img src="/images/integrations/bitbucket.png" alt="" className="h-3.5 w-3.5 rounded-sm" />
+                        Add Bitbucket
                       </Button>
                     </div>
                   ) : connectedRepository ? (
