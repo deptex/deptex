@@ -1,4 +1,5 @@
-import { memo, useState, useCallback, useEffect } from 'react';
+import { memo, useState, useCallback, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import { Filter, X, Flame, Shield, CheckCircle } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -38,9 +39,13 @@ interface SecurityFilterBarProps {
   onFiltersChange: (filters: SecurityFilters) => void;
 }
 
+const DROPDOWN_WIDTH = 320;
+
 function SecurityFilterBar({ filters, onFiltersChange }: SecurityFilterBarProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [isOpen, setIsOpen] = useState(false);
+  const [dropdownPosition, setDropdownPosition] = useState<{ top: number; left: number } | null>(null);
+  const filterButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const severity = searchParams.get('severity')?.split(',').filter(Boolean) ?? [];
@@ -96,10 +101,169 @@ function SecurityFilterBar({ filters, onFiltersChange }: SecurityFilterBarProps)
     updateFilters({ ...filters, severity: newSev });
   };
 
+  useEffect(() => {
+    if (!isOpen) {
+      setDropdownPosition(null);
+      return;
+    }
+    if (!filterButtonRef.current) return;
+    const rect = filterButtonRef.current.getBoundingClientRect();
+    setDropdownPosition({
+      top: rect.bottom + 8,
+      left: Math.max(8, rect.right - DROPDOWN_WIDTH),
+    });
+  }, [isOpen]);
+
+  const dropdownContent = isOpen && dropdownPosition && (
+    <div
+      className="fixed w-80 bg-background-card border border-border rounded-xl shadow-2xl p-4 space-y-4"
+      style={{
+        top: dropdownPosition.top,
+        left: dropdownPosition.left,
+        zIndex: 9999,
+      }}
+    >
+      {/* Severity */}
+      <div>
+        <div className="text-xs font-medium text-zinc-400 mb-2">Severity</div>
+        <div className="flex gap-2 flex-wrap">
+          {['critical', 'high', 'medium', 'low'].map(sev => (
+            <button
+              key={sev}
+              onClick={() => toggleSeverity(sev)}
+              className={cn(
+                'px-2 py-1 rounded text-xs capitalize transition-colors border',
+                filters.severity.includes(sev)
+                  ? sev === 'critical' ? 'border-red-500/30 bg-red-500/10 text-red-400'
+                    : sev === 'high' ? 'border-orange-500/30 bg-orange-500/10 text-orange-400'
+                    : sev === 'medium' ? 'border-yellow-500/30 bg-yellow-500/10 text-yellow-400'
+                    : 'border-zinc-500/30 bg-zinc-500/10 text-zinc-400'
+                  : 'border-border text-zinc-500 hover:text-zinc-400'
+              )}
+            >
+              {sev}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Depscore Range */}
+      <div>
+        <div className="text-xs font-medium text-zinc-400 mb-2">Minimum Depscore</div>
+        <input
+          type="number"
+          min="0"
+          max="100"
+          placeholder="e.g. 40"
+          value={filters.depscoreMin ?? ''}
+          onChange={(e) => updateFilters({ ...filters, depscoreMin: e.target.value ? Number(e.target.value) : null })}
+          className="w-full px-3 py-1.5 bg-background border border-border rounded-lg text-xs text-foreground focus:ring-1 focus:ring-primary focus:border-transparent"
+        />
+      </div>
+
+      {/* EPSS Threshold */}
+      <div>
+        <div className="text-xs font-medium text-zinc-400 mb-2">Minimum EPSS (%)</div>
+        <input
+          type="number"
+          min="0"
+          max="100"
+          step="0.1"
+          placeholder="e.g. 1"
+          value={filters.epssMin ?? ''}
+          onChange={(e) => updateFilters({ ...filters, epssMin: e.target.value ? Number(e.target.value) : null })}
+          className="w-full px-3 py-1.5 bg-background border border-border rounded-lg text-xs text-foreground focus:ring-1 focus:ring-primary focus:border-transparent"
+        />
+      </div>
+
+      {/* Reachability Level (Phase 6B) */}
+      <div>
+        <div className="text-xs font-medium text-zinc-400 mb-2">Reachability Level</div>
+        <div className="flex gap-2 flex-wrap">
+          {([
+            { value: 'all', label: 'All', color: 'primary' },
+            { value: 'data_flow', label: 'Data flow', color: 'orange' },
+            { value: 'function', label: 'Function', color: 'yellow' },
+            { value: 'module', label: 'Module', color: 'zinc' },
+            { value: 'unreachable', label: 'Unreachable', color: 'green' },
+          ] as const).map(({ value, label, color }) => (
+            <button
+              key={value}
+              onClick={() => updateFilters({ ...filters, reachabilityLevel: value })}
+              className={cn(
+                'px-2 py-1 rounded text-xs transition-colors border',
+                filters.reachabilityLevel === value
+                  ? color === 'orange' ? 'border-orange-500/30 bg-orange-500/10 text-orange-400'
+                    : color === 'yellow' ? 'border-yellow-500/30 bg-yellow-500/10 text-yellow-400'
+                    : color === 'green' ? 'border-green-500/30 bg-green-500/10 text-green-400'
+                    : color === 'zinc' ? 'border-zinc-500/30 bg-zinc-500/10 text-zinc-400'
+                    : 'border-primary/30 bg-primary/10 text-primary'
+                  : 'border-border text-zinc-500 hover:text-zinc-400'
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Dependency Type */}
+      <div>
+        <div className="text-xs font-medium text-zinc-400 mb-2">Dependency Type</div>
+        <div className="flex gap-2">
+          {(['all', 'direct', 'transitive'] as const).map(type => (
+            <button
+              key={type}
+              onClick={() => updateFilters({ ...filters, depType: type })}
+              className={cn(
+                'px-2 py-1 rounded text-xs capitalize transition-colors border',
+                filters.depType === type
+                  ? 'border-primary/30 bg-primary/10 text-primary'
+                  : 'border-border text-zinc-500 hover:text-zinc-400'
+              )}
+            >
+              {type}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Phase 15: SLA Status */}
+      <div>
+        <div className="text-xs font-medium text-zinc-400 mb-2">SLA Status</div>
+        <div className="flex gap-2 flex-wrap">
+          {([
+            { value: 'all' as const, label: 'All' },
+            { value: 'on_track' as const, label: 'On track' },
+            { value: 'warning' as const, label: 'Warning' },
+            { value: 'breached' as const, label: 'Breached' },
+            { value: 'exempt' as const, label: 'Exempt' },
+          ]).map(({ value, label }) => (
+            <button
+              key={value}
+              onClick={() => updateFilters({ ...filters, slaStatus: value })}
+              className={cn(
+                'px-2 py-1 rounded text-xs transition-colors border',
+                filters.slaStatus === value
+                  ? value === 'breached' ? 'border-red-500/30 bg-red-500/10 text-red-400'
+                    : value === 'warning' ? 'border-amber-500/30 bg-amber-500/10 text-amber-400'
+                    : 'border-primary/30 bg-primary/10 text-primary'
+                  : 'border-border text-zinc-500 hover:text-zinc-400'
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="relative">
       <div className="flex items-center gap-2">
         <button
+          ref={filterButtonRef}
           onClick={() => setIsOpen(!isOpen)}
           className={cn(
             'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border',
@@ -157,144 +321,7 @@ function SecurityFilterBar({ filters, onFiltersChange }: SecurityFilterBarProps)
         )}
       </div>
 
-      {/* Dropdown panel */}
-      {isOpen && (
-        <div className="absolute top-full left-0 mt-2 w-80 bg-background-card border border-border rounded-xl shadow-2xl z-40 p-4 space-y-4">
-          {/* Severity */}
-          <div>
-            <div className="text-xs font-medium text-zinc-400 mb-2">Severity</div>
-            <div className="flex gap-2 flex-wrap">
-              {['critical', 'high', 'medium', 'low'].map(sev => (
-                <button
-                  key={sev}
-                  onClick={() => toggleSeverity(sev)}
-                  className={cn(
-                    'px-2 py-1 rounded text-xs capitalize transition-colors border',
-                    filters.severity.includes(sev)
-                      ? sev === 'critical' ? 'border-red-500/30 bg-red-500/10 text-red-400'
-                        : sev === 'high' ? 'border-orange-500/30 bg-orange-500/10 text-orange-400'
-                        : sev === 'medium' ? 'border-yellow-500/30 bg-yellow-500/10 text-yellow-400'
-                        : 'border-zinc-500/30 bg-zinc-500/10 text-zinc-400'
-                      : 'border-border text-zinc-500 hover:text-zinc-400'
-                  )}
-                >
-                  {sev}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Depscore Range */}
-          <div>
-            <div className="text-xs font-medium text-zinc-400 mb-2">Minimum Depscore</div>
-            <input
-              type="number"
-              min="0"
-              max="100"
-              placeholder="e.g. 40"
-              value={filters.depscoreMin ?? ''}
-              onChange={(e) => updateFilters({ ...filters, depscoreMin: e.target.value ? Number(e.target.value) : null })}
-              className="w-full px-3 py-1.5 bg-background border border-border rounded-lg text-xs text-foreground focus:ring-1 focus:ring-primary focus:border-transparent"
-            />
-          </div>
-
-          {/* EPSS Threshold */}
-          <div>
-            <div className="text-xs font-medium text-zinc-400 mb-2">Minimum EPSS (%)</div>
-            <input
-              type="number"
-              min="0"
-              max="100"
-              step="0.1"
-              placeholder="e.g. 1"
-              value={filters.epssMin ?? ''}
-              onChange={(e) => updateFilters({ ...filters, epssMin: e.target.value ? Number(e.target.value) : null })}
-              className="w-full px-3 py-1.5 bg-background border border-border rounded-lg text-xs text-foreground focus:ring-1 focus:ring-primary focus:border-transparent"
-            />
-          </div>
-
-          {/* Reachability Level (Phase 6B) */}
-          <div>
-            <div className="text-xs font-medium text-zinc-400 mb-2">Reachability Level</div>
-            <div className="flex gap-2 flex-wrap">
-              {([
-                { value: 'all', label: 'All', color: 'primary' },
-                { value: 'data_flow', label: 'Data flow', color: 'orange' },
-                { value: 'function', label: 'Function', color: 'yellow' },
-                { value: 'module', label: 'Module', color: 'zinc' },
-                { value: 'unreachable', label: 'Unreachable', color: 'green' },
-              ] as const).map(({ value, label, color }) => (
-                <button
-                  key={value}
-                  onClick={() => updateFilters({ ...filters, reachabilityLevel: value })}
-                  className={cn(
-                    'px-2 py-1 rounded text-xs transition-colors border',
-                    filters.reachabilityLevel === value
-                      ? color === 'orange' ? 'border-orange-500/30 bg-orange-500/10 text-orange-400'
-                        : color === 'yellow' ? 'border-yellow-500/30 bg-yellow-500/10 text-yellow-400'
-                        : color === 'green' ? 'border-green-500/30 bg-green-500/10 text-green-400'
-                        : color === 'zinc' ? 'border-zinc-500/30 bg-zinc-500/10 text-zinc-400'
-                        : 'border-primary/30 bg-primary/10 text-primary'
-                      : 'border-border text-zinc-500 hover:text-zinc-400'
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Dependency Type */}
-          <div>
-            <div className="text-xs font-medium text-zinc-400 mb-2">Dependency Type</div>
-            <div className="flex gap-2">
-              {(['all', 'direct', 'transitive'] as const).map(type => (
-                <button
-                  key={type}
-                  onClick={() => updateFilters({ ...filters, depType: type })}
-                  className={cn(
-                    'px-2 py-1 rounded text-xs capitalize transition-colors border',
-                    filters.depType === type
-                      ? 'border-primary/30 bg-primary/10 text-primary'
-                      : 'border-border text-zinc-500 hover:text-zinc-400'
-                  )}
-                >
-                  {type}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Phase 15: SLA Status */}
-          <div>
-            <div className="text-xs font-medium text-zinc-400 mb-2">SLA Status</div>
-            <div className="flex gap-2 flex-wrap">
-              {([
-                { value: 'all' as const, label: 'All' },
-                { value: 'on_track' as const, label: 'On track' },
-                { value: 'warning' as const, label: 'Warning' },
-                { value: 'breached' as const, label: 'Breached' },
-                { value: 'exempt' as const, label: 'Exempt' },
-              ]).map(({ value, label }) => (
-                <button
-                  key={value}
-                  onClick={() => updateFilters({ ...filters, slaStatus: value })}
-                  className={cn(
-                    'px-2 py-1 rounded text-xs transition-colors border',
-                    filters.slaStatus === value
-                      ? value === 'breached' ? 'border-red-500/30 bg-red-500/10 text-red-400'
-                        : value === 'warning' ? 'border-amber-500/30 bg-amber-500/10 text-amber-400'
-                        : 'border-primary/30 bg-primary/10 text-primary'
-                      : 'border-border text-zinc-500 hover:text-zinc-400'
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+      {typeof document !== 'undefined' && dropdownContent && createPortal(dropdownContent, document.body)}
     </div>
   );
 }

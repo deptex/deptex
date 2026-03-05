@@ -1,12 +1,11 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import {
   TowerControl,
   ShieldCheck,
   ShieldAlert,
   AlertTriangle,
   Loader2,
-  ExternalLink,
   Check,
   X,
   Minus,
@@ -96,18 +95,33 @@ export default function ProjectWatchtowerPage() {
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
 
   const realtime = useRealtimeStatus(orgId, projectId);
-  const isExtractionOngoing = realtime.status !== 'ready';
+  const isExtractionOngoing = !realtime.isLoading && realtime.status !== 'ready';
 
   const fetchData = useCallback(async () => {
     if (!orgId || !projectId) return;
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'21910a'},body:JSON.stringify({sessionId:'21910a',location:'ProjectWatchtowerPage.tsx:fetchData',message:'fetchData entry',data:{orgId,projectId},timestamp:Date.now(),hypothesisId:'H3,H5'})}).catch(()=>{});
+    // #endregion
     try {
-      const [statsRes, pkgsRes] = await Promise.all([
-        api.authenticatedGet<WatchtowerStats>(`/api/organizations/${orgId}/projects/${projectId}/watchtower/stats`),
-        api.authenticatedGet<{ packages: WatchtowerPackage[]; total_direct_deps: number }>(`/api/organizations/${orgId}/projects/${projectId}/watchtower/packages`).catch(() => ({ packages: [], total_direct_deps: 0 })),
-      ]);
+      let pkgsRes: { packages: WatchtowerPackage[]; total_direct_deps: number };
+      try {
+        pkgsRes = await api.authenticatedGet<{ packages: WatchtowerPackage[]; total_direct_deps: number }>(`/api/organizations/${orgId}/projects/${projectId}/watchtower/packages`);
+        // #region agent log
+        fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'21910a'},body:JSON.stringify({sessionId:'21910a',location:'ProjectWatchtowerPage.tsx:packages response',message:'packages API success',data:{total_direct_deps:pkgsRes?.total_direct_deps,packagesLength:pkgsRes?.packages?.length},timestamp:Date.now(),hypothesisId:'H1,H4'})}).catch(()=>{});
+        // #endregion
+      } catch (packagesErr: any) {
+        // #region agent log
+        fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'21910a'},body:JSON.stringify({sessionId:'21910a',location:'ProjectWatchtowerPage.tsx:packages error',message:'packages API failed',data:{message:packagesErr?.message,responseBody:packagesErr?.responseBody},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+        // #endregion
+        pkgsRes = { packages: [], total_direct_deps: 0 };
+      }
+      const statsRes = await api.authenticatedGet<WatchtowerStats>(`/api/organizations/${orgId}/projects/${projectId}/watchtower/stats`);
       setStats(statsRes);
       setPackages(pkgsRes.packages || []);
       setTotalDirect(pkgsRes.total_direct_deps || 0);
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'21910a'},body:JSON.stringify({sessionId:'21910a',location:'ProjectWatchtowerPage.tsx:setTotalDirect',message:'state set',data:{total_direct_deps:pkgsRes.total_direct_deps},timestamp:Date.now(),hypothesisId:'H4'})}).catch(()=>{});
+      // #endregion
     } catch {
       setStats({ enabled: false, total_direct: 0, analyzed: 0, alerts: 0, blocked: 0, errored: 0 });
     } finally {
@@ -213,20 +227,24 @@ export default function ProjectWatchtowerPage() {
           </div>
           <div className="flex items-center justify-center gap-3">
             <button
+              type="button"
               onClick={() => handleToggle(true)}
               disabled={enabling || totalDirect === 0}
-              className="inline-flex items-center gap-2 rounded-md bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand/90 disabled:opacity-50"
+              title={totalDirect === 0 ? 'Connect a repository and run extraction to add dependencies first' : undefined}
+              className="inline-flex items-center gap-2 rounded-md bg-green-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50"
             >
               {enabling ? <Loader2 className="h-4 w-4 animate-spin" /> : <TowerControl className="h-4 w-4" />}
               Enable Watchtower
             </button>
-            <Link
-              to="/docs/watchtower"
+            <a
+              href="/docs/watchtower"
+              target="_blank"
+              rel="noopener noreferrer"
               className="inline-flex items-center gap-1.5 rounded-md border border-border px-4 py-2 text-sm font-medium text-foreground-secondary hover:text-foreground hover:bg-background-subtle"
             >
               <BookOpen className="h-4 w-4" />
               Docs
-            </Link>
+            </a>
           </div>
 
           <div className="grid grid-cols-2 gap-4 mt-8 max-w-lg mx-auto text-left">
@@ -265,13 +283,15 @@ export default function ProjectWatchtowerPage() {
               Since {new Date(stats.enabled_at).toLocaleDateString()}
             </span>
           )}
-          <Link
-            to="/docs/watchtower"
+          <a
+            href="/docs/watchtower"
+            target="_blank"
+            rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-xs text-foreground-secondary hover:text-foreground"
           >
             <BookOpen className="h-3.5 w-3.5" />
             Docs
-          </Link>
+          </a>
           <button
             onClick={() => handleToggle(false)}
             disabled={enabling}

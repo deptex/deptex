@@ -2607,6 +2607,15 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/recent-activity`);
   },
 
+  async getProjectVulnerabilityTimeline(
+    orgId: string,
+    projectId: string,
+    days?: number
+  ): Promise<{ timeline: { date: string; detected: number; resolved: number }[] }> {
+    const q = days != null ? `?days=${days}` : '';
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/vulnerability-timeline${q}`);
+  },
+
   async triggerProjectSync(orgId: string, projectId: string): Promise<{ job_id: string; status: string }> {
     return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/sync`, { method: 'POST' });
   },
@@ -2813,6 +2822,9 @@ export interface ProjectRepository {
   connected_at?: string | null;
   updated_at?: string;
   sync_frequency?: string;
+  webhook_status?: string | null;
+  last_webhook_at?: string | null;
+  last_webhook_event?: string | null;
 }
 
 export interface OpenssfCheck {
@@ -3942,7 +3954,7 @@ export interface ProjectStats {
   compliance: { percent: number; compliant: number; failing: number; not_evaluated: number; total: number };
   vulnerabilities: { total: number; critical: number; high: number; medium: number; low: number; reachable_count: number };
   code_findings: { semgrep_count: number; secret_count: number; verified_secret_count: number };
-  dependencies: { total: number; direct: number; transitive: number; outdated: number };
+  dependencies: { total: number; direct: number; transitive: number; outdated: number; healthy?: number; vulnerable?: number };
   sync: { status: string; extraction_step: string | null; last_synced: string | null; last_error: string | null; branch: string };
   action_items: ActionItem[];
   graph_deps: GraphDep[];

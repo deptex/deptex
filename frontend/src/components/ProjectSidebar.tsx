@@ -1,6 +1,6 @@
 import { memo, useState, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ShieldAlert, Package, Shield, TowerControl, Settings } from 'lucide-react';
+import { LayoutDashboard, Package, Scale, TowerControl, Settings } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { ProjectPermissions } from '../lib/api';
 
@@ -13,8 +13,7 @@ interface ProjectSidebarProps {
 const allNavItems = [
   { id: 'overview', label: 'Overview', path: 'overview', icon: LayoutDashboard, requiredPermission: null },
   { id: 'dependencies', label: 'Dependencies', path: 'dependencies', icon: Package, requiredPermission: null },
-  { id: 'security', label: 'Security', path: 'security', icon: ShieldAlert, requiredPermission: null },
-  { id: 'compliance', label: 'Compliance', path: 'compliance', icon: Shield, requiredPermission: null },
+  { id: 'compliance', label: 'Compliance', path: 'compliance', icon: Scale, requiredPermission: null },
   { id: 'watchtower', label: 'Watchtower', path: 'watchtower', icon: TowerControl, requiredPermission: null },
   { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: 'view_settings' as const },
 ];

@@ -71,6 +71,19 @@ function formatConnectedAgo(dateStr: string | null | undefined): string {
   return `${Math.floor(days / 30)}mo ago`;
 }
 
+function formatWebhookTimeAgo(dateStr: string | null | undefined): string {
+  if (!dateStr) return 'never';
+  const diff = (Date.now() - new Date(dateStr).getTime()) / 1000;
+  const mins = Math.floor(diff / 60);
+  const hours = Math.floor(diff / 3600);
+  const days = Math.floor(diff / 86400);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days < 30) return `${days}d ago`;
+  return `${Math.floor(days / 30)}mo ago`;
+}
+
 function formatRunDuration(createdAt: string, completedAt: string | null, status: string): string {
   const start = new Date(createdAt).getTime();
   const end = (completedAt ? new Date(completedAt).getTime() : Date.now());
@@ -1859,6 +1872,32 @@ export default function ProjectSettingsPage() {
                                 </>
                               )}
                             </div>
+                            <div className="text-xs text-foreground-secondary flex items-center gap-1.5 mt-2">
+                              <span
+                                className={cn(
+                                  'w-1.5 h-1.5 rounded-full shrink-0',
+                                  connectedRepository.webhook_status === 'active'
+                                    ? 'bg-emerald-500'
+                                    : connectedRepository.webhook_status === 'inactive'
+                                      ? 'bg-amber-500'
+                                      : connectedRepository.webhook_status === 'error'
+                                        ? 'bg-destructive'
+                                        : 'bg-zinc-500'
+                                )}
+                                aria-hidden
+                              />
+                              <span>
+                                {connectedRepository.webhook_status === 'active' && connectedRepository.last_webhook_at
+                                  ? `Webhook: Active (last event ${formatWebhookTimeAgo(connectedRepository.last_webhook_at)}${connectedRepository.last_webhook_event ? `: ${connectedRepository.last_webhook_event}` : ''})`
+                                  : connectedRepository.webhook_status === 'inactive'
+                                    ? 'Webhook: Inactive (no events in 7 days)'
+                                    : connectedRepository.webhook_status === 'error'
+                                      ? 'Webhook: Error'
+                                      : connectedRepository.last_webhook_at
+                                        ? `Webhook: Last event ${formatWebhookTimeAgo(connectedRepository.last_webhook_at)}`
+                                        : 'Webhook: Unknown'}
+                              </span>
+                            </div>
                           </div>
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
@@ -2059,14 +2098,10 @@ export default function ProjectSettingsPage() {
                               </td>
                             </tr>
                           ) : (
-                            extractionRuns.map((run, index) => {
+                            extractionRuns.map((run) => {
                               const isActive = run.status === 'queued' || run.status === 'processing';
                               const duration = formatRunDuration(run.created_at, run.completed_at ?? null, run.status);
-                              const triggerLabel = run.commit_sha
-                                ? [run.branch || 'main', (run.commit_sha as string).slice(0, 7), (run.commit_message || '').split('\n')[0].slice(0, 50)].filter(Boolean).join(' ')
-                                : run.trigger_type === 'initial'
-                                  ? 'Initial extraction'
-                                  : 'Sync';
+                              const triggerSubtext = run.trigger_type === 'initial' ? 'Initial extraction' : 'Sync';
                               const byDisplay = run.commit_author?.username
                                 ? run.commit_author.username
                                 : run.started_by?.full_name ?? 'Deptex';
@@ -2078,22 +2113,23 @@ export default function ProjectSettingsPage() {
                                   className="group hover:bg-table-hover transition-colors cursor-pointer"
                                 >
                                   <td className="px-4 py-3">
-                                    <div className="flex items-center gap-2 min-w-0">
-                                      {run.commit_sha ? (
-                                        <>
-                                          <GitCommit className="h-4 w-4 text-foreground-secondary shrink-0" />
-                                          <span className="text-sm font-mono text-foreground truncate">
-                                            {run.branch || 'main'} {(run.commit_sha as string).slice(0, 7)}
-                                          </span>
-                                          {run.commit_message && (
-                                            <span className="text-sm text-foreground-secondary truncate hidden sm:inline">
-                                              {(run.commit_message as string).split('\n')[0].slice(0, 40)}
+                                    <div className="flex flex-col gap-0.5 min-w-0">
+                                      {/* Main line: commit when available, otherwise trigger type */}
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        {run.commit_sha ? (
+                                          <>
+                                            <GitCommit className="h-4 w-4 text-foreground-secondary shrink-0" />
+                                            <span className="text-sm font-medium font-mono text-foreground truncate">
+                                              {run.branch || 'main'} {(run.commit_sha as string).slice(0, 7)}
+                                              {run.commit_message ? ` — ${(run.commit_message as string).split('\n')[0].slice(0, 40)}` : ''}
                                             </span>
-                                          )}
-                                        </>
-                                      ) : (
-                                        <span className="text-sm text-foreground">{triggerLabel}</span>
-                                      )}
+                                          </>
+                                        ) : (
+                                          <span className="text-sm font-medium text-foreground">{triggerSubtext}</span>
+                                        )}
+                                      </div>
+                                      {/* Sub line: always trigger type */}
+                                      <span className="text-xs text-muted-foreground">{triggerSubtext}</span>
                                     </div>
                                   </td>
                                   <td className="px-4 py-3">

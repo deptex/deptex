@@ -38,8 +38,8 @@ import NotFoundRedirect from "../components/NotFoundRedirect";
 import ProjectLayout from "./pages/ProjectLayout";
 import ProjectOverviewPage from "./pages/ProjectOverviewPage";
 import ProjectDependenciesPage from "./pages/ProjectDependenciesPage";
-import ProjectVulnerabilitiesPage from "./pages/ProjectVulnerabilitiesPage";
 import ProjectCompliancePage from "./pages/ProjectCompliancePage";
+import ProjectVulnerabilitiesPage from "./pages/ProjectVulnerabilitiesPage";
 
 import ProjectSettingsPage from "./pages/ProjectSettingsPage";
 import ProjectWatchtowerPage from "./pages/ProjectWatchtowerPage";
@@ -177,7 +177,7 @@ export const router = createBrowserRouter([
       },
       {
         path: "vulnerabilities",
-        element: <Navigate to="../security" replace />,
+        element: <ProjectVulnerabilitiesPage />,
       },
       {
         path: "dependencies",
@@ -193,7 +193,7 @@ export const router = createBrowserRouter([
       },
       {
         path: "dependencies/:dependencyId/watchtower",
-        element: <Navigate to="../../../watchtower" replace />,
+        element: <Navigate to="../overview" replace />,
       },
       {
         path: "watchtower",

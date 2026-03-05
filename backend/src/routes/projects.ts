@@ -29,6 +29,11 @@ import { fetchGhsaVulnerabilitiesBatch, filterGhsaVulnsByVersion, ghsaSeverityTo
 import { getVulnCountsBatch, getVulnCountsForVersion, getVulnCountsForVersionsBatch, VulnCounts } from '../lib/vuln-counts';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
 import { emitEvent } from '../lib/event-bus';
+import {
+  registerGitLabWebhook,
+  registerBitbucketWebhook,
+  generateWebhookSecret,
+} from '../lib/webhook-registration';
 import pacote from 'pacote';
 import { calculateLatestSafeVersion, type LatestSafeVersionResponse } from '../lib/latest-safe-version';
 import {
@@ -3811,6 +3816,9 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
           auto_fix_vulnerabilities_enabled: (repoRecord as { auto_fix_vulnerabilities_enabled?: boolean }).auto_fix_vulnerabilities_enabled === true,
           connected_at: (repoRecord as { created_at?: string }).created_at ?? null,
           sync_frequency: (repoRecord as { sync_frequency?: string }).sync_frequency ?? 'daily',
+          webhook_status: (repoRecord as { webhook_status?: string }).webhook_status ?? null,
+          last_webhook_at: (repoRecord as { last_webhook_at?: string }).last_webhook_at ?? null,
+          last_webhook_event: (repoRecord as { last_webhook_event?: string }).last_webhook_event ?? null,
         }
         : null,
       repositories: allRepos,
@@ -4020,6 +4028,62 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
         .update({ framework, updated_at: new Date().toISOString() })
         .eq('id', projectId)
         .eq('organization_id', id);
+    }
+
+    // Register per-repo webhook for GitLab/Bitbucket so push/PR events are received
+    if (
+      (resolvedProvider === 'gitlab' || resolvedProvider === 'bitbucket') &&
+      integrationId
+    ) {
+      const integ = await getIntegrationById(id, integrationId);
+      const token = integ?.access_token;
+      if (token) {
+        const backendUrl = (process.env.BACKEND_URL || process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/$/, '');
+        const secret = generateWebhookSecret();
+        try {
+          if (resolvedProvider === 'gitlab') {
+            const baseUrl = (integ.metadata as any)?.base_url || 'https://gitlab.com';
+            const { id: hookId } = await registerGitLabWebhook(
+              baseUrl,
+              token,
+              Number(repo_id),
+              `${backendUrl}/api/integrations/webhooks/gitlab`,
+              secret
+            );
+            await supabase
+              .from('project_repositories')
+              .update({
+                webhook_id: String(hookId),
+                webhook_secret: secret,
+                webhook_status: 'active',
+                updated_at: new Date().toISOString(),
+              })
+              .eq('project_id', projectId);
+          } else if (resolvedProvider === 'bitbucket') {
+            const [workspace, repoSlug] = String(repo_full_name).split('/');
+            if (workspace && repoSlug) {
+              const { uuid } = await registerBitbucketWebhook(
+                token,
+                workspace,
+                repoSlug,
+                `${backendUrl}/api/integrations/webhooks/bitbucket`,
+                secret
+              );
+              await supabase
+                .from('project_repositories')
+                .update({
+                  webhook_id: uuid,
+                  webhook_secret: secret,
+                  webhook_status: 'active',
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('project_id', projectId);
+            }
+          }
+        } catch (webhookErr: any) {
+          console.warn('[EXTRACT] Webhook registration failed (repo still connected):', webhookErr?.message || webhookErr);
+        }
+      }
     }
 
     res.json({
@@ -4335,7 +4399,13 @@ router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthR
 });
 
 /** Fetches and enriches project dependencies from the DB. Used for cache refresh and when cache misses. */
-async function fetchEnrichedDependenciesForProject(organizationId: string, projectId: string): Promise<any[]> {
+async function fetchEnrichedDependenciesForProject(
+  organizationId: string,
+  projectId: string,
+  options?: { debugTiming?: boolean }
+): Promise<any[]> {
+  const debugTiming = options?.debugTiming === true;
+  const t0 = debugTiming ? Date.now() : 0;
   // Get project dependencies with joined dependency analysis data
     // Note: license column was removed from project_dependencies - it now comes from dependencies table
     // is_watching and watchtower_cleared_at come from organization_watchlist (org-level)
@@ -4426,6 +4496,8 @@ async function fetchEnrichedDependenciesForProject(organizationId: string, proje
         : Promise.resolve({ data: null }),
       supabase.from('project_teams').select('team_id').eq('project_id', projectId),
     ]);
+    const t1 = debugTiming ? Date.now() : 0;
+    if (debugTiming) console.log('[fetchEnrichedDependencies] project_deps + wave1', t1 - t0, 'ms');
 
     const watchlistByDependencyId = new Map<string, { watchtower_cleared_at: string | null }>();
     if (watchlistResult.data) {
@@ -4463,6 +4535,8 @@ async function fetchEnrichedDependenciesForProject(organizationId: string, proje
     if (allPairs.length > 0) {
       vulnCountsByKey = await getVulnCountsBatch(supabase, allPairs);
     }
+    const t2 = debugTiming ? Date.now() : 0;
+    if (debugTiming) console.log('[fetchEnrichedDependencies] getVulnCountsBatch', t2 - t1, 'ms (pairs:', allPairs.length, ')');
 
     const projectVersionIdSet = new Set(dependencyVersionIds);
     const childToParentVersionId = new Map<string, string>();
@@ -4559,6 +4633,8 @@ async function fetchEnrichedDependenciesForProject(organizationId: string, proje
       depIds.length > 0 ? supabase.from('banned_versions').select('dependency_id, banned_version').eq('organization_id', organizationId).in('dependency_id', depIds) : Promise.resolve({ data: null }),
       depIds.length > 0 && teamIds.length > 0 ? supabase.from('team_banned_versions').select('dependency_id, banned_version').in('team_id', teamIds).in('dependency_id', depIds) : Promise.resolve({ data: null }),
     ]);
+    const t3 = debugTiming ? Date.now() : 0;
+    if (debugTiming) console.log('[fetchEnrichedDependencies] wave2', t3 - t2, 'ms');
 
     const scoreFallbackByName = new Map<string, { openssf_score: number | null; openssf_data: any; weekly_downloads: number | null; last_published_at: string | null; openssf_penalty?: number; popularity_penalty?: number; maintenance_penalty?: number; releases_last_12_months?: number | null; status?: string; score?: number | null; analyzed_at?: string | null }>();
     for (const resp of scoreFallbackBatches as Array<{ data: any[] | null }>) {
@@ -4722,6 +4798,7 @@ async function fetchEnrichedDependenciesForProject(organizationId: string, proje
       return out;
     });
 
+  if (debugTiming) console.log('[fetchEnrichedDependencies] total', Date.now() - t0, 'ms');
   return enrichedDeps;
 }
 
@@ -4750,7 +4827,8 @@ router.get('/:id/projects/:projectId/dependencies', async (req: AuthRequest, res
       await invalidateDependenciesCache(id, projectId);
     }
 
-    const enrichedDeps = await fetchEnrichedDependenciesForProject(id, projectId);
+    const debugTiming = req.query.debug_timing === '1';
+    const enrichedDeps = await fetchEnrichedDependenciesForProject(id, projectId, { debugTiming });
     await setCached(depsCacheKey, enrichedDeps, CACHE_TTL_SECONDS.DEPENDENCIES).catch((err: any) => {
       console.warn('[Cache] Failed to set dependencies cache:', err?.message);
     });
@@ -5115,7 +5193,7 @@ router.post('/:id/projects/:projectId/dependencies/:projectDependencyId/analyze-
       console.warn('Failed to fetch code from GitHub for AI analysis, proceeding with metadata only:', githubError);
     }
 
-    // 6. Build the OpenAI prompt
+    // 6. Build the prompt (Tier-1: Gemini Flash via platform provider)
     const systemPrompt = `You are a senior software architect reviewing how a dependency is used in a codebase. Provide:
 (1) A 2-3 sentence summary of the dependency's role and criticality in this project.
 (2) One representative code example from the provided files showing how it's used, formatted as a markdown code block with the file path as a comment above it.
@@ -5137,21 +5215,18 @@ ${allFilePaths.length > 0 ? allFilePaths.map((fp: string) => `- ${fp}`).join('\n
       }
     }
 
-    // 7. Call OpenAI
-    const { getOpenAIClient } = await import('../lib/openai');
-    const openai = getOpenAIClient();
-
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
+    // 7. Call platform provider (Gemini Flash)
+    const { getPlatformProvider } = await import('../lib/ai/provider');
+    const provider = getPlatformProvider();
+    const chatResult = await provider.chat(
+      [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
-      temperature: 0.3,
-      max_tokens: 500,
-    });
+      { temperature: 0.3, maxTokens: 500 }
+    );
 
-    const aiSummary = completion.choices[0]?.message?.content || 'Analysis could not be generated.';
+    const aiSummary = chatResult.content?.trim() || 'Analysis could not be generated.';
     const analyzedAt = new Date().toISOString();
 
     // 8. Store the result
@@ -10662,7 +10737,7 @@ router.get('/:id/projects/:projectId/commits', async (req: AuthRequest, res) => 
   try {
     const userId = req.user!.id;
     const { id, projectId } = req.params;
-    const status = (req.query.status as string) || 'ALL';
+    const status = (req.query.compliance_status || req.query.status) as string || 'ALL';
     const timeframe = (req.query.timeframe as string) || 'ALL';
     const search = (req.query.search as string) || '';
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
@@ -10706,7 +10781,7 @@ router.get('/:id/projects/:projectId/commits', async (req: AuthRequest, res) => 
     const { data, error, count } = await query;
     if (error) throw error;
 
-    res.json({ commits: data ?? [], total: count ?? 0, page, per_page: perPage });
+    res.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage });
   } catch (error: any) {
     console.error('Error fetching project commits:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch project commits' });
@@ -10814,7 +10889,7 @@ router.get('/:id/projects/:projectId/pull-requests', async (req: AuthRequest, re
     const { data, error, count } = await query;
     if (error) throw error;
 
-    res.json({ pullRequests: data ?? [], total: count ?? 0, page, per_page: perPage });
+    res.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage });
   } catch (error: any) {
     console.error('Error fetching project pull requests:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch project pull requests' });
@@ -10889,6 +10964,9 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
     const directDeps = depsRows.filter((d: any) => d.is_direct === true);
     const transitiveDeps = depsRows.filter((d: any) => d.is_direct === false);
     const outdated = depsRows.filter((d: any) => d.is_outdated === true).length;
+    const vulnerableDepIds = new Set(vulnRows.map((v: any) => v.project_dependency_id));
+    const vulnerable = vulnerableDepIds.size;
+    const healthy = depsRows.length - vulnerable;
 
     // Action items
     const actionItems: any[] = [];
@@ -10969,7 +11047,7 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       compliance: { percent: compliancePercent, compliant, failing, not_evaluated: notEvaluated, total: depsRows.length },
       vulnerabilities: { total: vulnRows.length, critical: vulnCritical, high: vulnHigh, medium: vulnMedium, low: vulnLow, reachable_count: reachableCount },
       code_findings: { semgrep_count: semgrepCount, secret_count: secretCount, verified_secret_count: verifiedSecretCount },
-      dependencies: { total: depsRows.length, direct: directDeps.length, transitive: transitiveDeps.length, outdated },
+      dependencies: { total: depsRows.length, direct: directDeps.length, transitive: transitiveDeps.length, outdated, healthy, vulnerable },
       sync: {
         status: repoRow?.status ?? 'not_connected',
         extraction_step: repoRow?.extraction_step ?? null,
@@ -10995,6 +11073,56 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
   } catch (error: any) {
     console.error('Error fetching project stats:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch project stats' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/vulnerability-timeline?days=30
+router.get('/:id/projects/:projectId/vulnerability-timeline', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: organizationId, projectId } = req.params;
+    const days = Math.min(90, Math.max(7, parseInt(String(req.query.days), 10) || 30));
+
+    const accessCheck = await checkProjectAccess(userId, organizationId, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    const sinceIso = since.toISOString();
+
+    const { data: events } = await supabase
+      .from('project_vulnerability_events')
+      .select('event_type, created_at')
+      .eq('project_id', projectId)
+      .gte('created_at', sinceIso)
+      .order('created_at', { ascending: true });
+
+    const byDate = new Map<string, { detected: number; resolved: number }>();
+    for (const e of events ?? []) {
+      const date = (e.created_at || '').slice(0, 10);
+      if (!date) continue;
+      let row = byDate.get(date);
+      if (!row) {
+        row = { detected: 0, resolved: 0 };
+        byDate.set(date, row);
+      }
+      if (e.event_type === 'detected') row.detected += 1;
+      else if (e.event_type === 'resolved') row.resolved += 1;
+    }
+
+    const sortedDates = Array.from(byDate.keys()).sort();
+    const timeline = sortedDates.map((date) => ({
+      date,
+      detected: byDate.get(date)!.detected,
+      resolved: byDate.get(date)!.resolved,
+    }));
+
+    res.json({ timeline });
+  } catch (error: any) {
+    console.error('Error fetching vulnerability timeline:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch vulnerability timeline' });
   }
 });
 
@@ -11592,6 +11720,9 @@ router.get('/:orgId/projects/:projectId/watchtower/packages', async (req: AuthRe
   try {
     const { orgId, projectId } = req.params;
     const userId = req.user!.id;
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'21910a'},body:JSON.stringify({sessionId:'21910a',location:'projects.ts:watchtower/packages',message:'handler entry',data:{orgId,projectId,projectIdType:typeof projectId},timestamp:Date.now(),hypothesisId:'H3,H4'})}).catch(()=>{});
+    // #endregion
 
     const { data: membership } = await supabase
       .from('organization_members')
@@ -11605,14 +11736,20 @@ router.get('/:orgId/projects/:projectId/watchtower/packages', async (req: AuthRe
       return;
     }
 
-    const { data: directDeps } = await supabase
+    const { data: directDeps, error: directDepsError } = await supabase
       .from('project_dependencies')
       .select('dependency_id, name, version, files_importing_count, ecosystem')
       .eq('project_id', projectId)
       .eq('is_direct', true);
 
     const deps = directDeps || [];
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'21910a'},body:JSON.stringify({sessionId:'21910a',location:'projects.ts:watchtower/packages after query',message:'directDeps count',data:{depsLength:deps.length,queryError:directDepsError?.message},timestamp:Date.now(),hypothesisId:'H2,H4'})}).catch(()=>{});
+    // #endregion
     if (deps.length === 0) {
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'21910a'},body:JSON.stringify({sessionId:'21910a',location:'projects.ts:watchtower/packages early return',message:'returning zero deps',data:{projectId},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
+      // #endregion
       res.json({ packages: [], total_direct_deps: 0 });
       return;
     }

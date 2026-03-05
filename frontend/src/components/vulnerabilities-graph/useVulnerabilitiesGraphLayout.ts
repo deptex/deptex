@@ -111,6 +111,17 @@ export function getWorstDepscore(depNodes: VulnGraphDepNode[]): number {
   return worst;
 }
 
+/** Worst depscore among reachable vulns for a single dep (for edge coloring). */
+function getWorstDepscoreForDep(dep: VulnGraphDepNode): number | null {
+  if (dep.isZombie) return null;
+  let worst: number | null = null;
+  for (const v of reachableVulns(dep.vulnerabilities)) {
+    const s = v.depscore ?? null;
+    if (s != null && (worst == null || s > worst)) worst = s;
+  }
+  return worst;
+}
+
 export function getDepscoreColorScheme(score: number): {
   border: string;
   shadow: string;
@@ -129,9 +140,20 @@ export function getDepscoreColorScheme(score: number): {
   }
 }
 
-/** Vulnerabilities that are reachable (affect node/edge color). Default true when missing. */
+const REACHABLE_LEVELS = new Set(['data_flow', 'function', 'module', 'confirmed']);
+
+/** Single definition of "reachable": prefer reachability_level (data_flow/function/module/confirmed = reachable, unreachable = not); else is_reachable !== false. */
+function isVulnReachable(v: VulnGraphDepNode['vulnerabilities'][number]): boolean {
+  const level = v.reachability_level;
+  if (level != null && level !== '') {
+    return REACHABLE_LEVELS.has(level);
+  }
+  return v.is_reachable !== false;
+}
+
+/** Vulnerabilities that are reachable (affect node/edge color and "Reachable" filter). */
 function reachableVulns(vulns: VulnGraphDepNode['vulnerabilities']) {
-  return vulns.filter((v) => v.is_reachable !== false);
+  return vulns.filter(isVulnReachable);
 }
 
 function countVulnsBySeverity(
@@ -234,7 +256,7 @@ export function buildDepAndVulnNodesAndEdges(
         mediumVulns: counts.medium,
         lowVulns: counts.low,
         vulnerabilities: vulnsForDisplay,
-        showLicense: false,
+        showLicense: true,
         notImported: isZombie,
       } satisfies DependencyNodeData,
       draggable: true,
@@ -242,10 +264,13 @@ export function buildDepAndVulnNodesAndEdges(
       ...(isZombie && { style: { opacity: 0.5 } }),
     });
 
+    const worstDepscore = getWorstDepscoreForDep(dep);
     const edgeSeverity = getEdgeSeverity(dep);
-    const hasVulnsInSubtree = edgeSeverity !== 'none';
+    const hasVulnsInSubtree = edgeSeverity !== 'none' || (worstDepscore != null && worstDepscore > 0);
     let strokeColor = 'rgba(100, 116, 139, 0.25)';
-    if (edgeSeverity === 'critical') strokeColor = 'rgba(239, 68, 68, 0.45)';
+    if (worstDepscore != null && worstDepscore > 0) {
+      strokeColor = getDepscoreEdgeColor(worstDepscore);
+    } else if (edgeSeverity === 'critical') strokeColor = 'rgba(239, 68, 68, 0.45)';
     else if (edgeSeverity === 'high') strokeColor = 'rgba(249, 115, 22, 0.45)';
     else if (edgeSeverity === 'medium') strokeColor = 'rgba(234, 179, 8, 0.35)';
     else if (edgeSeverity === 'low') strokeColor = 'rgba(100, 116, 139, 0.35)';
@@ -305,17 +330,20 @@ export function buildDepAndVulnNodesAndEdges(
           mediumVulns: counts.medium,
           lowVulns: counts.low,
           vulnerabilities: vulnsForDisplayTrans,
-          showLicense: false,
+          showLicense: true,
         } satisfies DependencyNodeData,
         draggable: true,
         selectable: false,
         ...(isZombieTrans && { style: { opacity: 0.5 } }),
       });
 
-      const hasSignificantVulns = !isZombieTrans && (counts.critical > 0 || counts.high > 0 || counts.medium > 0);
+      const worstDepscoreTrans = getWorstDepscoreForDep(dep);
+      const hasSignificantVulns = !isZombieTrans && (counts.critical > 0 || counts.high > 0 || counts.medium > 0 || (worstDepscoreTrans != null && worstDepscoreTrans > 0));
       let strokeColor = 'rgba(100, 116, 139, 0.25)';
       if (!isZombieTrans) {
-        if (counts.critical > 0) strokeColor = 'rgba(239, 68, 68, 0.45)';
+        if (worstDepscoreTrans != null && worstDepscoreTrans > 0) {
+          strokeColor = getDepscoreEdgeColor(worstDepscoreTrans);
+        } else if (counts.critical > 0) strokeColor = 'rgba(239, 68, 68, 0.45)';
         else if (counts.high > 0) strokeColor = 'rgba(249, 115, 22, 0.45)';
         else if (counts.medium > 0) strokeColor = 'rgba(234, 179, 8, 0.35)';
       }
@@ -373,7 +401,7 @@ export function buildDepAndVulnNodesAndEdges(
         selectable: false,
         ...(vulnIsZombie && { style: { opacity: 0.5 } }),
       });
-      const edgeColor = getVulnEdgeColor(vuln.severity);
+      const edgeColor = vuln.depscore != null ? getDepscoreEdgeColor(vuln.depscore) : getVulnEdgeColor(vuln.severity);
       const { sourceHandle, targetHandle } = getVulnHandlePair(vulnAngle);
       edges.push({
         id: `vuln-edge-${dep.id}-${vuln.osv_id}`,
@@ -432,7 +460,9 @@ export function createVulnerabilitiesCenterNode(
   projectName: string,
   depNodes: VulnGraphDepNode[],
   framework?: string | null,
-  _vulnerableDependenciesLabel?: string
+  _vulnerableDependenciesLabel?: string,
+  statusName?: string | null,
+  statusColor?: string | null
 ): Node {
   const worstSeverity = getWorstSeverity(depNodes);
   return {
@@ -446,6 +476,8 @@ export function createVulnerabilitiesCenterNode(
       projectName,
       worstVulnerabilitySeverity: worstSeverity,
       frameworkName: framework ?? undefined,
+      statusName: statusName ?? undefined,
+      statusColor: statusColor ?? undefined,
     },
     draggable: true,
     selectable: false,
@@ -480,18 +512,20 @@ export function useVulnerabilitiesGraphLayout(
   framework?: string | null,
   _vulnerableDependenciesLabel?: string,
   _centerExtras?: VulnGraphCenterExtras | null,
-  showOnlyReachable = false
+  showOnlyReachable = false,
+  statusName?: string | null,
+  statusColor?: string | null
 ): { nodes: Node[]; edges: Edge[] } {
   return useMemo(() => {
     const nodes: Node[] = [];
     const edges: Edge[] = [];
 
-    nodes.push(createVulnerabilitiesCenterNode(projectName, depNodes, framework));
+    nodes.push(createVulnerabilitiesCenterNode(projectName, depNodes, framework, undefined, statusName, statusColor));
 
     const sub = buildDepAndVulnNodesAndEdges(CENTER_ID, depNodes, showOnlyReachable);
     nodes.push(...sub.nodes);
     edges.push(...sub.edges);
 
     return { nodes, edges };
-  }, [projectName, depNodes, framework, _vulnerableDependenciesLabel, _centerExtras, showOnlyReachable]);
+  }, [projectName, depNodes, framework, _vulnerableDependenciesLabel, _centerExtras, showOnlyReachable, statusName, statusColor]);
 }

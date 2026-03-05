@@ -14,6 +14,7 @@ import { storeAstAnalysisResults } from './ast-storage';
 import { ExtractionLogger } from './logger';
 import { parsePurl, resolvePurlToDependencyId } from './purl';
 import { parseReachableFlows, parseUsageSlices, parseLlmPrompts, updateReachabilityLevels } from './reachability';
+import { updateJobPayloadCommit } from './job-db';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
@@ -141,6 +142,8 @@ export interface ExtractionJob {
   ecosystem?: string;
   provider?: string;
   integration_id?: string;
+  /** Set by worker so pipeline can write commit into job payload after clone */
+  jobId?: string;
 }
 
 function runDepScan(
@@ -219,20 +222,34 @@ function classifyCdxgenError(message: string): string {
   return `SBOM generation failed: ${message.slice(0, 200)}`;
 }
 
-/** Clear VDB/cache on mounted volume so this job starts with free space (avoids "No space left on device"). */
-function clearVdbVolume(): void {
-  const dataDir = process.env.VDB_HOME || process.env.DEPSCAN_CACHE_DIR;
-  if (!dataDir || dataDir !== '/data') return; // only clear the known mount
+/** Clear only dep-scan cache on the volume; do NOT delete VDB (the VDB extract is ~30GB and is reused between runs). */
+function clearDepscanCacheOnly(): void {
+  const cacheDir = process.env.DEPSCAN_CACHE_DIR || (process.env.VDB_HOME ? path.join(process.env.VDB_HOME, 'cache') : null);
+  if (!cacheDir || !cacheDir.startsWith('/data')) return;
+  if (!fs.existsSync(cacheDir)) return;
+  try {
+    const entries = fs.readdirSync(cacheDir, { withFileTypes: true });
+    for (const e of entries) {
+      fs.rmSync(path.join(cacheDir, e.name), { recursive: true, force: true });
+    }
+  } catch (err) {
+    console.warn('[EXTRACT] Failed to clear dep-scan cache:', (err as Error).message);
+  }
+}
+
+/** Clear entire /data (VDB + cache). Use only for corruption recovery so dep-scan re-downloads a fresh VDB. */
+function clearVdbVolumeForRecovery(): void {
+  const dataDir = process.env.VDB_HOME;
+  if (!dataDir || dataDir !== '/data') return;
   if (!fs.existsSync(dataDir)) return;
   try {
     const entries = fs.readdirSync(dataDir, { withFileTypes: true });
     for (const e of entries) {
-      const full = path.join(dataDir, e.name);
-      fs.rmSync(full, { recursive: true, force: true });
+      fs.rmSync(path.join(dataDir, e.name), { recursive: true, force: true });
     }
     fs.mkdirSync(path.join(dataDir, 'cache'), { recursive: true });
   } catch (err) {
-    console.warn('[EXTRACT] Failed to clear VDB volume:', (err as Error).message);
+    console.warn('[EXTRACT] Failed to clear VDB volume for recovery:', (err as Error).message);
   }
 }
 
@@ -261,9 +278,8 @@ export async function runPipeline(
   let projectDepsCount = 0;
 
   try {
-    // === Clear VDB volume so this run has full space (prevents accumulation across jobs) ===
-    await log.info('cloning', 'Clearing previous VDB/cache to free space for this run...');
-    clearVdbVolume();
+    // === Clear only dep-scan cache (keep VDB ~30GB so we don't re-download every run) ===
+    clearDepscanCacheOnly();
 
     // === STEP: Clone (CRITICAL) ===
     if (checkCancelled && await checkCancelled()) return;
@@ -280,6 +296,21 @@ export async function runPipeline(
       throw new Error(userMsg);
     }
     await log.success('cloning', 'Repository cloned successfully', Date.now() - cloneStart);
+
+    // Record HEAD commit into job payload for Recent Activity (manual/initial runs; webhook already set it)
+    if (job.jobId && repoPath) {
+      try {
+        const commitSha = execSync('git rev-parse HEAD', { cwd: repoPath, encoding: 'utf-8' }).trim();
+        const commitMessage = execSync('git log -1 --format=%s%n%b', { cwd: repoPath, encoding: 'utf-8' }).trim();
+        await updateJobPayloadCommit(supabase, job.jobId, {
+          commit_sha: commitSha,
+          commit_message: commitMessage.slice(0, 2000) || undefined,
+          branch: job.default_branch,
+        });
+      } catch (e) {
+        // non-fatal: UI will show trigger type only for this run
+      }
+    }
 
     const workspaceRoot = packageJsonPath
       ? path.join(repoPath, packageJsonPath)
@@ -582,13 +613,20 @@ export async function runPipeline(
 
       const heartbeatFn = heartbeat ?? (async () => {});
       try {
-        const res = await runDepScan(depScanExe, depScanArgs, workspaceRoot, log, heartbeatFn);
+        let res = await runDepScan(depScanExe, depScanArgs, workspaceRoot, log, heartbeatFn);
+        const rawStderr = (res.stderr ?? '').trim();
+        const isVdbCorrupt = /CorruptError|malformed|database disk image is malformed/i.test(rawStderr);
+
+        if (res.exitCode !== 0 && isVdbCorrupt) {
+          await log.warn('vuln_scan', 'VDB on volume is corrupted (e.g. from previous out-of-space); clearing and retrying once...');
+          clearVdbVolumeForRecovery();
+          res = await runDepScan(depScanExe, depScanArgs, workspaceRoot, log, heartbeatFn);
+        }
 
         if (res.exitCode !== 0) {
-          const rawStderr = (res.stderr ?? '').trim();
-          const lines = rawStderr ? rawStderr.split(/\r?\n/) : [];
-          // Log last 20 lines (actual Python error is at the end; first line is "Traceback (most recent call last):")
-          const excerpt = lines.length > 20 ? lines.slice(-20).join('\n') : rawStderr;
+          const finalStderr = (res.stderr ?? '').trim();
+          const lines = finalStderr ? finalStderr.split(/\r?\n/) : [];
+          const excerpt = lines.length > 20 ? lines.slice(-20).join('\n') : finalStderr;
           const stderrSnippet = excerpt.slice(-2000) || 'unknown error';
           if (res.exitCode === 137) {
             await log.warn('vuln_scan', 'dep-scan out of memory during atom analysis — falling back to basic scan results');

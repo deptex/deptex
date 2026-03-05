@@ -15,6 +15,9 @@ export interface ProjectCenterNodeData {
   secretCount?: number;
   /** When true, show spinner and "Project still extracting" instead of framework/vuln counts */
   isExtracting?: boolean;
+  /** Project status from policy (e.g. Compliant, Under Review). Shown as badge. */
+  statusName?: string | null;
+  statusColor?: string | null;
 }
 
 function getColorScheme(worstVulnerabilitySeverity: WorstSeverity) {
@@ -81,12 +84,17 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
     semgrepCount,
     secretCount,
     isExtracting = false,
+    statusName,
+    statusColor,
   } = (data as unknown as ProjectCenterNodeData) ?? {};
   const colorScheme = isExtracting ? greyExtractingScheme : getColorScheme(worstVulnerabilitySeverity);
   const hasKnownFramework = frameworkName && frameworkName.toLowerCase() !== 'unknown';
   const frameworkIdForIcon = hasKnownFramework ? frameworkName : undefined;
 
   const hasCounts = (vulnCount ?? 0) > 0 || (semgrepCount ?? 0) > 0 || (secretCount ?? 0) > 0;
+  const statusStyle = statusColor
+    ? { backgroundColor: `${statusColor}20`, borderColor: `${statusColor}66` }
+    : undefined;
 
   return (
     <div className="relative cursor-pointer">
@@ -107,7 +115,17 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
               <FrameworkIcon frameworkId={frameworkIdForIcon} size={20} className="text-current" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-foreground truncate">{projectName}</p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="text-sm font-semibold text-foreground truncate">{projectName}</p>
+                {statusName && (
+                  <span
+                    className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium border flex-shrink-0"
+                    style={statusStyle}
+                  >
+                    {statusName}
+                  </span>
+                )}
+              </div>
               {isExtracting ? (
                 <p className="text-[10px] text-foreground-secondary mt-0.5">Project still extracting</p>
               ) : hasCounts ? (

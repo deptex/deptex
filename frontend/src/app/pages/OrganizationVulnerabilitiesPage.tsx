@@ -21,7 +21,6 @@ import { VULN_CENTER_NODE_WIDTH, VULN_CENTER_NODE_HEIGHT } from '../../component
 import { GroupCenterNode } from '../../components/vulnerabilities-graph/GroupCenterNode';
 import { SkeletonGroupCenterNode } from '../../components/vulnerabilities-graph/SkeletonGroupCenterNode';
 import { VulnProjectNode } from '../../components/vulnerabilities-graph/VulnProjectNode';
-import { ShowOnlyReachableCard } from '../../components/vulnerabilities-graph/ShowOnlyReachableCard';
 import { DependencyNode } from '../../components/supply-chain/DependencyNode';
 import { VulnerabilityNode } from '../../components/supply-chain/VulnerabilityNode';
 import type { NodeTypes } from '@xyflow/react';
@@ -63,7 +62,6 @@ export default function OrganizationVulnerabilitiesPage() {
   const [teamsWithProjects, setTeamsWithProjects] = useState<TeamWithProjectsData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showOnlyReachable, setShowOnlyReachable] = useState(false);
 
   useEffect(() => {
     if (!organization?.id) return;
@@ -164,7 +162,7 @@ export default function OrganizationVulnerabilitiesPage() {
     organization?.name ?? 'Organization',
     teamsWithProjects,
     organization?.avatar_url ?? null,
-    showOnlyReachable
+    false
   );
 
   const [graphNodes, setGraphNodes, onNodesChange] = useNodesState<Node>([]);
@@ -223,10 +221,6 @@ export default function OrganizationVulnerabilitiesPage() {
             />
           </ReactFlow>
         </div>
-        <ShowOnlyReachableCard
-          showOnlyReachable={showOnlyReachable}
-          onToggle={setShowOnlyReachable}
-        />
       </div>
     </main>
   );

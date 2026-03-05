@@ -16,7 +16,6 @@ import { cn } from '../../lib/utils';
 import PackageOverview from '../../components/PackageOverview';
 import { PackageOverviewSkeleton } from '../../components/PackageOverviewSkeleton';
 import { SupplyChainContent } from './DependencySupplyChainPage';
-import { WatchtowerContent } from './DependencyWatchtowerPage';
 import DependencyNotesSidebar from '../../components/DependencyNotesSidebar';
 
 interface ProjectContextType {
@@ -138,7 +137,12 @@ function isLicenseAllowed(license: string | null, policies: ProjectEffectivePoli
 
 type DependencyOverviewResponse = Awaited<ReturnType<typeof api.getDependencyOverview>>;
 
-function buildDependencyFromOverview(projectId: string, projectDependencyId: string, overview: DependencyOverviewResponse | null): ProjectDependency {
+function buildDependencyFromOverview(
+  projectId: string,
+  projectDependencyId: string,
+  overview: DependencyOverviewResponse | null,
+  listItem?: ProjectDependency | null
+): ProjectDependency {
   return {
     id: projectDependencyId,
     project_id: projectId,
@@ -148,8 +152,8 @@ function buildDependencyFromOverview(projectId: string, projectDependencyId: str
     license: overview?.license ?? 'MIT',
     github_url: overview?.github_url ?? null,
     is_direct: true,
-    source: 'dependencies',
-    is_watching: false,
+    source: listItem?.source ?? 'dependencies',
+    is_watching: listItem?.is_watching ?? false,
     files_importing_count: overview?.files_importing_count ?? 0,
     imported_functions: overview?.imported_functions ?? [],
     imported_file_paths: overview?.imported_file_paths ?? [],
@@ -159,6 +163,7 @@ function buildDependencyFromOverview(projectId: string, projectDependencyId: str
     other_projects_using_names: overview?.other_projects_using_names ?? [],
     description: overview?.description ?? null,
     created_at: new Date().toISOString(),
+    policy_result: listItem?.policy_result ?? undefined,
     analysis: {
       status: 'ready',
       score: overview?.score ?? null,
@@ -182,7 +187,7 @@ function buildDependencyFromOverview(projectId: string, projectDependencyId: str
   };
 }
 
-const VALID_TABS = ['overview', 'watchtower', 'supply-chain'] as const;
+const VALID_TABS = ['overview', 'supply-chain'] as const;
 type UrlTab = (typeof VALID_TABS)[number];
 
 function tabFromPathname(pathname: string): UrlTab {
@@ -212,12 +217,13 @@ export default function ProjectDependenciesPage() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const realtime = useRealtimeStatus(organizationId, projectId);
-  const isExtractionOngoing = realtime.status !== 'ready';
+  const EXTRACTING_STATUSES = ['initializing', 'extracting', 'analyzing', 'finalizing'] as const;
+  const isExtractionOngoing = !realtime.isLoading && EXTRACTING_STATUSES.includes(realtime.status as typeof EXTRACTING_STATUSES[number]);
 
   // URL as source of truth for selection and tab (overview, watchtower, supply-chain; notes is not in URL)
   const selectedDepId = urlDependencyId ?? null;
   const urlTab = tabFromPathname(location.pathname);
-  const selectedSubTab: 'overview' | 'supply-chain' | 'watchtower' | 'notes' = urlTab;
+  const selectedSubTab: 'overview' | 'supply-chain' | 'notes' = urlTab;
 
   const depsBase = organizationId && projectId ? `/organizations/${organizationId}/projects/${projectId}/dependencies` : '';
 
@@ -230,6 +236,7 @@ export default function ProjectDependenciesPage() {
   const [permissionsChecked, setPermissionsChecked] = useState(false);
   const [dependencies, setDependencies] = useState<ProjectDependency[]>([]);
   const [dependenciesLoading, setDependenciesLoading] = useState(false);
+  const showListLoading = (realtime.isLoading || dependenciesLoading) && !isExtractionOngoing;
   const [dependenciesError, setDependenciesError] = useState<string | null>(null);
   const [refreshingDependencies, setRefreshingDependencies] = useState(false);
   const [policies, setPolicies] = useState<ProjectEffectivePolicies | null>(null);
@@ -377,41 +384,36 @@ export default function ProjectDependenciesPage() {
     }
   }, [organizationId, projectId]);
 
-  // Initial load: two calls for dependencies (cached first for fast paint, then full DB replaces), plus policies and import status
+  // Initial load: dependencies first for fast list paint; policies and import status in parallel (don't block list)
   useEffect(() => {
     if (!project || !projectId || !organizationId || !userPermissions?.view_dependencies || !permissionsChecked) return;
     hasUserRefreshedRef.current = false;
     let cancelled = false;
     setDependenciesLoading(true);
-    // First call: cached only — show immediately if we have data
+    // Cached only — show immediately if we have data
     api.getProjectDependencies(organizationId, projectId, { cachedOnly: true }).then((cachedDeps) => {
       if (!cancelled && cachedDeps.length > 0) setDependencies(cachedDeps);
     });
-    // Second call: full DB — replaces list when done and clears loading
-    Promise.all([
-      api.getProjectDependencies(organizationId, projectId),
-      api.getProjectPolicies(organizationId, projectId).catch((e) => {
-        console.error('Failed to load project policies:', e);
-        return null;
-      }),
-      api.getProjectImportStatus(organizationId, projectId).catch(() => null),
-    ]).then(([deps, pols, imp]) => {
-      if (cancelled) return;
-      if (hasUserRefreshedRef.current) {
-        setPolicies(pols ?? null);
-        setImportStatus(imp ?? null);
-        setDependenciesLoading(false);
-        return;
-      }
-      setDependencies(deps);
-      setDependenciesError(null);
-      setPolicies(pols ?? null);
-      setImportStatus(imp ?? null);
-    }).catch((err: any) => {
-      if (!cancelled) setDependenciesError(err.message || 'Failed to load dependencies');
-    }).finally(() => {
-      if (!cancelled) setDependenciesLoading(false);
-    });
+    // Full DB — list is ready when this resolves; don't wait for policies/import
+    api.getProjectDependencies(organizationId, projectId)
+      .then((deps) => {
+        if (cancelled || hasUserRefreshedRef.current) return;
+        setDependencies(deps);
+        setDependenciesError(null);
+      })
+      .catch((err: any) => {
+        if (!cancelled) setDependenciesError(err.message || 'Failed to load dependencies');
+      })
+      .finally(() => {
+        if (!cancelled) setDependenciesLoading(false);
+      });
+    // Load policies and import status in parallel (list already visible when deps resolve)
+    api.getProjectPolicies(organizationId, projectId)
+      .then((pols) => { if (!cancelled) setPolicies(pols ?? null); })
+      .catch((e) => { console.error('Failed to load project policies:', e); });
+    api.getProjectImportStatus(organizationId, projectId)
+      .then((imp) => { if (!cancelled) setImportStatus(imp ?? null); })
+      .catch(() => {});
     return () => { cancelled = true; };
   }, [project?.id, projectId, organizationId, userPermissions?.view_dependencies, permissionsChecked]);
 
@@ -429,9 +431,9 @@ export default function ProjectDependenciesPage() {
     return () => clearInterval(id);
   }, [importStatus?.status, organizationId, projectId, loadImportStatus]);
 
-  // Load suggestions for direct deps: remove for zero-import, batch for rest
+  // Load suggestions for direct deps after list is visible (deferred so first paint is fast)
   useEffect(() => {
-    if (!organizationId || !projectId) return;
+    if (!organizationId || !projectId || dependencies.length === 0) return;
     const directDeps = dependencies.filter((d) => d.is_direct);
     const depIds = new Set(directDeps.map((d) => d.id));
     const prevIds = suggestionLoadedIdsRef.current;
@@ -458,59 +460,64 @@ export default function ProjectDependenciesPage() {
 
     if (depsNeedingSuggestions.length === 0) return;
 
-    api.getProjectDependencySuggestionsBatch(organizationId, projectId, depsNeedingSuggestions)
-      .then((batch) => {
-        setSuggestionByDepId((prev) => {
-          const next = { ...prev };
-          for (const depId of depsNeedingSuggestions) {
-            const s = batch[depId];
-            if (s) {
-              next[depId] = s.action === 'current' ? { action: 'current' } : {
-                action: 'bump',
-                safeVersion: s.safeVersion!,
-                bumpPrUrl: s.bumpPrUrl,
-                bumpPrNumber: s.bumpPrNumber,
-              };
-            } else {
-              next[depId] = { action: 'current' };
+    // Defer batch and per-dep calls until after list has painted
+    const timeoutId = setTimeout(() => {
+      api.getProjectDependencySuggestionsBatch(organizationId, projectId, depsNeedingSuggestions)
+        .then((batch) => {
+          setSuggestionByDepId((prev) => {
+            const next = { ...prev };
+            for (const depId of depsNeedingSuggestions) {
+              const s = batch[depId];
+              if (s) {
+                next[depId] = s.action === 'current' ? { action: 'current' } : {
+                  action: 'bump',
+                  safeVersion: s.safeVersion!,
+                  bumpPrUrl: s.bumpPrUrl,
+                  bumpPrNumber: s.bumpPrNumber,
+                };
+              } else {
+                next[depId] = { action: 'current' };
+              }
             }
-          }
-          return next;
-        });
-      })
-      .catch((err) => {
-        setSuggestionByDepId((prev) => {
-          const next = { ...prev };
-          depsNeedingSuggestions.forEach((id) => { next[id] = { action: 'current' }; });
-          return next;
-        });
-      });
-
-    // For direct deps with banned current version, fetch safe version + Watchtower so we show decrease/bump icon in the list (same source as Overview)
-    const bannedDirectDeps = directDeps.filter((d) => d.is_current_version_banned && (d.files_importing_count ?? 0) > 0);
-    bannedDirectDeps.forEach((dep) => {
-      Promise.all([
-        api.getLatestSafeVersion(organizationId, projectId, dep.id, 'high', true),
-        api.getWatchtowerSummary(dep.name, dep.id),
-      ])
-        .then(([safeVersionData, summary]) => {
-          if (safeVersionData?.safeVersion && !safeVersionData.isCurrent) {
-            const cmp = compareVersions(safeVersionData.safeVersion, dep.version);
-            setSuggestionByDepId((prev) => ({
-              ...prev,
-              [dep.id]:
-                cmp < 0
-                  ? { action: 'decrease', decreasePrUrl: summary.decrease_pr_url ?? undefined }
-                  : {
-                      action: 'bump',
-                      safeVersion: safeVersionData.safeVersion!,
-                      bumpPrUrl: summary.bump_pr_url ?? undefined,
-                    },
-            }));
-          }
+            return next;
+          });
         })
-        .catch(() => {});
-    });
+        .catch((err) => {
+          setSuggestionByDepId((prev) => {
+            const next = { ...prev };
+            depsNeedingSuggestions.forEach((id) => { next[id] = { action: 'current' }; });
+            return next;
+          });
+        });
+
+      // Per-dep safe version + Watchtower for banned deps: deferred (panel loads when dep selected)
+      const bannedDirectDeps = directDeps.filter((d) => d.is_current_version_banned && (d.files_importing_count ?? 0) > 0);
+      bannedDirectDeps.forEach((dep) => {
+        Promise.all([
+          api.getLatestSafeVersion(organizationId, projectId, dep.id, 'high', true),
+          api.getWatchtowerSummary(dep.name, dep.id),
+        ])
+          .then(([safeVersionData, summary]) => {
+            if (safeVersionData?.safeVersion && !safeVersionData.isCurrent) {
+              const cmp = compareVersions(safeVersionData.safeVersion, dep.version);
+              setSuggestionByDepId((prev) => ({
+                ...prev,
+                [dep.id]:
+                  cmp < 0
+                    ? { action: 'decrease', decreasePrUrl: summary.decrease_pr_url ?? undefined }
+                    : {
+                        action: 'bump',
+                        safeVersion: safeVersionData.safeVersion!,
+                        bumpPrUrl: summary.bump_pr_url ?? undefined,
+                      },
+              }));
+            }
+          })
+          .catch(() => {});
+      });
+    }, 150);
+
+    return () => clearTimeout(timeoutId);
   }, [organizationId, projectId, dependencies]);
 
   // Fetch overview for right panel when a dependency is selected and sub-tab is Overview (use prefetched if available)
@@ -569,15 +576,11 @@ export default function ProjectDependenciesPage() {
     return () => { cancelled = true; };
   }, [organizationId, projectId, selectedDepId]);
 
-  // Prefetch supply chain and watchtower when a package is selected so those tabs open instantly
+  // Prefetch supply chain when a package is selected so that tab opens instantly
   useEffect(() => {
     if (!organizationId || !projectId || !selectedDepId) return;
     api.prefetchDependencySupplyChain(organizationId, projectId, selectedDepId);
-    const dep = dependencies.find((d) => d.id === selectedDepId);
-    if (dep?.name) {
-      api.prefetchWatchtowerData(dep.name, selectedDepId, organizationId);
-    }
-  }, [organizationId, projectId, selectedDepId, dependencies]);
+  }, [organizationId, projectId, selectedDepId]);
 
   // Bump scope for deprecation actions in panel
   useEffect(() => {
@@ -814,12 +817,12 @@ export default function ProjectDependenciesPage() {
     }
   }, [organizationId, projectId, selectedDepId, panelSafeVersionData?.safeVersion, panelBumping, toast]);
 
-  const panelDependency = useMemo(
-    () => (projectId && selectedDepId ? buildDependencyFromOverview(projectId, selectedDepId, panelOverview) : null),
-    [projectId, selectedDepId, panelOverview]
-  );
-
   const selectedDepFromList = selectedDepId ? dependencies.find((d) => d.id === selectedDepId) : null;
+
+  const panelDependency = useMemo(
+    () => (projectId && selectedDepId ? buildDependencyFromOverview(projectId, selectedDepId, panelOverview, selectedDepFromList) : null),
+    [projectId, selectedDepId, panelOverview, selectedDepFromList]
+  );
 
   // Prefetch tab data on hover (100ms debounce)
   const handleTabHover = useCallback((tabId: string) => {
@@ -832,8 +835,6 @@ export default function ProjectDependenciesPage() {
         api.prefetchDependencyOverview(organizationId, projectId, selectedDepId);
       } else if (tabId === 'supply-chain') {
         api.prefetchDependencySupplyChain(organizationId, projectId, selectedDepId);
-      } else if (tabId === 'watchtower' && selectedDepFromList?.name) {
-        api.prefetchWatchtowerData(selectedDepFromList.name, selectedDepId, organizationId);
       } else if (tabId === 'notes') {
         api.prefetchDependencyNotes(organizationId, projectId, selectedDepId);
       }
@@ -892,7 +893,6 @@ export default function ProjectDependenciesPage() {
   const dependencySubNavItems = [
     { id: 'overview', label: 'Overview', path: 'overview', icon: LayoutDashboard },
     { id: 'supply-chain', label: 'Supply chain', path: 'supply-chain', icon: GitBranch },
-    { id: 'watchtower', label: 'Watchtower', path: 'watchtower', icon: TowerControl },
     { id: 'notes', label: 'Notes', path: 'notes', icon: MessageSquareText },
   ] as const;
 
@@ -940,7 +940,8 @@ export default function ProjectDependenciesPage() {
     .filter(dep => {
       if (filterWatchtower && !dep.is_watching) return false;
       if (filterVulnerability && !getVulnSeverityInfo(dep)) return false;
-      if (filterLicenseIssue && isLicenseAllowed(dep.license, policies) !== false) return false;
+      const policyAllowed = dep.policy_result != null ? dep.policy_result.allowed : isLicenseAllowed(dep.license, policies);
+      if (filterLicenseIssue && policyAllowed !== false) return false;
       if (filterDeprecated && !dep.deprecation) return false;
       if (filterActionable) {
         const s = suggestionByDepId[dep.id];
@@ -1179,7 +1180,7 @@ export default function ProjectDependenciesPage() {
                 </div>
               </div>
             </div>
-          ) : dependenciesLoading ? (
+          ) : showListLoading ? (
             <div className="space-y-0.5 animate-pulse">
               {skeletonRows.map((row, i) => (
                 <PackageRowSkeleton key={i} nameWidth={row.nameWidth} opacityClass={row.opacityClass} />
@@ -1204,7 +1205,7 @@ export default function ProjectDependenciesPage() {
             <ul className="space-y-0.5">
               {filteredDependencies.map((dep) => {
                 const vulnInfo = getVulnSeverityInfo(dep);
-                const licenseAllowed = isLicenseAllowed(dep.license, policies);
+                const licenseAllowed = dep.policy_result != null ? dep.policy_result.allowed : isLicenseAllowed(dep.license, policies);
                 const suggestion = suggestionByDepId[dep.id];
                 const isBumping = bumpingDepId === dep.id;
                 const isDecreasing = decreasingDepId === dep.id;
@@ -1541,26 +1542,9 @@ export default function ProjectDependenciesPage() {
               }}
             />
           </div>
-        ) : selectedSubTab === 'watchtower' && selectedDepId && projectId && organizationId ? (
-          <div className="flex-1 overflow-y-auto py-8">
-            <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-              <WatchtowerContent
-                organizationId={organizationId}
-                projectId={projectId}
-                dependency={selectedDepFromList ?? null}
-                userPermissions={userPermissions}
-                organization={null}
-                onWatchingChange={(dependencyId, is_watching) =>
-                  setDependencies((prev) =>
-                    prev.map((d) => (d.id === dependencyId ? { ...d, is_watching } : d))
-                  )
-                }
-              />
-            </div>
-          </div>
         ) : selectedSubTab !== 'overview' ? (
           <div className="flex-1 flex items-center justify-center p-8">
-            <p className="text-sm text-foreground-secondary">Select a dependency to view {selectedSubTab === 'supply-chain' ? 'supply chain' : 'watchtower'}.</p>
+            <p className="text-sm text-foreground-secondary">Select a dependency to view {selectedSubTab === 'supply-chain' ? 'supply chain' : 'details'}.</p>
           </div>
         ) : panelOverviewLoading ? (
           <div className="flex-1 overflow-y-auto py-8">

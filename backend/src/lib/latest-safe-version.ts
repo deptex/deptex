@@ -150,11 +150,7 @@ export async function calculateLatestSafeVersion(
       return semver.rcompare(va, vb);
     });
 
-  // Vuln counts per version (derived from dependency_vulnerabilities)
-  const versionStrs = sortedVersions.map((v: any) => v.version);
-  const vulnCountsByVersion = await getVulnCountsForVersionsBatch(supabase, dependencyId, versionStrs);
-
-  // Optionally fetch org + team-banned versions to exclude from consideration (by dependency_id)
+  // Banned versions (needed for reachable-fix path and main loop)
   let bannedVersionSet: Set<string> | null = null;
   if (excludeBanned) {
     bannedVersionSet = new Set<string>();
@@ -185,6 +181,72 @@ export async function calculateLatestSafeVersion(
       bannedVersionSet = null;
     }
   }
+
+  // Try "newer safer version" from current reachable vulns with fixes (project context)
+  const { data: pdvRows } = await supabase
+    .from('project_dependency_vulnerabilities')
+    .select('osv_id, severity, fixed_versions')
+    .eq('project_dependency_id', projectDependencyId)
+    .eq('is_reachable', true);
+
+  if (pdvRows && pdvRows.length > 0) {
+    const currentCoerced = semver.coerce(currentVersion);
+    const minFixVersions: string[] = [];
+    for (const row of pdvRows as Array<{ fixed_versions: string[] | null }>) {
+      const fv = row.fixed_versions;
+      if (!fv || fv.length === 0) continue;
+      let minFix: string | null = null;
+      for (const vStr of fv) {
+        const v = semver.coerce(vStr);
+        if (!v || !semver.valid(v)) continue;
+        if (currentCoerced && semver.lte(v, currentCoerced)) continue;
+        if (!minFix || semver.lt(v, semver.coerce(minFix)!)) {
+          minFix = vStr;
+        }
+      }
+      if (minFix) minFixVersions.push(minFix);
+    }
+    if (minFixVersions.length > 0) {
+      const targetCoerced = minFixVersions.reduce((acc, vStr) => {
+        const v = semver.coerce(vStr);
+        if (!v) return acc;
+        return !acc || semver.gt(v, acc) ? v : acc;
+      }, null as semver.SemVer | null);
+      if (targetCoerced) {
+        const candidates = (sortedVersions as any[]).filter((r: any) => {
+          const v = semver.coerce(r.version);
+          return v && semver.gte(v, targetCoerced!);
+        });
+        const versionRow = candidates.length > 0 ? candidates[candidates.length - 1] : null;
+        if (versionRow) {
+          const vStr = versionRow.version;
+          if (bannedVersionSet && bannedVersionSet.has(vStr)) {
+            // Fall through to main loop
+          } else {
+            const vId = versionRow.id;
+            const versionCounts = await getVulnCountsForVersionsBatch(supabase, dependencyId, [vStr]).then((m) => m.get(vStr) ?? { critical_vulns: 0, high_vulns: 0, medium_vulns: 0, low_vulns: 0 });
+            if (!vulnExceedsThreshold(versionCounts, severityParam)) {
+            const isCurrent = vId === currentVersionId;
+            const result: LatestSafeVersionResponse = {
+              safeVersion: vStr,
+              safeVersionId: vId,
+              isCurrent,
+              severity: severityParam,
+              versionsChecked: 0,
+              message: isCurrent ? 'Current version is the latest safe version' : `Recommended version that fixes ${pdvRows.length} reachable vulnerability(ies)`,
+            };
+            await setCached(cacheKey, result, CACHE_TTL_SECONDS.LATEST_SAFE_VERSION);
+            return result;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Vuln counts per version (derived from dependency_vulnerabilities)
+  const versionStrs = sortedVersions.map((v: any) => v.version);
+  const vulnCountsByVersion = await getVulnCountsForVersionsBatch(supabase, dependencyId, versionStrs);
 
   // Watchtower integration: check if this org has the package on watchtower (for quarantine rules)
   let watchlistRow: { quarantine_until: string | null; is_current_version_quarantined: boolean; latest_allowed_version: string | null } | null = null;

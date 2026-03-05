@@ -121,7 +121,9 @@ export function getComplianceStatus(
     return { status: 'COMPLIANT' };
   }
 
-  const allowed = isLicenseAllowed(license, policies);
+  // Prefer stored policy result from packagePolicy() when available
+  const allowed =
+    dep.policy_result != null ? dep.policy_result.allowed : isLicenseAllowed(license, policies);
 
   if (allowed === null) {
     return { status: 'COMPLIANT' };

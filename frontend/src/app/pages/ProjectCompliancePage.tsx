@@ -474,14 +474,23 @@ export default function ProjectCompliancePage() {
     try {
       setLoading(true);
       setError(null);
-      const [depsData, policiesData, obligationsData] = await Promise.all([
-        api.getProjectDependencies(organizationId, projectId),
+      // Progressive load: try cached dependencies first for instant paint when cache exists
+      const [cachedDeps, policiesData, obligationsData] = await Promise.all([
+        api.getProjectDependencies(organizationId, projectId, { cachedOnly: true }),
         api.getProjectPolicies(organizationId, projectId),
         api.getLicenseObligations(organizationId, projectId).catch(() => []),
       ]);
-      setDependencies(depsData);
       setPolicies(policiesData);
       setObligations(obligationsData);
+      setDependencies(cachedDeps ?? []);
+      // If cache miss (no deps), or we have cached deps and want to refresh in background, fetch full deps
+      if ((cachedDeps ?? []).length === 0) {
+        const fullDeps = await api.getProjectDependencies(organizationId, projectId);
+        setDependencies(fullDeps);
+      } else {
+        // Refresh deps in background so next visit has warm cache and data is fresh
+        api.getProjectDependencies(organizationId, projectId).then(setDependencies).catch(() => {});
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to load compliance data');
     } finally {
@@ -805,26 +814,39 @@ export default function ProjectCompliancePage() {
 
             {/* ─── PROJECT SECTION ─── */}
             {activeSection === 'project' && (
-            <div className="space-y-6">
+            <div className="space-y-8">
+              <div>
+                <h1 className="text-xl font-semibold text-foreground tracking-tight">Project compliance</h1>
+                <p className="text-sm text-foreground-secondary mt-1">
+                  Policy status, license and vulnerability summary, and active violations from the latest scan.
+                </p>
+              </div>
+
               {isExtracting ? (
-                <div className="rounded-lg border border-border bg-background-card p-6">
+                <div className="rounded-lg border border-border bg-background-card shadow-sm p-6">
                   <div className="flex items-center gap-4">
-                    <div className="flex-1 space-y-2 min-w-0">
-                      <h3 className="text-sm font-semibold text-foreground">Project extraction still in progress</h3>
-                      <p className="text-sm text-foreground-secondary">
-                        Compliance will appear here once extraction completes.
-                      </p>
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border bg-background-subtle">
+                      <Loader2 className="h-5 w-5 animate-spin text-foreground-secondary" aria-hidden />
                     </div>
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
-                      <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" aria-hidden />
+                    <div className="flex-1 space-y-1 min-w-0">
+                      <h3 className="text-sm font-semibold text-foreground">Extraction in progress</h3>
+                      <p className="text-sm text-foreground-secondary">
+                        Compliance status will appear here once the scan completes.
+                      </p>
                     </div>
                   </div>
                 </div>
               ) : noExtraction ? (
-                <div className="bg-background-card border border-border rounded-lg p-8 text-center">
-                  <Package className="h-10 w-10 text-foreground-secondary mx-auto mb-3" />
-                  <h3 className="text-lg font-semibold text-foreground mb-1">No scan data available</h3>
-                  <p className="text-sm text-foreground-secondary mb-4">Run your first extraction to see compliance status.</p>
+                <div className="rounded-lg border border-border bg-background-card shadow-sm p-10 text-center">
+                  <div className="flex justify-center">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-border bg-background-subtle">
+                      <Package className="h-6 w-6 text-foreground-secondary" />
+                    </div>
+                  </div>
+                  <h3 className="text-base font-semibold text-foreground mt-4 mb-1">No scan data yet</h3>
+                  <p className="text-sm text-foreground-secondary mb-5 max-w-sm mx-auto">
+                    Connect a repository and run your first extraction to see compliance status and policy results.
+                  </p>
                   <Button size="sm" onClick={() => navigate(`/organizations/${organizationId}/projects/${projectId}/settings`)}>
                     Go to Settings
                   </Button>
@@ -832,15 +854,15 @@ export default function ProjectCompliancePage() {
               ) : (
                 <>
                   {/* Status Card */}
-                  <div className="bg-background-card border border-border rounded-lg p-5">
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-3">
+                  <div className="rounded-lg border border-border bg-background-card shadow-sm p-6">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex items-center gap-3 min-w-0">
                         <div
-                          className="w-3 h-3 rounded-full shrink-0"
+                          className="w-3.5 h-3.5 rounded-full shrink-0 mt-0.5"
                           style={{ backgroundColor: statusColor }}
                         />
-                        <div>
-                          <h2 className="text-xl font-semibold text-foreground">{statusName}</h2>
+                        <div className="min-w-0">
+                          <h2 className="text-lg font-semibold text-foreground">{statusName}</h2>
                           {violatedDeps.length > 0 ? (
                             <p className="text-sm text-foreground-secondary mt-0.5">
                               {violatedDeps.length} violation{violatedDeps.length !== 1 ? 's' : ''} detected in the latest scan
@@ -887,46 +909,47 @@ export default function ProjectCompliancePage() {
                   </div>
 
                   {/* Quick Stats */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    <div className="bg-background-card border border-border rounded-lg px-4 py-3">
-                      <p className="text-xs text-foreground-secondary">License Issues</p>
-                      <p className="text-lg font-semibold text-foreground mt-0.5">{licenseIssueCount}</p>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="rounded-lg border border-border bg-background-card shadow-sm px-4 py-4">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-foreground-secondary">License issues</p>
+                      <p className="text-xl font-semibold text-foreground mt-1.5">{licenseIssueCount}</p>
                     </div>
-                    <div className="bg-background-card border border-border rounded-lg px-4 py-3">
-                      <p className="text-xs text-foreground-secondary">Vulnerable Deps</p>
-                      <p className="text-lg font-semibold text-foreground mt-0.5">{vulnDepCount}</p>
+                    <div className="rounded-lg border border-border bg-background-card shadow-sm px-4 py-4">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-foreground-secondary">Vulnerable deps</p>
+                      <p className="text-xl font-semibold text-foreground mt-1.5">{vulnDepCount}</p>
                     </div>
-                    <div className="bg-background-card border border-border rounded-lg px-4 py-3">
-                      <p className="text-xs text-foreground-secondary">Avg Score</p>
-                      <p className="text-lg font-semibold text-foreground mt-0.5">{avgScore ?? 'N/A'}</p>
+                    <div className="rounded-lg border border-border bg-background-card shadow-sm px-4 py-4">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-foreground-secondary">Avg score</p>
+                      <p className="text-xl font-semibold text-foreground mt-1.5">{avgScore ?? '—'}</p>
                     </div>
-                    <div className="bg-background-card border border-border rounded-lg px-4 py-3">
-                      <p className="text-xs text-foreground-secondary">Total Dependencies</p>
-                      <p className="text-lg font-semibold text-foreground mt-0.5">{dependencies.length}</p>
+                    <div className="rounded-lg border border-border bg-background-card shadow-sm px-4 py-4">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-foreground-secondary">Total dependencies</p>
+                      <p className="text-xl font-semibold text-foreground mt-1.5">{dependencies.length}</p>
                     </div>
                   </div>
 
                   {/* Active Violations */}
                   <div>
-                    <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-2">
-                        <h3 className="text-base font-semibold text-foreground">Active Violations</h3>
+                        <h3 className="text-base font-semibold text-foreground">Active violations</h3>
                         {violatedDeps.length > 0 && (
                           <Badge variant="destructive" className="text-[10px]">{violatedDeps.length} items</Badge>
                         )}
                       </div>
                       <Button variant="outline" size="sm" onClick={() => setShowPreflight(true)} className="h-8 text-xs">
                         <Shield className="h-3.5 w-3.5 mr-1.5" />
-                        Check a Package
+                        Check a package
                       </Button>
                     </div>
                     {violatedDeps.length === 0 ? (
-                      <div className="bg-background-card border border-border rounded-lg p-6 text-center">
-                        <CheckCircle2 className="h-8 w-8 text-emerald-400 mx-auto mb-2" />
-                        <p className="text-sm text-foreground-secondary">No active violations</p>
+                      <div className="rounded-lg border border-border bg-background-card shadow-sm p-8 text-center">
+                        <CheckCircle2 className="h-9 w-9 text-emerald-400 mx-auto mb-3" />
+                        <p className="text-sm font-medium text-foreground">No active violations</p>
+                        <p className="text-xs text-foreground-secondary mt-1">All dependencies comply with the current policy.</p>
                       </div>
                     ) : (
-                      <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                      <div className="rounded-lg border border-border bg-background-card shadow-sm overflow-hidden">
                         <div className="divide-y divide-border">
                           {violatedDeps.slice(0, 20).map((dep) => (
                             <div
@@ -966,18 +989,18 @@ export default function ProjectCompliancePage() {
 
                   {/* Blocked PRs placeholder */}
                   <div>
-                    <h3 className="text-base font-semibold text-foreground mb-3">Blocked Pull Requests</h3>
-                    <div className="bg-background-card border border-border rounded-lg p-6 text-center">
-                      <GitPullRequest className="h-8 w-8 text-foreground-secondary mx-auto mb-2" />
-                      <p className="text-sm text-foreground-secondary">PR checks not configured</p>
-                      <p className="text-xs text-foreground-secondary mt-1">Enable webhooks in organization settings to see blocked PRs.</p>
+                    <h3 className="text-base font-semibold text-foreground mb-4">Blocked pull requests</h3>
+                    <div className="rounded-lg border border-border bg-background-card shadow-sm p-8 text-center">
+                      <GitPullRequest className="h-9 w-9 text-foreground-secondary mx-auto mb-3" />
+                      <p className="text-sm font-medium text-foreground">PR checks not configured</p>
+                      <p className="text-xs text-foreground-secondary mt-1">Enable webhooks in project or organization settings to see blocked PRs.</p>
                     </div>
                   </div>
 
                   {/* Policy Source Card */}
                   <div>
-                    <h3 className="text-base font-semibold text-foreground mb-3">Policy Source</h3>
-                    <div className="bg-background-card border border-border rounded-lg divide-y divide-border">
+                    <h3 className="text-base font-semibold text-foreground mb-4">Policy source</h3>
+                    <div className="rounded-lg border border-border bg-background-card shadow-sm divide-y divide-border">
                       {(['Package Policy', 'Status Code', 'PR Check'] as const).map((label) => {
                         const isInherited = true;
                         return (

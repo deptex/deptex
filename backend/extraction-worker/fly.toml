@@ -8,11 +8,11 @@ primary_region = 'iad'
 
 [build]
 
-# VDB + dep-scan cache + atom/research outputs; 10gb can fill during VDB extract (OSError 28).
+# VDB extract is ~30GB; we keep it between runs. Need headroom for cache/atom (~5–10GB). Do not clear /data, only /data/cache.
 [mounts]
 source = "depscan_vdb"
 destination = "/data"
-initial_size = "30gb"
+initial_size = "40gb"
 
 [env]
   NODE_ENV = 'production'

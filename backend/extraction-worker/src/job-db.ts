@@ -74,3 +74,36 @@ export async function isJobCancelled(
     .single();
   return data?.status === 'cancelled';
 }
+
+/**
+ * Merge commit_sha, commit_message, branch into job payload only when not already set
+ * (e.g. webhook may have set them; worker fills them after clone for manual/initial runs).
+ */
+export async function updateJobPayloadCommit(
+  supabase: SupabaseClient,
+  jobId: string,
+  commit: { commit_sha: string; commit_message?: string; branch?: string }
+): Promise<void> {
+  const { data, error: fetchError } = await supabase
+    .from('extraction_jobs')
+    .select('payload')
+    .eq('id', jobId)
+    .single();
+
+  if (fetchError || !data?.payload) return;
+
+  const payload = data.payload as Record<string, unknown>;
+  if (payload.commit_sha) return;
+
+  const merged = {
+    ...payload,
+    commit_sha: commit.commit_sha,
+    ...(commit.commit_message != null && { commit_message: commit.commit_message }),
+    ...(commit.branch != null && { branch: commit.branch }),
+  };
+
+  await supabase
+    .from('extraction_jobs')
+    .update({ payload: merged })
+    .eq('id', jobId);
+}
