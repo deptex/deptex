@@ -11738,7 +11738,7 @@ router.get('/:orgId/projects/:projectId/watchtower/packages', async (req: AuthRe
 
     const { data: directDeps, error: directDepsError } = await supabase
       .from('project_dependencies')
-      .select('dependency_id, name, version, files_importing_count, ecosystem')
+      .select('dependency_id, name, version, files_importing_count')
       .eq('project_id', projectId)
       .eq('is_direct', true);
 
@@ -11820,7 +11820,7 @@ router.get('/:orgId/projects/:projectId/watchtower/packages', async (req: AuthRe
         import_count: dep.files_importing_count || 0,
         analysis_status: watched?.status || 'pending',
         analysis_error: watched?.error_message || null,
-        ecosystem: latest?.ecosystem || dep.ecosystem || 'npm',
+        ecosystem: latest?.ecosystem || 'npm',
       };
     });
 

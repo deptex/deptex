@@ -105,7 +105,7 @@ function PolicyEditorSkeleton() {
   );
 }
 
-type SubTab = 'package_policy' | 'pr_check' | 'change_history' | 'project_requests';
+type SubTab = 'package_policy' | 'project_status' | 'pr_check' | 'change_history' | 'project_requests';
 
 interface OrganizationContextType {
   organization: Organization | null;
