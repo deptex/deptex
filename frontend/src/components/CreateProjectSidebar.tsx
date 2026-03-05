@@ -45,6 +45,7 @@ export function CreateProjectSidebar({
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [assetTier, setAssetTier] = useState<AssetTier>('EXTERNAL');
   const [creating, setCreating] = useState(false);
+  const [sidebarConnectionsLoading, setSidebarConnectionsLoading] = useState(false);
   const [sidebarRepos, setSidebarRepos] = useState<RepoWithProvider[]>([]);
   const [sidebarReposLoading, setSidebarReposLoading] = useState(false);
   const [sidebarReposLoadAttempted, setSidebarReposLoadAttempted] = useState(false);
@@ -104,6 +105,7 @@ export function CreateProjectSidebar({
     setAssetTier('EXTERNAL');
     setCreatedProjectId(null);
     setCreatedProjectName('');
+    setSidebarConnectionsLoading(false);
     setSidebarRepos([]);
     setSidebarReposLoading(false);
     setSidebarReposLoadAttempted(false);
@@ -121,6 +123,7 @@ export function CreateProjectSidebar({
 
   const loadSidebarConnections = async () => {
     if (!organizationId) return;
+    setSidebarConnectionsLoading(true);
     try {
       const connections = await api.getOrganizationConnections(organizationId);
       setSidebarConnections(connections);
@@ -136,6 +139,8 @@ export function CreateProjectSidebar({
     } catch {
       setSidebarReposLoadAttempted(true);
       /* ignore */
+    } finally {
+      setSidebarConnectionsLoading(false);
     }
   };
 
@@ -165,6 +170,7 @@ export function CreateProjectSidebar({
     setSidebarRepoScanResult(null);
     setSidebarRepoScanError(null);
     setSidebarSelectedPath('');
+    setProjectName(repoNameOnly(repo.full_name));
     if (!organizationId) return;
     setSidebarRepoScanLoading(repo.full_name);
     try {
@@ -180,7 +186,10 @@ export function CreateProjectSidebar({
         setSidebarRepoScanResult(result);
         setSidebarRepoScanResultsByRepo((prev) => ({ ...prev, [repo.full_name]: result }));
         const firstUnlinked = scanData.potentialProjects.find((p) => !p.isLinked);
-        if (firstUnlinked) setSidebarSelectedPath(firstUnlinked.path);
+        if (firstUnlinked) {
+          setSidebarSelectedPath(firstUnlinked.path);
+          setProjectName(firstUnlinked.path === '' ? repoNameOnly(repo.full_name) : firstUnlinked.name);
+        }
       }
     } catch (err: any) {
       setSidebarRepoScanError(err.message || 'Failed to scan repository');
@@ -440,84 +449,47 @@ export function CreateProjectSidebar({
       {!createdProjectId ? (
         <div className="space-y-6">
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-foreground-secondary mb-2">
-              Project Name
-            </label>
-            <input
-              type="text"
-              value={projectName}
-              onChange={(e) => setProjectName(e.target.value)}
-              placeholder="Project Name"
-              className="w-full px-3 py-2.5 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-              onKeyDown={(e) => { if (e.key === 'Enter') handleCreateProject(); }}
-              autoFocus
-            />
-          </div>
-
-          <div className="border-t border-border" />
-
-          <div>
-            <div className="flex items-center gap-1.5 mb-2">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-foreground-secondary">
-                Asset tier
-              </label>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="inline-flex cursor-help text-foreground-secondary hover:text-foreground" aria-label="What is asset tier?">
-                    <HelpCircle className="h-3.5 w-3.5" />
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="max-w-[260px]">
-                  Used by Depscore to weight vulnerability scores and blast radius (e.g. Crown Jewels vs non-production).
-                </TooltipContent>
-              </Tooltip>
-            </div>
-            <div className="space-y-2" role="radiogroup" aria-label="Asset tier">
-              {[
-                { value: 'CROWN_JEWELS' as const, label: 'Crown Jewels', icon: Crown, desc: 'Mission-critical, highest blast radius' },
-                { value: 'EXTERNAL' as const, label: 'External', icon: Globe, desc: 'Public-facing services' },
-                { value: 'INTERNAL' as const, label: 'Internal', icon: Building2, desc: 'Internal apps & services' },
-                { value: 'NON_PRODUCTION' as const, label: 'Non-production', icon: FlaskConical, desc: 'Dev & test environments' },
-              ].map(({ value, label, icon: Icon, desc }) => {
-                const isSelected = assetTier === value;
-                return (
-                  <button
-                    key={value}
-                    type="button"
-                    role="radio"
-                    aria-checked={isSelected}
-                    onClick={() => setAssetTier(value)}
-                    className={`w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all ${
-                      isSelected ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20' : 'bg-background-card border-border hover:border-foreground-secondary/30'
-                    }`}
-                  >
-                    <div className={`h-4 w-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors ${isSelected ? 'border-foreground bg-foreground text-background' : 'border-foreground-secondary/50 bg-transparent'}`} aria-hidden>
-                      {isSelected && <Check className="h-2.5 w-2.5" />}
-                    </div>
-                    <Icon className="h-4 w-4 flex-shrink-0 text-foreground-secondary" />
-                    <div className="min-w-0 flex-1">
-                      <div className="font-medium text-foreground">{label}</div>
-                      <div className="text-xs text-foreground-secondary mt-0.5">{desc}</div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="border-t border-border" />
-
-          <div>
             <div className="mb-4">
               <div className="text-xs font-semibold uppercase tracking-wider text-foreground-secondary mb-0.5">
                 Connect a Repository
               </div>
               <div className="text-xs text-foreground-secondary">
-                You can also connect later from the overview.
+                Choose a repo (and workspace if monorepo). Project name will match your selection.
               </div>
             </div>
 
-            {gitConnections.length === 0 ? (
+            {sidebarConnectionsLoading ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5" aria-hidden>
+                  <div className="relative flex-1 min-w-0">
+                    <div className="w-full px-3 py-2 border border-border rounded-lg bg-background-card flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <div className="h-4 w-4 flex-shrink-0 rounded-full bg-muted animate-pulse" />
+                        <div className="h-3.5 rounded bg-muted animate-pulse min-w-0 flex-1" style={{ maxWidth: '70%' }} />
+                      </div>
+                      <div className="h-4 w-4 flex-shrink-0 rounded bg-muted animate-pulse" />
+                    </div>
+                  </div>
+                  <div className="relative flex-1 min-w-0">
+                    <div className="w-full pl-9 py-2 pr-3 border border-border rounded-lg bg-background-card flex items-center">
+                      <div className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 rounded bg-muted animate-pulse" />
+                      <div className="h-3.5 rounded bg-muted animate-pulse flex-1 min-w-0" style={{ width: '55%' }} />
+                    </div>
+                  </div>
+                </div>
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <div key={i} className="rounded-lg border border-border bg-background-card" aria-hidden>
+                    <div className="w-full px-4 py-3 flex items-center gap-3 text-left">
+                      <div className="h-4 w-4 flex-shrink-0 rounded-full bg-muted animate-pulse" />
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="h-3.5 rounded bg-muted animate-pulse" style={{ width: `${52 + (i % 3) * 20}%` }} />
+                        <div className="h-3 rounded bg-muted/80 animate-pulse w-10" />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : gitConnections.length === 0 ? (
               <div className="flex flex-wrap gap-2 justify-center">
                 <Button size="sm" variant="outline" className="gap-2" disabled={!!connectingProvider} onClick={() => startGitProviderConnect('github')}>
                   {connectingProvider === 'github' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <img src="/images/integrations/github.png" alt="" className="h-3.5 w-3.5 rounded-sm" />}
@@ -693,7 +665,13 @@ export function CreateProjectSidebar({
                                             key={p.path || '(root)'}
                                             type="button"
                                             disabled={isDisabled}
-                                            onClick={(e) => { e.stopPropagation(); !isDisabled && setSidebarSelectedPath(p.path); }}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              if (isDisabled) return;
+                                              setSidebarSelectedPath(p.path);
+                                              const name = p.path === '' ? repoNameOnly(repo.full_name) : p.name;
+                                              setProjectName(name);
+                                            }}
                                             className={`w-full rounded-lg border px-4 py-3 flex items-center justify-between gap-3 text-left transition-colors ${
                                               isDisabled ? 'opacity-50 cursor-not-allowed border-border bg-background' : isChosen ? 'border-foreground/30 ring-1 ring-foreground/10 bg-background-subtle/30' : 'border-border bg-background hover:border-border/80 hover:bg-background-subtle/30'
                                             }`}
@@ -735,6 +713,73 @@ export function CreateProjectSidebar({
                 )}
               </div>
             )}
+          </div>
+
+          <div className="border-t border-border" />
+
+          <div>
+            <div className="flex items-center gap-1.5 mb-2">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-foreground-secondary">
+                Asset tier
+              </label>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex cursor-help text-foreground-secondary hover:text-foreground" aria-label="What is asset tier?">
+                    <HelpCircle className="h-3.5 w-3.5" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[260px]">
+                  Used by Depscore to weight vulnerability scores and blast radius (e.g. Crown Jewels vs non-production).
+                </TooltipContent>
+              </Tooltip>
+            </div>
+            <div className="space-y-2" role="radiogroup" aria-label="Asset tier">
+              {[
+                { value: 'CROWN_JEWELS' as const, label: 'Crown Jewels', icon: Crown, desc: 'Mission-critical, highest blast radius' },
+                { value: 'EXTERNAL' as const, label: 'External', icon: Globe, desc: 'Public-facing services' },
+                { value: 'INTERNAL' as const, label: 'Internal', icon: Building2, desc: 'Internal apps & services' },
+                { value: 'NON_PRODUCTION' as const, label: 'Non-production', icon: FlaskConical, desc: 'Dev & test environments' },
+              ].map(({ value, label, icon: Icon, desc }) => {
+                const isSelected = assetTier === value;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    role="radio"
+                    aria-checked={isSelected}
+                    onClick={() => setAssetTier(value)}
+                    className={`w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all ${
+                      isSelected ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20' : 'bg-background-card border-border hover:border-foreground-secondary/30'
+                    }`}
+                  >
+                    <div className={`h-4 w-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors ${isSelected ? 'border-foreground bg-foreground text-background' : 'border-foreground-secondary/50 bg-transparent'}`} aria-hidden>
+                      {isSelected && <Check className="h-2.5 w-2.5" />}
+                    </div>
+                    <Icon className="h-4 w-4 flex-shrink-0 text-foreground-secondary" />
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium text-foreground">{label}</div>
+                      <div className="text-xs text-foreground-secondary mt-0.5">{desc}</div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="border-t border-border" />
+
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-foreground-secondary mb-2">
+              Project Name
+            </label>
+            <input
+              type="text"
+              value={projectName}
+              onChange={(e) => setProjectName(e.target.value)}
+              placeholder="Project Name"
+              className="w-full px-3 py-2.5 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+              onKeyDown={(e) => { if (e.key === 'Enter') handleCreateProject(); }}
+            />
           </div>
 
           <div className="border-t border-border" />

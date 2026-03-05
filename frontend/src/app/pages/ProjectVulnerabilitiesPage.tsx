@@ -13,12 +13,13 @@ import '@xyflow/react/dist/style.css';
 import { Loader2 } from 'lucide-react';
 import { useToast } from '../../hooks/use-toast';
 import { api, ProjectWithRole, ProjectPermissions } from '../../lib/api';
+import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
 import { loadProjectVulnerabilityGraphData } from '../../lib/vulnerability-graph-data';
 import { ProjectCenterNode } from '../../components/vulnerabilities-graph/ProjectCenterNode';
 import { SkeletonProjectCenterNode } from '../../components/vulnerabilities-graph/SkeletonProjectCenterNode';
 import { DependencyNode } from '../../components/supply-chain/DependencyNode';
 import { VulnerabilityNode } from '../../components/supply-chain/VulnerabilityNode';
-import { useVulnerabilitiesGraphLayout, createVulnerabilitiesCenterNode, type VulnGraphDepNode, type VulnGraphCenterExtras, VULN_CENTER_NODE_WIDTH, VULN_CENTER_NODE_HEIGHT, VULN_CENTER_ID } from '../../components/vulnerabilities-graph/useVulnerabilitiesGraphLayout';
+import { useVulnerabilitiesGraphLayout, createVulnerabilitiesCenterNode, createExtractingCenterNode, type VulnGraphDepNode, type VulnGraphCenterExtras, VULN_CENTER_NODE_WIDTH, VULN_CENTER_NODE_HEIGHT, VULN_CENTER_ID } from '../../components/vulnerabilities-graph/useVulnerabilitiesGraphLayout';
 import { VulnerabilitiesSimulationCard } from '../../components/vulnerabilities-graph/VulnerabilitiesSimulationCard';
 import { ShowOnlyReachableCard } from '../../components/vulnerabilities-graph/ShowOnlyReachableCard';
 import SecuritySidebar, { type ActiveSidebar } from '../../components/security/SecuritySidebar';
@@ -59,6 +60,10 @@ const skeletonNodes = [
   },
 ];
 
+const extractingCenterNodes = (projectName: string) => [
+  createExtractingCenterNode(projectName),
+];
+
 function VulnerabilitiesGraph({
   projectName,
   vulnerableDependenciesLabel,
@@ -68,6 +73,7 @@ function VulnerabilitiesGraph({
   vulnerabilitiesLoading,
   centerExtras,
   showOnlyReachable = false,
+  extractionOngoing = false,
 }: {
   projectName: string;
   vulnerableDependenciesLabel: string;
@@ -77,6 +83,7 @@ function VulnerabilitiesGraph({
   vulnerabilitiesLoading?: boolean;
   centerExtras?: VulnGraphCenterExtras | null;
   showOnlyReachable?: boolean;
+  extractionOngoing?: boolean;
 }) {
   const loading = graphLoading || vulnerabilitiesLoading;
   const { nodes: layoutNodes, edges: layoutEdges } = useVulnerabilitiesGraphLayout(
@@ -96,6 +103,11 @@ function VulnerabilitiesGraph({
   if (loading) lastAppliedLayoutRef.current = null;
 
   useEffect(() => {
+    if (extractionOngoing) {
+      setGraphNodes(extractingCenterNodes(projectName));
+      setGraphEdges([]);
+      return;
+    }
     if (
       !loading &&
       layoutNodes.length > 0 &&
@@ -114,31 +126,39 @@ function VulnerabilitiesGraph({
       setGraphEdges(layoutEdges);
     }
   }, [
+    extractionOngoing,
+    projectName,
     loading,
     layoutSignature,
     layoutNodes,
     layoutEdges,
     setGraphNodes,
     setGraphEdges,
-    projectName,
     graphDepNodes,
     framework,
   ]);
 
   const stillShowingSkeleton =
-    loading ||
-    (layoutNodes.length > 0 &&
-      graphNodes.length === 1 &&
-      graphNodes[0]?.id === 'skeleton-center');
+    !extractionOngoing &&
+    (loading ||
+      (layoutNodes.length > 0 &&
+        graphNodes.length === 1 &&
+        graphNodes[0]?.id === 'skeleton-center'));
 
   return (
     <ReactFlow
-      nodes={stillShowingSkeleton ? skeletonNodes : graphNodes}
-      edges={stillShowingSkeleton ? [] : graphEdges}
+      nodes={
+        stillShowingSkeleton
+          ? skeletonNodes
+          : extractionOngoing
+            ? extractingCenterNodes(projectName)
+            : graphNodes
+      }
+      edges={stillShowingSkeleton || extractionOngoing ? [] : graphEdges}
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
       nodeTypes={stillShowingSkeleton ? skeletonCenterNodeTypes : vulnerabilityGraphNodeTypes}
-      fitView={stillShowingSkeleton}
+      fitView={stillShowingSkeleton || extractionOngoing}
       fitViewOptions={{ padding: 0.3, maxZoom: 1.2 }}
       minZoom={0.3}
       maxZoom={2}
@@ -160,6 +180,8 @@ export default function ProjectVulnerabilitiesPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const realtime = useRealtimeStatus(organizationId, projectId);
+  const isExtractionOngoing = realtime.status !== 'ready';
   const [permissionsChecked, setPermissionsChecked] = useState(false);
   const [loading, setLoading] = useState(false);
   const [, setError] = useState<string | null>(null);
@@ -494,6 +516,7 @@ export default function ProjectVulnerabilitiesPage() {
             vulnerabilitiesLoading={loading}
             centerExtras={centerExtras}
             showOnlyReachable={showOnlyReachable}
+            extractionOngoing={isExtractionOngoing}
           />
         </div>
         {/* Left card: Simulating (always visible); under sidebar (z-30). Empty = Preview fix, with items = Create PRs (transparent style). */}

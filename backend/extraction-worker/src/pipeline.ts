@@ -72,10 +72,12 @@ async function setError(
 
 function runCdxgen(workspacePath: string, ecosystem?: string): string {
   const outPath = path.join(workspacePath, 'sbom.json');
+  // Use relative -o and cwd so cdxgen always writes to workspacePath/sbom.json regardless of
+  // how it resolves paths (some environments resolve -o relative to process cwd).
   const args = [
     '--yes', '@cyclonedx/cdxgen',
-    '--path', `"${workspacePath}"`,
-    '-o', `"${outPath}"`,
+    '--path', '.',
+    '-o', 'sbom.json',
     '--profile', 'research',
     '--deep',
   ];
@@ -84,12 +86,16 @@ function runCdxgen(workspacePath: string, ecosystem?: string): string {
   }
   try {
     execSync(`npx ${args.join(' ')}`, {
+      cwd: workspacePath,
       stdio: 'pipe',
       timeout: 15 * 60 * 1000,
       maxBuffer: 50 * 1024 * 1024,
     });
   } catch (e: any) {
     throw new Error(`cdxgen failed: ${e.message}`);
+  }
+  if (!fs.existsSync(outPath)) {
+    throw new Error(`cdxgen completed but did not create sbom.json at ${outPath}`);
   }
   return outPath;
 }
@@ -373,43 +379,35 @@ export async function runPipeline(
     }
 
     const depIds = [...new Set(entries.map((e) => e.dependency_id))];
-    const { data: existingVersions } = await supabase
-      .from('dependency_versions')
-      .select('id, dependency_id, version')
-      .in('dependency_id', depIds);
-    const existingMap = new Map<string, string>();
-    if (existingVersions) {
-      for (const r of existingVersions) {
-        existingMap.set(`${r.dependency_id}|${r.version}`, r.id);
-      }
-    }
-
-    const toInsert: Array<{ dependency_id: string; version: string }> = [];
+    const toUpsert: Array<{ dependency_id: string; version: string }> = [];
     for (const e of entries) {
-      const mapKey = `${e.dependency_id}|${e.version}`;
-      const id = existingMap.get(mapKey);
-      if (id) {
-        keyToVersionId.set(e.key, id);
-      } else {
-        toInsert.push({ dependency_id: e.dependency_id, version: e.version });
-      }
+      toUpsert.push({ dependency_id: e.dependency_id, version: e.version });
     }
 
-    if (toInsert.length > 0) {
-      const { data: insertedRows, error } = await supabase
+    if (toUpsert.length > 0) {
+      const { error } = await supabase
         .from('dependency_versions')
-        .insert(toInsert)
-        .select('id, dependency_id, version');
+        .upsert(toUpsert, { onConflict: 'dependency_id,version', ignoreDuplicates: true });
       if (error) throw error;
-      if (insertedRows) {
-        for (const r of insertedRows) {
+    }
+
+    const existingMap = new Map<string, string>();
+    for (let offset = 0; offset < depIds.length; offset += 200) {
+      const chunk = depIds.slice(offset, offset + 200);
+      const { data: existingVersions } = await supabase
+        .from('dependency_versions')
+        .select('id, dependency_id, version')
+        .in('dependency_id', chunk)
+        .limit(10000);
+      if (existingVersions) {
+        for (const r of existingVersions) {
           existingMap.set(`${r.dependency_id}|${r.version}`, r.id);
         }
-        for (const e of entries) {
-          const id = existingMap.get(`${e.dependency_id}|${e.version}`);
-          if (id) keyToVersionId.set(e.key, id);
-        }
       }
+    }
+    for (const e of entries) {
+      const id = existingMap.get(`${e.dependency_id}|${e.version}`);
+      if (id) keyToVersionId.set(e.key, id);
     }
 
     const directNames = new Set(dependencies.filter((d) => d.is_direct).map((d) => d.name));

@@ -329,15 +329,6 @@ export function SyncDetailSidebar({ projectId, organizationId, onClose, onCancel
                   )}
                 </div>
               ))}
-              {isActive && (
-                <div className="flex items-center gap-3 py-0.5 px-1">
-                  <span className="text-zinc-600 shrink-0 tabular-nums select-none">
-                    {formatTimestamp(new Date().toISOString())}
-                  </span>
-                  <span className="h-2 w-2 rounded-full shrink-0 mt-1.5 bg-blue-400 animate-pulse" />
-                  <span className="text-zinc-500 animate-pulse">Waiting for next step...</span>
-                </div>
-              )}
             </div>
           </div>
 

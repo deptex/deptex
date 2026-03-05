@@ -452,6 +452,24 @@ export function createVulnerabilitiesCenterNode(
   };
 }
 
+/** Center node shown when project extraction is still in progress (spinner + "Project still extracting"). No other nodes. */
+export function createExtractingCenterNode(projectName: string): Node {
+  return {
+    id: VULN_CENTER_ID,
+    type: 'projectCenterNode',
+    position: {
+      x: -CENTER_NODE_WIDTH / 2,
+      y: -CENTER_NODE_HEIGHT / 2,
+    },
+    data: {
+      projectName,
+      isExtracting: true,
+    },
+    draggable: false,
+    selectable: false,
+  };
+}
+
 /**
  * Builds React Flow nodes and edges for the project vulnerabilities graph:
  * center (project) → direct deps with vulns → transitive deps with vulns, plus vuln nodes per dep.

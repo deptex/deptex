@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useOutletContext, useNavigate, useParams, useLocation } from 'react-router-dom';
 import { Search, SlidersHorizontal, TowerControl, ArrowUp, ArrowDown, X, Loader2, PanelLeftClose, PanelLeftOpen, Package, LayoutDashboard, GitBranch, MessageSquareText, RefreshCw } from 'lucide-react';
+import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
 import { api, ProjectWithRole, ProjectPermissions, ProjectDependency, ProjectEffectivePolicies, ProjectImportStatus, type LatestSafeVersionResponse } from '../../lib/api';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
 import { useToast } from '../../hooks/use-toast';
@@ -189,12 +190,29 @@ function tabFromPathname(pathname: string): UrlTab {
   return VALID_TABS.includes(segment as UrlTab) ? (segment as UrlTab) : 'overview';
 }
 
+function extractionStepLabel(step: string | null | undefined): string {
+  if (!step) return 'Starting extraction...';
+  const labels: Record<string, string> = {
+    queued: 'Job queued, waiting for worker...',
+    cloning: 'Cloning repository...',
+    sbom: 'Building SBOM...',
+    deps_synced: 'Syncing dependencies...',
+    ast_parsing: 'Analyzing imports...',
+    scanning: 'Scanning for vulnerabilities...',
+    uploading: 'Uploading results...',
+    completed: 'Finishing up...',
+  };
+  return labels[step] ?? `Processing (${step})...`;
+}
+
 export default function ProjectDependenciesPage() {
   const { project, organizationId, userPermissions } = useOutletContext<ProjectContextType>();
   const { projectId, dependencyId: urlDependencyId } = useParams<{ projectId: string; dependencyId?: string }>();
   const location = useLocation();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const realtime = useRealtimeStatus(organizationId, projectId);
+  const isExtractionOngoing = realtime.status !== 'ready';
 
   // URL as source of truth for selection and tab (overview, watchtower, supply-chain; notes is not in URL)
   const selectedDepId = urlDependencyId ?? null;
@@ -1145,7 +1163,25 @@ export default function ProjectDependenciesPage() {
           </div>
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pl-5 pr-3 pt-0.5 pb-4">
-          {dependenciesLoading ? (
+          {isExtractionOngoing ? (
+            <div className="rounded-lg border border-border bg-background-card p-6">
+              <div className="flex items-center gap-4">
+                <div className="flex-1 space-y-2 min-w-0">
+                  <h3 className="text-sm font-semibold text-foreground">Project extraction still in progress</h3>
+                  <p className="text-sm text-foreground-secondary">
+                    {realtime.isLoading
+                      ? 'Checking status...'
+                      : realtime.status === 'not_connected'
+                        ? 'Connect a repository in Project Settings to see dependencies.'
+                        : 'Dependencies will appear here once extraction completes.'}
+                  </p>
+                </div>
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
+                  <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" aria-hidden />
+                </div>
+              </div>
+            </div>
+          ) : dependenciesLoading ? (
             <div className="space-y-0.5 animate-pulse">
               {skeletonRows.map((row, i) => (
                 <PackageRowSkeleton key={i} nameWidth={row.nameWidth} opacityClass={row.opacityClass} />

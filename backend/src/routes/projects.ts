@@ -4102,6 +4102,7 @@ router.get('/:id/projects/:projectId/extraction/logs', async (req: AuthRequest, 
 });
 
 // GET /api/organizations/:id/projects/:projectId/extraction/runs - Get extraction run history
+// Uses extraction_logs so previous attempts (e.g. after recovery requeue) stay visible; merges current job status when run_id matches.
 router.get('/:id/projects/:projectId/extraction/runs', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
@@ -4112,15 +4113,41 @@ router.get('/:id/projects/:projectId/extraction/runs', async (req: AuthRequest, 
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
-    const { data, error } = await supabase
-      .from('extraction_jobs')
-      .select('run_id, status, attempts, created_at, completed_at, error')
-      .eq('project_id', projectId)
-      .order('created_at', { ascending: false })
-      .limit(20);
+    const [{ data: runsFromLogs, error: rpcError }, { data: jobRows }] = await Promise.all([
+      supabase.rpc('get_extraction_runs_for_project', { p_project_id: projectId }),
+      supabase.from('extraction_jobs').select('run_id, status, attempts, created_at, completed_at, error').eq('project_id', projectId).limit(1).maybeSingle(),
+    ]);
 
-    if (error) throw error;
-    res.json(data ?? []);
+    if (rpcError) {
+      const rpcMissing = /function.*does not exist|PGRST202/i.test(rpcError.message || '');
+      if (rpcMissing) {
+        const { data: fallback } = await supabase
+          .from('extraction_jobs')
+          .select('run_id, status, attempts, created_at, completed_at, error')
+          .eq('project_id', projectId)
+          .order('created_at', { ascending: false })
+          .limit(20);
+        return res.json(fallback ?? []);
+      }
+      throw rpcError;
+    }
+
+    const runs = (runsFromLogs ?? []) as Array<{ run_id: string; started_at: string }>;
+    const job = jobRows ?? null;
+
+    const out = runs.map((r) => {
+      const isCurrentJob = job && r.run_id === job.run_id;
+      return {
+        run_id: r.run_id,
+        status: isCurrentJob ? job.status : 'completed',
+        attempts: isCurrentJob ? job.attempts : 1,
+        created_at: r.started_at,
+        completed_at: isCurrentJob ? job.completed_at : null,
+        error: isCurrentJob ? job.error : null,
+      };
+    });
+
+    res.json(out);
   } catch (error: any) {
     console.error('Error fetching extraction runs:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch extraction runs' });
