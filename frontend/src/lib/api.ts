@@ -3111,6 +3111,17 @@ export interface ExtractionRun {
   created_at: string;
   completed_at: string | null;
   error: string | null;
+  /** How the run was triggered: initial connect, webhook push, or manual sync */
+  trigger_type?: 'initial' | 'webhook' | 'manual';
+  /** Deptex user who started the run (manual or initial); resolved for display */
+  started_by_user_id?: string;
+  started_by?: { avatar_url?: string; full_name?: string };
+  /** Git commit (set for webhook runs; optional for others) */
+  commit_sha?: string;
+  commit_message?: string;
+  branch?: string;
+  /** Commit author from Git (webhook runs) */
+  commit_author?: { username?: string; avatar_url?: string };
 }
 
 export interface ProjectVulnerability {

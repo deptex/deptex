@@ -63,6 +63,14 @@ function getColorScheme(worstVulnerabilitySeverity: WorstSeverity) {
   }
 }
 
+const greyExtractingScheme = {
+  border: 'border-slate-400/40',
+  shadow: 'shadow-slate-400/5',
+  glow: 'bg-slate-400',
+  iconBg: 'bg-slate-400/15',
+  iconText: 'text-slate-500',
+};
+
 function ProjectCenterNodeComponent({ data }: NodeProps) {
   const {
     projectName = 'Project',
@@ -74,7 +82,7 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
     secretCount,
     isExtracting = false,
   } = (data as unknown as ProjectCenterNodeData) ?? {};
-  const colorScheme = getColorScheme(worstVulnerabilitySeverity);
+  const colorScheme = isExtracting ? greyExtractingScheme : getColorScheme(worstVulnerabilitySeverity);
   const hasKnownFramework = frameworkName && frameworkName.toLowerCase() !== 'unknown';
   const frameworkIdForIcon = hasKnownFramework ? frameworkName : undefined;
 
@@ -88,21 +96,15 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
       <Handle id="left" type="source" position={Position.Left} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
 
       <div
-        className={`relative rounded-xl border-2 shadow-lg overflow-hidden min-w-[260px] ${isExtracting ? 'border-primary/50 shadow-primary/10' : `${colorScheme.border} ${colorScheme.shadow}`}`}
+        className={`relative rounded-xl border-2 shadow-lg overflow-hidden min-w-[260px] ${colorScheme.border} ${colorScheme.shadow}`}
       >
-        {!isExtracting && (
-          <div className={`absolute inset-0 rounded-xl blur-xl opacity-20 -z-10 ${colorScheme.glow}`} />
-        )}
+        <div className={`absolute inset-0 rounded-xl blur-xl opacity-20 -z-10 ${colorScheme.glow}`} />
         <div className="bg-background-card px-5 pt-4 pb-4 rounded-xl">
           <div className="flex items-center gap-2.5">
             <div
-              className={`flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 ${isExtracting ? 'bg-primary/15 text-primary' : `${colorScheme.iconBg} ${colorScheme.iconText}`}`}
+              className={`flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 ${colorScheme.iconBg} ${colorScheme.iconText}`}
             >
-              {isExtracting ? (
-                <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
-              ) : (
-                <FrameworkIcon frameworkId={frameworkIdForIcon} size={20} className="text-current" />
-              )}
+              <FrameworkIcon frameworkId={frameworkIdForIcon} size={20} className="text-current" />
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-foreground truncate">{projectName}</p>
@@ -118,6 +120,11 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
                 </p>
               ) : null}
             </div>
+            {isExtracting && (
+              <div className="flex-shrink-0" aria-hidden>
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -18,7 +18,7 @@ const mockSetSearchParams = vi.fn();
 const mockReloadProject = vi.fn().mockResolvedValue(undefined);
 
 let mockProjectContext: {
-  project: { id: string; name: string; asset_tier: string };
+  project: { id: string; name: string; asset_tier: string; asset_tier_id?: string | null };
   reloadProject: ReturnType<typeof vi.fn>;
   organizationId: string;
   userPermissions: { view_settings: boolean; edit_settings: boolean };
@@ -76,6 +76,7 @@ describe('ProjectSettingsPage – General', () => {
         id: 'proj-1',
         name: 'Test Project',
         asset_tier: 'EXTERNAL',
+        asset_tier_id: 't1',
       },
       reloadProject: mockReloadProject,
       organizationId: 'org-1',
@@ -83,32 +84,37 @@ describe('ProjectSettingsPage – General', () => {
     };
   });
 
-  it('shows General heading when on general tab', async () => {
+  it('shows Project Name and Asset Tier sections when on general tab', async () => {
     render(<ProjectSettingsPage />);
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Project Name' })).toBeInTheDocument();
     });
+    expect(screen.getByRole('heading', { name: 'Asset Tier' })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Enter project name')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Save' }).length).toBeGreaterThanOrEqual(2);
   });
 
   it('shows project name input and asset tier select', async () => {
     render(<ProjectSettingsPage />);
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument();
+      expect(screen.getByPlaceholderText('Enter project name')).toBeInTheDocument();
     });
-    expect(screen.getByPlaceholderText('Enter project name')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Asset Tier' })).toBeInTheDocument();
+    const saveBtns = screen.getAllByRole('button', { name: 'Save' });
+    expect(saveBtns.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('Save button is disabled when name and asset tier unchanged', async () => {
+  it('Save buttons are disabled when name and asset tier unchanged', async () => {
     render(<ProjectSettingsPage />);
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: 'Save' }).length).toBeGreaterThanOrEqual(1);
     });
-    const saveBtn = screen.getByRole('button', { name: 'Save' });
-    expect(saveBtn).toBeDisabled();
+    const saveBtns = screen.getAllByRole('button', { name: 'Save' });
+    expect(saveBtns[0]).toBeDisabled();
+    expect(saveBtns[1]).toBeDisabled();
   });
 
-  it('Save calls api.updateProject when name changed and Save clicked', async () => {
+  it('Save calls api.updateProject when name changed and Save clicked in name card', async () => {
     render(<ProjectSettingsPage />);
     await waitFor(() => {
       expect(screen.getByPlaceholderText('Enter project name')).toBeInTheDocument();
@@ -116,8 +122,8 @@ describe('ProjectSettingsPage – General', () => {
     const nameInput = screen.getByPlaceholderText('Enter project name');
     await userEvent.clear(nameInput);
     await userEvent.type(nameInput, 'New Project Name');
-    const saveBtn = screen.getByRole('button', { name: 'Save' });
-    await userEvent.click(saveBtn);
+    const saveBtns = screen.getAllByRole('button', { name: 'Save' });
+    await userEvent.click(saveBtns[0]);
 
     await waitFor(() => {
       expect(mockUpdateProject).toHaveBeenCalledWith('org-1', 'proj-1', expect.objectContaining({ name: 'New Project Name' }));
@@ -278,7 +284,7 @@ describe('ProjectSettingsPage – General', () => {
   it('tab click navigates to correct settings URL', async () => {
     render(<ProjectSettingsPage />);
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Project Name' })).toBeInTheDocument();
     });
     const accessButton = screen.getAllByRole('button').find((b) => b.textContent === 'Access');
     expect(accessButton).toBeDefined();

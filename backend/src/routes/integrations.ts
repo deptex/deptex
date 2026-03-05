@@ -1446,11 +1446,15 @@ router.delete('/organizations/:orgId/integrations/github', authenticateUser, asy
 // ============================================================
 type PushProjectRow = {
   project_id: string;
+  repo_full_name?: string;
   default_branch: string;
   package_json_path: string | null;
   installation_id: string;
   sync_frequency: string;
   status: string;
+  ecosystem?: string;
+  provider?: string;
+  integration_id?: string;
   projects: { organization_id: string }[] | { organization_id: string } | null;
 };
 
@@ -1469,7 +1473,7 @@ async function handlePushEvent(payload: any): Promise<void> {
 
   const { data: rows, error: fetchError } = await supabase
     .from('project_repositories')
-    .select('project_id, default_branch, package_json_path, installation_id, sync_frequency, status, projects(organization_id)')
+    .select('project_id, repo_full_name, default_branch, package_json_path, installation_id, sync_frequency, status, ecosystem, provider, integration_id, projects(organization_id)')
     .eq('repo_full_name', repoFullName)
     .eq('installation_id', String(installationId));
 
@@ -1533,7 +1537,29 @@ async function handlePushEvent(payload: any): Promise<void> {
     if (isAffected && row.sync_frequency === 'on_commit') {
       if (extractionCount < MAX_EXTRACTION_PER_PUSH) {
         try {
-          const result = await queueExtractionJob(row.project_id, organizationId, row as any);
+          const branchName = ref.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length) : ref;
+          const commits = payload.commits ?? [];
+          const commitForAfter = commits.find((c: any) => (c.id || c.sha) === after);
+          const meta = {
+            trigger_type: 'webhook' as const,
+            commit_sha: after,
+            branch: branchName,
+            commit_message: commitForAfter ? (commitForAfter.message || '').slice(0, 500) : undefined,
+            commit_author: commitForAfter?.author ? {
+              username: commitForAfter.author.username ?? commitForAfter.author.name,
+              avatar_url: commitForAfter.author.avatar_url,
+            } : undefined,
+          };
+          const repoRecord = {
+            repo_full_name: row.repo_full_name ?? repoFullName,
+            installation_id: String(row.installation_id),
+            default_branch: row.default_branch,
+            package_json_path: row.package_json_path ?? '',
+            ecosystem: row.ecosystem ?? 'npm',
+            provider: row.provider ?? 'github',
+            integration_id: row.integration_id ?? undefined,
+          };
+          const result = await queueExtractionJob(row.project_id, organizationId, repoRecord, meta);
           if (result.success) {
             extractionCount++;
             extractionTriggered = true;

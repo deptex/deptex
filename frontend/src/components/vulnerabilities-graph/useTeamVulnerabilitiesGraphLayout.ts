@@ -13,6 +13,8 @@ export interface ProjectWithGraphData {
   graphDepNodes: VulnGraphDepNode[];
   framework?: string | null;
   worstSeverity?: WorstSeverity;
+  /** When true, show only project node with extracting spinner (no dependencies/vulnerabilities). */
+  isExtracting?: boolean;
 }
 
 function getHandlePair(angle: number): { sourceHandle: string; targetHandle: string } {
@@ -77,6 +79,7 @@ export function useTeamVulnerabilitiesGraphLayout(
 
       const worstSeverity = proj.worstSeverity ?? getWorstSeverity(proj.graphDepNodes);
       const slaBreachCount = getSlaBreachCount(proj.graphDepNodes);
+      const isExtracting = proj.isExtracting === true;
 
       nodes.push({
         id: projectNodeId,
@@ -88,6 +91,7 @@ export function useTeamVulnerabilitiesGraphLayout(
           framework: proj.framework,
           worstSeverity,
           slaBreachCount,
+          isExtracting,
         },
         draggable: true,
         selectable: false,
@@ -107,7 +111,8 @@ export function useTeamVulnerabilitiesGraphLayout(
         markerEnd: { type: MarkerType.ArrowClosed, color: grayStroke, width: 12, height: 12 },
       });
 
-      if (proj.graphDepNodes.length === 0) return;
+      // When extracting, do not show dependencies or vulnerabilities (match Project Security tab).
+      if (isExtracting || proj.graphDepNodes.length === 0) return;
 
       const prefix = `project-${proj.projectId}-`;
       const namespacedDepNodes: VulnGraphDepNode[] = proj.graphDepNodes.map((d) => ({

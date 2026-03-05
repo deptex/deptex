@@ -61,6 +61,15 @@ export default function ProjectLayout() {
     return null;
   }, [project?.permissions, cachedPermissions]);
 
+  // Tab title: "Project name | Organization name | Deptex" when viewing a project
+  useEffect(() => {
+    if (!project?.name || !organization?.name) return;
+    const prev = document.title;
+    document.title = `${project.name} | ${organization.name} | Deptex`;
+    return () => {
+      document.title = prev;
+    };
+  }, [project?.name, organization?.name]);
 
   useEffect(() => {
     if (orgId && projectId) {
@@ -316,6 +325,7 @@ export default function ProjectLayout() {
               setProjectAutoBump: (value: boolean) =>
                 setProject((prev) => (prev ? { ...prev, auto_bump: value } : null)),
               organizationId: orgId,
+              organization,
               userPermissions,
             }}
           />

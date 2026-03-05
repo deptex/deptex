@@ -18,7 +18,7 @@ import {
 } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
-import { api, ProjectWithRole, ProjectPermissions, Team, ProjectTeamsResponse, ProjectContributingTeam, ProjectMember, OrganizationMember, ProjectRepository, ProjectImportStatus, type ProjectEffectivePolicies, type ProjectPolicyException, type AssetTier, type RepoWithProvider, type CiCdConnection, type OrganizationAssetTier } from '../../lib/api';
+import { api, ProjectWithRole, ProjectPermissions, Team, ProjectTeamsResponse, ProjectContributingTeam, ProjectMember, OrganizationMember, ProjectRepository, ProjectImportStatus, type ProjectEffectivePolicies, type ProjectPolicyException, type AssetTier, type RepoWithProvider, type CiCdConnection, type OrganizationAssetTier, type ExtractionRun, type Organization } from '../../lib/api';
 import NotificationRulesSection from './NotificationRulesSection';
 import { useToast } from '../../hooks/use-toast';
 import { Button } from '../../components/ui/button';
@@ -27,16 +27,19 @@ import { FrameworkIcon } from '../../components/framework-icon';
 import { PolicyCodeEditor } from '../../components/PolicyCodeEditor';
 import { PolicyAIAssistant } from '../../components/PolicyAIAssistant';
 import { PolicyExceptionSidebar } from '../../components/PolicyExceptionSidebar';
-import { SyncDetailSidebar, type SyncLogEntry } from '../../components/SyncDetailSidebar';
+import { SyncDetailSidebar } from '../../components/SyncDetailSidebar';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
 import { ProjectTeamSelect } from '../../components/ProjectTeamSelect';
+import { RoleBadge } from '../../components/RoleBadge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Switch } from '../../components/ui/switch';
+import { Avatar, AvatarFallback, AvatarImage } from '../../components/ui/avatar';
 
 interface ProjectContextType {
   project: ProjectWithRole | null;
   reloadProject: () => Promise<void>;
   organizationId: string;
+  organization: Organization | null;
   userPermissions: ProjectPermissions | null;
 }
 
@@ -68,7 +71,24 @@ function formatConnectedAgo(dateStr: string | null | undefined): string {
   return `${Math.floor(days / 30)}mo ago`;
 }
 
+function formatRunDuration(createdAt: string, completedAt: string | null, status: string): string {
+  const start = new Date(createdAt).getTime();
+  const end = (completedAt ? new Date(completedAt).getTime() : Date.now());
+  const sec = Math.max(0, Math.floor((end - start) / 1000));
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h`;
+}
+
 const VALID_PROJECT_SETTINGS_SECTIONS = new Set(['general', 'repository', 'access', 'notifications', 'policies']);
+
+const ASSET_TIER_LABEL: Record<AssetTier, string> = {
+  CROWN_JEWELS: 'Crown Jewels',
+  EXTERNAL: 'External',
+  INTERNAL: 'Internal',
+  NON_PRODUCTION: 'Non-production',
+};
 
 /** Renders a tab-specific content skeleton for the project settings loading state. */
 function ProjectSettingsTabSkeleton({ section }: { section: string }) {
@@ -321,7 +341,7 @@ function ProjectSettingsTabSkeleton({ section }: { section: string }) {
 }
 
 export default function ProjectSettingsPage() {
-  const { project, reloadProject, organizationId, userPermissions } = useOutletContext<ProjectContextType>();
+  const { project, reloadProject, organizationId, organization, userPermissions } = useOutletContext<ProjectContextType>();
   const { projectId, section: sectionParam } = useParams<{ projectId: string; section?: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
@@ -332,6 +352,7 @@ export default function ProjectSettingsPage() {
   const [assetTier, setAssetTier] = useState<AssetTier>(project?.asset_tier ?? 'EXTERNAL');
   const [assetTierId, setAssetTierId] = useState<string>(project?.asset_tier_id ?? '');
   const [orgAssetTiers, setOrgAssetTiers] = useState<OrganizationAssetTier[]>([]);
+  const [loadingAssetTiers, setLoadingAssetTiers] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
@@ -380,7 +401,10 @@ export default function ProjectSettingsPage() {
   const [pullRequestCommentsEnabled, setPullRequestCommentsEnabled] = useState(true);
   const [autoFixVulnerabilitiesEnabled, setAutoFixVulnerabilitiesEnabled] = useState(false);
   const [syncFrequency, setSyncFrequency] = useState<string>('on_commit');
-  const [selectedSyncLog, setSelectedSyncLog] = useState<SyncLogEntry | null>(null);
+  const [syncFrequencySaving, setSyncFrequencySaving] = useState(false);
+  const [extractionRuns, setExtractionRuns] = useState<ExtractionRun[]>([]);
+  const [extractionRunsLoading, setExtractionRunsLoading] = useState(false);
+  const [selectedExtractionRunId, setSelectedExtractionRunId] = useState<string | null>(null);
   const [showExtractionLogs, setShowExtractionLogs] = useState(false);
   // Transfer project state
   const [teams, setTeams] = useState<Team[]>([]);
@@ -484,10 +508,22 @@ export default function ProjectSettingsPage() {
   }, [project?.name, project?.asset_tier, project?.asset_tier_id]);
 
   useEffect(() => {
-    if (organizationId) {
-      api.getOrganizationAssetTiers(organizationId).then(setOrgAssetTiers).catch(console.error);
-    }
+    if (!organizationId) return;
+    setLoadingAssetTiers(true);
+    api.getOrganizationAssetTiers(organizationId)
+      .then(setOrgAssetTiers)
+      .catch(console.error)
+      .finally(() => setLoadingAssetTiers(false));
   }, [organizationId]);
+
+  // When org asset tiers load, if project had a tier at creation but no asset_tier_id, match by name
+  useEffect(() => {
+    if (orgAssetTiers.length === 0 || !project?.asset_tier) return;
+    if (project.asset_tier_id) return; // already set from project
+    const legacyLabel = ASSET_TIER_LABEL[project.asset_tier as AssetTier];
+    const match = orgAssetTiers.find((t) => t.name === legacyLabel || t.name === project.asset_tier);
+    if (match) setAssetTierId(match.id);
+  }, [orgAssetTiers, project?.asset_tier_id, project?.asset_tier]);
 
   const loadProjectRepositories = async (integrationId?: string) => {
     if (!organizationId || !projectId) return;
@@ -505,9 +541,7 @@ export default function ProjectSettingsPage() {
       if (data.connectedRepository?.auto_fix_vulnerabilities_enabled !== undefined) {
         setAutoFixVulnerabilitiesEnabled(data.connectedRepository.auto_fix_vulnerabilities_enabled === true);
       }
-      if ((data.connectedRepository as any)?.sync_frequency) {
-        setSyncFrequency((data.connectedRepository as any).sync_frequency);
-      }
+      setSyncFrequency((data.connectedRepository as any)?.sync_frequency || 'daily');
     } catch (error: any) {
       setRepositoriesError(error.message || 'Failed to load repositories');
     } finally {
@@ -630,9 +664,7 @@ export default function ProjectSettingsPage() {
         if (cached.connectedRepository?.auto_fix_vulnerabilities_enabled !== undefined) {
           setAutoFixVulnerabilitiesEnabled(cached.connectedRepository.auto_fix_vulnerabilities_enabled === true);
         }
-        if ((cached.connectedRepository as any)?.sync_frequency) {
-          setSyncFrequency((cached.connectedRepository as any).sync_frequency);
-        }
+        setSyncFrequency((cached.connectedRepository as any)?.sync_frequency || 'daily');
       }
       loadProjectRepositories();
     }
@@ -686,6 +718,28 @@ export default function ProjectSettingsPage() {
     pollingIntervalRef.current = id;
     return () => { if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current); pollingIntervalRef.current = null; };
   }, [connectedRepository?.status, importStatus?.status, checkImportStatus]);
+
+  // Fetch extraction runs when Repository tab is active and repo is connected
+  useEffect(() => {
+    if (activeSection !== 'repository' || !organizationId || !projectId || !connectedRepository) return;
+    setExtractionRunsLoading(true);
+    api.getExtractionRuns(organizationId, projectId).then((runs) => {
+      setExtractionRuns(runs);
+    }).catch(() => {
+      setExtractionRuns([]);
+    }).finally(() => {
+      setExtractionRunsLoading(false);
+    });
+  }, [activeSection, organizationId, projectId, connectedRepository]);
+
+  // Poll extraction runs when on Repository tab so status and "X ago" stay live
+  useEffect(() => {
+    if (activeSection !== 'repository' || !organizationId || !projectId || !connectedRepository) return;
+    const interval = setInterval(() => {
+      api.getExtractionRuns(organizationId, projectId).then(setExtractionRuns).catch(() => {});
+    }, 6000);
+    return () => clearInterval(interval);
+  }, [activeSection, organizationId, projectId, connectedRepository]);
 
   // Load teams for transfer dropdown
   const loadTeams = async () => {
@@ -1188,28 +1242,32 @@ export default function ProjectSettingsPage() {
     );
   }
 
-  const handleSave = async () => {
+  const handleSaveName = async () => {
     if (!organizationId || !project?.id || !projectName.trim()) return;
-
     try {
       setIsSaving(true);
-      const updatePayload: Record<string, unknown> = { name: projectName.trim() };
-      if (orgAssetTiers.length > 0 && assetTierId) {
-        updatePayload.asset_tier_id = assetTierId;
-      } else {
-        updatePayload.asset_tier = assetTier;
-      }
-      await api.updateProject(organizationId, project.id, updatePayload as any);
-      toast({
-        title: 'Success',
-        description: 'Project settings saved',
-      });
+      await api.updateProject(organizationId, project.id, { name: projectName.trim() } as any);
+      toast({ title: 'Success', description: 'Project name saved' });
       await reloadProject();
     } catch (error: any) {
-      toast({
-        title: 'Error',
-        description: error.message || 'Failed to save settings',
-      });
+      toast({ title: 'Error', description: error.message || 'Failed to save project name' });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleSaveAssetTier = async () => {
+    if (!organizationId || !project?.id) return;
+    try {
+      setIsSaving(true);
+      const payload = orgAssetTiers.length > 0 && assetTierId
+        ? { asset_tier_id: assetTierId }
+        : { asset_tier: assetTier };
+      await api.updateProject(organizationId, project.id, payload as any);
+      toast({ title: 'Success', description: 'Asset tier saved' });
+      await reloadProject();
+    } catch (error: any) {
+      toast({ title: 'Error', description: error.message || 'Failed to save asset tier' });
     } finally {
       setIsSaving(false);
     }
@@ -1377,26 +1435,32 @@ export default function ProjectSettingsPage() {
     }
   };
 
-  const handleSyncFrequencyChange = async (value: string) => {
-    if (!organizationId || !projectId) return;
-    const prev = syncFrequency;
+  const handleSyncFrequencySelect = (value: string) => {
     setSyncFrequency(value);
+  };
+
+  const handleSaveSyncFrequency = async () => {
+    if (!organizationId || !projectId) return;
+    const saved = (connectedRepository as any)?.sync_frequency;
+    if (syncFrequency === saved) return;
+    setSyncFrequencySaving(true);
     try {
       await api.updateProjectRepositorySettings(organizationId, projectId, {
-        sync_frequency: value,
+        sync_frequency: syncFrequency,
       });
       setConnectedRepository((r) =>
-        r ? { ...r, sync_frequency: value } as any : null
+        r ? { ...r, sync_frequency: syncFrequency } as any : null
       );
-      const labels: Record<string, string> = { on_commit: 'On Every Commit', daily: 'Daily', weekly: 'Weekly', manual: 'Manual Only' };
-      toast({ title: `Sync frequency set to ${labels[value] || value}` });
+      const labels: Record<string, string> = { on_commit: 'On every commit', daily: 'Daily', weekly: 'Weekly', manual: 'Manual only' };
+      toast({ title: `Sync frequency set to ${labels[syncFrequency] || syncFrequency}` });
     } catch (err: any) {
-      setSyncFrequency(prev);
       toast({
         title: 'Failed to update sync frequency',
         description: (err as Error).message,
         variant: 'destructive',
       });
+    } finally {
+      setSyncFrequencySaving(false);
     }
   };
 
@@ -1448,65 +1512,21 @@ export default function ProjectSettingsPage() {
           <div className="flex-1 no-scrollbar">
             {activeSection === 'general' && (
               <div className="space-y-6">
-                <div>
-                  <h2 className="text-2xl font-bold text-foreground">General</h2>
-                </div>
-
-                {/* Project Name & Asset Tier Card - Anyone with edit can edit */}
+                {/* Project Name Card */}
                 <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                  <div className="p-6 space-y-6">
-                    <div>
-                      <h3 className="text-base font-semibold text-foreground mb-1">Project Name</h3>
-                      <p className="text-sm text-foreground-secondary mb-4">
-                        This is your project's visible name. It will be displayed throughout the dashboard.
-                      </p>
-                      <div className="max-w-md">
-                        <input
-                          type="text"
-                          value={projectName}
-                          onChange={(e) => setProjectName(e.target.value)}
-                          placeholder="Enter project name"
-                          className="w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <h3 className="text-base font-semibold text-foreground mb-1">Asset Tier</h3>
-                      <p className="text-sm text-foreground-secondary mb-4">
-                        Used by Depscore to weight vulnerability scores and blast radius (Crown Jewels vs non-production).
-                      </p>
-                      <div className="max-w-md">
-                        {orgAssetTiers.length > 0 ? (
-                          <Select value={assetTierId} onValueChange={(v) => setAssetTierId(v)}>
-                            <SelectTrigger className="w-full px-3 py-2.5 h-auto bg-background-content">
-                              <SelectValue placeholder="Select asset tier" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {orgAssetTiers.map((tier) => (
-                                <SelectItem key={tier.id} value={tier.id}>
-                                  <span className="flex items-center gap-2">
-                                    <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: tier.color }} />
-                                    {tier.name}
-                                    <span className="text-xs text-muted-foreground ml-1">({tier.environmental_multiplier}x)</span>
-                                  </span>
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <Select value={assetTier} onValueChange={(v) => setAssetTier(v as AssetTier)}>
-                            <SelectTrigger className="w-full px-3 py-2.5 h-auto bg-background-content">
-                              <SelectValue placeholder="Select asset tier" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="CROWN_JEWELS">Crown Jewels</SelectItem>
-                              <SelectItem value="EXTERNAL">External</SelectItem>
-                              <SelectItem value="INTERNAL">Internal</SelectItem>
-                              <SelectItem value="NON_PRODUCTION">Non-production</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        )}
-                      </div>
+                  <div className="p-6">
+                    <h3 className="text-base font-semibold text-foreground mb-1">Project Name</h3>
+                    <p className="text-sm text-foreground-secondary mb-4">
+                      This is your project's visible name. It will be displayed throughout the dashboard.
+                    </p>
+                    <div className="max-w-md">
+                      <Input
+                        type="text"
+                        value={projectName}
+                        onChange={(e) => setProjectName(e.target.value)}
+                        placeholder="Enter project name"
+                        className="bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:border-primary transition-all"
+                      />
                     </div>
                   </div>
                   <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
@@ -1514,8 +1534,99 @@ export default function ProjectSettingsPage() {
                       Changes will be visible to all project members.
                     </p>
                     <Button
-                      onClick={handleSave}
-                      disabled={isSaving || (projectName === project?.name && (orgAssetTiers.length > 0 ? assetTierId === (project?.asset_tier_id ?? '') : assetTier === (project?.asset_tier ?? 'EXTERNAL')))}
+                      onClick={handleSaveName}
+                      disabled={isSaving || projectName === project?.name || !projectName.trim()}
+                      size="sm"
+                      className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                    >
+                      {isSaving && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
+                      Save
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Asset Tier Card */}
+                <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                  <div className="p-6">
+                    <h3 className="text-base font-semibold text-foreground mb-1">Asset Tier</h3>
+                    <p className="text-sm text-foreground-secondary mb-4">
+                      Used by Depscore to weight vulnerability scores and blast radius (Crown Jewels vs non-production).
+                    </p>
+                    <div className="w-full space-y-2" role="radiogroup" aria-label="Asset tier">
+                      {loadingAssetTiers ? (
+                        <>
+                          {[1, 2, 3].map((i) => (
+                            <div key={i} className="rounded-lg border border-border bg-black/20 px-4 py-3 flex items-center gap-3">
+                              <div className="h-5 w-5 rounded-full bg-muted animate-pulse flex-shrink-0" />
+                              <div className="h-5 w-24 bg-muted rounded animate-pulse" />
+                            </div>
+                          ))}
+                        </>
+                      ) : orgAssetTiers.length > 0 ? (
+                        orgAssetTiers.map((tier) => {
+                          const isSelected = assetTierId === tier.id;
+                          return (
+                            <button
+                              key={tier.id}
+                              type="button"
+                              role="radio"
+                              aria-checked={isSelected}
+                              onClick={() => setAssetTierId(tier.id)}
+                              className={cn(
+                                'w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all',
+                                isSelected
+                                  ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20'
+                                  : 'bg-black/20 border-border text-foreground hover:border-foreground-secondary/30 hover:bg-black/30'
+                              )}
+                            >
+                              <div className={cn('h-4 w-4 rounded-full border-2 flex-shrink-0 transition-colors', isSelected ? 'border-foreground bg-foreground' : 'border-foreground-secondary/50 bg-transparent')} aria-hidden />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-sm font-medium text-foreground">{tier.name}</div>
+                                <div className="text-xs text-muted-foreground mt-0.5">{tier.environmental_multiplier}x multiplier</div>
+                              </div>
+                              <RoleBadge role={tier.name} roleDisplayName={tier.name} roleColor={tier.color || null} className="flex-shrink-0" />
+                            </button>
+                          );
+                        })
+                      ) : (
+                        (['CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION'] as const).map((value) => {
+                          const isSelected = assetTier === value;
+                          const label = ASSET_TIER_LABEL[value];
+                          return (
+                            <button
+                              key={value}
+                              type="button"
+                              role="radio"
+                              aria-checked={isSelected}
+                              onClick={() => setAssetTier(value)}
+                              className={cn(
+                                'w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all',
+                                isSelected
+                                  ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20'
+                                  : 'bg-black/20 border-border text-foreground hover:border-foreground-secondary/30 hover:bg-black/30'
+                              )}
+                            >
+                              <div className={cn('h-4 w-4 rounded-full border-2 flex-shrink-0 transition-colors', isSelected ? 'border-foreground bg-foreground' : 'border-foreground-secondary/50 bg-transparent')} aria-hidden />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-sm font-medium text-foreground">{label}</div>
+                                <div className="text-xs text-muted-foreground mt-0.5">Multiplier applies</div>
+                              </div>
+                              <RoleBadge role={label.toLowerCase()} roleDisplayName={label} roleColor={null} className="flex-shrink-0" />
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                  <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
+                    <p className="text-xs text-foreground-secondary">
+                      Changes will be visible to all project members.
+                    </p>
+                    <Button
+                      onClick={handleSaveAssetTier}
+                      disabled={isSaving || (orgAssetTiers.length > 0
+                        ? assetTierId === (project?.asset_tier_id ?? '') || (!(project?.asset_tier_id) && project?.asset_tier && orgAssetTiers.find((t) => t.id === assetTierId)?.name === ASSET_TIER_LABEL[project.asset_tier as AssetTier])
+                        : assetTier === (project?.asset_tier ?? 'EXTERNAL'))}
                       size="sm"
                       className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
                     >
@@ -1549,7 +1660,7 @@ export default function ProjectSettingsPage() {
                                 teams={teams}
                                 placeholder="Select a team"
                                 showNoTeamOption={false}
-                                className="bg-background-content"
+                                className="bg-black/20 border border-border rounded-lg text-sm text-foreground focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:border-primary transition-all"
                               />
                             </div>
                           )}
@@ -1659,10 +1770,6 @@ export default function ProjectSettingsPage() {
 
             {activeSection === 'repository' && (
               <div className="space-y-8">
-                <div>
-                  <h2 className="text-2xl font-bold text-foreground">Repository</h2>
-                </div>
-
                 {/* Disconnected repository banner */}
                 {isRepoDisconnected && disconnectedBannerMessage && (
                   <div className="flex items-start gap-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-4 py-3">
@@ -1733,8 +1840,6 @@ export default function ProjectSettingsPage() {
                                 <GitBranch className="h-3.5 w-3.5" />
                                 {connectedRepository.default_branch || 'main'}
                               </span>
-                              <span>·</span>
-                              <span>Last synced {formatConnectedAgo(connectedRepository.connected_at) || '—'}</span>
                               {getWorkspaceDisplayPath(connectedRepository.package_json_path) !== 'Root' && (
                                 <>
                                   <span>·</span>
@@ -1744,12 +1849,13 @@ export default function ProjectSettingsPage() {
                               {(importStatus?.status === 'finalizing' || connectedRepository.status === 'extracting' || connectedRepository.status === 'analyzing' || connectedRepository.status === 'finalizing') && (
                                 <>
                                   <span>·</span>
-                                  {importStatus?.status === 'finalizing' || connectedRepository.status === 'finalizing'
-                                    ? 'Finalizing'
-                                    : connectedRepository.status === 'extracting'
-                                      ? 'Extracting'
-                                      : 'Analyzing'}
-                                  {importStatus && importStatus.total > 0 && ` ${importStatus.ready}/${importStatus.total}`}
+                                  <span>
+                                    {importStatus?.status === 'finalizing' || connectedRepository.status === 'finalizing'
+                                      ? 'Finalizing'
+                                      : connectedRepository.status === 'extracting'
+                                        ? 'Syncing…'
+                                        : 'Analyzing…'}
+                                  </span>
                                 </>
                               )}
                             </div>
@@ -1789,52 +1895,6 @@ export default function ProjectSettingsPage() {
                           )}
                         </div>
                       </div>
-                      {importStatus && importStatus.total > 0 && (connectedRepository?.status === 'analyzing' || importStatus?.status === 'analyzing') && (
-                        <div className="px-5 pb-5 pt-0">
-                          <div className="flex justify-between text-xs text-foreground-secondary mb-2">
-                            <span>Analyzing dependencies...</span>
-                            <span>{importStatus.ready} / {importStatus.total}</span>
-                          </div>
-                          <div className="h-1.5 bg-border/60 rounded-full overflow-hidden">
-                            <div className="h-full bg-primary transition-all duration-500 rounded-full" style={{ width: `${Math.round((importStatus.ready / importStatus.total) * 100)}%` }} />
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Webhook health */}
-                      <div className="border-t border-border/60 px-5 py-3 flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-4 text-sm">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-medium text-foreground-secondary">Webhook Status</span>
-                            {(() => {
-                              const ws = (connectedRepository as any)?.webhook_status as string | undefined;
-                              const dot = ws === 'active' ? 'bg-emerald-500' : ws === 'inactive' ? 'bg-yellow-500' : ws === 'error' ? 'bg-red-500' : 'bg-gray-400';
-                              const label = ws === 'active' ? 'Active' : ws === 'inactive' ? 'Inactive' : ws === 'error' ? 'Error' : 'Unknown';
-                              return (
-                                <span className="flex items-center gap-1.5">
-                                  <span className={cn('h-2 w-2 rounded-full shrink-0', dot)} />
-                                  <span className="text-xs text-foreground">{label}</span>
-                                  {ws === 'active' && (connectedRepository as any)?.last_webhook_at && (
-                                    <span className="text-xs text-foreground-secondary">({formatConnectedAgo((connectedRepository as any).last_webhook_at)})</span>
-                                  )}
-                                </span>
-                              );
-                            })()}
-                          </div>
-                          {(connectedRepository as any)?.last_webhook_event && (
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-xs text-foreground-secondary">Last Event</span>
-                              <span className="text-xs font-mono text-foreground">{(connectedRepository as any).last_webhook_event}</span>
-                            </div>
-                          )}
-                        </div>
-                        {((connectedRepository as any)?.provider === 'gitlab' || (connectedRepository as any)?.provider === 'bitbucket') && (
-                          <Button variant="outline" size="sm" className="h-7 text-xs">
-                            <Webhook className="h-3.5 w-3.5 mr-1.5" />
-                            Re-register Webhook
-                          </Button>
-                        )}
-                      </div>
                     </div>
                   ) : (
                     <div className="flex items-center gap-4 py-5 px-5 rounded-lg border border-dashed border-border/60 bg-background-content/30">
@@ -1851,65 +1911,104 @@ export default function ProjectSettingsPage() {
                   )}
                 </section>
 
-                {/* Automation section */}
+                {/* Note: Cannot disconnect — right below repo card */}
+                {connectedRepository && (
+                  <div className="rounded-lg border border-border bg-background-card px-4 py-3">
+                    <div className="flex gap-3">
+                      <Info className="h-5 w-5 text-foreground-secondary shrink-0 mt-0.5" />
+                      <p className="text-sm text-foreground-secondary">
+                        Projects cannot be disconnected from a repository. To use a different repository, create a new project or remove this project.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Sync Frequency */}
                 {connectedRepository && (
                   <section>
-                    <h3 className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider pb-3 border-b border-border/60">Automation</h3>
-                    <div className="mt-4 rounded-lg border border-border bg-background-card overflow-hidden">
-                      <div className="flex items-center gap-4 px-4 py-3">
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium text-foreground">Pull Request Comments</div>
-                          <p className="text-xs text-foreground-secondary mt-0.5">
-                            Post dependency summaries on new PRs automatically.
-                          </p>
+                    <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                      <div className="p-6">
+                        <h3 className="text-base font-semibold text-foreground mb-1">Sync Frequency</h3>
+                        <p className="text-sm text-foreground-secondary mb-4">
+                          When Deptex re-extracts dependencies from this repository.
+                        </p>
+                        <div className="w-full space-y-2" role="radiogroup" aria-label="Sync frequency">
+                          {(() => {
+                            const plan = organization?.plan?.toLowerCase?.() ?? 'free';
+                            const canUseOnCommit = ['pro', 'team', 'enterprise'].includes(plan);
+                            return [
+                              { value: 'on_commit', label: 'On every commit', description: 'Re-extract on each push to the default branch.', locked: !canUseOnCommit },
+                              { value: 'daily', label: 'Daily', description: 'Re-extract once per day.', locked: false },
+                              { value: 'weekly', label: 'Weekly', description: 'Re-extract once per week.', locked: false },
+                              { value: 'manual', label: 'Manual only', description: 'Re-extract only when you trigger a sync.', locked: false },
+                            ].map((opt) => {
+                              const isSelected = syncFrequency === opt.value;
+                              const isLocked = opt.locked;
+                              return (
+                                <div key={opt.value} className="relative">
+                                  <button
+                                    type="button"
+                                    role="radio"
+                                    aria-checked={isSelected}
+                                    aria-disabled={isLocked}
+                                    onClick={() => !isLocked && handleSyncFrequencySelect(opt.value)}
+                                    disabled={isLocked}
+                                    className={cn(
+                                      'w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all',
+                                      isLocked && 'opacity-75 cursor-not-allowed',
+                                      !isLocked && (isSelected
+                                        ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20'
+                                        : 'bg-black/20 border-border text-foreground hover:border-foreground-secondary/30 hover:bg-black/30')
+                                    )}
+                                  >
+                                    <div className={cn('h-4 w-4 rounded-full border-2 flex-shrink-0 transition-colors', isSelected ? 'border-foreground bg-foreground' : 'border-foreground-secondary/50 bg-transparent')} aria-hidden />
+                                    <div className="flex-1 min-w-0">
+                                      <div className="text-sm font-medium text-foreground flex items-center gap-2">
+                                        {opt.label}
+                                        {isLocked && (
+                                          <span className="text-xs font-normal text-foreground-secondary bg-transparent border border-foreground-secondary/50 px-1.5 py-0.5 rounded">
+                                            Pro or higher
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p className="text-xs text-muted-foreground mt-0.5">{opt.description}</p>
+                                    </div>
+                                  </button>
+                                </div>
+                              );
+                            });
+                          })()}
                         </div>
-                        <Switch
-                          checked={pullRequestCommentsEnabled}
-                          onCheckedChange={handlePullRequestCommentsToggle}
-                          className="shrink-0 self-center"
-                        />
                       </div>
-                      <div className="border-t border-border/60" />
-                      <button
-                        type="button"
-                        onClick={() => handleAutoFixVulnerabilitiesToggle(!autoFixVulnerabilitiesEnabled)}
-                        className="w-full flex items-center gap-4 px-4 py-3 text-left hover:bg-background-subtle/50 transition-colors"
-                      >
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium text-foreground">Auto-Fix Vulnerabilities</div>
-                          <p className="text-xs text-foreground-secondary mt-0.5">
-                            Create fix PRs for critical security issues.
-                          </p>
-                        </div>
-                        <Switch
-                          checked={autoFixVulnerabilitiesEnabled}
-                          onCheckedChange={handleAutoFixVulnerabilitiesToggle}
-                          className="shrink-0 self-center pointer-events-none"
-                        />
-                      </button>
-                    </div>
-
-                    <div className="mt-5">
-                      <div className="text-sm font-medium text-foreground mb-1">Sync Frequency</div>
-                      <p className="text-xs text-foreground-secondary mb-3">
-                        Controls when Deptex re-extracts dependencies from this repository.
-                      </p>
-                      <Select value={syncFrequency} onValueChange={handleSyncFrequencyChange}>
-                        <SelectTrigger className="w-full max-w-xs px-3 py-2.5 h-auto bg-background-content">
-                          <SelectValue placeholder="Select frequency" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="on_commit">On Every Commit</SelectItem>
-                          <SelectItem value="daily">Daily</SelectItem>
-                          <SelectItem value="weekly">Weekly</SelectItem>
-                          <SelectItem value="manual">Manual Only</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
+                        <p className="text-xs text-foreground-secondary">
+                          Choose when to re-extract dependencies. Click Save to apply.
+                        </p>
+                        {(() => {
+                          const savedSync = (connectedRepository as any)?.sync_frequency ?? 'daily';
+                          const plan = organization?.plan?.toLowerCase?.() ?? 'free';
+                          const canUseOnCommit = ['pro', 'team', 'enterprise'].includes(plan);
+                          const wouldSaveOnCommit = syncFrequency === 'on_commit' && !canUseOnCommit;
+                          const hasChange = syncFrequency !== savedSync && !wouldSaveOnCommit;
+                          return (
+                            <Button
+                              onClick={handleSaveSyncFrequency}
+                              disabled={syncFrequencySaving || !hasChange}
+                              size="sm"
+                              variant="default"
+                              className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 disabled:opacity-50 disabled:pointer-events-none"
+                            >
+                              {syncFrequencySaving && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
+                              Save
+                            </Button>
+                          );
+                        })()}
+                      </div>
                     </div>
                   </section>
                 )}
 
-                {/* Recent Activity */}
+                {/* Recent Activity — Vercel-style deployments table */}
                 {connectedRepository && (
                   <div>
                     <h3 className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider pb-3 border-b border-border/60">Recent Activity</h3>
@@ -1917,66 +2016,148 @@ export default function ProjectSettingsPage() {
                       <table className="w-full">
                         <thead className="bg-background-card-header border-b border-border">
                           <tr>
-                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Commit</th>
+                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Source</th>
                             <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</th>
                             <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Time</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
-                          {([
-                            { id: 8291, shortId: '8sGTNkrBp', commit: '8a2b9f', time: '2 mins ago', duration: '1.2s', status: 'success' as const, trigger: 'Webhook' },
-                            { id: 8290, shortId: '4JuN99N55', commit: '4d1c2a', time: '4 hours ago', duration: '0.4s', status: 'error' as const, trigger: 'Push to main' },
-                            { id: 8289, shortId: 'B55SoE5rj', commit: 'b19c21', time: '1 day ago', duration: '1.8s', status: 'success' as const, trigger: 'Scheduled' },
-                          ] as SyncLogEntry[]).map((log) => (
-                            <tr
-                              key={log.id}
-                              onClick={() => setSelectedSyncLog(log)}
-                              className="group hover:bg-table-hover transition-colors cursor-pointer"
-                            >
-                              <td className="px-4 py-3">
-                                <div className="flex items-center gap-2">
-                                  <GitCommit className="h-4 w-4 text-foreground-secondary shrink-0" />
-                                  <span className="text-sm font-mono text-foreground">{log.commit}</span>
-                                </div>
-                              </td>
-                              <td className="px-4 py-3">
-                                <div className="flex items-center gap-2">
-                                  <span className={cn(
-                                    'h-2 w-2 rounded-full shrink-0',
-                                    log.status === 'success' ? 'bg-success' : 'bg-destructive'
-                                  )} />
-                                  <span className="text-sm text-foreground-secondary">
-                                    {log.status === 'success' ? 'Complete' : 'Failed'}
-                                  </span>
-                                </div>
-                              </td>
-                              <td className="px-4 py-3 text-right text-sm text-foreground-secondary">
-                                {log.time} by henryru
+                          {extractionRunsLoading ? (
+                            [1, 2, 3, 4, 5].map((i) => (
+                              <tr key={i} className="animate-pulse">
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center gap-2">
+                                    <div className="h-4 w-4 bg-muted rounded shrink-0" />
+                                    <div className="h-4 bg-muted rounded w-24" />
+                                    <div className="h-4 bg-muted rounded w-32 hidden sm:block" />
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="flex flex-col gap-1">
+                                    <div className="flex items-center gap-2">
+                                      <div className="h-2 w-2 rounded-full bg-muted" />
+                                      <div className="h-4 bg-muted rounded w-16" />
+                                    </div>
+                                    <div className="h-3 bg-muted rounded w-8" />
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 text-right">
+                                  <div className="flex flex-col items-end gap-1">
+                                    <div className="h-4 bg-muted rounded w-14 ml-auto" />
+                                    <div className="flex items-center gap-1.5">
+                                      <div className="h-5 w-5 rounded-full bg-muted" />
+                                      <div className="h-3 bg-muted rounded w-16" />
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))
+                          ) : extractionRuns.length === 0 ? (
+                            <tr>
+                              <td colSpan={3} className="px-4 py-8 text-center text-sm text-foreground-secondary">
+                                No extraction runs yet. Sync the repository to see activity.
                               </td>
                             </tr>
-                          ))}
+                          ) : (
+                            extractionRuns.map((run, index) => {
+                              const isActive = run.status === 'queued' || run.status === 'processing';
+                              const duration = formatRunDuration(run.created_at, run.completed_at ?? null, run.status);
+                              const triggerLabel = run.commit_sha
+                                ? [run.branch || 'main', (run.commit_sha as string).slice(0, 7), (run.commit_message || '').split('\n')[0].slice(0, 50)].filter(Boolean).join(' ')
+                                : run.trigger_type === 'initial'
+                                  ? 'Initial extraction'
+                                  : 'Sync';
+                              const byDisplay = run.commit_author?.username
+                                ? run.commit_author.username
+                                : run.started_by?.full_name ?? 'Deptex';
+                              const byAvatarUrl = run.commit_author?.avatar_url ?? run.started_by?.avatar_url;
+                              return (
+                                <tr
+                                  key={run.run_id}
+                                  onClick={() => setSelectedExtractionRunId(run.run_id)}
+                                  className="group hover:bg-table-hover transition-colors cursor-pointer"
+                                >
+                                  <td className="px-4 py-3">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      {run.commit_sha ? (
+                                        <>
+                                          <GitCommit className="h-4 w-4 text-foreground-secondary shrink-0" />
+                                          <span className="text-sm font-mono text-foreground truncate">
+                                            {run.branch || 'main'} {(run.commit_sha as string).slice(0, 7)}
+                                          </span>
+                                          {run.commit_message && (
+                                            <span className="text-sm text-foreground-secondary truncate hidden sm:inline">
+                                              {(run.commit_message as string).split('\n')[0].slice(0, 40)}
+                                            </span>
+                                          )}
+                                        </>
+                                      ) : (
+                                        <span className="text-sm text-foreground">{triggerLabel}</span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <div className="flex flex-col gap-0.5">
+                                      <div className="flex items-center gap-2">
+                                        {isActive ? (
+                                          <>
+                                            <span className="h-2 w-2 rounded-full shrink-0 bg-amber-400" aria-hidden />
+                                            <span className="text-sm text-foreground">In progress</span>
+                                          </>
+                                        ) : run.status === 'completed' ? (
+                                          <>
+                                            <span className="h-2 w-2 rounded-full shrink-0 bg-emerald-500" />
+                                            <span className="text-sm text-foreground-secondary">Ready</span>
+                                          </>
+                                        ) : run.status === 'cancelled' ? (
+                                          <>
+                                            <span className="h-2 w-2 rounded-full shrink-0 bg-amber-500" />
+                                            <span className="text-sm text-foreground-secondary">Cancelled</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <span className="h-2 w-2 rounded-full shrink-0 bg-destructive" />
+                                            <span className="text-sm text-foreground-secondary">Error</span>
+                                          </>
+                                        )}
+                                      </div>
+                                      <span className="text-xs text-muted-foreground">{duration}</span>
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3 text-right">
+                                    <div className="flex flex-col items-end gap-0.5">
+                                      <span className="text-sm text-foreground-secondary">{formatConnectedAgo(run.created_at)}</span>
+                                      <span className="text-xs text-muted-foreground flex items-center gap-1.5 justify-end">
+                                        by
+                                        {run.commit_author ? (
+                                          <Avatar className="h-5 w-5">
+                                            {byAvatarUrl && <AvatarImage src={byAvatarUrl} alt="" />}
+                                            <AvatarFallback className="text-[10px]">{byDisplay.slice(0, 2).toUpperCase()}</AvatarFallback>
+                                          </Avatar>
+                                        ) : (
+                                          <img src="/images/logo.png" alt="" className="h-5 w-5 rounded-full object-contain shrink-0" aria-hidden />
+                                        )}
+                                        <span className="truncate max-w-[100px]">{byDisplay}</span>
+                                      </span>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
                         </tbody>
                       </table>
                     </div>
                   </div>
                 )}
 
-                {/* Note: Cannot disconnect */}
-                {connectedRepository && (
-                  <div className="rounded-lg border border-border/60 bg-background-content/30 px-4 py-4">
-                    <p className="text-sm text-foreground-secondary">
-                      Projects cannot be disconnected from a repository. To use a different repository, create a new project or remove this project.
-                    </p>
-                  </div>
-                )}
-
                 {/* Sync detail sidebar — live extraction logs */}
-                {(selectedSyncLog || showExtractionLogs) && (
+                {(selectedExtractionRunId !== null || showExtractionLogs) && (
                   <SyncDetailSidebar
-                    entry={selectedSyncLog ?? undefined}
                     projectId={projectId!}
                     organizationId={organizationId}
-                    onClose={() => { setSelectedSyncLog(null); setShowExtractionLogs(false); }}
+                    initialRunId={selectedExtractionRunId ?? undefined}
+                    onClose={() => { setSelectedExtractionRunId(null); setShowExtractionLogs(false); }}
                     onCancelled={() => reloadProject?.()}
                   />
                 )}
@@ -2140,7 +2321,7 @@ export default function ProjectSettingsPage() {
                           The owner team has full control over this project including settings and member management.
                         </p>
                         {projectTeams?.owner_team ? (
-                          <div className="flex items-center gap-3 p-3 bg-background rounded-lg border border-border">
+                          <div className="flex items-center gap-3 p-3 bg-black/20 rounded-lg border border-border">
                             <div className="flex-1 min-w-0">
                               <div className="text-sm font-medium text-foreground truncate">
                                 {projectTeams.owner_team.name}

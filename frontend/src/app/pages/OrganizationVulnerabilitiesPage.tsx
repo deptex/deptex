@@ -110,13 +110,19 @@ export default function OrganizationVulnerabilitiesPage() {
           ...teamsWithAnyProjects,
           ...(ungroupedProjects.length > 0 ? [{ id: UNGROUPED_TEAM_ID, name: UNGROUPED_TEAM_NAME }] : []),
         ];
+        const projectById = new Map<string, Project>(allProjects.map((p: Project) => [p.id, p]));
         const projectLoads = Array.from(projectIdsToLoad).map((projectId) =>
-          loadProjectVulnerabilityGraphData(organization.id, projectId).then((result) => ({
-            projectId,
-            projectName: projectMeta.get(projectId)?.name ?? 'Project',
-            framework: projectMeta.get(projectId)?.framework ?? null,
-            graphDepNodes: result.graphDepNodes,
-          }))
+          loadProjectVulnerabilityGraphData(organization.id, projectId).then((result) => {
+            const proj = projectById.get(projectId);
+            const isExtracting = proj?.repo_status != null && proj.repo_status !== 'ready';
+            return {
+              projectId,
+              projectName: projectMeta.get(projectId)?.name ?? 'Project',
+              framework: projectMeta.get(projectId)?.framework ?? null,
+              graphDepNodes: result.graphDepNodes,
+              isExtracting,
+            };
+          })
         );
 
         return Promise.all(projectLoads).then((projectDataList) => {

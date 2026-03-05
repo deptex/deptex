@@ -117,6 +117,16 @@ export interface ExtractionJob {
   integration_id?: string;
 }
 
+/** Optional metadata for extraction run display (trigger, commit, who started it). */
+export type ExtractionJobMeta = {
+  trigger_type?: 'initial' | 'webhook' | 'manual';
+  started_by_user_id?: string;
+  commit_sha?: string;
+  commit_message?: string;
+  branch?: string;
+  commit_author?: { username?: string; avatar_url?: string };
+};
+
 /**
  * Queue an extraction job by inserting into Supabase extraction_jobs table
  * and starting a Fly.io machine to process it.
@@ -132,7 +142,8 @@ export async function queueExtractionJob(
     ecosystem?: string;
     provider?: string;
     integration_id?: string;
-  }
+  },
+  meta?: ExtractionJobMeta
 ): Promise<{ success: boolean; error?: string; run_id?: string }> {
   try {
     const runId = crypto.randomUUID();
@@ -167,20 +178,30 @@ export async function queueExtractionJob(
       console.warn('[EXTRACT] Plan limit check failed (allowing):', e.message);
     }
 
+    const payload: Record<string, unknown> = {
+      repo_full_name: repoRecord.repo_full_name,
+      installation_id: repoRecord.installation_id,
+      default_branch: repoRecord.default_branch,
+      package_json_path: repoRecord.package_json_path ?? '',
+      ecosystem: repoRecord.ecosystem ?? 'npm',
+      provider: repoRecord.provider ?? 'github',
+      integration_id: repoRecord.integration_id,
+    };
+    if (meta) {
+      if (meta.trigger_type) payload.trigger_type = meta.trigger_type;
+      if (meta.started_by_user_id) payload.started_by_user_id = meta.started_by_user_id;
+      if (meta.commit_sha) payload.commit_sha = meta.commit_sha;
+      if (meta.commit_message) payload.commit_message = meta.commit_message;
+      if (meta.branch) payload.branch = meta.branch;
+      if (meta.commit_author) payload.commit_author = meta.commit_author;
+    }
+
     const { error: insertError } = await supabase.from('extraction_jobs').insert({
       project_id: projectId,
       organization_id: organizationId,
       status: 'queued',
       run_id: runId,
-      payload: {
-        repo_full_name: repoRecord.repo_full_name,
-        installation_id: repoRecord.installation_id,
-        default_branch: repoRecord.default_branch,
-        package_json_path: repoRecord.package_json_path ?? '',
-        ecosystem: repoRecord.ecosystem ?? 'npm',
-        provider: repoRecord.provider ?? 'github',
-        integration_id: repoRecord.integration_id,
-      },
+      payload,
     });
 
     if (insertError) {

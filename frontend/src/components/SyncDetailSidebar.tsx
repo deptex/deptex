@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Check, X, Copy, Download, ChevronDown, Loader2, Ban } from 'lucide-react';
+import { Check, Copy, ChevronDown, Loader2, Ban } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Button } from './ui/button';
 import { useToast } from '../hooks/use-toast';
@@ -21,6 +21,7 @@ interface SyncDetailSidebarProps {
   entry?: SyncLogEntry;
   projectId: string;
   organizationId: string;
+  initialRunId?: string;
   onClose: () => void;
   onCancelled?: () => void;
 }
@@ -53,7 +54,7 @@ function levelDot(level: string): string {
   }
 }
 
-export function SyncDetailSidebar({ projectId, organizationId, onClose, onCancelled }: SyncDetailSidebarProps) {
+export function SyncDetailSidebar({ projectId, organizationId, initialRunId, onClose, onCancelled }: SyncDetailSidebarProps) {
   const [panelVisible, setPanelVisible] = useState(false);
   const [logs, setLogs] = useState<ExtractionLog[]>([]);
   const [runs, setRuns] = useState<ExtractionRun[]>([]);
@@ -61,6 +62,8 @@ export function SyncDetailSidebar({ projectId, organizationId, onClose, onCancel
   const [showRunSelector, setShowRunSelector] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
+  const [logsLoading, setLogsLoading] = useState(true);
+  const [copied, setCopied] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
@@ -76,9 +79,23 @@ export function SyncDetailSidebar({ projectId, organizationId, onClose, onCancel
     api.getExtractionRuns(organizationId, projectId).then(setRuns).catch(() => {});
   }, [organizationId, projectId]);
 
+  // When initialRunId is provided, select that run once runs are loaded
+  useEffect(() => {
+    if (!initialRunId || runs.length === 0) return;
+    const exists = runs.some((r) => r.run_id === initialRunId);
+    if (exists) setSelectedRunId(initialRunId);
+  }, [initialRunId, runs]);
+
   useEffect(() => {
     const runId = selectedRunId || undefined;
-    api.getExtractionLogs(organizationId, projectId, runId).then(setLogs).catch(() => {});
+    setLogsLoading(true);
+    api.getExtractionLogs(organizationId, projectId, runId).then((data) => {
+      setLogs(data);
+      setLogsLoading(false);
+    }).catch(() => {
+      setLogs([]);
+      setLogsLoading(false);
+    });
   }, [organizationId, projectId, selectedRunId]);
 
   useEffect(() => {
@@ -129,23 +146,22 @@ export function SyncDetailSidebar({ projectId, organizationId, onClose, onCancel
     }
   }, [organizationId, projectId, toast, onCancelled]);
 
-  const logText = logs.map((l) => `${formatTimestamp(l.created_at)}  [${l.level}] ${l.message}`).join('\n');
+  // Filter out atom analysis progress / elapsed messages
+  const filteredLogs = logs.filter((line) => {
+    const msg = (line.message || '').toLowerCase();
+    if (/atom analysis in progress/i.test(msg)) return false;
+    if (/\d+\s*minute\s*elapsed|elapsed\s*:\s*\d+/i.test(msg)) return false;
+    return true;
+  });
+
+  const logText = filteredLogs.map((l) => `${formatTimestamp(l.created_at)}  [${l.level}] ${l.message}`).join('\n');
 
   const handleCopyLogs = useCallback(() => {
     navigator.clipboard.writeText(logText);
+    setCopied(true);
     toast({ title: 'Logs copied to clipboard' });
+    setTimeout(() => setCopied(false), 2000);
   }, [logText, toast]);
-
-  const handleDownloadLogs = useCallback(() => {
-    const blob = new Blob([logText], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `extraction-${projectId}.log`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast({ title: 'Logs downloaded' });
-  }, [logText, projectId, toast]);
 
   const lastLog = logs[logs.length - 1];
   const isComplete = lastLog?.step === 'complete' && (lastLog.level === 'success' || lastLog.level === 'error');
@@ -175,30 +191,22 @@ export function SyncDetailSidebar({ projectId, organizationId, onClose, onCancel
         <div className="px-6 pt-5 pb-4 flex-shrink-0 border-b border-zinc-800">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-zinc-100">Extraction Logs</h2>
-            <div className="flex items-center gap-2">
-              {isActive && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 text-xs border-zinc-700 text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800"
-                  onClick={handleCancel}
-                  disabled={cancelling}
-                >
-                  {cancelling ? (
-                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                  ) : (
-                    <Ban className="h-3.5 w-3.5 mr-1.5" />
-                  )}
-                  Cancel
-                </Button>
-              )}
-              <button
-                onClick={handleClose}
-                className="h-8 w-8 rounded-md flex items-center justify-center text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+            {isActive && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs border-zinc-700 text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800"
+                onClick={handleCancel}
+                disabled={cancelling}
               >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+                {cancelling ? (
+                  <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                ) : (
+                  <Ban className="h-3.5 w-3.5 mr-1.5" />
+                )}
+                Cancel
+              </Button>
+            )}
           </div>
 
           {/* Status + Run selector */}
@@ -212,7 +220,7 @@ export function SyncDetailSidebar({ projectId, organizationId, onClose, onCancel
               )}
               {isComplete && hasError && (
                 <span className="flex items-center gap-1.5 text-red-400">
-                  <X className="h-4 w-4" />
+                  <span className="h-2 w-2 rounded-full bg-red-400" />
                   Failed
                 </span>
               )}
@@ -222,7 +230,7 @@ export function SyncDetailSidebar({ projectId, organizationId, onClose, onCancel
                   In progress
                 </span>
               )}
-              {!isActive && logs.length === 0 && (
+              {!isActive && logs.length === 0 && !logsLoading && (
                 <span className="text-zinc-500">No logs yet</span>
               )}
             </div>
@@ -278,32 +286,31 @@ export function SyncDetailSidebar({ projectId, organizationId, onClose, onCancel
         <div className="flex-1 flex flex-col min-h-0 px-6 py-4">
           <div className="flex items-center justify-between gap-4 mb-3 flex-shrink-0">
             <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Output</h3>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-xs border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
-                onClick={handleDownloadLogs}
-                disabled={logs.length === 0}
-              >
-                <Download className="h-3 w-3 mr-1.5" />
-                Download
-              </Button>
-              <button
-                type="button"
-                onClick={handleCopyLogs}
-                disabled={logs.length === 0}
-                className="h-7 w-7 rounded-md flex items-center justify-center text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors disabled:opacity-50"
-                aria-label="Copy logs"
-              >
-                <Copy className="h-3.5 w-3.5" />
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={handleCopyLogs}
+              disabled={filteredLogs.length === 0}
+              className="h-7 w-7 rounded-md flex items-center justify-center text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors disabled:opacity-50"
+              aria-label={copied ? 'Copied' : 'Copy logs'}
+            >
+              {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+            </button>
           </div>
 
           <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto custom-scrollbar">
+            {(logsLoading || (logs.length === 0 && isActive)) ? (
+              <div className="font-mono text-xs leading-relaxed space-y-0.5">
+                {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
+                  <div key={i} className="flex items-start gap-3 py-0.5">
+                    <span className="h-3 w-14 bg-zinc-800 rounded shrink-0 animate-pulse" />
+                    <span className="h-2 w-2 rounded-full bg-zinc-800 shrink-0 mt-1.5 animate-pulse" />
+                    <span className="h-3 flex-1 max-w-full bg-zinc-800 rounded animate-pulse" style={{ width: `${60 + (i % 3) * 15}%` }} />
+                  </div>
+                ))}
+              </div>
+            ) : (
             <div className="font-mono text-xs leading-relaxed space-y-0.5">
-              {logs.map((line) => (
+              {filteredLogs.map((line) => (
                 <div key={line.id}>
                   <div
                     className="flex items-start gap-3 py-0.5 cursor-pointer hover:bg-zinc-900/50 rounded px-1 -mx-1"
@@ -330,6 +337,7 @@ export function SyncDetailSidebar({ projectId, organizationId, onClose, onCancel
                 </div>
               ))}
             </div>
+            )}
           </div>
 
           <div className="flex items-center gap-4 mt-3 text-[11px] text-zinc-600 flex-shrink-0 border-t border-zinc-800 pt-3">

@@ -1571,6 +1571,9 @@ router.get('/:id/projects/:projectId', async (req: AuthRequest, res) => {
       auto_bump: project.auto_bump !== false,
       role: userRole,
       permissions: userPermissions,
+      asset_tier: project.asset_tier ?? null,
+      asset_tier_id: project.asset_tier_id ?? null,
+      status_id: project.status_id ?? null,
     };
 
     res.json(formattedProject);
@@ -3807,6 +3810,7 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
           pull_request_comments_enabled: (repoRecord as { pull_request_comments_enabled?: boolean }).pull_request_comments_enabled !== false,
           auto_fix_vulnerabilities_enabled: (repoRecord as { auto_fix_vulnerabilities_enabled?: boolean }).auto_fix_vulnerabilities_enabled === true,
           connected_at: (repoRecord as { created_at?: string }).created_at ?? null,
+          sync_frequency: (repoRecord as { sync_frequency?: string }).sync_frequency ?? 'daily',
         }
         : null,
       repositories: allRepos,
@@ -3972,6 +3976,7 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
           status: 'initializing',
           extraction_step: 'queued',
           extraction_error: null,
+          sync_frequency: 'daily',
           updated_at: new Date().toISOString(),
         },
         { onConflict: 'project_id' }
@@ -3993,7 +3998,7 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
       ecosystem: resolvedEcosystem,
       provider: resolvedProvider,
       integration_id: integrationId ?? undefined,
-    });
+    }, { trigger_type: 'initial' });
 
     if (!queueResult.success) {
       await supabase
@@ -4102,7 +4107,7 @@ router.get('/:id/projects/:projectId/extraction/logs', async (req: AuthRequest, 
 });
 
 // GET /api/organizations/:id/projects/:projectId/extraction/runs - Get extraction run history
-// Uses extraction_logs so previous attempts (e.g. after recovery requeue) stay visible; merges current job status when run_id matches.
+// Uses extraction_logs so previous attempts (e.g. after recovery requeue) stay visible; merges job status and payload when run_id matches.
 router.get('/:id/projects/:projectId/extraction/runs', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
@@ -4113,37 +4118,92 @@ router.get('/:id/projects/:projectId/extraction/runs', async (req: AuthRequest, 
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
-    const [{ data: runsFromLogs, error: rpcError }, { data: jobRows }] = await Promise.all([
-      supabase.rpc('get_extraction_runs_for_project', { p_project_id: projectId }),
-      supabase.from('extraction_jobs').select('run_id, status, attempts, created_at, completed_at, error').eq('project_id', projectId).limit(1).maybeSingle(),
-    ]);
+    const { data: runsFromLogs, error: rpcError } = await supabase.rpc('get_extraction_runs_for_project', { p_project_id: projectId });
+    const runs = (runsFromLogs ?? []) as Array<{ run_id: string; started_at: string }>;
+    const runIds = runs.map((r) => r.run_id);
+    const { data: allJobRows } = runIds.length > 0
+      ? await supabase.from('extraction_jobs').select('run_id, status, attempts, created_at, completed_at, error, payload').eq('project_id', projectId).in('run_id', runIds)
+      : { data: [] };
 
     if (rpcError) {
       const rpcMissing = /function.*does not exist|PGRST202/i.test(rpcError.message || '');
       if (rpcMissing) {
         const { data: fallback } = await supabase
           .from('extraction_jobs')
-          .select('run_id, status, attempts, created_at, completed_at, error')
+          .select('run_id, status, attempts, created_at, completed_at, error, payload')
           .eq('project_id', projectId)
           .order('created_at', { ascending: false })
           .limit(20);
-        return res.json(fallback ?? []);
+        const fallbackOut = (fallback ?? []).map((j: any) => {
+          const p = j.payload ?? {};
+          return {
+            run_id: j.run_id,
+            status: j.status,
+            attempts: j.attempts ?? 1,
+            created_at: j.created_at,
+            completed_at: j.completed_at,
+            error: j.error,
+            trigger_type: p.trigger_type,
+            started_by_user_id: p.started_by_user_id,
+            commit_sha: p.commit_sha,
+            commit_message: p.commit_message,
+            branch: p.branch,
+            commit_author: p.commit_author,
+          };
+        });
+        return res.json(fallbackOut);
       }
       throw rpcError;
     }
 
-    const runs = (runsFromLogs ?? []) as Array<{ run_id: string; started_at: string }>;
-    const job = jobRows ?? null;
+    const jobByRunId = new Map<string, any>();
+    for (const j of allJobRows ?? []) {
+      if (j.run_id && !jobByRunId.has(j.run_id)) jobByRunId.set(j.run_id, j);
+    }
+
+    const startedByUserIds = new Set<string>();
+    for (const j of allJobRows ?? []) {
+      const uid = (j.payload as any)?.started_by_user_id;
+      if (uid) startedByUserIds.add(uid);
+    }
+    let startedByMap: Record<string, { avatar_url?: string; full_name?: string }> = {};
+    if (startedByUserIds.size > 0) {
+      const { data: profiles } = await supabase
+        .from('user_profiles')
+        .select('user_id, avatar_url, full_name')
+        .in('user_id', [...startedByUserIds]);
+      for (const p of profiles ?? []) {
+        startedByMap[p.user_id] = { avatar_url: p.avatar_url ?? undefined, full_name: p.full_name ?? undefined };
+      }
+    }
+
+    function payloadToMeta(payload: any): Record<string, unknown> {
+      if (!payload || typeof payload !== 'object') return {};
+      const meta: Record<string, unknown> = {};
+      if (payload.trigger_type) meta.trigger_type = payload.trigger_type;
+      if (payload.started_by_user_id) {
+        meta.started_by_user_id = payload.started_by_user_id;
+        const profile = startedByMap[payload.started_by_user_id];
+        if (profile) meta.started_by = profile;
+      }
+      if (payload.commit_sha) meta.commit_sha = payload.commit_sha;
+      if (payload.commit_message) meta.commit_message = payload.commit_message;
+      if (payload.branch) meta.branch = payload.branch;
+      if (payload.commit_author) meta.commit_author = payload.commit_author;
+      return meta;
+    }
 
     const out = runs.map((r) => {
-      const isCurrentJob = job && r.run_id === job.run_id;
+      const job = jobByRunId.get(r.run_id) ?? null;
+      const payload = job?.payload;
       return {
         run_id: r.run_id,
-        status: isCurrentJob ? job.status : 'completed',
-        attempts: isCurrentJob ? job.attempts : 1,
+        status: job ? job.status : 'completed',
+        attempts: job ? job.attempts : 1,
         created_at: r.started_at,
-        completed_at: isCurrentJob ? job.completed_at : null,
-        error: isCurrentJob ? job.error : null,
+        completed_at: job?.completed_at ?? null,
+        error: job?.error ?? null,
+        ...payloadToMeta(payload),
       };
     });
 
@@ -4223,6 +4283,21 @@ router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthR
       return res.status(400).json({ error: `Invalid sync_frequency. Must be one of: ${VALID_SYNC_FREQUENCIES.join(', ')}` });
     }
 
+    if (sync_frequency === 'on_commit') {
+      try {
+        const { getOrgPlan, PLAN_FEATURES } = require('../lib/plan-limits');
+        const plan = await getOrgPlan(id);
+        const features = PLAN_FEATURES[plan.plan_tier] ?? PLAN_FEATURES.free;
+        if (!features.sync_frequency) {
+          return res.status(403).json({
+            error: 'On every commit is available on Pro plan or higher. Upgrade to enable sync on every commit.',
+          });
+        }
+      } catch (_) {
+        /* fail open if plan-limits unavailable */
+      }
+    }
+
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (typeof pull_request_comments_enabled === 'boolean') {
       updates.pull_request_comments_enabled = pull_request_comments_enabled;
@@ -4251,7 +4326,7 @@ router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthR
       status: updated.status,
       pull_request_comments_enabled: (updated as { pull_request_comments_enabled?: boolean }).pull_request_comments_enabled !== false,
       auto_fix_vulnerabilities_enabled: (updated as { auto_fix_vulnerabilities_enabled?: boolean }).auto_fix_vulnerabilities_enabled === true,
-      sync_frequency: (updated as any).sync_frequency ?? 'on_commit',
+      sync_frequency: (updated as any).sync_frequency ?? 'daily',
     });
   } catch (error: any) {
     console.error('Error updating repository settings:', error);
@@ -11075,7 +11150,7 @@ router.post('/:id/projects/:projectId/sync', async (req: AuthRequest, res) => {
       ecosystem: repo.ecosystem ?? 'npm',
       provider: repo.provider ?? 'github',
       integration_id: repo.integration_id,
-    });
+    }, { trigger_type: 'manual', started_by_user_id: userId });
 
     if (!result.success) {
       return res.status(500).json({ error: result.error ?? 'Failed to queue extraction' });

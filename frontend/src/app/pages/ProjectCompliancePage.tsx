@@ -47,6 +47,7 @@ import {
 } from '../../lib/api';
 import { downloadFile } from '../../lib/compliance-utils';
 import { useToast } from '../../hooks/use-toast';
+import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
 import { Toaster } from '../../components/ui/toaster';
 import { cn } from '../../lib/utils';
 import { ComplianceSidepanel, type ComplianceSection } from '../../components/ComplianceSidepanel';
@@ -465,7 +466,8 @@ export default function ProjectCompliancePage() {
   const [confirming, setConfirming] = useState(false);
 
   const canManageSettings = userPermissions?.edit_settings === true || userPermissions?.view_settings === true;
-  const isExtracting = (project as any)?.extraction_status === 'processing';
+  const realtime = useRealtimeStatus(organizationId, projectId);
+  const isExtracting = realtime.status !== 'ready';
 
   const loadData = useCallback(async () => {
     if (!organizationId || !projectId) return;
@@ -785,22 +787,19 @@ export default function ProjectCompliancePage() {
 
         <div className="flex-1 min-w-0 overflow-auto">
           <div className="px-6 py-6 mx-auto max-w-5xl">
-            {/* Page header - Re-evaluate only when on project/policy/updates and not extracting */}
-            {(activeSection === 'project' || activeSection === 'policy-results' || activeSection === 'updates') && (
-              <div className="flex items-center justify-between mb-6">
-                <h1 className="text-2xl font-bold text-foreground">Compliance</h1>
-                {canManageSettings && !isExtracting && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleReevaluate}
-                    disabled={reevaluating || Date.now() < reevalDisabledUntil}
-                    className="h-8 text-xs"
-                  >
-                    {reevaluating ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
-                    Re-evaluate
-                  </Button>
-                )}
+            {/* Re-evaluate button when on project/policy/updates and not extracting */}
+            {(activeSection === 'project' || activeSection === 'policy-results' || activeSection === 'updates') && canManageSettings && !isExtracting && (
+              <div className="flex items-center justify-end mb-6">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleReevaluate}
+                  disabled={reevaluating || Date.now() < reevalDisabledUntil}
+                  className="h-8 text-xs"
+                >
+                  {reevaluating ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
+                  Re-evaluate
+                </Button>
               </div>
             )}
 
@@ -813,7 +812,7 @@ export default function ProjectCompliancePage() {
                     <div className="flex-1 space-y-2 min-w-0">
                       <h3 className="text-sm font-semibold text-foreground">Project extraction still in progress</h3>
                       <p className="text-sm text-foreground-secondary">
-                        Dependencies will appear here once extraction completes.
+                        Compliance will appear here once extraction completes.
                       </p>
                     </div>
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
@@ -879,13 +878,7 @@ export default function ProjectCompliancePage() {
                       </div>
                     )}
 
-                    {isExtracting && (
-                      <div className="mt-3 flex items-center gap-2 text-xs text-yellow-400">
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        Extraction running...
-                      </div>
-                    )}
-                    {isStale && !isExtracting && (
+                    {isStale && (
                       <div className="mt-3 flex items-center gap-2 text-xs text-yellow-400">
                         <AlertTriangle className="h-3.5 w-3.5" />
                         Policy data may be out of date. Consider re-evaluating.
@@ -1015,7 +1008,7 @@ export default function ProjectCompliancePage() {
                     <div className="flex-1 space-y-2 min-w-0">
                       <h3 className="text-sm font-semibold text-foreground">Project extraction still in progress</h3>
                       <p className="text-sm text-foreground-secondary">
-                        Policy results will appear here once extraction completes.
+                        Compliance will appear here once extraction completes.
                       </p>
                     </div>
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">

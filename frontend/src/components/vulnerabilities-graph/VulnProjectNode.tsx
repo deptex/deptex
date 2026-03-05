@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Folder, Users } from 'lucide-react';
+import { Folder, Users, Loader2 } from 'lucide-react';
 import { FrameworkIcon } from '../framework-icon';
 import type { WorstSeverity } from './useVulnerabilitiesGraphLayout';
 
@@ -15,6 +15,10 @@ export interface VulnProjectNodeData {
   isTeamNode?: boolean;
   /** Phase 15: Number of vulnerabilities with SLA breached. Shown as "SLA: X breached" when > 0. */
   slaBreachCount?: number;
+  /** When true, show extracting spinner and no dependency/vulnerability data (like Project Security tab). */
+  isExtracting?: boolean;
+  /** When true (team node only), team has projects still extracting — show grey so color reflects known risk only. */
+  hasExtractingProjects?: boolean;
 }
 
 const NODE_WIDTH = 220;
@@ -67,13 +71,22 @@ function getColorScheme(worstSeverity: WorstSeverity | undefined) {
   }
 }
 
+const greyExtractingScheme = {
+  border: 'border-slate-400/40',
+  shadow: 'shadow-slate-400/5',
+  glow: 'bg-slate-400',
+  iconBg: 'bg-slate-400/15',
+  iconText: 'text-slate-500',
+};
+
 function VulnProjectNodeComponent({ data }: NodeProps) {
-  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount } =
+  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, hasExtractingProjects } =
     (data as unknown as VulnProjectNodeData) ?? {};
   const hasKnownFramework = framework && framework.toLowerCase() !== 'unknown';
   const frameworkIdForIcon = hasKnownFramework ? framework : undefined;
-  const colorScheme = getColorScheme(worstSeverity);
-  const showSlaBreach = typeof slaBreachCount === 'number' && slaBreachCount > 0;
+  const useGrey = isExtracting || (isTeamNode && hasExtractingProjects);
+  const colorScheme = useGrey ? greyExtractingScheme : getColorScheme(worstSeverity);
+  const showSlaBreach = !isExtracting && typeof slaBreachCount === 'number' && slaBreachCount > 0;
 
   return (
     <div className="relative" style={{ minWidth: NODE_WIDTH, minHeight: NODE_HEIGHT }}>
@@ -89,9 +102,9 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
       <div
         className={`relative rounded-xl border-2 bg-background-card px-3 py-2.5 shadow-sm h-full flex flex-col justify-center gap-0.5 min-w-0 overflow-hidden ${colorScheme.border} ${colorScheme.shadow}`}
       >
-        <div className={`absolute inset-0 rounded-xl blur-xl opacity-15 -z-10 ${colorScheme.glow}`} />
+        {!isExtracting && <div className={`absolute inset-0 rounded-xl blur-xl opacity-15 -z-10 ${colorScheme.glow}`} />}
         <div className="flex items-center gap-2 min-w-0">
-          {isTeamNode ? (
+          {isTeamNode && !isExtracting ? (
             <div
               className={`flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0 ${colorScheme.iconBg} ${colorScheme.iconText}`}
             >
@@ -110,9 +123,19 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
               <Folder className="w-4 h-4" />
             </div>
           )}
-          <p className="text-sm font-medium text-foreground truncate" title={projectName}>
-            {projectName}
-          </p>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-foreground truncate" title={projectName}>
+              {projectName}
+            </p>
+            {isExtracting && (
+              <p className="text-[10px] text-foreground-secondary mt-0.5">Project still extracting</p>
+            )}
+          </div>
+          {isExtracting && (
+            <div className="flex-shrink-0" aria-hidden>
+              <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+            </div>
+          )}
         </div>
         {showSlaBreach && (
           <p className="text-[10px] text-red-400 font-medium truncate" title={`${slaBreachCount} SLA breach(es)`}>

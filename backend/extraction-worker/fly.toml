@@ -8,10 +8,11 @@ primary_region = 'iad'
 
 [build]
 
+# VDB + dep-scan cache + atom/research outputs; 10gb can fill during VDB extract (OSError 28).
 [mounts]
 source = "depscan_vdb"
 destination = "/data"
-initial_size = "10gb"
+initial_size = "30gb"
 
 [env]
   NODE_ENV = 'production'
