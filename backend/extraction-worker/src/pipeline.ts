@@ -219,6 +219,23 @@ function classifyCdxgenError(message: string): string {
   return `SBOM generation failed: ${message.slice(0, 200)}`;
 }
 
+/** Clear VDB/cache on mounted volume so this job starts with free space (avoids "No space left on device"). */
+function clearVdbVolume(): void {
+  const dataDir = process.env.VDB_HOME || process.env.DEPSCAN_CACHE_DIR;
+  if (!dataDir || dataDir !== '/data') return; // only clear the known mount
+  if (!fs.existsSync(dataDir)) return;
+  try {
+    const entries = fs.readdirSync(dataDir, { withFileTypes: true });
+    for (const e of entries) {
+      const full = path.join(dataDir, e.name);
+      fs.rmSync(full, { recursive: true, force: true });
+    }
+    fs.mkdirSync(path.join(dataDir, 'cache'), { recursive: true });
+  } catch (err) {
+    console.warn('[EXTRACT] Failed to clear VDB volume:', (err as Error).message);
+  }
+}
+
 /** Logger interface for pipeline; full ExtractionLogger or minimal mock for tests. */
 export type PipelineLogger = Pick<ExtractionLogger, 'info' | 'success' | 'warn' | 'error'>;
 
@@ -244,6 +261,10 @@ export async function runPipeline(
   let projectDepsCount = 0;
 
   try {
+    // === Clear VDB volume so this run has full space (prevents accumulation across jobs) ===
+    await log.info('cloning', 'Clearing previous VDB/cache to free space for this run...');
+    clearVdbVolume();
+
     // === STEP: Clone (CRITICAL) ===
     if (checkCancelled && await checkCancelled()) return;
     await updateStep(supabase, projectId, 'cloning', 'extracting');
