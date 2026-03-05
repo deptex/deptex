@@ -126,17 +126,19 @@ export function getDepscoreColorScheme(score: number): {
   border: string;
   shadow: string;
   glow: string;
+  /** Badge classes using the same border color as the card for visual consistency. */
+  badgeClass: string;
 } {
   const bracket = getDepscoreBracket(score);
   switch (bracket) {
     case 'urgent':
-      return { border: 'border-red-500/50', shadow: 'shadow-red-500/20', glow: 'ring-red-500/30' };
+      return { border: 'border-red-500/50', shadow: 'shadow-red-500/20', glow: 'ring-red-500/30', badgeClass: 'border-red-500/50 bg-red-500/10 text-red-500' };
     case 'moderate':
-      return { border: 'border-orange-500/50', shadow: 'shadow-orange-500/20', glow: 'ring-orange-500/30' };
+      return { border: 'border-orange-500/50', shadow: 'shadow-orange-500/20', glow: 'ring-orange-500/30', badgeClass: 'border-orange-500/50 bg-orange-500/10 text-orange-500' };
     case 'low':
-      return { border: 'border-zinc-500/30', shadow: '', glow: '' };
+      return { border: 'border-zinc-500/30', shadow: '', glow: '', badgeClass: 'border-zinc-500/30 bg-zinc-500/10 text-zinc-400' };
     case 'healthy':
-      return { border: 'border-green-500/30', shadow: 'shadow-green-500/10', glow: 'ring-green-500/20' };
+      return { border: 'border-green-500/30', shadow: 'shadow-green-500/10', glow: 'ring-green-500/20', badgeClass: 'border-green-500/30 bg-green-500/10 text-green-500' };
   }
 }
 

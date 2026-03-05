@@ -18,7 +18,7 @@ import {
 } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
-import { api, ProjectWithRole, ProjectPermissions, Team, ProjectTeamsResponse, ProjectContributingTeam, ProjectMember, OrganizationMember, ProjectRepository, ProjectImportStatus, type ProjectEffectivePolicies, type ProjectPolicyException, type AssetTier, type RepoWithProvider, type CiCdConnection, type OrganizationAssetTier, type ExtractionRun, type Organization } from '../../lib/api';
+import { api, ProjectWithRole, ProjectPermissions, Team, ProjectTeamsResponse, ProjectContributingTeam, ProjectMember, OrganizationMember, ProjectRepository, ProjectImportStatus, type ProjectEffectivePolicies, type ProjectPolicyException, type ProjectPolicyChange, type AssetTier, type RepoWithProvider, type CiCdConnection, type OrganizationAssetTier, type ExtractionRun, type Organization } from '../../lib/api';
 import NotificationRulesSection from './NotificationRulesSection';
 import { useToast } from '../../hooks/use-toast';
 import { Button } from '../../components/ui/button';
@@ -449,7 +449,16 @@ export default function ProjectSettingsPage() {
   const [projectPolicies, setProjectPolicies] = useState<ProjectEffectivePolicies | null>(null);
   const [policiesLoading, setPoliciesLoading] = useState(false);
   const [policyCancellingId, setPolicyCancellingId] = useState<string | null>(null);
-  const [policyActiveTab, setPolicyActiveTab] = useState<'policies' | 'exceptions'>('policies');
+  const [policyActiveTab, setPolicyActiveTab] = useState<'package_policy' | 'project_status' | 'pr_check' | 'change_requests'>('package_policy');
+  const [policyChanges, setPolicyChanges] = useState<ProjectPolicyChange[]>([]);
+  const [usePhase4Policies, setUsePhase4Policies] = useState(false);
+  // Phase 4: three policy types (when backend returns inherited_* / effective_*)
+  const [packagePolicyBody, setPackagePolicyBody] = useState('');
+  const [inheritedPackagePolicyBody, setInheritedPackagePolicyBody] = useState('');
+  const [projectStatusBody, setProjectStatusBody] = useState('');
+  const [inheritedProjectStatusBody, setInheritedProjectStatusBody] = useState('');
+  const [prCheckBody, setPrCheckBody] = useState('');
+  const [inheritedPrCheckBody, setInheritedPrCheckBody] = useState('');
   const [notificationActiveTab, setNotificationActiveTab] = useState<'notifications' | 'destinations'>('notifications');
   const [hasVisitedNotifications, setHasVisitedNotifications] = useState(false);
   const [hasVisitedPolicies, setHasVisitedPolicies] = useState(false);
@@ -478,6 +487,10 @@ export default function ProjectSettingsPage() {
 
   const [showExceptionSidebar, setShowExceptionSidebar] = useState<'compliance' | 'pullRequest' | null>(null);
   const [viewingExceptionId, setViewingExceptionId] = useState<string | null>(null);
+  const [showRequestChangeDialog, setShowRequestChangeDialog] = useState(false);
+  const [requestChangeCodeType, setRequestChangeCodeType] = useState<'package_policy' | 'project_status' | 'pr_check'>('package_policy');
+  const [requestChangeMessage, setRequestChangeMessage] = useState('');
+  const [requestChangeSubmitting, setRequestChangeSubmitting] = useState(false);
   const [showAI, setShowAI] = useState(false);
   const [aiPanelVisible, setAiPanelVisible] = useState(false);
   const aiCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -564,6 +577,21 @@ export default function ProjectSettingsPage() {
 
   const DEFAULT_PULL_REQUEST_BODY = 'return { passed: true };';
   const DEFAULT_COMPLIANCE_BODY = 'return { compliant: true };';
+  const DEFAULT_PACKAGE_POLICY_BODY = 'return { allowed: true, reasons: [] };';
+  const DEFAULT_PROJECT_STATUS_BODY = 'return { status: "Compliant", violations: [] };';
+
+  function wrapPackagePolicyBody(body: string): string {
+    const lines = body.trim().split('\n').map((l) => (l ? `  ${l}` : ''));
+    return `function packagePolicy(context) {\n${lines.join('\n')}\n}`;
+  }
+  function wrapProjectStatusBody(body: string): string {
+    const lines = body.trim().split('\n').map((l) => (l ? `  ${l}` : ''));
+    return `function projectStatus(context) {\n${lines.join('\n')}\n}`;
+  }
+  function wrapPrCheckBody(body: string): string {
+    const lines = body.trim().split('\n').map((l) => (l ? `  ${l}` : ''));
+    return `function pullRequestCheck(context) {\n${lines.join('\n')}\n}`;
+  }
 
   function extractFunctionBody(code: string, fnName: string): string | null {
     const regex = new RegExp(`function\\s+${fnName}\\s*\\([^)]*\\)\\s*\\{`, 'g');
@@ -599,10 +627,38 @@ export default function ProjectSettingsPage() {
     if (!organizationId || !projectId) return;
     setPoliciesLoading(true);
     try {
-      const [orgPol, projPol] = await Promise.all([
+      const [orgPol, projPol, changes] = await Promise.all([
         api.getOrganizationPolicies(organizationId),
         api.getProjectPolicies(organizationId, projectId),
+        api.getProjectPolicyChanges(organizationId, projectId),
       ]);
+      setPolicyChanges(changes ?? []);
+
+      const hasPhase4 = typeof (projPol as any).inherited_package_policy_code === 'string';
+      if (hasPhase4) {
+        setUsePhase4Policies(true);
+        const iPackage = (projPol as any).inherited_package_policy_code ?? '';
+        const iStatus = (projPol as any).inherited_project_status_code ?? '';
+        const iPR = (projPol as any).inherited_pr_check_code ?? '';
+        const ePackage = (projPol as any).effective_package_policy_code ?? iPackage;
+        const eStatus = (projPol as any).effective_project_status_code ?? iStatus;
+        const ePR = (projPol as any).effective_pr_check_code ?? iPR;
+        const iPackageBody = extractFunctionBody(iPackage, 'packagePolicy') ?? DEFAULT_PACKAGE_POLICY_BODY;
+        const iStatusBody = extractFunctionBody(iStatus, 'projectStatus') ?? DEFAULT_PROJECT_STATUS_BODY;
+        const iPRBody = extractFunctionBody(iPR, 'pullRequestCheck') ?? DEFAULT_PULL_REQUEST_BODY;
+        const ePackageBody = extractFunctionBody(ePackage, 'packagePolicy') ?? iPackageBody;
+        const eStatusBody = extractFunctionBody(eStatus, 'projectStatus') ?? iStatusBody;
+        const ePRBody = extractFunctionBody(ePR, 'pullRequestCheck') ?? iPRBody;
+        setInheritedPackagePolicyBody(iPackageBody);
+        setInheritedProjectStatusBody(iStatusBody);
+        setInheritedPrCheckBody(iPRBody);
+        setPackagePolicyBody(ePackageBody);
+        setProjectStatusBody(eStatusBody);
+        setPrCheckBody(ePRBody);
+      } else {
+        setUsePhase4Policies(false);
+      }
+
       const inheritedCode = (orgPol.policy_code ?? '').trim();
       const { pullRequestBody: iPR, complianceBody: iComp } = inheritedCode
         ? parsePolicyCode(inheritedCode)
@@ -638,6 +694,55 @@ export default function ProjectSettingsPage() {
 
   const complianceDirty = hasSyncedPolicies && complianceBody !== effectiveComplianceBody;
   const pullRequestDirty = hasSyncedPolicies && pullRequestBody !== effectivePullRequestBody;
+
+  const pendingChangeByType = useMemo(() => {
+    const pending = (policyChanges ?? []).filter((c) => c.status === 'pending');
+    return {
+      package_policy: pending.find((c) => c.code_type === 'package_policy'),
+      project_status: pending.find((c) => c.code_type === 'project_status'),
+      pr_check: pending.find((c) => c.code_type === 'pr_check'),
+    };
+  }, [policyChanges]);
+
+  const packagePolicyDirty = usePhase4Policies && packagePolicyBody !== inheritedPackagePolicyBody;
+  const projectStatusDirty = usePhase4Policies && projectStatusBody !== inheritedProjectStatusBody;
+  const prCheckDirtyPhase4 = usePhase4Policies && prCheckBody !== inheritedPrCheckBody;
+
+  const handleRequestChangeSubmit = async () => {
+    if (!organizationId || !projectId || !requestChangeMessage.trim()) return;
+    const body = requestChangeCodeType === 'package_policy' ? packagePolicyBody : requestChangeCodeType === 'project_status' ? projectStatusBody : prCheckBody;
+    const fullCode = requestChangeCodeType === 'package_policy' ? wrapPackagePolicyBody(body) : requestChangeCodeType === 'project_status' ? wrapProjectStatusBody(body) : wrapPrCheckBody(body);
+    setRequestChangeSubmitting(true);
+    try {
+      await api.createProjectPolicyChange(organizationId, projectId, {
+        code_type: requestChangeCodeType,
+        proposed_code: fullCode,
+        message: requestChangeMessage.trim(),
+      });
+      toast({ title: 'Change requested', description: 'Your request has been submitted for review.' });
+      setShowRequestChangeDialog(false);
+      setRequestChangeMessage('');
+      await loadPoliciesSection();
+    } catch (e: any) {
+      toast({ title: 'Error', description: e?.message || 'Failed to submit change request', variant: 'destructive' });
+    } finally {
+      setRequestChangeSubmitting(false);
+    }
+  };
+
+  const handleRevertToOrg = async (codeType: 'package_policy' | 'project_status' | 'pr_check') => {
+    if (!organizationId || !projectId) return;
+    try {
+      await api.revertProjectPolicy(organizationId, projectId, codeType);
+      toast({ title: 'Reverted', description: 'Project now uses organization policy for this type.' });
+      await loadPoliciesSection();
+    } catch (e: any) {
+      toast({ title: 'Error', description: e?.message || 'Failed to revert', variant: 'destructive' });
+    }
+  };
+
+  const codeTypeLabel = (codeType: string) =>
+    codeType === 'package_policy' ? 'Package Policy' : codeType === 'project_status' ? 'Project Status' : 'Pull Request';
 
   // AI sidebar animation
   useEffect(() => {
@@ -2943,191 +3048,205 @@ export default function ProjectSettingsPage() {
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between border-b border-border pb-px">
-                    <div className="flex items-center gap-6">
+                  <div className="flex items-center gap-6 border-b border-border pb-px">
+                    {(['package_policy', 'project_status', 'pr_check', 'change_requests'] as const).map((tab) => (
                       <button
+                        key={tab}
                         type="button"
-                        onClick={() => setPolicyActiveTab('policies')}
-                        className={`pb-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
-                          policyActiveTab === 'policies' ? 'text-foreground border-foreground' : 'text-foreground-secondary hover:text-foreground border-transparent'
-                        }`}
+                        onClick={() => setPolicyActiveTab(tab)}
+                        className={cn(
+                          'pb-3 text-sm font-medium border-b-2 -mb-px transition-colors',
+                          policyActiveTab === tab ? 'text-foreground border-foreground' : 'text-foreground-secondary hover:text-foreground border-transparent'
+                        )}
                       >
-                        Policy
+                        {tab === 'change_requests' ? 'Change requests' : codeTypeLabel(tab)}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => setPolicyActiveTab('exceptions')}
-                        className={`pb-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
-                          policyActiveTab === 'exceptions' ? 'text-foreground border-foreground' : 'text-foreground-secondary hover:text-foreground border-transparent'
-                        }`}
-                      >
-                        Exception applications
-                      </button>
-                    </div>
+                    ))}
                   </div>
                 </div>
 
-                {policyActiveTab === 'policies' && (
+                {policyActiveTab === 'package_policy' && (
                   <>
                     {policiesLoading ? (
                       <div className="space-y-6 pt-2 pb-8">
-                        {[0, 1].map((i) => (
-                          <div key={i} className="rounded-lg border border-border bg-background-card overflow-hidden">
-                            <div className="px-4 py-2.5 bg-background-card-header border-b border-border">
-                              <div className="h-3.5 bg-muted rounded w-32 animate-pulse" />
-                            </div>
-                            <div className="bg-[#1d1f21] px-4 py-3 font-mono text-[13px] leading-6" style={{ minHeight: '180px' }}>
-                              <div className="space-y-1.5 animate-pulse">
-                                <div className="h-3 bg-white/[0.06] rounded w-[70%]" />
-                                <div className="h-3 bg-white/[0.06] rounded w-[55%] ml-4" />
-                                <div className="h-3 bg-white/[0.06] rounded w-[80%] ml-4" />
-                                <div className="h-3 bg-white/[0.06] rounded w-[40%] ml-8" />
-                                <div className="h-3 bg-white/[0.06] rounded w-[60%] ml-4" />
-                                <div className="h-3 bg-white/[0.06] rounded w-[30%]" />
-                                <div className="h-3" />
-                                <div className="h-3 bg-white/[0.06] rounded w-[50%] ml-4" />
-                                <div className="h-3 bg-white/[0.06] rounded w-[45%] ml-4" />
-                              </div>
+                        <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                          <div className="px-4 py-2.5 bg-background-card-header border-b border-border"><div className="h-3.5 bg-muted rounded w-32 animate-pulse" /></div>
+                          <div className="bg-[#1d1f21] px-4 py-3 font-mono text-[13px] leading-6" style={{ minHeight: '180px' }}>
+                            <div className="space-y-1.5 animate-pulse">
+                              <div className="h-3 bg-white/[0.06] rounded w-[70%]" /><div className="h-3 bg-white/[0.06] rounded w-[55%] ml-4" /><div className="h-3 bg-white/[0.06] rounded w-[80%] ml-4" />
                             </div>
                           </div>
-                        ))}
+                        </div>
                       </div>
                     ) : projectPolicies ? (
                       <div className="space-y-6 pt-2 pb-8">
-                        {(projectPolicies.pending_exceptions ?? [])
-                          .filter((p) => p.status === 'pending')
-                          .map((pending) => (
-                            <div key={pending.id} className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <Clock className="h-4 w-4 text-warning" />
-                                <span className="text-sm text-foreground">
-                                  {pending.policy_type === 'pull_request'
-                                    ? 'Pull request exception under review'
-                                    : pending.policy_type === 'compliance'
-                                      ? 'Compliance exception under review'
-                                      : 'Policy exception under review'}
-                                </span>
-                              </div>
-                              {canViewSettings && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  disabled={!!policyCancellingId}
-                                  className="h-7 text-xs"
-                                  onClick={async () => {
-                                    if (!organizationId || !pending.id) return;
-                                    setPolicyCancellingId(pending.id);
-                                    try {
-                                      await api.deletePolicyException(organizationId, pending.id);
-                                      toast({ title: 'Request withdrawn', description: 'Exception request has been cancelled.' });
-                                      await loadPoliciesSection();
-                                    } catch (e: any) {
-                                      toast({ title: 'Error', description: e.message || 'Failed to cancel request', variant: 'destructive' });
-                                    } finally {
-                                      setPolicyCancellingId(null);
-                                    }
-                                  }}
-                                >
-                                  {policyCancellingId === pending.id ? (
-                                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                                  ) : (
-                                    <X className="h-3.5 w-3.5 mr-1.5" />
-                                  )}
-                                  Cancel request
-                                </Button>
-                              )}
-                            </div>
-                          ))}
-
-                        <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                          <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project Compliance</span>
-                              {!complianceDirty && !(projectPolicies.pending_exceptions ?? []).some((p) => ['compliance', 'full'].includes(p.policy_type ?? 'full')) && (
-                                (projectPolicies.accepted_exceptions ?? []).some((e) => ['compliance', 'full'].includes(e.policy_type ?? 'full'))
-                                  ? <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-emerald-500/40 text-emerald-500">Exception active</Badge>
-                                  : <Badge variant="outline" className="text-[10px] px-1.5 py-0">Inherited from org</Badge>
-                              )}
-                            </div>
-                            {canViewSettings && complianceDirty && !(projectPolicies.pending_exceptions ?? []).some((p) => ['compliance', 'full'].includes(p.policy_type ?? 'full')) && (
-                              <div className="flex items-center gap-1.5">
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => setComplianceBody(effectiveComplianceBody)}
-                                  className="h-5 min-h-5 px-1.5 py-0 text-[11px] leading-none"
-                                >
-                                  Cancel
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  onClick={() => setShowExceptionSidebar('compliance')}
-                                  className="h-5 min-h-5 px-1.5 py-0 text-[11px] leading-none shadow-sm gap-1 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20"
-                                >
-                                  Apply for Exception
-                                </Button>
+                        {usePhase4Policies ? (
+                          <>
+                            {pendingChangeByType.package_policy && (
+                              <div className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <Clock className="h-4 w-4 text-warning" />
+                                  <span className="text-sm text-foreground">Package policy change under review</span>
+                                </div>
                               </div>
                             )}
-                          </div>
-                          <div className="bg-background-card">
-                            <PolicyCodeEditor
-                              value={complianceBody}
-                              onChange={setComplianceBody}
-                              readOnly={!canViewSettings || (projectPolicies.pending_exceptions ?? []).some((p) => ['compliance', 'full'].includes(p.policy_type ?? 'full'))}
-                              fitContent
-                            />
-                          </div>
-                        </div>
-
-                        <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                          <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Pull Request Check</span>
-                              {!pullRequestDirty && !(projectPolicies.pending_exceptions ?? []).some((p) => ['pull_request', 'full'].includes(p.policy_type ?? 'full')) && (
-                                (projectPolicies.accepted_exceptions ?? []).some((e) => ['pull_request', 'full'].includes(e.policy_type ?? 'full'))
-                                  ? <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-emerald-500/40 text-emerald-500">Exception active</Badge>
-                                  : <Badge variant="outline" className="text-[10px] px-1.5 py-0">Inherited from org</Badge>
-                              )}
-                            </div>
-                            {canViewSettings && pullRequestDirty && !(projectPolicies.pending_exceptions ?? []).some((p) => ['pull_request', 'full'].includes(p.policy_type ?? 'full')) && (
-                              <div className="flex items-center gap-1.5">
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => setPullRequestBody(effectivePullRequestBody)}
-                                  className="h-5 min-h-5 px-1.5 py-0 text-[11px] leading-none"
-                                >
-                                  Cancel
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  onClick={() => setShowExceptionSidebar('pullRequest')}
-                                  className="h-5 min-h-5 px-1.5 py-0 text-[11px] leading-none shadow-sm gap-1 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20"
-                                >
-                                  Apply for Exception
-                                </Button>
+                            <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                              <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">packagePolicy</span>
+                                  {!pendingChangeByType.package_policy && (packagePolicyBody === inheritedPackagePolicyBody ? <Badge variant="outline" className="text-[10px] px-1.5 py-0">Inherited from org</Badge> : null)}
+                                </div>
+                                {canViewSettings && !pendingChangeByType.package_policy && (
+                                  <div className="flex items-center gap-1.5">
+                                    {packagePolicyDirty && (<><Button variant="outline" size="sm" className="h-5 min-h-5 px-1.5 py-0 text-[11px]" onClick={() => setPackagePolicyBody(inheritedPackagePolicyBody)}>Cancel</Button><Button size="sm" className="h-5 min-h-5 px-1.5 py-0 text-[11px]" onClick={() => { setRequestChangeCodeType('package_policy'); setRequestChangeMessage(''); setShowRequestChangeDialog(true); }}>Request change</Button></>)}
+                                    {!packagePolicyDirty && packagePolicyBody !== inheritedPackagePolicyBody && <Button variant="outline" size="sm" className="h-5 min-h-5 px-1.5 py-0 text-[11px]" onClick={() => handleRevertToOrg('package_policy')}>Revert to org</Button>}
+                                  </div>
+                                )}
                               </div>
-                            )}
-                          </div>
-                          <div className="bg-background-card">
-                            <PolicyCodeEditor
-                              value={pullRequestBody}
-                              onChange={setPullRequestBody}
-                              readOnly={!canViewSettings || (projectPolicies.pending_exceptions ?? []).some((p) => ['pull_request', 'full'].includes(p.policy_type ?? 'full'))}
-                              fitContent
-                            />
-                          </div>
-                        </div>
+                              <div className="bg-background-card"><PolicyCodeEditor value={packagePolicyBody} onChange={setPackagePolicyBody} readOnly={!canViewSettings || !!pendingChangeByType.package_policy} fitContent /></div>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            {(projectPolicies.pending_exceptions ?? []).filter((p) => p.status === 'pending' && ['compliance', 'full'].includes(p.policy_type ?? '')).map((pending) => (
+                              <div key={pending.id} className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 flex items-center justify-between">
+                                <div className="flex items-center gap-2"><Clock className="h-4 w-4 text-warning" /><span className="text-sm text-foreground">Compliance exception under review</span></div>
+                                {canViewSettings && (
+                                  <Button variant="outline" size="sm" disabled={!!policyCancellingId} className="h-7 text-xs" onClick={async () => { if (!organizationId || !pending.id) return; setPolicyCancellingId(pending.id); try { await api.deletePolicyException(organizationId, pending.id); toast({ title: 'Request withdrawn', description: 'Exception request has been cancelled.' }); await loadPoliciesSection(); } catch (e: any) { toast({ title: 'Error', description: e.message || 'Failed to cancel request', variant: 'destructive' }); } finally { setPolicyCancellingId(null); } }}>
+                                    {policyCancellingId === pending.id ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <X className="h-3.5 w-3.5 mr-1.5" />} Cancel request
+                                  </Button>
+                                )}
+                              </div>
+                            ))}
+                            <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                              <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project Compliance</span>
+                                  {!complianceDirty && !(projectPolicies.pending_exceptions ?? []).some((p) => ['compliance', 'full'].includes(p.policy_type ?? 'full')) && ((projectPolicies.accepted_exceptions ?? []).some((e) => ['compliance', 'full'].includes(e.policy_type ?? 'full')) ? <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-emerald-500/40 text-emerald-500">Exception active</Badge> : <Badge variant="outline" className="text-[10px] px-1.5 py-0">Inherited from org</Badge>)}
+                                </div>
+                                {canViewSettings && complianceDirty && !(projectPolicies.pending_exceptions ?? []).some((p) => ['compliance', 'full'].includes(p.policy_type ?? 'full')) && (<div className="flex items-center gap-1.5"><Button variant="outline" size="sm" onClick={() => setComplianceBody(effectiveComplianceBody)} className="h-5 min-h-5 px-1.5 py-0 text-[11px] leading-none">Cancel</Button><Button size="sm" onClick={() => setShowExceptionSidebar('compliance')} className="h-5 min-h-5 px-1.5 py-0 text-[11px] leading-none shadow-sm gap-1 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20">Apply for Exception</Button></div>)}
+                              </div>
+                              <div className="bg-background-card"><PolicyCodeEditor value={complianceBody} onChange={setComplianceBody} readOnly={!canViewSettings || (projectPolicies.pending_exceptions ?? []).some((p) => ['compliance', 'full'].includes(p.policy_type ?? 'full'))} fitContent /></div>
+                            </div>
+                          </>
+                        )}
                       </div>
                     ) : (
-                      <div className="rounded-lg border border-border p-8 text-center text-foreground-secondary text-sm">
-                        Failed to load policies.
-                      </div>
+                      <div className="rounded-lg border border-border p-8 text-center text-foreground-secondary text-sm">Failed to load policies.</div>
                     )}
                   </>
                 )}
 
-                {policyActiveTab === 'exceptions' && (
+                {policyActiveTab === 'project_status' && (
+                  <>
+                    {policiesLoading ? (
+                      <div className="space-y-6 pt-2 pb-8">
+                        <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                          <div className="px-4 py-2.5 bg-background-card-header border-b border-border"><div className="h-3.5 bg-muted rounded w-32 animate-pulse" /></div>
+                          <div className="bg-[#1d1f21] px-4 py-3 font-mono text-[13px] leading-6" style={{ minHeight: '180px' }}><div className="space-y-1.5 animate-pulse"><div className="h-3 bg-white/[0.06] rounded w-[70%]" /></div></div>
+                        </div>
+                      </div>
+                    ) : projectPolicies ? (
+                      <div className="space-y-6 pt-2 pb-8">
+                        {usePhase4Policies ? (
+                          <>
+                            {pendingChangeByType.project_status && (
+                              <div className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 flex items-center justify-between">
+                                <div className="flex items-center gap-2"><Clock className="h-4 w-4 text-warning" /><span className="text-sm text-foreground">Project status change under review</span></div>
+                              </div>
+                            )}
+                            <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                              <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">projectStatus</span>
+                                  {!pendingChangeByType.project_status && (projectStatusBody === inheritedProjectStatusBody ? <Badge variant="outline" className="text-[10px] px-1.5 py-0">Inherited from org</Badge> : null)}
+                                </div>
+                                {canViewSettings && !pendingChangeByType.project_status && (
+                                  <div className="flex items-center gap-1.5">
+                                    {projectStatusDirty && (<><Button variant="outline" size="sm" className="h-5 min-h-5 px-1.5 py-0 text-[11px]" onClick={() => setProjectStatusBody(inheritedProjectStatusBody)}>Cancel</Button><Button size="sm" className="h-5 min-h-5 px-1.5 py-0 text-[11px]" onClick={() => { setRequestChangeCodeType('project_status'); setRequestChangeMessage(''); setShowRequestChangeDialog(true); }}>Request change</Button></>)}
+                                    {!projectStatusDirty && projectStatusBody !== inheritedProjectStatusBody && <Button variant="outline" size="sm" className="h-5 min-h-5 px-1.5 py-0 text-[11px]" onClick={() => handleRevertToOrg('project_status')}>Revert to org</Button>}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="bg-background-card"><PolicyCodeEditor value={projectStatusBody} onChange={setProjectStatusBody} readOnly={!canViewSettings || !!pendingChangeByType.project_status} fitContent /></div>
+                            </div>
+                          </>
+                        ) : (
+                          <p className="text-sm text-foreground-secondary">Project status is set by your organization&apos;s Status code in Organization Settings → Statuses & Tiers → Status Code.</p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-border p-8 text-center text-foreground-secondary text-sm">Failed to load policies.</div>
+                    )}
+                  </>
+                )}
+
+                {policyActiveTab === 'pr_check' && (
+                  <>
+                    {policiesLoading ? (
+                      <div className="space-y-6 pt-2 pb-8">
+                        <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                          <div className="px-4 py-2.5 bg-background-card-header border-b border-border"><div className="h-3.5 bg-muted rounded w-32 animate-pulse" /></div>
+                          <div className="bg-[#1d1f21] px-4 py-3 font-mono text-[13px] leading-6" style={{ minHeight: '180px' }}><div className="space-y-1.5 animate-pulse"><div className="h-3 bg-white/[0.06] rounded w-[70%]" /></div></div>
+                        </div>
+                      </div>
+                    ) : projectPolicies ? (
+                      <div className="space-y-6 pt-2 pb-8">
+                        {usePhase4Policies ? (
+                          <>
+                            {pendingChangeByType.pr_check && (
+                              <div className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 flex items-center justify-between">
+                                <div className="flex items-center gap-2"><Clock className="h-4 w-4 text-warning" /><span className="text-sm text-foreground">Pull request check change under review</span></div>
+                              </div>
+                            )}
+                            <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                              <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">pullRequestCheck</span>
+                                  {!pendingChangeByType.pr_check && (prCheckBody === inheritedPrCheckBody ? <Badge variant="outline" className="text-[10px] px-1.5 py-0">Inherited from org</Badge> : null)}
+                                </div>
+                                {canViewSettings && !pendingChangeByType.pr_check && (
+                                  <div className="flex items-center gap-1.5">
+                                    {prCheckDirtyPhase4 && (<><Button variant="outline" size="sm" className="h-5 min-h-5 px-1.5 py-0 text-[11px]" onClick={() => setPrCheckBody(inheritedPrCheckBody)}>Cancel</Button><Button size="sm" className="h-5 min-h-5 px-1.5 py-0 text-[11px]" onClick={() => { setRequestChangeCodeType('pr_check'); setRequestChangeMessage(''); setShowRequestChangeDialog(true); }}>Request change</Button></>)}
+                                    {!prCheckDirtyPhase4 && prCheckBody !== inheritedPrCheckBody && <Button variant="outline" size="sm" className="h-5 min-h-5 px-1.5 py-0 text-[11px]" onClick={() => handleRevertToOrg('pr_check')}>Revert to org</Button>}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="bg-background-card"><PolicyCodeEditor value={prCheckBody} onChange={setPrCheckBody} readOnly={!canViewSettings || !!pendingChangeByType.pr_check} fitContent /></div>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            {(projectPolicies.pending_exceptions ?? []).filter((p) => p.status === 'pending' && ['pull_request', 'full'].includes(p.policy_type ?? '')).map((pending) => (
+                              <div key={pending.id} className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 flex items-center justify-between">
+                                <div className="flex items-center gap-2"><Clock className="h-4 w-4 text-warning" /><span className="text-sm text-foreground">Pull request exception under review</span></div>
+                                {canViewSettings && (
+                                  <Button variant="outline" size="sm" disabled={!!policyCancellingId} className="h-7 text-xs" onClick={async () => { if (!organizationId || !pending.id) return; setPolicyCancellingId(pending.id); try { await api.deletePolicyException(organizationId, pending.id); toast({ title: 'Request withdrawn', description: 'Exception request has been cancelled.' }); await loadPoliciesSection(); } catch (e: any) { toast({ title: 'Error', description: e.message || 'Failed to cancel request', variant: 'destructive' }); } finally { setPolicyCancellingId(null); } }}>
+                                    {policyCancellingId === pending.id ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <X className="h-3.5 w-3.5 mr-1.5" />} Cancel request
+                                  </Button>
+                                )}
+                              </div>
+                            ))}
+                            <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                              <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Pull Request Check</span>
+                                  {!pullRequestDirty && !(projectPolicies.pending_exceptions ?? []).some((p) => ['pull_request', 'full'].includes(p.policy_type ?? 'full')) && ((projectPolicies.accepted_exceptions ?? []).some((e) => ['pull_request', 'full'].includes(e.policy_type ?? 'full')) ? <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-emerald-500/40 text-emerald-500">Exception active</Badge> : <Badge variant="outline" className="text-[10px] px-1.5 py-0">Inherited from org</Badge>)}
+                                </div>
+                                {canViewSettings && pullRequestDirty && !(projectPolicies.pending_exceptions ?? []).some((p) => ['pull_request', 'full'].includes(p.policy_type ?? 'full')) && (<div className="flex items-center gap-1.5"><Button variant="outline" size="sm" onClick={() => setPullRequestBody(effectivePullRequestBody)} className="h-5 min-h-5 px-1.5 py-0 text-[11px] leading-none">Cancel</Button><Button size="sm" onClick={() => setShowExceptionSidebar('pullRequest')} className="h-5 min-h-5 px-1.5 py-0 text-[11px] leading-none shadow-sm gap-1 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20">Apply for Exception</Button></div>)}
+                              </div>
+                              <div className="bg-background-card"><PolicyCodeEditor value={pullRequestBody} onChange={setPullRequestBody} readOnly={!canViewSettings || (projectPolicies.pending_exceptions ?? []).some((p) => ['pull_request', 'full'].includes(p.policy_type ?? 'full'))} fitContent /></div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-border p-8 text-center text-foreground-secondary text-sm">Failed to load policies.</div>
+                    )}
+                  </>
+                )}
+
+                {policyActiveTab === 'change_requests' && (
                   <div className="space-y-6 pt-2 pb-8 min-w-0">
                     <div className="rounded-lg border border-border bg-background-card overflow-x-auto">
                       <table className="w-full table-auto min-w-[640px]">
@@ -3159,58 +3278,66 @@ export default function ProjectSettingsPage() {
                               </tr>
                             ))
                           ) : (() => {
+                            const changes = policyChanges ?? [];
                             const allExceptions: ProjectPolicyException[] = [
                               ...(projectPolicies?.pending_exceptions ?? []),
                               ...(projectPolicies?.accepted_exceptions ?? []),
                               ...(projectPolicies?.revoked_exceptions ?? []),
                             ];
-                            if (allExceptions.length === 0) {
+                            const hasChanges = changes.length > 0;
+                            const hasExceptions = allExceptions.length > 0;
+                            if (!hasChanges && !hasExceptions) {
                               return (
                                 <tr>
                                   <td colSpan={5} className="px-4 py-6 text-center text-sm text-foreground-secondary">
-                                    No exception applications
+                                    No change requests
                                   </td>
                                 </tr>
                               );
                             }
-                            return allExceptions.map((ex) => (
-                              <tr key={ex.id} className="group hover:bg-table-hover transition-colors">
-                                <td className="px-4 py-3">
-                                  {ex.status === 'pending' && (
-                                    <Badge variant="warning" className="gap-1"><Clock className="h-3 w-3" /> Pending</Badge>
-                                  )}
-                                  {ex.status === 'accepted' && (
-                                    <Badge variant="success" className="gap-1"><Check className="h-3 w-3" /> Accepted</Badge>
-                                  )}
-                                  {ex.status === 'rejected' && (
-                                    <Badge variant="destructive" className="gap-1"><X className="h-3 w-3" /> Rejected</Badge>
-                                  )}
-                                  {ex.status === 'revoked' && (
-                                    <Badge variant="destructive" className="gap-1"><Ban className="h-3 w-3" /> Revoked</Badge>
-                                  )}
-                                </td>
-                                <td className="px-4 py-3 text-sm text-foreground-secondary">
-                                  {ex.policy_type === 'pull_request' ? 'Pull Request' : ex.policy_type === 'compliance' ? 'Compliance' : 'Full'}
-                                </td>
-                                <td className="px-4 py-3 text-sm text-foreground-secondary min-w-0 max-w-[200px]">
-                                  <span className="block truncate" title={ex.reason || undefined}>{ex.reason || '\u2014'}</span>
-                                </td>
-                                <td className="px-4 py-3 text-sm text-foreground-secondary whitespace-nowrap">{new Date(ex.created_at).toLocaleDateString()}</td>
-                                <td className="px-4 py-3 text-right whitespace-nowrap">
-                                  {ex.base_policy_code && ex.requested_policy_code && (
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      className="h-7 text-xs"
-                                      onClick={() => setViewingExceptionId(ex.id)}
-                                    >
-                                      <Eye className="h-3.5 w-3.5 mr-1" />
-                                      View
-                                    </Button>
-                                  )}
-                                </td>
-                              </tr>
-                            ));
+                            return (
+                              <>
+                                {changes.map((c) => (
+                                  <tr key={`change-${c.id}`} className="group hover:bg-table-hover transition-colors">
+                                    <td className="px-4 py-3">
+                                      {c.status === 'pending' && <Badge variant="warning" className="gap-1"><Clock className="h-3 w-3" /> Pending</Badge>}
+                                      {c.status === 'accepted' && <Badge variant="success" className="gap-1"><Check className="h-3 w-3" /> Accepted</Badge>}
+                                      {c.status === 'rejected' && <Badge variant="destructive" className="gap-1"><X className="h-3 w-3" /> Rejected</Badge>}
+                                    </td>
+                                    <td className="px-4 py-3 text-sm text-foreground-secondary">{codeTypeLabel(c.code_type)}</td>
+                                    <td className="px-4 py-3 text-sm text-foreground-secondary min-w-0 max-w-[200px]">
+                                      <span className="block truncate" title={c.message || undefined}>{c.message || '\u2014'}</span>
+                                    </td>
+                                    <td className="px-4 py-3 text-sm text-foreground-secondary whitespace-nowrap">{new Date(c.created_at).toLocaleDateString()}</td>
+                                    <td className="px-4 py-3 text-right whitespace-nowrap" />
+                                  </tr>
+                                ))}
+                                {allExceptions.map((ex) => (
+                                  <tr key={`ex-${ex.id}`} className="group hover:bg-table-hover transition-colors">
+                                    <td className="px-4 py-3">
+                                      {ex.status === 'pending' && <Badge variant="warning" className="gap-1"><Clock className="h-3 w-3" /> Pending</Badge>}
+                                      {ex.status === 'accepted' && <Badge variant="success" className="gap-1"><Check className="h-3 w-3" /> Accepted</Badge>}
+                                      {ex.status === 'rejected' && <Badge variant="destructive" className="gap-1"><X className="h-3 w-3" /> Rejected</Badge>}
+                                      {ex.status === 'revoked' && <Badge variant="destructive" className="gap-1"><Ban className="h-3 w-3" /> Revoked</Badge>}
+                                    </td>
+                                    <td className="px-4 py-3 text-sm text-foreground-secondary">
+                                      {ex.policy_type === 'pull_request' ? 'Legacy (Pull Request)' : ex.policy_type === 'compliance' ? 'Legacy (Compliance)' : 'Legacy (Full)'}
+                                    </td>
+                                    <td className="px-4 py-3 text-sm text-foreground-secondary min-w-0 max-w-[200px]">
+                                      <span className="block truncate" title={ex.reason || undefined}>{ex.reason || '\u2014'}</span>
+                                    </td>
+                                    <td className="px-4 py-3 text-sm text-foreground-secondary whitespace-nowrap">{new Date(ex.created_at).toLocaleDateString()}</td>
+                                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                                      {ex.base_policy_code && ex.requested_policy_code && (
+                                        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setViewingExceptionId(ex.id)}>
+                                          <Eye className="h-3.5 w-3.5 mr-1" /> View
+                                        </Button>
+                                      )}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </>
+                            );
                           })()}
                         </tbody>
                       </table>
@@ -3222,6 +3349,33 @@ export default function ProjectSettingsPage() {
           </div>
         </div>
       </div>
+
+      {/* Request change dialog (Phase 4) */}
+      <Dialog open={showRequestChangeDialog} onOpenChange={(open) => { setShowRequestChangeDialog(open); if (!open) setRequestChangeMessage(''); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogTitle>Request policy change</DialogTitle>
+          <DialogDescription>
+            Add a message for reviewers. Your change request will appear under Change requests until an org admin accepts or rejects it.
+          </DialogDescription>
+          <div className="space-y-2 py-2">
+            <Label htmlFor="request-change-msg">Message</Label>
+            <Input
+              id="request-change-msg"
+              value={requestChangeMessage}
+              onChange={(e) => setRequestChangeMessage(e.target.value)}
+              placeholder="Brief reason for this change"
+              disabled={requestChangeSubmitting}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setShowRequestChangeDialog(false); setRequestChangeMessage(''); }} disabled={requestChangeSubmitting}>Cancel</Button>
+            <Button onClick={handleRequestChangeSubmit} disabled={requestChangeSubmitting || !requestChangeMessage.trim()}>
+              {requestChangeSubmitting && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
+              Submit request
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Policy Exception View Sidebar */}
       {viewingExceptionId && projectPolicies && project && (() => {

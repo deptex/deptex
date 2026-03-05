@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   TowerControl,
@@ -93,35 +93,21 @@ export default function ProjectWatchtowerPage() {
   const [filter, setFilter] = useState<'all' | 'alerts' | 'blocked' | 'safe'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const realtime = useRealtimeStatus(orgId, projectId);
   const isExtractionOngoing = !realtime.isLoading && realtime.status !== 'ready';
 
   const fetchData = useCallback(async () => {
     if (!orgId || !projectId) return;
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'21910a'},body:JSON.stringify({sessionId:'21910a',location:'ProjectWatchtowerPage.tsx:fetchData',message:'fetchData entry',data:{orgId,projectId},timestamp:Date.now(),hypothesisId:'H3,H5'})}).catch(()=>{});
-    // #endregion
     try {
-      let pkgsRes: { packages: WatchtowerPackage[]; total_direct_deps: number };
-      try {
-        pkgsRes = await api.authenticatedGet<{ packages: WatchtowerPackage[]; total_direct_deps: number }>(`/api/organizations/${orgId}/projects/${projectId}/watchtower/packages`);
-        // #region agent log
-        fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'21910a'},body:JSON.stringify({sessionId:'21910a',location:'ProjectWatchtowerPage.tsx:packages response',message:'packages API success',data:{total_direct_deps:pkgsRes?.total_direct_deps,packagesLength:pkgsRes?.packages?.length},timestamp:Date.now(),hypothesisId:'H1,H4'})}).catch(()=>{});
-        // #endregion
-      } catch (packagesErr: any) {
-        // #region agent log
-        fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'21910a'},body:JSON.stringify({sessionId:'21910a',location:'ProjectWatchtowerPage.tsx:packages error',message:'packages API failed',data:{message:packagesErr?.message,responseBody:packagesErr?.responseBody},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
-        // #endregion
-        pkgsRes = { packages: [], total_direct_deps: 0 };
-      }
-      const statsRes = await api.authenticatedGet<WatchtowerStats>(`/api/organizations/${orgId}/projects/${projectId}/watchtower/stats`);
+      const [statsRes, pkgsRes] = await Promise.all([
+        api.authenticatedGet<WatchtowerStats>(`/api/organizations/${orgId}/projects/${projectId}/watchtower/stats`),
+        api.authenticatedGet<{ packages: WatchtowerPackage[]; total_direct_deps: number }>(`/api/organizations/${orgId}/projects/${projectId}/watchtower/packages`).catch(() => ({ packages: [], total_direct_deps: 0 })),
+      ]);
       setStats(statsRes);
       setPackages(pkgsRes.packages || []);
       setTotalDirect(pkgsRes.total_direct_deps || 0);
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'21910a'},body:JSON.stringify({sessionId:'21910a',location:'ProjectWatchtowerPage.tsx:setTotalDirect',message:'state set',data:{total_direct_deps:pkgsRes.total_direct_deps},timestamp:Date.now(),hypothesisId:'H4'})}).catch(()=>{});
-      // #endregion
     } catch {
       setStats({ enabled: false, total_direct: 0, analyzed: 0, alerts: 0, blocked: 0, errored: 0 });
     } finally {
@@ -154,8 +140,23 @@ export default function ProjectWatchtowerPage() {
     }
   };
 
+  // One row per (dependency_id, version); merge import_count for duplicates from API
+  const deduplicatedPackages = useMemo(() => {
+    const byKey = new Map<string, WatchtowerPackage>();
+    for (const p of packages) {
+      const key = `${p.dependency_id}-${p.version}`;
+      const existing = byKey.get(key);
+      if (!existing) {
+        byKey.set(key, { ...p });
+        continue;
+      }
+      existing.import_count = (existing.import_count || 0) + (p.import_count || 0);
+    }
+    return Array.from(byKey.values());
+  }, [packages]);
+
   const filteredPackages = useMemo(() => {
-    let filtered = packages;
+    let filtered = deduplicatedPackages;
     if (filter === 'alerts') {
       filtered = filtered.filter(p =>
         p.registry_integrity_status === 'fail' ||
@@ -173,24 +174,26 @@ export default function ProjectWatchtowerPage() {
         p.entropy_analysis_status !== 'fail'
       );
     }
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
       filtered = filtered.filter(p => p.name.toLowerCase().includes(q));
     }
     return filtered;
-  }, [packages, filter, searchQuery]);
+  }, [deduplicatedPackages, filter, searchQuery]);
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-6 w-6 animate-spin text-foreground-secondary" />
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
+        <div className="flex items-center justify-center h-64">
+          <Loader2 className="h-6 w-6 animate-spin text-foreground-secondary" />
+        </div>
       </div>
     );
   }
 
   if (isExtractionOngoing) {
     return (
-      <div className="px-6 py-8">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
         <div className="max-w-2xl mx-auto">
           <div className="rounded-lg border border-border bg-background-card p-6">
             <div className="flex items-center gap-4">
@@ -214,15 +217,12 @@ export default function ProjectWatchtowerPage() {
 
   if (!stats?.enabled) {
     return (
-      <div className="px-6 py-8">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
         <div className="max-w-2xl mx-auto text-center space-y-6">
-          <div className="inline-flex items-center justify-center h-16 w-16 rounded-2xl bg-background-card border border-border">
-            <TowerControl className="h-8 w-8 text-foreground-secondary" />
-          </div>
           <div>
             <h2 className="text-2xl font-semibold text-foreground">Watchtower Supply Chain Monitoring</h2>
             <p className="mt-2 text-foreground-secondary max-w-md mx-auto">
-              Enable Watchtower to monitor all {totalDirect || 'your'} direct dependencies for supply chain threats.
+              Enable Watchtower on this project to receive advanced security intelligence.
             </p>
           </div>
           <div className="flex items-center justify-center gap-3">
@@ -231,7 +231,7 @@ export default function ProjectWatchtowerPage() {
               onClick={() => handleToggle(true)}
               disabled={enabling || totalDirect === 0}
               title={totalDirect === 0 ? 'Connect a repository and run extraction to add dependencies first' : undefined}
-              className="inline-flex items-center gap-2 rounded-md bg-green-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50"
+              className="inline-flex items-center gap-2 h-9 px-5 py-2.5 rounded-lg text-sm font-semibold bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50"
             >
               {enabling ? <Loader2 className="h-4 w-4 animate-spin" /> : <TowerControl className="h-4 w-4" />}
               Enable Watchtower
@@ -240,7 +240,7 @@ export default function ProjectWatchtowerPage() {
               href="/docs/watchtower"
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-md border border-border px-4 py-2 text-sm font-medium text-foreground-secondary hover:text-foreground hover:bg-background-subtle"
+              className="inline-flex items-center gap-1.5 h-9 px-5 py-2.5 rounded-lg text-sm font-medium border border-border bg-background-card text-foreground hover:bg-background-subtle"
             >
               <BookOpen className="h-4 w-4" />
               Docs
@@ -267,7 +267,8 @@ export default function ProjectWatchtowerPage() {
   }
 
   return (
-    <div className="px-6 py-6 space-y-6">
+    <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
+      <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -278,11 +279,6 @@ export default function ProjectWatchtowerPage() {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          {stats.enabled_at && (
-            <span className="text-xs text-foreground-secondary">
-              Since {new Date(stats.enabled_at).toLocaleDateString()}
-            </span>
-          )}
           <a
             href="/docs/watchtower"
             target="_blank"
@@ -302,101 +298,106 @@ export default function ProjectWatchtowerPage() {
         </div>
       </div>
 
-      {/* Stats Strip */}
-      <div className="grid grid-cols-4 gap-4">
-        <div className="rounded-lg border border-border bg-background-card p-4">
-          <p className="text-xs text-foreground-secondary">Packages Monitored</p>
-          <p className="text-xl font-semibold text-foreground mt-1">
-            {stats.analyzed} <span className="text-sm text-foreground-secondary font-normal">/ {stats.total_direct}</span>
-          </p>
-          <div className="mt-2 h-1 rounded-full bg-background-subtle overflow-hidden">
-            <div className="h-full bg-brand rounded-full" style={{ width: stats.total_direct > 0 ? `${(stats.analyzed / stats.total_direct) * 100}%` : '0%' }} />
-          </div>
+      {/* Toolbar: search left, filters right */}
+      <div className="flex items-center justify-between gap-4">
+        <div className="relative w-80">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-foreground-secondary pointer-events-none" />
+          <input
+            ref={searchInputRef}
+            type="text"
+            placeholder="Search packages..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && searchQuery) {
+                e.preventDefault();
+                setSearchQuery('');
+                searchInputRef.current?.blur();
+              }
+            }}
+            className={`w-full pl-9 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent ${searchQuery ? 'pr-14' : 'pr-4'}`}
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded text-xs font-medium text-foreground-secondary hover:text-foreground bg-transparent border border-border/60 hover:border-border transition-colors"
+              aria-label="Clear search (Esc)"
+            >
+              Esc
+            </button>
+          )}
         </div>
-        <div className="rounded-lg border border-border bg-background-card p-4">
-          <p className="text-xs text-foreground-secondary">Security Alerts</p>
-          <p className={cn('text-xl font-semibold mt-1', stats.alerts > 0 ? 'text-red-400' : 'text-foreground')}>{stats.alerts}</p>
+        <div className="flex items-center rounded-md border border-border bg-background">
+          {(['all', 'alerts', 'blocked', 'safe'] as const).map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={cn(
+                'px-2.5 py-1 text-xs font-medium capitalize transition-colors',
+                filter === f
+                  ? 'bg-background-card text-foreground'
+                  : 'text-foreground-secondary hover:text-foreground'
+              )}
+            >
+              {f}
+            </button>
+          ))}
         </div>
-        <div className="rounded-lg border border-border bg-background-card p-4">
-          <p className="text-xs text-foreground-secondary">Blocked Versions</p>
-          <p className={cn('text-xl font-semibold mt-1', stats.blocked > 0 ? 'text-yellow-400' : 'text-foreground')}>{stats.blocked}</p>
-        </div>
-        {stats.errored > 0 && (
-          <div className="rounded-lg border border-border bg-background-card p-4">
-            <p className="text-xs text-foreground-secondary">Errored Packages</p>
-            <p className="text-xl font-semibold text-orange-400 mt-1">{stats.errored}</p>
-          </div>
-        )}
       </div>
 
-      {/* Packages Security Table */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-medium text-foreground">Packages</h2>
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-foreground-secondary" />
-              <input
-                type="text"
-                placeholder="Search packages..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="h-8 w-48 rounded-md border border-border bg-background pl-8 pr-3 text-xs text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-1 focus:ring-brand"
-              />
-            </div>
-            <div className="flex items-center rounded-md border border-border bg-background">
-              {(['all', 'alerts', 'blocked', 'safe'] as const).map((f) => (
-                <button
-                  key={f}
-                  onClick={() => setFilter(f)}
-                  className={cn(
-                    'px-2.5 py-1 text-xs font-medium capitalize transition-colors',
-                    filter === f
-                      ? 'bg-background-card text-foreground'
-                      : 'text-foreground-secondary hover:text-foreground'
-                  )}
-                >
-                  {f}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <p className="text-xs text-foreground-secondary">
-          Monitoring {stats.total_direct} direct dependencies. Transitive dependencies are covered through their parent packages.
-        </p>
-
-        <div className="rounded-lg border border-border overflow-hidden">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-background-card-header border-b border-border text-left">
-                <th className="px-4 py-2.5 text-xs font-medium text-foreground-secondary">Package</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-foreground-secondary">Version</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-foreground-secondary text-center" title="Registry Integrity">Registry</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-foreground-secondary text-center" title="Install Scripts">Scripts</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-foreground-secondary text-center" title="Entropy Analysis">Entropy</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-foreground-secondary text-center">Anomaly</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-foreground-secondary">Next Version</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-foreground-secondary w-20"></th>
+      {/* Packages Table — same wrapper and row styling as Members / org tables */}
+      <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-background-card-header border-b border-border">
+              <tr>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                  Package
+                </th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                  Version
+                </th>
+                <th className="text-center px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider" title="Registry Integrity">
+                  Registry
+                </th>
+                <th className="text-center px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider" title="Install Scripts">
+                  Scripts
+                </th>
+                <th className="text-center px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider" title="Entropy Analysis">
+                  Entropy
+                </th>
+                <th className="text-center px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                  Anomaly
+                </th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                  Next Version
+                </th>
+                <th className="w-20 px-4 py-3"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {filteredPackages.map((pkg) => {
-                const isExpanded = expandedRow === pkg.dependency_id;
+                const rowId = `${pkg.dependency_id}-${pkg.version}`;
+                const isExpanded = expandedRow === rowId;
                 const isAnalyzing = pkg.analysis_status === 'analyzing' || pkg.analysis_status === 'pending';
                 const hasError = pkg.analysis_status === 'error';
 
                 return (
-                  <tr key={pkg.dependency_id} className="hover:bg-table-hover/40 transition-colors">
-                    <td className="px-4 py-2.5">
+                  <tr key={rowId} className="hover:bg-table-hover transition-colors">
+                    <td className="px-4 py-3 min-w-0 overflow-hidden">
                       <button
-                        onClick={() => setExpandedRow(isExpanded ? null : pkg.dependency_id)}
-                        className="flex items-center gap-2 text-left"
+                        onClick={() => setExpandedRow(isExpanded ? null : rowId)}
+                        className="flex items-center gap-2 text-left w-full min-w-0"
                       >
                         {isExpanded ? <ChevronDown className="h-3.5 w-3.5 text-foreground-secondary flex-shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 text-foreground-secondary flex-shrink-0" />}
-                        <span className="font-medium text-foreground">{pkg.name}</span>
-                        <span className="text-[10px] text-foreground-secondary uppercase">{pkg.ecosystem}</span>
+                        {pkg.ecosystem === 'npm' ? (
+                          <img src="/images/npm_icon.png" alt="" className="h-4 w-4 shrink-0 object-contain" aria-hidden />
+                        ) : (
+                          <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium uppercase text-foreground-secondary bg-background-subtle border border-border shrink-0">
+                            {pkg.ecosystem}
+                          </span>
+                        )}
+                        <span className="text-sm font-medium text-foreground truncate">{pkg.name}</span>
                       </button>
                       {isExpanded && (
                         <div className="mt-2 ml-6 space-y-1 text-xs text-foreground-secondary">
@@ -410,23 +411,25 @@ export default function ProjectWatchtowerPage() {
                         </div>
                       )}
                     </td>
-                    <td className="px-3 py-2.5 text-foreground-secondary font-mono text-xs">{pkg.version}</td>
-                    <td className="px-3 py-2.5 text-center">
+                    <td className="px-4 py-3 text-sm font-mono text-foreground-secondary">
+                      {pkg.version}
+                    </td>
+                    <td className="px-4 py-3 text-center">
                       {isAnalyzing ? <Loader2 className="h-3.5 w-3.5 animate-spin text-foreground-secondary mx-auto" /> : <StatusDot status={pkg.registry_integrity_status} ecosystem={pkg.ecosystem} />}
                     </td>
-                    <td className="px-3 py-2.5 text-center">
+                    <td className="px-4 py-3 text-center">
                       {isAnalyzing ? <Loader2 className="h-3.5 w-3.5 animate-spin text-foreground-secondary mx-auto" /> : <StatusDot status={pkg.install_scripts_status} ecosystem={pkg.ecosystem} />}
                     </td>
-                    <td className="px-3 py-2.5 text-center">
+                    <td className="px-4 py-3 text-center">
                       {isAnalyzing ? <Loader2 className="h-3.5 w-3.5 animate-spin text-foreground-secondary mx-auto" /> : <StatusDot status={pkg.entropy_analysis_status} />}
                     </td>
-                    <td className="px-3 py-2.5 text-center">
+                    <td className="px-4 py-3 text-center">
                       <AnomalyScore score={pkg.max_anomaly_score} />
                     </td>
-                    <td className="px-3 py-2.5">
+                    <td className="px-4 py-3">
                       <NextVersionBadge status={pkg.next_version_status} version={pkg.latest_version} />
                     </td>
-                    <td className="px-3 py-2.5">
+                    <td className="px-4 py-3">
                       {hasError && pkg.watchlist_id && (
                         <button
                           onClick={() => handleReanalyze(pkg.watchlist_id!)}
@@ -442,14 +445,14 @@ export default function ProjectWatchtowerPage() {
               })}
               {filteredPackages.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-sm text-foreground-secondary">
+                  <td colSpan={8} className="px-4 py-8 text-center text-sm text-foreground-secondary min-w-0">
                     {searchQuery ? 'No packages match your search.' : 'No packages in this view.'}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
-        </div>
+      </div>
       </div>
     </div>
   );

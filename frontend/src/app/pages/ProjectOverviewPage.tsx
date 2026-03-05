@@ -6,7 +6,8 @@ import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
 import { loadProjectVulnerabilityGraphData } from '../../lib/vulnerability-graph-data';
 import { ProjectVulnerabilitiesGraph } from '../../components/vulnerabilities-graph/ProjectVulnerabilitiesGraph';
 import SecuritySidebar, { type ActiveSidebar } from '../../components/security/SecuritySidebar';
-import VulnerabilityDetailContent from '../../components/security/VulnerabilityDetailContent';
+import { SyncDetailSidebar } from '../../components/SyncDetailSidebar';
+import VulnerabilityDetailContent, { type VulnerabilityHeaderContent } from '../../components/security/VulnerabilityDetailContent';
 import DependencySecurityContent from '../../components/security/DependencySecurityContent';
 import ProjectSecurityContent from '../../components/security/ProjectSecurityContent';
 import SecurityFilterBar, { type SecurityFilters, DEFAULT_FILTERS } from '../../components/security/SecurityFilterBar';
@@ -37,10 +38,14 @@ export default function ProjectOverviewPage() {
   const [revertedInSimulation, setRevertedInSimulation] = useState<Set<string>>(new Set());
   const [simulateLoading, setSimulateLoading] = useState(false);
   const [activeSidebar, setActiveSidebar] = useState<ActiveSidebar>(null);
+  const [vulnHeaderContent, setVulnHeaderContent] = useState<VulnerabilityHeaderContent | null>(null);
   const [securityFilters, setSecurityFilters] = useState<SecurityFilters>(DEFAULT_FILTERS);
 
   const realtime = useRealtimeStatus(organizationId, projectId);
   const isExtractionOngoing = realtime.status !== 'ready';
+  // #region agent log
+  if (projectId && organizationId) { fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'cd7edb'},body:JSON.stringify({sessionId:'cd7edb',location:'ProjectOverviewPage.tsx:realtime',message:'Overview realtime state',data:{realtimeStatus:realtime.status,isExtractionOngoing,projectId},timestamp:Date.now(),hypothesisId:'H4'})}).catch(()=>{}); }
+  // #endregion
 
   const canManageSidebars = useMemo(() => {
     if (!userPermissions) return false;
@@ -289,7 +294,11 @@ export default function ProjectOverviewPage() {
     (_: React.MouseEvent, node: Node) => {
       if (!projectId) return;
       if (node.id === VULN_CENTER_ID) {
-        setActiveSidebar({ type: 'project', id: projectId });
+        if (isExtractionOngoing) {
+          setActiveSidebar({ type: 'extraction-logs', id: projectId });
+        } else {
+          setActiveSidebar({ type: 'project', id: projectId });
+        }
         return;
       }
       if (node.type === 'vulnerabilityNode' && node.data && typeof (node.data as { osvId?: string }).osvId === 'string') {
@@ -298,10 +307,12 @@ export default function ProjectOverviewPage() {
       }
       setActiveSidebar({ type: 'dependency', id: node.id });
     },
-    [projectId]
+    [projectId, isExtractionOngoing]
   );
 
-  if (!project || !permissionsChecked) {
+  // Only show page-level skeleton when project isn't loaded yet. Once we have project,
+  // show the graph immediately (it has its own loading state) to avoid a flash of gray bars.
+  if (!project) {
     return (
       <main className="relative flex flex-col min-h-[calc(100vh-3rem)] w-full">
         <div className="animate-pulse space-y-6 p-4">
@@ -312,7 +323,8 @@ export default function ProjectOverviewPage() {
     );
   }
 
-  if (!userPermissions?.view_dependencies) {
+  // Redirect is handled in useEffect; don't render graph for users without access.
+  if (userPermissions && !userPermissions.view_dependencies) {
     return null;
   }
 
@@ -330,6 +342,7 @@ export default function ProjectOverviewPage() {
             centerExtras={centerExtras}
             showOnlyReachable={securityFilters.reachableOnly}
             extractionOngoing={isExtractionOngoing}
+            extractionStatusKnown={!realtime.isLoading}
             onNodeClick={handleGraphNodeClick}
             statusName={project?.status_name}
             statusColor={project?.status_color}
@@ -350,9 +363,11 @@ export default function ProjectOverviewPage() {
       {activeSidebar?.type === 'vulnerability' && (
         <SecuritySidebar
           isOpen
-          onClose={() => setActiveSidebar(null)}
+          onClose={() => { setActiveSidebar(null); setVulnHeaderContent(null); }}
           title={activeSidebar.id}
-          subtitle="Vulnerability Detail"
+          titleHref={activeSidebar.id.startsWith('GHSA-') ? `https://github.com/advisories/${activeSidebar.id}` : `https://osv.dev/vulnerability/${activeSidebar.id}`}
+          subtitle={vulnHeaderContent?.subtitle ?? undefined}
+          headerRight={vulnHeaderContent?.headerRight}
         >
           <VulnerabilityDetailContent
             organizationId={organizationId ?? ''}
@@ -360,6 +375,7 @@ export default function ProjectOverviewPage() {
             osvId={activeSidebar.id}
             canManage={canManageSidebars}
             onNavigateToDep={(depId) => setActiveSidebar({ type: 'dependency', id: depId })}
+            onHeaderContent={setVulnHeaderContent}
           />
         </SecuritySidebar>
       )}
@@ -380,6 +396,14 @@ export default function ProjectOverviewPage() {
             }}
           />
         </SecuritySidebar>
+      )}
+      {activeSidebar?.type === 'extraction-logs' && (
+        <SyncDetailSidebar
+          projectId={activeSidebar.id}
+          organizationId={organizationId ?? ''}
+          onClose={() => setActiveSidebar(null)}
+          onCancelled={() => setActiveSidebar(null)}
+        />
       )}
       {activeSidebar?.type === 'project' && (
         <SecuritySidebar

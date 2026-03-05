@@ -60,9 +60,20 @@ function getReceiver(): Receiver | null {
   return receiver;
 }
 
+/**
+ * Base URL for the backend API. QStash requires destination URLs to have http:// or https://.
+ * Normalizes values like "myapp.fly.dev" or "localhost:3001" to include a scheme.
+ */
 function getApiBaseUrl(): string {
-  // Check both possible env var names
-  return process.env.API_BASE_URL || process.env.BACKEND_URL || 'http://localhost:3001';
+  const raw = process.env.API_BASE_URL || process.env.BACKEND_URL || 'http://localhost:3001';
+  const trimmed = (raw || '').trim().replace(/\/$/, '');
+  if (!trimmed) return 'http://localhost:3001';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  // Localhost without scheme -> http; otherwise https (e.g. fly.dev)
+  if (/^localhost(:\d+)?$/i.test(trimmed) || /^127\.0\.0\.1(:\d+)?$/i.test(trimmed)) {
+    return `http://${trimmed}`;
+  }
+  return `https://${trimmed}`;
 }
 
 /**

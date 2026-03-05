@@ -2521,10 +2521,10 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
-    // Verify project exists and belongs to org
+    // Verify project exists and belongs to org; include Phase 4 effective code columns
     const { data: project, error: projectError } = await supabase
       .from('projects')
-      .select('id, name')
+      .select('id, name, effective_package_policy_code, effective_project_status_code, effective_pr_check_code')
       .eq('id', projectId)
       .eq('organization_id', id)
       .single();
@@ -2533,7 +2533,7 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    // Get organization policy (policy as code)
+    // Get organization policy (legacy policy as code)
     const { data: orgPolicies } = await supabase
       .from('organization_policies')
       .select('policy_code')
@@ -2541,6 +2541,23 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
       .single();
 
     const inheritedPolicyCode = (orgPolicies?.policy_code ?? '').trim() || '';
+
+    // Phase 4: Get org split policy code (inherited per type)
+    const [
+      { data: orgPackagePolicy },
+      { data: orgStatusCode },
+      { data: orgPrCheck },
+    ] = await Promise.all([
+      supabase.from('organization_package_policies').select('package_policy_code').eq('organization_id', id).single(),
+      supabase.from('organization_status_codes').select('project_status_code').eq('organization_id', id).single(),
+      supabase.from('organization_pr_checks').select('pr_check_code').eq('organization_id', id).single(),
+    ]);
+    const inheritedPackagePolicyCode = (orgPackagePolicy?.package_policy_code ?? '').trim() || '';
+    const inheritedProjectStatusCode = (orgStatusCode?.project_status_code ?? '').trim() || '';
+    const inheritedPrCheckCode = (orgPrCheck?.pr_check_code ?? '').trim() || '';
+    const effectivePackagePolicyCode = (project as any).effective_package_policy_code?.trim() || inheritedPackagePolicyCode;
+    const effectiveProjectStatusCode = (project as any).effective_project_status_code?.trim() || inheritedProjectStatusCode;
+    const effectivePrCheckCode = (project as any).effective_pr_check_code?.trim() || inheritedPrCheckCode;
 
     // Get all exceptions for this project (accepted and pending)
     const { data: exceptions } = await supabase
@@ -2633,6 +2650,13 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
       effective,
       pending_exceptions: pendingExceptionsLegacy,
       revoked_exceptions: revokedExceptionsLegacy,
+      // Phase 4: split policy code (inherited from org, effective = project override or inherited)
+      inherited_package_policy_code: inheritedPackagePolicyCode,
+      inherited_project_status_code: inheritedProjectStatusCode,
+      inherited_pr_check_code: inheritedPrCheckCode,
+      effective_package_policy_code: effectivePackagePolicyCode,
+      effective_project_status_code: effectiveProjectStatusCode,
+      effective_pr_check_code: effectivePrCheckCode,
     });
   } catch (error: any) {
     console.error('Error fetching project policies:', error);
@@ -11720,9 +11744,6 @@ router.get('/:orgId/projects/:projectId/watchtower/packages', async (req: AuthRe
   try {
     const { orgId, projectId } = req.params;
     const userId = req.user!.id;
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'21910a'},body:JSON.stringify({sessionId:'21910a',location:'projects.ts:watchtower/packages',message:'handler entry',data:{orgId,projectId,projectIdType:typeof projectId},timestamp:Date.now(),hypothesisId:'H3,H4'})}).catch(()=>{});
-    // #endregion
 
     const { data: membership } = await supabase
       .from('organization_members')
@@ -11736,20 +11757,14 @@ router.get('/:orgId/projects/:projectId/watchtower/packages', async (req: AuthRe
       return;
     }
 
-    const { data: directDeps, error: directDepsError } = await supabase
+    const { data: directDeps } = await supabase
       .from('project_dependencies')
       .select('dependency_id, name, version, files_importing_count')
       .eq('project_id', projectId)
       .eq('is_direct', true);
 
     const deps = directDeps || [];
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'21910a'},body:JSON.stringify({sessionId:'21910a',location:'projects.ts:watchtower/packages after query',message:'directDeps count',data:{depsLength:deps.length,queryError:directDepsError?.message},timestamp:Date.now(),hypothesisId:'H2,H4'})}).catch(()=>{});
-    // #endregion
     if (deps.length === 0) {
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'21910a'},body:JSON.stringify({sessionId:'21910a',location:'projects.ts:watchtower/packages early return',message:'returning zero deps',data:{projectId},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
-      // #endregion
       res.json({ packages: [], total_direct_deps: 0 });
       return;
     }

@@ -43,15 +43,8 @@ function wrapPrCheckBody(body: string): string {
   return `function pullRequestCheck(context) {\n${lines.join('\n')}\n}`;
 }
 
-/** Wrap projectStatus body into full function. */
-function wrapProjectStatusBody(body: string): string {
-  const lines = body.trim().split('\n').map((l) => (l ? `  ${l}` : ''));
-  return `function projectStatus(context) {\n${lines.join('\n')}\n}`;
-}
-
 const DEFAULT_PACKAGE_POLICY_BODY = 'return { allowed: true, reasons: [] };';
 const DEFAULT_PR_CHECK_BODY = 'return { passed: true, violations: [] };';
-const DEFAULT_PROJECT_STATUS_BODY = 'return { status: "Compliant", violations: [] };';
 
 /** Legacy helpers for backward-compat with old policy_code format. */
 function assemblePolicyCode(pullRequestBody: string, complianceBody: string): string {
@@ -105,7 +98,7 @@ function PolicyEditorSkeleton() {
   );
 }
 
-type SubTab = 'package_policy' | 'project_status' | 'pr_check' | 'change_history' | 'project_requests';
+type SubTab = 'package_policy' | 'pr_check' | 'change_history' | 'project_requests';
 
 interface OrganizationContextType {
   organization: Organization | null;
@@ -127,11 +120,9 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
   const [permissionsLoaded, setPermissionsLoaded] = useState(false);
   const [subTab, setSubTab] = useState<SubTab>('package_policy');
 
-  // Split policy code state
+  // Split policy code state (Package Policy + PR Check only; Project Status lives in Statuses)
   const [packagePolicyCode, setPackagePolicyCode] = useState('');
   const [packagePolicyOriginal, setPackagePolicyOriginal] = useState('');
-  const [projectStatusCode, setProjectStatusCode] = useState('');
-  const [projectStatusOriginal, setProjectStatusOriginal] = useState('');
   const [prCheckCode, setPrCheckCode] = useState('');
   const [prCheckOriginal, setPrCheckOriginal] = useState('');
   const [saving, setSaving] = useState(false);
@@ -144,7 +135,7 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
   const aiCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Commit sidebar (open after validation passes)
-  const [commitSidebarCodeType, setCommitSidebarCodeType] = useState<'package_policy' | 'project_status' | 'pr_check' | null>(null);
+  const [commitSidebarCodeType, setCommitSidebarCodeType] = useState<'package_policy' | 'pr_check' | null>(null);
   const [commitMessage, setCommitMessage] = useState('');
   const [commitSidebarVisible, setCommitSidebarVisible] = useState(false);
   const [committing, setCommitting] = useState(false);
@@ -180,15 +171,11 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
       setLoading(true);
       const data = await api.getOrganizationPolicyCode(id);
       const pkgFull = data.package_policy?.package_policy_code || '';
-      const statusFull = data.status_code?.project_status_code || '';
       const prFull = data.pr_check?.pr_check_code || '';
       const pkgBody = extractFunctionBody(pkgFull, 'packagePolicy') ?? DEFAULT_PACKAGE_POLICY_BODY;
-      const statusBody = extractFunctionBody(statusFull, 'projectStatus') ?? DEFAULT_PROJECT_STATUS_BODY;
       const prBody = extractFunctionBody(prFull, 'pullRequestCheck') ?? DEFAULT_PR_CHECK_BODY;
       setPackagePolicyCode(pkgBody);
       setPackagePolicyOriginal(pkgBody);
-      setProjectStatusCode(statusBody);
-      setProjectStatusOriginal(statusBody);
       setPrCheckCode(prBody);
       setPrCheckOriginal(prBody);
     } catch (error: any) {
@@ -230,11 +217,10 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
       setLoadingChanges(true);
       Promise.all([
         api.getOrganizationPolicyChanges(id, 'package_policy'),
-        api.getOrganizationPolicyChanges(id, 'project_status'),
         api.getOrganizationPolicyChanges(id, 'pr_check'),
       ])
-        .then(([pkgChanges, statusChanges, prChanges]) => {
-          const all = [...pkgChanges, ...statusChanges, ...prChanges].sort(
+        .then(([pkgChanges, prChanges]) => {
+          const all = [...pkgChanges, ...prChanges].sort(
             (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
           );
           setChanges(all);
@@ -255,7 +241,7 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
         })
         .catch((e) => {
           console.error(e);
-          toast({ title: 'Error', description: e?.message || 'Failed to load project requests', variant: 'destructive' });
+          toast({ title: 'Error', description: e?.message || 'Failed to load change requests', variant: 'destructive' });
         })
         .finally(() => setLoadingProjectRequests(false));
     }
@@ -395,7 +381,6 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
     organization?.role === 'admin';
 
   const packagePolicyDirty = packagePolicyCode !== packagePolicyOriginal;
-  const projectStatusDirty = projectStatusCode !== projectStatusOriginal;
   const prCheckDirty = prCheckCode !== prCheckOriginal;
 
   /** Map policy API validation result to NotificationRulesSection-style checks for the validation-failed card. */
@@ -421,10 +406,10 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
   }, []);
 
   /** On Commit click: validate in background; if pass open sidebar, if fail show validation card. */
-  const handleCommitClick = async (codeType: 'package_policy' | 'project_status' | 'pr_check') => {
+  const handleCommitClick = async (codeType: 'package_policy' | 'pr_check') => {
     if (!id) return;
-    const body = codeType === 'package_policy' ? packagePolicyCode : codeType === 'project_status' ? projectStatusCode : prCheckCode;
-    const code = codeType === 'package_policy' ? wrapPackagePolicyBody(body) : codeType === 'project_status' ? wrapProjectStatusBody(body) : wrapPrCheckBody(body);
+    const body = codeType === 'package_policy' ? packagePolicyCode : prCheckCode;
+    const code = codeType === 'package_policy' ? wrapPackagePolicyBody(body) : wrapPrCheckBody(body);
 
     setValidating(true);
     setValidationResult(null);
@@ -449,33 +434,30 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
   /** Called from commit sidebar: save with message (validation already passed). */
   const handleCommitSubmit = async () => {
     if (!id || !commitSidebarCodeType) return;
-    const body = commitSidebarCodeType === 'package_policy' ? packagePolicyCode : commitSidebarCodeType === 'project_status' ? projectStatusCode : prCheckCode;
-    const code = commitSidebarCodeType === 'package_policy' ? wrapPackagePolicyBody(body) : commitSidebarCodeType === 'project_status' ? wrapProjectStatusBody(body) : wrapPrCheckBody(body);
+    const body = commitSidebarCodeType === 'package_policy' ? packagePolicyCode : prCheckCode;
+    const code = commitSidebarCodeType === 'package_policy' ? wrapPackagePolicyBody(body) : wrapPrCheckBody(body);
 
     setCommitting(true);
     try {
       await api.updateOrganizationPolicyCode(id, commitSidebarCodeType, code, commitMessage.trim() || undefined);
       if (commitSidebarCodeType === 'package_policy') {
         setPackagePolicyOriginal(body);
-      } else if (commitSidebarCodeType === 'project_status') {
-        setProjectStatusOriginal(body);
       } else {
         setPrCheckOriginal(body);
       }
       closeCommitSidebar();
       if (id) {
-        const [pkgChanges, statusChanges, prChanges] = await Promise.all([
+        const [pkgChanges, prChanges] = await Promise.all([
           api.getOrganizationPolicyChanges(id, 'package_policy'),
-          api.getOrganizationPolicyChanges(id, 'project_status'),
           api.getOrganizationPolicyChanges(id, 'pr_check'),
         ]);
         setChanges(
-          [...pkgChanges, ...statusChanges, ...prChanges].sort(
+          [...pkgChanges, ...prChanges].sort(
             (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
           ),
         );
       }
-      const label = commitSidebarCodeType === 'package_policy' ? 'Package policy' : commitSidebarCodeType === 'project_status' ? 'Project status' : 'PR check';
+      const label = commitSidebarCodeType === 'package_policy' ? 'Package policy' : 'PR check';
       toast({
         title: 'Policy saved',
         description: `${label} updated successfully.`,
@@ -520,10 +502,9 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
 
   const subTabs: { id: SubTab; label: string }[] = [
     { id: 'package_policy', label: 'Package Policy' },
-    { id: 'project_status', label: 'Project Status' },
     { id: 'pr_check', label: 'Pull Request Check' },
     { id: 'change_history', label: 'Change History' },
-    { id: 'project_requests', label: 'Project requests' },
+    { id: 'project_requests', label: 'Change requests' },
   ];
 
   return (
@@ -589,20 +570,6 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
             </CardContent>
           </Card>
         )}
-        {subTab === 'project_status' && (
-          <Card className="rounded-lg border border-border bg-background-card/80 mb-6">
-            <CardContent className="p-4 flex gap-3">
-              <div className="flex-shrink-0 mt-0.5">
-                <Info className="h-5 w-5 text-foreground-muted" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm text-foreground-secondary">
-                  Assign a custom status to each project based on policy. Write a <code className="px-1 py-0.5 rounded bg-muted text-foreground text-xs font-mono">projectStatus(context)</code> function that receives project and dependencies and returns one of your organization&apos;s statuses.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        )}
         {subTab === 'pr_check' && (
           <Card className="rounded-lg border border-border bg-background-card/80 mb-6">
             <CardContent className="p-4 flex gap-3">
@@ -619,7 +586,7 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
         )}
 
         {loading ? (
-          (subTab === 'package_policy' || subTab === 'project_status' || subTab === 'pr_check') ? (
+          (subTab === 'package_policy' || subTab === 'pr_check') ? (
             <PolicyEditorSkeleton />
           ) : subTab === 'change_history' ? (
             /* Change history has its own loading state below */
@@ -666,74 +633,6 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
                   </div>
                 </div>
                 {showValidationFailedCard && subTab === 'package_policy' && validationChecksFromResult && (
-                  <div
-                    ref={validationCardRef}
-                    className="mt-3 p-4 rounded-lg border border-destructive/30 bg-destructive/10"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="rounded-md bg-destructive/20 border border-destructive/40 w-9 h-9 flex items-center justify-center flex-shrink-0 text-destructive">
-                        <X className="h-4 w-4" />
-                      </div>
-                      <span className="text-base font-medium text-destructive">Validation failed</span>
-                    </div>
-                    <div className="mt-3 space-y-2 pl-12">
-                      {validationChecksFromResult
-                        .filter((c) => !c.pass)
-                        .map((check, i) => (
-                          <div key={i} className="text-sm">
-                            <span className="font-medium text-destructive">
-                              {check.name === 'syntax' ? 'Syntax' : check.name === 'shape' ? 'Return value' : check.name === 'fetch_resilience' ? 'Fetch handling' : check.name.replace(/_/g, ' ')} failed
-                            </span>
-                            {check.error && (
-                              <p className="text-foreground-secondary mt-0.5">{check.error}</p>
-                            )}
-                          </div>
-                        ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Project Status editor */}
-            {subTab === 'project_status' && (
-              <div className="space-y-4">
-                <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                  <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
-                    <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">projectStatus</span>
-                    {hasManageCompliance && projectStatusDirty && (
-                      <div className="flex items-center gap-1.5">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => { setProjectStatusCode(projectStatusOriginal); setValidationResult(null); }}
-                          disabled={validating}
-                          className="h-6 min-h-6 px-1.5 py-0 text-[11px] font-medium"
-                        >
-                          Clear
-                        </Button>
-                        <Button
-                          size="sm"
-                          onClick={() => handleCommitClick('project_status')}
-                          disabled={validating}
-                          className="h-6 min-h-6 px-1.5 py-0 text-[11px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-                        >
-                          {validating && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
-                          Commit
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                  <div className="bg-background-card">
-                    <PolicyCodeEditor
-                      value={projectStatusCode}
-                      onChange={(val) => { setProjectStatusCode(val || ''); setValidationResult(null); }}
-                      readOnly={!hasManageCompliance}
-                      fitContent
-                    />
-                  </div>
-                </div>
-                {showValidationFailedCard && subTab === 'project_status' && validationChecksFromResult && (
                   <div
                     ref={validationCardRef}
                     className="mt-3 p-4 rounded-lg border border-destructive/30 bg-destructive/10"
@@ -927,7 +826,7 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
             </div>
           )}
 
-        {/* Project requests – pending policy change requests from projects */}
+        {/* Change requests – pending policy change requests from projects (package + PR only; status in Statuses) */}
         {subTab === 'project_requests' && (
           <div className="bg-background-card border border-border rounded-lg overflow-hidden">
             <table className="w-full table-fixed">
@@ -961,14 +860,14 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
                       <td className="px-4 py-3"><div className="h-8 bg-muted rounded w-20" /></td>
                     </tr>
                   ))
-                ) : projectRequests.length === 0 ? (
+                ) : projectRequests.filter((r) => r.code_type === 'package_policy' || r.code_type === 'pr_check').length === 0 ? (
                   <tr>
                     <td colSpan={6} className="px-4 py-3 text-sm text-muted-foreground text-center">
-                      No pending project requests.
+                      No pending change requests.
                     </td>
                   </tr>
                 ) : (
-                  projectRequests.map((req) => (
+                  projectRequests.filter((r) => r.code_type === 'package_policy' || r.code_type === 'pr_check').map((req) => (
                     <tr key={req.id} className="hover:bg-table-hover transition-colors">
                       <td className="px-4 py-3 text-sm text-foreground font-medium truncate" title={req.project_name}>{req.project_name}</td>
                       <td className="px-4 py-3">{codeTypeBadge(req.code_type)}</td>

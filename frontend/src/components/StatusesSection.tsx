@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useParams } from 'react-router-dom';
-import { Plus, Lock, Trash2, Loader2, Check, X, Info } from 'lucide-react';
-import { api, OrganizationStatus, OrganizationAssetTier, OrganizationPolicyChange } from '@/lib/api';
+import { useParams, useOutletContext } from 'react-router-dom';
+import { Plus, Lock, Trash2, Loader2, Check, X, Info, Eye } from 'lucide-react';
+import { api, OrganizationStatus, OrganizationAssetTier, OrganizationPolicyChange, ProjectPolicyChangeRequest } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -63,11 +63,16 @@ const COLOR_PRESETS = [
 ];
 const PRESET_HEXES = COLOR_PRESETS.map((p) => p.color);
 
-type SubTab = 'statuses' | 'asset_tiers' | 'status_code' | 'change_history';
+type SubTab = 'statuses' | 'asset_tiers' | 'status_code' | 'change_history' | 'change_requests';
+
+interface OrganizationContextType {
+  organization: { permissions?: { manage_compliance?: boolean }; role?: string } | null;
+}
 
 export default function StatusesSection() {
   const { id: orgId } = useParams<{ id: string }>();
   const { toast } = useToast();
+  const { organization } = useOutletContext<OrganizationContextType>();
   const [subTab, setSubTab] = useState<SubTab>('statuses');
   const [statuses, setStatuses] = useState<OrganizationStatus[]>([]);
   const [assetTiers, setAssetTiers] = useState<OrganizationAssetTier[]>([]);
@@ -110,6 +115,15 @@ export default function StatusesSection() {
   const changeDetailCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const changeHistoryLoadedRef = useRef(false);
 
+  // Change requests (pending project status code requests only)
+  const [changeRequests, setChangeRequests] = useState<ProjectPolicyChangeRequest[]>([]);
+  const [loadingChangeRequests, setLoadingChangeRequests] = useState(false);
+  const [selectedRequest, setSelectedRequest] = useState<ProjectPolicyChangeRequest | null>(null);
+  const [requestDetailVisible, setRequestDetailVisible] = useState(false);
+  const requestDetailCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [reviewingRequestId, setReviewingRequestId] = useState<string | null>(null);
+  const changeRequestsLoadedRef = useRef(false);
+
   const load = useCallback(async () => {
     if (!orgId) return;
     setLoading(true);
@@ -136,7 +150,20 @@ export default function StatusesSection() {
 
   useEffect(() => {
     changeHistoryLoadedRef.current = false;
+    changeRequestsLoadedRef.current = false;
   }, [orgId]);
+
+  useEffect(() => {
+    if (selectedRequest) {
+      setRequestDetailVisible(false);
+      const raf = requestAnimationFrame(() => {
+        requestAnimationFrame(() => setRequestDetailVisible(true));
+      });
+      return () => cancelAnimationFrame(raf);
+    } else {
+      setRequestDetailVisible(false);
+    }
+  }, [selectedRequest]);
 
   useEffect(() => {
     if (subTab === 'change_history' && orgId && !changeHistoryLoadedRef.current) {
@@ -150,6 +177,49 @@ export default function StatusesSection() {
         .finally(() => setLoadingChanges(false));
     }
   }, [subTab, orgId]);
+
+  useEffect(() => {
+    if (subTab === 'change_requests' && orgId && !changeRequestsLoadedRef.current) {
+      setLoadingChangeRequests(true);
+      api.getOrganizationPolicyChangeRequests(orgId)
+        .then((list) => {
+          setChangeRequests(list.filter((r) => r.code_type === 'project_status'));
+          changeRequestsLoadedRef.current = true;
+        })
+        .catch((e) => {
+          console.error(e);
+          toast({ title: 'Error', description: e?.message || 'Failed to load change requests', variant: 'destructive' });
+        })
+        .finally(() => setLoadingChangeRequests(false));
+    }
+  }, [subTab, orgId, toast]);
+
+  const hasManageCompliance = !!(organization?.permissions?.manage_compliance) || organization?.role === 'owner' || organization?.role === 'admin';
+
+  const closeRequestDetail = useCallback(() => {
+    setRequestDetailVisible(false);
+    if (requestDetailCloseTimeoutRef.current) clearTimeout(requestDetailCloseTimeoutRef.current);
+    requestDetailCloseTimeoutRef.current = setTimeout(() => {
+      requestDetailCloseTimeoutRef.current = null;
+      setSelectedRequest(null);
+    }, 150);
+  }, []);
+
+  const handleReviewRequest = useCallback(async (changeId: string, action: 'accept' | 'reject') => {
+    if (!orgId) return;
+    setReviewingRequestId(changeId);
+    try {
+      await api.reviewProjectPolicyChange(orgId, changeId, action);
+      toast({ title: action === 'accept' ? 'Request accepted' : 'Request rejected' });
+      setChangeRequests((prev) => prev.filter((r) => r.id !== changeId));
+      setSelectedRequest(null);
+      setRequestDetailVisible(false);
+    } catch (e: any) {
+      toast({ title: 'Error', description: e?.message || 'Failed to update request', variant: 'destructive' });
+    } finally {
+      setReviewingRequestId(null);
+    }
+  }, [orgId, toast]);
 
   const handleAddStatus = async () => {
     if (!orgId || !newStatusName.trim()) return;
@@ -336,6 +406,7 @@ export default function StatusesSection() {
     { id: 'asset_tiers', label: 'Asset Tiers' },
     { id: 'status_code', label: 'Status Code' },
     { id: 'change_history', label: 'Change History' },
+    { id: 'change_requests', label: 'Change requests' },
   ];
 
   const pulse = 'bg-muted animate-pulse rounded';
@@ -896,6 +967,83 @@ export default function StatusesSection() {
         </div>
       )}
 
+      {/* Change requests sub-tab – pending project status code requests */}
+      {subTab === 'change_requests' && (
+        <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+          <table className="w-full table-fixed">
+            <colgroup>
+              <col className="w-[180px]" />
+              <col className="w-[140px]" />
+              <col className="min-w-[120px]" />
+              <col className="w-[120px]" />
+              <col className="w-[100px]" />
+            </colgroup>
+            <thead className="bg-background-card-header border-b border-border">
+              <tr>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Requested by</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Message</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Date</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {loadingChangeRequests ? (
+                [1, 2, 3].map((i) => (
+                  <tr key={i} className="animate-pulse">
+                    <td className="px-4 py-3"><div className="h-4 bg-muted rounded w-32" /></td>
+                    <td className="px-4 py-3"><div className="h-5 bg-muted rounded w-24" /></td>
+                    <td className="px-4 py-3"><div className="h-4 bg-muted rounded w-48" /></td>
+                    <td className="px-4 py-3"><div className="h-4 bg-muted rounded w-16" /></td>
+                    <td className="px-4 py-3"><div className="h-8 bg-muted rounded w-20" /></td>
+                  </tr>
+                ))
+              ) : changeRequests.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-4 py-6 text-sm text-muted-foreground text-center">
+                    No pending change requests for status code.
+                  </td>
+                </tr>
+              ) : (
+                changeRequests.map((req) => (
+                  <tr key={req.id} className="hover:bg-table-hover transition-colors">
+                    <td className="px-4 py-3 text-sm text-foreground font-medium truncate" title={req.project_name}>{req.project_name}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Avatar className="h-6 w-6 flex-shrink-0">
+                          <AvatarImage src={req.author_avatar_url ?? undefined} alt="" />
+                          <AvatarFallback className="text-[10px] bg-muted text-muted-foreground">
+                            {(req.author_display_name || 'User').trim().slice(0, 2).toUpperCase() || '?'}
+                          </AvatarFallback>
+                        </Avatar>
+                        <span className="text-sm text-foreground truncate">{req.author_display_name || 'Unknown'}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-foreground truncate" title={req.message || undefined}>
+                      {req.message?.trim() || '—'}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-muted-foreground">{formatRelativeTime(req.created_at)}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1.5">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs"
+                          onClick={() => { setSelectedRequest(req); setRequestDetailVisible(false); requestAnimationFrame(() => requestAnimationFrame(() => setRequestDetailVisible(true))); }}
+                        >
+                          <Eye className="h-3.5 w-3.5 mr-1" />
+                          Review
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {/* Change detail sidebar – diff view */}
       {selectedChange && createPortal(
         <div className="fixed inset-0 z-50">
@@ -962,6 +1110,85 @@ export default function StatusesSection() {
               <Button variant="outline" size="sm" onClick={closeChangeDetail}>
                 Close
               </Button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* Change request detail sidebar – diff and Accept/Reject (status code only) */}
+      {selectedRequest && createPortal(
+        <div className="fixed inset-0 z-50">
+          <div
+            className={cn(
+              'fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150',
+              requestDetailVisible ? 'opacity-100' : 'opacity-0',
+            )}
+            onClick={closeRequestDetail}
+          />
+          <div
+            className={cn(
+              'fixed right-4 top-4 bottom-4 w-full max-w-[560px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
+              requestDetailVisible ? 'translate-x-0' : 'translate-x-full',
+            )}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 pt-5 pb-3 flex-shrink-0">
+              <h2 className="text-xl font-semibold text-foreground">Status code change request</h2>
+              <p className="text-sm text-foreground mt-1 font-medium">{selectedRequest.project_name}</p>
+              <p className="text-sm text-muted-foreground mt-0.5 truncate">{selectedRequest.message?.trim() || '—'}</p>
+              <div className="flex items-center gap-2 mt-2">
+                <span className="text-xs text-muted-foreground">{formatRelativeTime(selectedRequest.created_at)}</span>
+                {selectedRequest.has_conflict && (
+                  <Badge variant="secondary" className="text-amber-600 border-amber-200 bg-amber-50">Conflict</Badge>
+                )}
+              </div>
+              <div className="flex items-center gap-2 mt-3">
+                <Avatar className="h-6 w-6 flex-shrink-0">
+                  <AvatarImage src={selectedRequest.author_avatar_url ?? undefined} alt="" />
+                  <AvatarFallback className="text-[10px] bg-muted text-muted-foreground">
+                    {(selectedRequest.author_display_name || 'User').trim().slice(0, 2).toUpperCase() || '?'}
+                  </AvatarFallback>
+                </Avatar>
+                <span className="text-sm text-muted-foreground">Requested by {selectedRequest.author_display_name || 'Unknown'}</span>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto min-h-0 px-4 pb-4">
+              <div className="rounded-lg overflow-hidden border border-border">
+                <PolicyDiffViewer
+                  baseCode={selectedRequest.base_code ?? ''}
+                  requestedCode={selectedRequest.proposed_code ?? ''}
+                  minHeight="200px"
+                  className="text-[11px]"
+                />
+              </div>
+            </div>
+            <div className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header flex items-center justify-between">
+              <Button variant="outline" size="sm" onClick={closeRequestDetail}>
+                Close
+              </Button>
+              {hasManageCompliance && (
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-destructive hover:text-destructive"
+                    disabled={reviewingRequestId === selectedRequest.id}
+                    onClick={() => handleReviewRequest(selectedRequest.id, 'reject')}
+                  >
+                    <X className="h-3 w-3 mr-1" />
+                    Reject
+                  </Button>
+                  <Button
+                    size="sm"
+                    disabled={reviewingRequestId === selectedRequest.id}
+                    onClick={() => handleReviewRequest(selectedRequest.id, 'accept')}
+                  >
+                    {reviewingRequestId === selectedRequest.id ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Check className="h-3 w-3 mr-1" />}
+                    Accept
+                  </Button>
+                </div>
+              )}
             </div>
           </div>
         </div>,

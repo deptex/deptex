@@ -1371,7 +1371,8 @@ export const api = {
     connectedRepository: (ProjectRepository & { provider?: string }) | null;
     repositories: RepoWithProvider[];
   }> {
-    const key = `${organizationId}:${projectId}:${integrationId || 'all'}`;
+    // Match key used by setProjectRepositoriesCache when no integrationId (so cache + invalidate work)
+    const key = integrationId ? `${organizationId}:${projectId}:${integrationId}` : `${organizationId}:${projectId}`;
     const cached = this._projectRepositoriesCache.get(key);
     if (cached && Date.now() - cached.fetchedAt < REPOS_CACHE_TTL_MS) {
       return { connectedRepository: cached.connectedRepository, repositories: cached.repositories };
@@ -3549,6 +3550,13 @@ export interface ProjectEffectivePolicies {
   accepted_exceptions: ProjectPolicyException[];
   pending_exceptions: ProjectPolicyException[];
   revoked_exceptions?: ProjectPolicyException[];
+  // Phase 4: split policy code (inherited from org, effective = project override or inherited)
+  inherited_package_policy_code?: string;
+  inherited_project_status_code?: string;
+  inherited_pr_check_code?: string;
+  effective_package_policy_code?: string;
+  effective_project_status_code?: string;
+  effective_pr_check_code?: string;
 }
 
 export interface ProjectPRGuardrails {

@@ -63,6 +63,8 @@ export interface ProjectVulnerabilitiesGraphProps {
   centerExtras?: VulnGraphCenterExtras | null;
   showOnlyReachable?: boolean;
   extractionOngoing?: boolean;
+  /** When false, show loading skeleton until extraction status is known (avoids flashing "Project still extracting" on initial load). */
+  extractionStatusKnown?: boolean;
   onNodeClick?: (event: React.MouseEvent, node: Node) => void;
   /** Project status from policy (e.g. Compliant, Under Review). Shown as badge on center node. */
   statusName?: string | null;
@@ -79,11 +81,13 @@ export function ProjectVulnerabilitiesGraph({
   centerExtras,
   showOnlyReachable = false,
   extractionOngoing = false,
+  extractionStatusKnown = true,
   onNodeClick,
   statusName,
   statusColor,
 }: ProjectVulnerabilitiesGraphProps) {
   const loading = graphLoading || vulnerabilitiesLoading;
+  const waitForExtractionStatus = !extractionStatusKnown;
   const { nodes: layoutNodes, edges: layoutEdges } = useVulnerabilitiesGraphLayout(
     projectName,
     graphDepNodes,
@@ -101,6 +105,7 @@ export function ProjectVulnerabilitiesGraph({
     layoutNodes.length + '-' + layoutNodes.map((n) => n.id).join(',');
   const lastAppliedLayoutRef = useRef<string | null>(null);
   if (loading) lastAppliedLayoutRef.current = null;
+  if (extractionOngoing) lastAppliedLayoutRef.current = null;
 
   useEffect(() => {
     if (extractionOngoing) {
@@ -140,11 +145,12 @@ export function ProjectVulnerabilitiesGraph({
   ]);
 
   const stillShowingSkeleton =
-    !extractionOngoing &&
-    (loading ||
-      (layoutNodes.length > 0 &&
-        graphNodes.length === 1 &&
-        graphNodes[0]?.id === 'skeleton-center'));
+    waitForExtractionStatus ||
+    (!extractionOngoing &&
+      (loading ||
+        (layoutNodes.length > 0 &&
+          graphNodes.length === 1 &&
+          graphNodes[0]?.id === 'skeleton-center')));
 
   return (
     <ReactFlow
