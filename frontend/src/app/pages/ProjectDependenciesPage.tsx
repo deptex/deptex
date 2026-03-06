@@ -217,8 +217,7 @@ export default function ProjectDependenciesPage() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const realtime = useRealtimeStatus(organizationId, projectId);
-  const EXTRACTING_STATUSES = ['initializing', 'extracting', 'analyzing', 'finalizing'] as const;
-  const isExtractionOngoing = !realtime.isLoading && EXTRACTING_STATUSES.includes(realtime.status as typeof EXTRACTING_STATUSES[number]);
+  const isExtractionOngoing = !realtime.isLoading && realtime.status !== 'ready';
 
   // URL as source of truth for selection and tab (overview, watchtower, supply-chain; notes is not in URL)
   const selectedDepId = urlDependencyId ?? null;

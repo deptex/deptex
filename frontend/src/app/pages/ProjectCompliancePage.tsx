@@ -749,39 +749,34 @@ export default function ProjectCompliancePage() {
   const prTotalPages = Math.max(1, Math.ceil(prTotal / PER_PAGE));
   const commitsTotalPages = Math.max(1, Math.ceil(commitsTotal / PER_PAGE));
 
-  // Loading
-  if (!project || loading) {
+  const noExtraction = dependencies.length === 0;
+  const noPolicy = !policies?.effective_policy_code && !policies?.inherited_policy_code;
+
+  // Content-area skeleton when loading (sidebar stays visible)
+  const contentSkeleton = (
+    <div className="px-6 py-6 mx-auto max-w-5xl">
+      <div className="h-8 w-48 bg-muted rounded animate-pulse mb-6" />
+      <div className="grid grid-cols-4 gap-4 mb-6">
+        {[1, 2, 3, 4].map((i) => (
+          <div key={i} className="h-20 bg-muted rounded-lg animate-pulse" />
+        ))}
+      </div>
+      <div className="h-64 bg-muted rounded-lg animate-pulse" />
+    </div>
+  );
+
+  // Full-page placeholder only when project not loaded yet
+  if (!project) {
     return (
       <div className="min-h-[calc(100vh-3rem)] px-6 py-6">
         <div className="mx-auto max-w-7xl">
           <div className="h-8 w-48 bg-muted rounded animate-pulse mb-6" />
-          <div className="grid grid-cols-4 gap-4 mb-6">
-            {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="h-20 bg-muted rounded-lg animate-pulse" />
-            ))}
-          </div>
           <div className="h-64 bg-muted rounded-lg animate-pulse" />
         </div>
         <Toaster position="bottom-right" />
       </div>
     );
   }
-
-  // Error
-  if (error) {
-    return (
-      <div className="min-h-[calc(100vh-3rem)] px-6 py-6">
-        <div className="mx-auto max-w-7xl">
-          <h1 className="text-2xl font-bold text-foreground mb-4">Compliance</h1>
-          <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4 text-sm text-destructive">{error}</div>
-        </div>
-        <Toaster position="bottom-right" />
-      </div>
-    );
-  }
-
-  const noExtraction = dependencies.length === 0;
-  const noPolicy = !policies?.effective_policy_code && !policies?.inherited_policy_code;
 
   return (
     <>
@@ -795,6 +790,14 @@ export default function ProjectCompliancePage() {
         />
 
         <div className="flex-1 min-w-0 overflow-auto">
+          {loading ? (
+            contentSkeleton
+          ) : error ? (
+            <div className="px-6 py-6 mx-auto max-w-5xl">
+              <h1 className="text-2xl font-bold text-foreground mb-4">Compliance</h1>
+              <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4 text-sm text-destructive">{error}</div>
+            </div>
+          ) : (
           <div className="px-6 py-6 mx-auto max-w-5xl">
             {/* Re-evaluate button when on project/policy/updates and not extracting */}
             {(activeSection === 'project' || activeSection === 'policy-results' || activeSection === 'updates') && canManageSettings && !isExtracting && (
@@ -818,7 +821,7 @@ export default function ProjectCompliancePage() {
               <div>
                 <h1 className="text-xl font-semibold text-foreground tracking-tight">Project compliance</h1>
                 <p className="text-sm text-foreground-secondary mt-1">
-                  Policy status, license and vulnerability summary, and active violations from the latest scan.
+                  Active violations from the latest scan.
                 </p>
               </div>
 
@@ -853,81 +856,6 @@ export default function ProjectCompliancePage() {
                 </div>
               ) : (
                 <>
-                  {/* Status Card */}
-                  <div className="rounded-lg border border-border bg-background-card shadow-sm p-6">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div
-                          className="w-3.5 h-3.5 rounded-full shrink-0 mt-0.5"
-                          style={{ backgroundColor: statusColor }}
-                        />
-                        <div className="min-w-0">
-                          <h2 className="text-lg font-semibold text-foreground">{statusName}</h2>
-                          {violatedDeps.length > 0 ? (
-                            <p className="text-sm text-foreground-secondary mt-0.5">
-                              {violatedDeps.length} violation{violatedDeps.length !== 1 ? 's' : ''} detected in the latest scan
-                            </p>
-                          ) : (
-                            <p className="text-sm text-foreground-secondary mt-0.5">
-                              {noPolicy
-                                ? 'No policy rules defined — all packages allowed by default.'
-                                : 'All dependencies comply with the current policy.'}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 text-xs text-foreground-secondary">
-                        <Clock className="h-3.5 w-3.5" />
-                        {policyEvaluatedAt ? `Last evaluated ${formatTimeAgo(policyEvaluatedAt)}` : 'Not yet evaluated'}
-                      </div>
-                    </div>
-
-                    {allViolationReasons.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 mt-3">
-                        {allViolationReasons.slice(0, 8).map((reason, i) => {
-                          const cat = getReasonCategory(reason);
-                          return (
-                            <span key={i} className={cn('text-[11px] px-2 py-0.5 rounded-full border', getReasonBadgeColor(cat))}>
-                              {reason.length > 40 ? reason.slice(0, 40) + '...' : reason}
-                            </span>
-                          );
-                        })}
-                        {allViolationReasons.length > 8 && (
-                          <span className="text-[11px] px-2 py-0.5 rounded-full border bg-zinc-500/15 text-zinc-400 border-zinc-500/20">
-                            +{allViolationReasons.length - 8} more
-                          </span>
-                        )}
-                      </div>
-                    )}
-
-                    {isStale && (
-                      <div className="mt-3 flex items-center gap-2 text-xs text-yellow-400">
-                        <AlertTriangle className="h-3.5 w-3.5" />
-                        Policy data may be out of date. Consider re-evaluating.
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Quick Stats */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div className="rounded-lg border border-border bg-background-card shadow-sm px-4 py-4">
-                      <p className="text-xs font-semibold uppercase tracking-wider text-foreground-secondary">License issues</p>
-                      <p className="text-xl font-semibold text-foreground mt-1.5">{licenseIssueCount}</p>
-                    </div>
-                    <div className="rounded-lg border border-border bg-background-card shadow-sm px-4 py-4">
-                      <p className="text-xs font-semibold uppercase tracking-wider text-foreground-secondary">Vulnerable deps</p>
-                      <p className="text-xl font-semibold text-foreground mt-1.5">{vulnDepCount}</p>
-                    </div>
-                    <div className="rounded-lg border border-border bg-background-card shadow-sm px-4 py-4">
-                      <p className="text-xs font-semibold uppercase tracking-wider text-foreground-secondary">Avg score</p>
-                      <p className="text-xl font-semibold text-foreground mt-1.5">{avgScore ?? '—'}</p>
-                    </div>
-                    <div className="rounded-lg border border-border bg-background-card shadow-sm px-4 py-4">
-                      <p className="text-xs font-semibold uppercase tracking-wider text-foreground-secondary">Total dependencies</p>
-                      <p className="text-xl font-semibold text-foreground mt-1.5">{dependencies.length}</p>
-                    </div>
-                  </div>
-
                   {/* Active Violations */}
                   <div>
                     <div className="flex items-center justify-between mb-4">
@@ -1750,9 +1678,10 @@ export default function ProjectCompliancePage() {
               </div>
             </div>
           )}
+          </div>
+            )}
         </div>
       </div>
-    </div>
 
       {/* Preflight Sidebar */}
       {showPreflight && (

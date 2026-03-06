@@ -83,6 +83,58 @@ function AnomalyScore({ score }: { score: number | null }) {
   return <span className={cn('text-sm font-mono tabular-nums', color)}>{score}</span>;
 }
 
+/** Skeleton matching Watchtower enabled layout: header, toolbar, table. */
+function WatchtowerSkeleton() {
+  const pulse = 'bg-muted animate-pulse rounded';
+  return (
+    <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className={cn('h-6 w-32', pulse)} />
+            <div className={cn('h-5 w-20', pulse)} />
+          </div>
+          <div className={cn('h-8 w-16', pulse)} />
+        </div>
+        <div className="flex items-center justify-between gap-4">
+          <div className={cn('h-9 w-80', pulse)} />
+          <div className="flex gap-2">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className={cn('h-8 w-16', pulse)} />
+            ))}
+          </div>
+        </div>
+        <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-background-card-header border-b border-border">
+              <tr>
+                {['Package', 'Version', 'Registry', 'Scripts', 'Entropy', 'Anomaly', 'Next version'].map((label) => (
+                  <th key={label} className="px-4 py-3 text-left">
+                    <div className={cn('h-3 w-16', pulse)} />
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <tr key={i}>
+                  <td className="px-4 py-3"><div className={cn('h-4 w-36', pulse)} /></td>
+                  <td className="px-4 py-3"><div className={cn('h-4 w-16', pulse)} /></td>
+                  <td className="px-4 py-3"><div className={cn('h-4 w-8', pulse)} /></td>
+                  <td className="px-4 py-3"><div className={cn('h-4 w-8', pulse)} /></td>
+                  <td className="px-4 py-3"><div className={cn('h-4 w-8', pulse)} /></td>
+                  <td className="px-4 py-3"><div className={cn('h-4 w-8', pulse)} /></td>
+                  <td className="px-4 py-3"><div className={cn('h-4 w-20', pulse)} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ProjectWatchtowerPage() {
   const { orgId, projectId } = useParams<{ orgId: string; projectId: string }>();
   const [stats, setStats] = useState<WatchtowerStats | null>(null);
@@ -181,14 +233,9 @@ export default function ProjectWatchtowerPage() {
     return filtered;
   }, [deduplicatedPackages, filter, searchQuery]);
 
-  if (loading) {
-    return (
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className="h-6 w-6 animate-spin text-foreground-secondary" />
-        </div>
-      </div>
-    );
+  // Show skeleton until extraction status is known (avoids flash of "Enable Watchtower") or until data is loaded
+  if (realtime.isLoading || loading) {
+    return <WatchtowerSkeleton />;
   }
 
   if (isExtractionOngoing) {

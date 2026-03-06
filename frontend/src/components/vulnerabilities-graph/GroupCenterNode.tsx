@@ -43,13 +43,15 @@ function GroupCenterNodeComponent({ data }: NodeProps) {
         <div className="bg-background-card px-5 pt-4 pb-4 rounded-xl">
           <div className="flex items-center gap-2.5">
             <div
-              className={`flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 ${iconBgClass} ${iconTextClass}`}
+              className={`flex items-center justify-center w-9 h-9 flex-shrink-0 rounded-lg overflow-hidden ${
+                showAvatar ? '' : `${iconBgClass} ${iconTextClass}`
+              }`}
             >
               {showAvatar ? (
                 <img
                   src={avatarUrl ?? undefined}
                   alt={title}
-                  className="w-8 h-8 rounded-full object-cover"
+                  className="h-full w-full object-contain"
                 />
               ) : (
                 <Users className="w-5 h-5" />
