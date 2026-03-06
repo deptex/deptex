@@ -11,6 +11,7 @@ import {
   Info,
 } from 'lucide-react';
 import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
+import { isExtractionOngoing as checkExtractionOngoing } from '../../lib/extractionStatus';
 import { useToast } from '../../hooks/use-toast';
 import { Button } from '../../components/ui/button';
 import { cn } from '../../lib/utils';
@@ -48,7 +49,7 @@ export default function ProjectWatchtowerPage() {
   const [showUpgradeCard, setShowUpgradeCard] = useState(false);
   const navigate = useNavigate();
   const realtime = useRealtimeStatus(orgId, projectId);
-  const isExtractionOngoing = !realtime.isLoading && realtime.status !== 'ready' && realtime.status !== 'not_connected';
+  const isExtractionOngoing = checkExtractionOngoing(realtime.status);
   const { toast } = useToast();
 
   const handleEnableClick = () => {
@@ -73,9 +74,7 @@ export default function ProjectWatchtowerPage() {
               <div className="flex-1 space-y-2 min-w-0">
                 <h3 className="text-sm font-semibold text-foreground">Project extraction still in progress</h3>
                 <p className="text-sm text-foreground-secondary">
-                  {realtime.status === 'not_connected'
-                    ? 'Connect a repository in Project Settings to use Watchtower.'
-                    : 'Watchtower will be available once extraction completes. You can enable supply chain monitoring from this tab then.'}
+                  Watchtower will be available once extraction completes. You can enable supply chain monitoring from this tab then.
                 </p>
               </div>
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">

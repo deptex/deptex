@@ -18,6 +18,9 @@ export interface ProjectCenterNodeData {
   /** Project status from policy (e.g. Compliant, Under Review). Shown as badge. */
   statusName?: string | null;
   statusColor?: string | null;
+  /** Org overview: when set, click opens extraction logs sidebar for this project. */
+  projectId?: string;
+  organizationId?: string;
 }
 
 function getColorScheme(worstVulnerabilitySeverity: WorstSeverity) {
@@ -86,7 +89,10 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
     isExtracting = false,
     statusName,
     statusColor,
+    projectId,
+    organizationId,
   } = (data as unknown as ProjectCenterNodeData) ?? {};
+  const isOrgOverviewExtracting = Boolean(isExtracting && projectId && organizationId);
   const colorScheme = isExtracting ? greyExtractingScheme : getColorScheme(worstVulnerabilitySeverity);
   const hasKnownFramework = frameworkName && frameworkName.toLowerCase() !== 'unknown';
   const frameworkIdForIcon = hasKnownFramework ? frameworkName : undefined;
@@ -98,54 +104,82 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
 
   return (
     <div className="relative cursor-pointer">
-      <Handle id="top" type="source" position={Position.Top} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
-      <Handle id="right" type="source" position={Position.Right} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
-      <Handle id="bottom" type="source" position={Position.Bottom} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
-      <Handle id="left" type="source" position={Position.Left} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
+      {/* Target handles so edges from team/org can connect (same ids as VulnProjectNode) */}
+      <Handle id="top" type="target" position={Position.Top} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
+      <Handle id="right" type="target" position={Position.Right} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
+      <Handle id="bottom" type="target" position={Position.Bottom} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
+      <Handle id="left" type="target" position={Position.Left} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
+      <Handle id="source-top" type="source" position={Position.Top} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
+      <Handle id="source-right" type="source" position={Position.Right} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
+      <Handle id="source-bottom" type="source" position={Position.Bottom} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
+      <Handle id="source-left" type="source" position={Position.Left} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
 
-      <div
-        className={`relative rounded-xl border-2 shadow-lg overflow-hidden min-w-[260px] ${colorScheme.border} ${colorScheme.shadow}`}
-      >
-        <div className={`absolute inset-0 rounded-xl blur-xl opacity-20 -z-10 ${colorScheme.glow}`} />
-        <div className="bg-background-card px-5 pt-4 pb-4 rounded-xl">
-          <div className="flex items-center gap-2.5">
-            <div
-              className={`flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 ${colorScheme.iconBg} ${colorScheme.iconText}`}
-            >
-              <FrameworkIcon frameworkId={frameworkIdForIcon} size={20} className="text-current" />
+      {isOrgOverviewExtracting ? (
+        <div className="relative rounded-lg border border-border bg-background-card shadow-md h-full min-h-[100px] min-w-[268px] flex flex-col overflow-hidden cursor-pointer hover:shadow-lg hover:border-border/80 transition-all">
+          {/* Top: icon + name only (like team card) */}
+          <div className="px-3.5 py-3 flex items-center gap-2.5 min-w-0 flex-1">
+            <div className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 text-muted-foreground">
+              <FrameworkIcon frameworkId={frameworkIdForIcon} size={18} className="text-current" />
             </div>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 flex-wrap">
-                <p className="text-sm font-semibold text-foreground truncate">{projectName}</p>
-                {statusName && (
-                  <span
-                    className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium border flex-shrink-0"
-                    style={statusStyle}
-                  >
-                    {statusName}
-                  </span>
-                )}
-              </div>
-              {isExtracting ? (
-                <p className="text-[10px] text-foreground-secondary mt-0.5">Project still extracting</p>
-              ) : hasCounts ? (
-                <p className="text-[10px] text-foreground-secondary mt-0.5">
-                  {[
-                    vulnCount ? `${vulnCount} vulns` : null,
-                    semgrepCount ? `${semgrepCount} code issues` : null,
-                    secretCount ? `${secretCount} secrets` : null,
-                  ].filter(Boolean).join(' · ')}
-                </p>
-              ) : null}
+              <p className="text-sm font-medium text-foreground truncate" title={projectName}>
+                {projectName}
+              </p>
             </div>
-            {isExtracting && (
-              <div className="flex-shrink-0" aria-hidden>
-                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-              </div>
-            )}
+          </div>
+          {/* Bottom bar: "Project still extracting" + spinner (like team card's bottom bar) */}
+          <div className="border-t border-border px-3 py-2 flex items-center gap-3 flex-wrap w-full text-left rounded-b-lg">
+            <span className="text-[11px] text-muted-foreground">Project still extracting</span>
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground flex-shrink-0" aria-hidden />
           </div>
         </div>
-      </div>
+      ) : (
+        <>
+          <div
+            className={`relative rounded-xl border-2 shadow-lg overflow-hidden min-w-[260px] ${colorScheme.border} ${colorScheme.shadow}`}
+          >
+            <div className={`absolute inset-0 rounded-xl blur-xl opacity-20 -z-10 ${colorScheme.glow}`} />
+            <div className="bg-background-card px-5 pt-4 pb-4 rounded-xl">
+              <div className="flex items-center gap-2.5">
+                <div
+                  className={`flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 ${colorScheme.iconBg} ${colorScheme.iconText}`}
+                >
+                  <FrameworkIcon frameworkId={frameworkIdForIcon} size={20} className="text-current" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-sm font-semibold text-foreground truncate">{projectName}</p>
+                    {statusName && (
+                      <span
+                        className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium border flex-shrink-0"
+                        style={statusStyle}
+                      >
+                        {statusName}
+                      </span>
+                    )}
+                  </div>
+                  {isExtracting ? (
+                    <p className="text-[10px] text-foreground-secondary mt-0.5">Project still extracting</p>
+                  ) : hasCounts ? (
+                    <p className="text-[10px] text-foreground-secondary mt-0.5">
+                      {[
+                        vulnCount ? `${vulnCount} vulns` : null,
+                        semgrepCount ? `${semgrepCount} code issues` : null,
+                        secretCount ? `${secretCount} secrets` : null,
+                      ].filter(Boolean).join(' · ')}
+                    </p>
+                  ) : null}
+                </div>
+                {isExtracting && (
+                  <div className="flex-shrink-0" aria-hidden>
+                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

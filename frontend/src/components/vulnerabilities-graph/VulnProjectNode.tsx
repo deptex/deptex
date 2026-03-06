@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Folder, Loader2, ChevronRight, Package, PanelLeftClose, ShieldAlert, Ban, Clock } from 'lucide-react';
+import { Folder, Loader2, ChevronRight, Package, PanelLeftClose, ShieldAlert, Ban, Clock, Users } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import {
   DropdownMenu,
@@ -209,9 +209,7 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
 
       {isOverviewTeamCard ? (
         <div className="relative rounded-lg border border-border bg-background-card shadow-md h-full flex flex-col overflow-hidden cursor-pointer hover:shadow-lg hover:border-border/80 transition-all">
-          {/* Second layer / inner border like project node */}
-          <div className="absolute inset-[1px] rounded-[7px] border border-border/60 pointer-events-none" aria-hidden />
-          {/* Top: Team icon, name, risk badge */}
+          {/* Top: Team icon, name (no badge here) */}
           <div className="px-3.5 py-3 flex items-center gap-2.5 min-w-0 flex-1">
             <div className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 bg-[#1a1c1e] text-muted-foreground">
               <TeamIcon />
@@ -221,21 +219,38 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
                 {projectName}
               </p>
             </div>
-            <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-400">
-              {riskGrade ?? 'A+'}
-            </span>
           </div>
-          {/* Bottom bar: x projects, x members (no arrow) */}
+          {/* Bottom bar: risk badge + project count (icon) + member count (icon) */}
           <div className="border-t border-border px-3 py-2 flex items-center gap-3 flex-wrap w-full text-left rounded-b-lg">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-400 cursor-default">
+                  {riskGrade ?? 'A+'}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="top">Calculated risk score based on vulnerabilities, secrets, and code findings.</TooltipContent>
+            </Tooltip>
             {typeof projectsCount === 'number' && (
-              <span className="text-[11px] text-muted-foreground">
-                {projectsCount} project{projectsCount === 1 ? '' : 's'}
-              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="flex items-center gap-1 text-[11px] text-muted-foreground cursor-default">
+                    <Folder className="h-3.5 w-3.5 flex-shrink-0" />
+                    {projectsCount}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top">{projectsCount} project{projectsCount === 1 ? '' : 's'}</TooltipContent>
+              </Tooltip>
             )}
             {typeof membersCount === 'number' && (
-              <span className="text-[11px] text-muted-foreground">
-                {membersCount} member{membersCount === 1 ? '' : 's'}
-              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="flex items-center gap-1 text-[11px] text-muted-foreground cursor-default">
+                    <Users className="h-3.5 w-3.5 flex-shrink-0" />
+                    {membersCount}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top">{membersCount} member{membersCount === 1 ? '' : 's'}</TooltipContent>
+              </Tooltip>
             )}
           </div>
         </div>
@@ -275,9 +290,14 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
               </div>
               {/* Bottom bar: expand options (dropdown) or collapse (when expanded) */}
               <div className="border-t border-border px-3 py-2 flex items-center gap-2 flex-wrap w-full text-left rounded-b-lg">
-                <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-400">
-                  {riskGrade ?? 'A+'}
-                </span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-400 cursor-default">
+                      {riskGrade ?? 'A+'}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">Calculated risk score based on vulnerabilities, secrets, and code findings.</TooltipContent>
+                </Tooltip>
                 {typeof dependenciesCount === 'number' && (
                   <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
                     <Package className="h-3 w-3 flex-shrink-0" />
@@ -422,7 +442,7 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
               )}
             </div>
           </TooltipTrigger>
-          <TooltipContent side="top">Calculated risk score</TooltipContent>
+          <TooltipContent side="top">Calculated risk score based on vulnerabilities, secrets, and code findings.</TooltipContent>
         </Tooltip>
       ) : (
         <div

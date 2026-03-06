@@ -42,6 +42,7 @@ import {
 import { downloadFile } from '../../lib/compliance-utils';
 import { useToast } from '../../hooks/use-toast';
 import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
+import { isExtractionOngoing as checkExtractionOngoing } from '../../lib/extractionStatus';
 import { Toaster } from '../../components/ui/toaster';
 import { cn } from '../../lib/utils';
 import { ComplianceSidepanel, type ComplianceSection } from '../../components/ComplianceSidepanel';
@@ -528,9 +529,7 @@ export default function ProjectCompliancePage() {
 
   const canManageSettings = userPermissions?.edit_settings === true || userPermissions?.view_settings === true;
   const realtime = useRealtimeStatus(organizationId, projectId);
-  // Only show "Extraction in progress" when a scan is actively running (not when pending/ready/error/not_connected)
-  const EXTRACTING_STATUSES = ['initializing', 'extracting', 'analyzing', 'finalizing'];
-  const isExtracting = EXTRACTING_STATUSES.includes(realtime.status);
+  const isExtracting = checkExtractionOngoing(realtime.status);
 
   const loadData = useCallback(async () => {
     if (!organizationId || !projectId) return;

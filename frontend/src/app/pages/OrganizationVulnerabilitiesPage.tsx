@@ -37,6 +37,8 @@ import { VULN_CENTER_NODE_WIDTH, VULN_CENTER_NODE_HEIGHT } from '../../component
 import { GroupCenterNode } from '../../components/vulnerabilities-graph/GroupCenterNode';
 import { SkeletonGroupCenterNode } from '../../components/vulnerabilities-graph/SkeletonGroupCenterNode';
 import { VulnProjectNode } from '../../components/vulnerabilities-graph/VulnProjectNode';
+import { ProjectCenterNode } from '../../components/vulnerabilities-graph/ProjectCenterNode';
+import { SyncDetailSidebar } from '../../components/SyncDetailSidebar';
 import { OrgMemberNode, MEMBER_NODE_WIDTH, MEMBER_NODE_HEIGHT } from '../../components/vulnerabilities-graph/OrgMemberNode';
 import { DependencyNode } from '../../components/supply-chain/DependencyNode';
 import { FrameworkIcon } from '../../components/framework-icon';
@@ -52,6 +54,7 @@ interface OrganizationContextType {
 const nodeTypes: NodeTypes = {
   groupCenterNode: GroupCenterNode,
   vulnProjectNode: VulnProjectNode,
+  projectCenterNode: ProjectCenterNode,
   dependencyNode: DependencyNode,
   orgMemberNode: OrgMemberNode,
 };
@@ -157,6 +160,7 @@ export default function OrganizationVulnerabilitiesPage() {
   const [membersExpanded, setMembersExpanded] = useState(false);
   const [membersExpanding, setMembersExpanding] = useState(false);
   const [orgMembersList, setOrgMembersList] = useState<OrganizationMember[]>([]);
+  const [syncDetailProjectId, setSyncDetailProjectId] = useState<string | null>(null);
 
   useEffect(() => {
     if (searchOpen) setTimeout(() => searchInputRef.current?.focus(), 0);
@@ -221,6 +225,8 @@ export default function OrganizationVulnerabilitiesPage() {
           const bucket =
             displayTeamId && teamIds.has(displayTeamId) ? displayTeamId : UNGROUPED_TEAM_ID;
           if (byTeam.has(bucket)) {
+            const repoStatus = (p as Project).repo_status ?? null;
+            const isExtracting = ['initializing', 'extracting', 'analyzing', 'finalizing'].includes(repoStatus || '');
             byTeam.get(bucket)!.push({
               projectId: p.id,
               projectName: p.name,
@@ -230,6 +236,7 @@ export default function OrganizationVulnerabilitiesPage() {
               statusId: p.status_id ?? null,
               assetTierName: p.asset_tier_name ?? null,
               dependenciesCount: (p as Project).direct_dependencies_count ?? (p as Project).dependencies_count ?? null,
+              isExtracting,
             });
           }
         });
@@ -333,7 +340,11 @@ export default function OrganizationVulnerabilitiesPage() {
         requestAnimationFrame(() => setOrgSidebarVisible(true));
         return;
       }
-      const d = node.data as { projectId?: string; projectName?: string; isTeamNode?: boolean; framework?: string | null };
+      const d = node.data as { projectId?: string; projectName?: string; isTeamNode?: boolean; framework?: string | null; organizationId?: string };
+      if (node.type === 'projectCenterNode' && d.projectId && d.organizationId) {
+        setSyncDetailProjectId(d.projectId);
+        return;
+      }
       if (d.projectId && d.isTeamNode) {
         setSelectedTeamId(d.projectId);
         setSelectedTeamName((d.projectName as string) ?? null);
@@ -1672,6 +1683,15 @@ export default function OrganizationVulnerabilitiesPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {syncDetailProjectId && orgId && (
+        <SyncDetailSidebar
+          projectId={syncDetailProjectId}
+          organizationId={orgId}
+          onClose={() => setSyncDetailProjectId(null)}
+          onCancelled={() => setSyncDetailProjectId(null)}
+        />
       )}
     </main>
   );

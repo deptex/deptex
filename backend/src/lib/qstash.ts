@@ -69,11 +69,20 @@ function getApiBaseUrl(): string {
   const trimmed = (raw || '').trim().replace(/\/$/, '');
   if (!trimmed) return 'http://localhost:3001';
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  // Localhost without scheme -> http; otherwise https (e.g. fly.dev)
+  // Localhost without scheme -> http; otherwise https (e.g. fly.dev, vercel.app)
   if (/^localhost(:\d+)?$/i.test(trimmed) || /^127\.0\.0\.1(:\d+)?$/i.test(trimmed)) {
     return `http://${trimmed}`;
   }
   return `https://${trimmed}`;
+}
+
+/** Ensure URL has http:// or https:// so QStash accepts it (invalid scheme -> 400). */
+function ensureScheme(url: string): string {
+  const s = (url || '').trim();
+  if (!s) return 'http://localhost:3001';
+  if (/^https?:\/\//i.test(s)) return s;
+  if (/^localhost(:\d+)?$/i.test(s) || /^127\.0\.0\.1(:\d+)?$/i.test(s)) return `http://${s}`;
+  return `https://${s}`;
 }
 
 /**
@@ -117,8 +126,9 @@ export async function queueDependencyAnalysis(
     return null;
   }
 
-  const url = `${getApiBaseUrl()}/api/workers/analyze-dependency`;
-  
+  const base = ensureScheme(getApiBaseUrl());
+  const url = `${base.replace(/\/$/, '')}/api/workers/analyze-dependency`;
+
   const baseUrl = getQStashBaseUrl();
   try {
     const response = await fetch(`${baseUrl}/v2/publish/` + encodeURIComponent(url), {
@@ -161,14 +171,14 @@ export async function queueDependencyAnalysisBatch(
   dependencies: Array<{ dependencyId: string; name: string; version: string }>
 ): Promise<{ queued: number; failed: number; messages: number }> {
   const token = getQStashToken();
-  const apiBaseUrl = getApiBaseUrl();
+  const apiBaseUrl = ensureScheme(getApiBaseUrl());
 
   if (!token) {
     console.warn('QSTASH_TOKEN not configured - skipping batch queue');
     return { queued: 0, failed: dependencies.length, messages: 0 };
   }
 
-  const url = `${apiBaseUrl}/api/workers/analyze-dependencies`;
+  const url = `${apiBaseUrl.replace(/\/$/, '')}/api/workers/analyze-dependencies`;
   
   // Group dependencies into batches of 20 to reduce message count
   const BATCH_SIZE = 20;
@@ -254,14 +264,14 @@ export async function queuePopulateDependencyBatch(
   organizationId?: string,
 ): Promise<{ queued: number; failed: number; messages: number }> {
   const token = getQStashToken();
-  const apiBaseUrl = getApiBaseUrl();
+  const apiBaseUrl = ensureScheme(getApiBaseUrl());
 
   if (!token) {
     console.warn('QSTASH_TOKEN not configured - skipping populate batch queue');
     return { queued: 0, failed: dependencies.length, messages: 0 };
   }
 
-  const url = `${apiBaseUrl}/api/workers/populate-dependencies`;
+  const url = `${apiBaseUrl.replace(/\/$/, '')}/api/workers/populate-dependencies`;
 
   // Group by ecosystem first so each ecosystem gets its own flow-control lane
   const byEcosystem = new Map<string, Array<{ dependencyId: string; name: string; ecosystem?: string }>>();
@@ -346,8 +356,22 @@ export async function queuePopulateDependencyBatch(
 }
 
 /**
+ * Build backend base URL for QStash callbacks. Used when THIS process (the one handling
+ * populate-dependencies) tells QStash where to call back. Set BACKEND_URL or API_BASE_URL
+ * on the app that serves /api/workers/* (Vercel/Fly.io backend), not on the extraction worker.
+ */
+function getBackfillDestinationBase(): string {
+  const raw = (process.env.API_BASE_URL || process.env.BACKEND_URL || '').trim().replace(/\/$/, '');
+  if (!raw) return 'http://localhost:3001';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (/^localhost(:\d+)?$/i.test(raw) || /^127\.0\.0\.1(:\d+)?$/i.test(raw)) return `http://${raw}`;
+  return `https://${raw}`;
+}
+
+/**
  * Queue a backfill job to populate transitive dependency edges for a dependency.
  * Uses same flow key as populate so npm jobs never run concurrently.
+ * Called from the backend when it handles POST /api/workers/populate-dependencies (invoked by QStash).
  */
 export async function queueBackfillDependencyTrees(
   dependencyId: string,
@@ -359,8 +383,14 @@ export async function queueBackfillDependencyTrees(
     return null;
   }
 
-  const url = `${getApiBaseUrl()}/api/workers/backfill-dependency-trees`;
+  const base = getBackfillDestinationBase();
+  const url = `${base}/api/workers/backfill-dependency-trees`;
   const baseUrl = getQStashBaseUrl();
+
+  console.log('[QStash backfill] destination url=', url, '| hasScheme=', /^https?:\/\//i.test(url));
+  if (!/^https?:\/\//i.test(url)) {
+    console.error('[QStash backfill] Destination URL missing scheme (set BACKEND_URL on backend). url=', url);
+  }
 
   try {
     const response = await fetch(`${baseUrl}/v2/publish/` + encodeURIComponent(url), {

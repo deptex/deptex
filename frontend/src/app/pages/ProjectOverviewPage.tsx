@@ -3,6 +3,7 @@ import { useOutletContext, useParams, useNavigate } from 'react-router-dom';
 import { api, ProjectWithRole, ProjectPermissions } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
+import { isExtractionOngoing as checkExtractionOngoing } from '../../lib/extractionStatus';
 import { loadProjectVulnerabilityGraphData } from '../../lib/vulnerability-graph-data';
 import { ProjectVulnerabilitiesGraph } from '../../components/vulnerabilities-graph/ProjectVulnerabilitiesGraph';
 import SecuritySidebar, { type ActiveSidebar } from '../../components/security/SecuritySidebar';
@@ -42,10 +43,7 @@ export default function ProjectOverviewPage() {
   const [securityFilters, setSecurityFilters] = useState<SecurityFilters>(DEFAULT_FILTERS);
 
   const realtime = useRealtimeStatus(organizationId, projectId);
-  const isExtractionOngoing = realtime.status !== 'ready';
-  // #region agent log
-  if (projectId && organizationId) { fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'cd7edb'},body:JSON.stringify({sessionId:'cd7edb',location:'ProjectOverviewPage.tsx:realtime',message:'Overview realtime state',data:{realtimeStatus:realtime.status,isExtractionOngoing,projectId},timestamp:Date.now(),hypothesisId:'H4'})}).catch(()=>{}); }
-  // #endregion
+  const isExtractionOngoing = checkExtractionOngoing(realtime.status);
 
   const canManageSidebars = useMemo(() => {
     if (!userPermissions) return false;

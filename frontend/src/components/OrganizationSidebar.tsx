@@ -1,6 +1,6 @@
 import { memo, useState, useMemo, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, FolderKanban, Users, ClipboardCheck, TowerControl, Settings, Plus, Loader2 } from 'lucide-react';
+import { LayoutDashboard, FolderKanban, Users, Scale, TowerControl, Settings, Plus, Loader2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { RolePermissions, Team, Project, api } from '../lib/api';
 import { useToast } from '../hooks/use-toast';
@@ -31,7 +31,7 @@ type NavItemDef = {
 
 const allNavItems: NavItemDef[] = [
   { id: 'overview', label: 'Overview', path: 'overview', icon: LayoutDashboard, requiredPermission: null },
-  { id: 'compliance', label: 'Compliance', path: 'compliance', icon: ClipboardCheck, requiredPermission: null },
+  { id: 'compliance', label: 'Compliance', path: 'compliance', icon: Scale, requiredPermission: null },
   { id: 'watchtower', label: 'Watchtower', path: 'watchtower', icon: TowerControl, requiredPermission: null },
   { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: 'view_settings' as const },
 ];
@@ -133,6 +133,11 @@ function OrganizationSidebar({
   const currentTab = pathParts[pathParts.length - 1];
 
   const activeTab = useMemo(() => {
+    // When under compliance (e.g. /compliance/overview), highlight Compliance in the sidebar
+    if (pathParts.includes('compliance')) {
+      const complianceTab = visibleNavItems.find((tab) => tab.id === 'compliance');
+      if (complianceTab) return 'compliance';
+    }
     const matchingTab = visibleNavItems.find((tab) => tab.path === currentTab);
     if (matchingTab) return matchingTab.id;
     // If we're under /organizations/:id/settings or /organizations/:id/settings/:section,

@@ -89,9 +89,16 @@ function GroupCenterNodeComponent({ data }: NodeProps) {
               )}
             </div>
             {kind === 'org' && (organizationRiskGrade ?? 'A+') && (
-              <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-sm font-semibold text-emerald-400">
-                {organizationRiskGrade ?? 'A+'}
-              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-sm font-semibold text-emerald-400 cursor-default">
+                    {organizationRiskGrade ?? 'A+'}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={6}>
+                  Calculated risk score based on vulnerabilities, secrets, and code findings.
+                </TooltipContent>
+              </Tooltip>
             )}
             {showMembersToggle && (
               <Tooltip>

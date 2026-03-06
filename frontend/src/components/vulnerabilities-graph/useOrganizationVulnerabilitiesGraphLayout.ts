@@ -283,6 +283,8 @@ export interface OverviewProjectItem {
   assetTierName?: string | null;
   /** Number of dependencies (for org overview card). */
   dependenciesCount?: number | null;
+  /** When true, show as extracting center node (spinner) and clicking opens extraction logs sidebar. */
+  isExtracting?: boolean;
 }
 
 export interface OverviewTeamWithProjects {
@@ -356,28 +358,47 @@ export function useOrganizationOverviewGraphLayout(
       const px = centerX + Math.cos(angle) * teamRingRadius;
       const py = centerY + Math.sin(angle) * teamRingRadius;
 
-      nodes.push({
-        id: projectNodeId,
-        type: 'vulnProjectNode',
-        position: {
-          x: px - OVERVIEW_PROJECT_NODE_WIDTH / 2,
-          y: py - OVERVIEW_PROJECT_NODE_HEIGHT / 2,
-        },
-        data: {
-          projectName: proj.projectName,
-          projectId: proj.projectId,
-          framework: proj.framework ?? undefined,
-          neutralStyle: true,
-          statusBadge: proj.statusName ?? undefined,
-          statusBadgeColor: proj.statusColor ?? undefined,
-          assetTierName: proj.assetTierName ?? undefined,
-          riskGrade: 'A+',
-          dependenciesCount: proj.dependenciesCount ?? undefined,
-          organizationId: organizationId ?? undefined,
-        },
-        draggable: true,
-        selectable: false,
-      });
+      if (proj.isExtracting) {
+        nodes.push({
+          id: projectNodeId,
+          type: 'projectCenterNode',
+          position: {
+            x: px - OVERVIEW_PROJECT_NODE_WIDTH / 2,
+            y: py - OVERVIEW_PROJECT_NODE_HEIGHT / 2,
+          },
+          data: {
+            projectName: proj.projectName,
+            isExtracting: true,
+            projectId: proj.projectId,
+            organizationId: organizationId ?? undefined,
+          },
+          draggable: true,
+          selectable: false,
+        });
+      } else {
+        nodes.push({
+          id: projectNodeId,
+          type: 'vulnProjectNode',
+          position: {
+            x: px - OVERVIEW_PROJECT_NODE_WIDTH / 2,
+            y: py - OVERVIEW_PROJECT_NODE_HEIGHT / 2,
+          },
+          data: {
+            projectName: proj.projectName,
+            projectId: proj.projectId,
+            framework: proj.framework ?? undefined,
+            neutralStyle: true,
+            statusBadge: proj.statusName ?? undefined,
+            statusBadgeColor: proj.statusColor ?? undefined,
+            assetTierName: proj.assetTierName ?? undefined,
+            riskGrade: 'A+',
+            dependenciesCount: proj.dependenciesCount ?? undefined,
+            organizationId: organizationId ?? undefined,
+          },
+          draggable: true,
+          selectable: false,
+        });
+      }
 
       const { sourceHandle, targetHandle } = getHandlePair(angle);
       edges.push({
@@ -441,28 +462,47 @@ export function useOrganizationOverviewGraphLayout(
         const px = tx + Math.cos(projAngle) * projectRingRadius;
         const py = ty + Math.sin(projAngle) * projectRingRadius;
 
-        nodes.push({
-          id: projectNodeId,
-          type: 'vulnProjectNode',
-          position: {
-            x: px - OVERVIEW_PROJECT_NODE_WIDTH / 2,
-            y: py - OVERVIEW_PROJECT_NODE_HEIGHT / 2,
-          },
-          data: {
-            projectName: proj.projectName,
-            projectId: proj.projectId,
-            framework: proj.framework ?? undefined,
-            neutralStyle: true,
-            statusBadge: proj.statusName ?? undefined,
-            statusBadgeColor: proj.statusColor ?? undefined,
-            assetTierName: proj.assetTierName ?? undefined,
-            riskGrade: 'A+',
-            dependenciesCount: proj.dependenciesCount ?? undefined,
-            organizationId: organizationId ?? undefined,
-          },
-          draggable: true,
-          selectable: false,
-        });
+        if (proj.isExtracting) {
+          nodes.push({
+            id: projectNodeId,
+            type: 'projectCenterNode',
+            position: {
+              x: px - OVERVIEW_PROJECT_NODE_WIDTH / 2,
+              y: py - OVERVIEW_PROJECT_NODE_HEIGHT / 2,
+            },
+            data: {
+              projectName: proj.projectName,
+              isExtracting: true,
+              projectId: proj.projectId,
+              organizationId: organizationId ?? undefined,
+            },
+            draggable: true,
+            selectable: false,
+          });
+        } else {
+          nodes.push({
+            id: projectNodeId,
+            type: 'vulnProjectNode',
+            position: {
+              x: px - OVERVIEW_PROJECT_NODE_WIDTH / 2,
+              y: py - OVERVIEW_PROJECT_NODE_HEIGHT / 2,
+            },
+            data: {
+              projectName: proj.projectName,
+              projectId: proj.projectId,
+              framework: proj.framework ?? undefined,
+              neutralStyle: true,
+              statusBadge: proj.statusName ?? undefined,
+              statusBadgeColor: proj.statusColor ?? undefined,
+              assetTierName: proj.assetTierName ?? undefined,
+              riskGrade: 'A+',
+              dependenciesCount: proj.dependenciesCount ?? undefined,
+              organizationId: organizationId ?? undefined,
+            },
+            draggable: true,
+            selectable: false,
+          });
+        }
 
         const { sourceHandle: teamSourceHandle, targetHandle: teamTargetHandle } = getHandlePair(projAngle);
         edges.push({

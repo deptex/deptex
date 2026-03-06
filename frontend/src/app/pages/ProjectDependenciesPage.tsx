@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useOutletContext, useNavigate, useParams, useLocation } from 'react-router-dom';
 import { Search, SlidersHorizontal, TowerControl, ArrowUp, ArrowDown, X, Loader2, PanelLeftClose, PanelLeftOpen, Package, LayoutDashboard, GitBranch, MessageSquareText, RefreshCw } from 'lucide-react';
 import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
+import { isExtractionOngoing as checkExtractionOngoing } from '../../lib/extractionStatus';
 import { api, ProjectWithRole, ProjectPermissions, ProjectDependency, ProjectEffectivePolicies, ProjectImportStatus, type LatestSafeVersionResponse } from '../../lib/api';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
 import { useToast } from '../../hooks/use-toast';
@@ -217,7 +218,7 @@ export default function ProjectDependenciesPage() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const realtime = useRealtimeStatus(organizationId, projectId);
-  const isExtractionOngoing = !realtime.isLoading && realtime.status !== 'ready';
+  const isExtractionOngoing = checkExtractionOngoing(realtime.status);
 
   // URL as source of truth for selection and tab (overview, watchtower, supply-chain; notes is not in URL)
   const selectedDepId = urlDependencyId ?? null;

@@ -45,9 +45,7 @@ import AegisPage from "./pages/AegisPage";
 // Team-level imports
 import TeamLayout from "./pages/TeamLayout";
 import TeamOverviewPage from "./pages/TeamOverviewPage";
-import TeamProjectsPage from "./pages/TeamProjectsPage";
 import TeamMembersPage from "./pages/TeamMembersPage";
-import TeamAlertsPage from "./pages/TeamAlertsPage";
 import TeamSettingsPage from "./pages/TeamSettingsPage";
 // Redirect /settings to /settings/general while preserving search params (for OAuth callbacks)
 function SettingsRedirect() {
@@ -135,6 +133,10 @@ export const router = createBrowserRouter([
       },
       {
         path: "compliance",
+        element: <CompliancePage />,
+      },
+      {
+        path: "compliance/:section",
         element: <CompliancePage />,
       },
       {
@@ -252,7 +254,7 @@ export const router = createBrowserRouter([
       },
       {
         path: "projects",
-        element: <TeamProjectsPage />,
+        element: <Navigate to=".." replace />,
       },
       {
         path: "members",
@@ -260,7 +262,7 @@ export const router = createBrowserRouter([
       },
       {
         path: "alerts",
-        element: <TeamAlertsPage />,
+        element: <Navigate to=".." replace />,
       },
       {
         path: "settings",

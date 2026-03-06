@@ -1,30 +1,41 @@
-import { Package, FileText, Download, Loader2 } from 'lucide-react';
+import { Package, FileText, Download, Loader2, LayoutDashboard } from 'lucide-react';
 import { cn } from '../lib/utils';
 
-export type ComplianceSection = 'project' | 'export-notice' | 'export-sbom';
+export type ComplianceSection = 'project' | 'export-notice' | 'export-sbom' | 'overview';
 
-interface ComplianceSidepanelProps {
-  activeSection: ComplianceSection;
-  onSelect: (section: ComplianceSection) => void;
+interface ComplianceSidepanelBaseProps {
   canViewSettings: boolean;
   disabledExports?: boolean;
-  /** When provided, Export Legal Notice is a download button instead of a tab. */
-  onExportNotice?: () => void;
-  /** When provided, Export SBOM is a download button instead of a tab. */
-  onExportSBOM?: () => void;
-  /** Which export is currently in progress (disables that button and shows spinner). */
   exporting?: 'notice' | 'sbom' | null;
 }
 
-export function ComplianceSidepanel({
-  activeSection,
-  onSelect,
-  canViewSettings,
-  disabledExports = false,
-  onExportNotice,
-  onExportSBOM,
-  exporting = null,
-}: ComplianceSidepanelProps) {
+interface ComplianceSidepanelProjectProps extends ComplianceSidepanelBaseProps {
+  mode?: 'project';
+  activeSection: 'project' | 'export-notice' | 'export-sbom';
+  onSelect: (section: 'project' | 'export-notice' | 'export-sbom') => void;
+  onExportNotice?: () => void;
+  onExportSBOM?: () => void;
+  onExportNoticeClick?: never;
+  onExportSBOMClick?: never;
+}
+
+interface ComplianceSidepanelOrganizationProps extends ComplianceSidepanelBaseProps {
+  mode: 'organization';
+  activeSection: 'overview';
+  onSelect: (section: 'overview') => void;
+  onExportNotice?: never;
+  onExportSBOM?: never;
+  onExportNoticeClick?: () => void;
+  onExportSBOMClick?: () => void;
+}
+
+export type ComplianceSidepanelProps = ComplianceSidepanelProjectProps | ComplianceSidepanelOrganizationProps;
+
+export function ComplianceSidepanel(props: ComplianceSidepanelProps) {
+  const { canViewSettings, disabledExports = false, exporting = null } = props;
+  const mode = props.mode ?? 'project';
+  const isOrg = mode === 'organization';
+
   return (
     <aside className="w-52 shrink-0 border-r border-border bg-background flex flex-col py-4">
       <div className="px-3 mb-2">
@@ -34,71 +45,126 @@ export function ComplianceSidepanel({
       </div>
 
       <nav className="flex-1" aria-label="Compliance navigation">
-        {/* Project */}
+        {/* Overview (org) or Project (project) */}
         <div className="space-y-0.5">
-          <button
-            onClick={() => onSelect('project')}
-            aria-current={activeSection === 'project' ? 'page' : undefined}
-            className={cn(
-              'w-full flex items-center gap-2.5 h-9 px-3 text-sm font-medium transition-colors',
-              activeSection === 'project'
-                ? 'text-foreground bg-background-card'
-                : 'text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50'
-            )}
-          >
-            <Package className="h-4 w-4 shrink-0" />
-            Project
-          </button>
+          {isOrg ? (
+            <button
+              onClick={() => props.onSelect('overview')}
+              aria-current={props.activeSection === 'overview' ? 'page' : undefined}
+              className={cn(
+                'w-full flex items-center gap-2.5 h-9 px-3 text-sm font-medium transition-colors',
+                props.activeSection === 'overview'
+                  ? 'text-foreground bg-background-card'
+                  : 'text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50'
+              )}
+            >
+              <LayoutDashboard className="h-4 w-4 shrink-0" />
+              Overview
+            </button>
+          ) : (
+            <button
+              onClick={() => props.onSelect('project')}
+              aria-current={props.activeSection === 'project' ? 'page' : undefined}
+              className={cn(
+                'w-full flex items-center gap-2.5 h-9 px-3 text-sm font-medium transition-colors',
+                props.activeSection === 'project'
+                  ? 'text-foreground bg-background-card'
+                  : 'text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50'
+              )}
+            >
+              <Package className="h-4 w-4 shrink-0" />
+              Project
+            </button>
+          )}
         </div>
 
-        {canViewSettings && (onExportNotice != null || onExportSBOM != null) && (
+        {/* Export buttons: project = direct download, organization = open modal */}
+        {canViewSettings && (
           <>
             <div className="my-3 border-t border-border" aria-hidden />
 
-            {/* Export Legal Notice — same look as Project nav, triggers download */}
-            {onExportNotice != null && (
-              <div className="space-y-0.5">
-                <button
-                  type="button"
-                  onClick={onExportNotice}
-                  disabled={disabledExports || exporting === 'notice'}
-                  className={cn(
-                    'w-full flex items-center gap-2.5 h-9 px-3 text-sm font-medium transition-colors',
-                    (disabledExports || exporting === 'notice') && 'opacity-50 cursor-not-allowed',
-                    !disabledExports && exporting !== 'notice' && 'text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50'
-                  )}
-                >
-                  {exporting === 'notice' ? (
-                    <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-                  ) : (
-                    <FileText className="h-4 w-4 shrink-0" />
-                  )}
-                  Export Legal Notice
-                </button>
-              </div>
-            )}
-
-            {/* Export SBOM — same look as Project nav, triggers download */}
-            {onExportSBOM != null && (
-              <div className="space-y-0.5">
-                <button
-                  type="button"
-                  onClick={onExportSBOM}
-                  disabled={disabledExports || exporting === 'sbom'}
-                  className={cn(
-                    'w-full flex items-center gap-2.5 h-9 px-3 text-sm font-medium transition-colors',
-                    (disabledExports || exporting === 'sbom') && 'opacity-50 cursor-not-allowed',
-                    !disabledExports && exporting !== 'sbom' && 'text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50'
-                  )}
-                >
-                  {exporting === 'sbom' ? (
-                    <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-                  ) : (
-                    <Download className="h-4 w-4 shrink-0" />
-                  )}
-                  Export SBOM
-                </button>
-              </div>
+            {isOrg ? (
+              <>
+                {props.onExportNoticeClick != null && (
+                  <div className="space-y-0.5">
+                    <button
+                      type="button"
+                      onClick={props.onExportNoticeClick}
+                      disabled={disabledExports}
+                      className={cn(
+                        'w-full flex items-center gap-2.5 h-9 px-3 text-sm font-medium transition-colors',
+                        disabledExports && 'opacity-50 cursor-not-allowed',
+                        !disabledExports && 'text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50'
+                      )}
+                    >
+                      <FileText className="h-4 w-4 shrink-0" />
+                      Export Legal Notice
+                    </button>
+                  </div>
+                )}
+                {props.onExportSBOMClick != null && (
+                  <div className="space-y-0.5">
+                    <button
+                      type="button"
+                      onClick={props.onExportSBOMClick}
+                      disabled={disabledExports}
+                      className={cn(
+                        'w-full flex items-center gap-2.5 h-9 px-3 text-sm font-medium transition-colors',
+                        disabledExports && 'opacity-50 cursor-not-allowed',
+                        !disabledExports && 'text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50'
+                      )}
+                    >
+                      <Download className="h-4 w-4 shrink-0" />
+                      Export SBOM
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                {props.onExportNotice != null && (
+                  <div className="space-y-0.5">
+                    <button
+                      type="button"
+                      onClick={props.onExportNotice}
+                      disabled={disabledExports || exporting === 'notice'}
+                      className={cn(
+                        'w-full flex items-center gap-2.5 h-9 px-3 text-sm font-medium transition-colors',
+                        (disabledExports || exporting === 'notice') && 'opacity-50 cursor-not-allowed',
+                        !disabledExports && exporting !== 'notice' && 'text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50'
+                      )}
+                    >
+                      {exporting === 'notice' ? (
+                        <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                      ) : (
+                        <FileText className="h-4 w-4 shrink-0" />
+                      )}
+                      Export Legal Notice
+                    </button>
+                  </div>
+                )}
+                {props.onExportSBOM != null && (
+                  <div className="space-y-0.5">
+                    <button
+                      type="button"
+                      onClick={props.onExportSBOM}
+                      disabled={disabledExports || exporting === 'sbom'}
+                      className={cn(
+                        'w-full flex items-center gap-2.5 h-9 px-3 text-sm font-medium transition-colors',
+                        (disabledExports || exporting === 'sbom') && 'opacity-50 cursor-not-allowed',
+                        !disabledExports && exporting !== 'sbom' && 'text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50'
+                      )}
+                    >
+                      {exporting === 'sbom' ? (
+                        <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                      ) : (
+                        <Download className="h-4 w-4 shrink-0" />
+                      )}
+                      Export SBOM
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </>
         )}
