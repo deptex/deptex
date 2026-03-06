@@ -9,11 +9,8 @@ import LoginPage from "./pages/LoginPage";
 import SSOCallbackPage from "./pages/SSOCallbackPage";
 import OrganizationsPage from "./pages/OrganizationsPage";
 import OrganizationLayout from "./pages/OrganizationLayout";
-import OrganizationDetailPage from "./pages/OrganizationDetailPage";
 import OrganizationSettingsPage from "./pages/OrganizationSettingsPage";
 
-import TeamsPage from "./pages/TeamsPage";
-import ProjectsPage from "./pages/ProjectsPage";
 import PoliciesPage from "./pages/PoliciesPage";
 import CompliancePage from "./pages/CompliancePage";
 import OrganizationVulnerabilitiesPage from "./pages/OrganizationVulnerabilitiesPage";
@@ -102,24 +99,27 @@ export const router = createBrowserRouter([
     children: [
       {
         index: true,
-        element: <OrganizationDetailPage />,
-      },
-
-      {
-        path: "teams",
-        element: <TeamsPage />,
-      },
-      {
-        path: "security",
         element: <OrganizationVulnerabilitiesPage />,
       },
       {
+        path: "overview",
+        element: <OrganizationVulnerabilitiesPage />,
+      },
+      {
+        path: "teams",
+        element: <Navigate to="overview" replace />,
+      },
+      {
+        path: "security",
+        element: <Navigate to=".." replace />,
+      },
+      {
         path: "vulnerabilities",
-        element: <Navigate to="../security" replace />,
+        element: <Navigate to=".." replace />,
       },
       {
         path: "projects",
-        element: <ProjectsPage />,
+        element: <Navigate to="overview" replace />,
       },
       {
         path: "settings",
@@ -151,7 +151,7 @@ export const router = createBrowserRouter([
       },
       {
         path: ":tab",
-        element: <OrganizationDetailPage />,
+        element: <Navigate to=".." replace />,
       },
     ],
   },

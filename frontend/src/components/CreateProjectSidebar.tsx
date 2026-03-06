@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Search, Check, Lock, Loader2, Save, Globe, Building2, FlaskConical, Crown, HelpCircle, ChevronDown } from 'lucide-react';
-import { api, Team, type AssetTier, type CiCdConnection, type RepoWithProvider } from '../lib/api';
+import { Plus, Search, Check, Lock, Loader2, Save, HelpCircle, ChevronDown } from 'lucide-react';
+import { api, Team, type AssetTier, type CiCdConnection, type RepoWithProvider, type OrganizationAssetTier } from '../lib/api';
 import { supabase } from '../lib/supabase';
 import { useToast } from '../hooks/use-toast';
 import { Button } from './ui/button';
@@ -44,6 +44,9 @@ export function CreateProjectSidebar({
   const [projectName, setProjectName] = useState('');
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [assetTier, setAssetTier] = useState<AssetTier>('EXTERNAL');
+  const [selectedAssetTierId, setSelectedAssetTierId] = useState<string | null>(null);
+  const [orgAssetTiers, setOrgAssetTiers] = useState<OrganizationAssetTier[]>([]);
+  const [orgAssetTiersLoading, setOrgAssetTiersLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [sidebarConnectionsLoading, setSidebarConnectionsLoading] = useState(false);
   const [sidebarRepos, setSidebarRepos] = useState<RepoWithProvider[]>([]);
@@ -98,11 +101,25 @@ export function CreateProjectSidebar({
     }
   }, [open, organizationId]);
 
+  useEffect(() => {
+    if (!open || !organizationId) return;
+    setOrgAssetTiersLoading(true);
+    setOrgAssetTiers([]);
+    api.getOrganizationAssetTiers(organizationId)
+      .then((tiers) => {
+        setOrgAssetTiers(tiers);
+        setSelectedAssetTierId(tiers.length > 0 ? tiers[0].id : null);
+      })
+      .catch(() => setOrgAssetTiers([]))
+      .finally(() => setOrgAssetTiersLoading(false));
+  }, [open, organizationId]);
+
   const closeModal = () => {
     onClose();
     setProjectName('');
     setSelectedTeamId(teamLocked && lockedTeam ? lockedTeam.id : null);
     setAssetTier('EXTERNAL');
+    setSelectedAssetTierId(null);
     setCreatedProjectId(null);
     setCreatedProjectName('');
     setSidebarConnectionsLoading(false);
@@ -216,14 +233,19 @@ export function CreateProjectSidebar({
     }
 
     const teamIds = teamLocked && lockedTeam ? [lockedTeam.id] : effectiveTeamId ? [effectiveTeamId] : undefined;
+    const createPayload: { name: string; team_ids?: string[]; asset_tier?: AssetTier; asset_tier_id?: string | null } = {
+      name: projectName.trim(),
+      team_ids: teamIds,
+    };
+    if (orgAssetTiers.length > 0 && selectedAssetTierId) {
+      createPayload.asset_tier_id = selectedAssetTierId;
+    } else {
+      createPayload.asset_tier = assetTier;
+    }
 
     setCreating(true);
     try {
-      const newProject = await api.createProject(organizationId, {
-        name: projectName.trim(),
-        team_ids: teamIds,
-        asset_tier: assetTier,
-      });
+      const newProject = await api.createProject(organizationId, createPayload);
 
       onProjectsReload?.();
 
@@ -734,35 +756,77 @@ export function CreateProjectSidebar({
               </Tooltip>
             </div>
             <div className="space-y-2" role="radiogroup" aria-label="Asset tier">
-              {[
-                { value: 'CROWN_JEWELS' as const, label: 'Crown Jewels', icon: Crown, desc: 'Mission-critical, highest blast radius' },
-                { value: 'EXTERNAL' as const, label: 'External', icon: Globe, desc: 'Public-facing services' },
-                { value: 'INTERNAL' as const, label: 'Internal', icon: Building2, desc: 'Internal apps & services' },
-                { value: 'NON_PRODUCTION' as const, label: 'Non-production', icon: FlaskConical, desc: 'Dev & test environments' },
-              ].map(({ value, label, icon: Icon, desc }) => {
-                const isSelected = assetTier === value;
-                return (
-                  <button
-                    key={value}
-                    type="button"
-                    role="radio"
-                    aria-checked={isSelected}
-                    onClick={() => setAssetTier(value)}
-                    className={`w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all ${
-                      isSelected ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20' : 'bg-background-card border-border hover:border-foreground-secondary/30'
-                    }`}
-                  >
-                    <div className={`h-4 w-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors ${isSelected ? 'border-foreground bg-foreground text-background' : 'border-foreground-secondary/50 bg-transparent'}`} aria-hidden>
-                      {isSelected && <Check className="h-2.5 w-2.5" />}
+              {orgAssetTiersLoading ? (
+                [1, 2, 3, 4].map((i) => (
+                  <div key={i} className="rounded-lg border border-border bg-background-card px-4 py-3 flex items-center justify-between gap-3" aria-hidden>
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <div className="h-4 w-4 flex-shrink-0 rounded-full bg-muted animate-pulse" />
+                      <div className="h-4 rounded bg-muted animate-pulse flex-1 min-w-0" style={{ maxWidth: `${40 + i * 15}%` }} />
                     </div>
-                    <Icon className="h-4 w-4 flex-shrink-0 text-foreground-secondary" />
-                    <div className="min-w-0 flex-1">
-                      <div className="font-medium text-foreground">{label}</div>
-                      <div className="text-xs text-foreground-secondary mt-0.5">{desc}</div>
-                    </div>
-                  </button>
-                );
-              })}
+                    <div className="h-6 w-16 rounded-md bg-muted animate-pulse flex-shrink-0" />
+                  </div>
+                ))
+              ) : orgAssetTiers.length > 0 ? (
+                orgAssetTiers.map((tier) => {
+                  const isSelected = selectedAssetTierId === tier.id;
+                  const tierColor = tier.color?.trim() ? (tier.color.startsWith('#') ? tier.color : `#${tier.color}`) : null;
+                  return (
+                    <button
+                      key={tier.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={isSelected}
+                      onClick={() => setSelectedAssetTierId(tier.id)}
+                      className={`w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all ${
+                        isSelected ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20' : 'bg-background-card border-border hover:border-foreground-secondary/30'
+                      }`}
+                    >
+                      <div className={`h-4 w-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors ${isSelected ? 'border-foreground bg-foreground text-background' : 'border-foreground-secondary/50 bg-transparent'}`} aria-hidden>
+                        {isSelected && <Check className="h-2.5 w-2.5" />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-foreground truncate">{tier.name}</div>
+                        <div className="text-xs text-muted-foreground mt-0.5">{tier.environmental_multiplier}x multiplier</div>
+                      </div>
+                      <span
+                        className="flex-shrink-0 rounded-md border px-2 py-0.5 text-xs font-medium"
+                        style={
+                          tierColor
+                            ? { backgroundColor: `${tierColor}18`, color: tierColor, borderColor: `${tierColor}40` }
+                            : { backgroundColor: 'var(--muted)', color: 'var(--muted-foreground)', borderColor: 'var(--border)' }
+                        }
+                      >
+                        {tier.name}
+                      </span>
+                    </button>
+                  );
+                })
+              ) : (
+                ['CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION'].map((value) => {
+                  const label = value === 'CROWN_JEWELS' ? 'Crown Jewels' : value === 'NON_PRODUCTION' ? 'Non-production' : value.charAt(0) + value.slice(1).toLowerCase();
+                  const isSelected = assetTier === value;
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      role="radio"
+                      aria-checked={isSelected}
+                      onClick={() => setAssetTier(value)}
+                      className={`w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all ${
+                        isSelected ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20' : 'bg-background-card border-border hover:border-foreground-secondary/30'
+                      }`}
+                    >
+                      <div className={`h-4 w-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors ${isSelected ? 'border-foreground bg-foreground text-background' : 'border-foreground-secondary/50 bg-transparent'}`} aria-hidden>
+                        {isSelected && <Check className="h-2.5 w-2.5" />}
+                      </div>
+                      <div className="min-w-0 flex-1 font-medium text-foreground">{label}</div>
+                      <span className="flex-shrink-0 rounded-md border border-border bg-muted/50 px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                        {label}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
             </div>
           </div>
 

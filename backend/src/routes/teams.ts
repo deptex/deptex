@@ -381,7 +381,7 @@ router.put('/:id/teams/:teamId', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id, teamId } = req.params;
-    const { name, avatar_url, description } = req.body;
+    const { name, avatar_url, description, notifications_paused_until } = req.body;
 
     // Check if user has access to this team
     const accessCheck = await checkTeamAccess(userId, id, teamId);
@@ -424,6 +424,7 @@ router.put('/:id/teams/:teamId', async (req: AuthRequest, res) => {
     if (name !== undefined) updateData.name = name.trim();
     if (avatar_url !== undefined) updateData.avatar_url = avatar_url;
     if (description !== undefined) updateData.description = description;
+    if (notifications_paused_until !== undefined) updateData.notifications_paused_until = notifications_paused_until;
 
     const { data: team, error: teamError } = await supabase
       .from('teams')

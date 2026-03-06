@@ -128,7 +128,7 @@ interface PullRequestCheckContext {
   removed: RemovedDependency[];
 }
 
-/** Context passed to projectCompliance(). */
+/** Context passed to projectCompliance() — NOT EXECUTED BY THE ENGINE. For reference/IntelliSense only. The engine only runs packagePolicy(context) per dependency. */
 interface ProjectComplianceContext {
   /** The project being evaluated. */
   project: Project;
@@ -161,6 +161,7 @@ declare function pullRequestCheck(context: PullRequestCheckContext): PullRequest
 /**
  * Evaluate all dependencies for ongoing project compliance.
  * Return { compliant: true } if the project meets policy, or { compliant: false, violations: [...] }.
+ * NOTE: This function is NOT run by the backend. Only packagePolicy(context) is executed (once per dependency).
  */
 declare function projectCompliance(context: ProjectComplianceContext): ComplianceResult;
 
@@ -179,9 +180,6 @@ interface PackagePolicyContext {
     dependencyScore: number | null;
     maliciousIndicator: MaliciousIndicator | null;
     slsaLevel: number | null;
-    registryIntegrityStatus: 'pass' | 'warning' | 'fail' | null;
-    installScriptsStatus: 'pass' | 'warning' | 'fail' | null;
-    entropyAnalysisStatus: 'pass' | 'warning' | 'fail' | null;
   };
   tier: Tier;
   fetch: (url: string) => Promise<{ ok: boolean; status: number; json: () => Promise<any>; text: () => Promise<string> }>;
@@ -499,9 +497,6 @@ export function PolicyCodeEditor({
             { label: 'dependencyScore', detail: 'number | null', doc: 'Deptex reputation score (0-100).' },
             { label: 'maliciousIndicator', detail: 'object | null', doc: 'Malicious indicator { source, confidence, reason }.' },
             { label: 'slsaLevel', detail: 'number | null', doc: 'SLSA provenance level (0-4).' },
-            { label: 'registryIntegrityStatus', detail: 'string | null', doc: '"pass" | "warning" | "fail"' },
-            { label: 'installScriptsStatus', detail: 'string | null', doc: '"pass" | "warning" | "fail"' },
-            { label: 'entropyAnalysisStatus', detail: 'string | null', doc: '"pass" | "warning" | "fail"' },
           ];
           for (const f of pkgFields) {
             suggestions.push({

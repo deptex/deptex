@@ -7,7 +7,6 @@ import { api, Organization, OrganizationInvitation } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { Toaster } from '../../components/ui/toaster';
 import CreateOrganizationModal from '../../components/CreateOrganizationModal';
-import { RoleBadge } from '../../components/RoleBadge';
 
 export default function OrganizationsPage() {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
@@ -338,18 +337,11 @@ export default function OrganizationsPage() {
                         className="h-10 w-10 rounded-full object-cover border border-border flex-shrink-0"
                       />
                       <div className="flex flex-col min-w-0">
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-base font-semibold text-foreground truncate">
-                            {org.name}
-                          </h3>
-                          <RoleBadge
-                            role={org.role || 'member'}
-                            roleDisplayName={org.role_display_name || (org.role === 'owner' ? 'CEO' : (org.role ? org.role.charAt(0).toUpperCase() + org.role.slice(1) : 'Member'))}
-                            roleColor={org.role_color}
-                          />
-                        </div>
+                        <h3 className="text-base font-semibold text-foreground truncate">
+                          {org.name}
+                        </h3>
                         <div className="text-sm text-foreground-secondary">
-                          Free
+                          {org.role_display_name || (org.role === 'owner' ? 'Owner' : (org.role ? org.role.charAt(0).toUpperCase() + org.role.slice(1) : 'Member'))}
                         </div>
                       </div>
                     </div>

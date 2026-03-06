@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useOutletContext, useNavigate, useParams, useLocation, Link, useSearchParams } from 'react-router-dom';
-import { Save, Trash2, Upload, Settings, Plus, X, Edit2, MoreVertical, UserCircle, Users, Bell, Tag, FileCheck, Check, Mail, Webhook, ChevronDown, Loader2, BookOpen } from 'lucide-react';
+import { Save, Trash2, Upload, Settings, Plus, X, Edit2, MoreVertical, UserCircle, Users, Bell, Tag, FileCheck, Check, Mail, Webhook, ChevronDown, Loader2, BookOpen, PauseCircle } from 'lucide-react';
 import { api, TeamWithRole, TeamPermissions, TeamMember, TeamRole, Organization, type CiCdConnection } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { useAuth } from '../../contexts/AuthContext';
@@ -311,6 +311,12 @@ export default function TeamSettingsPage() {
   const [teamJiraPatBaseUrl, setTeamJiraPatBaseUrl] = useState('');
   const [teamJiraPatToken, setTeamJiraPatToken] = useState('');
   const [teamJiraPatSaving, setTeamJiraPatSaving] = useState(false);
+  const [showTeamPagerDutyDialog, setShowTeamPagerDutyDialog] = useState(false);
+  const [teamPagerDutyServiceName, setTeamPagerDutyServiceName] = useState('');
+  const [teamPagerDutyRoutingKey, setTeamPagerDutyRoutingKey] = useState('');
+  const [teamPagerDutySaving, setTeamPagerDutySaving] = useState(false);
+  const [notifPausedUntil, setNotifPausedUntil] = useState<string | null>(null);
+  const [notifPauseLoading, setNotifPauseLoading] = useState(false);
 
   // Track the team id to only reset state when switching teams, not on every reload
   const [loadedTeamId, setLoadedTeamId] = useState<string | null>(null);
@@ -379,6 +385,7 @@ export default function TeamSettingsPage() {
       setName(team.name);
       setDescription(team.description || '');
       setAvatarUrl(team.avatar_url || null);
+      setNotifPausedUntil(team.notifications_paused_until ?? null);
       setLoadedTeamId(team.id);
       // Reset tab visit flags and connections so cached content doesn't show wrong team's data
       setHasVisitedRoles(false);
@@ -1219,20 +1226,86 @@ export default function TeamSettingsPage() {
             {/* Keep Notifications mounted after first visit so it doesn't reload when switching tabs (like Roles) */}
             {(activeSection === 'notifications' || hasVisitedNotifications) && organizationId && team?.id && (
               <div style={{ display: activeSection === 'notifications' ? undefined : 'none' }}>
-                <div className="flex items-center justify-between mb-6">
-                  <h2 className="text-2xl font-bold text-foreground">Notifications</h2>
-                  {notificationActiveTab === 'notifications' && organizationId && team?.id && (
-                    <Button
-                      onClick={() => notificationCreateRef.current?.()}
-                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
-                    >
-                      <Plus className="h-4 w-4 mr-2" />
-                      Create Rule
-                    </Button>
-                  )}
+                <div className="flex items-center justify-between gap-4 flex-wrap pb-2">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-2xl font-bold text-foreground">Notifications</h2>
+                      <Link to="/docs/notification-rules" target="_blank" rel="noopener noreferrer" className="shrink-0 text-foreground-secondary hover:text-foreground" aria-label="Notification rules docs">
+                        <BookOpen className="h-4 w-4" />
+                      </Link>
+                    </div>
+                    <p className="mt-1.5 text-sm text-foreground-secondary">
+                      Create custom rules with code to decide when to notify. Send alerts to Slack, email, Jira, webhooks, and more. The AI assistant can help you write the trigger logic.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm" className="text-xs gap-1.5" disabled={notifPauseLoading}>
+                          {notifPauseLoading ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <PauseCircle className="h-3.5 w-3.5" />
+                          )}
+                          {notifPausedUntil && new Date(notifPausedUntil) > new Date() ? 'Paused' : 'Pause All'}
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {notifPausedUntil && new Date(notifPausedUntil) > new Date() ? (
+                          <DropdownMenuItem onClick={async () => {
+                            setNotifPauseLoading(true);
+                            try {
+                              const updated = await api.updateTeam(organizationId!, team!.id, { notifications_paused_until: null });
+                              setNotifPausedUntil(null);
+                              updateTeamData({ notifications_paused_until: null });
+                              toast({ title: 'Resumed', description: 'Notifications have been resumed.' });
+                            } catch { toast({ title: 'Error', description: 'Failed to resume notifications.', variant: 'destructive' }); }
+                            finally { setNotifPauseLoading(false); }
+                          }}>
+                            Resume notifications
+                          </DropdownMenuItem>
+                        ) : (
+                          <>
+                            {[{ label: 'Pause for 1 hour', hours: 1 }, { label: 'Pause for 4 hours', hours: 4 }, { label: 'Pause for 24 hours', hours: 24 }].map(({ label, hours }) => (
+                              <DropdownMenuItem key={hours} onClick={async () => {
+                                setNotifPauseLoading(true);
+                                try {
+                                  const until = new Date(Date.now() + hours * 3600000).toISOString();
+                                  await api.updateTeam(organizationId!, team!.id, { notifications_paused_until: until });
+                                  setNotifPausedUntil(until);
+                                  updateTeamData({ notifications_paused_until: until });
+                                  toast({ title: 'Paused', description: `Notifications paused for ${hours} hour${hours > 1 ? 's' : ''}.` });
+                                } catch { toast({ title: 'Error', description: 'Failed to pause notifications.', variant: 'destructive' }); }
+                                finally { setNotifPauseLoading(false); }
+                              }}>
+                                {label}
+                              </DropdownMenuItem>
+                            ))}
+                          </>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                    {notificationActiveTab === 'notifications' && organizationId && team?.id && (
+                      <Button
+                        onClick={() => notificationCreateRef.current?.()}
+                        className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
+                      >
+                        Create Rule
+                      </Button>
+                    )}
+                  </div>
                 </div>
 
-                <div className="flex items-center justify-between border-b border-border pb-px">
+                {notifPausedUntil && new Date(notifPausedUntil) > new Date() && (
+                  <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 mt-4">
+                    <PauseCircle className="h-4 w-4 text-amber-400 flex-shrink-0" />
+                    <span className="text-sm text-amber-400">
+                      Notifications paused until {new Date(notifPausedUntil).toLocaleString()}
+                    </span>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between border-b border-border pb-px mt-6">
                   <div className="flex items-center gap-6">
                     <button
                       type="button"
@@ -1319,13 +1392,14 @@ export default function TeamSettingsPage() {
                                       {!['slack', 'discord', 'email', 'custom_notification', 'custom_ticketing'].includes(conn.provider) && (
                                         conn.provider === 'jira' ? <img src="/images/integrations/jira.png" alt="" className="h-5 w-5 rounded-sm" /> :
                                         conn.provider === 'linear' ? <img src="/images/integrations/linear.png" alt="" className="h-5 w-5 rounded-sm" /> :
+                                        conn.provider === 'pagerduty' ? <img src="/images/integrations/pagerduty.png" alt="" className="h-5 w-5 rounded-sm" /> :
                                         <Webhook className="h-5 w-5 text-foreground-secondary" />
                                       )}
                                       <span className="text-sm font-medium text-foreground">
                                         {conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing' ? 'Custom' :
                                           conn.provider === 'email' ? 'Email' :
                                           conn.provider === 'jira' ? (conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira') :
-                                          conn.provider === 'slack' ? 'Slack' : conn.provider === 'discord' ? 'Discord' : conn.provider === 'linear' ? 'Linear' : conn.provider}
+                                          conn.provider === 'slack' ? 'Slack' : conn.provider === 'discord' ? 'Discord' : conn.provider === 'linear' ? 'Linear' : conn.provider === 'pagerduty' ? 'PagerDuty' : conn.provider}
                                       </span>
                                     </div>
                                   </td>
@@ -1440,6 +1514,15 @@ export default function TeamSettingsPage() {
                             variant="outline"
                             size="sm"
                             className="text-xs"
+                            onClick={() => { setTeamPagerDutyServiceName(''); setTeamPagerDutyRoutingKey(''); setShowTeamPagerDutyDialog(true); }}
+                          >
+                            <img src="/images/integrations/pagerduty.png" alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5" />
+                            Add PagerDuty
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs"
                             onClick={() => { setTeamCustomType('notification'); setTeamCustomName(''); setTeamCustomWebhookUrl(''); setShowTeamCustomDialog(true); }}
                           >
                             <Webhook className="h-3.5 w-3.5 mr-1.5" />
@@ -1500,13 +1583,14 @@ export default function TeamSettingsPage() {
                                       {!['slack', 'discord', 'email', 'custom_notification', 'custom_ticketing'].includes(conn.provider) && (
                                         conn.provider === 'jira' ? <img src="/images/integrations/jira.png" alt="" className="h-5 w-5 rounded-sm" /> :
                                         conn.provider === 'linear' ? <img src="/images/integrations/linear.png" alt="" className="h-5 w-5 rounded-sm" /> :
+                                        conn.provider === 'pagerduty' ? <img src="/images/integrations/pagerduty.png" alt="" className="h-5 w-5 rounded-sm" /> :
                                         <Webhook className="h-5 w-5 text-foreground-secondary" />
                                       )}
                                       <span className="text-sm font-medium text-foreground">
                                         {conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing' ? 'Custom' :
                                           conn.provider === 'email' ? 'Email' :
                                           conn.provider === 'jira' ? (conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira') :
-                                          conn.provider === 'slack' ? 'Slack' : conn.provider === 'discord' ? 'Discord' : conn.provider === 'linear' ? 'Linear' : conn.provider}
+                                          conn.provider === 'slack' ? 'Slack' : conn.provider === 'discord' ? 'Discord' : conn.provider === 'linear' ? 'Linear' : conn.provider === 'pagerduty' ? 'PagerDuty' : conn.provider}
                                       </span>
                                     </div>
                                   </td>
@@ -2388,6 +2472,72 @@ export default function TeamSettingsPage() {
               }}
             >
               {teamJiraPatSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
+              Connect
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Team PagerDuty Connect Dialog */}
+      <Dialog open={showTeamPagerDutyDialog} onOpenChange={setShowTeamPagerDutyDialog}>
+        <DialogContent hideClose className="sm:max-w-[440px] bg-background p-0 gap-0">
+          <div className="px-6 pt-6 pb-4 border-b border-border">
+            <div className="flex items-center gap-3">
+              <div className="h-7 w-7 rounded flex items-center justify-center text-lg leading-none">🚨</div>
+              <div>
+                <DialogTitle>Connect PagerDuty</DialogTitle>
+                <DialogDescription>Get paged for critical security events.</DialogDescription>
+              </div>
+            </div>
+          </div>
+          <div className="px-6 py-6 grid gap-4 bg-background">
+            <div className="grid gap-2">
+              <Label htmlFor="team-pd-service-name">Service name</Label>
+              <Input
+                id="team-pd-service-name"
+                value={teamPagerDutyServiceName}
+                onChange={(e) => setTeamPagerDutyServiceName(e.target.value)}
+                placeholder="e.g. Deptex Security Alerts"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="team-pd-routing-key">Routing key</Label>
+              <Input
+                id="team-pd-routing-key"
+                type="password"
+                value={teamPagerDutyRoutingKey}
+                onChange={(e) => setTeamPagerDutyRoutingKey(e.target.value)}
+                placeholder="PagerDuty Events API v2 routing key"
+              />
+              <p className="text-xs text-foreground-muted">Found in PagerDuty &rarr; Service &rarr; Integrations &rarr; Events API v2.</p>
+            </div>
+          </div>
+          <DialogFooter className="px-6 py-4 bg-background">
+            <Button variant="outline" onClick={() => setShowTeamPagerDutyDialog(false)}>Cancel</Button>
+            <Button
+              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+              disabled={!teamPagerDutyServiceName.trim() || !teamPagerDutyRoutingKey.trim() || teamPagerDutySaving}
+              onClick={async () => {
+                if (!organizationId || !team?.id) return;
+                setTeamPagerDutySaving(true);
+                try {
+                  await api.connectTeamPagerDuty(organizationId, team.id, {
+                    routingKey: teamPagerDutyRoutingKey.trim(),
+                    serviceName: teamPagerDutyServiceName.trim(),
+                  });
+                  toast({ title: 'Connected', description: 'PagerDuty has been connected successfully.' });
+                  setShowTeamPagerDutyDialog(false);
+                  setTeamPagerDutyServiceName('');
+                  setTeamPagerDutyRoutingKey('');
+                  loadTeamConnections();
+                } catch (err: any) {
+                  toast({ title: 'Error', description: err.message || 'Failed to connect PagerDuty.', variant: 'destructive' });
+                } finally {
+                  setTeamPagerDutySaving(false);
+                }
+              }}
+            >
+              {teamPagerDutySaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
               Connect
             </Button>
           </DialogFooter>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useOutletContext, useParams, useNavigate } from 'react-router-dom';
 import {
   CheckCircle2,
@@ -17,13 +17,9 @@ import {
   AlertCircle,
   ChevronRight,
   Sparkles,
-  Info,
-  GitPullRequest,
-  GitCommitHorizontal,
   Scale,
   ExternalLink,
   ChevronLeft,
-  FileCode2,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
@@ -42,8 +38,6 @@ import {
   ProjectEffectivePolicies,
   RegistrySearchResult,
   LicenseObligationGroup,
-  ProjectPullRequest,
-  ProjectCommit,
 } from '../../lib/api';
 import { downloadFile } from '../../lib/compliance-utils';
 import { useToast } from '../../hooks/use-toast';
@@ -59,7 +53,7 @@ interface ProjectContextType {
   userPermissions: ProjectPermissions | null;
 }
 
-const VALID_SECTIONS: ComplianceSection[] = ['project', 'policy-results', 'updates', 'export-notice', 'export-sbom'];
+const VALID_SECTIONS: ComplianceSection[] = ['project', 'export-notice', 'export-sbom'];
 function isValidSection(s: string | undefined): s is ComplianceSection {
   return !!s && VALID_SECTIONS.includes(s as ComplianceSection);
 }
@@ -97,6 +91,36 @@ function getReasonBadgeColor(category: string): string {
   }
 }
 
+/** Ecosystem to icon path for compliance table and Check a package dropdown; fallback to null (use Package icon). */
+const ECOSYSTEM_ICON: Record<string, string> = {
+  npm: '/images/npm_icon.png',
+  pypi: '/images/frameworks/python.png',
+  maven: '/images/frameworks/java.png',
+  golang: '/images/frameworks/go.png',
+  cargo: '/images/frameworks/rust.png',
+  gem: '/images/frameworks/ruby.png',
+  composer: '/images/frameworks/php.png',
+};
+function getEcosystemIcon(ecosystem: string | null | undefined): string | null {
+  if (!ecosystem) return null;
+  return ECOSYSTEM_ICON[ecosystem.toLowerCase()] ?? null;
+}
+
+/** All ecosystems supported for preflight / Check a package (order + display label). */
+const ALL_ECOSYSTEMS: { id: string; label: string }[] = [
+  { id: 'npm', label: 'npm' },
+  { id: 'pypi', label: 'PyPI' },
+  { id: 'maven', label: 'Maven' },
+  { id: 'golang', label: 'Go' },
+  { id: 'cargo', label: 'Cargo' },
+  { id: 'gem', label: 'RubyGems' },
+  { id: 'composer', label: 'Composer' },
+  { id: 'nuget', label: 'NuGet' },
+  { id: 'pub', label: 'Pub' },
+  { id: 'hex', label: 'Hex' },
+  { id: 'swift', label: 'Swift' },
+];
+
 // ─── Preflight Sidebar ───
 
 function PreflightSidebar({
@@ -105,22 +129,39 @@ function PreflightSidebar({
   organizationId,
   projectId,
   projectEcosystems,
+  initialEcosystem,
 }: {
   open: boolean;
   onClose: () => void;
   organizationId: string;
   projectId: string;
   projectEcosystems: string[];
+  initialEcosystem?: string | null;
 }) {
   const [panelVisible, setPanelVisible] = useState(false);
-  const [ecosystem, setEcosystem] = useState(projectEcosystems[0] || 'npm');
+  const [ecosystem, setEcosystem] = useState(initialEcosystem ?? projectEcosystems[0] ?? 'npm');
+
+  useEffect(() => {
+    if (open && initialEcosystem) setEcosystem(initialEcosystem);
+  }, [open, initialEcosystem]);
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<RegistrySearchResult[]>([]);
   const [searchMode, setSearchMode] = useState<'search' | 'exact'>('search');
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [hasSearched, setHasSearched] = useState(false);
   const [checking, setChecking] = useState(false);
-  const [checkResult, setCheckResult] = useState<{ allowed: boolean; reasons: string[]; tierName: string; packageInfo: RegistrySearchResult } | null>(null);
+  const [checkingPackageKey, setCheckingPackageKey] = useState<string | null>(null);
+  const [checkResult, setCheckResult] = useState<{
+    allowed: boolean;
+    reasons: string[];
+    tierName: string;
+    packageInfo: RegistrySearchResult;
+    license?: string | null;
+    dependencyScore?: number | null;
+    openSsfScore?: number | null;
+    slsaLevel?: number | null;
+  } | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -152,11 +193,14 @@ function PreflightSidebar({
       setSearchResults([]);
     } finally {
       setSearching(false);
+      setHasSearched(true);
     }
   }, [organizationId, projectId, ecosystem, searchQuery]);
 
   const handleCheck = useCallback(async (pkg: RegistrySearchResult) => {
+    const key = `${pkg.name}@${pkg.version ?? ''}`;
     setChecking(true);
+    setCheckingPackageKey(key);
     try {
       const result = await api.preflightCheck(organizationId, projectId, pkg.name, pkg.version || undefined, ecosystem);
       setCheckResult({
@@ -164,11 +208,16 @@ function PreflightSidebar({
         reasons: result.reasons,
         tierName: result.tierName,
         packageInfo: pkg,
+        license: result.license,
+        dependencyScore: result.dependencyScore,
+        openSsfScore: result.openSsfScore,
+        slsaLevel: result.slsaLevel,
       });
     } catch (err: any) {
       toast({ title: 'Preflight check failed', description: err.message, variant: 'destructive' });
     } finally {
       setChecking(false);
+      setCheckingPackageKey(null);
     }
   }, [organizationId, projectId, ecosystem, toast]);
 
@@ -190,96 +239,114 @@ function PreflightSidebar({
         )}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="px-6 pt-5 pb-3 flex-shrink-0">
-          <h2 className="text-xl font-semibold text-foreground">Preflight Check</h2>
-          <p className="text-sm text-foreground-secondary mt-1">Test if adding a package would affect compliance</p>
+        <div className="px-6 pt-5 pb-3 flex-shrink-0 flex items-center gap-3">
+          <div className="shrink-0 flex items-center justify-center">
+            {getEcosystemIcon(ecosystem) ? (
+              <img src={getEcosystemIcon(ecosystem)!} alt="" className="h-6 w-6 object-contain" aria-hidden />
+            ) : (
+              <Package className="h-6 w-6 text-foreground-secondary" />
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-xl font-semibold text-foreground">Preflight Check</h2>
+            <p className="text-sm text-foreground-secondary mt-1">Test if adding a package would affect compliance</p>
+          </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4">
+        <div className="flex-1 flex flex-col min-h-0 px-6 pt-4 pb-0">
           {!checkResult ? (
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground-secondary">Ecosystem</label>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="w-full justify-between h-9 text-sm">
-                      {ecosystem}
-                      <ChevronDown className="h-3.5 w-3.5 text-foreground-secondary" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-[200px]">
-                    {projectEcosystems.map((eco) => (
-                      <DropdownMenuItem key={eco} onClick={() => { setEcosystem(eco); setSearchResults([]); setSearchError(null); }}>
-                        {eco}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground-secondary">
-                  {isExactLookup ? 'Package name' : 'Search packages'}
-                </label>
-                <div className="flex gap-2">
-                  <Input
-                    placeholder={isExactLookup ? 'Enter package name...' : 'Search packages...'}
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                    className="h-9"
-                  />
-                  <Button size="sm" onClick={handleSearch} disabled={searching || !searchQuery.trim()} className="h-9 px-3">
-                    {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-                  </Button>
-                </div>
+            <div className="flex flex-col min-h-0 flex-1">
+              <div className="flex-shrink-0 mb-4">
+                <Input
+                  placeholder={isExactLookup ? 'Package name' : 'Search packages...'}
+                  value={searchQuery}
+                  onChange={(e) => { setSearchQuery(e.target.value); setHasSearched(false); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleSearch(); } }}
+                  className="h-9"
+                />
               </div>
 
               {searchError && (
-                <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">
+                <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2 flex-shrink-0 mb-4">
                   <AlertCircle className="h-4 w-4 shrink-0" />
                   {searchError}
                 </div>
               )}
 
-              {searchResults.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-xs text-foreground-secondary">{searchResults.length} result{searchResults.length !== 1 ? 's' : ''}</p>
-                  <div className="space-y-1.5 max-h-[400px] overflow-y-auto custom-scrollbar">
-                    {searchResults.map((pkg, i) => (
-                      <div key={`${pkg.name}-${i}`} className="bg-background-card border border-border rounded-lg p-3 hover:border-foreground/20 transition-colors">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium text-foreground truncate">{pkg.name}</span>
-                              <Badge variant="secondary" className="text-[10px] shrink-0">{pkg.version}</Badge>
-                            </div>
-                            {pkg.description && (
-                              <p className="text-xs text-foreground-secondary mt-1 line-clamp-2">{pkg.description}</p>
-                            )}
-                            <div className="flex items-center gap-3 mt-1.5 text-xs text-foreground-secondary">
-                              {pkg.license && <span>{pkg.license}</span>}
-                              {pkg.downloads != null && <span>{pkg.downloads.toLocaleString()} downloads</span>}
-                            </div>
+              {searching && (
+                <div className="flex flex-col min-h-0 flex-1 mt-2 space-y-1.5">
+                  {[1, 2, 3, 4, 5, 6].map((i) => (
+                    <div key={i} className="bg-background-card border border-border rounded-lg p-3 animate-pulse">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0 flex-1 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <div className="h-4 rounded w-24 bg-foreground/15" />
+                            <div className="h-4 rounded w-12 bg-foreground/10" />
                           </div>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 text-xs shrink-0"
-                            onClick={() => handleCheck(pkg)}
-                            disabled={checking}
-                          >
-                            {checking ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Check'}
-                          </Button>
+                          <div className="h-3 rounded w-full max-w-[280px] bg-foreground/10" />
+                          <div className="flex items-center gap-2">
+                            <div className="h-3 rounded w-14 bg-foreground/10" />
+                            <div className="h-3 rounded w-20 bg-foreground/10" />
+                          </div>
                         </div>
+                        <div className="h-7 w-14 shrink-0 rounded bg-foreground/10" />
                       </div>
-                    ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {!searching && searchResults.length > 0 && (
+                <div className="flex flex-col min-h-0 flex-1 mt-2">
+                  <p className="text-xs text-foreground-secondary flex-shrink-0 mb-2">{searchResults.length} result{searchResults.length !== 1 ? 's' : ''}</p>
+                  <div className="space-y-1.5 flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+                    {searchResults.map((pkg, i) => {
+                      const packageKey = `${pkg.name}@${pkg.version ?? ''}`;
+                      const isCheckingThis = checkingPackageKey === packageKey;
+                      return (
+                        <div key={`${pkg.name}-${i}`} className="bg-background-card border border-border rounded-lg p-3 hover:border-foreground/20 transition-colors">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-medium text-foreground truncate">{pkg.name}</span>
+                                {pkg.version && (
+                                  <span className="text-[10px] shrink-0 px-1.5 py-0.5 rounded border border-border bg-transparent text-foreground-secondary">
+                                    {pkg.version}
+                                  </span>
+                                )}
+                              </div>
+                              {pkg.description && (
+                                <p className="text-xs text-foreground-secondary mt-1 line-clamp-2">{pkg.description}</p>
+                              )}
+                              <div className="flex items-center gap-3 mt-1.5 text-xs text-foreground-secondary">
+                                {pkg.license && <span>{pkg.license}</span>}
+                                {pkg.downloads != null && (
+                                  <span className="flex items-center gap-1">
+                                    <Download className="h-3 w-3 shrink-0" />
+                                    {pkg.downloads.toLocaleString()} downloads
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs shrink-0"
+                              onClick={() => handleCheck(pkg)}
+                              disabled={isCheckingThis}
+                            >
+                              {isCheckingThis ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Check'}
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
 
-              {!searching && searchResults.length === 0 && searchQuery && !searchError && (
-                <p className="text-sm text-foreground-secondary text-center py-4">No results found</p>
+              {hasSearched && !searching && searchResults.length === 0 && !searchError && (
+                <p className="text-sm text-foreground-secondary text-center py-4 flex-shrink-0">No results found</p>
               )}
             </div>
           ) : (
@@ -290,21 +357,20 @@ function PreflightSidebar({
                   ? 'bg-emerald-500/10 border-emerald-500/20'
                   : 'bg-red-500/10 border-red-500/20'
               )}>
-                <div className="flex items-center gap-2 mb-2">
+                <div className="flex items-center gap-2">
                   {checkResult.allowed ? (
-                    <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+                    <CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" />
                   ) : (
-                    <XCircle className="h-5 w-5 text-red-400" />
+                    <XCircle className="h-5 w-5 text-red-400 shrink-0" />
                   )}
                   <span className={cn('text-lg font-semibold', checkResult.allowed ? 'text-emerald-400' : 'text-red-400')}>
                     {checkResult.allowed ? 'Allowed' : 'Blocked'}
                   </span>
                 </div>
-                {checkResult.reasons.length > 0 && (
-                  <div className="space-y-1 mt-2">
+                {!checkResult.allowed && checkResult.reasons.length > 0 && (
+                  <div className="mt-2 space-y-1">
                     {checkResult.reasons.map((reason, i) => (
-                      <p key={i} className="text-sm text-foreground-secondary flex items-start gap-1.5">
-                        <span className="text-red-400 mt-0.5">•</span>
+                      <p key={i} className="text-sm text-foreground-secondary">
                         {reason}
                       </p>
                     ))}
@@ -314,36 +380,46 @@ function PreflightSidebar({
 
               <div className="bg-background-card border border-border rounded-lg p-4 space-y-2">
                 <h4 className="text-sm font-medium text-foreground">{checkResult.packageInfo.name}</h4>
-                <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
                   <div>
                     <span className="text-foreground-secondary">Version:</span>{' '}
                     <span className="text-foreground">{checkResult.packageInfo.version}</span>
                   </div>
                   <div>
                     <span className="text-foreground-secondary">License:</span>{' '}
-                    <span className="text-foreground">{checkResult.packageInfo.license || 'Unknown'}</span>
+                    <span className="text-foreground">{checkResult.license ?? checkResult.packageInfo.license ?? 'Unknown'}</span>
                   </div>
                   <div>
-                    <span className="text-foreground-secondary">Tier:</span>{' '}
+                    <span className="text-foreground-secondary">Project tier:</span>{' '}
                     <span className="text-foreground">{checkResult.tierName}</span>
                   </div>
+                  <div>
+                    <span className="text-foreground-secondary">Score:</span>{' '}
+                    <span className="text-foreground">
+                      {checkResult.dependencyScore != null ? checkResult.dependencyScore : '—'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-foreground-secondary">OpenSSF:</span>{' '}
+                    <span className="text-foreground">
+                      {checkResult.openSsfScore != null ? checkResult.openSsfScore : '—'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-foreground-secondary">SLSA:</span>{' '}
+                    <span className="text-foreground">
+                      {checkResult.slsaLevel != null ? `L${checkResult.slsaLevel}` : '—'}
+                    </span>
+                  </div>
                   {checkResult.packageInfo.downloads != null && (
-                    <div>
+                    <div className="flex items-center gap-1">
+                      <Download className="h-3.5 w-3.5 text-foreground-secondary shrink-0" />
                       <span className="text-foreground-secondary">Downloads:</span>{' '}
                       <span className="text-foreground">{checkResult.packageInfo.downloads.toLocaleString()}</span>
                     </div>
                   )}
                 </div>
               </div>
-
-              <div className="flex items-center gap-2 text-xs text-foreground-secondary bg-background-card border border-border rounded-lg px-3 py-2">
-                <Info className="h-3.5 w-3.5 shrink-0" />
-                Reachability analysis and import count are not available in preflight checks.
-              </div>
-
-              <Button variant="outline" size="sm" onClick={() => { setCheckResult(null); setSearchQuery(''); setSearchResults([]); }} className="w-full">
-                Check Another Package
-              </Button>
             </div>
           )}
         </div>
@@ -421,9 +497,9 @@ export default function ProjectCompliancePage() {
 
   const activeSection: ComplianceSection = isValidSection(urlSection) ? urlSection : 'project';
   const [policyResultsTab, setPolicyResultsTab] = useState<'issues' | 'all'>('issues');
-  const [policyResultFilter, setPolicyResultFilter] = useState<string>('all');
   const [directFilter, setDirectFilter] = useState<'all' | 'direct' | 'transitive'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const complianceSearchInputRef = useRef<HTMLInputElement>(null);
 
   const [dependencies, setDependencies] = useState<ProjectDependency[]>([]);
   const [policies, setPolicies] = useState<ProjectEffectivePolicies | null>(null);
@@ -434,24 +510,9 @@ export default function ProjectCompliancePage() {
   const [reevaluating, setReevaluating] = useState(false);
   const [reevalDisabledUntil, setReevalDisabledUntil] = useState(0);
   const [showPreflight, setShowPreflight] = useState(false);
+  const [preflightInitialEcosystem, setPreflightInitialEcosystem] = useState<string | null>(null);
   const [exporting, setExporting] = useState<'sbom' | 'notice' | null>(null);
   const [obligationsOpen, setObligationsOpen] = useState(false);
-
-  // Updates tab state
-  const [updatesSubTab, setUpdatesSubTab] = useState<'pull-requests' | 'commits'>('pull-requests');
-  const [pullRequests, setPullRequests] = useState<ProjectPullRequest[]>([]);
-  const [prTotal, setPrTotal] = useState(0);
-  const [prPage, setPrPage] = useState(1);
-  const [prStatusFilter, setPrStatusFilter] = useState<string>('all');
-  const [prSearch, setPrSearch] = useState('');
-  const [prLoading, setPrLoading] = useState(false);
-
-  const [commits, setCommits] = useState<ProjectCommit[]>([]);
-  const [commitsTotal, setCommitsTotal] = useState(0);
-  const [commitsPage, setCommitsPage] = useState(1);
-  const [commitsComplianceFilter, setCommitsComplianceFilter] = useState<string>('all');
-  const [commitsSearch, setCommitsSearch] = useState('');
-  const [commitsLoading, setCommitsLoading] = useState(false);
 
   const [exceptionLoading, setExceptionLoading] = useState<string | null>(null);
   const [diffDialog, setDiffDialog] = useState<{
@@ -467,7 +528,9 @@ export default function ProjectCompliancePage() {
 
   const canManageSettings = userPermissions?.edit_settings === true || userPermissions?.view_settings === true;
   const realtime = useRealtimeStatus(organizationId, projectId);
-  const isExtracting = realtime.status !== 'ready';
+  // Only show "Extraction in progress" when a scan is actively running (not when pending/ready/error/not_connected)
+  const EXTRACTING_STATUSES = ['initializing', 'extracting', 'analyzing', 'finalizing'];
+  const isExtracting = EXTRACTING_STATUSES.includes(realtime.status);
 
   const loadData = useCallback(async () => {
     if (!organizationId || !projectId) return;
@@ -506,7 +569,8 @@ export default function ProjectCompliancePage() {
 
   useEffect(() => {
     if (!organizationId || !projectId) return;
-    if (!urlSection || !isValidSection(urlSection)) {
+    // Only 'project' is a tab; export-notice and export-sbom are download buttons, so redirect to project
+    if (!urlSection || urlSection !== 'project') {
       navigate(`/organizations/${organizationId}/projects/${projectId}/compliance/project`, { replace: true });
     }
   }, [urlSection, navigate, organizationId, projectId]);
@@ -544,6 +608,28 @@ export default function ProjectCompliancePage() {
   const policyEvaluatedAt = (project as any)?.policy_evaluated_at as string | null;
   const isStale = policyEvaluatedAt ? (Date.now() - new Date(policyEvaluatedAt).getTime()) > 24 * 60 * 60 * 1000 : false;
   const statusName = (project as any)?.status_name || (violatedDeps.length > 0 ? 'Non-Compliant' : 'Compliant');
+
+  // Compliance score = % of packages that are allowed (policy_result.allowed !== false)
+  const complianceScorePct = useMemo(() => {
+    if (dependencies.length === 0) return null;
+    const allowed = dependencies.filter((d) => d.policy_result?.allowed !== false).length;
+    return Math.round((allowed / dependencies.length) * 100);
+  }, [dependencies]);
+
+  // Human-readable last scan time (policy evaluation = when we last had a full scan)
+  const lastScannedLabel = useMemo(() => {
+    if (!policyEvaluatedAt) return 'Never';
+    const d = new Date(policyEvaluatedAt);
+    const now = new Date();
+    const sameDay = d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const isYesterday = d.getDate() === yesterday.getDate() && d.getMonth() === yesterday.getMonth() && d.getFullYear() === yesterday.getFullYear();
+    const timeStr = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    if (sameDay) return `Today, ${timeStr}`;
+    if (isYesterday) return `Yesterday, ${timeStr}`;
+    return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  }, [policyEvaluatedAt]);
   const statusColor = violatedDeps.length > 0 ? '#ef4444' : '#22c55e';
   const statusViolations = (project as any)?.status_violations as string[] || [];
 
@@ -555,13 +641,6 @@ export default function ProjectCompliancePage() {
       filtered = filtered.filter((d) => d.policy_result && d.policy_result.allowed === false);
     }
 
-    if (policyResultFilter !== 'all') {
-      filtered = filtered.filter((d) => {
-        if (!d.policy_result?.reasons?.length) return policyResultFilter === 'all';
-        return d.policy_result.reasons.some((r) => getReasonCategory(r) === policyResultFilter);
-      });
-    }
-
     if (directFilter === 'direct') filtered = filtered.filter((d) => d.is_direct);
     else if (directFilter === 'transitive') filtered = filtered.filter((d) => !d.is_direct);
 
@@ -571,7 +650,7 @@ export default function ProjectCompliancePage() {
     }
 
     return filtered;
-  }, [dependencies, policyResultsTab, policyResultFilter, directFilter, searchQuery]);
+  }, [dependencies, policyResultsTab, directFilter, searchQuery]);
 
   // Quick stats
   const licenseIssueCount = useMemo(() =>
@@ -692,76 +771,48 @@ export default function ProjectCompliancePage() {
     }
   }, [diffDialog, toast, loadData]);
 
-  const PER_PAGE = 15;
-
-  const loadPullRequests = useCallback(async () => {
-    if (!organizationId || !projectId) return;
-    setPrLoading(true);
-    try {
-      const res = await api.getProjectPullRequests(organizationId, projectId, {
-        status: prStatusFilter,
-        search: prSearch || undefined,
-        page: prPage,
-        perPage: PER_PAGE,
-      });
-      setPullRequests(res?.data ?? []);
-      setPrTotal(res?.total ?? 0);
-    } catch {
-      setPullRequests([]);
-      setPrTotal(0);
-    } finally {
-      setPrLoading(false);
-    }
-  }, [organizationId, projectId, prStatusFilter, prSearch, prPage]);
-
-  const loadCommits = useCallback(async () => {
-    if (!organizationId || !projectId) return;
-    setCommitsLoading(true);
-    try {
-      const res = await api.getProjectCommits(organizationId, projectId, {
-        compliance_status: commitsComplianceFilter,
-        search: commitsSearch || undefined,
-        page: commitsPage,
-        perPage: PER_PAGE,
-      });
-      setCommits(res?.data ?? []);
-      setCommitsTotal(res?.total ?? 0);
-    } catch {
-      setCommits([]);
-      setCommitsTotal(0);
-    } finally {
-      setCommitsLoading(false);
-    }
-  }, [organizationId, projectId, commitsComplianceFilter, commitsSearch, commitsPage]);
-
-  useEffect(() => {
-    if (activeSection === 'updates' && updatesSubTab === 'pull-requests') {
-      loadPullRequests();
-    }
-  }, [activeSection, updatesSubTab, loadPullRequests]);
-
-  useEffect(() => {
-    if (activeSection === 'updates' && updatesSubTab === 'commits') {
-      loadCommits();
-    }
-  }, [activeSection, updatesSubTab, loadCommits]);
-
-  const prTotalPages = Math.max(1, Math.ceil(prTotal / PER_PAGE));
-  const commitsTotalPages = Math.max(1, Math.ceil(commitsTotal / PER_PAGE));
-
   const noExtraction = dependencies.length === 0;
   const noPolicy = !policies?.effective_policy_code && !policies?.inherited_policy_code;
 
-  // Content-area skeleton when loading (sidebar stays visible)
+  // Content-area skeleton matching project compliance layout: score, filters, table
   const contentSkeleton = (
-    <div className="px-6 py-6 mx-auto max-w-5xl">
-      <div className="h-8 w-48 bg-muted rounded animate-pulse mb-6" />
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        {[1, 2, 3, 4].map((i) => (
-          <div key={i} className="h-20 bg-muted rounded-lg animate-pulse" />
-        ))}
+    <div className="px-6 py-6 mx-auto max-w-5xl space-y-8">
+      {/* Score + last scanned row */}
+      <div className="flex flex-wrap items-center gap-8">
+        <div className="flex items-baseline gap-3">
+          <div className="h-10 w-20 bg-muted rounded animate-pulse" />
+          <div className="h-3 w-24 bg-muted rounded animate-pulse" />
+        </div>
+        <div className="min-w-0">
+          <div className="h-3 w-16 bg-muted rounded animate-pulse mb-1.5" />
+          <div className="h-4 w-28 bg-muted rounded animate-pulse" />
+        </div>
       </div>
-      <div className="h-64 bg-muted rounded-lg animate-pulse" />
+      {/* Search + filter bar */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="h-9 w-64 bg-muted rounded-md animate-pulse flex-shrink-0" />
+        <div className="h-8 w-20 bg-muted rounded animate-pulse ml-auto" />
+      </div>
+      {/* Table */}
+      <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+        <div className="border-b border-border px-4 py-3 flex gap-4">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className={cn('h-3 bg-muted rounded animate-pulse', i === 1 ? 'w-32' : 'w-16')} />
+          ))}
+        </div>
+        <div className="divide-y divide-border">
+          {[1, 2, 3, 4, 5, 6, 7, 8].map((row) => (
+            <div key={row} className="px-4 py-2.5 flex gap-4 items-center">
+              <div className="h-4 w-28 bg-muted rounded animate-pulse flex-shrink-0" />
+              <div className="h-4 w-14 bg-muted rounded animate-pulse" />
+              <div className="h-4 w-8 bg-muted rounded animate-pulse" />
+              <div className="h-4 w-8 bg-muted rounded animate-pulse" />
+              <div className="h-5 w-16 bg-muted rounded animate-pulse" />
+              <div className="h-4 flex-1 max-w-[120px] bg-muted rounded animate-pulse" />
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 
@@ -787,6 +838,9 @@ export default function ProjectCompliancePage() {
           onSelect={handleSectionSelect}
           canViewSettings={!!canManageSettings}
           disabledExports={noExtraction || isExtracting}
+          onExportNotice={canManageSettings ? handleExportNotice : undefined}
+          onExportSBOM={canManageSettings ? handleExportSBOM : undefined}
+          exporting={exporting}
         />
 
         <div className="flex-1 min-w-0 overflow-auto">
@@ -799,32 +853,9 @@ export default function ProjectCompliancePage() {
             </div>
           ) : (
           <div className="px-6 py-6 mx-auto max-w-5xl">
-            {/* Re-evaluate button when on project/policy/updates and not extracting */}
-            {(activeSection === 'project' || activeSection === 'policy-results' || activeSection === 'updates') && canManageSettings && !isExtracting && (
-              <div className="flex items-center justify-end mb-6">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleReevaluate}
-                  disabled={reevaluating || Date.now() < reevalDisabledUntil}
-                  className="h-8 text-xs"
-                >
-                  {reevaluating ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
-                  Re-evaluate
-                </Button>
-              </div>
-            )}
-
             {/* ─── PROJECT SECTION ─── */}
             {activeSection === 'project' && (
             <div className="space-y-8">
-              <div>
-                <h1 className="text-xl font-semibold text-foreground tracking-tight">Project compliance</h1>
-                <p className="text-sm text-foreground-secondary mt-1">
-                  Active violations from the latest scan.
-                </p>
-              </div>
-
               {isExtracting ? (
                 <div className="rounded-lg border border-border bg-background-card shadow-sm p-6">
                   <div className="flex items-center gap-4">
@@ -856,828 +887,296 @@ export default function ProjectCompliancePage() {
                 </div>
               ) : (
                 <>
-                  {/* Active Violations */}
-                  <div>
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-base font-semibold text-foreground">Active violations</h3>
-                        {violatedDeps.length > 0 && (
-                          <Badge variant="destructive" className="text-[10px]">{violatedDeps.length} items</Badge>
-                        )}
-                      </div>
-                      <Button variant="outline" size="sm" onClick={() => setShowPreflight(true)} className="h-8 text-xs">
-                        <Shield className="h-3.5 w-3.5 mr-1.5" />
-                        Check a package
-                      </Button>
-                    </div>
-                    {violatedDeps.length === 0 ? (
-                      <div className="rounded-lg border border-border bg-background-card shadow-sm p-8 text-center">
-                        <CheckCircle2 className="h-9 w-9 text-emerald-400 mx-auto mb-3" />
-                        <p className="text-sm font-medium text-foreground">No active violations</p>
-                        <p className="text-xs text-foreground-secondary mt-1">All dependencies comply with the current policy.</p>
-                      </div>
-                    ) : (
-                      <div className="rounded-lg border border-border bg-background-card shadow-sm overflow-hidden">
-                        <div className="divide-y divide-border">
-                          {violatedDeps.slice(0, 20).map((dep) => (
-                            <div
-                              key={dep.id}
-                              className="flex items-center gap-3 px-4 py-2.5 hover:bg-table-hover transition-colors cursor-pointer"
-                              onClick={() => navigate(`/organizations/${organizationId}/projects/${projectId}/dependencies/${dep.dependency_id}/overview`)}
-                            >
-                              <Package className="h-4 w-4 text-foreground-secondary shrink-0" />
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm font-medium text-foreground truncate">{dep.name}</span>
-                                  <Badge variant="secondary" className="text-[10px]">{dep.version}</Badge>
-                                </div>
-                              </div>
-                              <div className="flex flex-wrap gap-1 justify-end max-w-[50%]">
-                                {(dep.policy_result?.reasons || []).slice(0, 2).map((reason, i) => (
-                                  <span key={i} className={cn('text-[10px] px-1.5 py-0.5 rounded border', getReasonBadgeColor(getReasonCategory(reason)))}>
-                                    {reason.length > 30 ? reason.slice(0, 30) + '...' : reason}
-                                  </span>
-                                ))}
-                              </div>
-                              <ChevronRight className="h-4 w-4 text-foreground-secondary shrink-0" />
-                            </div>
-                          ))}
-                        </div>
-                        {violatedDeps.length > 20 && (
-                          <div className="px-4 py-2 text-xs text-foreground-secondary border-t border-border">
-                            Showing 20 of {violatedDeps.length} violations.{' '}
-                            <button onClick={() => handleSectionSelect('policy-results')} className="text-primary hover:underline">
-                              View all in Policy Results
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Blocked PRs placeholder */}
-                  <div>
-                    <h3 className="text-base font-semibold text-foreground mb-4">Blocked pull requests</h3>
-                    <div className="rounded-lg border border-border bg-background-card shadow-sm p-8 text-center">
-                      <GitPullRequest className="h-9 w-9 text-foreground-secondary mx-auto mb-3" />
-                      <p className="text-sm font-medium text-foreground">PR checks not configured</p>
-                      <p className="text-xs text-foreground-secondary mt-1">Enable webhooks in project or organization settings to see blocked PRs.</p>
-                    </div>
-                  </div>
-
-                  {/* Policy Source Card */}
-                  <div>
-                    <h3 className="text-base font-semibold text-foreground mb-4">Policy source</h3>
-                    <div className="rounded-lg border border-border bg-background-card shadow-sm divide-y divide-border">
-                      {(['Package Policy', 'Status Code', 'PR Check'] as const).map((label) => {
-                        const isInherited = true;
-                        return (
-                          <div key={label} className="flex items-center justify-between px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <ShieldAlert className="h-4 w-4 text-foreground-secondary" />
-                              <span className="text-sm text-foreground">{label}</span>
-                            </div>
-                            <Badge variant={isInherited ? 'secondary' : 'default'} className="text-[10px]">
-                              {isInherited ? 'Inherited' : 'Custom'}
-                            </Badge>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-
-          {/* ─── POLICY RESULTS SECTION ─── */}
-          {activeSection === 'policy-results' && (
-            <div className="space-y-4">
-              {isExtracting ? (
-                <div className="rounded-lg border border-border bg-background-card p-6">
-                  <div className="flex items-center gap-4">
-                    <div className="flex-1 space-y-2 min-w-0">
-                      <h3 className="text-sm font-semibold text-foreground">Project extraction still in progress</h3>
-                      <p className="text-sm text-foreground-secondary">
-                        Compliance will appear here once extraction completes.
-                      </p>
-                    </div>
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
-                      <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" aria-hidden />
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <>
-              {/* Sub-tabs */}
-              <div className="flex items-center justify-between">
-                <div className="flex gap-4">
-                  <button
-                    onClick={() => setPolicyResultsTab('issues')}
-                    className={cn(
-                      'text-sm font-medium transition-colors pb-1 border-b-2',
-                      policyResultsTab === 'issues' ? 'text-foreground border-foreground' : 'text-foreground-secondary border-transparent hover:text-foreground'
-                    )}
-                  >
-                    Issues
-                    {violatedDeps.length > 0 && (
-                      <span className="ml-1.5 text-[10px] bg-destructive/20 text-destructive px-1.5 py-0.5 rounded-full">
-                        {violatedDeps.length}
+                  {/* Compliance Score — no card */}
+                  <div className="flex flex-wrap items-center gap-8">
+                    <div className="flex items-baseline gap-3">
+                      <span className="text-4xl font-semibold tabular-nums text-foreground">
+                        {complianceScorePct != null ? `${complianceScorePct}%` : '—'}
                       </span>
-                    )}
-                  </button>
-                  <button
-                    onClick={() => setPolicyResultsTab('all')}
-                    className={cn(
-                      'text-sm font-medium transition-colors pb-1 border-b-2',
-                      policyResultsTab === 'all' ? 'text-foreground border-foreground' : 'text-foreground-secondary border-transparent hover:text-foreground'
-                    )}
-                  >
-                    All Packages
-                  </button>
-                </div>
-              </div>
-
-              {/* Filters */}
-              <div className="flex flex-wrap items-center gap-2">
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="h-8 text-xs">
-                      Category: {policyResultFilter === 'all' ? 'All' : policyResultFilter}
-                      <ChevronDown className="h-3 w-3 ml-1" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start">
-                    {['all', 'License Violation', 'Malicious Package', 'Low Score', 'SLSA', 'Supply Chain', 'Other'].map((cat) => (
-                      <DropdownMenuItem key={cat} onClick={() => setPolicyResultFilter(cat)}>
-                        {cat === 'all' ? 'All Categories' : cat}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="h-8 text-xs">
-                      {directFilter === 'all' ? 'All deps' : directFilter === 'direct' ? 'Direct' : 'Transitive'}
-                      <ChevronDown className="h-3 w-3 ml-1" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start">
-                    <DropdownMenuItem onClick={() => setDirectFilter('all')}>All</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setDirectFilter('direct')}>Direct</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setDirectFilter('transitive')}>Transitive</DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-
-                <div className="flex-1 max-w-xs">
-                  <Input
-                    placeholder="Search by package name..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="h-8 text-xs"
-                  />
-                </div>
-              </div>
-
-              {/* Table */}
-              <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-background-card-header border-b border-border">
-                      <tr>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[30%]">Package</th>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[12%]">Version</th>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[14%]">License</th>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[12%]">Status</th>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[22%]">Reasons</th>
-                        <th className="text-right px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[10%]"></th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {filteredPolicyDeps.length === 0 ? (
-                        <tr>
-                          <td colSpan={6} className="px-4 py-8 text-center text-sm text-foreground-secondary">
-                            {policyResultsTab === 'issues' ? 'No policy violations found.' : 'No dependencies to display.'}
-                          </td>
-                        </tr>
-                      ) : (
-                        filteredPolicyDeps.map((dep) => {
-                          const isAllowed = dep.policy_result?.allowed !== false;
+                      <span className="text-xs font-semibold uppercase tracking-wider text-foreground-secondary">Compliance score</span>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm text-foreground-secondary">Last scanned</p>
+                      <p className="text-sm text-foreground">{lastScannedLabel}</p>
+                    </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 text-xs ml-auto w-[180px] justify-between"
+                        >
+                          <Shield className="h-3.5 w-3.5 mr-1.5" />
+                          Check a package
+                          <ChevronDown className="h-3.5 w-3.5 ml-1 opacity-70" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-[180px]">
+                        {ALL_ECOSYSTEMS.map(({ id, label }) => {
+                          const icon = getEcosystemIcon(id);
                           return (
-                            <tr key={dep.id} className="group hover:bg-table-hover transition-colors">
-                              <td className="px-4 py-2.5">
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <Package className="h-4 w-4 text-foreground-secondary shrink-0" />
-                                  <span className="text-sm font-medium text-foreground truncate">{dep.name}</span>
-                                  {dep.is_direct && <Badge variant="secondary" className="text-[9px] shrink-0">direct</Badge>}
-                                </div>
-                              </td>
-                              <td className="px-4 py-2.5">
-                                <Badge variant="secondary" className="text-[10px]">{dep.version}</Badge>
-                              </td>
-                              <td className="px-4 py-2.5">
-                                <span className="text-sm text-foreground-secondary">{dep.license || 'Unknown'}</span>
-                              </td>
-                              <td className="px-4 py-2.5">
-                                {isAllowed ? (
-                                  <Badge variant="success" className="gap-1 text-[10px]">
-                                    <CheckCircle2 className="h-3 w-3" />
-                                    Allowed
-                                  </Badge>
-                                ) : (
-                                  <Badge variant="destructive" className="gap-1 text-[10px]">
-                                    <XCircle className="h-3 w-3" />
-                                    Blocked
-                                  </Badge>
-                                )}
-                              </td>
-                              <td className="px-4 py-2.5">
-                                <div className="flex flex-wrap gap-1">
-                                  {(dep.policy_result?.reasons || []).slice(0, 3).map((reason, i) => (
-                                    <span key={i} className={cn('text-[10px] px-1.5 py-0.5 rounded border', getReasonBadgeColor(getReasonCategory(reason)))}>
-                                      {reason.length > 25 ? reason.slice(0, 25) + '...' : reason}
-                                    </span>
-                                  ))}
-                                </div>
-                              </td>
-                              <td className="px-4 py-2.5 text-right">
-                                {!isAllowed && (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="opacity-0 group-hover:opacity-100 transition-opacity h-7 text-[11px] px-2"
-                                    onClick={() => handleApplyException(dep)}
-                                    disabled={exceptionLoading === dep.id}
-                                  >
-                                    {exceptionLoading === dep.id ? (
-                                      <Loader2 className="h-3 w-3 animate-spin" />
-                                    ) : (
-                                      <>
-                                        <Sparkles className="h-3 w-3 mr-1" />
-                                        Exception
-                                      </>
-                                    )}
-                                  </Button>
-                                )}
-                              </td>
-                            </tr>
+                            <DropdownMenuItem
+                              key={id}
+                              onClick={() => {
+                                setPreflightInitialEcosystem(id);
+                                setShowPreflight(true);
+                              }}
+                              className="flex items-center gap-2"
+                            >
+                              {icon ? (
+                                <img src={icon} alt="" className="h-4 w-4 shrink-0 object-contain" aria-hidden />
+                              ) : (
+                                <Package className="h-4 w-4 shrink-0 text-foreground-secondary" />
+                              )}
+                              <span>{label}</span>
+                            </DropdownMenuItem>
                           );
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+                        })}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
 
-              {/* License Obligations collapsible */}
-              {obligations.length > 0 && (
-                <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                  <button
-                    onClick={() => setObligationsOpen(!obligationsOpen)}
-                    className="w-full flex items-center justify-between px-4 py-3 hover:bg-table-hover transition-colors"
-                  >
-                    <div className="flex items-center gap-2">
-                      <Scale className="h-4 w-4 text-foreground-secondary" />
-                      <span className="text-sm font-medium text-foreground">License Obligations</span>
-                      <Badge variant="secondary" className="text-[10px]">{obligations.length} licenses</Badge>
+                  {/* Issues / All Packages tabs, filters, table */}
+                  <div className="space-y-4 mt-8">
+                    <div className="border-b border-border">
+                      <div className="flex gap-6">
+                        <button
+                          onClick={() => setPolicyResultsTab('issues')}
+                          className={cn(
+                            'text-sm font-medium transition-colors pb-3 border-b-2 -mb-px',
+                            policyResultsTab === 'issues' ? 'text-foreground border-foreground' : 'text-foreground-secondary border-transparent hover:text-foreground'
+                          )}
+                        >
+                          Issues
+                          {violatedDeps.length > 0 && (
+                            <span className="ml-1.5 text-[10px] bg-destructive/20 text-destructive px-1.5 py-0.5 rounded-full">
+                              {violatedDeps.length}
+                            </span>
+                          )}
+                        </button>
+                        <button
+                          onClick={() => setPolicyResultsTab('all')}
+                          className={cn(
+                            'text-sm font-medium transition-colors pb-3 border-b-2 -mb-px',
+                            policyResultsTab === 'all' ? 'text-foreground border-foreground' : 'text-foreground-secondary border-transparent hover:text-foreground'
+                          )}
+                        >
+                          All Packages
+                        </button>
+                      </div>
                     </div>
-                    <ChevronDown className={cn('h-4 w-4 text-foreground-secondary transition-transform', obligationsOpen && 'rotate-180')} />
-                  </button>
-                  {obligationsOpen && (
-                    <div className="border-t border-border divide-y divide-border">
-                      {obligations.map((group) => (
-                        <div key={group.license} className="px-4 py-3">
-                          <div className="flex items-center justify-between mb-1.5">
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium text-foreground">{group.license}</span>
-                              <span className="text-xs text-foreground-secondary">{group.count} package{group.count !== 1 ? 's' : ''}</span>
-                            </div>
-                            <div className="flex gap-1">
-                              {group.obligations?.requires_attribution && (
-                                <Badge variant="secondary" className="text-[9px]">Attribution</Badge>
-                              )}
-                              {group.obligations?.requires_source_disclosure && (
-                                <Badge variant="secondary" className="text-[9px]">Source Disclosure</Badge>
-                              )}
-                              {group.obligations?.is_copyleft && (
-                                <Badge variant="destructive" className="text-[9px]">Copyleft</Badge>
-                              )}
-                              {group.obligations?.is_weak_copyleft && (
-                                <Badge variant="warning" className="text-[9px]">Weak Copyleft</Badge>
-                              )}
-                              {group.obligations?.requires_notice_file && (
-                                <Badge variant="secondary" className="text-[9px]">NOTICE File</Badge>
-                              )}
-                            </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="relative max-w-xs w-full sm:w-64 flex-shrink-0">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-foreground-secondary pointer-events-none" />
+                        <input
+                          ref={complianceSearchInputRef}
+                          type="text"
+                          placeholder="Search by package name"
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Escape' && searchQuery) {
+                              e.preventDefault();
+                              setSearchQuery('');
+                              complianceSearchInputRef.current?.blur();
+                            }
+                          }}
+                          className="w-full pl-9 pr-12 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                        />
+                        {searchQuery && (
+                          <button
+                            type="button"
+                            onClick={() => { setSearchQuery(''); complianceSearchInputRef.current?.focus(); }}
+                            aria-label="Clear search (Esc)"
+                            className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded text-xs font-medium text-foreground-secondary hover:text-foreground bg-transparent border border-border/60 hover:border-border transition-colors"
+                          >
+                            Esc
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 ml-auto">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="outline" size="sm" className="h-8 text-xs">
+                              {directFilter === 'all' ? 'All deps' : directFilter === 'direct' ? 'Direct' : 'Transitive'}
+                              <ChevronDown className="h-3 w-3 ml-1" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="start">
+                            <DropdownMenuItem onClick={() => setDirectFilter('all')}>All</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setDirectFilter('direct')}>Direct</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setDirectFilter('transitive')}>Transitive</DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                    </div>
+
+                    <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full table-fixed">
+                          <thead className="bg-background-card-header border-b border-border">
+                            <tr>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[32%] min-w-[180px]">Package</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[12%]">License</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[7%]">Score</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[6%]">SLSA</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[12%]">Status</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[18%]">Reasons</th>
+                              <th className="text-right px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[13%]"></th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border">
+                            {filteredPolicyDeps.length === 0 ? (
+                              <tr>
+                                <td colSpan={7} className="px-4 py-2.5 text-center text-sm text-foreground-secondary">
+                                  {policyResultsTab === 'issues' ? 'No policy violations found.' : 'No dependencies to display.'}
+                                </td>
+                              </tr>
+                            ) : (
+                              filteredPolicyDeps.map((dep) => {
+                                const isAllowed = dep.policy_result?.allowed !== false;
+                                const ecosystemIcon = getEcosystemIcon(dep.ecosystem);
+                                const score = dep.analysis?.score ?? null;
+                                const slsaLevel = dep.slsa_level ?? null;
+                                return (
+                                  <tr key={dep.id} className="group hover:bg-table-hover transition-colors">
+                                    <td className="px-4 py-2.5">
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        {ecosystemIcon ? (
+                                          <img src={ecosystemIcon} alt="" className="h-4 w-4 shrink-0 object-contain" aria-hidden />
+                                        ) : (
+                                          <Package className="h-4 w-4 text-foreground-secondary shrink-0" />
+                                        )}
+                                        <span className="text-sm font-medium text-foreground truncate">{dep.name}</span>
+                                        {!dep.is_direct && (
+                                          <span className="text-[9px] shrink-0 px-1.5 py-0.5 rounded-md border border-border bg-transparent text-foreground-secondary font-medium">transitive</span>
+                                        )}
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-2.5">
+                                      <span className="text-sm text-foreground-secondary">{dep.license ?? 'Unknown'}</span>
+                                    </td>
+                                    <td className="px-4 py-2.5">
+                                      <span className="text-sm text-foreground-secondary">
+                                        {score != null ? String(score) : '—'}
+                                      </span>
+                                    </td>
+                                    <td className="px-4 py-2.5">
+                                      <span className="text-sm text-foreground-secondary">
+                                        {slsaLevel != null ? `L${slsaLevel}` : '—'}
+                                      </span>
+                                    </td>
+                                    <td className="px-4 py-2.5">
+                                      {isAllowed ? (
+                                        <Badge variant="success" className="gap-1 text-[10px]">
+                                          <CheckCircle2 className="h-3 w-3" />
+                                          Allowed
+                                        </Badge>
+                                      ) : (
+                                        <Badge variant="destructive" className="gap-1 text-[10px]">
+                                          <XCircle className="h-3 w-3" />
+                                          Blocked
+                                        </Badge>
+                                      )}
+                                    </td>
+                                    <td className="px-4 py-2.5">
+                                      <div className="flex flex-wrap gap-1">
+                                        {(dep.policy_result?.reasons || []).slice(0, 3).map((reason, i) => (
+                                          <span key={i} className={cn('text-[10px] px-1.5 py-0.5 rounded border', getReasonBadgeColor(getReasonCategory(reason)))}>
+                                            {reason.length > 25 ? reason.slice(0, 25) + '...' : reason}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-2.5 text-right">
+                                      {!isAllowed && (
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          className="opacity-0 group-hover:opacity-100 transition-opacity h-7 text-[11px] px-2"
+                                          onClick={() => handleApplyException(dep)}
+                                          disabled={exceptionLoading === dep.id}
+                                        >
+                                          {exceptionLoading === dep.id ? (
+                                            <Loader2 className="h-3 w-3 animate-spin" />
+                                          ) : (
+                                            <>
+                                              <Sparkles className="h-3 w-3 mr-1" />
+                                              Exception
+                                            </>
+                                          )}
+                                        </Button>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    {obligations.length > 0 && (
+                      <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                        <button
+                          onClick={() => setObligationsOpen(!obligationsOpen)}
+                          className="w-full flex items-center justify-between px-4 py-3 hover:bg-table-hover transition-colors"
+                        >
+                          <div className="flex items-center gap-2">
+                            <Scale className="h-4 w-4 text-foreground-secondary" />
+                            <span className="text-sm font-medium text-foreground">License Obligations</span>
+                            <Badge variant="secondary" className="text-[10px]">{obligations.length} licenses</Badge>
                           </div>
-                          {group.obligations?.summary && (
-                            <p className="text-xs text-foreground-secondary">{group.obligations.summary}</p>
-                          )}
-                          {!group.obligations && group.license !== 'Unknown' && (
-                            <p className="text-xs text-foreground-secondary italic">Obligation details not available for this license.</p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
+                          <ChevronDown className={cn('h-4 w-4 text-foreground-secondary transition-transform', obligationsOpen && 'rotate-180')} />
+                        </button>
+                        {obligationsOpen && (
+                          <div className="border-t border-border divide-y divide-border">
+                            {obligations.map((group) => (
+                              <div key={group.license} className="px-4 py-3">
+                                <div className="flex items-center justify-between mb-1.5">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-sm font-medium text-foreground">{group.license}</span>
+                                    <span className="text-xs text-foreground-secondary">{group.count} package{group.count !== 1 ? 's' : ''}</span>
+                                  </div>
+                                  <div className="flex gap-1">
+                                    {group.obligations?.requires_attribution && (
+                                      <Badge variant="secondary" className="text-[9px]">Attribution</Badge>
+                                    )}
+                                    {group.obligations?.requires_source_disclosure && (
+                                      <Badge variant="secondary" className="text-[9px]">Source Disclosure</Badge>
+                                    )}
+                                    {group.obligations?.is_copyleft && (
+                                      <Badge variant="destructive" className="text-[9px]">Copyleft</Badge>
+                                    )}
+                                    {group.obligations?.is_weak_copyleft && (
+                                      <Badge variant="warning" className="text-[9px]">Weak Copyleft</Badge>
+                                    )}
+                                    {group.obligations?.requires_notice_file && (
+                                      <Badge variant="secondary" className="text-[9px]">NOTICE File</Badge>
+                                    )}
+                                  </div>
+                                </div>
+                                {group.obligations?.summary && (
+                                  <p className="text-xs text-foreground-secondary">{group.obligations.summary}</p>
+                                )}
+                                {!group.obligations && group.license !== 'Unknown' && (
+                                  <p className="text-xs text-foreground-secondary italic">Obligation details not available for this license.</p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
                 </>
               )}
             </div>
           )}
 
-          {/* ─── UPDATES SECTION ─── */}
-          {activeSection === 'updates' && (
-            <div className="space-y-4">
-              {isExtracting ? (
-                <div className="rounded-lg border border-border bg-background-card p-6">
-                  <div className="flex items-center gap-4">
-                    <div className="flex-1 space-y-2 min-w-0">
-                      <h3 className="text-sm font-semibold text-foreground">Project extraction still in progress</h3>
-                      <p className="text-sm text-foreground-secondary">
-                        Pull requests and commits will appear here once extraction completes.
-                      </p>
-                    </div>
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
-                      <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" aria-hidden />
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <>
-              {/* Sub-tabs */}
-              <div className="flex items-center gap-4">
-                <button
-                  onClick={() => { setUpdatesSubTab('pull-requests'); setPrPage(1); }}
-                  className={cn(
-                    'text-sm font-medium transition-colors pb-1 border-b-2',
-                    updatesSubTab === 'pull-requests' ? 'text-foreground border-foreground' : 'text-foreground-secondary border-transparent hover:text-foreground'
-                  )}
-                >
-                  Pull Requests
-                  {prTotal > 0 && (
-                    <span className="ml-1.5 text-[10px] bg-foreground/10 text-foreground-secondary px-1.5 py-0.5 rounded-full">
-                      {prTotal}
-                    </span>
-                  )}
-                </button>
-                <button
-                  onClick={() => { setUpdatesSubTab('commits'); setCommitsPage(1); }}
-                  className={cn(
-                    'text-sm font-medium transition-colors pb-1 border-b-2',
-                    updatesSubTab === 'commits' ? 'text-foreground border-foreground' : 'text-foreground-secondary border-transparent hover:text-foreground'
-                  )}
-                >
-                  Commits
-                  {commitsTotal > 0 && (
-                    <span className="ml-1.5 text-[10px] bg-foreground/10 text-foreground-secondary px-1.5 py-0.5 rounded-full">
-                      {commitsTotal}
-                    </span>
-                  )}
-                </button>
-              </div>
-
-              {/* ── Pull Requests ── */}
-              {updatesSubTab === 'pull-requests' && (
-                <div className="space-y-4">
-                  {/* Filters */}
-                  <div className="flex flex-wrap items-center gap-2">
-                    {(['all', 'open', 'merged', 'closed'] as const).map((status) => (
-                      <Button
-                        key={status}
-                        variant={prStatusFilter === status ? 'default' : 'outline'}
-                        size="sm"
-                        className="h-8 text-xs capitalize"
-                        onClick={() => { setPrStatusFilter(status); setPrPage(1); }}
-                      >
-                        {status === 'all' ? 'All' : status}
-                      </Button>
-                    ))}
-                    <div className="flex-1 max-w-xs">
-                      <Input
-                        placeholder="Search by title or author..."
-                        value={prSearch}
-                        onChange={(e) => { setPrSearch(e.target.value); setPrPage(1); }}
-                        className="h-8 text-xs"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Table */}
-                  {prLoading ? (
-                    <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                      <div className="divide-y divide-border">
-                        {[1, 2, 3, 4, 5].map((i) => (
-                          <div key={i} className="flex items-center gap-4 px-4 py-3">
-                            <div className="h-4 w-4 bg-muted rounded animate-pulse" />
-                            <div className="flex-1 space-y-1.5">
-                              <div className="h-4 w-3/5 bg-muted rounded animate-pulse" />
-                              <div className="h-3 w-1/4 bg-muted rounded animate-pulse" />
-                            </div>
-                            <div className="h-5 w-16 bg-muted rounded-full animate-pulse" />
-                            <div className="h-5 w-16 bg-muted rounded-full animate-pulse" />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : pullRequests.length === 0 ? (
-                    <div className="bg-background-card border border-border rounded-lg p-8 text-center">
-                      <GitPullRequest className="h-10 w-10 text-foreground-secondary mx-auto mb-3" />
-                      <h3 className="text-lg font-semibold text-foreground mb-1">No pull requests yet.</h3>
-                      <p className="text-sm text-foreground-secondary">
-                        Pull requests will appear here once webhooks deliver PR events.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                      <div className="overflow-x-auto">
-                        <table className="w-full">
-                          <thead className="bg-background-card-header border-b border-border">
-                            <tr>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Pull Request</th>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[14%]">Author</th>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[10%]">Status</th>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[12%]">Check</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[10%]">Deps</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[10%]">Time</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[4%]"></th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-border">
-                            {pullRequests.map((pr) => {
-                              const depsChanged = pr.deps_added + pr.deps_updated + pr.deps_removed;
-                              const timestamp = pr.merged_at || pr.closed_at || pr.opened_at || pr.created_at;
-                              return (
-                                <tr key={pr.id} className="group hover:bg-table-hover transition-colors">
-                                  <td className="px-4 py-2.5">
-                                    <div className="min-w-0">
-                                      <div className="flex items-center gap-1.5">
-                                        <GitPullRequest className={cn(
-                                          'h-3.5 w-3.5 shrink-0',
-                                          pr.status === 'merged' ? 'text-purple-400' : pr.status === 'closed' ? 'text-red-400' : 'text-green-400'
-                                        )} />
-                                        <span className="text-sm font-medium text-foreground truncate">{pr.title || `PR #${pr.pr_number}`}</span>
-                                        <span className="text-xs text-foreground-secondary shrink-0">#{pr.pr_number}</span>
-                                      </div>
-                                      {pr.head_branch && (
-                                        <span className="text-[11px] text-foreground-secondary mt-0.5 block truncate">{pr.head_branch}</span>
-                                      )}
-                                    </div>
-                                  </td>
-                                  <td className="px-4 py-2.5">
-                                    <div className="flex items-center gap-1.5">
-                                      {pr.author_avatar_url ? (
-                                        <img src={pr.author_avatar_url} alt="" className="h-5 w-5 rounded-full shrink-0" />
-                                      ) : (
-                                        <div className="h-5 w-5 rounded-full bg-foreground/10 shrink-0" />
-                                      )}
-                                      <span className="text-xs text-foreground-secondary truncate">{pr.author_login || 'Unknown'}</span>
-                                    </div>
-                                  </td>
-                                  <td className="px-4 py-2.5">
-                                    <Badge className={cn('text-[10px]',
-                                      pr.status === 'merged' ? 'bg-purple-500/15 text-purple-400 border-purple-500/20' :
-                                      pr.status === 'open' ? 'bg-green-500/15 text-green-400 border-green-500/20' :
-                                      'bg-zinc-500/15 text-zinc-400 border-zinc-500/20'
-                                    )}>
-                                      {pr.status === 'merged' ? 'Merged' : pr.status === 'open' ? 'Open' : 'Closed'}
-                                    </Badge>
-                                  </td>
-                                  <td className="px-4 py-2.5">
-                                    {pr.check_result ? (
-                                      <Badge className={cn('text-[10px]',
-                                        pr.check_result === 'passed' ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20' :
-                                        pr.check_result === 'failed' ? 'bg-red-500/15 text-red-400 border-red-500/20' :
-                                        pr.check_result === 'pending' ? 'bg-yellow-500/15 text-yellow-400 border-yellow-500/20' :
-                                        'bg-zinc-500/15 text-zinc-400 border-zinc-500/20'
-                                      )}>
-                                        {pr.check_result === 'passed' ? 'Passed' :
-                                         pr.check_result === 'failed' ? 'Failed' :
-                                         pr.check_result === 'pending' ? 'Pending' : 'Skipped'}
-                                      </Badge>
-                                    ) : (
-                                      <span className="text-xs text-foreground-secondary">—</span>
-                                    )}
-                                  </td>
-                                  <td className="px-4 py-2.5 text-right">
-                                    {depsChanged > 0 ? (
-                                      <span className="text-xs text-foreground-secondary">{depsChanged} changed</span>
-                                    ) : (
-                                      <span className="text-xs text-foreground-secondary">—</span>
-                                    )}
-                                  </td>
-                                  <td className="px-4 py-2.5 text-right">
-                                    <span className="text-xs text-foreground-secondary">{formatTimeAgo(timestamp)}</span>
-                                  </td>
-                                  <td className="px-4 py-2.5 text-right">
-                                    {pr.provider_url && (
-                                      <a href={pr.provider_url} target="_blank" rel="noopener noreferrer" className="text-foreground-secondary hover:text-foreground transition-colors">
-                                        <ExternalLink className="h-3.5 w-3.5" />
-                                      </a>
-                                    )}
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-
-                      {/* Pagination */}
-                      {prTotalPages > 1 && (
-                        <div className="flex items-center justify-between px-4 py-3 border-t border-border">
-                          <span className="text-xs text-foreground-secondary">
-                            Page {prPage} of {prTotalPages} ({prTotal} total)
-                          </span>
-                          <div className="flex items-center gap-1.5">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 text-xs px-2"
-                              disabled={prPage <= 1}
-                              onClick={() => setPrPage((p) => Math.max(1, p - 1))}
-                            >
-                              <ChevronLeft className="h-3.5 w-3.5 mr-0.5" />
-                              Prev
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 text-xs px-2"
-                              disabled={prPage >= prTotalPages}
-                              onClick={() => setPrPage((p) => p + 1)}
-                            >
-                              Next
-                              <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* ── Commits ── */}
-              {updatesSubTab === 'commits' && (
-                <div className="space-y-4">
-                  {/* Filters */}
-                  <div className="flex flex-wrap items-center gap-2">
-                    {(['all', 'COMPLIANT', 'NON_COMPLIANT', 'UNKNOWN'] as const).map((status) => (
-                      <Button
-                        key={status}
-                        variant={commitsComplianceFilter === status ? 'default' : 'outline'}
-                        size="sm"
-                        className="h-8 text-xs"
-                        onClick={() => { setCommitsComplianceFilter(status); setCommitsPage(1); }}
-                      >
-                        {status === 'all' ? 'All' : status === 'COMPLIANT' ? 'Compliant' : status === 'NON_COMPLIANT' ? 'Non-Compliant' : 'Unknown'}
-                      </Button>
-                    ))}
-                    <div className="flex-1 max-w-xs">
-                      <Input
-                        placeholder="Search by message or author..."
-                        value={commitsSearch}
-                        onChange={(e) => { setCommitsSearch(e.target.value); setCommitsPage(1); }}
-                        className="h-8 text-xs"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Table */}
-                  {commitsLoading ? (
-                    <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                      <div className="divide-y divide-border">
-                        {[1, 2, 3, 4, 5].map((i) => (
-                          <div key={i} className="flex items-center gap-4 px-4 py-3">
-                            <div className="h-4 w-4 bg-muted rounded animate-pulse" />
-                            <div className="flex-1 space-y-1.5">
-                              <div className="h-4 w-3/5 bg-muted rounded animate-pulse" />
-                              <div className="h-3 w-1/4 bg-muted rounded animate-pulse" />
-                            </div>
-                            <div className="h-5 w-16 bg-muted rounded-full animate-pulse" />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : commits.length === 0 ? (
-                    <div className="bg-background-card border border-border rounded-lg p-8 text-center">
-                      <GitCommitHorizontal className="h-10 w-10 text-foreground-secondary mx-auto mb-3" />
-                      <h3 className="text-lg font-semibold text-foreground mb-1">No commits recorded yet.</h3>
-                      <p className="text-sm text-foreground-secondary">
-                        Commits will appear here once webhooks deliver push events.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                      <div className="overflow-x-auto">
-                        <table className="w-full">
-                          <thead className="bg-background-card-header border-b border-border">
-                            <tr>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Commit</th>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[14%]">Author</th>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[12%]">Compliance</th>
-                              <th className="text-center px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[8%]">Manifest</th>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[12%]">Extraction</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[10%]">Time</th>
-                              <th className="text-right px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[4%]"></th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-border">
-                            {commits.map((commit) => {
-                              const firstLine = (commit.message || '').split('\n')[0];
-                              const truncatedMsg = firstLine.length > 72 ? firstLine.slice(0, 72) + '...' : firstLine;
-                              return (
-                                <tr key={commit.id} className="group hover:bg-table-hover transition-colors">
-                                  <td className="px-4 py-2.5">
-                                    <div className="min-w-0">
-                                      <div className="flex items-center gap-1.5">
-                                        <GitCommitHorizontal className="h-3.5 w-3.5 text-foreground-secondary shrink-0" />
-                                        <span className="text-sm font-medium text-foreground truncate">{truncatedMsg || 'No message'}</span>
-                                      </div>
-                                      <span className="text-[11px] text-foreground-secondary font-mono mt-0.5 block">{commit.sha.slice(0, 7)}</span>
-                                    </div>
-                                  </td>
-                                  <td className="px-4 py-2.5">
-                                    <div className="flex items-center gap-1.5">
-                                      {commit.author_avatar_url ? (
-                                        <img src={commit.author_avatar_url} alt="" className="h-5 w-5 rounded-full shrink-0" />
-                                      ) : (
-                                        <div className="h-5 w-5 rounded-full bg-foreground/10 shrink-0" />
-                                      )}
-                                      <span className="text-xs text-foreground-secondary truncate">{commit.author_name || 'Unknown'}</span>
-                                    </div>
-                                  </td>
-                                  <td className="px-4 py-2.5">
-                                    <Badge className={cn('text-[10px]',
-                                      commit.compliance_status === 'COMPLIANT' ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20' :
-                                      commit.compliance_status === 'NON_COMPLIANT' ? 'bg-red-500/15 text-red-400 border-red-500/20' :
-                                      'bg-zinc-500/15 text-zinc-400 border-zinc-500/20'
-                                    )}>
-                                      {commit.compliance_status === 'COMPLIANT' ? 'Compliant' :
-                                       commit.compliance_status === 'NON_COMPLIANT' ? 'Non-Compliant' : 'Unknown'}
-                                    </Badge>
-                                  </td>
-                                  <td className="px-4 py-2.5 text-center">
-                                    {commit.manifest_changed ? (
-                                      <FileCode2 className="h-4 w-4 text-yellow-400 mx-auto" />
-                                    ) : (
-                                      <span className="text-xs text-foreground-secondary">—</span>
-                                    )}
-                                  </td>
-                                  <td className="px-4 py-2.5">
-                                    {commit.extraction_triggered ? (
-                                      <Badge className={cn('text-[10px]',
-                                        commit.extraction_status === 'completed' ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20' :
-                                        commit.extraction_status === 'processing' ? 'bg-blue-500/15 text-blue-400 border-blue-500/20' :
-                                        commit.extraction_status === 'failed' ? 'bg-red-500/15 text-red-400 border-red-500/20' :
-                                        'bg-zinc-500/15 text-zinc-400 border-zinc-500/20'
-                                      )}>
-                                        {commit.extraction_status === 'completed' ? 'Completed' :
-                                         commit.extraction_status === 'processing' ? 'Running' :
-                                         commit.extraction_status === 'failed' ? 'Failed' :
-                                         commit.extraction_status || 'Queued'}
-                                      </Badge>
-                                    ) : (
-                                      <span className="text-xs text-foreground-secondary">—</span>
-                                    )}
-                                  </td>
-                                  <td className="px-4 py-2.5 text-right">
-                                    <span className="text-xs text-foreground-secondary">{formatTimeAgo(commit.committed_at || commit.created_at)}</span>
-                                  </td>
-                                  <td className="px-4 py-2.5 text-right">
-                                    {commit.provider_url && (
-                                      <a href={commit.provider_url} target="_blank" rel="noopener noreferrer" className="text-foreground-secondary hover:text-foreground transition-colors">
-                                        <ExternalLink className="h-3.5 w-3.5" />
-                                      </a>
-                                    )}
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-
-                      {/* Pagination */}
-                      {commitsTotalPages > 1 && (
-                        <div className="flex items-center justify-between px-4 py-3 border-t border-border">
-                          <span className="text-xs text-foreground-secondary">
-                            Page {commitsPage} of {commitsTotalPages} ({commitsTotal} total)
-                          </span>
-                          <div className="flex items-center gap-1.5">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 text-xs px-2"
-                              disabled={commitsPage <= 1}
-                              onClick={() => setCommitsPage((p) => Math.max(1, p - 1))}
-                            >
-                              <ChevronLeft className="h-3.5 w-3.5 mr-0.5" />
-                              Prev
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 text-xs px-2"
-                              disabled={commitsPage >= commitsTotalPages}
-                              onClick={() => setCommitsPage((p) => p + 1)}
-                            >
-                              Next
-                              <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-                </>
-              )}
-            </div>
-          )}
-
-          {/* ─── EXPORT LEGAL NOTICE SECTION ─── */}
-          {activeSection === 'export-notice' && (
-            <div className="space-y-6">
-              <h1 className="text-2xl font-bold text-foreground">Export Legal Notice</h1>
-              <p className="text-sm text-foreground-secondary">
-                Download a third-party notices file (THIRD-PARTY-NOTICES.txt) generated from your project&apos;s dependencies and license obligations.
-              </p>
-              <div className="bg-background-card border border-border rounded-lg p-6">
-                {isExtracting ? (
-                  <div className="flex items-center gap-4">
-                    <div className="flex-1 space-y-2 min-w-0">
-                      <h3 className="text-sm font-semibold text-foreground">Project extraction still in progress</h3>
-                      <p className="text-sm text-foreground-secondary">
-                        Export will be available once extraction completes.
-                      </p>
-                    </div>
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
-                      <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" aria-hidden />
-                    </div>
-                  </div>
-                ) : noExtraction ? (
-                  <div className="text-center py-4">
-                    <FileText className="h-10 w-10 text-foreground-secondary mx-auto mb-3" />
-                    <p className="text-sm text-foreground-secondary">Run an extraction first to generate a legal notice.</p>
-                  </div>
-                ) : (
-                  <Button
-                    onClick={handleExportNotice}
-                    disabled={!!exporting}
-                    className="gap-2"
-                  >
-                    {exporting === 'notice' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Scale className="h-4 w-4" />}
-                    {exporting === 'notice' ? 'Downloading...' : 'Download Legal Notice'}
-                  </Button>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* ─── EXPORT SBOM SECTION ─── */}
-          {activeSection === 'export-sbom' && (
-            <div className="space-y-6">
-              <h1 className="text-2xl font-bold text-foreground">Export SBOM</h1>
-              <p className="text-sm text-foreground-secondary">
-                Download a CycloneDX Software Bill of Materials (JSON) for this project.
-              </p>
-              <div className="bg-background-card border border-border rounded-lg p-6">
-                {isExtracting ? (
-                  <div className="flex items-center gap-4">
-                    <div className="flex-1 space-y-2 min-w-0">
-                      <h3 className="text-sm font-semibold text-foreground">Project extraction still in progress</h3>
-                      <p className="text-sm text-foreground-secondary">
-                        Export will be available once extraction completes.
-                      </p>
-                    </div>
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
-                      <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" aria-hidden />
-                    </div>
-                  </div>
-                ) : noExtraction ? (
-                  <div className="text-center py-4">
-                    <FileText className="h-10 w-10 text-foreground-secondary mx-auto mb-3" />
-                    <p className="text-sm text-foreground-secondary">Run an extraction first to generate an SBOM.</p>
-                  </div>
-                ) : (
-                  <Button
-                    onClick={handleExportSBOM}
-                    disabled={!!exporting}
-                    variant="outline"
-                    className="gap-2"
-                  >
-                    {exporting === 'sbom' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                    {exporting === 'sbom' ? 'Downloading...' : 'Download SBOM (CycloneDX)'}
-                  </Button>
-                )}
-              </div>
-            </div>
-          )}
           </div>
             )}
         </div>
@@ -1687,10 +1186,11 @@ export default function ProjectCompliancePage() {
       {showPreflight && (
         <PreflightSidebar
           open={showPreflight}
-          onClose={() => setShowPreflight(false)}
+          onClose={() => { setShowPreflight(false); setPreflightInitialEcosystem(null); }}
           organizationId={organizationId}
           projectId={projectId!}
           projectEcosystems={projectEcosystems}
+          initialEcosystem={preflightInitialEcosystem}
         />
       )}
 

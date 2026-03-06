@@ -431,7 +431,7 @@ export default function StatusesSection() {
   return (
     <div className="space-y-6 pt-8">
       <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold text-foreground">Statuses & Tiers</h2>
+        <h2 className="text-2xl font-bold text-foreground">Statuses</h2>
         {!loading && subTab === 'statuses' && (
           <Button
             onClick={() => setAddStatusOpen(true)}
@@ -451,23 +451,6 @@ export default function StatusesSection() {
           </Button>
         )}
       </div>
-
-      {/* Info card – same pattern as Notifications section */}
-      <Card className="rounded-lg border border-border bg-background-card/80">
-        <CardContent className="p-4 flex gap-3">
-          <div className="flex-shrink-0 mt-0.5">
-            <Info className="h-5 w-5 text-foreground-muted" />
-          </div>
-          <div className="min-w-0 space-y-1">
-            <p className="text-sm text-foreground-secondary">
-              Create and define custom statuses and asset tiers for your organization. Use them in policy to label project health and weight vulnerability scores (Depscore).
-            </p>
-            <p className="text-sm text-foreground-secondary">
-              <span className="font-medium text-foreground">Custom status code</span> — In the Status Code tab, write a <code className="px-1 py-0.5 rounded bg-muted text-foreground text-xs font-mono">projectStatus(context)</code> function that assigns one of your statuses to each project based on policy.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
 
       {/* Sub-tabs */}
       <div className="flex gap-1 border-b border-border">
@@ -634,6 +617,18 @@ export default function StatusesSection() {
             </DialogContent>
           </Dialog>
           </>
+          )}
+          {!loading && (
+            <Card className="rounded-lg border border-border bg-background-card/80 mt-4">
+              <CardContent className="p-4 flex gap-3">
+                <div className="flex-shrink-0 mt-0.5">
+                  <Info className="h-5 w-5 text-foreground-muted" />
+                </div>
+                <p className="text-sm text-foreground-secondary min-w-0">
+                  Define custom statuses for your organization. Your projects will be assigned one of these statuses based on the Status Code.
+                </p>
+              </CardContent>
+            </Card>
           )}
         </div>
       )}
@@ -803,6 +798,18 @@ export default function StatusesSection() {
           </Dialog>
           </>
           )}
+          {!loading && (
+            <Card className="rounded-lg border border-border bg-background-card/80 mt-4">
+              <CardContent className="p-4 flex gap-3">
+                <div className="flex-shrink-0 mt-0.5">
+                  <Info className="h-5 w-5 text-foreground-muted" />
+                </div>
+                <p className="text-sm text-foreground-secondary min-w-0">
+                  Define asset tiers for your projects. Tiers set an environmental multiplier used in Depscore and can be referenced in policy (e.g. stricter rules for Crown Jewels).
+                </p>
+              </CardContent>
+            </Card>
+          )}
         </div>
       )}
 
@@ -882,6 +889,16 @@ export default function StatusesSection() {
               </div>
             </div>
           )}
+          <Card className="rounded-lg border border-border bg-background-card/80 mt-4">
+            <CardContent className="p-4 flex gap-3">
+              <div className="flex-shrink-0 mt-0.5">
+                <Info className="h-5 w-5 text-foreground-muted" />
+              </div>
+              <p className="text-sm text-foreground-secondary min-w-0">
+                This code runs when evaluating each project. It receives <code className="px-1 py-0.5 rounded bg-muted text-foreground text-xs font-mono">context</code> with project metadata, dependencies, vulnerabilities, licenses, and policy results. Return one of your status names (e.g. &quot;Compliant&quot;, &quot;Action Required&quot;) so projects get the right badge and health classification.
+              </p>
+            </CardContent>
+          </Card>
         </div>
       )}
 

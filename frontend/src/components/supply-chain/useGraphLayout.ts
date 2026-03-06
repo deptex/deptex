@@ -68,6 +68,10 @@ export interface DependencyNodeData {
   showLicense?: boolean;
   /** When true, show "Not imported" badge (e.g. direct dep that is a zombie on vulnerabilities graph). */
   notImported?: boolean;
+  /** Package manager ecosystem (npm, pypi, maven, etc.) for logo. */
+  ecosystem?: string | null;
+  /** Policy result: when defined, show Allowed / Not allowed badge. */
+  policyAllowed?: boolean | null;
 }
 
 export interface VulnerabilityNodeData {

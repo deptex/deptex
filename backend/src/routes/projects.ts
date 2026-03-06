@@ -719,6 +719,32 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
       }
     }
 
+    // Fetch status and asset tier display names/colors for list (org overview cards)
+    const statusById: Record<string, { name: string; color: string | null }> = {};
+    const tierById: Record<string, { name: string; color: string | null }> = {};
+    // Direct dependency counts per project (for org overview cards: "X direct deps")
+    let directDepsByProject: Record<string, number> = {};
+    const [[statusRes, tierRes], directDepsResult] = await Promise.all([
+      Promise.all([
+        supabase.from('organization_statuses').select('id, name, color').eq('organization_id', id),
+        supabase.from('organization_asset_tiers').select('id, name, color').eq('organization_id', id),
+      ]),
+      projectIds.length > 0
+        ? supabase
+            .from('project_dependencies')
+            .select('project_id')
+            .in('project_id', projectIds)
+            .eq('is_direct', true)
+        : Promise.resolve({ data: [] }),
+    ]);
+    const statusRows = (statusRes as any)?.data ?? [];
+    const tierRows = (tierRes as any)?.data ?? [];
+    (statusRows || []).forEach((s: any) => { statusById[s.id] = { name: s.name, color: s.color ?? null }; });
+    (tierRows || []).forEach((t: any) => { tierById[t.id] = { name: t.name, color: t.color ?? null }; });
+    (directDepsResult.data || []).forEach((row: any) => {
+      directDepsByProject[row.project_id] = (directDepsByProject[row.project_id] ?? 0) + 1;
+    });
+
     // Format projects with team_ids, team_names, owner_team, role, and permissions
     const formattedProjects = (projects || []).map((project: any) => {
       const role = projectRoles[project.id] || 'viewer';
@@ -771,6 +797,8 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
       }
 
       const repoStatus = repoStatusByProject[project.id] ?? null;
+      const statusInfo = project.status_id ? statusById[project.status_id] : null;
+      const tierInfo = project.asset_tier_id ? tierById[project.asset_tier_id] : null;
       return {
         id: project.id,
         organization_id: project.organization_id,
@@ -785,6 +813,7 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
         owner_team_id: ownerTeamId,
         owner_team_name: ownerTeamByProject[project.id]?.name || null,
         dependencies_count: project.dependencies_count || 0,
+        direct_dependencies_count: directDepsByProject[project.id] ?? 0,
         framework: project.framework || null,
         alerts_count: project.alerts_count || 0,
         repo_status: repoStatus?.status ?? null,
@@ -792,6 +821,12 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
         extraction_error: repoStatus?.extraction_error ?? null,
         role,
         permissions,
+        status_id: project.status_id ?? null,
+        status_name: statusInfo?.name ?? null,
+        status_color: statusInfo?.color ?? null,
+        asset_tier_id: project.asset_tier_id ?? null,
+        asset_tier_name: tierInfo?.name ?? null,
+        asset_tier_color: tierInfo?.color ?? null,
       };
     });
 
@@ -956,7 +991,7 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id } = req.params;
-    const { name, team_ids, asset_tier: assetTierRaw } = req.body;
+    const { name, team_ids, asset_tier: assetTierRaw, asset_tier_id: assetTierIdRaw } = req.body;
 
     if (!name || typeof name !== 'string') {
       return res.status(400).json({ error: 'Project name is required' });
@@ -1025,16 +1060,36 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
         ? assetTierRaw
         : 'EXTERNAL';
 
+    let insertAssetTierId: string | null = null;
+    if (assetTierIdRaw !== undefined && assetTierIdRaw !== null && assetTierIdRaw !== '') {
+      const tierId = typeof assetTierIdRaw === 'string' ? assetTierIdRaw.trim() : null;
+      if (tierId) {
+        const { data: tier, error: tierError } = await supabase
+          .from('organization_asset_tiers')
+          .select('id')
+          .eq('id', tierId)
+          .eq('organization_id', id)
+          .single();
+        if (tierError || !tier) {
+          return res.status(400).json({ error: 'asset_tier_id must be a valid asset tier for this organization' });
+        }
+        insertAssetTierId = tier.id;
+      }
+    }
+
+    const insertPayload: Record<string, any> = {
+      organization_id: id,
+      name: name.trim(),
+      health_score: 0,
+      status: 'compliant',
+      asset_tier: insertAssetTierId ? 'EXTERNAL' : assetTier,
+    };
+    if (insertAssetTierId) insertPayload.asset_tier_id = insertAssetTierId;
+
     // Create project
     const { data: project, error: projectError } = await supabase
       .from('projects')
-      .insert({
-        organization_id: id,
-        name: name.trim(),
-        health_score: 0,
-        status: 'compliant',
-        asset_tier: assetTier,
-      })
+      .insert(insertPayload)
       .select('*')
       .single();
 
@@ -1123,7 +1178,7 @@ router.put('/:id/projects/:projectId', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id, projectId } = req.params;
-    const { name, team_ids, auto_bump: autoBump, asset_tier: assetTierRaw } = req.body;
+    const { name, team_ids, auto_bump: autoBump, asset_tier: assetTierRaw, asset_tier_id: assetTierIdRaw, notifications_paused_until } = req.body;
 
     // Check if user has access to this project
     const accessCheck = await checkProjectAccess(userId, id, projectId);
@@ -1135,9 +1190,10 @@ router.put('/:id/projects/:projectId', async (req: AuthRequest, res) => {
     // When updating only auto_bump, also allow users with project-level edit_settings.
     const isOrgOwner = accessCheck.orgMembership?.role === 'owner';
     const hasOrgPermission = accessCheck.orgRole?.permissions?.manage_teams_and_projects === true;
-    const onlyAutoBump = name === undefined && team_ids === undefined && assetTierRaw === undefined && autoBump !== undefined;
-    const onlyAssetTier = name === undefined && team_ids === undefined && autoBump === undefined && assetTierRaw !== undefined;
-    const onlyNonStructuralUpdate = onlyAutoBump || onlyAssetTier;
+    const onlyAutoBump = name === undefined && team_ids === undefined && assetTierRaw === undefined && assetTierIdRaw === undefined && autoBump !== undefined && notifications_paused_until === undefined;
+    const onlyAssetTier = name === undefined && team_ids === undefined && autoBump === undefined && (assetTierRaw !== undefined || assetTierIdRaw !== undefined) && notifications_paused_until === undefined;
+    const onlyNotificationsPause = name === undefined && team_ids === undefined && assetTierRaw === undefined && assetTierIdRaw === undefined && autoBump === undefined && notifications_paused_until !== undefined;
+    const onlyNonStructuralUpdate = onlyAutoBump || onlyAssetTier || onlyNotificationsPause;
 
     if (!isOrgOwner && !hasOrgPermission) {
       if (!onlyNonStructuralUpdate) {
@@ -1207,11 +1263,37 @@ router.put('/:id/projects/:projectId', async (req: AuthRequest, res) => {
     }
 
     const VALID_ASSET_TIERS = ['CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION'];
-    if (assetTierRaw !== undefined) {
+    if (assetTierIdRaw !== undefined) {
+      if (assetTierIdRaw === null || assetTierIdRaw === '') {
+        updateData.asset_tier_id = null;
+        updateData.asset_tier = assetTierRaw ?? 'EXTERNAL';
+      } else {
+        const tierId = typeof assetTierIdRaw === 'string' ? assetTierIdRaw.trim() : null;
+        if (!tierId) {
+          return res.status(400).json({ error: 'asset_tier_id must be a valid UUID' });
+        }
+        const { data: tier, error: tierError } = await supabase
+          .from('organization_asset_tiers')
+          .select('id')
+          .eq('id', tierId)
+          .eq('organization_id', id)
+          .single();
+        if (tierError || !tier) {
+          return res.status(400).json({ error: 'asset_tier_id must be a valid asset tier for this organization' });
+        }
+        updateData.asset_tier_id = tier.id;
+        updateData.asset_tier = 'EXTERNAL';
+      }
+    } else if (assetTierRaw !== undefined) {
       if (typeof assetTierRaw !== 'string' || !VALID_ASSET_TIERS.includes(assetTierRaw)) {
         return res.status(400).json({ error: 'asset_tier must be one of: CROWN_JEWELS, EXTERNAL, INTERNAL, NON_PRODUCTION' });
       }
       updateData.asset_tier = assetTierRaw;
+      updateData.asset_tier_id = null;
+    }
+
+    if (notifications_paused_until !== undefined) {
+      updateData.notifications_paused_until = notifications_paused_until;
     }
 
     const { data: project, error: projectError } = await supabase
@@ -1579,6 +1661,8 @@ router.get('/:id/projects/:projectId', async (req: AuthRequest, res) => {
       asset_tier: project.asset_tier ?? null,
       asset_tier_id: project.asset_tier_id ?? null,
       status_id: project.status_id ?? null,
+      policy_evaluated_at: project.policy_evaluated_at ?? null,
+      status_violations: project.status_violations ?? [],
     };
 
     res.json(formattedProject);
@@ -2521,6 +2605,12 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
+    // Whether a policy change request from this user would be auto-accepted (owner/admin or manage_compliance)
+    const requestWillAutoAccept =
+      accessCheck.orgMembership?.role === 'owner' ||
+      accessCheck.orgMembership?.role === 'admin' ||
+      accessCheck.orgRole?.permissions?.manage_compliance === true;
+
     // Verify project exists and belongs to org; include Phase 4 effective code columns
     const { data: project, error: projectError } = await supabase
       .from('projects')
@@ -2657,6 +2747,7 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
       effective_package_policy_code: effectivePackagePolicyCode,
       effective_project_status_code: effectiveProjectStatusCode,
       effective_pr_check_code: effectivePrCheckCode,
+      request_will_auto_accept: requestWillAutoAccept,
     });
   } catch (error: any) {
     console.error('Error fetching project policies:', error);
@@ -4487,7 +4578,7 @@ async function fetchEnrichedDependenciesForProject(
             Array.from({ length: Math.ceil(dependencyIds.length / BATCH_SIZE) }, (_, i) => {
               const batch = dependencyIds.slice(i * BATCH_SIZE, (i + 1) * BATCH_SIZE);
               return supabase.from('dependencies').select(`
-                id, license, github_url, status, score, openssf_penalty, popularity_penalty, maintenance_penalty,
+                id, license, github_url, status, score, ecosystem, openssf_penalty, popularity_penalty, maintenance_penalty,
                 openssf_score, openssf_data, weekly_downloads, last_published_at, releases_last_12_months, analyzed_at
               `).in('id', batch);
             })
@@ -4497,7 +4588,7 @@ async function fetchEnrichedDependenciesForProject(
         ? Promise.all(
             Array.from({ length: Math.ceil(dependencyVersionIds.length / BATCH_SIZE) }, (_, i) => {
               const batch = dependencyVersionIds.slice(i * BATCH_SIZE, (i + 1) * BATCH_SIZE);
-              return supabase.from('dependency_versions').select('id, dependency_id, version, analyzed_at, dependencies(license)').in('id', batch);
+              return supabase.from('dependency_versions').select('id, dependency_id, version, analyzed_at, slsa_level, dependencies(license)').in('id', batch);
             })
           )
         : Promise.resolve([]),
@@ -4516,7 +4607,7 @@ async function fetchEnrichedDependenciesForProject(
         ? supabase.from('project_dependency_files').select('project_dependency_id, file_path').in('project_dependency_id', projectDepIds).order('file_path')
         : Promise.resolve({ data: null }),
       namesNeedingFallback.length > 0
-        ? supabase.from('dependencies').select('name, github_url, openssf_score, openssf_data, license, weekly_downloads, last_published_at, openssf_penalty, popularity_penalty, maintenance_penalty, releases_last_12_months, status, score, analyzed_at').in('name', namesNeedingFallback)
+        ? supabase.from('dependencies').select('name, github_url, openssf_score, openssf_data, license, weekly_downloads, last_published_at, openssf_penalty, popularity_penalty, maintenance_penalty, releases_last_12_months, status, score, ecosystem, analyzed_at').in('name', namesNeedingFallback)
         : Promise.resolve({ data: null }),
       supabase.from('project_teams').select('team_id').eq('project_id', projectId),
     ]);
@@ -4637,7 +4728,7 @@ async function fetchEnrichedDependenciesForProject(
               const batch = allNamesForScore.slice(i * NAME_BATCH_SIZE, (i + 1) * NAME_BATCH_SIZE);
               if (batch.length === 0) return Promise.resolve({ data: null });
               const orFilter = batch.map((n: string) => `name.ilike.${n.replace(/,/g, '\\,')}`).join(',');
-              return supabase.from('dependencies').select('name, openssf_score, openssf_data, weekly_downloads, last_published_at, openssf_penalty, popularity_penalty, maintenance_penalty, releases_last_12_months, status, score, analyzed_at').or(orFilter);
+              return supabase.from('dependencies').select('name, openssf_score, openssf_data, weekly_downloads, last_published_at, openssf_penalty, popularity_penalty, maintenance_penalty, releases_last_12_months, status, score, ecosystem, analyzed_at').or(orFilter);
             })
           )
         : Promise.resolve([]),
@@ -4646,7 +4737,7 @@ async function fetchEnrichedDependenciesForProject(
             Array.from({ length: Math.ceil(versionDependencyIds.length / BATCH_SIZE) }, (_, i) => {
               const batch = versionDependencyIds.slice(i * BATCH_SIZE, (i + 1) * BATCH_SIZE);
               return supabase.from('dependencies').select(`
-                id, license, github_url, status, score, openssf_penalty, popularity_penalty, maintenance_penalty,
+                id, license, github_url, status, score, ecosystem, openssf_penalty, popularity_penalty, maintenance_penalty,
                 openssf_score, openssf_data, weekly_downloads, last_published_at, releases_last_12_months, analyzed_at
               `).in('id', batch);
             })
@@ -4806,8 +4897,12 @@ async function fetchEnrichedDependenciesForProject(
       const effectiveDepIdForBan = pd.dependency_id || depIdFromVersion;
       const isBannedComputed = !!(effectiveDepIdForBan && pd.version && bannedKeySet.has(`${effectiveDepIdForBan}|${pd.version}`));
 
+      const ecosystemVal = effectivePackageAnalysis?.ecosystem ?? byNameRow?.ecosystem ?? null;
+      const slsaLevelVal = versionAnalysis?.slsa_level ?? null;
       const out = {
         ...pd,
+        ecosystem: ecosystemVal,
+        slsa_level: slsaLevelVal,
         is_watching: !!watchlistRow,
         watchtower_cleared_at: watchlistRow?.watchtower_cleared_at ?? null,
         license: licenseFromJoin ?? null,
@@ -9065,6 +9160,7 @@ router.post('/:id/bump-all', async (req: AuthRequest, res) => {
 
 import { evaluateProjectPolicies, validatePolicyCode, preflightCheck } from '../lib/policy-engine';
 import { checkRateLimit } from '../lib/rate-limit';
+import { enrichPackageForPreflight } from './workers';
 
 // POST /api/organizations/:id/projects/:projectId/evaluate-policy
 router.post('/:id/projects/:projectId/evaluate-policy', async (req: AuthRequest, res) => {
@@ -9174,14 +9270,25 @@ router.post('/:id/projects/:projectId/preflight-check', async (req: AuthRequest,
       return res.status(400).json({ error: 'packageName is required' });
     }
 
-    const result = await preflightCheck(organizationId, projectId, packageName, packageVersion || 'latest');
+    const eco = (ecosystem && typeof ecosystem === 'string' ? ecosystem : 'npm').toLowerCase();
+    const version = packageVersion || 'latest';
+    let enriched: Awaited<ReturnType<typeof enrichPackageForPreflight>> | null = null;
+    try {
+      enriched = await enrichPackageForPreflight(eco, packageName, version);
+    } catch (e: any) {
+      console.warn('Preflight enrich failed, continuing with DB-only:', e?.message);
+    }
+    const result = await preflightCheck(organizationId, projectId, packageName, version, enriched ?? undefined);
 
     res.json({
       allowed: result.allowed,
       reasons: result.reasons,
       tierName: result.tierName,
       ecosystem: ecosystem || 'npm',
-      disclaimer: 'Some fields (reachability, filesImportingCount, isOutdated) are unavailable in preflight mode.',
+      license: result.license ?? undefined,
+      dependencyScore: result.dependencyScore ?? undefined,
+      openSsfScore: result.openSsfScore ?? undefined,
+      slsaLevel: result.slsaLevel ?? undefined,
     });
   } catch (error: any) {
     console.error('Error running preflight check:', error);
@@ -9499,12 +9606,33 @@ router.get('/:id/projects/:projectId/sbom', async (req: AuthRequest, res) => {
       .eq('id', projectId)
       .single();
 
-    const storagePath = `project-imports/${projectId}/${latestJob.id}/sbom.json`;
-    const { data: fileData, error: storageError } = await supabase.storage
+    // Prefer path by extraction_job id (matches worker after fix). Fallback: list run folders and try each
+    // (older extractions may have uploaded to projectId/{timestamp}/sbom.json).
+    let fileData: Blob | null = null;
+    const { data: byId, error: byIdError } = await supabase.storage
       .from('project-imports')
       .download(`${projectId}/${latestJob.id}/sbom.json`);
-
-    if (storageError || !fileData) {
+    if (!byIdError && byId) {
+      fileData = byId;
+    }
+    if (!fileData) {
+      const { data: runFolders, error: listError } = await supabase.storage
+        .from('project-imports')
+        .list(projectId, { limit: 50 });
+      if (!listError && runFolders?.length) {
+        for (const entry of runFolders) {
+          if (!entry.name || entry.name === '.emptyFolderPlaceholder') continue;
+          const { data: blob } = await supabase.storage
+            .from('project-imports')
+            .download(`${projectId}/${entry.name}/sbom.json`);
+          if (blob) {
+            fileData = blob;
+            break;
+          }
+        }
+      }
+    }
+    if (!fileData) {
       return res.status(404).json({ error: 'SBOM file not found in storage. The extraction may not have completed successfully.' });
     }
 
@@ -9815,19 +9943,16 @@ router.post('/:id/projects/:projectId/apply-exception', async (req: AuthRequest,
       return res.status(503).json({ error: 'AI service temporarily unavailable - please request the exception manually.' });
     }
 
-    const prompt = `You are modifying a JavaScript policy function called packagePolicy() used in a dependency security platform.
+    const prompt = `You are modifying the packagePolicy() function for a dependency security platform. The engine runs ONLY packagePolicy(context) once per dependency. Context has context.dependency (one package: name, version, license, dependencyScore, maliciousIndicator, etc.) and context.tier (name, rank, multiplier). You MUST return { allowed: boolean, reasons: string[] } — nothing else (no projectCompliance, no compliant/violations).
 
 Current policy code:
 \`\`\`javascript
 ${currentPolicyCode}
 \`\`\`
 
-The package "${packageName}"${version ? ` at version "${version}"` : ''} is currently blocked by this policy.
-${reason ? `Reason for exception: ${reason}` : ''}
+The package "${packageName}"${version ? ` at version "${version}"` : ''} is currently blocked. Add a single exception at the top of the function (early return) that allows this package${version ? ` at this version` : ''}. Keep every other rule exactly as-is; do not rewrite the rest of the function.
 
-Modify the policy function to add a specific exception that allows this package${version ? ` at this version` : ''} while keeping all other policy rules intact. Add the exception at the beginning of the function as an early return.
-
-Return ONLY the complete modified function code (the full packagePolicy function), no explanation, no markdown fences.`;
+Return ONLY the full packagePolicy function code, no explanation, no markdown.`;
 
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
     const geminiController = new AbortController();

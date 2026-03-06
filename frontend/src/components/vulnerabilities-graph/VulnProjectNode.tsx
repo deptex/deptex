@@ -1,7 +1,15 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Folder, Users, Loader2 } from 'lucide-react';
+import { Folder, Loader2, ChevronRight, Package, PanelLeftClose, ShieldAlert, Ban, Clock } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../ui/dropdown-menu';
 import { FrameworkIcon } from '../framework-icon';
+import { TeamIcon } from '../TeamIcon';
 import type { WorstSeverity } from './useVulnerabilitiesGraphLayout';
 
 export interface VulnProjectNodeData {
@@ -19,10 +27,41 @@ export interface VulnProjectNodeData {
   isExtracting?: boolean;
   /** When true (team node only), team has projects still extracting — show grey so color reflects known risk only. */
   hasExtractingProjects?: boolean;
+  /** When true, use neutral grey styling only (no severity colors). Used for org overview graph. */
+  neutralStyle?: boolean;
+  /** Badge on the right: user's role in this team (team nodes). */
+  roleBadge?: string | null;
+  /** Hex color for role badge (e.g. from team.role_color). */
+  roleBadgeColor?: string | null;
+  /** Badge on the right for project nodes: project status (e.g. Compliant, Non-Compliant). */
+  statusBadge?: string | null;
+  /** Hex color for status badge (e.g. from organization_statuses.color). */
+  statusBadgeColor?: string | null;
+  /** Team nodes: risk grade shown on the right (e.g. A+). */
+  riskGrade?: string | null;
+  /** Team nodes (org overview): number of projects for bottom bar. */
+  projectsCount?: number | null;
+  /** Team nodes (org overview): number of members for bottom bar. */
+  membersCount?: number | null;
+  /** Project nodes (org overview): asset tier name shown as subtext (e.g. Crown Jewels, External). */
+  assetTierName?: string | null;
+  /** Org overview: number of dependencies to show in bottom bar. */
+  dependenciesCount?: number | null;
+  /** Org overview: organization id for expand navigation. */
+  organizationId?: string | null;
+  /** Org overview: when true, show spinner in bottom bar (loading direct deps). */
+  isExpanding?: boolean;
+  /** Org overview: called when user clicks expand; projectId and optional filter. */
+  onExpandProject?: (projectId: string, filter?: 'all' | 'vulnerable' | 'not_allowed' | 'outdated') => void;
+  /** Org overview: when set, this project is expanded; show collapse control instead of expand menu. */
+  expandedProjectId?: string | null;
 }
 
 const NODE_WIDTH = 220;
 const NODE_HEIGHT = 64;
+/** Larger project card for org overview (border, bottom bar, deps count, expand). */
+export const OVERVIEW_PROJECT_NODE_WIDTH = 268;
+export const OVERVIEW_PROJECT_NODE_HEIGHT = 100;
 
 function getColorScheme(worstSeverity: WorstSeverity | undefined) {
   const s = worstSeverity ?? 'none';
@@ -79,17 +118,86 @@ const greyExtractingScheme = {
   iconText: 'text-slate-500',
 };
 
+const neutralScheme = {
+  border: 'border-[#22272b]',
+  shadow: 'shadow-slate-500/5',
+  glow: 'bg-slate-500',
+  iconBg: 'bg-[#1a1c1e]',
+  iconText: 'text-muted-foreground',
+};
+
+function hexToRgba(hex: string, alpha: number): string {
+  if (!hex || hex.length < 4) return `rgba(0,0,0,${alpha})`;
+  let r = 0, g = 0, b = 0;
+  if (hex.length === 4) {
+    r = parseInt(hex[1] + hex[1], 16);
+    g = parseInt(hex[2] + hex[2], 16);
+    b = parseInt(hex[3] + hex[3], 16);
+  } else if (hex.length >= 7) {
+    r = parseInt(hex.slice(1, 3), 16);
+    g = parseInt(hex.slice(3, 5), 16);
+    b = parseInt(hex.slice(5, 7), 16);
+  }
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+/** Fallback status colors when API doesn't return status_color (e.g. projects list). */
+function statusBadgeColorFallback(label: string | null | undefined): string | null {
+  if (!label || typeof label !== 'string') return null;
+  const lower = label.toLowerCase();
+  if (lower.includes('compliant') && !lower.includes('non') && !lower.includes('not')) return '#22c55e';
+  if (lower.includes('non-compliant') || lower.includes('not compliant') || lower.includes('non compliant')) return '#ef4444';
+  if (lower.includes('under review') || lower.includes('review')) return '#f59e0b';
+  if (lower.includes('failed') || lower.includes('error')) return '#ef4444';
+  return null;
+}
+
 function VulnProjectNodeComponent({ data }: NodeProps) {
-  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, hasExtractingProjects } =
+  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, hasExtractingProjects, neutralStyle, roleBadge, roleBadgeColor, statusBadge, statusBadgeColor, riskGrade, projectsCount, membersCount, assetTierName, dependenciesCount, organizationId, isExpanding, onExpandProject, expandedProjectId } =
     (data as unknown as VulnProjectNodeData) ?? {};
   const hasKnownFramework = framework && framework.toLowerCase() !== 'unknown';
   const frameworkIdForIcon = hasKnownFramework ? framework : undefined;
-  const useGrey = isExtracting || (isTeamNode && hasExtractingProjects);
-  const colorScheme = useGrey ? greyExtractingScheme : getColorScheme(worstSeverity);
+  const useGrey = neutralStyle || isExtracting || (isTeamNode && hasExtractingProjects);
+  const colorScheme = useGrey ? (neutralStyle ? neutralScheme : greyExtractingScheme) : getColorScheme(worstSeverity);
   const showSlaBreach = !isExtracting && typeof slaBreachCount === 'number' && slaBreachCount > 0;
+  const showTeamRoleBadge = !isExtracting && roleBadge != null && roleBadge !== '' && isTeamNode;
+  const showStatusBadge = !isExtracting && statusBadge != null && statusBadge !== '' && !isTeamNode;
+  const showTeamRiskGrade = !isExtracting && isTeamNode && (riskGrade ?? 'A+');
+  const showProjectRiskGrade = !isExtracting && !isTeamNode && neutralStyle && (riskGrade ?? 'A+');
+  const showAssetTierSubtext = !isExtracting && !isTeamNode && assetTierName != null && assetTierName !== '';
+  const showCardTooltip = !isTeamNode && neutralStyle;
+  const rawStatusColor = statusBadgeColor?.trim() ? statusBadgeColor : (showStatusBadge ? statusBadgeColorFallback(statusBadge) : null);
+  const effectiveStatusColor = rawStatusColor && !rawStatusColor.startsWith('#') ? `#${rawStatusColor}` : rawStatusColor;
+
+  /** Org overview: larger project card with border, bottom bar (risk, deps, asset), expand button. */
+  const isOverviewProjectCard = Boolean(neutralStyle && !isTeamNode && !isExtracting);
+  /** Org overview: larger team card with border, risk badge, bottom bar (x projects, x members), no arrow. */
+  const isOverviewTeamCard = Boolean(neutralStyle && isTeamNode && !isExtracting);
+  const nodeWidth = (isOverviewProjectCard || isOverviewTeamCard) ? OVERVIEW_PROJECT_NODE_WIDTH : NODE_WIDTH;
+  const nodeHeight = (isOverviewProjectCard || isOverviewTeamCard) ? OVERVIEW_PROJECT_NODE_HEIGHT : NODE_HEIGHT;
+
+  const isExpanded = Boolean(projectId && expandedProjectId === projectId);
+
+  const expandWithFilter = (filter: 'all' | 'vulnerable' | 'not_allowed' | 'outdated' = 'all') => {
+    if (onExpandProject && projectId) {
+      onExpandProject(projectId, filter);
+    }
+  };
+
+  const onExpand = (e: React.MouseEvent, filter?: 'all' | 'vulnerable' | 'not_allowed' | 'outdated') => {
+    e.stopPropagation();
+    expandWithFilter(filter ?? 'all');
+  };
+
+  const onCollapse = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onExpandProject && projectId) {
+      onExpandProject(projectId);
+    }
+  };
 
   return (
-    <div className="relative" style={{ minWidth: NODE_WIDTH, minHeight: NODE_HEIGHT }}>
+    <div className="relative" style={{ minWidth: nodeWidth, minHeight: nodeHeight }}>
       <Handle id="top" type="target" position={Position.Top} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
       <Handle id="right" type="target" position={Position.Right} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
       <Handle id="bottom" type="target" position={Position.Bottom} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
@@ -99,50 +207,296 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
       <Handle id="source-bottom" type="source" position={Position.Bottom} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
       <Handle id="source-left" type="source" position={Position.Left} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
 
-      <div
-        className={`relative rounded-xl border-2 bg-background-card px-3 py-2.5 shadow-sm h-full flex flex-col justify-center gap-0.5 min-w-0 overflow-hidden ${colorScheme.border} ${colorScheme.shadow}`}
-      >
-        {!isExtracting && <div className={`absolute inset-0 rounded-xl blur-xl opacity-15 -z-10 ${colorScheme.glow}`} />}
-        <div className="flex items-center gap-2 min-w-0">
-          {isTeamNode && !isExtracting ? (
-            <div
-              className={`flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0 ${colorScheme.iconBg} ${colorScheme.iconText}`}
-            >
-              <Users className="w-4 h-4" />
+      {isOverviewTeamCard ? (
+        <div className="relative rounded-lg border border-border bg-background-card shadow-md h-full flex flex-col overflow-hidden cursor-pointer hover:shadow-lg hover:border-border/80 transition-all">
+          {/* Second layer / inner border like project node */}
+          <div className="absolute inset-[1px] rounded-[7px] border border-border/60 pointer-events-none" aria-hidden />
+          {/* Top: Team icon, name, risk badge */}
+          <div className="px-3.5 py-3 flex items-center gap-2.5 min-w-0 flex-1">
+            <div className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 bg-[#1a1c1e] text-muted-foreground">
+              <TeamIcon />
             </div>
-          ) : frameworkIdForIcon ? (
-            <div
-              className={`flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0 ${colorScheme.iconBg} ${colorScheme.iconText}`}
-            >
-              <FrameworkIcon frameworkId={frameworkIdForIcon} size={18} className="text-current" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-foreground truncate" title={projectName}>
+                {projectName}
+              </p>
             </div>
-          ) : (
-            <div
-              className={`flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0 ${colorScheme.iconBg} ${colorScheme.iconText}`}
-            >
-              <Folder className="w-4 h-4" />
-            </div>
-          )}
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium text-foreground truncate" title={projectName}>
-              {projectName}
-            </p>
-            {isExtracting && (
-              <p className="text-[10px] text-foreground-secondary mt-0.5">Project still extracting</p>
+            <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-400">
+              {riskGrade ?? 'A+'}
+            </span>
+          </div>
+          {/* Bottom bar: x projects, x members (no arrow) */}
+          <div className="border-t border-border px-3 py-2 flex items-center gap-3 flex-wrap w-full text-left rounded-b-lg">
+            {typeof projectsCount === 'number' && (
+              <span className="text-[11px] text-muted-foreground">
+                {projectsCount} project{projectsCount === 1 ? '' : 's'}
+              </span>
+            )}
+            {typeof membersCount === 'number' && (
+              <span className="text-[11px] text-muted-foreground">
+                {membersCount} member{membersCount === 1 ? '' : 's'}
+              </span>
             )}
           </div>
-          {isExtracting && (
-            <div className="flex-shrink-0" aria-hidden>
-              <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+        </div>
+      ) : isOverviewProjectCard ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="relative rounded-lg border border-border bg-background-card shadow-md h-full flex flex-col overflow-hidden cursor-pointer hover:shadow-lg hover:border-border/80 transition-all">
+              {/* Second layer / inner border */}
+              <div className="absolute inset-[1px] rounded-[7px] border border-border/60 pointer-events-none" aria-hidden />
+              {/* Top: icon, name, status (click opens sidebar) */}
+              <div className="px-3.5 py-3 flex items-center gap-2.5 min-w-0 flex-1">
+                {frameworkIdForIcon ? (
+                  <div className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 bg-[#1a1c1e] text-muted-foreground">
+                    <FrameworkIcon frameworkId={frameworkIdForIcon} size={18} className="text-current" />
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 bg-[#1a1c1e] text-muted-foreground">
+                    <Folder className="w-4 h-4" />
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-foreground truncate" title={projectName}>
+                    {projectName}
+                  </p>
+                </div>
+                {showStatusBadge && (
+                  <span
+                    className="flex-shrink-0 inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium"
+                    style={effectiveStatusColor
+                      ? { backgroundColor: `${effectiveStatusColor}20`, color: effectiveStatusColor, borderColor: `${effectiveStatusColor}40` }
+                      : { backgroundColor: 'transparent', color: 'var(--muted-foreground)', borderColor: 'rgba(255,255,255,0.2)' }
+                    }
+                  >
+                    {statusBadge}
+                  </span>
+                )}
+              </div>
+              {/* Bottom bar: expand options (dropdown) or collapse (when expanded) */}
+              <div className="border-t border-border px-3 py-2 flex items-center gap-2 flex-wrap w-full text-left rounded-b-lg">
+                <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-400">
+                  {riskGrade ?? 'A+'}
+                </span>
+                {typeof dependenciesCount === 'number' && (
+                  <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                    <Package className="h-3 w-3 flex-shrink-0" />
+                    {dependenciesCount} direct dep{dependenciesCount === 1 ? '' : 's'}
+                  </span>
+                )}
+                {assetTierName && (
+                  <span className="text-[11px] text-muted-foreground truncate max-w-[100px]" title={assetTierName}>
+                    {assetTierName}
+                  </span>
+                )}
+                <div className="flex-1 min-w-0" />
+                {onExpandProject && projectId && (
+                  isExpanding ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground flex-shrink-0" aria-hidden />
+                  ) : isExpanded ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={onCollapse}
+                          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
+                          aria-label="Collapse packages"
+                        >
+                          <PanelLeftClose className="h-4 w-4" />
+                          Collapse
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Collapse packages</TooltipContent>
+                    </Tooltip>
+                  ) : (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={(e) => e.stopPropagation()}
+                          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
+                          aria-label="Expand project options"
+                        >
+                          <ChevronRight className="h-4 w-4" />
+                          Expand
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" side="top" className="min-w-[200px]">
+                        <DropdownMenuItem onSelect={() => expandWithFilter('all')}>
+                          <Package className="h-3.5 w-3.5 mr-2" />
+                          Expand all packages
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => expandWithFilter('vulnerable')}>
+                          <ShieldAlert className="h-3.5 w-3.5 mr-2" />
+                          Expand vulnerable packages
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => expandWithFilter('not_allowed')}>
+                          <Ban className="h-3.5 w-3.5 mr-2" />
+                          Expand not allowed packages
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => expandWithFilter('outdated')}>
+                          <Clock className="h-3.5 w-3.5 mr-2" />
+                          Expand outdated packages
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )
+                )}
+              </div>
             </div>
+          </TooltipTrigger>
+          <TooltipContent side="top">Expand project</TooltipContent>
+        </Tooltip>
+      ) : showCardTooltip ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              className={`relative rounded-xl border-2 bg-background-card px-3 py-2.5 shadow-sm h-full flex flex-col justify-center gap-0.5 min-w-0 overflow-hidden ${colorScheme.border} ${colorScheme.shadow}`}
+            >
+              {!isExtracting && <div className={`absolute inset-0 rounded-xl blur-xl opacity-15 -z-10 ${colorScheme.glow}`} />}
+              <div className="flex items-center gap-2 min-w-0">
+                {isTeamNode && !isExtracting ? (
+                  <TeamIcon />
+                ) : frameworkIdForIcon ? (
+                  <div
+                    className={`flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0 ${colorScheme.iconBg} ${colorScheme.iconText}`}
+                  >
+                    <FrameworkIcon frameworkId={frameworkIdForIcon} size={18} className="text-current" />
+                  </div>
+                ) : (
+                  <div
+                    className={`flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0 ${colorScheme.iconBg} ${colorScheme.iconText}`}
+                  >
+                    <Folder className="w-4 h-4" />
+                  </div>
+                )}
+                <div className="min-w-0 flex-1 flex flex-col gap-1">
+                  <p className="text-sm font-medium text-foreground truncate" title={projectName}>
+                    {projectName}
+                  </p>
+                  {isTeamNode && showTeamRoleBadge ? (
+                    <span
+                      className="inline-flex w-fit rounded-md border px-2 py-0.5 text-[10px] font-medium"
+                      style={roleBadgeColor && roleBadgeColor.trim() !== ''
+                        ? { backgroundColor: hexToRgba(roleBadgeColor, 0.1), color: roleBadgeColor, borderColor: hexToRgba(roleBadgeColor, 0.2) }
+                        : { backgroundColor: 'transparent', color: 'var(--muted-foreground)', borderColor: 'rgba(255,255,255,0.2)' }
+                      }
+                    >
+                      {roleBadge}
+                    </span>
+                  ) : null}
+                  {!showTeamRoleBadge && isExtracting ? (
+                    <p className="text-[10px] text-foreground-secondary">Project still extracting</p>
+                  ) : !isTeamNode && showAssetTierSubtext ? (
+                    <p className="text-[10px] text-muted-foreground truncate" title={assetTierName ?? undefined}>
+                      {assetTierName}
+                    </p>
+                  ) : null}
+                </div>
+                {(showTeamRiskGrade || showProjectRiskGrade) && (
+                  <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-sm font-semibold text-emerald-400">
+                    {riskGrade ?? 'A+'}
+                  </span>
+                )}
+                {showStatusBadge && (
+                  <span
+                    className="flex-shrink-0 inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium"
+                    style={effectiveStatusColor
+                      ? { backgroundColor: `${effectiveStatusColor}20`, color: effectiveStatusColor, borderColor: `${effectiveStatusColor}40` }
+                      : { backgroundColor: 'transparent', color: 'var(--muted-foreground)', borderColor: 'rgba(255,255,255,0.2)' }
+                    }
+                  >
+                    {statusBadge}
+                  </span>
+                )}
+                {!showTeamRiskGrade && !showProjectRiskGrade && !showStatusBadge && isExtracting && (
+                  <div className="flex-shrink-0" aria-hidden>
+                    <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                  </div>
+                )}
+              </div>
+              {showSlaBreach && (
+                <p className="text-[10px] text-red-400 font-medium truncate" title={`${slaBreachCount} SLA breach(es)`}>
+                  SLA: {slaBreachCount} breached
+                </p>
+              )}
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="top">Calculated risk score</TooltipContent>
+        </Tooltip>
+      ) : (
+        <div
+          className={`relative rounded-xl border-2 bg-background-card px-3 py-2.5 shadow-sm h-full flex flex-col justify-center gap-0.5 min-w-0 overflow-hidden ${colorScheme.border} ${colorScheme.shadow}`}
+        >
+          {!isExtracting && <div className={`absolute inset-0 rounded-xl blur-xl opacity-15 -z-10 ${colorScheme.glow}`} />}
+          <div className="flex items-center gap-2 min-w-0">
+            {isTeamNode && !isExtracting ? (
+              <TeamIcon />
+            ) : frameworkIdForIcon ? (
+              <div
+                className={`flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0 ${colorScheme.iconBg} ${colorScheme.iconText}`}
+              >
+                <FrameworkIcon frameworkId={frameworkIdForIcon} size={18} className="text-current" />
+              </div>
+            ) : (
+              <div
+                className={`flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0 ${colorScheme.iconBg} ${colorScheme.iconText}`}
+              >
+                <Folder className="w-4 h-4" />
+              </div>
+            )}
+            <div className="min-w-0 flex-1 flex flex-col gap-1">
+              <p className="text-sm font-medium text-foreground truncate" title={projectName}>
+                {projectName}
+              </p>
+              {isTeamNode && showTeamRoleBadge ? (
+                <span
+                  className="inline-flex w-fit rounded-md border px-2 py-0.5 text-[10px] font-medium"
+                  style={roleBadgeColor && roleBadgeColor.trim() !== ''
+                    ? { backgroundColor: hexToRgba(roleBadgeColor, 0.1), color: roleBadgeColor, borderColor: hexToRgba(roleBadgeColor, 0.2) }
+                    : { backgroundColor: 'transparent', color: 'var(--muted-foreground)', borderColor: 'rgba(255,255,255,0.2)' }
+                  }
+                >
+                  {roleBadge}
+                </span>
+              ) : null}
+              {!showTeamRoleBadge && isExtracting ? (
+                <p className="text-[10px] text-foreground-secondary">Project still extracting</p>
+              ) : !isTeamNode && showAssetTierSubtext ? (
+                <p className="text-[10px] text-muted-foreground truncate" title={assetTierName ?? undefined}>
+                  {assetTierName}
+                </p>
+              ) : null}
+            </div>
+            {(showTeamRiskGrade || showProjectRiskGrade) && (
+              <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-sm font-semibold text-emerald-400">
+                {riskGrade ?? 'A+'}
+              </span>
+            )}
+            {showStatusBadge && (
+              <span
+                className="flex-shrink-0 inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium"
+                style={effectiveStatusColor
+                  ? { backgroundColor: `${effectiveStatusColor}20`, color: effectiveStatusColor, borderColor: `${effectiveStatusColor}40` }
+                  : { backgroundColor: 'transparent', color: 'var(--muted-foreground)', borderColor: 'rgba(255,255,255,0.2)' }
+                }
+              >
+                {statusBadge}
+              </span>
+            )}
+            {!showTeamRiskGrade && !showProjectRiskGrade && !showStatusBadge && isExtracting && (
+              <div className="flex-shrink-0" aria-hidden>
+                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              </div>
+            )}
+          </div>
+          {showSlaBreach && (
+            <p className="text-[10px] text-red-400 font-medium truncate" title={`${slaBreachCount} SLA breach(es)`}>
+              SLA: {slaBreachCount} breached
+            </p>
           )}
         </div>
-        {showSlaBreach && (
-          <p className="text-[10px] text-red-400 font-medium truncate" title={`${slaBreachCount} SLA breach(es)`}>
-            SLA: {slaBreachCount} breached
-          </p>
-        )}
-      </div>
+      )}
     </div>
   );
 }

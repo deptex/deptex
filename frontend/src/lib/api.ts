@@ -437,7 +437,7 @@ export const api = {
     return team;
   },
 
-  async updateTeam(organizationId: string, teamId: string, data: { name?: string; avatar_url?: string; description?: string }): Promise<Team> {
+  async updateTeam(organizationId: string, teamId: string, data: { name?: string; avatar_url?: string; description?: string; notifications_paused_until?: string | null }): Promise<Team> {
     const team = await fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -517,6 +517,13 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/connections/${connectionId}`, { method: 'DELETE' });
   },
 
+  async connectTeamPagerDuty(organizationId: string, teamId: string, data: { routingKey: string; serviceName?: string }): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/pagerduty/connect`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
   async createTeamEmailNotification(organizationId: string, teamId: string, email: string): Promise<{ success: boolean; id: string }> {
     return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/email-notifications`, {
       method: 'POST',
@@ -583,7 +590,7 @@ export const api = {
     return this._projectDataCache.get(cacheKey) || null;
   },
 
-  async createProject(organizationId: string, data: { name: string; team_ids?: string[]; asset_tier?: AssetTier }): Promise<Project> {
+  async createProject(organizationId: string, data: { name: string; team_ids?: string[]; asset_tier?: AssetTier; asset_tier_id?: string | null }): Promise<Project> {
     const project = await fetchWithAuth(`/api/organizations/${organizationId}/projects`, {
       method: 'POST',
       body: JSON.stringify(data),
@@ -593,7 +600,7 @@ export const api = {
     return project;
   },
 
-  async updateProject(organizationId: string, projectId: string, data: { name?: string; team_ids?: string[]; auto_bump?: boolean; asset_tier?: AssetTier }): Promise<Project> {
+  async updateProject(organizationId: string, projectId: string, data: { name?: string; team_ids?: string[]; auto_bump?: boolean; asset_tier?: AssetTier; asset_tier_id?: string | null; notifications_paused_until?: string | null }): Promise<Project> {
     const project = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -2476,7 +2483,10 @@ export const api = {
     reasons: string[];
     tierName: string;
     ecosystem: string;
-    disclaimer: string;
+    license?: string | null;
+    dependencyScore?: number | null;
+    openSsfScore?: number | null;
+    slsaLevel?: number | null;
   }> {
     return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/preflight-check`, {
       method: 'POST',
@@ -2722,6 +2732,7 @@ export interface Team {
   updated_at: string;
   member_count?: number;
   project_count?: number;
+  notifications_paused_until?: string | null;
 }
 
 export interface TeamPermissions {
@@ -2791,6 +2802,8 @@ export interface Project {
   owner_team_id?: string | null;
   owner_team_name?: string | null;
   dependencies_count?: number;
+  /** Number of direct dependencies (org overview cards). */
+  direct_dependencies_count?: number;
   framework?: string | null;
   alerts_count?: number;
   repo_status?: string | null;
@@ -2798,6 +2811,7 @@ export interface Project {
   extraction_error?: string | null;
   role?: string;
   asset_tier?: AssetTier;
+  notifications_paused_until?: string | null;
   // Phase 4: Custom statuses and tiers
   status_id?: string | null;
   status_name?: string;
@@ -2906,6 +2920,10 @@ export interface ProjectDependency {
   is_outdated?: boolean;
   versions_behind?: number;
   policy_result?: { allowed: boolean; reasons: string[] } | null;
+  /** Package ecosystem (npm, pypi, maven, etc.). */
+  ecosystem?: string | null;
+  /** SLSA provenance level 0-4 for this version. */
+  slsa_level?: number | null;
 }
 
 export interface DependencyVersionVulnerability {
@@ -3557,6 +3575,8 @@ export interface ProjectEffectivePolicies {
   effective_package_policy_code?: string;
   effective_project_status_code?: string;
   effective_pr_check_code?: string;
+  /** True when the current user has org permission (owner/admin or manage_compliance); policy change requests will be auto-accepted. */
+  request_will_auto_accept?: boolean;
 }
 
 export interface ProjectPRGuardrails {

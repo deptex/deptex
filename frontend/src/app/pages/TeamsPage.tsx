@@ -4,7 +4,6 @@ import { Plus, Users, Search, Grid3x3, List, ChevronRight, Folder, Loader2, Penc
 import { api, Team, TeamWithRole, OrganizationMember, Organization, RolePermissions } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { Button } from '../../components/ui/button';
-import { RoleBadge } from '../../components/RoleBadge';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
 
@@ -500,17 +499,13 @@ export default function TeamsPage() {
               <ChevronRight className="absolute top-5 right-5 h-5 w-5 text-foreground-secondary group-hover:text-foreground transition-colors flex-shrink-0" />
               <div className="flex-1 flex flex-col min-h-0 pr-6">
                 <h3 className="text-lg font-bold text-foreground mb-1 truncate">{team.name}</h3>
-                <p className="text-sm text-foreground-secondary line-clamp-2 mb-4 flex-1">
+                <p className="text-sm text-foreground-secondary line-clamp-2 mb-2 flex-1">
                   {team.description || "No description provided."}
                 </p>
                 {team.role && !team.role_display_name?.startsWith('Org ') && (
-                  <div className="mb-2">
-                    <RoleBadge
-                      role={team.role}
-                      roleDisplayName={team.role_display_name}
-                      roleColor={team.role_color}
-                    />
-                  </div>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    {team.role_display_name || team.role.charAt(0).toUpperCase() + team.role.slice(1)}
+                  </p>
                 )}
               </div>
               <div className="pt-4 border-t border-border flex items-center gap-6 mt-auto">
@@ -555,14 +550,12 @@ export default function TeamsPage() {
                   className="hover:bg-table-hover transition-colors cursor-pointer group"
                 >
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-col gap-0.5">
                       <div className="text-sm font-semibold text-foreground">{team.name}</div>
                       {team.role && !team.role_display_name?.startsWith('Org ') && (
-                        <RoleBadge
-                          role={team.role}
-                          roleDisplayName={team.role_display_name}
-                          roleColor={team.role_color}
-                        />
+                        <span className="text-xs text-muted-foreground">
+                          {team.role_display_name || team.role.charAt(0).toUpperCase() + team.role.slice(1)}
+                        </span>
                       )}
                     </div>
                   </td>

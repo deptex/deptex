@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useParams, useOutletContext, useNavigate } from 'react-router-dom';
+import { useParams, useOutletContext, useNavigate, Link } from 'react-router-dom';
 import { cn } from '../../lib/utils';
-import { BookOpen, Sparkles, Loader2, X, Check, Clock, Eye, Ban, FileQuestion, Info } from 'lucide-react';
+import { BookOpen, Loader2, X, Check, Clock, Eye, Ban, FileQuestion, Info } from 'lucide-react';
 import { api, Organization, RolePermissions, ProjectPolicyException, OrganizationPolicyChange, ProjectPolicyChangeRequest } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { PolicyCodeEditor } from '../../components/PolicyCodeEditor';
 import { Button } from '../../components/ui/button';
+import { Input } from '../../components/ui/input';
 import { Badge } from '../../components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '../../components/ui/avatar';
 import { Toaster } from '../../components/ui/toaster';
@@ -129,10 +130,12 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState<any>(null);
 
-  // AI sidebar
+  // AI sidebar – keep mounted once opened so conversation persists when "closed"; reset when user navigates away (page unmounts)
   const [showAI, setShowAI] = useState(false);
+  const [everOpenedAI, setEverOpenedAI] = useState(false);
   const [aiPanelVisible, setAiPanelVisible] = useState(false);
   const aiCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aiAssistantCloseRef = useRef<(() => void) | null>(null);
 
   // Commit sidebar (open after validation passes)
   const [commitSidebarCodeType, setCommitSidebarCodeType] = useState<'package_policy' | 'pr_check' | null>(null);
@@ -514,23 +517,19 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
       {/* Header */}
       <div className="sticky top-0 z-10 bg-background pb-2">
         <div className="mb-6 flex items-start justify-between">
-          <div>
+          <div className="flex items-center gap-2">
             {isSettingsSubpage ? (
               <h2 className="text-2xl font-bold text-foreground">Policies</h2>
             ) : (
               <h1 className="text-3xl font-bold text-foreground">Policies</h1>
             )}
+            <Link to="/docs/policies" target="_blank" rel="noopener noreferrer" className="shrink-0 text-foreground-secondary hover:text-foreground" aria-label="Policies docs">
+              <BookOpen className="h-4 w-4" />
+            </Link>
           </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" className="text-xs" onClick={() => setShowAI(true)}>
-              <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-              AI Assistant
-            </Button>
-            <Button variant="outline" size="sm" className="text-xs" onClick={() => window.open('/docs/policies', '_blank')}>
-              <BookOpen className="h-3.5 w-3.5 mr-1.5" />
-              Docs
-            </Button>
-          </div>
+          <Button variant="outline" size="sm" className="text-xs" onClick={() => { setEverOpenedAI(true); setShowAI(true); }}>
+            AI Assistant
+          </Button>
         </div>
 
         {/* Sub-tabs */}
@@ -555,36 +554,6 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
 
       {/* Content */}
       <div className="pt-4">
-        {/* Intro card (notification-style) – tab-specific: Package Policy or Pull Request Check */}
-        {subTab === 'package_policy' && (
-          <Card className="rounded-lg border border-border bg-background-card/80 mb-6">
-            <CardContent className="p-4 flex gap-3">
-              <div className="flex-shrink-0 mt-0.5">
-                <Info className="h-5 w-5 text-foreground-muted" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm text-foreground-secondary">
-                  Define your organization&apos;s package policies as code. This runs on each dependency in your projects and checks against license, score, tier, and other metadata to allow or block packages.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-        {subTab === 'pr_check' && (
-          <Card className="rounded-lg border border-border bg-background-card/80 mb-6">
-            <CardContent className="p-4 flex gap-3">
-              <div className="flex-shrink-0 mt-0.5">
-                <Info className="h-5 w-5 text-foreground-muted" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm text-foreground-secondary">
-                  Runs when pull requests change lockfiles or manifests. It receives PR context (changed files, diffs, added/removed packages) and returns whether the PR should pass or be blocked.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
         {loading ? (
           (subTab === 'package_policy' || subTab === 'pr_check') ? (
             <PolicyEditorSkeleton />
@@ -594,36 +563,36 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
           ) : null
         ) : (
           <>
-            {/* Package Policy editor: header with function title + Clear/Commit, body-only in editor */}
+            {/* Package Policy editor: header with function title; Clear/Commit on code block */}
             {subTab === 'package_policy' && (
               <div className="space-y-4">
                 <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                  <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
+                  <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center">
                     <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">packagePolicy</span>
+                  </div>
+                  <div className="bg-background-card relative">
                     {hasManageCompliance && packagePolicyDirty && (
-                      <div className="flex items-center gap-1.5">
+                      <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5">
                         <Button
                           variant="outline"
                           size="sm"
                           onClick={() => { setPackagePolicyCode(packagePolicyOriginal); setValidationResult(null); }}
                           disabled={validating}
-                          className="h-6 min-h-6 px-1.5 py-0 text-[11px] font-medium"
+                          className="h-7 px-2 text-[11px] font-medium backdrop-blur border-border bg-background-card/95 hover:bg-background-card shadow-sm"
                         >
-                          Clear
+                          Clear changes
                         </Button>
                         <Button
                           size="sm"
                           onClick={() => handleCommitClick('package_policy')}
                           disabled={validating}
-                          className="h-6 min-h-6 px-1.5 py-0 text-[11px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                          className="h-7 px-2 text-[11px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 shadow-sm"
                         >
                           {validating && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
-                          Commit
+                          Commit changes
                         </Button>
                       </div>
                     )}
-                  </div>
-                  <div className="bg-background-card">
                     <PolicyCodeEditor
                       value={packagePolicyCode}
                       onChange={(val) => { setPackagePolicyCode(val || ''); setValidationResult(null); }}
@@ -659,39 +628,51 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
                     </div>
                   </div>
                 )}
+                <Card className="rounded-lg border border-border bg-background-card/80 mt-6">
+                  <CardContent className="p-4 flex gap-3">
+                    <div className="flex-shrink-0 mt-0.5">
+                      <Info className="h-5 w-5 text-foreground-muted" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm text-foreground-secondary">
+                        Define your organization&apos;s package policies as code. This runs on each dependency in your projects and checks against license, score, tier, and other metadata to allow or block packages.
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
               </div>
             )}
 
-            {/* PR Check editor: header with function title + Clear/Commit, body-only in editor */}
+            {/* PR Check editor: header with function title; Clear/Commit on code block */}
             {subTab === 'pr_check' && (
               <div className="space-y-4">
                 <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                  <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
+                  <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center">
                     <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">pullRequestCheck</span>
+                  </div>
+                  <div className="bg-background-card relative">
                     {hasManageCompliance && prCheckDirty && (
-                      <div className="flex items-center gap-1.5">
+                      <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5">
                         <Button
                           variant="outline"
                           size="sm"
                           onClick={() => { setPrCheckCode(prCheckOriginal); setValidationResult(null); }}
                           disabled={validating}
-                          className="h-6 min-h-6 px-1.5 py-0 text-[11px] font-medium"
+                          className="h-7 px-2 text-[11px] font-medium backdrop-blur border-border bg-background-card/95 hover:bg-background-card shadow-sm"
                         >
-                          Clear
+                          Clear changes
                         </Button>
                         <Button
                           size="sm"
                           onClick={() => handleCommitClick('pr_check')}
                           disabled={validating}
-                          className="h-6 min-h-6 px-1.5 py-0 text-[11px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                          className="h-7 px-2 text-[11px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 shadow-sm"
                         >
                           {validating && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
-                          Commit
+                          Commit changes
                         </Button>
                       </div>
                     )}
-                  </div>
-                  <div className="bg-background-card">
                     <PolicyCodeEditor
                       value={prCheckCode}
                       onChange={(val) => { setPrCheckCode(val || ''); setValidationResult(null); }}
@@ -727,6 +708,18 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
                     </div>
                   </div>
                 )}
+                <Card className="rounded-lg border border-border bg-background-card/80 mt-6">
+                  <CardContent className="p-4 flex gap-3">
+                    <div className="flex-shrink-0 mt-0.5">
+                      <Info className="h-5 w-5 text-foreground-muted" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm text-foreground-secondary">
+                        Runs when pull requests change lockfiles or manifests. It receives PR context (changed files, diffs, added/removed packages) and returns whether the PR should pass or be blocked.
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
               </div>
             )}
           </>
@@ -1109,13 +1102,13 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
               <div className="space-y-4">
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">Message</label>
-                  <textarea
+                  <Input
+                    type="text"
                     value={commitMessage}
                     onChange={(e) => setCommitMessage(e.target.value)}
                     placeholder=""
-                    rows={2}
-                    className="w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent resize-none"
                     disabled={committing}
+                    className="h-9 w-full"
                   />
                 </div>
                 <div className="space-y-2">
@@ -1158,20 +1151,20 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
         document.body,
       )}
 
-      {/* AI Assistant */}
-      {showAI && createPortal(
-        <div className="fixed inset-0 z-50">
+      {/* AI Assistant – stay mounted once opened so conversation persists when closed; only unmount when user leaves the page */}
+      {everOpenedAI && createPortal(
+        <div className={cn('fixed inset-0 z-50', !showAI && 'pointer-events-none')}>
           <div
             className={cn(
               'fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150',
-              aiPanelVisible ? 'opacity-100' : 'opacity-0'
+              !showAI ? 'opacity-0' : (aiPanelVisible ? 'opacity-100' : 'opacity-0')
             )}
-            onClick={closeAIPanel}
+            onClick={() => { aiAssistantCloseRef.current ? aiAssistantCloseRef.current() : closeAIPanel(); }}
           />
           <div
             className={cn(
               'fixed right-4 top-4 bottom-4 w-full max-w-[680px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
-              aiPanelVisible ? 'translate-x-0' : 'translate-x-full'
+              !showAI ? 'translate-x-full' : (aiPanelVisible ? 'translate-x-0' : 'translate-x-full')
             )}
           >
             <PolicyAIAssistant
@@ -1182,6 +1175,7 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
               onUpdateCompliance={(code: string) => setPackagePolicyCode(code)}
               onUpdatePullRequest={(code: string) => setPrCheckCode(code)}
               onClose={closeAIPanel}
+              innerCloseRef={aiAssistantCloseRef}
             />
           </div>
         </div>,

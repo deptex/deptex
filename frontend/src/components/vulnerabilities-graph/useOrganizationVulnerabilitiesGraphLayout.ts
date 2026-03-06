@@ -3,7 +3,7 @@ import { type Node, type Edge, MarkerType } from '@xyflow/react';
 import { buildDepAndVulnNodesAndEdges, getWorstSeverity, getWorstDepscore } from './useVulnerabilitiesGraphLayout';
 import type { VulnGraphDepNode, WorstSeverity } from './useVulnerabilitiesGraphLayout';
 import { VULN_CENTER_NODE_WIDTH, VULN_CENTER_NODE_HEIGHT, getSlaBreachCount } from './useVulnerabilitiesGraphLayout';
-import { VULN_PROJECT_NODE_WIDTH, VULN_PROJECT_NODE_HEIGHT } from './VulnProjectNode';
+import { VULN_PROJECT_NODE_WIDTH, VULN_PROJECT_NODE_HEIGHT, OVERVIEW_PROJECT_NODE_WIDTH, OVERVIEW_PROJECT_NODE_HEIGHT } from './VulnProjectNode';
 import type { ProjectWithGraphData } from './useTeamVulnerabilitiesGraphLayout';
 
 export const ORG_CENTER_ID = 'org-center';
@@ -267,4 +267,217 @@ export function useOrganizationVulnerabilitiesGraphLayout(
 
     return { nodes, edges };
   }, [orgName, teamsWithProjects, showOnlyReachable, ungroupedProjects]);
+}
+
+/** Minimal project shape for org overview (no dependency/vuln data). */
+export interface OverviewProjectItem {
+  projectId: string;
+  projectName: string;
+  framework?: string | null;
+  /** Project status for badge (e.g. Compliant, Non-Compliant). */
+  statusName?: string | null;
+  statusColor?: string | null;
+  /** Status id for filtering (organization_statuses.id). */
+  statusId?: string | null;
+  /** Asset tier name shown as subtext on project card (e.g. Crown Jewels, External). */
+  assetTierName?: string | null;
+  /** Number of dependencies (for org overview card). */
+  dependenciesCount?: number | null;
+}
+
+export interface OverviewTeamWithProjects {
+  teamId: string;
+  teamName: string;
+  /** User's role in this team (e.g. Owner, Member) for badge. */
+  userRoleLabel?: string | null;
+  /** Hex color for user's role badge (e.g. from team.role_color). */
+  userRoleColor?: string | null;
+  projects: OverviewProjectItem[];
+  /** Number of projects (for team node bottom bar). */
+  projectCount?: number;
+  /** Number of members (for team node bottom bar). */
+  memberCount?: number;
+}
+
+/**
+ * Builds nodes and edges for org overview only: org center, teams, projects. No dependency/vuln nodes.
+ * All nodes use neutral styling. Org center shows role badge and risk grade (A+).
+ */
+export function useOrganizationOverviewGraphLayout(
+  orgName: string,
+  teamsWithProjects: OverviewTeamWithProjects[],
+  orgAvatarUrl: string | null | undefined,
+  orgRoleLabel?: string | null,
+  orgRoleColor?: string | null,
+  organizationId?: string | null
+): { nodes: Node[]; edges: Edge[] } {
+  return useMemo(() => {
+    const nodes: Node[] = [];
+    const edges: Edge[] = [];
+    const centerX = 0;
+    const centerY = 0;
+    const grayStroke = 'rgba(100, 116, 139, 0.4)';
+
+    const realTeams = teamsWithProjects.filter((t) => t.teamId !== UNGROUPED_TEAM_ID);
+    const ungrouped = teamsWithProjects
+      .filter((t) => t.teamId === UNGROUPED_TEAM_ID)
+      .flatMap((t) => t.projects);
+
+    nodes.push({
+      id: ORG_CENTER_ID,
+      type: 'groupCenterNode',
+      position: {
+        x: centerX - VULN_CENTER_NODE_WIDTH / 2,
+        y: centerY - VULN_CENTER_NODE_HEIGHT / 2,
+      },
+      data: {
+        title: orgName,
+        avatarUrl: orgAvatarUrl,
+        kind: 'org',
+        roleBadge: orgRoleLabel ?? undefined,
+        roleBadgeColor: orgRoleColor ?? undefined,
+        organizationRiskGrade: 'A+',
+      },
+      draggable: true,
+      selectable: false,
+    });
+
+    const totalRingItems = realTeams.length + ungrouped.length;
+    if (totalRingItems === 0) return { nodes, edges };
+
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+    const teamRingRadius = Math.max(900, 700 + totalRingItems * 100);
+    let ringIdx = 0;
+
+    ungrouped.forEach((proj) => {
+      const angle = ringIdx * goldenAngle;
+      ringIdx++;
+      const projectNodeId = `project-${proj.projectId}`;
+      const px = centerX + Math.cos(angle) * teamRingRadius;
+      const py = centerY + Math.sin(angle) * teamRingRadius;
+
+      nodes.push({
+        id: projectNodeId,
+        type: 'vulnProjectNode',
+        position: {
+          x: px - OVERVIEW_PROJECT_NODE_WIDTH / 2,
+          y: py - OVERVIEW_PROJECT_NODE_HEIGHT / 2,
+        },
+        data: {
+          projectName: proj.projectName,
+          projectId: proj.projectId,
+          framework: proj.framework ?? undefined,
+          neutralStyle: true,
+          statusBadge: proj.statusName ?? undefined,
+          statusBadgeColor: proj.statusColor ?? undefined,
+          assetTierName: proj.assetTierName ?? undefined,
+          riskGrade: 'A+',
+          dependenciesCount: proj.dependenciesCount ?? undefined,
+          organizationId: organizationId ?? undefined,
+        },
+        draggable: true,
+        selectable: false,
+      });
+
+      const { sourceHandle, targetHandle } = getHandlePair(angle);
+      edges.push({
+        id: `edge-org-${projectNodeId}`,
+        source: ORG_CENTER_ID,
+        target: projectNodeId,
+        sourceHandle,
+        targetHandle,
+        type: 'default',
+        style: { stroke: grayStroke, strokeWidth: 1.2 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: grayStroke, width: 12, height: 12 },
+      });
+    });
+
+    realTeams.forEach((teamData) => {
+      const teamAngle = ringIdx * goldenAngle;
+      ringIdx++;
+      const teamNodeId = `team-${teamData.teamId}`;
+      const tx = centerX + Math.cos(teamAngle) * teamRingRadius;
+      const ty = centerY + Math.sin(teamAngle) * teamRingRadius;
+
+      nodes.push({
+        id: teamNodeId,
+        type: 'vulnProjectNode',
+        position: {
+          x: tx - OVERVIEW_PROJECT_NODE_WIDTH / 2,
+          y: ty - OVERVIEW_PROJECT_NODE_HEIGHT / 2,
+        },
+        data: {
+          projectName: teamData.teamName,
+          projectId: teamData.teamId,
+          isTeamNode: true,
+          neutralStyle: true,
+          roleBadge: teamData.userRoleLabel ?? undefined,
+          roleBadgeColor: teamData.userRoleColor ?? undefined,
+          riskGrade: 'A+',
+          projectsCount: teamData.projectCount ?? teamData.projects.length,
+          membersCount: teamData.memberCount,
+        },
+        draggable: true,
+        selectable: false,
+      });
+
+      const { sourceHandle, targetHandle } = getHandlePair(teamAngle);
+      edges.push({
+        id: `edge-org-${teamNodeId}`,
+        source: ORG_CENTER_ID,
+        target: teamNodeId,
+        sourceHandle,
+        targetHandle,
+        type: 'default',
+        style: { stroke: grayStroke, strokeWidth: 1.2 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: grayStroke, width: 12, height: 12 },
+      });
+
+      const projectRingRadius = Math.max(500, 400 + teamData.projects.length * 80);
+
+      teamData.projects.forEach((proj, projIdx) => {
+        const projAngle = projIdx * goldenAngle;
+        const projectNodeId = `project-${proj.projectId}`;
+        const px = tx + Math.cos(projAngle) * projectRingRadius;
+        const py = ty + Math.sin(projAngle) * projectRingRadius;
+
+        nodes.push({
+          id: projectNodeId,
+          type: 'vulnProjectNode',
+          position: {
+            x: px - OVERVIEW_PROJECT_NODE_WIDTH / 2,
+            y: py - OVERVIEW_PROJECT_NODE_HEIGHT / 2,
+          },
+          data: {
+            projectName: proj.projectName,
+            projectId: proj.projectId,
+            framework: proj.framework ?? undefined,
+            neutralStyle: true,
+            statusBadge: proj.statusName ?? undefined,
+            statusBadgeColor: proj.statusColor ?? undefined,
+            assetTierName: proj.assetTierName ?? undefined,
+            riskGrade: 'A+',
+            dependenciesCount: proj.dependenciesCount ?? undefined,
+            organizationId: organizationId ?? undefined,
+          },
+          draggable: true,
+          selectable: false,
+        });
+
+        const { sourceHandle: teamSourceHandle, targetHandle: teamTargetHandle } = getHandlePair(projAngle);
+        edges.push({
+          id: `edge-${teamNodeId}-${projectNodeId}`,
+          source: teamNodeId,
+          target: projectNodeId,
+          sourceHandle: 'source-' + teamSourceHandle,
+          targetHandle: teamTargetHandle,
+          type: 'default',
+          style: { stroke: grayStroke, strokeWidth: 1.2 },
+          markerEnd: { type: MarkerType.ArrowClosed, color: grayStroke, width: 12, height: 12 },
+        });
+      });
+    });
+
+    return { nodes, edges };
+  }, [orgName, teamsWithProjects, orgAvatarUrl, orgRoleLabel, orgRoleColor, organizationId]);
 }

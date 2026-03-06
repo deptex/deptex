@@ -273,9 +273,6 @@ export default function TeamProjectsPage() {
                     Status
                   </th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
-                    Alerts
-                  </th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
                     Health Score
                   </th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
@@ -294,12 +291,6 @@ export default function TeamProjectsPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="h-5 w-20 rounded bg-muted" />
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-1.5">
-                        <div className="h-4 w-4 rounded-full bg-muted" />
-                        <div className="h-4 w-8 rounded bg-muted" />
-                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <div className="h-4 w-12 rounded bg-muted" />
@@ -401,9 +392,6 @@ export default function TeamProjectsPage() {
                   Status
                 </th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
-                  Alerts
-                </th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
                   Health Score
                 </th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
@@ -459,14 +447,6 @@ export default function TeamProjectsPage() {
                         </span>
                       );
                     })()}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-1.5">
-                      <Bell className="h-4 w-4 text-foreground-secondary" />
-                      <div className="text-sm text-foreground-secondary">
-                        {project.alerts_count || 0}
-                      </div>
-                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <div className="text-sm text-foreground-secondary">
