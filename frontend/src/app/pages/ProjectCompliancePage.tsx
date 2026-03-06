@@ -833,8 +833,9 @@ export default function ProjectCompliancePage() {
       <div className="flex min-h-[calc(100vh-3rem)] overflow-hidden">
         {/* Sticky compliance sidebar */}
         <ComplianceSidepanel
-          activeSection={activeSection}
-          onSelect={handleSectionSelect}
+          mode="project"
+          activeSection={activeSection as 'project' | 'export-notice' | 'export-sbom'}
+          onSelect={handleSectionSelect as (section: 'project' | 'export-notice' | 'export-sbom') => void}
           canViewSettings={!!canManageSettings}
           disabledExports={noExtraction || isExtracting}
           onExportNotice={canManageSettings ? handleExportNotice : undefined}

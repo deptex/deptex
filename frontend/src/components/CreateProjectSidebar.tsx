@@ -811,7 +811,7 @@ export function CreateProjectSidebar({
                       type="button"
                       role="radio"
                       aria-checked={isSelected}
-                      onClick={() => setAssetTier(value)}
+                      onClick={() => setAssetTier(value as AssetTier)}
                       className={`w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all ${
                         isSelected ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20' : 'bg-background-card border-border hover:border-foreground-secondary/30'
                       }`}

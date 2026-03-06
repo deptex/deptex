@@ -23,7 +23,7 @@ function OrgMemberNodeComponent({ data }: NodeProps) {
     role,
     roleDisplayName,
     roleColor,
-  } = (data as OrgMemberNodeData) ?? {};
+  } = (data as unknown as OrgMemberNodeData) ?? {};
 
   const displayName = fullName?.trim() || email?.split('@')[0] || 'Member';
 

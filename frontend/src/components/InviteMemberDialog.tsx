@@ -99,7 +99,7 @@ export function InviteMemberDialog({
         if (!currentPermissions) return false;
         if (role.permissions) {
           for (const [key, value] of Object.entries(role.permissions)) {
-            if (value === true && !(currentPermissions as Record<string, boolean>)[key]) return false;
+            if (value === true && !(currentPermissions as unknown as Record<string, boolean>)[key]) return false;
           }
         }
         return true;

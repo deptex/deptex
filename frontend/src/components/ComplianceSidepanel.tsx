@@ -49,7 +49,7 @@ export function ComplianceSidepanel(props: ComplianceSidepanelProps) {
         <div className="space-y-0.5">
           {isOrg ? (
             <button
-              onClick={() => props.onSelect('overview')}
+              onClick={() => (props as ComplianceSidepanelOrganizationProps).onSelect('overview')}
               aria-current={props.activeSection === 'overview' ? 'page' : undefined}
               className={cn(
                 'w-full flex items-center gap-2.5 h-9 px-3 text-sm font-medium transition-colors',
@@ -63,7 +63,7 @@ export function ComplianceSidepanel(props: ComplianceSidepanelProps) {
             </button>
           ) : (
             <button
-              onClick={() => props.onSelect('project')}
+              onClick={() => (props as ComplianceSidepanelProjectProps).onSelect('project')}
               aria-current={props.activeSection === 'project' ? 'page' : undefined}
               className={cn(
                 'w-full flex items-center gap-2.5 h-9 px-3 text-sm font-medium transition-colors',
