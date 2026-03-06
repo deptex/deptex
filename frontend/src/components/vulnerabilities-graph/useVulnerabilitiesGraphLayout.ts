@@ -277,11 +277,13 @@ export function buildDepAndVulnNodesAndEdges(
     else if (edgeSeverity === 'medium') strokeColor = 'rgba(234, 179, 8, 0.35)';
     else if (edgeSeverity === 'low') strokeColor = 'rgba(100, 116, 139, 0.35)';
     const { sourceHandle, targetHandle } = getHandlePair(angle);
+    // Center node (ProjectCenterNode) uses source handles id "source-right", "source-left", etc.
+    const centerSourceHandle = 'source-' + sourceHandle;
     edges.push({
       id: `edge-${dep.id}`,
       source: centerId,
       target: dep.id,
-      sourceHandle,
+      sourceHandle: centerSourceHandle,
       targetHandle,
       type: 'default',
       animated: hasVulnsInSubtree,
@@ -464,9 +466,15 @@ export function createVulnerabilitiesCenterNode(
   framework?: string | null,
   _vulnerableDependenciesLabel?: string,
   statusName?: string | null,
-  statusColor?: string | null
+  statusColor?: string | null,
+  /** When true, use org-overview-style card (border, bottom bar). */
+  overviewStyle?: boolean,
+  dependenciesCount?: number,
+  assetTierName?: string | null,
+  assetTierColor?: string | null
 ): Node {
   const worstSeverity = getWorstSeverity(depNodes);
+  const directCount = depNodes.filter((d) => d.parentId === CENTER_ID).length;
   return {
     id: VULN_CENTER_ID,
     type: 'projectCenterNode',
@@ -480,6 +488,10 @@ export function createVulnerabilitiesCenterNode(
       frameworkName: framework ?? undefined,
       statusName: statusName ?? undefined,
       statusColor: statusColor ?? undefined,
+      overviewStyle: overviewStyle ?? false,
+      dependenciesCount: dependenciesCount ?? directCount,
+      assetTierName: assetTierName ?? undefined,
+      assetTierColor: assetTierColor ?? undefined,
     },
     draggable: true,
     selectable: false,
@@ -516,18 +528,35 @@ export function useVulnerabilitiesGraphLayout(
   _centerExtras?: VulnGraphCenterExtras | null,
   showOnlyReachable = false,
   statusName?: string | null,
-  statusColor?: string | null
+  statusColor?: string | null,
+  overviewStyle = false,
+  assetTierName?: string | null,
+  assetTierColor?: string | null
 ): { nodes: Node[]; edges: Edge[] } {
   return useMemo(() => {
     const nodes: Node[] = [];
     const edges: Edge[] = [];
 
-    nodes.push(createVulnerabilitiesCenterNode(projectName, depNodes, framework, undefined, statusName, statusColor));
+    const directCount = depNodes.filter((d) => d.parentId === CENTER_ID).length;
+    nodes.push(
+      createVulnerabilitiesCenterNode(
+        projectName,
+        depNodes,
+        framework,
+        undefined,
+        statusName,
+        statusColor,
+        overviewStyle,
+        directCount,
+        assetTierName,
+        assetTierColor
+      )
+    );
 
     const sub = buildDepAndVulnNodesAndEdges(CENTER_ID, depNodes, showOnlyReachable);
     nodes.push(...sub.nodes);
     edges.push(...sub.edges);
 
     return { nodes, edges };
-  }, [projectName, depNodes, framework, _vulnerableDependenciesLabel, _centerExtras, showOnlyReachable, statusName, statusColor]);
+  }, [projectName, depNodes, framework, _vulnerableDependenciesLabel, _centerExtras, showOnlyReachable, statusName, statusColor, overviewStyle, assetTierName, assetTierColor]);
 }

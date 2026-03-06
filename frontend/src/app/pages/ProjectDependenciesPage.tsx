@@ -940,8 +940,10 @@ export default function ProjectDependenciesPage() {
     .filter(dep => {
       if (filterWatchtower && !dep.is_watching) return false;
       if (filterVulnerability && !getVulnSeverityInfo(dep)) return false;
-      const policyAllowed = dep.policy_result != null ? dep.policy_result.allowed : isLicenseAllowed(dep.license, policies);
-      if (filterLicenseIssue && policyAllowed !== false) return false;
+      // Only treat as license issue when policy was actually run and returned allowed: false.
+      // When policy_result is null (policy not evaluated yet), don't show/filter as license issue.
+      const hasLicenseIssue = dep.policy_result != null && dep.policy_result.allowed === false;
+      if (filterLicenseIssue && !hasLicenseIssue) return false;
       if (filterDeprecated && !dep.deprecation) return false;
       if (filterActionable) {
         const s = suggestionByDepId[dep.id];
@@ -1205,7 +1207,9 @@ export default function ProjectDependenciesPage() {
             <ul className="space-y-0.5">
               {filteredDependencies.map((dep) => {
                 const vulnInfo = getVulnSeverityInfo(dep);
-                const licenseAllowed = dep.policy_result != null ? dep.policy_result.allowed : isLicenseAllowed(dep.license, policies);
+                // Show "License" badge only when policy was evaluated and failed (allowed: false).
+                // When policy_result is null, policy hasn't run yet — don't show license issue.
+                const hasLicenseIssue = dep.policy_result != null && dep.policy_result.allowed === false;
                 const suggestion = suggestionByDepId[dep.id];
                 const isBumping = bumpingDepId === dep.id;
                 const isDecreasing = decreasingDepId === dep.id;
@@ -1256,7 +1260,7 @@ export default function ProjectDependenciesPage() {
                           <TooltipContent side="right">On org watchtower</TooltipContent>
                         </Tooltip>
                       )}
-                      {licenseAllowed === false && (
+                      {hasLicenseIssue && (
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <span className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-destructive/10 text-destructive border border-destructive/30 cursor-default">

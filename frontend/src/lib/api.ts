@@ -3801,10 +3801,16 @@ export interface VulnerabilityDetail {
     dependency_id: string;
     files_importing_count: number;
     files: string[];
+    environment?: string | null;
+    package_score?: number | null;
   }>;
   version_candidates: VersionCandidate[];
   timeline_events: VulnerabilityEvent[];
   reachable_flows?: ReachableFlow[];
+  /** For depscore breakdown: project asset tier enum (e.g. EXTERNAL). */
+  project_asset_tier?: string | null;
+  /** For depscore breakdown: custom tier multiplier when project uses org asset tier. */
+  project_tier_multiplier?: number | null;
 }
 
 export interface DependencySecuritySummary {

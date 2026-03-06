@@ -11,6 +11,8 @@ export interface DepscoreContext {
   epss: number;       // 0–1
   cisaKev: boolean;
   isReachable: boolean;
+  /** Phase 6B: tiered reachability (confirmed, data_flow, function, module, unreachable). */
+  reachabilityLevel?: string | null;
   assetTier: AssetTier;
   tierMultiplier?: number;
   tierRank?: number;
@@ -20,6 +22,14 @@ export interface DepscoreContext {
   packageScore?: number | null;
 }
 
+/** Reachability level weights (must match extraction-worker). */
+const REACHABILITY_LEVEL_WEIGHTS: Record<string, number> = {
+  confirmed: 1.0,
+  data_flow: 0.9,
+  function: 0.7,
+  module: 0.5,
+};
+
 const TIER_WEIGHT: Record<AssetTier, number> = {
   CROWN_JEWELS: 1.3,
   EXTERNAL: 1.1,
@@ -27,12 +37,8 @@ const TIER_WEIGHT: Record<AssetTier, number> = {
   NON_PRODUCTION: 0.6,
 };
 
-const REACHABILITY_WEIGHT_UNREACHABLE: Record<AssetTier, number> = {
-  CROWN_JEWELS: 0.8,
-  EXTERNAL: 0.5,
-  INTERNAL: 0.3,
-  NON_PRODUCTION: 0.1,
-};
+/** Unreachable vulns are heavily discounted (not used in code). Same for all tiers. */
+const REACHABILITY_WEIGHT_UNREACHABLE = 0.2;
 
 function packageReputationWeight(score: number | null | undefined): number {
   if (score == null) return 1.0;
@@ -53,11 +59,14 @@ export function calculateDepscore(context: DepscoreContext): number {
 
   const tierWeight = context.tierMultiplier ?? TIER_WEIGHT[context.assetTier];
 
-  const reachabilityWeight = context.isReachable
-    ? 1.0
-    : context.tierMultiplier != null
-      ? 0.1 + 0.7 * (context.tierMultiplier / 1.5)
-      : REACHABILITY_WEIGHT_UNREACHABLE[context.assetTier];
+  let reachabilityWeight: number;
+  if (context.reachabilityLevel && context.reachabilityLevel !== 'unreachable') {
+    reachabilityWeight = REACHABILITY_LEVEL_WEIGHTS[context.reachabilityLevel] ?? 0.5;
+  } else if (context.reachabilityLevel === 'unreachable' || context.isReachable === false) {
+    reachabilityWeight = REACHABILITY_WEIGHT_UNREACHABLE;
+  } else {
+    reachabilityWeight = 1.0;
+  }
 
   const environmentalMultiplier = tierWeight * reachabilityWeight;
 
@@ -70,6 +79,80 @@ export function calculateDepscore(context: DepscoreContext): number {
   const rawScore = baseImpact * threatMultiplier * environmentalMultiplier * dependencyContextMultiplier;
 
   return Math.min(100, Math.round(rawScore));
+}
+
+/** Human-readable breakdown of how depscore was computed (for sidebar/UI). */
+export interface DepscoreBreakdown {
+  baseImpact: number;
+  threatMultiplier: number;
+  threatLabel: string;
+  tierWeight: number;
+  reachabilityWeight: number;
+  reachabilityLabel: string;
+  environmentalMultiplier: number;
+  directnessWeight: number;
+  envWeight: number;
+  maliciousWeight: number;
+  reputationWeight: number;
+  dependencyContextMultiplier: number;
+  rawScore: number;
+  finalScore: number;
+}
+
+export function getDepscoreBreakdown(context: DepscoreContext): DepscoreBreakdown {
+  const cvss = Math.max(0, Math.min(10, context.cvss));
+  const epss = Math.max(0, Math.min(1, context.epss));
+  const baseImpact = cvss * 10;
+
+  const threatMultiplier = context.cisaKev
+    ? 1.2
+    : 0.6 + 0.6 * Math.sqrt(epss);
+  const threatLabel = context.cisaKev
+    ? 'CISA KEV (×1.2)'
+    : `EPSS ${(epss * 100).toFixed(1)}% (×${threatMultiplier.toFixed(2)})`;
+
+  const tierWeight = context.tierMultiplier ?? TIER_WEIGHT[context.assetTier];
+
+  let reachabilityWeight: number;
+  let reachabilityLabel: string;
+  if (context.reachabilityLevel && context.reachabilityLevel !== 'unreachable') {
+    reachabilityWeight = REACHABILITY_LEVEL_WEIGHTS[context.reachabilityLevel] ?? 0.5;
+    reachabilityLabel = `${context.reachabilityLevel.replace('_', ' ')} (×${reachabilityWeight.toFixed(2)})`;
+  } else if (context.reachabilityLevel === 'unreachable' || context.isReachable === false) {
+    reachabilityWeight = REACHABILITY_WEIGHT_UNREACHABLE;
+    reachabilityLabel = `Unreachable (×${reachabilityWeight.toFixed(2)})`;
+  } else {
+    reachabilityWeight = 1.0;
+    reachabilityLabel = 'Reachable (×1.0)';
+  }
+
+  const environmentalMultiplier = tierWeight * reachabilityWeight;
+
+  const directnessWeight = context.isDirect === false ? 0.75 : 1.0;
+  const envWeight = context.isDevDependency === true ? 0.4 : 1.0;
+  const maliciousWeight = context.isMalicious === true ? 1.3 : 1.0;
+  const reputationWeight = packageReputationWeight(context.packageScore);
+  const dependencyContextMultiplier = directnessWeight * envWeight * maliciousWeight * reputationWeight;
+
+  const rawScore = baseImpact * threatMultiplier * environmentalMultiplier * dependencyContextMultiplier;
+  const finalScore = Math.min(100, Math.round(rawScore));
+
+  return {
+    baseImpact,
+    threatMultiplier,
+    threatLabel,
+    tierWeight,
+    reachabilityWeight,
+    reachabilityLabel,
+    environmentalMultiplier,
+    directnessWeight,
+    envWeight,
+    maliciousWeight,
+    reputationWeight,
+    dependencyContextMultiplier,
+    rawScore,
+    finalScore,
+  };
 }
 
 /** Map severity label to CVSS when cvss_score is not available. */

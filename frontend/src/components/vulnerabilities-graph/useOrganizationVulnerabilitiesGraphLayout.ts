@@ -279,8 +279,10 @@ export interface OverviewProjectItem {
   statusColor?: string | null;
   /** Status id for filtering (organization_statuses.id). */
   statusId?: string | null;
-  /** Asset tier name shown as subtext on project card (e.g. Crown Jewels, External). */
+  /** Asset tier name shown in badge on project card (e.g. Crown Jewels, External). */
   assetTierName?: string | null;
+  /** Hex color for asset tier badge (from organization_asset_tiers). */
+  assetTierColor?: string | null;
   /** Number of dependencies (for org overview card). */
   dependenciesCount?: number | null;
   /** When true, show as extracting center node (spinner) and clicking opens extraction logs sidebar. */
@@ -391,6 +393,7 @@ export function useOrganizationOverviewGraphLayout(
             statusBadge: proj.statusName ?? undefined,
             statusBadgeColor: proj.statusColor ?? undefined,
             assetTierName: proj.assetTierName ?? undefined,
+            assetTierColor: proj.assetTierColor ?? undefined,
             riskGrade: 'A+',
             dependenciesCount: proj.dependenciesCount ?? undefined,
             organizationId: organizationId ?? undefined,
@@ -492,16 +495,17 @@ export function useOrganizationOverviewGraphLayout(
               projectId: proj.projectId,
               framework: proj.framework ?? undefined,
               neutralStyle: true,
-              statusBadge: proj.statusName ?? undefined,
-              statusBadgeColor: proj.statusColor ?? undefined,
-              assetTierName: proj.assetTierName ?? undefined,
-              riskGrade: 'A+',
-              dependenciesCount: proj.dependenciesCount ?? undefined,
-              organizationId: organizationId ?? undefined,
-            },
-            draggable: true,
-            selectable: false,
-          });
+            statusBadge: proj.statusName ?? undefined,
+            statusBadgeColor: proj.statusColor ?? undefined,
+            assetTierName: proj.assetTierName ?? undefined,
+            assetTierColor: proj.assetTierColor ?? undefined,
+            riskGrade: 'A+',
+            dependenciesCount: proj.dependenciesCount ?? undefined,
+            organizationId: organizationId ?? undefined,
+          },
+          draggable: true,
+          selectable: false,
+        });
         }
 
         const { sourceHandle: teamSourceHandle, targetHandle: teamTargetHandle } = getHandlePair(projAngle);

@@ -41,12 +41,8 @@ const TIER_WEIGHT: Record<AssetTier, number> = {
   NON_PRODUCTION: 0.6,
 };
 
-const REACHABILITY_WEIGHT_UNREACHABLE: Record<AssetTier, number> = {
-  CROWN_JEWELS: 0.8,
-  EXTERNAL: 0.5,
-  INTERNAL: 0.3,
-  NON_PRODUCTION: 0.1,
-};
+/** Unreachable vulns are heavily discounted (not used in code). Same for all tiers. */
+const REACHABILITY_WEIGHT_UNREACHABLE = 0.2;
 
 function packageReputationWeight(score: number | null | undefined): number {
   if (score == null) return 1.0;
@@ -72,9 +68,7 @@ export function calculateDepscore(ctx: DepscoreContext): number {
   if (ctx.reachabilityLevel && ctx.reachabilityLevel !== 'unreachable') {
     reachabilityWeight = REACHABILITY_LEVEL_WEIGHTS[ctx.reachabilityLevel] ?? 0.5;
   } else if (ctx.reachabilityLevel === 'unreachable' || !ctx.isReachable) {
-    reachabilityWeight = ctx.tierMultiplier != null
-      ? 0.1 + 0.7 * (ctx.tierMultiplier / 1.5)
-      : REACHABILITY_WEIGHT_UNREACHABLE[ctx.assetTier];
+    reachabilityWeight = REACHABILITY_WEIGHT_UNREACHABLE;
   } else {
     reachabilityWeight = 1.0;
   }

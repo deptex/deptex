@@ -675,31 +675,40 @@ export async function evaluateProjectPolicies(
 
   const projectDeps = deps ?? [];
 
-  // Run packagePolicy on each dep (if code exists)
-  if (packagePolicyCode && projectDeps.length > 0) {
+  // Run packagePolicy on each dep when org/project has policy code; otherwise set default "allowed"
+  // so the UI has an explicit policy_result and doesn't fall back to empty accepted_licenses.
+  if (projectDeps.length > 0) {
+    const defaultResult = { allowed: true as const, reasons: [] as string[] };
     for (const dep of projectDeps) {
-      const depData = (dep as any).dependencies;
-      const versionData = (dep as any).dependency_versions;
+      if (packagePolicyCode) {
+        const depData = (dep as any).dependencies;
+        const versionData = (dep as any).dependency_versions;
 
-      const depContext: PolicyDependencyContext = {
-        name: depData?.name ?? '',
-        version: depData?.version ?? '',
-        license: depData?.license ?? null,
-        openSsfScore: depData?.openssf_score ?? null,
-        weeklyDownloads: depData?.weekly_downloads ?? null,
-        lastPublishedAt: depData?.last_published_at ?? null,
-        releasesLast12Months: depData?.releases_last_12_months ?? null,
-        dependencyScore: depData?.score ?? null,
-        maliciousIndicator: versionData?.malicious_indicator ?? null,
-        slsaLevel: versionData?.slsa_level ?? null,
-      };
+        const depContext: PolicyDependencyContext = {
+          name: depData?.name ?? '',
+          version: depData?.version ?? '',
+          license: depData?.license ?? null,
+          openSsfScore: depData?.openssf_score ?? null,
+          weeklyDownloads: depData?.weekly_downloads ?? null,
+          lastPublishedAt: depData?.last_published_at ?? null,
+          releasesLast12Months: depData?.releases_last_12_months ?? null,
+          dependencyScore: depData?.score ?? null,
+          maliciousIndicator: versionData?.malicious_indicator ?? null,
+          slsaLevel: versionData?.slsa_level ?? null,
+        };
 
-      const policyResult = await runPackagePolicy(packagePolicyCode, depContext, tier, organizationId);
+        const policyResult = await runPackagePolicy(packagePolicyCode, depContext, tier, organizationId);
 
-      await supabase
-        .from('project_dependencies')
-        .update({ policy_result: policyResult })
-        .eq('id', dep.id);
+        await supabase
+          .from('project_dependencies')
+          .update({ policy_result: policyResult })
+          .eq('id', dep.id);
+      } else {
+        await supabase
+          .from('project_dependencies')
+          .update({ policy_result: defaultResult })
+          .eq('id', dep.id);
+      }
     }
   }
 

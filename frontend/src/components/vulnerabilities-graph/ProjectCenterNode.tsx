@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Loader2 } from 'lucide-react';
+import { Folder, Layers, Loader2, Package } from 'lucide-react';
 import { FrameworkIcon } from '../framework-icon';
 
 export type WorstSeverity = 'critical' | 'high' | 'medium' | 'low' | 'none';
@@ -21,6 +21,14 @@ export interface ProjectCenterNodeData {
   /** Org overview: when set, click opens extraction logs sidebar for this project. */
   projectId?: string;
   organizationId?: string;
+  /** When true, use org-overview-style card (border, bottom bar with risk grade + deps count). */
+  overviewStyle?: boolean;
+  /** For overview style: number of direct dependencies (shown in bottom bar). */
+  dependenciesCount?: number;
+  /** For overview style: asset tier name (e.g. Crown Jewels). */
+  assetTierName?: string | null;
+  /** For overview style: asset tier badge color. */
+  assetTierColor?: string | null;
 }
 
 function getColorScheme(worstVulnerabilitySeverity: WorstSeverity) {
@@ -77,6 +85,17 @@ const greyExtractingScheme = {
   iconText: 'text-slate-500',
 };
 
+/** Fallback status colors when API doesn't return status_color (matches VulnProjectNode). */
+function statusBadgeColorFallback(label: string | null | undefined): string | null {
+  if (!label || typeof label !== 'string') return null;
+  const lower = label.toLowerCase();
+  if (lower.includes('compliant') && !lower.includes('non') && !lower.includes('not')) return '#22c55e';
+  if (lower.includes('non-compliant') || lower.includes('not compliant') || lower.includes('non compliant')) return '#ef4444';
+  if (lower.includes('under review') || lower.includes('review')) return '#f59e0b';
+  if (lower.includes('failed') || lower.includes('error')) return '#ef4444';
+  return null;
+}
+
 function ProjectCenterNodeComponent({ data }: NodeProps) {
   const {
     projectName = 'Project',
@@ -91,6 +110,10 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
     statusColor,
     projectId,
     organizationId,
+    overviewStyle = false,
+    dependenciesCount,
+    assetTierName,
+    assetTierColor,
   } = (data as unknown as ProjectCenterNodeData) ?? {};
   const isOrgOverviewExtracting = Boolean(isExtracting && projectId && organizationId);
   const colorScheme = isExtracting ? greyExtractingScheme : getColorScheme(worstVulnerabilitySeverity);
@@ -101,6 +124,9 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
   const statusStyle = statusColor
     ? { backgroundColor: `${statusColor}20`, borderColor: `${statusColor}66` }
     : undefined;
+  const showStatusBadge = !isExtracting && statusName != null && statusName !== '';
+  const rawStatusColor = statusColor?.trim() ? statusColor : (showStatusBadge ? statusBadgeColorFallback(statusName) : null);
+  const effectiveStatusColor = rawStatusColor && !rawStatusColor.startsWith('#') ? `#${rawStatusColor}` : rawStatusColor;
 
   return (
     <div className="relative cursor-pointer">
@@ -114,7 +140,56 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
       <Handle id="source-bottom" type="source" position={Position.Bottom} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
       <Handle id="source-left" type="source" position={Position.Left} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
 
-      {isOrgOverviewExtracting ? (
+      {overviewStyle && !isExtracting ? (
+        <div className="relative rounded-lg border border-border bg-background-card shadow-md h-full min-h-[80px] min-w-[260px] flex flex-col overflow-hidden cursor-pointer hover:shadow-lg hover:border-border/80 transition-all">
+          <div className="px-3.5 py-3 flex items-center gap-2.5 min-w-0 flex-1">
+            {frameworkIdForIcon ? (
+              <div className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 bg-[#1a1c1e] text-muted-foreground">
+                <FrameworkIcon frameworkId={frameworkIdForIcon} size={18} className="text-current" />
+              </div>
+            ) : (
+              <div className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 bg-[#1a1c1e] text-muted-foreground">
+                <Folder className="w-4 h-4" />
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-foreground truncate" title={projectName}>
+                {projectName}
+              </p>
+            </div>
+            {showStatusBadge && (
+              <span
+                className="flex-shrink-0 inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium"
+                style={
+                  effectiveStatusColor
+                    ? { backgroundColor: `${effectiveStatusColor}20`, color: effectiveStatusColor, borderColor: `${effectiveStatusColor}40` }
+                    : { backgroundColor: 'transparent', color: 'var(--muted-foreground)', borderColor: 'rgba(255,255,255,0.2)' }
+                }
+              >
+                {statusName}
+              </span>
+            )}
+          </div>
+          <div className="border-t border-border px-3 py-2 flex items-center gap-2 flex-wrap w-full text-left rounded-b-lg">
+            <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-400">
+              A+
+            </span>
+            {typeof dependenciesCount === 'number' && (
+              <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                <Package className="h-3 w-3 flex-shrink-0" />
+                {dependenciesCount} direct dep{dependenciesCount === 1 ? '' : 's'}
+              </span>
+            )}
+            <div className="flex-1 min-w-0" />
+            {assetTierName && (
+              <span className="flex items-center gap-1 text-[11px] text-muted-foreground truncate max-w-[120px]" title={assetTierName}>
+                <Layers className="h-3 w-3 flex-shrink-0 text-muted-foreground/80" aria-hidden />
+                {assetTierName}
+              </span>
+            )}
+          </div>
+        </div>
+      ) : isOrgOverviewExtracting ? (
         <div className="relative rounded-lg border border-border bg-background-card shadow-md h-full min-h-[100px] min-w-[268px] flex flex-col overflow-hidden cursor-pointer hover:shadow-lg hover:border-border/80 transition-all">
           {/* Top: icon + name only (like team card) */}
           <div className="px-3.5 py-3 flex items-center gap-2.5 min-w-0 flex-1">

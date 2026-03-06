@@ -235,6 +235,7 @@ export default function OrganizationVulnerabilitiesPage() {
               statusColor: p.status_color ?? null,
               statusId: p.status_id ?? null,
               assetTierName: p.asset_tier_name ?? null,
+              assetTierColor: p.asset_tier_color ?? null,
               dependenciesCount: (p as Project).direct_dependencies_count ?? (p as Project).dependencies_count ?? null,
               isExtracting,
             });
@@ -1525,9 +1526,51 @@ export default function OrganizationVulnerabilitiesPage() {
             </div>
             <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
               {projectStatsLoading ? (
-                <div className="flex items-center justify-center py-12 text-muted-foreground">
-                  <Loader2 className="h-8 w-8 animate-spin" />
-                </div>
+                <>
+                  <section>
+                    <div className="h-4 w-20 bg-muted rounded animate-pulse mb-3" />
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="rounded-lg border border-border bg-background-subtle/50 p-3">
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="h-4 w-4 rounded bg-muted animate-pulse" />
+                          <div className="h-3 w-16 bg-muted rounded animate-pulse" />
+                        </div>
+                        <div className="h-6 w-8 bg-muted rounded animate-pulse mb-1" />
+                        <div className="h-3 w-24 bg-muted/80 rounded animate-pulse" />
+                      </div>
+                      <div className="rounded-lg border border-border bg-background-subtle/50 p-3">
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="h-4 w-4 rounded bg-muted animate-pulse" />
+                          <div className="h-3 w-14 bg-muted rounded animate-pulse" />
+                        </div>
+                        <div className="h-6 w-10 bg-muted rounded animate-pulse mb-1" />
+                        <div className="h-3 w-32 bg-muted/80 rounded animate-pulse" />
+                      </div>
+                    </div>
+                  </section>
+                  <section>
+                    <div className="h-4 w-24 bg-muted rounded animate-pulse mb-3" />
+                    <div className="flex flex-col gap-2">
+                      <div className="h-7 w-20 bg-muted rounded-md animate-pulse" />
+                      <div className="h-4 w-28 bg-muted/80 rounded animate-pulse" />
+                    </div>
+                  </section>
+                  <section>
+                    <div className="h-4 w-24 bg-muted rounded animate-pulse mb-3" />
+                    <ul className="space-y-2">
+                      {[1, 2, 3].map((i) => (
+                        <li key={i} className="rounded-lg border border-border bg-background-subtle/50 p-2.5">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="h-5 w-14 bg-muted rounded animate-pulse" />
+                            <div className="h-3.5 w-3.5 rounded bg-muted animate-pulse shrink-0" />
+                          </div>
+                          <div className="h-4 w-full max-w-[200px] bg-muted/80 rounded animate-pulse mt-2" />
+                          <div className="h-3 w-full max-w-[260px] bg-muted/60 rounded animate-pulse mt-1" />
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                </>
               ) : projectStats ? (
                 <>
                   {/* Stats row */}

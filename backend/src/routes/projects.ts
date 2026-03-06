@@ -10228,9 +10228,38 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
     if (pdIds.length > 0) {
       const { data: deps } = await supabase
         .from('project_dependencies')
-        .select('id, name, version, is_direct, dependency_id, files_importing_count')
+        .select('id, name, version, is_direct, dependency_id, files_importing_count, environment')
         .in('id', pdIds);
       affectedDeps = deps ?? [];
+    }
+
+    // Project and tier for depscore breakdown (asset_tier, custom tier multiplier)
+    const { data: project } = await supabase
+      .from('projects')
+      .select('asset_tier, asset_tier_id')
+      .eq('id', projectId)
+      .single();
+    let projectTierMultiplier: number | null = null;
+    if (project?.asset_tier_id) {
+      const { data: tierRow } = await supabase
+        .from('organization_asset_tiers')
+        .select('environmental_multiplier')
+        .eq('id', project.asset_tier_id)
+        .single();
+      projectTierMultiplier = tierRow?.environmental_multiplier ?? null;
+    }
+
+    // Package reputation scores for affected dependencies (for depscore breakdown)
+    const depIdsForScore = [...new Set((affectedDeps as any[]).map((d: any) => d.dependency_id).filter(Boolean))];
+    let scoreByDependencyId: Record<string, number> = {};
+    if (depIdsForScore.length > 0) {
+      const { data: depRows } = await supabase
+        .from('dependencies')
+        .select('id, score')
+        .in('id', depIdsForScore);
+      for (const row of depRows ?? []) {
+        scoreByDependencyId[row.id] = row.score ?? 0;
+      }
     }
 
     const depIds = affectedDeps.map((d: any) => d.id);
@@ -10298,10 +10327,13 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
       affected_dependencies: affectedDeps.map((d: any) => ({
         ...d,
         files: filesByDep[d.id] ?? [],
+        package_score: d.dependency_id != null ? (scoreByDependencyId[d.dependency_id] ?? null) : null,
       })),
       version_candidates: versionCandidates,
       timeline_events: events ?? [],
       reachable_flows: reachableFlows,
+      project_asset_tier: project?.asset_tier ?? null,
+      project_tier_multiplier: projectTierMultiplier,
     });
   } catch (error: any) {
     console.error('Error fetching vulnerability detail:', error);
