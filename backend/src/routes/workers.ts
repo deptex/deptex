@@ -655,6 +655,7 @@ export async function extractDependencies(
       .from('project_repositories')
       .update({
         status,
+        ...(status === 'ready' ? { extraction_step: 'completed' } : {}),
         updated_at: new Date().toISOString(),
       })
       .eq('project_id', projectId);
@@ -1790,7 +1791,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
 
         await supabase
           .from('project_repositories')
-          .update({ status: 'ready' })
+          .update({ status: 'ready', extraction_step: 'completed', updated_at: new Date().toISOString() })
           .eq('project_id', projectId);
 
         // Phase 10: compute health score and invalidate stats caches

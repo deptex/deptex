@@ -53,6 +53,7 @@ import {
   invalidateProjectCachesForTeam,
   CACHE_TTL_SECONDS,
 } from '../lib/cache';
+import { getHealthScoreBreakdown } from '../lib/health-score';
 
 /** True if version is a stable release (no canary/experimental/alpha/beta/rc). */
 function isStableVersion(version: string): boolean {
@@ -745,6 +746,25 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
       directDepsByProject[row.project_id] = (directDepsByProject[row.project_id] ?? 0) + 1;
     });
 
+    // Per-project compliance % (share of deps with policy_result.allowed !== false) for Compliance tab
+    const compliancePctByProject: Record<string, number | null> = {};
+    if (projectIds.length > 0) {
+      const { data: pdRows } = await supabase
+        .from('project_dependencies')
+        .select('project_id, policy_result')
+        .in('project_id', projectIds);
+      const byProject: Record<string, { total: number; compliant: number }> = {};
+      for (const pid of projectIds) byProject[pid] = { total: 0, compliant: 0 };
+      (pdRows || []).forEach((row: any) => {
+        byProject[row.project_id].total += 1;
+        if (row.policy_result?.allowed !== false) byProject[row.project_id].compliant += 1;
+      });
+      for (const pid of projectIds) {
+        const { total, compliant } = byProject[pid];
+        compliancePctByProject[pid] = total === 0 ? null : Math.round((compliant / total) * 100);
+      }
+    }
+
     // Format projects with team_ids, team_names, owner_team, role, and permissions
     const formattedProjects = (projects || []).map((project: any) => {
       const role = projectRoles[project.id] || 'viewer';
@@ -827,8 +847,20 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
         asset_tier_id: project.asset_tier_id ?? null,
         asset_tier_name: tierInfo?.name ?? null,
         asset_tier_color: tierInfo?.color ?? null,
+        compliance_score_pct: compliancePctByProject[project.id] ?? null,
       };
     });
+
+    // #region agent log
+    const lowHealthProjects = (projects || []).filter((p: any) => p.health_score != null && p.health_score < 100);
+    for (const p of lowHealthProjects) {
+      try {
+        const breakdown = await getHealthScoreBreakdown(p.id);
+        const weighted = Math.round(breakdown.complianceScore * 0.4 + breakdown.vulnScore * 0.3 + breakdown.freshnessScore * 0.2 + breakdown.findingsScore * 0.1);
+        fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'df8aae' }, body: JSON.stringify({ sessionId: 'df8aae', location: 'projects.ts:GET/:id/projects', message: 'Health score breakdown for project with score < 100', data: { projectId: p.id, projectName: p.name, storedHealthScore: p.health_score, complianceScore: breakdown.complianceScore, vulnScore: breakdown.vulnScore, freshnessScore: breakdown.freshnessScore, findingsScore: breakdown.findingsScore, computedWeighted: weighted }, timestamp: Date.now(), hypothesisId: 'H1-H5' }) }).catch(() => {});
+      } catch (_) {}
+    }
+    // #endregion
 
     res.json(formattedProjects);
   } catch (error: any) {
@@ -3866,6 +3898,30 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
       .eq('project_id', projectId)
       .single();
 
+    // If repo says ready but an extraction job is still running, or extraction_step is not completed, report extracting so Overview and Repository stay in sync
+    let effectiveStatus = repoRecord?.status ?? null;
+    let hasActiveJob = false;
+    if (repoRecord?.status === 'ready') {
+      const step = (repoRecord as { extraction_step?: string }).extraction_step;
+      if (step && step !== 'completed') {
+        effectiveStatus = 'extracting';
+      }
+      if (effectiveStatus === 'ready') {
+        const { data: activeJob } = await supabase
+          .from('extraction_jobs')
+          .select('id')
+          .eq('project_id', projectId)
+          .in('status', ['queued', 'processing'])
+          .limit(1)
+          .maybeSingle();
+        hasActiveJob = !!activeJob;
+        if (activeJob) effectiveStatus = 'extracting';
+      }
+    }
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'df7584' }, body: JSON.stringify({ sessionId: 'df7584', location: 'projects.ts:GET-repositories', message: 'repositories response', data: { projectId, repoStatus: repoRecord?.status ?? null, effectiveStatus, hasActiveJob }, timestamp: Date.now(), hypothesisId: 'H2' }) }).catch(() => {});
+    // #endregion
+
     const GIT_PROVIDERS = ['github', 'gitlab', 'bitbucket'] as const;
     let integrations: OrgIntegration[];
     if (integration_id) {
@@ -3922,7 +3978,7 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
         ? {
           repo_full_name: repoRecord.repo_full_name,
           default_branch: repoRecord.default_branch,
-          status: repoRecord.status,
+          status: effectiveStatus ?? repoRecord.status,
           package_json_path: (repoRecord as { package_json_path?: string }).package_json_path ?? '',
           extraction_step: (repoRecord as { extraction_step?: string }).extraction_step ?? null,
           extraction_error: (repoRecord as { extraction_error?: string }).extraction_error ?? null,
@@ -4385,6 +4441,14 @@ router.get('/:id/projects/:projectId/extraction/runs', async (req: AuthRequest, 
         ...payloadToMeta(payload),
       };
     });
+
+    // #region agent log
+    const latest = out[0];
+    if (latest) {
+      const jobForLatest = jobByRunId.get(latest.run_id);
+      fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'df7584' }, body: JSON.stringify({ sessionId: 'df7584', location: 'projects.ts:GET-extraction-runs', message: 'extraction runs latest', data: { projectId, run_id: latest.run_id, jobStatusFromDb: jobForLatest?.status ?? null, returnedStatus: latest.status }, timestamp: Date.now(), hypothesisId: 'H4' }) }).catch(() => {});
+    }
+    // #endregion
 
     res.json(out);
   } catch (error: any) {
@@ -7753,7 +7817,7 @@ router.get('/:id/projects/:projectId/import-status', async (req: AuthRequest, re
         effectiveStatus = 'ready';
         await supabase
           .from('project_repositories')
-          .update({ status: 'ready', updated_at: new Date().toISOString() })
+          .update({ status: 'ready', extraction_step: 'completed', updated_at: new Date().toISOString() })
           .eq('project_id', projectId);
       }
     } else if (repoRecord.status === 'analyzing' && !allReady) {

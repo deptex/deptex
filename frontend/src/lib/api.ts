@@ -2821,6 +2821,8 @@ export interface Project {
   asset_tier_name?: string;
   asset_tier_color?: string;
   policy_evaluated_at?: string | null;
+  /** Percent of dependencies with passing licenses/policy (0–100). Used on org Compliance tab. */
+  compliance_score_pct?: number | null;
 }
 
 export interface ProjectRepository {

@@ -12,7 +12,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { api, TeamWithRole, TeamPermissions, Project } from '../../lib/api';
 import { loadProjectVulnerabilityGraphData } from '../../lib/vulnerability-graph-data';
-import { useTeamVulnerabilitiesGraphLayout, type ProjectWithGraphData } from '../../components/vulnerabilities-graph/useTeamVulnerabilitiesGraphLayout';
+import { useTeamVulnerabilitiesGraphLayout, type ProjectWithGraphData, TEAM_CENTER_ID } from '../../components/vulnerabilities-graph/useTeamVulnerabilitiesGraphLayout';
 import { VULN_CENTER_NODE_WIDTH, VULN_CENTER_NODE_HEIGHT } from '../../components/vulnerabilities-graph/useVulnerabilitiesGraphLayout';
 import { GroupCenterNode } from '../../components/vulnerabilities-graph/GroupCenterNode';
 import { SkeletonGroupCenterNode } from '../../components/vulnerabilities-graph/SkeletonGroupCenterNode';
@@ -91,6 +91,11 @@ export default function TeamOverviewPage() {
               graphDepNodes: result.graphDepNodes,
               framework: p.framework,
               isExtracting: p.repo_status != null && p.repo_status !== 'ready',
+              statusName: p.status_name ?? null,
+              statusColor: p.status_color ?? null,
+              assetTierName: p.asset_tier_name ?? null,
+              assetTierColor: p.asset_tier_color ?? null,
+              dependenciesCount: p.dependencies_count ?? p.direct_dependencies_count ?? null,
             }))
           )
         )
@@ -119,7 +124,8 @@ export default function TeamOverviewPage() {
   const { nodes: layoutNodes, edges: layoutEdges } = useTeamVulnerabilitiesGraphLayout(
     team?.name ?? 'Team',
     projectsWithGraphData,
-    false
+    false,
+    team ? { memberCount: team.member_count, roleBadge: team.role_display_name ?? null, roleBadgeColor: team.role_color ?? null } : undefined
   );
 
   const [graphNodes, setGraphNodes, onNodesChange] = useNodesState<Node>([]);
@@ -137,6 +143,7 @@ export default function TeamOverviewPage() {
 
   const onNodeClick = useCallback(
     (_: unknown, node: Node) => {
+      if (node.id === TEAM_CENTER_ID) return; // team center is not clickable to navigate
       const d = node.data as { projectId?: string };
       if (!d?.projectId || !org) return;
       navigate(`/organizations/${org}/projects/${d.projectId}/overview`);

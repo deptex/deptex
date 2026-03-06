@@ -200,14 +200,14 @@ export default function CompliancePage() {
             complianceLoadingSkeleton
           ) : (
             <div className="mx-auto max-w-5xl px-6 py-6 space-y-8">
-              {/* Aggregate compliance score */}
+              {/* Aggregate: percent of projects passing policy (binary compliant/not) */}
               <div className="flex flex-wrap items-center gap-8">
                 <div className="flex items-baseline gap-3">
                   <span className="text-4xl font-semibold tabular-nums text-foreground">
                     {compliantPct}%
                   </span>
                   <span className="text-xs font-semibold uppercase tracking-wider text-foreground-secondary">
-                    Compliance score
+                    Projects passing policy
                   </span>
                 </div>
                 <p className="text-sm text-foreground-secondary">
@@ -215,7 +215,7 @@ export default function CompliancePage() {
                 </p>
               </div>
 
-              {/* Projects table */}
+              {/* Projects table: compliance score = % of dependencies with passing licenses/policy */}
               <div className="rounded-lg border border-border bg-background-card overflow-hidden">
                 <table className="w-full">
                   <thead className="bg-background-card-header border-b border-border">
@@ -256,8 +256,8 @@ export default function CompliancePage() {
                                 <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
                                 Extracting
                               </span>
-                            ) : project.health_score != null ? (
-                              `${project.health_score}%`
+                            ) : project.compliance_score_pct != null ? (
+                              `${project.compliance_score_pct}%`
                             ) : (
                               '—'
                             )}

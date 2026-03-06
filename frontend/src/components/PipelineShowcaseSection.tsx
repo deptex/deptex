@@ -23,11 +23,21 @@ import {
 } from "lucide-react";
 import LandingCTACard from "./LandingCTACard";
 
-const STEPS = [
+/** Optional image path for the right-side card (e.g. screenshot). */
+const STEPS: Array<{
+  id: string;
+  category: string;
+  title: string;
+  description: string;
+  learnMore?: string;
+  bullets: Array<{ icon: typeof Webhook; text: string; description: string }>;
+  image?: string;
+}> = [
   {
     id: "connect",
     category: "Connect and sync",
     title: "Connect your repositories",
+    image: "/images/connectrepos.png",
     description:
       "Link GitHub, GitLab, or Bitbucket in minutes. Deptex ingests your repos and builds SBOMs so you can secure every dependency across your stack.",
     bullets: [
@@ -40,6 +50,7 @@ const STEPS = [
     id: "intelligence",
     category: "Vulnerability intelligence",
     title: "Get detailed vulnerability intelligence",
+    image: "/images/vulnintelligence.png",
     description:
       "See which dependencies are affected, severity, EPSS scores, and CISA KEV status. Prioritize what matters with code-level reachability — data-flow, function, and module tracing.",
     learnMore: "/platform-features/vulnerability-intelligence",
@@ -53,6 +64,7 @@ const STEPS = [
     id: "compliance",
     category: "Policy and compliance",
     title: "Enforce custom compliance policies",
+    image: "/images/policiescode.png",
     description:
       "Policy-as-code, license checks, and custom statuses. Stay compliant and ship with confidence using a single source of truth for your security posture.",
     learnMore: "/platform-features/customizable-compliance",
@@ -66,6 +78,7 @@ const STEPS = [
     id: "fix",
     category: "Remediation",
     title: "Fix and automate with AI",
+    image: "/images/aiassistant.png",
     description:
       "Aegis suggests fixes, creates bump PRs, and learns from outcomes. Automate remediation so your team can focus on building.",
     learnMore: "/autonomous-agent",
@@ -198,15 +211,25 @@ export default function PipelineShowcaseSection() {
                 </ul>
               </div>
 
-              {/* Right: card — blank for image/video */}
+              {/* Right: card — screenshot when step.image set, else placeholder */}
               <div
                 className="relative rounded-xl overflow-hidden"
                 style={{
-                  background: "linear-gradient(180deg, rgba(28, 31, 36, 0.95) 0%, rgba(22, 25, 29, 0.98) 100%)",
+                  background: step.image
+                    ? "transparent"
+                    : "linear-gradient(180deg, rgba(28, 31, 36, 0.95) 0%, rgba(22, 25, 29, 0.98) 100%)",
                   boxShadow: "0 0 0 1px rgba(255,255,255,0.06), 0 8px 32px -8px rgba(0,0,0,0.5)",
                 }}
               >
-                <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[400px]" />
+                {step.image ? (
+                  <img
+                    src={step.image}
+                    alt={step.id === "connect" ? "New Project modal — choose a repository to connect" : step.id === "intelligence" ? "Security graph: project dependencies and vulnerabilities with Depscore, CVE, EPSS" : step.id === "compliance" ? "Policy-as-code: project status function with blocked deps and reachable critical vulns" : step.id === "fix" ? "Policy assistant panel: define policies in natural language, view generated code" : step.title}
+                    className="w-full h-auto min-h-[280px] sm:min-h-[360px] lg:min-h-[400px] object-cover object-top"
+                  />
+                ) : (
+                  <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[400px]" />
+                )}
               </div>
               </div>
             </div>

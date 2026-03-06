@@ -17,14 +17,17 @@ export async function computeHealthScore(projectId: string): Promise<number> {
     getFindingsScore(projectId),
   ]);
 
-  const score = Math.round(
+  // #region agent log
+  const scorePreClamp = Math.round(
     complianceScore * 0.4 +
     vulnScore * 0.3 +
     freshnessScore * 0.2 +
     findingsScore * 0.1,
   );
+  fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'df8aae' }, body: JSON.stringify({ sessionId: 'df8aae', location: 'health-score.ts:computeHealthScore', message: 'Health score breakdown', data: { projectId, complianceScore, vulnScore, freshnessScore, findingsScore, scorePreClamp, weights: '0.4 0.3 0.2 0.1' }, timestamp: Date.now(), hypothesisId: 'H1-H4' }) }).catch(() => {});
+  // #endregion
 
-  const clamped = Math.max(0, Math.min(100, score));
+  const clamped = Math.max(0, Math.min(100, scorePreClamp));
 
   await supabase
     .from('projects')
@@ -42,8 +45,9 @@ async function getComplianceScore(projectId: string): Promise<number> {
 
   if (!deps || deps.length === 0) return 100;
 
+  // Match frontend: allowed !== false (so null/undefined policy_result or allowed counts as compliant)
   const compliant = deps.filter(
-    (d: any) => d.policy_result && d.policy_result.allowed === true,
+    (d: any) => d.policy_result?.allowed !== false,
   ).length;
 
   return (compliant / deps.length) * 100;
@@ -84,6 +88,22 @@ async function getFreshnessScore(projectId: string): Promise<number> {
 
   const outdated = deps.filter((d: any) => d.is_outdated === true).length;
   return ((deps.length - outdated) / deps.length) * 100;
+}
+
+/** Returns the 4 component scores (0–100) without persisting. For debugging. */
+export async function getHealthScoreBreakdown(projectId: string): Promise<{
+  complianceScore: number;
+  vulnScore: number;
+  freshnessScore: number;
+  findingsScore: number;
+}> {
+  const [complianceScore, vulnScore, freshnessScore, findingsScore] = await Promise.all([
+    getComplianceScore(projectId),
+    getVulnScore(projectId),
+    getFreshnessScore(projectId),
+    getFindingsScore(projectId),
+  ]);
+  return { complianceScore, vulnScore, freshnessScore, findingsScore };
 }
 
 async function getFindingsScore(projectId: string): Promise<number> {
