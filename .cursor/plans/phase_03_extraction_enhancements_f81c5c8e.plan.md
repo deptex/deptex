@@ -68,7 +68,7 @@ Instead of Socket.dev, leverage the GHSA `classification` field we already query
 - `ALTER TABLE dependency_vulnerabilities ADD COLUMN classification TEXT DEFAULT 'GENERAL'`
 - Values: `GENERAL` (normal vuln) or `MALWARE` (known malicious package)
 
-**Pipeline integration** in [ee/backend/routes/workers.ts](ee/backend/routes/workers.ts) populate-dependencies flow:
+**Pipeline integration** in [backend/src/routes/workers.ts](backend/src/routes/workers.ts) populate-dependencies flow:
 
 - When upserting `dependency_vulnerabilities`, include `classification` from GHSA
 - After upsert, check if any advisory has `classification = 'MALWARE'` for this dependency
@@ -90,7 +90,7 @@ Instead of Socket.dev, leverage the GHSA `classification` field we already query
 - Returns attestations array with SLSA provenance predicateType
 - Parse the SLSA build level from the attestation
 
-**Integration point:** In [ee/backend/routes/workers.ts](ee/backend/routes/workers.ts) `populateSingleDependency()` -- runs during populate-dependencies flow (not during extraction pipeline), alongside npm registry fetch, GHSA, and OpenSSF scorecard.
+**Integration point:** In [backend/src/routes/workers.ts](backend/src/routes/workers.ts) `populateSingleDependency()` -- runs during populate-dependencies flow (not during extraction pipeline), alongside npm registry fetch, GHSA, and OpenSSF scorecard.
 
 **DB migration** (`backend/database/add_slsa_level_to_dependency_versions.sql`):
 
@@ -100,7 +100,7 @@ Instead of Socket.dev, leverage the GHSA `classification` field we already query
 
 ### 3A.3: Outdated Dependencies Detection
 
-**Where to compute:** In the populate-dependencies flow (`populateSingleDependency` in [ee/backend/routes/workers.ts](ee/backend/routes/workers.ts)), NOT during extraction. Reason: `latest_version` is already fetched there, and calculating during extraction means data is stale immediately. The watchtower poller also refreshes `latest_version` daily, which should trigger an update to these fields too.
+**Where to compute:** In the populate-dependencies flow (`populateSingleDependency` in [backend/src/routes/workers.ts](backend/src/routes/workers.ts)), NOT during extraction. Reason: `latest_version` is already fetched there, and calculating during extraction means data is stale immediately. The watchtower poller also refreshes `latest_version` daily, which should trigger an update to these fields too.
 
 **DB migration** (`backend/database/add_outdated_to_project_dependencies.sql`):
 
@@ -139,7 +139,7 @@ For **other ecosystems**: Leave as-is for now (most don't have a clear dev/prod 
 
 ### 3B.1: Dependency Score (package reputation) -- add multipliers
 
-Update `calculateDependencyScore` in [ee/backend/routes/workers.ts](ee/backend/routes/workers.ts):
+Update `calculateDependencyScore` in [backend/src/routes/workers.ts](backend/src/routes/workers.ts):
 
 ```typescript
 function calculateDependencyScore(data: {
@@ -246,7 +246,7 @@ New weights (appended after existing `environmentalMultiplier`):
 - Malicious multiplier: is_malicious drops score by 85%
 - Combined: malicious + no SLSA vs clean + SLSA 3
 
-`**ee/backend/lib/__tests__/fly-machines.test.ts`** and `**ee/backend/lib/__tests__/job-recovery.test.ts`:**
+`**backend/src/lib/__tests__/fly-machines.test.ts`** and `**backend/src/lib/__tests__/job-recovery.test.ts`:**
 
 - Only if not already written in Phase 2. If they exist, skip.
 
@@ -285,7 +285,7 @@ New weights (appended after existing `environmentalMultiplier`):
 **Backend (API/workers):**
 
 - `backend/src/lib/ghsa.ts` -- add `classification` to GraphQL query and interfaces
-- `ee/backend/routes/workers.ts` -- `calculateDependencyScore` multipliers, SLSA fetch in populate, `is_malicious` flag, outdated calculation
+- `backend/src/routes/workers.ts` -- `calculateDependencyScore` multipliers, SLSA fetch in populate, `is_malicious` flag, outdated calculation
 
 **Frontend:**
 
@@ -299,5 +299,5 @@ New weights (appended after existing `environmentalMultiplier`):
 
 **Tests:**
 
-- 5-7 new test files in extraction worker and ee/backend
+- 5-7 new test files in extraction worker and backend
 

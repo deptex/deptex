@@ -172,7 +172,7 @@ No git-like versioning conflicts arise from tier changes because the base code i
 
 **Install**: `npm install isolated-vm` in the backend
 
-**Create `ee/backend/lib/policy-engine.ts`:**
+**Create `backend/src/lib/policy-engine.ts`:**
 
 - Create V8 Isolate with 256MB memory limit
 - Timeout: 30 seconds (increased from original 5s to allow external API calls)
@@ -335,7 +335,7 @@ The tier info is the same for all deps in a project (fetched once, passed to eac
 - Project's effective policy code change (entries for that project's org+tier combo)
 - Tier definition change (multiplier or rank change -- entries for that tier)
 - Dependency metadata change (new version, score update -- entries for that dependency)
-- Cache TTL: 1 hour max. Use Redis with the existing `invalidateCache` pattern from [cache.ts](ee/backend/lib/cache.ts).
+- Cache TTL: 1 hour max. Use Redis with the existing `invalidateCache` pattern from [cache.ts](backend/src/lib/cache.ts).
 
 **For Project Status** (enriched with project-specific data):
 
@@ -520,7 +520,7 @@ Seed on org creation with sensible defaults (one row per table):
 - At the end of extraction, set `extraction_step = 'completed'` and `status = 'populating'` (new intermediate status, instead of jumping straight to 'ready')
 - Log to `extraction_logs`: "Extraction complete. Waiting for dependency population before policy evaluation..."
 
-**Populate callback** ([workers.ts](ee/backend/routes/workers.ts) `POST /api/workers/populate-dependencies`):
+**Populate callback** ([workers.ts](backend/src/routes/workers.ts) `POST /api/workers/populate-dependencies`):
 
 - After ALL dependencies in the batch are populated (registry + GHSA + OpenSSF + SLSA + reputation score):
 
@@ -541,7 +541,7 @@ Seed on org creation with sensible defaults (one row per table):
 
 **Replaces the old `project_pr_guardrails` toggle-based system.** PR blocking is now entirely controlled by the `pullRequestCheck()` code function. The old `project_pr_guardrails` table and `PRGuardrailsSidepanel` component are deprecated and removed as part of this phase. If `pr_check_code` exists (it's always seeded with a default), PR checks run automatically on every PR to a connected repo.
 
-In [handlePullRequestEvent](ee/backend/routes/integrations.ts):
+In [handlePullRequestEvent](backend/src/routes/integrations.ts):
 
 **Step 0 - Lockfile diffing:**
 
@@ -959,7 +959,7 @@ Each code type has its own independent chain per org (same pattern as project-le
 
 #### Test files
 
-`**ee/backend/lib/__tests__/policy-engine.test.ts`:**
+`**backend/src/lib/__tests__/policy-engine.test.ts`:**
 
 - Tests 1-10 (policy execution scenarios)
 - Tests 44-54 (validation scenarios)
@@ -978,7 +978,7 @@ Each code type has its own independent chain per org (same pattern as project-le
 - Test code size limit: reject code > 50KB with clear error
 - Test rate limiting: validation endpoint respects 10/min per-user limit
 
-`**ee/backend/routes/__tests__/policy-changes.test.ts`:**
+`**backend/src/routes/__tests__/policy-changes.test.ts`:**
 
 - Tests 11-33 (git-like versioning lifecycle + package policy + tier tests)
 - Tests 59-65 (permission enforcement)
@@ -994,7 +994,7 @@ Each code type has its own independent chain per org (same pattern as project-le
 - Data migration: existing `project_policy_exceptions` correctly converted to `project_policy_changes` with correct code_type mapping
 - Data migration: existing `organization_policies.policy_code` split into separate tables correctly
 
-`**ee/backend/routes/__tests__/organization-statuses.test.ts`:**
+`**backend/src/routes/__tests__/organization-statuses.test.ts`:**
 
 - Tests 39-43 (status management)
 - Test system status protection (can't delete Compliant/Non-Compliant)

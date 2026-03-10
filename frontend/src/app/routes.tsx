@@ -7,7 +7,7 @@ import HelpCenterPage from "./pages/docs/HelpCenterPage";
 import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/LoginPage";
 import SSOCallbackPage from "./pages/SSOCallbackPage";
-import OrganizationsPage from "./pages/OrganizationsPage";
+import OrganizationsLanding from "./pages/OrganizationsLanding";
 import OrganizationLayout from "./pages/OrganizationLayout";
 import OrganizationSettingsPage from "./pages/OrganizationSettingsPage";
 
@@ -40,7 +40,7 @@ import ProjectVulnerabilitiesPage from "./pages/ProjectVulnerabilitiesPage";
 
 import ProjectSettingsPage from "./pages/ProjectSettingsPage";
 import ProjectWatchtowerPage from "./pages/ProjectWatchtowerPage";
-import OrganizationWatchtowerPage from "./pages/OrganizationWatchtowerPage";
+import OrganizationVulnerabilitiesTabPage from "./pages/OrganizationVulnerabilitiesTabPage";
 import AegisPage from "./pages/AegisPage";
 // Team-level imports
 import TeamLayout from "./pages/TeamLayout";
@@ -83,7 +83,7 @@ export const router = createBrowserRouter([
     path: "/organizations",
     element: (
       <ProtectedRoute>
-        <OrganizationsPage />
+        <OrganizationsLanding />
       </ProtectedRoute>
     ),
   },
@@ -113,7 +113,7 @@ export const router = createBrowserRouter([
       },
       {
         path: "vulnerabilities",
-        element: <Navigate to=".." replace />,
+        element: <OrganizationVulnerabilitiesTabPage />,
       },
       {
         path: "projects",
@@ -138,10 +138,6 @@ export const router = createBrowserRouter([
       {
         path: "compliance/:section",
         element: <CompliancePage />,
-      },
-      {
-        path: "watchtower",
-        element: <OrganizationWatchtowerPage />,
       },
       {
         path: "aegis",

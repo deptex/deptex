@@ -2,21 +2,36 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ---------------------------------------------------------------------------
+   Vercel-style palette — app-wide. Use in custom CSS via var(--vercel-*).
+   Tailwind theme (background, foreground, border, etc.) mirrors these.
+   --------------------------------------------------------------------------- */
+:root {
+  --vercel-bg: #000000;
+  --vercel-card: #0a0a0a;
+  --vercel-hover: #171717;
+  --vercel-border: #262626;
+  --vercel-border-hover: #404040;
+  --vercel-text: #fafafa;
+  --vercel-text-secondary: #a1a1a1;
+  --vercel-text-muted: #71717a;
+}
+
 @layer utilities {
-  /* Get Demo page: all inputs and textarea same color; placeholder and labels more subtle */
+  /* Get Demo page: inputs use Vercel palette */
   .demo-page-input,
   input.demo-page-input,
   textarea.demo-page-input {
-    background-color: #16191d !important;
-    border: 1px solid #2c3138;
+    background-color: var(--vercel-card) !important;
+    border: 1px solid var(--vercel-border);
   }
   .demo-page-input::placeholder,
   input.demo-page-input::placeholder,
   textarea.demo-page-input::placeholder {
-    color: rgba(255, 255, 255, 0.28);
+    color: var(--vercel-text-muted);
   }
   .demo-page-label {
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--vercel-text-secondary);
   }
 
   /* Chrome, Safari and Opera */
@@ -53,6 +68,41 @@
 
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.25) !important;
+  }
+
+  /* Org switcher search: no focus ring/outline (override browser and Tailwind) */
+  .org-switcher-search:focus {
+    outline: none !important;
+    box-shadow: none !important;
+    border-color: transparent !important;
+  }
+
+  /* Org switcher trigger: no white outline/border (dropdown button) */
+  .org-switcher-trigger,
+  .org-switcher-trigger:focus,
+  .org-switcher-trigger:focus-visible {
+    outline: none !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  /* New Agent sidebar: horizontal scrolling suggestions, pause on hover */
+  @keyframes aegis-scroll {
+    from { transform: translateX(0); }
+    to { transform: translateX(-50%); }
+  }
+  @keyframes aegis-scroll-reverse {
+    from { transform: translateX(-50%); }
+    to { transform: translateX(0); }
+  }
+  .aegis-scroll-animate {
+    animation: aegis-scroll 20s linear infinite;
+  }
+  .aegis-scroll-animate-reverse {
+    animation: aegis-scroll-reverse 20s linear infinite;
+  }
+  .aegis-scroll-paused {
+    animation-play-state: paused;
   }
 
   .chat-height {
@@ -96,7 +146,12 @@
   }
 
   .border-gradient-primary > * {
-    background: #0D0F12;
+    background: var(--vercel-bg);
+  }
+
+  /* Organizations page: uses global Vercel theme; wrapper keeps header consistent */
+  .organizations-page-vercel header {
+    border-color: var(--vercel-border) !important;
   }
 
   /* AI Security Agent / marketing section: soft green glow around text block */
@@ -419,6 +474,20 @@
   background-color: #1A1C1E !important;
 }
 
+/* Policy code editor: same dark background for editor + gutter (no lighter strip on left) */
+.policy-code-editor .monaco-editor,
+.policy-code-editor .monaco-editor .overflowingContentWidgets,
+.policy-code-editor .monaco-editor .margin,
+.policy-code-editor .monaco-editor .margin-view-overlay {
+  background-color: #0a0a0a !important;
+}
+
+/* Policy diff editor (Monaco DiffEditor): root + split panes match code block */
+.policy-code-editor .monaco-diff-editor,
+.policy-code-editor .monaco-diff-editor .monaco-editor {
+  background-color: #0a0a0a !important;
+}
+
 /* Policy diff viewer: same colors as policy code editor (Monaco vs-dark) */
 .policy-diff-viewer .policy-diff-line-syntax {
   color: #d4d4d4;
@@ -473,5 +542,28 @@
 .policy-diff-viewer .policy-diff-line-syntax .token.important {
   color: #d4d4d4;
   font-weight: bold;
+}
+
+/* ---------------------------------------------------------------------------
+   Global table styles — match org details card: body = card body, header = card footer
+   --------------------------------------------------------------------------- */
+/* Header & footer: darker strip for clear separation from body (#0a0a0a) */
+table thead,
+table thead tr,
+table tfoot,
+table tfoot tr {
+  background-color: #050505 !important;
+}
+table thead th,
+table tfoot td {
+  background-color: transparent !important;
+}
+/* Body rows: same as org details card body (bg-background-card) */
+table tbody tr {
+  background-color: #0a0a0a;
+  transition: background-color 0.15s ease;
+}
+table tbody tr:hover {
+  background-color: #111111 !important;
 }
 

@@ -192,7 +192,7 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
           <div className="border-t border-border px-3 py-2 flex items-center gap-3 flex-wrap w-full text-left rounded-b-lg">
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-400 cursor-default">
+                <span className="flex-shrink-0 rounded-md border border-green-500/35 bg-green-500/15 px-2 py-0.5 text-xs font-semibold text-green-500 cursor-default">
                   {riskGrade ?? 'A+'}
                 </span>
               </TooltipTrigger>
@@ -256,7 +256,7 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
           <div className="border-t border-border px-3 py-2 flex items-center gap-2 flex-wrap w-full text-left rounded-b-lg">
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-400 cursor-default">
+                <span className="flex-shrink-0 rounded-md border border-green-500/35 bg-green-500/15 px-2 py-0.5 text-xs font-semibold text-green-500 cursor-default">
                   {riskGrade ?? 'A+'}
                 </span>
               </TooltipTrigger>
@@ -324,7 +324,7 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
                   ) : null}
                 </div>
                 {(showTeamRiskGrade || showProjectRiskGrade) && (
-                  <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-sm font-semibold text-emerald-400">
+                  <span className="flex-shrink-0 rounded-md border border-green-500/35 bg-green-500/15 px-2 py-0.5 text-sm font-semibold text-green-500">
                     {riskGrade ?? 'A+'}
                   </span>
                 )}
@@ -399,7 +399,7 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
               ) : null}
             </div>
             {(showTeamRiskGrade || showProjectRiskGrade) && (
-              <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-sm font-semibold text-emerald-400">
+              <span className="flex-shrink-0 rounded-md border border-green-500/35 bg-green-500/15 px-2 py-0.5 text-sm font-semibold text-green-500">
                 {riskGrade ?? 'A+'}
               </span>
             )}

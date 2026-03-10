@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { AlertCircle } from 'lucide-react';
 import { Button } from './ui/button';
-import { api } from '../lib/api';
+import { api, Organization } from '../lib/api';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from './ui/dialog';
 
 interface CreateOrganizationModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (org?: Organization) => void;
 }
 
 export default function CreateOrganizationModal({
@@ -29,9 +29,9 @@ export default function CreateOrganizationModal({
     setLoading(true);
 
     try {
-      await api.createOrganization(name);
+      const org = await api.createOrganization(name);
       setName('');
-      onSuccess();
+      onSuccess(org);
       onClose();
     } catch (err: any) {
       setError(err.message || 'Failed to create organization');

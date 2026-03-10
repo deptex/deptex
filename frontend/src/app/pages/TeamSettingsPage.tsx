@@ -1878,8 +1878,8 @@ export default function TeamSettingsPage() {
                   )}
                   onClick={(e) => e.stopPropagation()}
                 >
-                  {/* Header – no X, no border */}
-                  <div className="px-6 pt-5 pb-3 flex-shrink-0">
+                  {/* Header – light, same as content (table body) */}
+                  <div className="px-6 pt-5 pb-3 flex-shrink-0 bg-background-card">
                     <h2 className="text-xl font-semibold text-foreground">Create New Role</h2>
                     <p className="text-sm text-foreground-secondary mt-0.5">
                       Define a custom role with specific permissions for your team.
@@ -2084,8 +2084,8 @@ export default function TeamSettingsPage() {
                   )}
                   onClick={(e) => e.stopPropagation()}
                 >
-                  {/* Header */}
-                  <div className="px-6 pt-5 pb-3 flex-shrink-0">
+                  {/* Header – light, same as content (table body) */}
+                  <div className="px-6 pt-5 pb-3 flex-shrink-0 bg-background-card">
                     <div className="flex items-center gap-2">
                       <h2 className="text-xl font-semibold text-foreground">
                         {selectedRoleForSettings.display_name || selectedRoleForSettings.name.charAt(0).toUpperCase() + selectedRoleForSettings.name.slice(1)} Settings

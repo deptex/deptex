@@ -1,7 +1,8 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Users, Loader2, PanelTopClose } from 'lucide-react';
+import { Users, AlertTriangle } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
+import { RoleBadge } from '../RoleBadge';
 
 export interface GroupCenterNodeData {
   title: string;
@@ -12,17 +13,23 @@ export interface GroupCenterNodeData {
   isHealthy?: boolean;
   /** Optional kind hint to distinguish org vs team. */
   kind?: 'org' | 'team';
-  /** When set for org center, show as subtext under the organization name (e.g. Owner). */
+  /** When set for org center, show as role badge label (e.g. Owner) — passed to RoleBadge as display name. */
   roleBadge?: string | null;
-  /** Hex color for role subtext (e.g. from organization.role_color). */
+  /** Hex color for role badge — passed to RoleBadge (same as org dropdown). */
   roleBadgeColor?: string | null;
-  /** Org center: risk grade shown after org name (e.g. A+). */
+  /** Raw role (owner/admin/member) for RoleBadge when label alone is ambiguous */
+  organizationRole?: string | null;
+  /** @deprecated Replaced by organizationRiskScore inline text */
   organizationRiskGrade?: string | null;
-  /** Org overview: called when user clicks people icon to show/hide members. */
+  /** Org center: average project health 0–100 shown as "Risk score: N/100" */
+  organizationRiskScore?: number | null;
+  /** Org center: number of alerts to show next to risk score row */
+  organizationAlertCount?: number | null;
+  /** @deprecated Members toggle removed from UI; kept for type compat. */
   onExpandMembers?: () => void;
-  /** Org overview: whether member nodes are currently shown. */
+  /** @deprecated */
   membersExpanded?: boolean;
-  /** Org overview: true while loading members (show spinner). */
+  /** @deprecated */
   isExpandingMembers?: boolean;
 }
 
@@ -35,21 +42,101 @@ function GroupCenterNodeComponent({ data }: NodeProps) {
     kind,
     roleBadge,
     roleBadgeColor,
-    organizationRiskGrade,
-    onExpandMembers,
-    membersExpanded,
-    isExpandingMembers,
+    organizationRole,
+    organizationRiskScore,
+    organizationAlertCount,
   } = (data as unknown as GroupCenterNodeData) ?? {};
 
   const useNeutralOrgStyle = kind === 'org';
-  const borderClass = useNeutralOrgStyle ? 'border-[#22272b]' : isHealthy ? 'border-primary/60' : 'border-slate-500/40';
+  const borderClass = useNeutralOrgStyle ? 'border-border' : isHealthy ? 'border-primary/60' : 'border-slate-500/40';
   const shadowClass = useNeutralOrgStyle ? 'shadow-slate-500/5' : isHealthy ? 'shadow-primary/10' : 'shadow-slate-500/5';
   const glowBgClass = useNeutralOrgStyle ? 'bg-transparent' : isHealthy ? 'bg-primary' : 'bg-slate-500';
   const iconBgClass = useNeutralOrgStyle ? 'bg-[#1a1c1e]' : isHealthy ? 'bg-primary/15' : 'bg-slate-500/15';
   const iconTextClass = useNeutralOrgStyle ? 'text-muted-foreground' : isHealthy ? 'text-primary' : 'text-slate-600 dark:text-slate-400';
   const showAvatar = kind === 'org' && avatarUrl;
-  const showMembersToggle = kind === 'org' && typeof onExpandMembers === 'function';
 
+  // Org overview: two-section card — outer border matches divider subtlety (single border-border)
+  if (useNeutralOrgStyle) {
+    const roleLabel = roleBadge?.trim() || 'Member';
+    const roleForBadge = (organizationRole || roleLabel).toLowerCase();
+
+    return (
+      <div className="relative">
+        <Handle id="top" type="source" position={Position.Top} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
+        <Handle id="right" type="source" position={Position.Right} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
+        <Handle id="bottom" type="source" position={Position.Bottom} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
+        <Handle id="left" type="source" position={Position.Left} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
+
+        <div
+          className={`relative rounded-xl border ${borderClass} shadow-lg ${shadowClass} overflow-hidden min-w-[280px] max-w-[320px] bg-background-card`}
+        >
+          {/* Top section: avatar + name, then RoleBadge (same as OrganizationSwitcher) */}
+          <div className="px-4 pt-4 pb-3">
+            <div className="flex items-center gap-3">
+              <div
+                className={`flex items-center justify-center w-10 h-10 flex-shrink-0 rounded-lg overflow-hidden ${
+                  showAvatar ? '' : `${iconBgClass} ${iconTextClass}`
+                }`}
+              >
+                {showAvatar ? (
+                  <img src={avatarUrl ?? undefined} alt={title} className="h-full w-full object-contain rounded-lg" />
+                ) : (
+                  <Users className="w-5 h-5" />
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-base font-semibold text-foreground truncate leading-tight">{title}</p>
+              </div>
+            </div>
+            <div className="mt-4">
+              <RoleBadge
+                role={roleForBadge}
+                roleDisplayName={roleLabel}
+                roleColor={roleBadgeColor ?? null}
+              />
+            </div>
+          </div>
+
+          {/* Separator — same weight as outer border for visual consistency */}
+          <div className="border-t border-border w-full" />
+
+          {/* Bottom section: risk score + alert count */}
+          <div className="px-4 py-3 flex items-center justify-between gap-2">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <p className="text-sm cursor-default">
+                  <span className="text-foreground-secondary">Risk score: </span>
+                  <span className="font-medium tabular-nums text-foreground">
+                    {typeof organizationRiskScore === 'number'
+                      ? `${organizationRiskScore}/100`
+                      : '—/100'}
+                  </span>
+                </p>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={6}>
+                Average project health score (0–100) from vulnerabilities, compliance, freshness, and code findings.
+              </TooltipContent>
+            </Tooltip>
+            {typeof organizationAlertCount === 'number' && organizationAlertCount > 0 && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="flex items-center gap-1 text-amber-500">
+                    <AlertTriangle className="h-4 w-4" />
+                    <span className="text-xs font-medium tabular-nums">{organizationAlertCount}</span>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={6}>
+                  {organizationAlertCount} action item{organizationAlertCount !== 1 ? 's' : ''} need attention
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Team / non-org: compact row (keep slightly stronger border for non-org)
   return (
     <div className="relative">
       <Handle id="top" type="source" position={Position.Top} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
@@ -69,64 +156,17 @@ function GroupCenterNodeComponent({ data }: NodeProps) {
               }`}
             >
               {showAvatar ? (
-                <img
-                  src={avatarUrl ?? undefined}
-                  alt={title}
-                  className="h-full w-full object-contain rounded-lg"
-                />
+                <img src={avatarUrl ?? undefined} alt={title} className="h-full w-full object-contain rounded-lg" />
               ) : (
                 <Users className="w-5 h-5" />
               )}
             </div>
             <div className="min-w-0 flex-1 flex flex-col gap-1">
               <p className="text-sm font-semibold text-foreground truncate">{title}</p>
-              {kind === 'org' && roleBadge != null && roleBadge !== '' ? (
-                <p className="text-xs text-muted-foreground truncate">{roleBadge}</p>
-              ) : (
-                subtitle != null && subtitle !== '' && (
-                  <p className="text-xs text-muted-foreground truncate">{subtitle}</p>
-                )
+              {subtitle != null && subtitle !== '' && (
+                <p className="text-xs text-muted-foreground truncate">{subtitle}</p>
               )}
             </div>
-            {kind === 'org' && (organizationRiskGrade ?? 'A+') && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-sm font-semibold text-emerald-400 cursor-default">
-                    {organizationRiskGrade ?? 'A+'}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" sideOffset={6}>
-                  Calculated risk score based on vulnerabilities, secrets, and code findings.
-                </TooltipContent>
-              </Tooltip>
-            )}
-            {showMembersToggle && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onExpandMembers!();
-                    }}
-                    disabled={isExpandingMembers}
-                    className="flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-background-subtle transition-colors disabled:opacity-60"
-                    aria-label={membersExpanded ? 'Hide members' : 'Expand members'}
-                  >
-                    {isExpandingMembers ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : membersExpanded ? (
-                      <PanelTopClose className="h-4 w-4" />
-                    ) : (
-                      <Users className="h-4 w-4" />
-                    )}
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" sideOffset={6}>
-                  {isExpandingMembers ? 'Loading…' : membersExpanded ? 'Hide members' : 'Expand members'}
-                </TooltipContent>
-              </Tooltip>
-            )}
           </div>
         </div>
       </div>

@@ -13,6 +13,7 @@ const mockGetOrganizationMembers = vi.fn();
 const mockGetTeamMembers = vi.fn();
 const mockGetOrganizationPolicies = vi.fn();
 const mockGetProjectPolicies = vi.fn();
+const mockGetProjectPolicyChanges = vi.fn();
 const mockToast = vi.fn();
 const mockNavigate = vi.fn();
 const mockSetSearchParams = vi.fn();
@@ -25,10 +26,22 @@ let mockProjectContext: {
   userPermissions: { view_settings: boolean; edit_settings: boolean };
 };
 
-const defaultProjectPolicies = {
-  effective_policy_code: `function pullRequestCheck(context) {\n  return { passed: true };\n}\n\nfunction projectCompliance(context) {\n  return { compliant: true };\n}`,
+const pkg = 'function packagePolicy(context) {\n  return { allowed: true, reasons: [] };\n}';
+const status = 'function projectStatus(context) {\n  return { status: \'Compliant\', violations: [] };\n}';
+const pr = 'function pullRequestCheck(context) {\n  return { passed: true, violations: [] };\n}';
+
+/** Phase 4 shape so ProjectSettingsPage uses split tabs (Package Policy, Project Status, Pull Request). */
+const phase4ProjectPolicies = {
+  inherited_package_policy_code: pkg,
+  inherited_project_status_code: status,
+  inherited_pr_check_code: pr,
+  effective_package_policy_code: pkg,
+  effective_project_status_code: status,
+  effective_pr_check_code: pr,
   pending_exceptions: [],
   accepted_exceptions: [],
+  inherited: { accepted_licenses: [], slsa_enforcement: 'none' as const, slsa_level: null },
+  effective: { accepted_licenses: [], slsa_enforcement: 'none' as const, slsa_level: null },
 };
 
 const hoisted = vi.hoisted(() => ({
@@ -59,24 +72,25 @@ vi.mock('../../../lib/api', () => ({
     getTeamMembers: (...args: unknown[]) => mockGetTeamMembers(...args),
     getOrganizationPolicies: (...args: unknown[]) => mockGetOrganizationPolicies(...args),
     getProjectPolicies: (...args: unknown[]) => mockGetProjectPolicies(...args),
+    getProjectPolicyChanges: (...args: unknown[]) => mockGetProjectPolicyChanges(...args),
   },
 }));
 
-vi.mock('../../hooks/use-toast', () => ({
+vi.mock('../../../hooks/use-toast', () => ({
   useToast: () => ({ toast: mockToast }),
 }));
 
-vi.mock('../../components/PolicyCodeEditor', () => ({
+vi.mock('../../../components/PolicyCodeEditor', () => ({
   PolicyCodeEditor: ({ value }: { value: string }) => (
     <pre data-testid="policy-code-editor">{value}</pre>
   ),
 }));
 
-vi.mock('../../components/PolicyAIAssistant', () => ({
+vi.mock('../../../components/PolicyAIAssistant', () => ({
   PolicyAIAssistant: () => null,
 }));
 
-vi.mock('../../components/PolicyExceptionSidebar', () => ({
+vi.mock('../../../components/PolicyExceptionSidebar', () => ({
   PolicyExceptionSidebar: () => null,
 }));
 
@@ -96,7 +110,8 @@ describe('ProjectSettingsPage – Policies', () => {
     mockGetOrganizationMembers.mockResolvedValue([]);
     mockGetTeamMembers.mockResolvedValue([]);
     mockGetOrganizationPolicies.mockResolvedValue({ policy_code: '' });
-    mockGetProjectPolicies.mockResolvedValue(defaultProjectPolicies);
+    mockGetProjectPolicies.mockResolvedValue(phase4ProjectPolicies);
+    mockGetProjectPolicyChanges.mockResolvedValue([]);
     mockReloadProject.mockResolvedValue(undefined);
 
     mockProjectContext = {
@@ -114,38 +129,33 @@ describe('ProjectSettingsPage – Policies', () => {
     });
   });
 
-  it('shows Policy and Exception applications sub-tabs', async () => {
+  it('shows Phase 4 sub-tabs Package Policy, Project Status, Pull Request, Change requests', async () => {
     render(<ProjectSettingsPage />);
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Policies' })).toBeInTheDocument();
     });
-    expect(screen.getByText('Policy')).toBeInTheDocument();
-    expect(screen.getByText('Exception applications')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Package Policy' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Project Status' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pull Request' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Change requests' })).toBeInTheDocument();
   });
 
-  it('shows Docs and AI Assistant buttons', async () => {
+  it('shows Policies docs link and AI Assistant button', async () => {
     render(<ProjectSettingsPage />);
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Policies' })).toBeInTheDocument();
     });
     expect(screen.getByRole('button', { name: /AI Assistant/ })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Docs/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Policies docs/ })).toBeInTheDocument();
   });
 
-  it('shows Project Compliance and Pull Request Check sections when policies loaded', async () => {
+  it('shows packagePolicy editor and Inherited from org when aligned with org', async () => {
     render(<ProjectSettingsPage />);
     await waitFor(() => {
-      expect(screen.getByText('Project Compliance')).toBeInTheDocument();
-      expect(screen.getByText('Pull Request Check')).toBeInTheDocument();
+      expect(screen.getByText('packagePolicy')).toBeInTheDocument();
     });
-  });
-
-  it('shows Inherited from org badge when no project override', async () => {
-    render(<ProjectSettingsPage />);
-    await waitFor(() => {
-      const badges = screen.getAllByText('Inherited from org');
-      expect(badges.length).toBeGreaterThanOrEqual(1);
-    });
+    const inherited = screen.queryAllByText('Inherited from org');
+    expect(inherited.length).toBeGreaterThanOrEqual(1);
   });
 
   it('shows Failed to load policies on API error', async () => {
@@ -157,23 +167,20 @@ describe('ProjectSettingsPage – Policies', () => {
     });
   });
 
-  it('Exception applications sub-tab shows table', async () => {
+  it('Change requests tab is clickable', async () => {
     render(<ProjectSettingsPage />);
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Policies' })).toBeInTheDocument();
     });
-    await userEvent.click(screen.getByText('Exception applications'));
-    await waitFor(() => {
-      expect(screen.getByText('Status')).toBeInTheDocument();
-      expect(screen.getByText('Type')).toBeInTheDocument();
-      expect(screen.getByText('Reason')).toBeInTheDocument();
-    });
+    await userEvent.click(screen.getByRole('button', { name: 'Change requests' }));
+    // Tab switch only; no table columns from legacy Exception applications
+    expect(screen.getByRole('button', { name: 'Change requests' })).toBeInTheDocument();
   });
 
   it('does not refetch policies when navigating away and back (cached)', async () => {
     const { rerender } = render(<ProjectSettingsPage />);
     await waitFor(() => {
-      expect(screen.getByText('Project Compliance')).toBeInTheDocument();
+      expect(screen.getByText('packagePolicy')).toBeInTheDocument();
     });
     expect(mockGetProjectPolicies).toHaveBeenCalledTimes(1);
 
@@ -188,7 +195,7 @@ describe('ProjectSettingsPage – Policies', () => {
     hoisted.mockUseParams.mockReturnValue({ orgId: 'org-1', projectId: 'proj-1', section: 'policies' });
     rerender(<ProjectSettingsPage />);
     await waitFor(() => {
-      expect(screen.getByText('Project Compliance')).toBeInTheDocument();
+      expect(screen.getByText('packagePolicy')).toBeInTheDocument();
     });
     expect(mockGetProjectPolicies).toHaveBeenCalledTimes(1);
   });

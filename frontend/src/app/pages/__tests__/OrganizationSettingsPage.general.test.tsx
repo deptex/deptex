@@ -45,6 +45,7 @@ vi.mock('../../../lib/api', () => ({
     updateOrganization: (...args: unknown[]) => mockUpdateOrganization(...args),
     deleteOrganization: (...args: unknown[]) => mockDeleteOrganization(...args),
     transferOrganizationOwnership: (...args: unknown[]) => mockTransferOrganizationOwnership(...args),
+    getOrganizationConnections: vi.fn().mockResolvedValue([]),
   },
 }));
 
@@ -52,8 +53,26 @@ vi.mock('../../../contexts/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'user-1' } }),
 }));
 
-vi.mock('../../hooks/use-toast', () => ({
-  useToast: () => ({ toast: mockToast }),
+vi.mock('../../../hooks/use-toast', () => ({
+  useToast: () => ({ toast: mockToast, toasts: [] }),
+}));
+
+vi.mock('../../../contexts/PlanContext', () => ({
+  usePlan: () => ({
+    getPlanGate: () => ({
+      allowed: true,
+      requiredTier: 'pro',
+      currentTier: 'pro',
+      upgradeUrl: '/organizations/org-1/settings/plan',
+    }),
+  }),
+  usePlanGate: () => ({
+    allowed: true,
+    requiredTier: 'pro',
+    currentTier: 'pro',
+    upgradeUrl: '/organizations/org-1/settings/plan',
+  }),
+  TIER_DISPLAY: { pro: 'Pro', team: 'Team', enterprise: 'Enterprise', free: 'Free' },
 }));
 
 vi.mock('../../../lib/supabase', () => ({
@@ -93,17 +112,10 @@ describe('OrganizationSettingsPage – General', () => {
     };
   });
 
-  it('shows General heading when on general tab', async () => {
-    render(<OrganizationSettingsPage />);
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument();
-    });
-  });
-
   it('owner sees organization details card with editable name and Save button', async () => {
     render(<OrganizationSettingsPage />);
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Organization details', level: 3 })).toBeInTheDocument();
     });
     expect(screen.getByText('Organization details')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Enter organization name')).toBeInTheDocument();
@@ -123,7 +135,7 @@ describe('OrganizationSettingsPage – General', () => {
 
     render(<OrganizationSettingsPage />);
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Organization details', level: 3 })).toBeInTheDocument();
     });
     expect(screen.getByPlaceholderText('Enter organization name')).toBeDisabled();
     expect(screen.getByText('Only the organization owner can edit these settings.')).toBeInTheDocument();
@@ -147,7 +159,7 @@ describe('OrganizationSettingsPage – General', () => {
 
     render(<OrganizationSettingsPage />);
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Organization details', level: 3 })).toBeInTheDocument();
     });
     expect(screen.queryByText('Transfer Ownership')).not.toBeInTheDocument();
   });
@@ -171,7 +183,7 @@ describe('OrganizationSettingsPage – General', () => {
 
     render(<OrganizationSettingsPage />);
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Organization details', level: 3 })).toBeInTheDocument();
     });
     expect(screen.queryByText('Danger Zone')).not.toBeInTheDocument();
   });

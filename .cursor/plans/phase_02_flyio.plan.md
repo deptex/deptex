@@ -140,12 +140,12 @@ See **2K** for heartbeat implementation, run_id lifecycle, cancellation flow, an
 
 #### 2B: Add machine orchestrator to backend
 
-Create `ee/backend/lib/fly-machines.ts`:
+Create `backend/src/lib/fly-machines.ts`:
 
 - `startExtractionMachine()`: calls Fly Machines API to start a stopped machine from the pool
 - Uses `https://api.machines.dev/v1/apps/deptex-extraction-worker/machines` endpoint
 - Lists machines, picks one in "stopped" state, sends `POST /machines/{id}/start`
-- Called from [projects.ts](ee/backend/routes/projects.ts) right after inserting the job into `extraction_jobs`
+- Called from [projects.ts](backend/src/routes/projects.ts) right after inserting the job into `extraction_jobs`
 
 **Edge case handling in the orchestrator:**
 
@@ -410,7 +410,7 @@ The frontend subscribes to live `extraction_logs` inserts. Supabase Realtime res
 
 #### Backend endpoint
 
-Create `POST /api/internal/recovery/extraction-jobs` in `backend/src/routes/` (CE route, outside EE block). Protected by `X-Internal-Api-Key` header (same pattern as `ee/backend/routes/internal.ts`).
+Create `POST /api/internal/recovery/extraction-jobs` in `backend/src/routes/` (CE route, outside EE block). Protected by `X-Internal-Api-Key` header (same pattern as `backend/src/routes/internal.ts`).
 
 ```typescript
 router.post('/api/internal/recovery/extraction-jobs', async (req, res) => {
@@ -491,7 +491,7 @@ Use QStash to call the recovery endpoint every 5 minutes:
 - URL: `https://<backend-url>/api/internal/recovery/extraction-jobs`
 - Headers: `X-Internal-Api-Key: <INTERNAL_API_KEY>`
 - Add `INTERNAL_API_KEY` to backend `.env` and QStash schedule config
-- QStash signature verification protects against external calls (same pattern as existing QStash endpoints in `ee/backend/lib/qstash.ts`)
+- QStash signature verification protects against external calls (same pattern as existing QStash endpoints in `backend/src/lib/qstash.ts`)
 
 #### Recovery logging
 
@@ -725,7 +725,7 @@ All tests that MUST pass before Phase 2 is considered complete. Organized by com
 6. Token patterns are redacted from log messages (GitHub, GitLab, Bearer tokens)
 7. Clone URLs with embedded tokens are redacted
 
-`**ee/backend/lib/__tests__/fly-machines.test.ts`:**
+`**backend/src/lib/__tests__/fly-machines.test.ts`:**
 
 1. Happy path: list machines → find stopped → start it → return machine ID
 2. All machines busy: creates burst machine (up to `FLY_MAX_BURST_MACHINES`)
@@ -737,7 +737,7 @@ All tests that MUST pass before Phase 2 is considered complete. Organized by com
 8. No machines exist at all: creates first burst machine
 9. Burst machine creation failure: logs error, returns null
 
-`**ee/backend/lib/__tests__/job-recovery.test.ts`:**
+`**backend/src/lib/__tests__/job-recovery.test.ts`:**
 
 1. Stuck job (processing > 5 min, no heartbeat): requeued, new run_id, attempts unchanged
 2. Job with recent heartbeat (< 5 min ago): NOT requeued (still running)
@@ -769,7 +769,7 @@ All tests that MUST pass before Phase 2 is considered complete. Organized by com
 
 #### Integration Tests (backend, requires Supabase)
 
-`**ee/backend/routes/__tests__/extraction-connect.test.ts`:**
+`**backend/src/routes/__tests__/extraction-connect.test.ts`:**
 
 1. Connect repo → inserts `extraction_jobs` row with status `queued`
 2. Connect repo → generates `run_id` (UUID)
@@ -780,7 +780,7 @@ All tests that MUST pass before Phase 2 is considered complete. Organized by com
 7. Cancel already completed extraction → returns 409
 8. Cancel already cancelled extraction → returns 409
 
-`**ee/backend/routes/__tests__/recovery-endpoint.test.ts`:**
+`**backend/src/routes/__tests__/recovery-endpoint.test.ts`:**
 
 1. Recovery endpoint requires `X-Internal-Api-Key` header
 2. Recovery endpoint without key → 401
@@ -823,7 +823,7 @@ All tests that MUST pass before Phase 2 is considered complete. Organized by com
 
 Phase 2 moves extraction jobs from Redis to Supabase. The transition:
 
-1. **Phase 2 changes**: `queueExtractionJob()` in `ee/backend/lib/redis.ts` is replaced. Instead of `RPUSH` to Redis, it INSERTs into `extraction_jobs` table. The function signature stays the same for backward compatibility.
+1. **Phase 2 changes**: `queueExtractionJob()` in `backend/src/lib/redis.ts` is replaced. Instead of `RPUSH` to Redis, it INSERTs into `extraction_jobs` table. The function signature stays the same for backward compatibility.
 2. **Worker changes**: `index.ts` replaces Redis LPOP with Supabase claim query.
 3. **Redis still used for**: AST parsing jobs (`ast-parsing-jobs` queue), watchtower jobs (`watchtower-jobs` queue), caching (`getCached`/`setCached`). These are NOT migrated in Phase 2.
 4. **Rollback plan**: If Supabase job claims are too slow or unreliable in production, the old Redis-based `queueExtractionJob()` is still in git history. Rollback = revert the function and worker `index.ts`.

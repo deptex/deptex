@@ -15,8 +15,8 @@ isProject: false
 ### Prerequisites (completed in pre-Phase 5 cleanup)
 
 - `project_dependencies.policy_result` JSONB is exposed in the backend `fetchEnrichedDependenciesForProject()` SELECT and in the frontend `ProjectDependency` TypeScript interface in [api.ts](frontend/src/lib/api.ts)
-- Rate limiting utility exists at [ee/backend/lib/rate-limit.ts](ee/backend/lib/rate-limit.ts) -- `checkRateLimit(key, maxRequests, windowSeconds)` backed by Redis. New Phase 5 endpoints (legal-notice, SBOM) should reuse this.
-- Policy engine has a per-execution fetch count cap of 10 in [policy-engine.ts](ee/backend/lib/policy-engine.ts)
+- Rate limiting utility exists at [backend/src/lib/rate-limit.ts](backend/src/lib/rate-limit.ts) -- `checkRateLimit(key, maxRequests, windowSeconds)` backed by Redis. New Phase 5 endpoints (legal-notice, SBOM) should reuse this.
+- Policy engine has a per-execution fetch count cap of 10 in [policy-engine.ts](backend/src/lib/policy-engine.ts)
 - Phase 4 policy endpoints are rate-limited: evaluate-policy (1/5min/project), validate-policy (10/min/user), preflight-check (30/min/user)
 - Phase 4 migrations are consolidated in [phase4_policy_engine_consolidated.sql](backend/database/phase4_policy_engine_consolidated.sql)
 - `StatusesSection.tsx` import of `PolicyCodeEditor` is fixed (named import)
@@ -216,7 +216,7 @@ Beyond just allowed/banned, track what each license REQUIRES for legal complianc
 
 Replace the current frontend-generated SBOM with the real cdxgen SBOM stored in Supabase Storage. The cdxgen output is comprehensive, industry-standard CycloneDX 1.5 and includes metadata the frontend-generated version lacks.
 
-**New endpoint:** `GET /api/organizations/:orgId/projects/:projectId/sbom` in [projects.ts](ee/backend/routes/projects.ts) (EE route, follows existing route pattern).
+**New endpoint:** `GET /api/organizations/:orgId/projects/:projectId/sbom` in [projects.ts](backend/src/routes/projects.ts) (EE route, follows existing route pattern).
 
 **Auth:** Uses `authenticateUser` middleware + org membership check + project access verification (same pattern as other project GET endpoints). Any user who can view the project can download the SBOM (read-only export, no edit action).
 
@@ -242,11 +242,11 @@ Replace the current frontend-generated SBOM with the real cdxgen SBOM stored in 
 
 Replace the current frontend-only `generateLegalNotice()` in [compliance-utils.ts](frontend/src/lib/compliance-utils.ts) with a backend endpoint that produces a comprehensive legal attribution notice. This is generated on-the-fly from DB data (not from stored SBOM).
 
-**New endpoint:** `GET /api/organizations/:orgId/projects/:projectId/legal-notice` in [projects.ts](ee/backend/routes/projects.ts) (EE route, follows existing route pattern). Backend generates the notice including license full texts from the `license_obligations` table.
+**New endpoint:** `GET /api/organizations/:orgId/projects/:projectId/legal-notice` in [projects.ts](backend/src/routes/projects.ts) (EE route, follows existing route pattern). Backend generates the notice including license full texts from the `license_obligations` table.
 
 **Auth:** Uses `authenticateUser` middleware + org membership check + project access verification (same pattern as SBOM endpoint). Any user who can view the project can download the legal notice.
 
-**Rate limiting:** 5 requests/min per user per project using the existing `checkRateLimit()` from [rate-limit.ts](ee/backend/lib/rate-limit.ts) with key `legal-notice:${userId}:${projectId}`.
+**Rate limiting:** 5 requests/min per user per project using the existing `checkRateLimit()` from [rate-limit.ts](backend/src/lib/rate-limit.ts) with key `legal-notice:${userId}:${projectId}`.
 
 **Caching:** Cache the generated notice in Redis with key `legal-notice:${projectId}` and TTL of 1 hour. Invalidate on extraction completion (same pattern as dependency caches). This avoids repeated on-the-fly generation for large projects.
 
@@ -375,7 +375,7 @@ All test numbers are Phase 5-specific (starting from 1, independent of Phase 4 n
 
 #### Test files:
 
-`**ee/backend/routes/__tests__/compliance-api.test.ts`:**
+`**backend/src/routes/__tests__/compliance-api.test.ts`:**
 
 - 5A/4-9: re-evaluate endpoint (triggers, 409, zero deps, error, permissions)
 - 5B/6-12: preflight check endpoint (policy check, edge cases, registry errors)

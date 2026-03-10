@@ -26,8 +26,10 @@ import { Badge } from '../../components/ui/badge';
 import { FrameworkIcon } from '../../components/framework-icon';
 import { PolicyCodeEditor } from '../../components/PolicyCodeEditor';
 import { PolicyDiffViewer } from '../../components/PolicyDiffViewer';
+import { JsLangBadge } from '../../components/JsLangBadge';
 import { PolicyAIAssistant } from '../../components/PolicyAIAssistant';
 import { PolicyExceptionSidebar } from '../../components/PolicyExceptionSidebar';
+import { CODE_BLOCK_BG } from '../../components/policy-monaco-setup';
 import { SyncDetailSidebar } from '../../components/SyncDetailSidebar';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
 import { ProjectTeamSelect } from '../../components/ProjectTeamSelect';
@@ -3197,9 +3199,9 @@ export default function ProjectSettingsPage() {
                       <div className="space-y-6 pt-2 pb-8">
                         <div className="rounded-lg border border-border bg-background-card overflow-hidden">
                           <div className="px-4 py-2.5 bg-background-card-header border-b border-border"><div className="h-3.5 bg-muted rounded w-32 animate-pulse" /></div>
-                          <div className="bg-[#1d1f21] px-4 py-3 font-mono text-[13px] leading-6" style={{ minHeight: '180px' }}>
+                          <div className="px-4 py-3 font-mono text-[13px] leading-6" style={{ minHeight: '180px', backgroundColor: CODE_BLOCK_BG }}>
                             <div className="space-y-1.5 animate-pulse">
-                              <div className="h-3 bg-white/[0.06] rounded w-[70%]" /><div className="h-3 bg-white/[0.06] rounded w-[55%] ml-4" /><div className="h-3 bg-white/[0.06] rounded w-[80%] ml-4" />
+                              <div className="h-3 bg-white/10 rounded w-[70%]" /><div className="h-3 bg-white/10 rounded w-[55%] ml-4" /><div className="h-3 bg-white/10 rounded w-[80%] ml-4" />
                             </div>
                           </div>
                         </div>
@@ -3219,6 +3221,7 @@ export default function ProjectSettingsPage() {
                             <div className="rounded-lg border border-border bg-background-card overflow-hidden">
                               <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
                                 <div className="flex items-center gap-2">
+                                  <JsLangBadge className="text-xs" />
                                   <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">packagePolicy</span>
                                   {!pendingChangeByType.package_policy && (packagePolicyBody === inheritedPackagePolicyBody ? <Badge variant="outline" className="text-[10px] px-1.5 py-0">Inherited from org</Badge> : null)}
                                 </div>
@@ -3313,7 +3316,7 @@ export default function ProjectSettingsPage() {
                       <div className="space-y-6 pt-2 pb-8">
                         <div className="rounded-lg border border-border bg-background-card overflow-hidden">
                           <div className="px-4 py-2.5 bg-background-card-header border-b border-border"><div className="h-3.5 bg-muted rounded w-32 animate-pulse" /></div>
-                          <div className="bg-[#1d1f21] px-4 py-3 font-mono text-[13px] leading-6" style={{ minHeight: '180px' }}><div className="space-y-1.5 animate-pulse"><div className="h-3 bg-white/[0.06] rounded w-[70%]" /></div></div>
+                          <div className="px-4 py-3 font-mono text-[13px] leading-6" style={{ minHeight: '180px', backgroundColor: CODE_BLOCK_BG }}><div className="space-y-1.5 animate-pulse"><div className="h-3 bg-white/10 rounded w-[70%]" /></div></div>
                         </div>
                       </div>
                     ) : projectPolicies ? (
@@ -3393,7 +3396,7 @@ export default function ProjectSettingsPage() {
                       <div className="space-y-6 pt-2 pb-8">
                         <div className="rounded-lg border border-border bg-background-card overflow-hidden">
                           <div className="px-4 py-2.5 bg-background-card-header border-b border-border"><div className="h-3.5 bg-muted rounded w-32 animate-pulse" /></div>
-                          <div className="bg-[#1d1f21] px-4 py-3 font-mono text-[13px] leading-6" style={{ minHeight: '180px' }}><div className="space-y-1.5 animate-pulse"><div className="h-3 bg-white/[0.06] rounded w-[70%]" /></div></div>
+                          <div className="px-4 py-3 font-mono text-[13px] leading-6" style={{ minHeight: '180px', backgroundColor: CODE_BLOCK_BG }}><div className="space-y-1.5 animate-pulse"><div className="h-3 bg-white/10 rounded w-[70%]" /></div></div>
                         </div>
                       </div>
                     ) : projectPolicies ? (
@@ -3408,6 +3411,7 @@ export default function ProjectSettingsPage() {
                             <div className="rounded-lg border border-border bg-background-card overflow-hidden">
                               <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
                                 <div className="flex items-center gap-2">
+                                  <JsLangBadge className="text-xs" />
                                   <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">pullRequestCheck</span>
                                   {!pendingChangeByType.pr_check && (prCheckBody === inheritedPrCheckBody ? <Badge variant="outline" className="text-[10px] px-1.5 py-0">Inherited from org</Badge> : null)}
                                 </div>
@@ -3739,7 +3743,8 @@ export default function ProjectSettingsPage() {
           <div
             className={cn(
               'fixed right-4 top-4 bottom-4 w-full max-w-[40rem] bg-background-card-header border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
-              aiPanelVisible ? 'translate-x-0' : 'translate-x-full'
+              // Extra offset past 100% so border/shadow don’t peek when closed
+              aiPanelVisible ? 'translate-x-0' : 'translate-x-[calc(100%+32px)]'
             )}
             onClick={(e) => e.stopPropagation()}
           >

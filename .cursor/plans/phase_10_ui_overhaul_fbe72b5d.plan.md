@@ -106,9 +106,9 @@ CREATE INDEX IF NOT EXISTS idx_activities_metadata ON activities USING GIN (meta
 
 ### `computeHealthScore()` utility
 
-New file: `ee/backend/lib/health-score.ts`
+New file: `backend/src/lib/health-score.ts`
 
-`health_score` is initialized to `0` on project creation ([projects.ts line 1012](ee/backend/routes/projects.ts)) and never updated. This phase adds a `computeHealthScore(projectId)` function that writes to `projects.health_score`.
+`health_score` is initialized to `0` on project creation ([projects.ts line 1012](backend/src/routes/projects.ts)) and never updated. This phase adds a `computeHealthScore(projectId)` function that writes to `projects.health_score`.
 
 **Formula** (weighted 0-100):
 
@@ -121,7 +121,7 @@ New file: `ee/backend/lib/health-score.ts`
 
 **Called from:**
 
-- [ee/backend/routes/workers.ts](ee/backend/routes/workers.ts) -- after `populate-dependencies` callback completes and after `evaluateProjectPolicies()` runs
+- [backend/src/routes/workers.ts](backend/src/routes/workers.ts) -- after `populate-dependencies` callback completes and after `evaluateProjectPolicies()` runs
 - The new `POST /sync` endpoint -- after extraction completes (via the same populate callback path)
 
 ### Existing tables used (no new columns)
@@ -143,7 +143,7 @@ New file: `ee/backend/lib/health-score.ts`
 
 ## 10A: Backend Stats Endpoints
 
-New endpoints in [ee/backend/routes/projects.ts](ee/backend/routes/projects.ts), [ee/backend/routes/organizations.ts](ee/backend/routes/organizations.ts), and [ee/backend/routes/teams.ts](ee/backend/routes/teams.ts).
+New endpoints in [backend/src/routes/projects.ts](backend/src/routes/projects.ts), [backend/src/routes/organizations.ts](backend/src/routes/organizations.ts), and [backend/src/routes/teams.ts](backend/src/routes/teams.ts).
 
 ### `GET /api/organizations/:orgId/projects/:projectId/stats`
 
@@ -323,7 +323,7 @@ Differences from org stats:
 
 Retrigger extraction for a project.
 
-**Permission:** `manage_teams_and_projects` or org owner (same gate as repository connect at [projects.ts](ee/backend/routes/projects.ts)).
+**Permission:** `manage_teams_and_projects` or org owner (same gate as repository connect at [projects.ts](backend/src/routes/projects.ts)).
 
 **Guards:**
 
@@ -340,11 +340,11 @@ Retrigger extraction for a project.
 }
 ```
 
-Calls existing `queueExtractionJob()` from [redis.ts](ee/backend/lib/redis.ts). Sets Redis key `sync-cooldown:{projectId}` with 60s TTL after successful queue.
+Calls existing `queueExtractionJob()` from [redis.ts](backend/src/lib/redis.ts). Sets Redis key `sync-cooldown:{projectId}` with 60s TTL after successful queue.
 
 ### Caching Strategy
 
-All stats endpoints use `getCached`/`setCached` from [cache.ts](ee/backend/lib/cache.ts):
+All stats endpoints use `getCached`/`setCached` from [cache.ts](backend/src/lib/cache.ts):
 
 | Endpoint | Cache Key | TTL | Invalidation Triggers |
 |---|---|---|---|
@@ -352,7 +352,7 @@ All stats endpoints use `getCached`/`setCached` from [cache.ts](ee/backend/lib/c
 | Org stats | `org-stats:{orgId}` | 60s | Any project extraction completion, policy evaluation |
 | Team stats | `team-stats:{teamId}` | 60s | Team project extraction completion, policy evaluation |
 
-Invalidation calls `invalidateCache(key)` at the same points where existing cache invalidation already occurs in [workers.ts](ee/backend/routes/workers.ts) and [projects.ts](ee/backend/routes/projects.ts).
+Invalidation calls `invalidateCache(key)` at the same points where existing cache invalidation already occurs in [workers.ts](backend/src/routes/workers.ts) and [projects.ts](backend/src/routes/projects.ts).
 
 ---
 
@@ -562,7 +562,7 @@ Full skeleton state while stats are loading: skeleton strips for stats, skeleton
   - Last Sync (relative time)
   - Asset Tier (badge)
   Click row navigates to project overview.
-- **Activity feed**: Uses existing `getActivities(orgId, { team_id: teamId })` filter (already supported in the activities API at [activities.ts](ee/backend/routes/activities.ts)). Same `ActivityFeed` component as project/org. Shows team-scoped events.
+- **Activity feed**: Uses existing `getActivities(orgId, { team_id: teamId })` filter (already supported in the activities API at [activities.ts](backend/src/routes/activities.ts)). Same `ActivityFeed` component as project/org. Shows team-scoped events.
 - **Data source**: `GET /teams/:teamId/stats` for stats strip, security summary, and top vulns. `getProjects()` filtered by `team_ids` for the projects table (already the pattern used in team pages). `getActivities()` for activity feed.
 
 ### Empty states
@@ -660,7 +660,7 @@ Full skeleton state while stats are loading: skeleton strips for stats, skeleton
 - `frontend/src/components/StatsStrip.tsx` -- Reusable stat cards strip
 - `frontend/src/components/ActionableItems.tsx` -- Prioritized action items list
 - `frontend/src/components/ActivityFeed.tsx` -- Activity timeline with sidebar
-- `ee/backend/lib/health-score.ts` -- `computeHealthScore()` utility function
+- `backend/src/lib/health-score.ts` -- `computeHealthScore()` utility function
 - `backend/database/phase10_gin_index.sql` -- GIN index on activities.metadata
 
 **Modified files:**
@@ -669,10 +669,10 @@ Full skeleton state while stats are loading: skeleton strips for stats, skeleton
 - [OrganizationDetailPage.tsx](frontend/src/app/pages/OrganizationDetailPage.tsx) -- Major enhancement with graph, security posture, status distribution, activity feed
 - [TeamOverviewPage.tsx](frontend/src/app/pages/TeamOverviewPage.tsx) -- Full rewrite from single card to full dashboard with activity feed
 - [OrgGetStartedCard.tsx](frontend/src/components/OrgGetStartedCard.tsx) -- Fix policy step to check Phase 4 tables (`organization_package_policies`, `organization_status_codes`, `organization_pr_checks`) instead of legacy `organization_policies.policy_code`
-- [ee/backend/routes/projects.ts](ee/backend/routes/projects.ts) -- New project stats, recent-activity, sync endpoints
-- [ee/backend/routes/organizations.ts](ee/backend/routes/organizations.ts) -- New org stats endpoint
-- [ee/backend/routes/teams.ts](ee/backend/routes/teams.ts) -- New team stats endpoint
-- [ee/backend/routes/workers.ts](ee/backend/routes/workers.ts) -- Call `computeHealthScore()` after populate-dependencies and policy evaluation; invalidate new cache keys
+- [backend/src/routes/projects.ts](backend/src/routes/projects.ts) -- New project stats, recent-activity, sync endpoints
+- [backend/src/routes/organizations.ts](backend/src/routes/organizations.ts) -- New org stats endpoint
+- [backend/src/routes/teams.ts](backend/src/routes/teams.ts) -- New team stats endpoint
+- [backend/src/routes/workers.ts](backend/src/routes/workers.ts) -- Call `computeHealthScore()` after populate-dependencies and policy evaluation; invalidate new cache keys
 - [frontend/src/lib/api.ts](frontend/src/lib/api.ts) -- New API methods: `getProjectStats`, `getProjectRecentActivity`, `getOrgStats`, `getTeamStats`, `triggerProjectSync`
 
 **No changes to:**

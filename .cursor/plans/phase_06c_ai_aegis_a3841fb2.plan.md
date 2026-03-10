@@ -113,7 +113,7 @@ CREATE TABLE organization_ai_providers (
 CREATE INDEX idx_oap_org ON organization_ai_providers(organization_id);
 ```
 
-### Key Encryption (`ee/backend/lib/ai/encryption.ts`)
+### Key Encryption (`backend/src/lib/ai/encryption.ts`)
 
 - AES-256-GCM via `crypto.createCipheriv`
 - Server-side `AI_ENCRYPTION_KEY` env var (32-byte hex key)
@@ -136,9 +136,9 @@ function decryptApiKey(encrypted: string, storedVersion: number): string;
 
 **Deletion guard:** Before deleting a BYOK key, check for any active SSE streams or threads updated in the last 5 minutes for this provider. If any, return a warning (but allow deletion -- don't block).
 
-### Provider Abstraction (`ee/backend/lib/ai/provider.ts`)
+### Provider Abstraction (`backend/src/lib/ai/provider.ts`)
 
-**New dependencies:** Add `@anthropic-ai/sdk` and `@google/generative-ai` to `ee/backend/package.json`.
+**New dependencies:** Add `@anthropic-ai/sdk` and `@google/generative-ai` to `backend/src/package.json`.
 
 ```typescript
 interface AIProvider {
@@ -165,7 +165,7 @@ interface ToolCallResult extends ChatResult {
 }
 ```
 
-**Provider implementations** (`ee/backend/lib/ai/providers/`):
+**Provider implementations** (`backend/src/lib/ai/providers/`):
 
 - `openai-provider.ts` -- wraps `openai` SDK. Tool calls use `tools` array format.
 - `anthropic-provider.ts` -- wraps `@anthropic-ai/sdk`. Normalizes `tool_use` content blocks to the shared `ToolCallResult` format. Maps `role: 'system'` to Anthropic's system parameter.
@@ -198,11 +198,11 @@ function getPlatformProvider(): AIProvider;
 // If key missing: returns a stub that returns "AI features are temporarily unavailable"
 ```
 
-**Update existing Aegis executor** ([executor.ts](ee/backend/lib/aegis/executor.ts)): Replace `getOpenAIClient()` with `getProviderForOrg(context.organizationId)`. Use `AIProvider.chatWithTools()` instead of raw OpenAI SDK calls.
+**Update existing Aegis executor** ([executor.ts](backend/src/lib/aegis/executor.ts)): Replace `getOpenAIClient()` with `getProviderForOrg(context.organizationId)`. Use `AIProvider.chatWithTools()` instead of raw OpenAI SDK calls.
 
 ### Model Context Window Lookup
 
-Hardcoded lookup in `ee/backend/lib/ai/models.ts`:
+Hardcoded lookup in `backend/src/lib/ai/models.ts`:
 
 ```typescript
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
@@ -226,7 +226,7 @@ function getContextWindow(model: string): number;
 
 ### API Endpoints
 
-All mounted under `/api/organizations/:id/ai-providers` in [organizations.ts](ee/backend/routes/organizations.ts). Auth: `manage_integrations` permission.
+All mounted under `/api/organizations/:id/ai-providers` in [organizations.ts](backend/src/routes/organizations.ts). Auth: `manage_integrations` permission.
 
 - `POST /` -- add/update provider key. Validates provider enum. Encrypts key. Upserts. If this is the only provider, auto-set `is_default = true`.
 - `GET /` -- list configured providers. Returns `{ provider, model_preference, is_default, monthly_cost_cap, connected: true }` per row. Never returns keys.
@@ -250,7 +250,7 @@ New "AI Configuration" section in [OrganizationSettingsPage.tsx](frontend/src/ap
 
 ### Tier 1 (Platform AI) -- prevents abuse of Deptex-funded features
 
-Uses existing `checkRateLimit()` from [rate-limit.ts](ee/backend/lib/rate-limit.ts):
+Uses existing `checkRateLimit()` from [rate-limit.ts](backend/src/lib/rate-limit.ts):
 
 
 | Feature                    | Limit                                  | Key pattern                                                                |
@@ -297,7 +297,7 @@ Tokens are counted **after** the response, using the usage data that all provide
 
 For **pre-send estimation** (cost cap check): use `Math.ceil(JSON.stringify(messages).length / 4)` as a rough character-based approximation. This is intentionally conservative (overestimates).
 
-### Token Pricing Table (`ee/backend/lib/ai/pricing.ts`)
+### Token Pricing Table (`backend/src/lib/ai/pricing.ts`)
 
 ```typescript
 const TOKEN_PRICING: Record<string, { input: number; output: number }> = {
@@ -344,7 +344,7 @@ CREATE INDEX idx_aul_org_month ON ai_usage_logs(organization_id, created_at) WHE
 
 Valid `feature` values: `aegis_chat`, `explain_vuln`, `explain_semgrep`, `explain_secret`, `analyze_usage`, `policy_assistant`, `notification_assistant`, `security_report`, `ai_fix` (Phase 7), `sprint` (Phase 7B).
 
-**Logging middleware** (`ee/backend/lib/ai/logging.ts`):
+**Logging middleware** (`backend/src/lib/ai/logging.ts`):
 
 Wraps every `AIProvider` call. Records timing, token counts from provider response metadata, computes estimated cost via pricing table, inserts into `ai_usage_logs`. Logging is fire-and-forget (non-blocking, errors caught and logged to console).
 
@@ -450,7 +450,7 @@ When context changes mid-conversation:
 
 ### SSE Streaming Implementation
 
-**Backend endpoint:** `POST /api/aegis/stream` (new, in [aegis.ts](ee/backend/routes/aegis.ts))
+**Backend endpoint:** `POST /api/aegis/stream` (new, in [aegis.ts](backend/src/routes/aegis.ts))
 
 Auth: JWT + `interact_with_security_agent` permission check.
 
@@ -537,7 +537,7 @@ ALTER TABLE aegis_chat_threads
 
 ## 7. Aegis Security Actions
 
-Create `ee/backend/lib/aegis/actions/security.ts`:
+Create `backend/src/lib/aegis/actions/security.ts`:
 
 
 | Action                                         | Purpose                              | Data Source                               |
@@ -581,7 +581,7 @@ Additionally, strip any string sequences that resemble system/user role markers 
 
 ### System Prompt Update
 
-Extend [systemPrompt.ts](ee/backend/lib/aegis/systemPrompt.ts) with a new function:
+Extend [systemPrompt.ts](backend/src/lib/aegis/systemPrompt.ts) with a new function:
 
 ```typescript
 function getSecuritySystemPrompt(orgName: string, securityContext?: SecurityContext): string;
@@ -782,7 +782,7 @@ Add to [api.ts](frontend/src/lib/api.ts):
 
 ## 14. Test Suite
 
-### Backend Tests (`ee/backend/routes/__tests__/ai-infrastructure.test.ts`) -- 22 tests
+### Backend Tests (`backend/src/routes/__tests__/ai-infrastructure.test.ts`) -- 22 tests
 
 **BYOK (Tests 1-7):**
 

@@ -1,25 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '../../test/utils';
+import { render, screen } from '../../test/utils';
 import OrganizationHeader from '../OrganizationHeader';
 import { Organization } from '../../lib/api';
-import { api } from '../../lib/api';
-
-vi.mock('../../lib/api', () => ({
-  api: {
-    getOrganizationRoles: vi.fn(),
-  },
-}));
 
 vi.mock('../OrganizationSwitcher', () => ({
-  default: () => null,
+  default: ({ currentOrganizationName }: { currentOrganizationName: string }) => (
+    <span data-testid="org-switcher">{currentOrganizationName}</span>
+  ),
 }));
 
 vi.mock('../AppHeader', () => ({
   default: ({ customLeftContent }: any) => <div data-testid="app-header">{customLeftContent}</div>,
-}));
-
-vi.mock('../RoleBadge', () => ({
-  RoleBadge: () => <div data-testid="role-badge">RoleBadge</div>,
 }));
 
 describe('OrganizationHeader', () => {
@@ -43,35 +34,10 @@ describe('OrganizationHeader', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('renders org name and RoleBadge', () => {
+  it('renders org name via OrganizationSwitcher', () => {
     render(<OrganizationHeader organization={mockOrg} />);
 
     expect(screen.getByText('Test Org')).toBeInTheDocument();
-    expect(screen.getByTestId('role-badge')).toBeInTheDocument();
-  });
-
-  it('fetches role info when organization has role', async () => {
-    (api.getOrganizationRoles as any).mockResolvedValue([
-      {
-        name: 'admin',
-        display_name: 'Admin',
-        color: '#3b82f6',
-        permissions: {},
-      },
-    ]);
-
-    render(<OrganizationHeader organization={mockOrg} />);
-
-    await waitFor(() => {
-      expect(api.getOrganizationRoles).toHaveBeenCalledWith('org-1');
-    });
-  });
-
-  it('uses role_display_name from organization when present', () => {
-    const orgWithDisplayName = { ...mockOrg, role_display_name: 'Custom Admin' };
-    render(<OrganizationHeader organization={orgWithDisplayName} />);
-
-    expect(screen.getByText('Test Org')).toBeInTheDocument();
-    expect(screen.getByTestId('role-badge')).toBeInTheDocument();
+    expect(screen.getByTestId('org-switcher')).toBeInTheDocument();
   });
 });

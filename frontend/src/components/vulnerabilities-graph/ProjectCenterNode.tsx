@@ -171,7 +171,7 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
             )}
           </div>
           <div className="border-t border-border px-3 py-2 flex items-center gap-2 flex-wrap w-full text-left rounded-b-lg">
-            <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-400">
+            <span className="flex-shrink-0 rounded-md border border-green-500/35 bg-green-500/15 px-2 py-0.5 text-xs font-semibold text-green-500">
               A+
             </span>
             {typeof dependenciesCount === 'number' && (

@@ -70,8 +70,8 @@ The watchtower-worker and watchtower-poller already run the actual analysis at t
 - [DependencySidebar.tsx](frontend/src/components/DependencySidebar.tsx) -- remove Watchtower sub-tab.
 - [ProjectSidebar.tsx](frontend/src/components/ProjectSidebar.tsx) -- add Watchtower nav item.
 - [OrganizationSidebar.tsx](frontend/src/components/OrganizationSidebar.tsx) -- add Watchtower nav item.
-- [ee/backend/routes/watchtower.ts](ee/backend/routes/watchtower.ts) -- existing per-package API routes (kept, consumed by new project-level endpoints).
-- [ee/backend/routes/projects.ts](ee/backend/routes/projects.ts) -- new project-level Watchtower endpoints.
+- [backend/src/routes/watchtower.ts](backend/src/routes/watchtower.ts) -- existing per-package API routes (kept, consumed by new project-level endpoints).
+- [backend/src/routes/projects.ts](backend/src/routes/projects.ts) -- new project-level Watchtower endpoints.
 
 ---
 
@@ -557,7 +557,7 @@ The org-level toggle endpoint (`POST .../toggle`) calls the same backend logic a
 
 When an extraction completes for a project with `watchtower_enabled = true`, sync the watchlist with the current dependency set.
 
-**In the extraction pipeline** ([ee/backend/routes/workers.ts](ee/backend/routes/workers.ts)), after deps are synced to `project_dependencies`:
+**In the extraction pipeline** ([backend/src/routes/workers.ts](backend/src/routes/workers.ts)), after deps are synced to `project_dependencies`:
 
 **New dependencies added (in extraction diff):**
 
@@ -622,7 +622,7 @@ Backend: Add to the org roles `permissions` JSONB schema.
 - Clearing commits
 - Re-queuing analysis (reanalyze)
 
-**Note:** `can_manage_watchtower` is already derived in [ee/backend/routes/projects.ts](ee/backend/routes/projects.ts) (line 1507) from `hasOrgManagePermission || hasOwnerTeamManageProjects`. No new DB column needed for the project-level permission.
+**Note:** `can_manage_watchtower` is already derived in [backend/src/routes/projects.ts](backend/src/routes/projects.ts) (line 1507) from `hasOrgManagePermission || hasOwnerTeamManageProjects`. No new DB column needed for the project-level permission.
 
 **Permission hierarchy:**
 
@@ -667,7 +667,7 @@ No new event types needed -- Phase 9 already defines these Watchtower-related ev
 
 ## 10B.P: Notification Event Wiring
 
-The watchtower-worker runs on Fly.io as a separate deployment and cannot import from `ee/backend/`. To emit Phase 9 notification events, the worker calls an internal HTTP endpoint on the main backend.
+The watchtower-worker runs on Fly.io as a separate deployment and cannot import from `backend/src/`. To emit Phase 9 notification events, the worker calls an internal HTTP endpoint on the main backend.
 
 ### CE Endpoint
 
@@ -685,7 +685,7 @@ Add `POST /api/internal/watchtower-event` to [backend/src/routes/](backend/src/r
 }
 ```
 
-The endpoint calls `emitEvent()` from [ee/backend/lib/event-bus.ts](ee/backend/lib/event-bus.ts) (via dynamic import when EE edition). In CE mode, it's a no-op that returns 200.
+The endpoint calls `emitEvent()` from [backend/src/lib/event-bus.ts](backend/src/lib/event-bus.ts) (via dynamic import when EE edition). In CE mode, it's a no-op that returns 200.
 
 ### Worker Integration
 
@@ -848,7 +848,7 @@ $$ LANGUAGE plpgsql;
 
 ### Fly Machines API Integration
 
-Add to [ee/backend/lib/fly-machines.ts](ee/backend/lib/fly-machines.ts):
+Add to [backend/src/lib/fly-machines.ts](backend/src/lib/fly-machines.ts):
 
 ```typescript
 const FLY_WATCHTOWER_APP = process.env.FLY_WATCHTOWER_APP || 'deptex-watchtower-worker';
@@ -911,7 +911,7 @@ No `[http_service]` (worker has no HTTP server). No `auto_stop_machines` or `min
 
 ### Updated `queueWatchtowerJob()`
 
-Replace [ee/backend/lib/watchtower-queue.ts](ee/backend/lib/watchtower-queue.ts) to use Supabase instead of Redis:
+Replace [backend/src/lib/watchtower-queue.ts](backend/src/lib/watchtower-queue.ts) to use Supabase instead of Redis:
 
 ```typescript
 export async function queueWatchtowerJob(job: WatchtowerJobInput): Promise<{ success: boolean; jobId?: string }> {

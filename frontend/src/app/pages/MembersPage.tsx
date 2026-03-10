@@ -1016,8 +1016,8 @@ export default function MembersPage({
                 <tr key={invitation.id} className="hover:bg-table-hover transition-colors">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
-                      <div className="h-10 w-10 rounded-full bg-background-subtle flex items-center justify-center">
-                        <Mail className="h-5 w-5 text-foreground-secondary" />
+                      <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center">
+                        <Mail className="h-5 w-5 text-foreground" />
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium text-foreground truncate">{invitation.email}</div>
@@ -1041,9 +1041,9 @@ export default function MembersPage({
                     </span>
                   </td>
                   <td className="px-4 py-3">
-                    <div className="px-2 py-1 rounded text-xs font-medium border border-border bg-transparent text-foreground-secondary">
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-muted text-foreground">
                       Pending
-                    </div>
+                    </span>
                   </td>
                   <td className="px-4 py-3">
                   <DropdownMenu>

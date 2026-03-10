@@ -1,6 +1,6 @@
 # Contributing to Deptex
 
-Thank you for your interest in contributing to Deptex. This document explains how to contribute to the open-source core.
+Thank you for your interest in contributing to Deptex. This document explains how to contribute.
 
 ---
 
@@ -12,13 +12,11 @@ Please be respectful and constructive in all interactions. We aim for a welcomin
 
 ## What You Can Contribute To
 
-Deptex uses an **open-core** model. You can contribute to:
+- **`backend/`** — Express API, routes under `backend/src/routes/`, libs under `backend/src/lib/`, workers, extraction pipeline
+- **`frontend/`** — React dashboard
+- **`backend/database/`** — SQL migrations
 
-- **`backend/`** — Core API, libs (`ecosystems`, `ghsa`, `semver-affected`, `vuln-counts`, etc.), extraction worker, user profile route
-- **`frontend/`** — Dashboard UI
-- **`backend/database/`** — Core schema migrations (projects, dependencies, vulnerabilities, etc.)
-
-The **`ee/`** directory contains commercial code (organizations, teams, integrations, Aegis, etc.) and is not open for external contributions. If you have ideas for EE features, please open an issue to discuss.
+See [DEVELOPERS.md](./DEVELOPERS.md) for setup and where to add new routes or libs.
 
 ---
 
@@ -27,19 +25,18 @@ The **`ee/`** directory contains commercial code (organizations, teams, integrat
 1. **Fork the repo** and clone your fork
 2. **Create a branch** — `git checkout -b fix/some-bug` or `feature/some-feature`
 3. **Make your changes** — See [DEVELOPERS.md](./DEVELOPERS.md) for setup
-4. **Run tests** — `cd backend && npm run test`
+4. **Run tests** — `cd backend && npm run test` and `cd frontend && npm run test:run` as needed
 5. **Open a pull request** — Describe your changes and link any related issues
 
 ---
 
 ## Adding New Features
 
-When adding a feature, decide whether it belongs in the **core (CE)** or **commercial (EE)** layer:
+- **API routes:** `backend/src/routes/` — register in `backend/src/index.ts`
+- **Shared logic:** `backend/src/lib/`
+- **Workers / extraction:** `backend/extraction-worker/` and related packages
 
-- **CE**: Dependency/vuln logic, SBOM, ecosystems, analysis — goes in `backend/src/lib/` or `backend/extraction-worker/`
-- **EE**: Orgs, teams, integrations, Aegis, queues — goes in `ee/` (internal only)
-
-See the project skill `.cursor/skills/add-new-features/SKILL.md` for details.
+See `.cursor/skills/add-new-features/SKILL.md` for placement and patterns.
 
 ---
 

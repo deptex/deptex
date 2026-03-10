@@ -60,9 +60,9 @@ export function TeamDropdown({ value, onChange, teams, className = '', allOption
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className={`w-full px-3 py-2.5 border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary flex items-center justify-between transition-all ${variant === 'modal'
-          ? 'bg-background-card hover:border-foreground-secondary/30'
-          : 'bg-background-card hover:border-foreground-secondary/30'
+        className={`w-full px-3 py-2.5 border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary flex items-center justify-between transition-colors ${variant === 'modal'
+          ? 'bg-background-card hover:bg-background-subtle/50'
+          : 'bg-background-card hover:bg-background-subtle/50'
           } ${isOpen ? 'ring-2 ring-primary/50 border-primary' : ''}`}
       >
         <span className="text-left">
@@ -88,7 +88,7 @@ export function TeamDropdown({ value, onChange, teams, className = '', allOption
                     onChange(option.id);
                     setIsOpen(false);
                   }}
-                  className="w-full px-3 py-2.5 flex items-center justify-between hover:bg-table-hover transition-colors text-left"
+                  className="w-full px-3 py-2.5 flex items-center justify-between hover:bg-background-subtle/50 transition-colors text-left"
                 >
                   {hasDetails ? (
                     <div className="flex flex-col gap-0.5 min-w-0 flex-1">

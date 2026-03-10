@@ -13,7 +13,7 @@ const allTabs = [
   { id: 'projects', label: 'Projects', path: 'projects', icon: FolderKanban, requiredPermission: null },
   { id: 'teams', label: 'Teams', path: 'teams', icon: Users, requiredPermission: null },
   { id: 'compliance', label: 'Compliance', path: 'compliance', icon: ClipboardCheck, requiredPermission: null },
-  { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: 'view_settings' as const },
+  { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: null },
 ];
 
 function OrganizationTabs({ organizationId, userPermissions }: OrganizationTabsProps) {

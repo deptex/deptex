@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Button } from './ui/button';
 import { RolePermissions } from '../lib/api';
-import { Save, Settings, Shield, Users, Sparkles } from 'lucide-react';
+import { Save, Check } from 'lucide-react';
 
 interface PermissionEditorProps {
   permissions: RolePermissions;
@@ -30,9 +30,7 @@ function AnimatedPermissionRow({
         }`}
     >
       <div className="overflow-hidden">
-        <div className={`${!isLast ? 'border-b border-border' : ''}`}>
-          {children}
-        </div>
+        <div>{children}</div>
       </div>
     </div>
   );
@@ -56,24 +54,17 @@ export function PermissionEditor({
 
   const handlePermissionChange = (key: keyof RolePermissions, value: boolean) => {
     // strict check: cannot grant permission you don't have
-    if (!isOrgOwner && (!currentUserPermissions || !currentUserPermissions[key]) && value) {
-      return;
+    if (!isOrgOwner && value) {
+      if (key === 'manage_compliance') {
+        const hasEither =
+          currentUserPermissions?.manage_compliance || currentUserPermissions?.manage_statuses;
+        if (!currentUserPermissions || !hasEither) return;
+      } else if (!currentUserPermissions || !currentUserPermissions[key]) {
+        return;
+      }
     }
 
     const updated = { ...localPermissions, [key]: value };
-
-    // If view_settings is disabled, disable dependent permissions
-    if (key === 'view_settings' && !value) {
-      updated.manage_billing = false;
-      updated.manage_security = false;
-      updated.view_members = false;
-      updated.add_members = false;
-      updated.edit_roles = false;
-      updated.kick_members = false;
-      updated.view_activity = false;
-      updated.manage_integrations = false;
-      updated.manage_notifications = false;
-    }
 
     // Combined permission: view_members and add_members are synced together
     if (key === 'view_members') {
@@ -84,12 +75,24 @@ export function PermissionEditor({
       }
     }
 
-    // If interact_with_aegis is disabled, disable all dependent AI permissions
-    if (key === 'interact_with_aegis' && !value) {
-      updated.trigger_fix = false;
-      updated.manage_aegis = false;
-      updated.view_ai_spending = false;
-      updated.manage_incidents = false;
+    // Use Aegis AI is one capability in the UI: sync chat, fixes, and incidents together
+    if (key === 'interact_with_aegis') {
+      updated.trigger_fix = value;
+      updated.manage_incidents = value;
+      if (!value) {
+        updated.manage_aegis = false;
+        updated.view_ai_spending = false;
+      }
+    }
+
+    // Manage Aegis Configuration bundles view_ai_spending (same capability in the UI)
+    if (key === 'manage_aegis') {
+      updated.view_ai_spending = value;
+    }
+
+    // Manage Policies bundles manage_compliance + manage_statuses (same tabs/settings access)
+    if (key === 'manage_compliance') {
+      updated.manage_statuses = value;
     }
 
     setLocalPermissions(updated);
@@ -99,48 +102,72 @@ export function PermissionEditor({
   };
 
   const handleSave = async () => {
-    await onSave(localPermissions);
+    // Persist AI block consistently: one "Use Aegis AI" concept = all three flags aligned
+    const toSave: RolePermissions = { ...localPermissions };
+    if (toSave.interact_with_aegis) {
+      toSave.trigger_fix = true;
+      toSave.manage_incidents = true;
+    } else {
+      toSave.trigger_fix = false;
+      toSave.manage_incidents = false;
+    }
+    // manage_aegis and view_ai_spending are one toggle in the UI
+    if (toSave.manage_aegis) {
+      toSave.view_ai_spending = true;
+    } else {
+      toSave.view_ai_spending = false;
+    }
+    // Manage Policies: keep both flags aligned; manage_watchtower removed — clear if present
+    if (toSave.manage_compliance) {
+      toSave.manage_statuses = true;
+    } else {
+      toSave.manage_statuses = false;
+    }
+    (toSave as Record<string, boolean>).manage_watchtower = false;
+    // Org settings entry no longer gated by view_settings — keep true so team/project code still works
+    toSave.view_settings = true;
+    await onSave(toSave);
   };
 
   const permissionGroups = [
     {
       title: 'Admin',
-      icon: <Settings className="h-3.5 w-3.5" />,
+      // No view_settings — any org member can open Settings; sidebar shows only sections they have permission for
       permissions: [
-        { key: 'view_settings' as const, label: 'View Settings' },
-        { key: 'manage_billing' as const, label: 'Manage Plan & Billing', dependsOn: 'view_settings' as const },
-        { key: 'manage_security' as const, label: 'Manage Security', dependsOn: 'view_settings' as const },
-        { key: 'view_members' as const, label: 'View/Add Members', dependsOn: 'view_settings' as const },
+        { key: 'manage_billing' as const, label: 'Manage Plan & Billing' },
+        {
+          key: 'manage_security' as const,
+          label: 'Manage SSO, MFA & network access',
+        },
+        { key: 'view_members' as const, label: 'View/Add Members' },
         { key: 'kick_members' as const, label: 'Kick Members', dependsOn: 'view_members' as const },
         { key: 'edit_roles' as const, label: 'View/Edit Roles', dependsOn: 'view_members' as const },
-        { key: 'view_activity' as const, label: 'View Audit Logs', dependsOn: 'view_settings' as const },
-        { key: 'manage_integrations' as const, label: 'Manage Integrations', dependsOn: 'view_settings' as const },
-        { key: 'manage_notifications' as const, label: 'Manage Notifications', dependsOn: 'view_settings' as const },
+        { key: 'view_activity' as const, label: 'View Audit Logs' },
+        { key: 'manage_integrations' as const, label: 'Manage Integrations' },
+        { key: 'manage_notifications' as const, label: 'Manage Notifications' },
       ],
     },
     {
       title: 'Security & Policies',
-      icon: <Shield className="h-3.5 w-3.5" />,
       permissions: [
-        { key: 'manage_compliance' as const, label: 'Manage Compliance & Policies' },
-        { key: 'manage_statuses' as const, label: 'Manage Statuses & Tiers' },
-        { key: 'manage_watchtower' as const, label: 'Manage Watchtower' },
+        // Single toggle syncs manage_compliance + manage_statuses (policies, statuses, tiers tabs)
+        { key: 'manage_compliance' as const, label: 'Manage Policies' },
       ],
     },
     {
       title: 'AI & Automation',
-      icon: <Sparkles className="h-3.5 w-3.5" />,
       permissions: [
+        // Single "Use Aegis AI" toggle syncs interact_with_aegis + trigger_fix + manage_incidents in handlePermissionChange
         { key: 'interact_with_aegis' as const, label: 'Use Aegis AI' },
-        { key: 'trigger_fix' as const, label: 'Trigger AI Fixes', dependsOn: 'interact_with_aegis' as const },
-        { key: 'manage_aegis' as const, label: 'Manage Aegis Configuration', dependsOn: 'interact_with_aegis' as const },
-        { key: 'view_ai_spending' as const, label: 'View AI Spending & Usage', dependsOn: 'interact_with_aegis' as const },
-        { key: 'manage_incidents' as const, label: 'Manage Incidents', dependsOn: 'interact_with_aegis' as const },
+        {
+          key: 'manage_aegis' as const,
+          label: 'Manage Aegis Configuration',
+          dependsOn: 'interact_with_aegis' as const,
+        },
       ],
     },
     {
       title: 'Teams & Projects',
-      icon: <Users className="h-3.5 w-3.5" />,
       permissions: [
         { key: 'manage_teams_and_projects' as const, label: 'Manage Teams & Projects' },
       ],
@@ -159,89 +186,122 @@ export function PermissionEditor({
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-2">
       {permissionGroups.filter((g) => g.permissions.length > 0).map((group) => {
         const visiblePerms = getVisiblePermissions(group.permissions);
 
         return (
           <div key={group.title} className="space-y-2">
             <div className="flex items-center gap-1.5 px-1">
-              <span className="text-foreground-secondary">{group.icon}</span>
               <h4 className="text-xs font-semibold text-foreground-secondary tracking-wide uppercase">
                 {group.title}
               </h4>
             </div>
-            <div className="rounded-lg border border-border bg-background overflow-hidden">
+            <div className="flex flex-col">
               {group.permissions.map((perm) => {
                 const dependsOn = 'dependsOn' in perm ? perm.dependsOn : undefined;
                 const isVisible = isPermissionVisible(perm);
                 let isDisabled = dependsOn ? !localPermissions[dependsOn] : false;
 
-                const userHasPermission = isOrgOwner || (currentUserPermissions ? !!currentUserPermissions[perm.key] : false);
+                const userHasPermission =
+                  isOrgOwner ||
+                  (currentUserPermissions &&
+                    (perm.key === 'manage_compliance'
+                      ? !!(currentUserPermissions.manage_compliance || currentUserPermissions.manage_statuses)
+                      : !!currentUserPermissions[perm.key]));
 
                 if (!userHasPermission) {
                   isDisabled = true;
                 }
 
-                const isChecked = localPermissions[perm.key];
+                // Use Aegis AI row reflects combined capability (legacy roles may have mismatched flags)
+                // Manage Aegis Configuration bundles view_ai_spending — one toggle, no separate row
+                const isChecked =
+                  perm.key === 'interact_with_aegis'
+                    ? !!(
+                        localPermissions.interact_with_aegis ||
+                        localPermissions.trigger_fix ||
+                        localPermissions.manage_incidents
+                      )
+                    : perm.key === 'manage_aegis'
+                      ? !!(localPermissions.manage_aegis || localPermissions.view_ai_spending)
+                      : perm.key === 'manage_compliance'
+                        ? !!(
+                            localPermissions.manage_compliance ||
+                            localPermissions.manage_statuses
+                          )
+                        : localPermissions[perm.key];
 
-                // Calculate if this is the last visible permission
+                // Calculate if this is the last visible permission (spacing only between visible rows)
                 const visibleIndex = visiblePerms.findIndex(p => p.key === perm.key);
                 const isLastVisible = visibleIndex === visiblePerms.length - 1;
+                const spacerBelow = isVisible
+                  ? isLastVisible
+                    ? 'mb-4' /* extra space after last item in section */
+                    : 'mb-2'
+                  : '';
 
-                // If this permission has no dependency, render it normally
-                if (!dependsOn) {
-                  return (
-                    <div
-                      key={perm.key}
-                      className={`w-full px-4 py-3 flex items-center justify-between ${!isLastVisible ? 'border-b border-border' : ''
-                        } ${isDisabled ? 'opacity-40' : ''}`}
-                    >
-                      <span className={`text-sm font-medium ${isDisabled ? 'text-foreground-secondary' : 'text-foreground'}`}>
-                        {perm.label}
-                      </span>
-                      <button
-                        onClick={() => !isDisabled && handlePermissionChange(perm.key, !isChecked)}
-                        disabled={isDisabled}
-                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-border focus:ring-offset-2 focus:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 ${isChecked ? 'bg-primary' : 'bg-background-subtle'
-                          }`}
-                      >
-                        <span
-                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-background transition-transform ${isChecked ? 'translate-x-4' : 'translate-x-0.5'
-                            }`}
-                        />
-                      </button>
-                    </div>
-                  );
-                }
-
-                // For dependent permissions, wrap in animated container
-                return (
-                  <AnimatedPermissionRow
-                    key={perm.key}
-                    isVisible={isVisible}
-                    isLast={isLastVisible}
+                const rowContent = (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (isDisabled) return;
+                      if (perm.key === 'interact_with_aegis') {
+                        const next = !isChecked;
+                        handlePermissionChange('interact_with_aegis', next);
+                        return;
+                      }
+                      if (perm.key === 'manage_aegis') {
+                        const next = !isChecked;
+                        handlePermissionChange('manage_aegis', next);
+                        return;
+                      }
+                      if (perm.key === 'manage_compliance') {
+                        const next = !isChecked;
+                        handlePermissionChange('manage_compliance', next);
+                        return;
+                      }
+                      handlePermissionChange(perm.key, !isChecked);
+                    }}
+                    disabled={isDisabled}
+                    className={`w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all outline-none focus:outline-none focus-visible:ring-2 focus-visible:ring-border focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 ${
+                      isDisabled ? 'opacity-60' : ''
+                    } ${
+                      isChecked
+                        ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20'
+                        : 'bg-background-card border-border hover:border-foreground-secondary/30'
+                    }`}
                   >
                     <div
-                      className={`w-full px-4 py-3 flex items-center justify-between ${isDisabled ? 'opacity-40' : ''
-                        }`}
+                      className={`h-4 w-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors ${
+                        isChecked ? 'border-foreground bg-foreground text-background' : 'border-foreground-secondary/50 bg-transparent'
+                      }`}
+                      aria-hidden
                     >
-                      <span className={`text-sm font-medium ${isDisabled ? 'text-foreground-secondary' : 'text-foreground'}`}>
-                        {perm.label}
-                      </span>
-                      <button
-                        onClick={() => !isDisabled && handlePermissionChange(perm.key, !isChecked)}
-                        disabled={isDisabled}
-                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-border focus:ring-offset-2 focus:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 ${isChecked ? 'bg-primary' : 'bg-background-subtle'
-                          }`}
-                      >
-                        <span
-                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-background transition-transform ${isChecked ? 'translate-x-4' : 'translate-x-0.5'
-                            }`}
-                        />
-                      </button>
+                      {isChecked && <Check className="h-2.5 w-2.5" />}
                     </div>
-                  </AnimatedPermissionRow>
+                    <span className={`text-sm font-medium flex-1 ${isDisabled ? 'text-foreground-secondary' : 'text-foreground'}`}>
+                      {perm.label}
+                    </span>
+                  </button>
+                );
+
+                const content =
+                  dependsOn ? (
+                    <AnimatedPermissionRow
+                      isVisible={isVisible}
+                      isLast={isLastVisible}
+                    >
+                      {rowContent}
+                    </AnimatedPermissionRow>
+                  ) : (
+                    rowContent
+                  );
+
+                return (
+                  <div key={perm.key} className={`min-h-0 ${spacerBelow}`}>
+                    {content}
+                  </div>
                 );
               })}
             </div>

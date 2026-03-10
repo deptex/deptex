@@ -1,6 +1,6 @@
 /**
  * 8N: Daily/Weekly Extraction Scheduler (QStash cron endpoint)
- * CE route mounted outside isEeEdition() block.
+ * Mounted at /api/workers (see backend/src/index.ts).
  * Schedule: 0 *\/6 * * * (every 6 hours)
  */
 

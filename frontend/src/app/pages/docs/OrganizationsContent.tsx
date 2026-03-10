@@ -7,8 +7,7 @@ const permissions = [
   { permission: "manage_projects", description: "Create, archive, and configure projects." },
   { permission: "manage_integrations", description: "Connect and remove third-party integrations (GitHub, Slack, etc.)." },
   { permission: "manage_policies", description: "Edit the organization-wide policy code." },
-  { permission: "manage_compliance", description: "Review and approve policy exception applications." },
-  { permission: "manage_statuses", description: "Create, edit, reorder, and delete custom statuses." },
+  { permission: "manage_compliance", description: "Manage policies, compliance, custom statuses, and asset tiers (bundled as Manage Policies in the role editor)." },
   { permission: "manage_notification_rules", description: "Create, edit, and delete notification rules." },
   { permission: "view_audit_logs", description: "View the organization audit log." },
 ];
@@ -38,13 +37,20 @@ export default function OrganizationsContent() {
         </p>
       </div>
 
+      {/* Asset Tiers */}
+      <div>
+        <h2 className="text-lg font-semibold text-foreground mb-3">Asset Tiers</h2>
+        <p className="text-foreground/90 leading-relaxed">
+          The <strong className="text-foreground">Asset Tiers</strong> sub-tab (under Statuses) defines tiers such as Crown Jewels, External, Internal, and Non-Production. Each tier has an <strong className="text-foreground">environmental multiplier</strong> that weights Depscore by project criticality. Every project is assigned a tier; <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">packagePolicy</code> receives <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">context.tier</code> so you can apply stricter rules to higher tiers. See <Link to="/docs/policies" className="text-foreground underline hover:no-underline">Policies</Link> for how tier-aware package policy works.
+        </p>
+      </div>
+
       {/* Custom Statuses */}
       <div>
         <h2 className="text-lg font-semibold text-foreground mb-3">Custom Statuses</h2>
         <p className="text-foreground/90 leading-relaxed">
-          The <strong className="text-foreground">Statuses</strong> tab lets you define custom vulnerability statuses: name, color, rank,
-          and <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">is_passing</code>. Policy functions return one of these status names.
-          Drag and drop to reorder. System statuses cannot be deleted but can be reordered.
+          The <strong className="text-foreground">Statuses</strong> tab lets you define custom project statuses: <strong className="text-foreground">name</strong>,{" "}
+          <strong className="text-foreground">color</strong>, and <strong className="text-foreground">rank</strong> (ordering). Your <strong className="text-foreground">Status Code</strong> (<code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">projectStatus</code>) returns one of these names as a string — that is how a project gets its badge. See <Link to="/docs/policies" className="text-foreground underline hover:no-underline">Policies</Link> for examples. System statuses cannot be deleted but can be reordered.
         </p>
       </div>
 

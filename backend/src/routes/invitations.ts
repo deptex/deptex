@@ -58,19 +58,18 @@ router.get('/', async (req: AuthRequest, res) => {
       return res.json([]);
     }
 
-    // Get organization names for the invitations
+    // Get organization names and avatars for the invitations
     const organizationIds = invitations.map(inv => inv.organization_id);
     const { data: organizations, error: orgError } = await supabase
       .from('organizations')
-      .select('id, name')
+      .select('id, name, avatar_url')
       .in('id', organizationIds);
 
     if (orgError) {
       throw orgError;
     }
 
-    // Create a map of organization IDs to names
-    const orgMap = new Map(organizations?.map(org => [org.id, org.name]) || []);
+    const orgMap = new Map(organizations?.map(org => [org.id, { name: org.name, avatar_url: org.avatar_url ?? null }]) || []);
 
     // Get team names for invitations that have team_id
     const teamIds = invitations.filter(inv => inv.team_id).map(inv => inv.team_id);
@@ -83,19 +82,23 @@ router.get('/', async (req: AuthRequest, res) => {
       teamMap = new Map(teams?.map(team => [team.id, team.name]) || []);
     }
 
-    // Format the response to include organization name and team name
-    const formattedInvitations = invitations.map((inv) => ({
-      id: inv.id,
-      organization_id: inv.organization_id,
-      organization_name: orgMap.get(inv.organization_id) || 'Organization',
-      email: inv.email,
-      role: inv.role,
-      status: inv.status,
-      created_at: inv.created_at,
-      expires_at: inv.expires_at,
-      team_id: inv.team_id || null,
-      team_name: inv.team_id ? teamMap.get(inv.team_id) || null : null,
-    }));
+    // Format the response to include organization name, avatar, and team name
+    const formattedInvitations = invitations.map((inv) => {
+      const org = orgMap.get(inv.organization_id);
+      return {
+        id: inv.id,
+        organization_id: inv.organization_id,
+        organization_name: org?.name || 'Organization',
+        organization_avatar_url: org?.avatar_url ?? null,
+        email: inv.email,
+        role: inv.role,
+        status: inv.status,
+        created_at: inv.created_at,
+        expires_at: inv.expires_at,
+        team_id: inv.team_id || null,
+        team_name: inv.team_id ? teamMap.get(inv.team_id) || null : null,
+      };
+    });
 
     res.json(formattedInvitations);
   } catch (error: any) {

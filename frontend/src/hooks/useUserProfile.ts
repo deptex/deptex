@@ -6,6 +6,7 @@ interface UserProfile {
   user_id: string;
   avatar_url: string | null;
   full_name: string | null;
+  default_organization_id?: string | null;
 }
 
 const CACHE_KEY_PREFIX = 'user_profile_';

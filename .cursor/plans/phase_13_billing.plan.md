@@ -94,7 +94,7 @@ CREATE INDEX idx_op_stripe_subscription ON organization_plans(stripe_subscriptio
 - Product: "Deptex Team" with monthly ($300) and annual ($3000/yr) prices
 - Enterprise: handled manually (custom invoices via Stripe)
 
-**Backend integration** (`ee/backend/lib/stripe.ts`):
+**Backend integration** (`backend/src/lib/stripe.ts`):
 
 ```typescript
 import Stripe from 'stripe';
@@ -114,7 +114,7 @@ async function createPortalSession(orgId: string): Promise<string>;
 async function resetUsageCounters(orgId: string): Promise<void>;
 ```
 
-**Stripe Webhooks** (`ee/backend/routes/stripe-webhooks.ts`):
+**Stripe Webhooks** (`backend/src/routes/stripe-webhooks.ts`):
 
 Events to handle:
 

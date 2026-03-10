@@ -10,7 +10,7 @@ import {
   type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, ExternalLink, Loader2, Package, HeartPulse, ChevronRight, Check } from 'lucide-react';
+import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, ExternalLink, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, ArrowUp, FileText } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import {
   Dialog,
@@ -39,7 +39,6 @@ import { SkeletonGroupCenterNode } from '../../components/vulnerabilities-graph/
 import { VulnProjectNode } from '../../components/vulnerabilities-graph/VulnProjectNode';
 import { ProjectCenterNode } from '../../components/vulnerabilities-graph/ProjectCenterNode';
 import { SyncDetailSidebar } from '../../components/SyncDetailSidebar';
-import { OrgMemberNode, MEMBER_NODE_WIDTH, MEMBER_NODE_HEIGHT } from '../../components/vulnerabilities-graph/OrgMemberNode';
 import { DependencyNode } from '../../components/supply-chain/DependencyNode';
 import { FrameworkIcon } from '../../components/framework-icon';
 import { TeamIcon } from '../../components/TeamIcon';
@@ -56,7 +55,6 @@ const nodeTypes: NodeTypes = {
   vulnProjectNode: VulnProjectNode,
   projectCenterNode: ProjectCenterNode,
   dependencyNode: DependencyNode,
-  orgMemberNode: OrgMemberNode,
 };
 
 const skeletonNodeTypes: NodeTypes = {
@@ -119,7 +117,6 @@ export default function OrganizationVulnerabilitiesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [orgSidebarOpen, setOrgSidebarOpen] = useState(false);
-  const [orgSidebarVisible, setOrgSidebarVisible] = useState(false);
   const [teamSidebarOpen, setTeamSidebarOpen] = useState(false);
   const [teamSidebarVisible, setTeamSidebarVisible] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -157,10 +154,8 @@ export default function OrganizationVulnerabilitiesPage() {
   const [addMemberSelectedUserIds, setAddMemberSelectedUserIds] = useState<string[]>([]);
   const [addMemberSelectedRoleId, setAddMemberSelectedRoleId] = useState<string>('member');
   const [addMemberAdding, setAddMemberAdding] = useState(false);
-  const [membersExpanded, setMembersExpanded] = useState(false);
-  const [membersExpanding, setMembersExpanding] = useState(false);
-  const [orgMembersList, setOrgMembersList] = useState<OrganizationMember[]>([]);
   const [syncDetailProjectId, setSyncDetailProjectId] = useState<string | null>(null);
+  const reactFlowInstanceRef = useRef<{ fitView: (opts?: { nodes?: { id: string }[]; duration?: number }) => void } | null>(null);
 
   useEffect(() => {
     if (searchOpen) setTimeout(() => searchInputRef.current?.focus(), 0);
@@ -238,6 +233,7 @@ export default function OrganizationVulnerabilitiesPage() {
               assetTierColor: p.asset_tier_color ?? null,
               dependenciesCount: (p as Project).direct_dependencies_count ?? (p as Project).dependencies_count ?? null,
               isExtracting,
+              healthScore: typeof (p as Project).health_score === 'number' ? (p as Project).health_score : null,
             });
           }
         });
@@ -326,7 +322,8 @@ export default function OrganizationVulnerabilitiesPage() {
     organization?.avatar_url || '/images/org_profile.png',
     orgRoleLabel,
     orgRoleColor,
-    organization?.id ?? null
+    organization?.id ?? null,
+    organization?.role ?? null
   );
 
   const [graphNodes, setGraphNodes, onNodesChange] = useNodesState<Node>([]);
@@ -337,8 +334,8 @@ export default function OrganizationVulnerabilitiesPage() {
     (_: React.MouseEvent, node: Node) => {
       if (!orgId) return;
       if (node.id === ORG_CENTER_ID) {
+        reactFlowInstanceRef.current?.fitView({ nodes: [{ id: ORG_CENTER_ID }], duration: 300 });
         setOrgSidebarOpen(true);
-        requestAnimationFrame(() => setOrgSidebarVisible(true));
         return;
       }
       const d = node.data as { projectId?: string; projectName?: string; isTeamNode?: boolean; framework?: string | null; organizationId?: string };
@@ -366,8 +363,7 @@ export default function OrganizationVulnerabilitiesPage() {
   );
 
   const closeOrgSidebar = useCallback(() => {
-    setOrgSidebarVisible(false);
-    setTimeout(() => setOrgSidebarOpen(false), 150);
+    setOrgSidebarOpen(false);
   }, []);
 
   const closeTeamSidebar = useCallback(() => {
@@ -531,27 +527,6 @@ export default function OrganizationVulnerabilitiesPage() {
     [orgId, expandedProjectId]
   );
 
-  const onExpandMembers = useCallback(() => {
-    if (!orgId) return;
-    if (membersExpanded) {
-      setMembersExpanded(false);
-      setOrgMembersList([]);
-      return;
-    }
-    setMembersExpanding(true);
-    api
-      .getOrganizationMembers(orgId)
-      .then((members) => {
-        setOrgMembersList(members);
-        setMembersExpanded(true);
-      })
-      .catch(() => {
-        setMembersExpanded(false);
-        setOrgMembersList([]);
-      })
-      .finally(() => setMembersExpanding(false));
-  }, [orgId, membersExpanded]);
-
   useEffect(() => {
     graphNodesRef.current = graphNodes;
   }, [graphNodes]);
@@ -630,59 +605,9 @@ export default function OrganizationVulnerabilitiesPage() {
     return () => { cancelled = true; };
   }, [orgId, selectedProjectId, projectSidebarOpen]);
 
-  const memberNodesAndEdges = useMemo(() => {
-    if (!membersExpanded || orgMembersList.length === 0) return { nodes: [] as Node[], edges: [] as Edge[] };
-    const centerX = 0;
-    const centerY = 0;
-    const ringRadius = 320;
-    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-    const grayStroke = 'rgba(100, 116, 139, 0.4)';
-    const nodes: Node[] = orgMembersList.map((m, i) => {
-      const angle = i * goldenAngle;
-      const x = centerX + Math.cos(angle) * ringRadius - MEMBER_NODE_WIDTH / 2;
-      const y = centerY + Math.sin(angle) * ringRadius - MEMBER_NODE_HEIGHT / 2;
-      return {
-        id: `member-${m.user_id}`,
-        type: 'orgMemberNode',
-        position: { x, y },
-        data: {
-          memberId: m.user_id,
-          fullName: m.full_name,
-          email: m.email,
-          avatarUrl: m.avatar_url,
-          role: m.role,
-          roleDisplayName: m.role_display_name,
-          roleColor: m.role_color,
-        },
-        draggable: true,
-        selectable: false,
-      };
-    });
-    const edges: Edge[] = orgMembersList.map((m) => ({
-      id: `edge-org-member-${m.user_id}`,
-      source: ORG_CENTER_ID,
-      target: `member-${m.user_id}`,
-      type: 'default',
-      style: { stroke: grayStroke, strokeWidth: 1.2 },
-    }));
-    return { nodes, edges };
-  }, [membersExpanded, orgMembersList]);
-
   useEffect(() => {
     if (loading) return;
     const injectedLayoutNodes = layoutNodes.map((n) => {
-      if (n.id === ORG_CENTER_ID && n.data && typeof n.data === 'object') {
-        const data = n.data as Record<string, unknown>;
-        return {
-          ...n,
-          data: {
-            ...data,
-            onExpandMembers,
-            membersExpanded,
-            isExpandingMembers: membersExpanding,
-          },
-        };
-      }
       if (n.type === 'vulnProjectNode' && n.data && typeof n.data === 'object') {
         const data = n.data as Record<string, unknown>;
         return {
@@ -697,16 +622,8 @@ export default function OrganizationVulnerabilitiesPage() {
       }
       return n;
     });
-    setGraphNodes([
-      ...injectedLayoutNodes,
-      ...expandedNodes,
-      ...memberNodesAndEdges.nodes,
-    ]);
-    setGraphEdges([
-      ...layoutEdges,
-      ...expandedEdges,
-      ...memberNodesAndEdges.edges,
-    ]);
+    setGraphNodes([...injectedLayoutNodes, ...expandedNodes]);
+    setGraphEdges([...layoutEdges, ...expandedEdges]);
   }, [
     loading,
     layoutNodes,
@@ -717,10 +634,6 @@ export default function OrganizationVulnerabilitiesPage() {
     onExpandProject,
     setGraphNodes,
     setGraphEdges,
-    onExpandMembers,
-    membersExpanded,
-    membersExpanding,
-    memberNodesAndEdges,
   ]);
 
   if (!organization) {
@@ -735,7 +648,7 @@ export default function OrganizationVulnerabilitiesPage() {
   }
 
   return (
-    <main className="relative flex flex-col min-h-[calc(100vh-3rem)] w-full bg-background-content">
+    <main className="relative flex flex-col min-h-[calc(100vh-3rem)] w-full bg-background">
       {error && (
         <div className="flex-shrink-0 px-4 pt-3">
           <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-3 text-sm text-destructive">
@@ -959,86 +872,152 @@ export default function OrganizationVulnerabilitiesPage() {
             </div>
           </DialogContent>
         </Dialog>
-        <div className="absolute inset-0 overflow-hidden">
-          <ReactFlow
-            nodes={stillShowingSkeleton ? orgSkeletonNodes : graphNodes}
-            edges={stillShowingSkeleton ? [] : graphEdges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onNodeClick={onNodeClick}
-            nodeTypes={stillShowingSkeleton ? skeletonNodeTypes : nodeTypes}
-            fitView
-            fitViewOptions={{ padding: 0.3, maxZoom: stillShowingSkeleton ? 1.2 : 1 }}
-            minZoom={0.2}
-            maxZoom={2}
-            proOptions={{ hideAttribution: true }}
-            defaultEdgeOptions={{ type: 'smoothstep' }}
-          >
-            <Background
-              variant={BackgroundVariant.Dots}
-              gap={16}
-              size={1.2}
-              color="rgba(148, 163, 184, 0.3)"
-            />
-          </ReactFlow>
-        </div>
-      </div>
-
-      {orgSidebarOpen && organization && (
-        <div className="fixed inset-0 z-50">
+        <div className="absolute inset-0 flex min-h-0">
+          {/* Graph: 100% when sidebar closed, 34% when sidebar open */}
           <div
             className={cn(
-              'fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150',
-              orgSidebarVisible ? 'opacity-100' : 'opacity-0'
+              'min-h-0 overflow-hidden bg-background transition-[width] duration-300',
+              orgSidebarOpen ? 'w-1/3 flex-shrink-0' : 'flex-1 min-w-0'
             )}
-            onClick={closeOrgSidebar}
-            aria-hidden
-          />
-          <div
-            className={cn(
-              'fixed right-4 top-4 bottom-4 w-full max-w-[640px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
-              orgSidebarVisible ? 'translate-x-0' : 'translate-x-full'
-            )}
-            onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-6 pt-5 pb-4 flex-shrink-0 flex items-center justify-between gap-4 border-b border-border">
-              <div className="flex flex-col gap-0.5 min-w-0">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <img
-                    src={organization.avatar_url || '/images/org_profile.png'}
-                    alt={organization.name}
-                    className="h-8 w-8 rounded-lg object-contain border border-border flex-shrink-0"
-                  />
-                  <h2 className="text-base font-semibold text-foreground truncate">{organization.name}</h2>
-                </div>
-                {(organization.role || organization.role_display_name) && (
-                  <p className="text-xs text-muted-foreground pl-10 truncate">
-                    {organization.role_display_name ?? (organization.role ? organization.role.charAt(0).toUpperCase() + organization.role.slice(1) : 'Member')}
-                  </p>
-                )}
-              </div>
-            </div>
-            <div className="flex-1 overflow-y-auto px-6 py-5">
-              {/* Action Items */}
-              <section>
-                <h3 className="text-sm font-medium text-foreground mb-3">Action Items</h3>
-                {orgItemsToAddress.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-8 text-center">
-                      <ShieldCheck className="h-10 w-10 text-muted-foreground mb-3" aria-hidden />
-                      <p className="text-sm text-muted-foreground">Nothing to worry about here</p>
-                    </div>
-                  ) : (
-                    <ul className="space-y-2">
-                      {orgItemsToAddress.map((label) => (
-                        <li key={label} className="text-sm text-foreground">• {label}</li>
-                      ))}
-                    </ul>
-                  )}
-              </section>
+            <div className="absolute inset-0 overflow-hidden">
+              <ReactFlow
+                nodes={stillShowingSkeleton ? orgSkeletonNodes : graphNodes}
+                edges={stillShowingSkeleton ? [] : graphEdges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onNodeClick={onNodeClick}
+                onInit={(instance) => { reactFlowInstanceRef.current = instance as any; }}
+                nodeTypes={stillShowingSkeleton ? skeletonNodeTypes : nodeTypes}
+                fitView
+                fitViewOptions={{ padding: 0.3, maxZoom: stillShowingSkeleton ? 1.2 : 1 }}
+                minZoom={0.2}
+                maxZoom={2}
+                proOptions={{ hideAttribution: true }}
+                defaultEdgeOptions={{ type: 'smoothstep' }}
+              >
+                <Background
+                  variant={BackgroundVariant.Dots}
+                  gap={16}
+                  size={1.2}
+                  color="rgba(148, 163, 184, 0.3)"
+                />
+              </ReactFlow>
             </div>
           </div>
+
+          {/* Org sidebar: 66% of graph area, slides in from right */}
+          <div
+            className={cn(
+              'flex-shrink-0 flex flex-col bg-background border-l border-border overflow-hidden transition-[width] duration-300 ease-out',
+              orgSidebarOpen && organization ? 'w-2/3' : 'w-0'
+            )}
+          >
+            {orgSidebarOpen && organization && (
+              <>
+                <div className="px-5 pt-5 pb-4 flex-shrink-0 flex items-center justify-between gap-4 border-b border-border">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <img
+                      src={organization.avatar_url || '/images/org_profile.png'}
+                      alt={organization.name}
+                      className="h-9 w-9 rounded-lg object-contain border border-border flex-shrink-0"
+                    />
+                    <h2 className="text-lg font-semibold text-foreground truncate">{organization.name}</h2>
+                  </div>
+                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={closeOrgSidebar} aria-label="Close">
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto px-5 py-5 space-y-6">
+                  {/* Hero: Risk grade + trend */}
+                  <section className="rounded-lg border border-border bg-background-card p-5">
+                    <div className="flex items-end justify-between gap-4">
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-wider text-foreground-secondary mb-1">Risk grade</p>
+                        <p className="text-3xl font-bold text-foreground tabular-nums">B+</p>
+                        <p className="text-sm text-foreground-secondary mt-1">85/100</p>
+                      </div>
+                      <div className="flex items-center gap-1.5 rounded-md border border-green-500/30 bg-green-500/10 px-2.5 py-1.5 text-green-500">
+                        <ArrowUp className="h-4 w-4" />
+                        <span className="text-sm font-medium">Risk reduced 5% this month</span>
+                      </div>
+                    </div>
+                  </section>
+
+                  {/* Reachability funnel */}
+                  <section>
+                    <h3 className="text-sm font-medium text-foreground mb-3">Reachability (noise reduction)</h3>
+                    <div className="rounded-lg border border-border bg-background-card p-4 space-y-3">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-foreground-secondary">1,000 Total vulnerabilities</span>
+                      </div>
+                      <div className="h-2 rounded-full bg-muted overflow-hidden">
+                        <div className="h-full w-[40%] rounded-full bg-amber-500/60" />
+                      </div>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-foreground-secondary">400 Reachable in runtime</span>
+                      </div>
+                      <div className="h-2 rounded-full bg-muted overflow-hidden">
+                        <div className="h-full w-[3%] rounded-full bg-destructive/70" />
+                      </div>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="font-medium text-foreground">12 Violating active policies</span>
+                      </div>
+                    </div>
+                  </section>
+
+                  {/* Top 3 burning issues */}
+                  <section>
+                    <h3 className="text-sm font-medium text-foreground mb-3">Top burning issues</h3>
+                    <ul className="space-y-2">
+                      <li className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-sm">
+                        <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+                        <span className="text-foreground">Log4j found in Payment-Gateway</span>
+                      </li>
+                      <li className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2.5 text-sm">
+                        <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+                        <span className="text-foreground">2 teams failing SOC2 compliance</span>
+                      </li>
+                      <li className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2.5 text-sm">
+                        <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+                        <span className="text-foreground">3 critical vulns in Crown Jewels tier</span>
+                      </li>
+                    </ul>
+                  </section>
+
+                  {/* Quick actions */}
+                  <section>
+                    <Button className="w-full gap-2" size="lg">
+                      <FileText className="h-4 w-4" />
+                      Generate Executive Report (PDF)
+                    </Button>
+                  </section>
+
+                  {/* Recent activity */}
+                  <section>
+                    <h3 className="text-sm font-medium text-foreground mb-3">Recent activity</h3>
+                    <ul className="space-y-2 text-sm text-foreground-secondary">
+                      <li className="flex items-start gap-2 py-1.5 border-b border-border last:border-0">
+                        <Activity className="h-4 w-4 shrink-0 mt-0.5 text-muted-foreground" />
+                        <span>Admin enforced new &quot;No GPL&quot; policy</span>
+                      </li>
+                      <li className="flex items-start gap-2 py-1.5 border-b border-border last:border-0">
+                        <Activity className="h-4 w-4 shrink-0 mt-0.5 text-muted-foreground" />
+                        <span>Team Backend onboarded 5 new repositories</span>
+                      </li>
+                      <li className="flex items-start gap-2 py-1.5 border-b border-border last:border-0">
+                        <Activity className="h-4 w-4 shrink-0 mt-0.5 text-muted-foreground" />
+                        <span>Policy evaluation completed for 12 projects</span>
+                      </li>
+                    </ul>
+                  </section>
+                </div>
+              </>
+            )}
+          </div>
         </div>
-      )}
+      </div>
 
       {teamSidebarOpen && selectedTeamId && (
         <div className="fixed inset-0 z-50">

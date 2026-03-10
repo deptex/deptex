@@ -708,7 +708,7 @@ Key schema difference from original plan: `extraction_run_id` added for stale da
 
 **Tier 1 (always available):** Atom's `code` field is already stored in `flow_nodes` JSONB on `project_reachable_flows`. This provides the 1-line code snippet at each flow node. The `CodeImpactView` component renders these inline snippets with syntax highlighting. No additional DB storage needed.
 
-**Tier 2 (on-demand, lazy):** When a user clicks "Show expanded context" on a flow node, the frontend calls a new endpoint that fetches the surrounding 5 lines via the git provider API (GitHub/GitLab/Bitbucket file content endpoint). This uses the existing [git-provider.ts](ee/backend/lib/git-provider.ts) infrastructure. Response is NOT cached in DB -- it's fetched fresh each time (fast, <500ms per file).
+**Tier 2 (on-demand, lazy):** When a user clicks "Show expanded context" on a flow node, the frontend calls a new endpoint that fetches the surrounding 5 lines via the git provider API (GitHub/GitLab/Bitbucket file content endpoint). This uses the existing [git-provider.ts](backend/src/lib/git-provider.ts) infrastructure. Response is NOT cached in DB -- it's fetched fresh each time (fast, <500ms per file).
 
 **New endpoint:** `GET /api/organizations/:orgId/projects/:projectId/reachable-flows/:flowId/code-context?step=0`
 
@@ -932,7 +932,7 @@ Add to [api.ts](frontend/src/lib/api.ts):
 - `getUsageSlices(orgId, projectId, depId?, page?, perPage?)` -- `GET /api/organizations/:orgId/projects/:projectId/usage-slices` with optional `?target_type=` filter and pagination
 - `getFlowCodeContext(orgId, projectId, flowId, stepIndex)` -- `GET /api/organizations/:orgId/projects/:projectId/reachable-flows/:flowId/code-context?step=N`
 
-Backend endpoints (in [projects.ts](ee/backend/routes/projects.ts)):
+Backend endpoints (in [projects.ts](backend/src/routes/projects.ts)):
 
 - `GET /api/.../reachable-flows` -- paginated, auth: project member. Optional filters: `dependency_id`, `entry_point_file`. Response: `{ data: [...], total, page, per_page }`
 - `GET /api/.../usage-slices` -- paginated, auth: project member. Optional filters: `target_type`, `file_path`. Response: same shape.

@@ -3,10 +3,19 @@ import { Outlet, useLocation } from "react-router-dom";
 import NavBar from "../components/NavBar/NavBar";
 import Footer from "../components/Footer";
 import { Toaster } from "../components/ui/toaster";
+import { useAuth } from "../contexts/AuthContext";
 import "./Main.css";
 
+/**
+ * When we're on the exact index path "/" and auth is still loading, we show
+ * a single full-screen loader instead of the marketing layout (NavBar + Outlet).
+ * This prevents logged-in users from briefly seeing the "onboarding" / marketing
+ * header before PublicRoute redirects them to /organizations.
+ */
 export default function App() {
   const location = useLocation();
+  const { loading } = useAuth();
+  const isIndexRoute = location.pathname === "/";
 
   useEffect(() => {
     // Ensure dark mode is always enabled
@@ -23,6 +32,17 @@ export default function App() {
       window.scrollTo(0, 0);
     }
   }, [location]);
+
+  if (isIndexRoute && loading) {
+    return (
+      <>
+        <div className="bg-background text-foreground min-h-screen flex items-center justify-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" aria-hidden />
+        </div>
+        <Toaster position="bottom-right" />
+      </>
+    );
+  }
 
   return (
     <>

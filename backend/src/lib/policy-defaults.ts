@@ -85,47 +85,28 @@ export const DEFAULT_PACKAGE_POLICY_CODE = `function packagePolicy(context) {
   return { allowed: true, reasons: [] };
 }`;
 
+/**
+ * Default projectStatus: if any dependency was disallowed by packagePolicy, project is Non-Compliant
+ * with per-dependency reasons; otherwise Compliant. Matches engine fallback when no status code exists.
+ */
 export const DEFAULT_PROJECT_STATUS_CODE = `function projectStatus(context) {
-  var violations = [];
-  var blocked = context.dependencies.filter(function(d) { return d.policyResult && !d.policyResult.allowed; });
-  var reachableCritical = context.dependencies.filter(function(d) {
-    return d.vulnerabilities && d.vulnerabilities.some(function(v) {
-      return v.severity === 'critical' && v.isReachable;
-    });
+  var deps = context.dependencies || [];
+  var blocked = deps.filter(function(d) {
+    return d.policyResult && d.policyResult.allowed === false;
   });
-
   if (blocked.length > 0) {
-    blocked.forEach(function(d) {
-      violations.push(d.name + ': ' + (d.policyResult.reasons || []).join(', '));
-    });
-  }
-  if (reachableCritical.length > 0) {
-    reachableCritical.forEach(function(d) {
-      violations.push(d.name + ': reachable critical vulnerability');
-    });
-  }
-
-  if (blocked.length > 5 || reachableCritical.length > 0) {
-    return { status: 'Non-Compliant', violations: violations };
-  }
-  if (blocked.length > 0) {
-    return { status: 'Non-Compliant', violations: violations };
+    return {
+      status: 'Non-Compliant',
+      violations: blocked.map(function(d) {
+        return d.name + ': ' + (d.policyResult.reasons || []).join(', ');
+      })
+    };
   }
   return { status: 'Compliant', violations: [] };
 }`;
 
 export const DEFAULT_PR_CHECK_CODE = `function pullRequestCheck(context) {
-  var newViolations = context.added.concat(context.updated).filter(function(d) {
-    return d.policyResult && !d.policyResult.allowed;
-  });
-
-  if (newViolations.length > 0) {
-    var violations = newViolations.map(function(d) {
-      return d.name + ': ' + (d.policyResult.reasons || []).join(', ');
-    });
-    return { status: 'Non-Compliant', violations: violations };
-  }
-  return { status: 'Compliant', violations: [] };
+  return { passed: true, violations: [] };
 }`;
 
 /**

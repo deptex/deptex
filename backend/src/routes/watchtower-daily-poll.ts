@@ -1,6 +1,6 @@
 /**
  * 8O: Watchtower Daily Poll (QStash cron endpoint)
- * CE route mounted outside isEeEdition() block.
+ * Mounted at /api/workers (see backend/src/index.ts).
  * Schedule: 0 4 * * * (daily at 4 AM UTC)
  */
 

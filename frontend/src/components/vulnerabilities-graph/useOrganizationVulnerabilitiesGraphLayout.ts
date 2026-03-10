@@ -287,6 +287,8 @@ export interface OverviewProjectItem {
   dependenciesCount?: number | null;
   /** When true, show as extracting center node (spinner) and clicking opens extraction logs sidebar. */
   isExtracting?: boolean;
+  /** Project health score 0–100 when available (for org center aggregate). */
+  healthScore?: number | null;
 }
 
 export interface OverviewTeamWithProjects {
@@ -303,6 +305,13 @@ export interface OverviewTeamWithProjects {
   memberCount?: number;
 }
 
+/** Match OrganizationSwitcher / RoleBadge defaults when API has no role_color */
+const OVERVIEW_DEFAULT_ROLE_COLORS: Record<string, string> = {
+  owner: '#3b82f6',
+  admin: '#14b8a6',
+  member: '#71717a',
+};
+
 /**
  * Builds nodes and edges for org overview only: org center, teams, projects. No dependency/vuln nodes.
  * All nodes use neutral styling. Org center shows role badge and risk grade (A+).
@@ -313,7 +322,9 @@ export function useOrganizationOverviewGraphLayout(
   orgAvatarUrl: string | null | undefined,
   orgRoleLabel?: string | null,
   orgRoleColor?: string | null,
-  organizationId?: string | null
+  organizationId?: string | null,
+  /** Raw role name (owner/admin/member) for RoleBadge color fallback — same as OrganizationSwitcher */
+  orgRole?: string | null
 ): { nodes: Node[]; edges: Edge[] } {
   return useMemo(() => {
     const nodes: Node[] = [];
@@ -327,6 +338,23 @@ export function useOrganizationOverviewGraphLayout(
       .filter((t) => t.teamId === UNGROUPED_TEAM_ID)
       .flatMap((t) => t.projects);
 
+    const resolvedRoleColor =
+      orgRoleColor && orgRoleColor.trim() !== ''
+        ? orgRoleColor
+        : orgRole && OVERVIEW_DEFAULT_ROLE_COLORS[orgRole]
+          ? OVERVIEW_DEFAULT_ROLE_COLORS[orgRole]
+          : OVERVIEW_DEFAULT_ROLE_COLORS.member;
+
+    // Aggregate health score across all projects (0–100) for org center line "Risk score: N/100"
+    const allOverviewProjects = teamsWithProjects.flatMap((t) => t.projects);
+    const healthScores = allOverviewProjects
+      .map((p) => p.healthScore)
+      .filter((n): n is number => typeof n === 'number' && !Number.isNaN(n));
+    const organizationRiskScore =
+      healthScores.length > 0
+        ? Math.round(healthScores.reduce((a, b) => a + b, 0) / healthScores.length)
+        : null;
+
     nodes.push({
       id: ORG_CENTER_ID,
       type: 'groupCenterNode',
@@ -339,8 +367,10 @@ export function useOrganizationOverviewGraphLayout(
         avatarUrl: orgAvatarUrl,
         kind: 'org',
         roleBadge: orgRoleLabel ?? undefined,
-        roleBadgeColor: orgRoleColor ?? undefined,
-        organizationRiskGrade: 'A+',
+        roleBadgeColor: resolvedRoleColor,
+        organizationRole: orgRole ?? undefined,
+        organizationRiskScore,
+        organizationAlertCount: 3, // Placeholder; wire real data later
       },
       draggable: true,
       selectable: false,
@@ -523,5 +553,5 @@ export function useOrganizationOverviewGraphLayout(
     });
 
     return { nodes, edges };
-  }, [orgName, teamsWithProjects, orgAvatarUrl, orgRoleLabel, orgRoleColor, organizationId]);
+  }, [orgName, teamsWithProjects, orgAvatarUrl, orgRoleLabel, orgRoleColor, organizationId, orgRole]);
 }

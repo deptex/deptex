@@ -33,11 +33,9 @@ cp .env.example .env   # or create .env with required vars
 **Required env vars** (see `.env.example`):
 
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY`
-- For EE features: `UPSTASH_REDIS_URL`, `UPSTASH_REDIS_TOKEN`, `QSTASH_`*, GitHub App credentials, etc.
+- For full stack: `UPSTASH_REDIS_URL`, `UPSTASH_REDIS_TOKEN`, `QSTASH_*`, GitHub App credentials, etc.
 
 ### 3. Run the backend
-
-**Full (EE) mode** (default — orgs, teams, integrations, Aegis):
 
 ```bash
 cd backend
@@ -85,74 +83,37 @@ npm run dev
 
 ## Project Structure
 
-```mermaid
-flowchart LR
-    subgraph CE [Open Source]
-        FE[frontend]
-        BE[backend]
-        EW[extraction-worker]
-    end
-
-    subgraph EE [ee/ - Commercial]
-        EERoutes[EE routes]
-        EELibs[EE libs]
-    end
-
-    FE --> BE
-    BE -->|DEPTEX_EDITION=ee| EERoutes
-    BE --> EW
-```
-
-
-
-
 | Directory                    | Purpose                                               |
 | ---------------------------- | ----------------------------------------------------- |
-| `backend/`                   | Express API, core libs, CE routes                     |
+| `backend/`                   | Express API; routes in `backend/src/routes/`, libs in `backend/src/lib/` |
 | `backend/extraction-worker/` | Clone, cdxgen, SBOM, dep-scan pipeline                |
-| `ee/backend/`                | EE routes (orgs, teams, integrations, Aegis, workers) |
 | `frontend/`                  | React dashboard                                       |
 | `backend/database/`          | SQL migrations                                        |
-
 
 ---
 
 ## Running Tests
 
 ```bash
-cd backend
-npm run test
+cd backend && npm run test
+cd frontend && npm run test:run
 ```
 
-Tests run with `DEPTEX_EDITION=ee` so EE routes are available. Use mocks for external services (Supabase, GitHub, etc.).
-
----
-
-## Environment Modes
-
-
-| Variable                     | Effect                                              |
-| ---------------------------- | --------------------------------------------------- |
-| `DEPTEX_EDITION=ee` or unset | Full mode — EE routes loaded                        |
-| `NODE_PATH=node_modules`     | Required for EE modules to resolve (set in scripts) |
-
+Tests use mocks for external services (Supabase, GitHub, etc.).
 
 ---
 
 ## Database
 
 - Migrations live in `backend/database/`
-- Core tables: `projects`, `project_repositories`, `dependencies`, `dependency_versions`, `project_dependencies`, `dependency_vulnerabilities`, etc.
-- EE tables: `organizations`, `teams`, `organization_integrations`, `aegis_*`, etc.
-- See [ee/database/README.md](./ee/database/README.md) for EE migration notes
+- Tables include `projects`, `organizations`, `teams`, `organization_integrations`, `aegis_*`, dependencies/vulnerabilities, etc.
 
 ---
 
 ## Common Tasks
 
-- **Add a CE route**: Add to `backend/src/routes/` and register in `backend/src/index.ts` (outside the `if (isEeEdition())` block)
-- **Add an EE route**: Add to `ee/backend/routes/` and register inside the `if (isEeEdition())` block in `backend/src/index.ts`
-- **Add a core lib**: Add to `backend/src/lib/` — keep it free of EE imports
+- **Add an API route:** `backend/src/routes/` + register in `backend/src/index.ts`
+- **Add a lib:** `backend/src/lib/`
 
 ---
 
@@ -162,12 +123,3 @@ Tests run with `DEPTEX_EDITION=ee` so EE routes are available. Use mocks for ext
 2. Create a branch
 3. Make changes, run tests
 4. Open a PR — see [CONTRIBUTING.md](./CONTRIBUTING.md)
-
----
-
-## Troubleshooting
-
-- **"Cannot find module" for EE libs**: Ensure `NODE_PATH=node_modules` when running (scripts set this)
-- **404 on /api/organizations**: You're in CE mode; use `npm run dev` (not `dev:ce`) for full features
-- **Supabase errors**: Check `.env` has correct Supabase URL and keys
-

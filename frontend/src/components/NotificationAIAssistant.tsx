@@ -3,6 +3,7 @@ import { ArrowUp, Check, X, Loader2, Bot, User } from 'lucide-react';
 import { api } from '../lib/api';
 import { cn } from '../lib/utils';
 import { PolicyDiffViewer } from './PolicyDiffViewer';
+import { JsLangBadge } from './JsLangBadge';
 import { Button } from './ui/button';
 
 interface ChatMessage {
@@ -76,8 +77,10 @@ export function NotificationAIAssistant({
     const el = inputRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 160) + 'px';
-  }, []);
+    // Match PolicyAIAssistant INPUT_MAX_HEIGHT_PX so inline block grows with content then scrolls
+    const maxPx = variant === 'inline' ? 280 : 160;
+    el.style.height = Math.min(el.scrollHeight, maxPx) + 'px';
+  }, [variant]);
 
   useEffect(() => {
     autoResizeTextarea();
@@ -304,7 +307,8 @@ export function NotificationAIAssistant({
                         )}
                         {msg.suggestedCode && !msg.accepted && (
                           <div className="rounded-lg overflow-hidden border border-border bg-background">
-                            <div className="px-3 py-2 border-b border-border">
+                            <div className="px-3 py-2 border-b border-border flex items-center gap-2">
+                              <JsLangBadge />
                               <span className="text-xs text-foreground-muted font-medium">Suggested code</span>
                             </div>
                             <PolicyDiffViewer
@@ -346,7 +350,8 @@ export function NotificationAIAssistant({
 
       <div className={isInline ? 'px-6 pb-4 flex-shrink-0' : 'p-3 flex-shrink-0 border-t border-border'}>
         {isInline ? (
-          <div className="relative flex flex-col rounded-lg overflow-hidden border border-border shadow-sm" style={{ backgroundColor: '#0D0F12' }}>
+          // Match PolicyAIAssistant input shell: pb-24 reserves space above footer so text never sits on the bar
+          <div className="relative flex flex-col overflow-hidden border border-border bg-background-card shadow-sm rounded-lg">
             <textarea
               ref={inputRef}
               value={input}
@@ -355,9 +360,10 @@ export function NotificationAIAssistant({
               placeholder="Ask AI to write the code"
               rows={1}
               disabled={isStreaming}
-              className="w-full resize-none px-4 pt-2 pb-12 text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-0 focus:border-0 disabled:opacity-50 min-h-[44px] max-h-[160px] overflow-y-auto border-0 bg-transparent"
+              className="w-full resize-none px-4 pt-4 pb-24 text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-0 focus:border-0 disabled:opacity-50 min-h-[88px] max-h-[280px] overflow-y-auto border-0 bg-transparent box-border"
+              style={{ minHeight: 88 }}
             />
-            <div className="absolute bottom-0 left-0 right-0 flex items-center justify-end px-3 py-2 gap-2">
+            <div className="absolute bottom-0 left-0 right-0 flex items-center justify-end px-3 pt-4 pb-2.5 gap-2 border-t border-border bg-background-card">
               <button
                 type="button"
                 onClick={() => handleSend()}

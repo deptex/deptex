@@ -1,14 +1,11 @@
 import { useRef, useEffect } from 'react';
 import MonacoEditor, { type OnMount, type BeforeMount } from '@monaco-editor/react';
 import type { editor, languages, IDisposable, IRange } from 'monaco-editor';
-
-/** Monaco theme extending vs-dark to match Deptex dark UI. */
-const DEPTEX_THEME: editor.IStandaloneThemeData = {
-  base: 'vs-dark',
-  inherit: true,
-  rules: [],
-  colors: { 'editor.background': '#1A1C1E' },
-};
+import {
+  CODE_BLOCK_BG,
+  POLICY_LANGUAGE_ID,
+  beforeMountPolicyMonaco,
+} from './policy-monaco-setup';
 
 const POLICY_TYPEDEFS = `
 /** Asset criticality tier (legacy enum). */
@@ -251,64 +248,6 @@ const CONTEXT_FIELDS = [
   { label: 'fetch', detail: 'function', doc: 'Controlled fetch() for external API calls.' },
 ] as const;
 
-/** Language ID for policy editor; no built-in TS hover so no "any" in tooltips. */
-const POLICY_LANGUAGE_ID = 'deptex-policy';
-
-/** JavaScript-like monarch tokenizer for policy code (no TS language service = no "any" hover). */
-const POLICY_MONARCH: languages.IMonarchLanguage = {
-  defaultToken: 'source',
-  tokenPostfix: '.js',
-  brackets: [
-    { open: '{', close: '}', token: 'delimiter.curly' },
-    { open: '[', close: ']', token: 'delimiter.square' },
-    { open: '(', close: ')', token: 'delimiter.parenthesis' },
-  ],
-  keywords: [
-    'function', 'return', 'const', 'let', 'var', 'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'break', 'continue',
-    'true', 'false', 'null', 'undefined', 'in', 'of', 'new', 'typeof', 'instanceof', 'delete', 'void',
-    'try', 'catch', 'finally', 'throw', 'async', 'await',
-  ],
-  operators: ['=', '>', '<', '!', '~', '?', ':', '==', '<=', '>=', '!=', '&&', '||', '++', '--', '+', '-', '*', '/', '&', '|', '^', '%', '=>'],
-  symbols: /[=><!~?:&|+\-*\/\^%]+/,
-  escapes: /\\(?:[abfnrtv\\"']|x[0-9A-Fa-f]{1,4}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})/,
-  tokenizer: {
-    root: [
-      [/[a-zA-Z_$][\w$]*/, { cases: { '@keywords': 'keyword', '@default': 'identifier' } }],
-      [/[ \t\r\n]+/, ''],
-      [/[{}()\[\]]/, '@brackets'],
-      [/@symbols/, { cases: { '@operators': 'operator', '@default': '' } }],
-      [/\d*\.\d+([eE][\-+]?\d+)?/, 'number.float'],
-      [/0[xX][0-9a-fA-F]+/, 'number.hex'],
-      [/\d+/, 'number'],
-      [/[;,.]/, 'delimiter'],
-      [/"([^"\\]|\\.)*$/, 'string.invalid'],
-      [/"/, 'string', '@string_double'],
-      [/'([^'\\]|\\.)*$/, 'string.invalid'],
-      [/'/, 'string', '@string_single'],
-      [/\/\*/, 'comment', '@comment_block'],
-      [/\/\/.*$/, 'comment'],
-    ],
-    string_double: [
-      [/[^\\"]+/, 'string'],
-      [/@escapes/, 'string.escape'],
-      [/\\./, 'string.escape.invalid'],
-      [/"/, 'string', '@pop'],
-    ],
-    string_single: [
-      [/[^\\']+/, 'string'],
-      [/@escapes/, 'string.escape'],
-      [/\\./, 'string.escape.invalid'],
-      [/'/, 'string', '@pop'],
-    ],
-    comment_block: [
-      [/[^\/*]+/, 'comment'],
-      [/\/\*/, 'comment', '@push'],
-      [/\*\//, 'comment', '@pop'],
-      [/[\/*]/, 'comment'],
-    ],
-  },
-};
-
 /** Policy globals for prefix completion and hover. */
 const POLICY_GLOBALS: Array<{
   label: string;
@@ -377,25 +316,7 @@ export function PolicyCodeEditor({
 
   const handleBeforeMount: BeforeMount = (monaco) => {
     cleanupDisposables();
-
-    monaco.editor.defineTheme('deptex', DEPTEX_THEME);
-
-    if (!monaco.languages.getLanguages().some((l: { id: string }) => l.id === POLICY_LANGUAGE_ID)) {
-      monaco.languages.register({ id: POLICY_LANGUAGE_ID });
-      monaco.languages.setMonarchTokensProvider(POLICY_LANGUAGE_ID, POLICY_MONARCH);
-    }
-
-    monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
-      noSemanticValidation: true,
-      noSyntaxValidation: false,
-    });
-
-    monaco.languages.typescript.javascriptDefaults.setCompilerOptions({
-      target: monaco.languages.typescript.ScriptTarget.ESNext,
-      allowNonTsExtensions: true,
-      allowJs: true,
-      checkJs: false,
-    });
+    beforeMountPolicyMonaco(monaco);
 
     disposablesRef.push(
       monaco.languages.typescript.javascriptDefaults.addExtraLib(POLICY_TYPEDEFS, 'policy-context.d.ts')
@@ -625,9 +546,9 @@ export function PolicyCodeEditor({
 
   return (
     <div
-      className={`w-full overscroll-auto ${className}`}
+      className={`policy-code-editor w-full overscroll-auto ${className}`}
       style={{
-        backgroundColor: '#1A1C1E',
+        backgroundColor: CODE_BLOCK_BG,
         ...(fitContent ? {} : { minHeight }),
         fontSize: 16,
       }}
@@ -641,7 +562,7 @@ export function PolicyCodeEditor({
           <div
             style={{
               minHeight: height,
-              backgroundColor: '#1A1C1E',
+              backgroundColor: CODE_BLOCK_BG,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',

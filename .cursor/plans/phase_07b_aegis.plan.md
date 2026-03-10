@@ -34,7 +34,7 @@ The full Phase 7B subsections (7B-A through 7B-Q) are detailed below. This is th
 
 **Key Technical Decision -- Vercel AI SDK as the Agent Engine Layer:**
 
-Phase 6C already built a custom provider abstraction (`ee/backend/lib/ai/`) with `OpenAIProvider`, `AnthropicProvider`, `GoogleProvider`, BYOK key encryption, cost caps, and usage logging. For the agentic loop, Aegis layers the **Vercel AI SDK** (`ai` npm package) on top of this existing infrastructure. The AI SDK provides:
+Phase 6C already built a custom provider abstraction (`backend/src/lib/ai/`) with `OpenAIProvider`, `AnthropicProvider`, `GoogleProvider`, BYOK key encryption, cost caps, and usage logging. For the agentic loop, Aegis layers the **Vercel AI SDK** (`ai` npm package) on top of this existing infrastructure. The AI SDK provides:
 
 - Multi-turn tool calling via `streamText()` with `maxSteps` -- the ReAct loop handled by the SDK
 - SSE streaming with proper event formatting via `.toDataStreamResponse()`
@@ -42,9 +42,9 @@ Phase 6C already built a custom provider abstraction (`ee/backend/lib/ai/`) with
 - Token counting and cost estimation per provider
 - Tool calling protocol translation (each provider has different function-calling formats -- SDK normalizes them)
 
-**Migration strategy:** The existing `getProviderForOrg()` in `ee/backend/lib/ai/provider.ts` continues to handle BYOK key decryption and config resolution. The new `llm-provider.ts` receives the decrypted key from `getProviderForOrg()` and creates an AI SDK model instance. Existing `cost-cap.ts` (Redis-based monthly cap, SSE concurrency), `logging.ts` (ai_usage_logs), and `encryption.ts` (AES-256-GCM) are preserved -- they're called from the AI SDK's `onStepFinish` and `onFinish` callbacks. The Phase 6C provider classes (`OpenAIProvider`, `AnthropicProvider`, `GoogleProvider`) remain for non-Aegis platform AI features (docs assistant, policy AI, notification AI).
+**Migration strategy:** The existing `getProviderForOrg()` in `backend/src/lib/ai/provider.ts` continues to handle BYOK key decryption and config resolution. The new `llm-provider.ts` receives the decrypted key from `getProviderForOrg()` and creates an AI SDK model instance. Existing `cost-cap.ts` (Redis-based monthly cap, SSE concurrency), `logging.ts` (ai_usage_logs), and `encryption.ts` (AES-256-GCM) are preserved -- they're called from the AI SDK's `onStepFinish` and `onFinish` callbacks. The Phase 6C provider classes (`OpenAIProvider`, `AnthropicProvider`, `GoogleProvider`) remain for non-Aegis platform AI features (docs assistant, policy AI, notification AI).
 
-Install in `ee/backend`: `npm install ai @ai-sdk/openai @ai-sdk/anthropic @ai-sdk/google`
+Install in `backend`: `npm install ai @ai-sdk/openai @ai-sdk/anthropic @ai-sdk/google`
 Install in `frontend`: `npm install @ai-sdk/react`
 
 **OpenClaw-Inspired Patterns (concepts borrowed, not code):**
@@ -107,7 +107,7 @@ graph TD
 
 ### 7B-A: Core Agentic Architecture
 
-**Rewrite** the current single-shot executor in [executor.ts](ee/backend/lib/aegis/executor.ts) into a multi-turn ReAct (Reason + Act) loop:
+**Rewrite** the current single-shot executor in [executor.ts](backend/src/lib/aegis/executor.ts) into a multi-turn ReAct (Reason + Act) loop:
 
 ```typescript
 interface AgentLoopConfig {
@@ -149,7 +149,7 @@ type AegisStreamEvent =
 
 **Multi-provider LLM support via Vercel AI SDK:**
 
-Create `ee/backend/lib/aegis/llm-provider.ts` -- a thin wrapper around the AI SDK that bridges the existing BYOK infrastructure with the AI SDK's model interface:
+Create `backend/src/lib/aegis/llm-provider.ts` -- a thin wrapper around the AI SDK that bridges the existing BYOK infrastructure with the AI SDK's model interface:
 
 ```typescript
 import { createOpenAI } from '@ai-sdk/openai';
@@ -540,7 +540,7 @@ CREATE TABLE aegis_event_triggers (
 
 **Expanded `aegis_automations`:** Add columns for `cron_expression`, `timezone`, `automation_type`, `delivery_config` (JSONB), `template_config` (JSONB), `qstash_schedule_id`, `last_run_at`, `last_run_status`, `last_run_output`, `run_count`.
 
-**Delivery channels:** in-app inbox, email (via existing Nodemailer/Gmail infrastructure from `ee/backend/lib/email.ts`), Slack (channel or DM), Discord, Jira, Linear, webhook, PDF export to Supabase storage. Reuses the Phase 9 `destination-dispatchers.ts` for Slack Block Kit, Discord embeds, Jira/Linear/Asana ticket creation, and email HTML templates.
+**Delivery channels:** in-app inbox, email (via existing Nodemailer/Gmail infrastructure from `backend/src/lib/email.ts`), Slack (channel or DM), Discord, Jira, Linear, webhook, PDF export to Supabase storage. Reuses the Phase 9 `destination-dispatchers.ts` for Slack Block Kit, Discord embeds, Jira/Linear/Asana ticket creation, and email HTML templates.
 
 **PDF generation:** For report exports and audit packages, use `@react-pdf/renderer` (lightweight, server-side, aligns with React frontend). Install: `npm install @react-pdf/renderer`. PDFs uploaded to Supabase Storage `aegis-reports/{orgId}/{reportId}/`.
 
@@ -568,7 +568,7 @@ CREATE TABLE aegis_slack_config (
 
 Capabilities: @Aegis mentions in any channel -> Slack Events API -> Aegis processes with org context -> responds in thread. Slash commands: `/aegis status`, `/aegis fix CVE-...`, `/aegis report`. Proactive messages: automation delivery, urgent alerts. Interactive approvals: Approve/Reject buttons on approval requests.
 
-Backend: `ee/backend/lib/aegis/slack-bot.ts` handles Events API + Interactions API. New routes: `POST /api/integrations/slack/events`, `POST /api/integrations/slack/interactions`. Both verify Slack signing secrets.
+Backend: `backend/src/lib/aegis/slack-bot.ts` handles Events API + Interactions API. New routes: `POST /api/integrations/slack/events`, `POST /api/integrations/slack/interactions`. Both verify Slack signing secrets.
 
 **Slack critical implementation details:**
 
@@ -580,7 +580,7 @@ Backend: `ee/backend/lib/aegis/slack-bot.ts` handles Events API + Interactions A
 
 **Cost:** Slack API is free. No additional cost.
 
-**Email:** Uses the existing Nodemailer/Gmail infrastructure (`ee/backend/lib/email.ts`, `GMAIL_USER`, `GMAIL_APP_PASSWORD`). HTML templates for security briefings, digests, reports, critical alerts. Reuses Phase 9 email templates where applicable. Gmail supports up to 500 emails/day, which is sufficient for Aegis reports and digests.
+**Email:** Uses the existing Nodemailer/Gmail infrastructure (`backend/src/lib/email.ts`, `GMAIL_USER`, `GMAIL_APP_PASSWORD`). HTML templates for security briefings, digests, reports, critical alerts. Reuses Phase 9 email templates where applicable. Gmail supports up to 500 emails/day, which is sufficient for Aegis reports and digests.
 
 **PR Comments:** Use existing git provider APIs. Posted by PR Security Review (7B-G).
 
@@ -1156,7 +1156,7 @@ WHERE name = 'owner' OR (permissions->>'manage_aegis')::boolean = true;
 
 **Dependencies to install:**
 
-- `ee/backend`: `npm install ai @ai-sdk/openai @ai-sdk/anthropic @ai-sdk/google @react-pdf/renderer`
+- `backend`: `npm install ai @ai-sdk/openai @ai-sdk/anthropic @ai-sdk/google @react-pdf/renderer`
 - `frontend`: `npm install @ai-sdk/react`
 
 ### 7B-P: Permissions -- Full AI & Aegis Permission System
@@ -1169,7 +1169,7 @@ The codebase currently uses `interact_with_security_agent`. The plans use `inter
 
 - `frontend/src/lib/api.ts` (`RolePermissions` interface)
 - `frontend/src/components/PermissionEditor.tsx`
-- `ee/backend/routes/organizations.ts` (default role definitions, permission checks)
+- `backend/src/routes/organizations.ts` (default role definitions, permission checks)
 - `backend/database/add_permissions_to_roles.sql`
 - `backend/database/add_default_roles_to_existing_orgs.sql`
 - All Supabase migration SQL files that reference the old name

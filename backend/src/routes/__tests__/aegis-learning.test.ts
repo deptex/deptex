@@ -249,8 +249,12 @@ describe('Strategy Recommendations', () => {
   });
 
   test('28. Dashboard returns correct shape', async () => {
+    // fix_outcomes rows must include created_at — recommendation-engine buckets by month
+    const outcomesWithDates = [
+      { created_at: '2025-01-15T00:00:00Z', success: true },
+    ];
     mockSupabaseFrom.mockImplementation((table: string) => {
-      if (table === 'fix_outcomes') return mockChain([]);
+      if (table === 'fix_outcomes') return mockChain(outcomesWithDates);
       if (table === 'strategy_patterns') return mockChain([]);
       return mockChain(null);
     });

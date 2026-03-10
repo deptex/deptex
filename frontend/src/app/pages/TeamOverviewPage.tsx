@@ -163,7 +163,7 @@ export default function TeamOverviewPage() {
   }
 
   return (
-    <main className="relative flex flex-col min-h-[calc(100vh-3rem)] w-full bg-background-content">
+    <main className="relative flex flex-col min-h-[calc(100vh-3rem)] w-full bg-background">
       {error && (
         <div className="flex-shrink-0 px-4 pt-3">
           <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-3 text-sm text-destructive">
@@ -172,7 +172,7 @@ export default function TeamOverviewPage() {
         </div>
       )}
       <div className="flex-1 min-h-0 relative">
-        <div className="absolute inset-0 overflow-hidden">
+        <div className="absolute inset-0 overflow-hidden bg-background">
           <ReactFlow
             nodes={stillShowingSkeleton ? teamSkeletonNodes : graphNodes}
             edges={stillShowingSkeleton ? [] : graphEdges}

@@ -2,6 +2,7 @@ import { memo, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronRight } from 'lucide-react';
 import AppHeader from './AppHeader';
+import OrganizationSwitcher from './OrganizationSwitcher';
 import { ProjectWithRole, Organization, api, TeamWithRole, ProjectPermissions } from '../lib/api';
 import { RoleBadge } from './RoleBadge';
 import { FrameworkIcon } from './framework-icon';
@@ -150,31 +151,22 @@ function ProjectHeader({
         showNewOrg={false}
         customLeftContent={
           <nav className="flex items-center gap-2 text-sm">
-            {/* Logo */}
-            <Link to="/organizations" className="flex items-center hover:opacity-80 transition-opacity">
-              <img
-                src="/images/logo.png"
-                alt="Deptex"
-                className="h-8 w-8"
-              />
-            </Link>
-
-            <ChevronRight className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+            <img
+              src="/images/logo.png"
+              alt="Deptex"
+              className="h-8 w-8 flex-shrink-0"
+            />
+            <div className="h-4 w-px bg-border flex-shrink-0 ml-1.5 mr-3" aria-hidden />
 
             {/* Organization */}
-            <div className="flex items-center gap-2 min-w-0">
-              <Link
-                to={`/organizations/${organization?.id}`}
-                className="text-muted-foreground font-medium hover:text-foreground transition-colors truncate max-w-[140px]"
-              >
-                {organization?.name}
-              </Link>
-              <RoleBadge
-                role={organization?.role || 'member'}
-                roleDisplayName={orgRoleDisplayName}
-                roleColor={orgRoleColor}
+            {organization && (
+              <OrganizationSwitcher
+                currentOrganizationId={organization.id}
+                currentOrganizationName={organization.name}
+                currentOrganizationAvatarUrl={organization.avatar_url}
+                triggerVariant="full"
               />
-            </div>
+            )}
 
             {/* Team (if project has an owner team) */}
             {(project.owner_team_id || project.team_ids?.[0]) && (project.owner_team_name || project.team_names?.[0]) && (

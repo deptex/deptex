@@ -161,6 +161,7 @@ export interface OrganizationInvitation {
   id: string;
   organization_id: string;
   organization_name?: string;
+  organization_avatar_url?: string | null;
   email: string;
   role: string;
   status: string;
@@ -851,11 +852,11 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/roles/${roleId}`, { method: 'DELETE' });
   },
 
-  async getUserProfile(): Promise<{ user_id: string; avatar_url: string | null; full_name: string | null }> {
+  async getUserProfile(): Promise<{ user_id: string; avatar_url: string | null; full_name: string | null; default_organization_id: string | null }> {
     return fetchWithAuth('/api/user-profile');
   },
 
-  async updateUserProfile(data: { avatar_url?: string; full_name?: string }): Promise<{ user_id: string; avatar_url: string | null; full_name: string | null }> {
+  async updateUserProfile(data: { avatar_url?: string; full_name?: string; default_organization_id?: string | null }): Promise<{ user_id: string; avatar_url: string | null; full_name: string | null; default_organization_id: string | null }> {
     return fetchWithAuth('/api/user-profile', {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -940,9 +941,10 @@ export const api = {
     organizationId: string,
     params: {
       message: string;
-      targetEditor: 'compliance' | 'pullRequest';
-      currentComplianceCode: string;
-      currentPullRequestCode: string;
+      targetEditor: 'compliance' | 'pullRequest' | 'projectStatus';
+      currentComplianceCode?: string;
+      currentPullRequestCode?: string;
+      currentProjectStatusCode?: string;
       conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>;
     },
   ): Promise<Response> {
