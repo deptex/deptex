@@ -46,6 +46,16 @@ interface ProjectContextType {
   userPermissions: ProjectPermissions | null;
 }
 
+/** Props for standalone use (e.g. org overview project sidebar). */
+export interface ProjectSettingsContentProps {
+  project: ProjectWithRole | null;
+  organizationId: string;
+  organization: Organization | null;
+  userPermissions: ProjectPermissions | null;
+  reloadProject: () => Promise<void>;
+  embedInSidebar?: boolean;
+}
+
 /** Repo name without account prefix: "owner/repo" -> "repo" */
 function repoNameOnly(fullName: string): string {
   const parts = fullName.split('/');
@@ -356,13 +366,25 @@ function ProjectSettingsTabSkeleton({ section }: { section: string }) {
   }
 }
 
-export default function ProjectSettingsPage() {
-  const { project, reloadProject, organizationId, organization, userPermissions } = useOutletContext<ProjectContextType>();
-  const { projectId, section: sectionParam } = useParams<{ projectId: string; section?: string }>();
+export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
+  const { project, reloadProject, organizationId, organization, userPermissions, embedInSidebar } = props;
+  const params = useParams<{ projectId: string; section?: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const activeSection = (sectionParam && VALID_PROJECT_SETTINGS_SECTIONS.has(sectionParam) ? sectionParam : 'general');
+  const projectId = project?.id ?? params.projectId ?? '';
+  const sectionParam = params.section;
+  const [sidebarSection, setSidebarSection] = useState<string>('general');
+  const activeSection = embedInSidebar ? sidebarSection : (sectionParam && VALID_PROJECT_SETTINGS_SECTIONS.has(sectionParam) ? sectionParam : 'general');
+  /** Match Dependencies / Compliance embed: bleed past org project drawer px-5; same shell as drawer (not lighter bg-background-content). */
+  const mainEmbedClass = embedInSidebar
+    ? '-mx-5 min-h-[28rem] h-full w-[calc(100%+2.5rem)] max-w-none'
+    : undefined;
+  const embedShellBg = 'bg-background-card-header';
+  const settingsInnerShellClass = cn(
+    embedInSidebar ? 'max-w-none w-full' : 'mx-auto max-w-7xl',
+    embedInSidebar ? 'px-3 py-4' : 'px-4 sm:px-6 lg:px-8 py-8'
+  );
   const { toast } = useToast();
   const [projectName, setProjectName] = useState(project?.name || '');
   const [assetTier, setAssetTier] = useState<AssetTier>(project?.asset_tier ?? 'EXTERNAL');
@@ -517,19 +539,21 @@ export default function ProjectSettingsPage() {
 
   // Normalize legacy ?section=... query to path so refresh and back/forward work
   useEffect(() => {
+    if (embedInSidebar) return;
     const qSection = searchParams.get('section');
     if (!organizationId || !projectId || !qSection) return;
     if (VALID_PROJECT_SETTINGS_SECTIONS.has(qSection)) {
       navigate(`/organizations/${organizationId}/projects/${projectId}/settings/${qSection}`, { replace: true });
     }
-  }, [organizationId, projectId, searchParams, navigate]);
+  }, [organizationId, projectId, searchParams, navigate, embedInSidebar]);
 
   // Redirect to settings/general when section param is invalid
   useEffect(() => {
+    if (embedInSidebar) return;
     if (organizationId && projectId && sectionParam && !VALID_PROJECT_SETTINGS_SECTIONS.has(sectionParam)) {
       navigate(`/organizations/${organizationId}/projects/${projectId}/settings/general`, { replace: true });
     }
-  }, [organizationId, projectId, sectionParam, navigate]);
+  }, [organizationId, projectId, sectionParam, navigate, embedInSidebar]);
 
   // Sync projectName, assetTier, and notification pause state when project changes
   useEffect(() => {
@@ -1408,12 +1432,23 @@ export default function ProjectSettingsPage() {
   if (!project) {
     const loadingSection = sectionParam && VALID_PROJECT_SETTINGS_SECTIONS.has(sectionParam) ? sectionParam : 'general';
     return (
-      <div className="bg-background">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
-          <div className="flex gap-8 items-start">
+      <div
+        className={cn(
+          embedInSidebar ? embedShellBg : 'bg-background-content',
+          embedInSidebar && 'min-h-0 h-full',
+          mainEmbedClass
+        )}
+      >
+        <div className={settingsInnerShellClass}>
+          <div
+            className={cn(
+              'flex items-start',
+              embedInSidebar ? 'gap-6 pr-12' : 'gap-8'
+            )}
+          >
             {/* Sidebar skeleton */}
-            <aside className="w-64 flex-shrink-0">
-              <div className="sticky top-24 pt-8 bg-background z-10">
+            <aside className={cn('flex-shrink-0', embedInSidebar ? 'w-48 pt-6' : 'w-64')}>
+              <div className={cn(!embedInSidebar && 'sticky top-24 pt-8 bg-background-content z-10')}>
                 <nav className="space-y-1">
                   {[1, 2, 3, 4, 5].map((i) => (
                     <div key={i} className="flex items-center gap-3 px-3 py-2">
@@ -1676,21 +1711,38 @@ export default function ProjectSettingsPage() {
   })();
 
   return (
-    <div className="bg-background">
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
-        <div className="flex gap-8 items-start">
-          {/* Sidebar */}
-          <aside className="w-64 flex-shrink-0">
-            <div className="sticky top-24 pt-8 bg-background z-10">
+    <div
+      className={cn(
+        embedInSidebar ? embedShellBg : 'bg-background-content',
+        embedInSidebar && 'min-h-0 h-full',
+        mainEmbedClass
+      )}
+    >
+      <div className={settingsInnerShellClass}>
+        <div
+          className={cn(
+            'flex items-start',
+            embedInSidebar ? 'gap-6 pr-12' : 'gap-8'
+          )}
+        >
+          {/* Sidebar — embed: match team settings drawer (w-48, pt-6); full page: sticky + w-64 */}
+          <aside className={cn('flex-shrink-0', embedInSidebar ? 'w-48 pt-6' : 'w-64')}>
+            <div className={cn(!embedInSidebar && 'sticky top-24 pt-8 bg-background-content z-10')}>
               <nav className="space-y-1">
                 {projectSettingsSections.map((section) => (
                   <button
                     key={section.id}
-                    onClick={() => organizationId && projectId && navigate(`/organizations/${organizationId}/projects/${projectId}/settings/${section.id}`)}
-                    className={`w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md transition-colors group ${activeSection === section.id
-                      ? 'text-foreground'
-                      : 'text-foreground-secondary hover:text-foreground'
-                      }`}
+                    type="button"
+                    onClick={() => {
+                      if (embedInSidebar) setSidebarSection(section.id);
+                      else if (organizationId && projectId) navigate(`/organizations/${organizationId}/projects/${projectId}/settings/${section.id}`);
+                    }}
+                    className={cn(
+                      'w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md transition-colors',
+                      activeSection === section.id
+                        ? 'text-foreground'
+                        : 'text-foreground-secondary hover:text-foreground'
+                    )}
                   >
                     {section.icon}
                     {section.label}
@@ -3161,7 +3213,7 @@ export default function ProjectSettingsPage() {
             {/* Keep Policies mounted after first visit so it doesn't reload when switching tabs (like Notifications) */}
             {(activeSection === 'policies' || hasVisitedPolicies) && (
               <div style={{ display: activeSection === 'policies' ? undefined : 'none' }}>
-                <div className="sticky top-0 z-10 bg-background pb-2">
+                <div className="sticky top-0 z-10 bg-background-content pb-2">
                   <div className="mb-6 flex items-start justify-between">
                     <div className="flex items-center gap-2">
                       <h2 className="text-2xl font-bold text-foreground">Policies</h2>
@@ -4232,5 +4284,18 @@ export default function ProjectSettingsPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+export default function ProjectSettingsPage() {
+  const { project, reloadProject, organizationId, organization, userPermissions } = useOutletContext<ProjectContextType>();
+  return (
+    <ProjectSettingsContent
+      project={project}
+      organizationId={organizationId}
+      organization={organization}
+      userPermissions={userPermissions}
+      reloadProject={reloadProject}
+    />
   );
 }

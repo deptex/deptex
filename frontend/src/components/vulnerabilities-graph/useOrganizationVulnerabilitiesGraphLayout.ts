@@ -4,7 +4,16 @@ import { buildDepAndVulnNodesAndEdges, getWorstSeverity, getWorstDepscore } from
 import type { VulnGraphDepNode, WorstSeverity } from './useVulnerabilitiesGraphLayout';
 import { VULN_CENTER_NODE_WIDTH, VULN_CENTER_NODE_HEIGHT, getSlaBreachCount } from './useVulnerabilitiesGraphLayout';
 import { VULN_PROJECT_NODE_WIDTH, VULN_PROJECT_NODE_HEIGHT, OVERVIEW_PROJECT_NODE_WIDTH, OVERVIEW_PROJECT_NODE_HEIGHT } from './VulnProjectNode';
+import {
+  TEAM_CONTAINER_MIN_WIDTH,
+  TEAM_CONTAINER_MIN_HEIGHT,
+  TEAM_CONTAINER_PADDING,
+  TEAM_CONTAINER_HEADER_HEIGHT,
+  TEAM_CONTAINER_GRID_GAP,
+  TEAM_CONTAINER_FOOTER_HEIGHT,
+} from './TeamGroupNode';
 import type { ProjectWithGraphData } from './useTeamVulnerabilitiesGraphLayout';
+import type { OverviewStatusRollup } from '../../lib/overviewStatusRollup';
 
 export const ORG_CENTER_ID = 'org-center';
 /** @deprecated Synthetic team id for ungrouped projects. Phase 6 places these directly at team ring level. */
@@ -46,7 +55,7 @@ export function useOrganizationVulnerabilitiesGraphLayout(
     const centerX = 0;
     const centerY = 0;
 
-    const grayStroke = 'rgba(100, 116, 139, 0.4)';
+    const grayStroke = '#262626';
 
     const realTeams = teamsWithProjects.filter(t => t.teamId !== UNGROUPED_TEAM_ID);
     const ungrouped = ungroupedProjects ?? teamsWithProjects
@@ -73,7 +82,7 @@ export function useOrganizationVulnerabilitiesGraphLayout(
         isHealthy: orgIsHealthy,
         kind: 'org',
       },
-      draggable: true,
+      draggable: false,
       selectable: false,
     });
 
@@ -111,7 +120,7 @@ export function useOrganizationVulnerabilitiesGraphLayout(
           slaBreachCount,
           isExtracting,
         },
-        draggable: true,
+        draggable: false,
         selectable: false,
       });
 
@@ -172,7 +181,7 @@ export function useOrganizationVulnerabilitiesGraphLayout(
           isTeamNode: true,
           hasExtractingProjects,
         },
-        draggable: true,
+        draggable: false,
         selectable: false,
       });
 
@@ -215,7 +224,7 @@ export function useOrganizationVulnerabilitiesGraphLayout(
             slaBreachCount,
             isExtracting,
           },
-          draggable: true,
+          draggable: false,
           selectable: false,
         });
 
@@ -283,8 +292,6 @@ export interface OverviewProjectItem {
   assetTierName?: string | null;
   /** Hex color for asset tier badge (from organization_asset_tiers). */
   assetTierColor?: string | null;
-  /** Number of dependencies (for org overview card). */
-  dependenciesCount?: number | null;
   /** When true, show as extracting center node (spinner) and clicking opens extraction logs sidebar. */
   isExtracting?: boolean;
   /** Project health score 0–100 when available (for org center aggregate). */
@@ -313,8 +320,133 @@ const OVERVIEW_DEFAULT_ROLE_COLORS: Record<string, string> = {
 };
 
 /**
+ * Project grid inside a team card: column count grows with √(n) so the container widens predictably.
+ * Examples: 2 → 1×2, 3 → 2+1, 4 → 2×2, 5–6 → 3-wide rows, 7–9 → 3 cols, 10+ → 4+ cols as needed.
+ */
+function getOverviewTeamProjectGridDimensions(projectCount: number): { cols: number; rows: number } {
+  const n = Math.max(0, projectCount);
+  if (n === 0) return { cols: 1, rows: 1 };
+  const cols = Math.max(1, Math.ceil(Math.sqrt(n)));
+  const rows = Math.max(1, Math.ceil(n / cols));
+  return { cols, rows };
+}
+
+const ORG_OVERVIEW_ORG_NODE_HALF_W = VULN_CENTER_NODE_WIDTH / 2;
+const ORG_OVERVIEW_ORG_NODE_HALF_H = VULN_CENTER_NODE_HEIGHT / 2;
+
+/** Cardinal slots: 1st right, 2nd down, 3rd left, 4th up (repeats for additional rings). */
+type OverviewOrgGridSlot = 'right' | 'down' | 'left' | 'up';
+
+const OVERVIEW_ORG_GRID_SLOT_ORDER: OverviewOrgGridSlot[] = ['right', 'down', 'left', 'up'];
+
+/** Gap between stacked nodes in the same cardinal column (px). */
+const OVERVIEW_ORG_GRID_STACK_GAP = 48;
+
+/** Side of satellite node that receives the org edge (flat horizontal segment). */
+function overviewOrgEdgeTargetSideForSlot(slot: OverviewOrgGridSlot): 'left' | 'right' | undefined {
+  if (slot === 'right') return 'left';
+  if (slot === 'left') return 'right';
+  return undefined;
+}
+
+/**
+ * Extra horizontal space from org when a team/card is wider than the reference min width.
+ * Keeps single-column teams from feeling tighter than wide multi-project teams.
+ */
+function overviewOrgGridGapX(containerWidth: number): number {
+  const ref = TEAM_CONTAINER_MIN_WIDTH;
+  return 72 + 0.22 * Math.max(0, containerWidth - ref);
+}
+
+/** Extra vertical gap below/above org for tall team stacks (px). */
+function overviewOrgGridGapY(containerHeight: number): number {
+  const ref = TEAM_CONTAINER_MIN_HEIGHT;
+  return 56 + 0.16 * Math.max(0, containerHeight - ref);
+}
+
+interface OverviewOrgGridCell {
+  globalIndex: number;
+  slot: OverviewOrgGridSlot;
+  width: number;
+  height: number;
+  teamData: OverviewTeamWithProjects | null;
+  ungroupedProject: OverviewProjectItem | null;
+  teamInner?: {
+    cols: number;
+    rows: number;
+    projectWidth: number;
+    projectHeight: number;
+    gap: number;
+    projectGridTopInset: number;
+    projectGridBottomInset: number;
+  };
+}
+
+/**
+ * Snap overview satellites to a grid around the org:
+ * - Right/left: top aligns with org top; extra rows in that direction stack further out horizontally.
+ * - Down/up: horizontally centered on org; stack further down/up; growth extends away from the org.
+ */
+function layoutOverviewOrgGrid(
+  cells: OverviewOrgGridCell[],
+  centerY: number
+): Map<number, { x: number; y: number }> {
+  const positions = new Map<number, { x: number; y: number }>();
+  const Wo = ORG_OVERVIEW_ORG_NODE_HALF_W;
+  const Ho = ORG_OVERVIEW_ORG_NODE_HALF_H;
+  const orgTop = centerY - Ho;
+  const orgBottom = centerY + Ho;
+  const stack = OVERVIEW_ORG_GRID_STACK_GAP;
+
+  for (const slot of OVERVIEW_ORG_GRID_SLOT_ORDER) {
+    const inSlot = cells.filter((c) => c.slot === slot).sort((a, b) => a.globalIndex - b.globalIndex);
+    if (inSlot.length === 0) continue;
+
+    if (slot === 'right') {
+      for (let i = 0; i < inSlot.length; i++) {
+        const it = inSlot[i];
+        const x =
+          i === 0
+            ? Wo + overviewOrgGridGapX(it.width)
+            : positions.get(inSlot[i - 1].globalIndex)!.x + inSlot[i - 1].width + stack;
+        positions.set(it.globalIndex, { x, y: orgTop });
+      }
+    } else if (slot === 'down') {
+      for (let i = 0; i < inSlot.length; i++) {
+        const it = inSlot[i];
+        const y =
+          i === 0
+            ? orgBottom + overviewOrgGridGapY(it.height)
+            : positions.get(inSlot[i - 1].globalIndex)!.y + inSlot[i - 1].height + stack;
+        positions.set(it.globalIndex, { x: -it.width / 2, y });
+      }
+    } else if (slot === 'left') {
+      for (let i = 0; i < inSlot.length; i++) {
+        const it = inSlot[i];
+        const x =
+          i === 0
+            ? -Wo - overviewOrgGridGapX(it.width) - it.width
+            : positions.get(inSlot[i - 1].globalIndex)!.x - stack - it.width;
+        positions.set(it.globalIndex, { x, y: orgTop });
+      }
+    } else {
+      for (let i = 0; i < inSlot.length; i++) {
+        const it = inSlot[i];
+        const y =
+          i === 0
+            ? orgTop - overviewOrgGridGapY(it.height) - it.height
+            : positions.get(inSlot[i - 1].globalIndex)!.y - stack - it.height;
+        positions.set(it.globalIndex, { x: -it.width / 2, y });
+      }
+    }
+  }
+
+  return positions;
+}
+
+/**
  * Builds nodes and edges for org overview only: org center, teams, projects. No dependency/vuln nodes.
- * All nodes use neutral styling. Org center shows role badge and risk grade (A+).
+ * All nodes use neutral styling. Team containers size to their project grid (tight hug).
  */
 export function useOrganizationOverviewGraphLayout(
   orgName: string,
@@ -324,14 +456,16 @@ export function useOrganizationOverviewGraphLayout(
   orgRoleColor?: string | null,
   organizationId?: string | null,
   /** Raw role name (owner/admin/member) for RoleBadge color fallback — same as OrganizationSwitcher */
-  orgRole?: string | null
+  orgRole?: string | null,
+  orgStatusRollup?: OverviewStatusRollup | null,
+  teamStatusRollups?: Record<string, OverviewStatusRollup> | null
 ): { nodes: Node[]; edges: Edge[] } {
   return useMemo(() => {
     const nodes: Node[] = [];
     const edges: Edge[] = [];
     const centerX = 0;
     const centerY = 0;
-    const grayStroke = 'rgba(100, 116, 139, 0.4)';
+    const grayStroke = '#262626';
 
     const realTeams = teamsWithProjects.filter((t) => t.teamId !== UNGROUPED_TEAM_ID);
     const ungrouped = teamsWithProjects
@@ -370,188 +504,240 @@ export function useOrganizationOverviewGraphLayout(
         roleBadgeColor: resolvedRoleColor,
         organizationRole: orgRole ?? undefined,
         organizationRiskScore,
-        organizationAlertCount: 3, // Placeholder; wire real data later
+        ...(orgStatusRollup
+          ? {
+              overviewStatusBadgeLabel: orgStatusRollup.badgeLabel,
+              overviewStatusBadgeColor: orgStatusRollup.badgeColor,
+              overviewStatusTooltip: orgStatusRollup.tooltipText,
+            }
+          : {}),
       },
-      draggable: true,
+      draggable: false,
       selectable: false,
     });
 
     const totalRingItems = realTeams.length + ungrouped.length;
     if (totalRingItems === 0) return { nodes, edges };
 
-    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-    const teamRingRadius = Math.max(900, 700 + totalRingItems * 100);
-    let ringIdx = 0;
+    // Handles / edges use pure cardinals (right, down, left, up) matching slot order.
+    const cardinalAngles = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2];
 
-    ungrouped.forEach((proj) => {
-      const angle = ringIdx * goldenAngle;
-      ringIdx++;
-      const projectNodeId = `project-${proj.projectId}`;
-      const px = centerX + Math.cos(angle) * teamRingRadius;
-      const py = centerY + Math.sin(angle) * teamRingRadius;
+    const projectWidth = OVERVIEW_PROJECT_NODE_WIDTH;
+    const projectHeight = OVERVIEW_PROJECT_NODE_HEIGHT;
+    const innerGap = TEAM_CONTAINER_GRID_GAP;
+    const projectGridTopInset = 6;
+    const projectGridBottomInset = 8;
 
-      if (proj.isExtracting) {
-        nodes.push({
-          id: projectNodeId,
-          type: 'projectCenterNode',
-          position: {
-            x: px - OVERVIEW_PROJECT_NODE_WIDTH / 2,
-            y: py - OVERVIEW_PROJECT_NODE_HEIGHT / 2,
-          },
-          data: {
-            projectName: proj.projectName,
-            isExtracting: true,
-            projectId: proj.projectId,
-            organizationId: organizationId ?? undefined,
-          },
-          draggable: true,
-          selectable: false,
-        });
-      } else {
-        nodes.push({
-          id: projectNodeId,
-          type: 'vulnProjectNode',
-          position: {
-            x: px - OVERVIEW_PROJECT_NODE_WIDTH / 2,
-            y: py - OVERVIEW_PROJECT_NODE_HEIGHT / 2,
-          },
-          data: {
-            projectName: proj.projectName,
-            projectId: proj.projectId,
-            framework: proj.framework ?? undefined,
-            neutralStyle: true,
-            statusBadge: proj.statusName ?? undefined,
-            statusBadgeColor: proj.statusColor ?? undefined,
-            assetTierName: proj.assetTierName ?? undefined,
-            assetTierColor: proj.assetTierColor ?? undefined,
-            riskGrade: 'A+',
-            dependenciesCount: proj.dependenciesCount ?? undefined,
-            organizationId: organizationId ?? undefined,
-          },
-          draggable: true,
-          selectable: false,
-        });
-      }
+    const gridCells: OverviewOrgGridCell[] = [];
 
-      const { sourceHandle, targetHandle } = getHandlePair(angle);
-      edges.push({
-        id: `edge-org-${projectNodeId}`,
-        source: ORG_CENTER_ID,
-        target: projectNodeId,
-        sourceHandle,
-        targetHandle,
-        type: 'default',
-        style: { stroke: grayStroke, strokeWidth: 1.2 },
-        markerEnd: { type: MarkerType.ArrowClosed, color: grayStroke, width: 12, height: 12 },
+    realTeams.forEach((teamData, teamIndex) => {
+      const projectCount = teamData.projects.length;
+      const { cols, rows } = getOverviewTeamProjectGridDimensions(projectCount);
+      const containerWidth = Math.max(
+        TEAM_CONTAINER_MIN_WIDTH,
+        cols * projectWidth + Math.max(0, cols - 1) * innerGap + TEAM_CONTAINER_PADDING * 2
+      );
+      const containerHeight = Math.max(
+        TEAM_CONTAINER_MIN_HEIGHT,
+        TEAM_CONTAINER_HEADER_HEIGHT +
+          projectGridTopInset +
+          rows * projectHeight +
+          Math.max(0, rows - 1) * innerGap +
+          projectGridBottomInset +
+          TEAM_CONTAINER_FOOTER_HEIGHT
+      );
+      gridCells.push({
+        globalIndex: teamIndex,
+        slot: OVERVIEW_ORG_GRID_SLOT_ORDER[teamIndex % 4],
+        width: containerWidth,
+        height: containerHeight,
+        teamData,
+        ungroupedProject: null,
+        teamInner: {
+          cols,
+          rows,
+          projectWidth,
+          projectHeight,
+          gap: innerGap,
+          projectGridTopInset,
+          projectGridBottomInset,
+        },
       });
     });
 
-    realTeams.forEach((teamData) => {
-      const teamAngle = ringIdx * goldenAngle;
-      ringIdx++;
-      const teamNodeId = `team-${teamData.teamId}`;
-      const tx = centerX + Math.cos(teamAngle) * teamRingRadius;
-      const ty = centerY + Math.sin(teamAngle) * teamRingRadius;
-
-      nodes.push({
-        id: teamNodeId,
-        type: 'vulnProjectNode',
-        position: {
-          x: tx - OVERVIEW_PROJECT_NODE_WIDTH / 2,
-          y: ty - OVERVIEW_PROJECT_NODE_HEIGHT / 2,
-        },
-        data: {
-          projectName: teamData.teamName,
-          projectId: teamData.teamId,
-          isTeamNode: true,
-          neutralStyle: true,
-          roleBadge: teamData.userRoleLabel ?? undefined,
-          roleBadgeColor: teamData.userRoleColor ?? undefined,
-          riskGrade: 'A+',
-          projectsCount: teamData.projectCount ?? teamData.projects.length,
-          membersCount: teamData.memberCount,
-        },
-        draggable: true,
-        selectable: false,
+    ungrouped.forEach((proj, ungroupedIdx) => {
+      const globalIndex = realTeams.length + ungroupedIdx;
+      gridCells.push({
+        globalIndex,
+        slot: OVERVIEW_ORG_GRID_SLOT_ORDER[globalIndex % 4],
+        width: OVERVIEW_PROJECT_NODE_WIDTH,
+        height: OVERVIEW_PROJECT_NODE_HEIGHT,
+        teamData: null,
+        ungroupedProject: proj,
       });
+    });
 
-      const { sourceHandle, targetHandle } = getHandlePair(teamAngle);
-      edges.push({
-        id: `edge-org-${teamNodeId}`,
-        source: ORG_CENTER_ID,
-        target: teamNodeId,
-        sourceHandle,
-        targetHandle,
-        type: 'default',
-        style: { stroke: grayStroke, strokeWidth: 1.2 },
-        markerEnd: { type: MarkerType.ArrowClosed, color: grayStroke, width: 12, height: 12 },
-      });
+    const gridPositions = layoutOverviewOrgGrid(gridCells, centerY);
 
-      const projectRingRadius = Math.max(500, 400 + teamData.projects.length * 80);
+    gridCells
+      .sort((a, b) => a.globalIndex - b.globalIndex)
+      .forEach((cell) => {
+        const pos = gridPositions.get(cell.globalIndex);
+        if (!pos) return;
+        const angle = cardinalAngles[cell.globalIndex % 4];
+        const { sourceHandle, targetHandle } = getHandlePair(angle);
 
-      teamData.projects.forEach((proj, projIdx) => {
-        const projAngle = projIdx * goldenAngle;
-        const projectNodeId = `project-${proj.projectId}`;
-        const px = tx + Math.cos(projAngle) * projectRingRadius;
-        const py = ty + Math.sin(projAngle) * projectRingRadius;
+        if (cell.teamData && cell.teamInner) {
+          const teamData = cell.teamData;
+          const teamNodeId = `team-${teamData.teamId}`;
+          const { cols, rows, gap, projectGridTopInset: pti, projectHeight: ph, projectWidth: pw } = cell.teamInner;
+          const overviewOrgEdgeOnTargetSide = overviewOrgEdgeTargetSideForSlot(cell.slot);
+          const teamRollup = teamStatusRollups?.[teamData.teamId];
 
-        if (proj.isExtracting) {
           nodes.push({
-            id: projectNodeId,
-            type: 'projectCenterNode',
-            position: {
-              x: px - OVERVIEW_PROJECT_NODE_WIDTH / 2,
-              y: py - OVERVIEW_PROJECT_NODE_HEIGHT / 2,
-            },
+            id: teamNodeId,
+            type: 'teamGroupNode',
+            position: { x: pos.x, y: pos.y },
             data: {
-              projectName: proj.projectName,
-              isExtracting: true,
-              projectId: proj.projectId,
-              organizationId: organizationId ?? undefined,
+              teamName: teamData.teamName,
+              teamId: teamData.teamId,
+              roleLabel: teamData.userRoleLabel ?? undefined,
+              roleColor: teamData.userRoleColor ?? undefined,
+              role: teamData.userRoleLabel?.toLowerCase() ?? undefined,
+              width: cell.width,
+              height: cell.height,
+              ...(overviewOrgEdgeOnTargetSide ? { overviewOrgEdgeOnTargetSide } : {}),
+              ...(teamRollup
+                ? {
+                    overviewStatusBadgeLabel: teamRollup.badgeLabel,
+                    overviewStatusBadgeColor: teamRollup.badgeColor,
+                    overviewStatusTooltip: teamRollup.tooltipText,
+                  }
+                : {}),
             },
-            draggable: true,
+            draggable: false,
             selectable: false,
+            style: { zIndex: 0 },
           });
-        } else {
-          nodes.push({
-            id: projectNodeId,
-            type: 'vulnProjectNode',
-            position: {
-              x: px - OVERVIEW_PROJECT_NODE_WIDTH / 2,
-              y: py - OVERVIEW_PROJECT_NODE_HEIGHT / 2,
-            },
-            data: {
-              projectName: proj.projectName,
-              projectId: proj.projectId,
-              framework: proj.framework ?? undefined,
-              neutralStyle: true,
-            statusBadge: proj.statusName ?? undefined,
-            statusBadgeColor: proj.statusColor ?? undefined,
-            assetTierName: proj.assetTierName ?? undefined,
-            assetTierColor: proj.assetTierColor ?? undefined,
-            riskGrade: 'A+',
-            dependenciesCount: proj.dependenciesCount ?? undefined,
-            organizationId: organizationId ?? undefined,
-          },
-          draggable: true,
-          selectable: false,
-        });
-        }
 
-        const { sourceHandle: teamSourceHandle, targetHandle: teamTargetHandle } = getHandlePair(projAngle);
-        edges.push({
-          id: `edge-${teamNodeId}-${projectNodeId}`,
-          source: teamNodeId,
-          target: projectNodeId,
-          sourceHandle: 'source-' + teamSourceHandle,
-          targetHandle: teamTargetHandle,
-          type: 'default',
-          style: { stroke: grayStroke, strokeWidth: 1.2 },
-          markerEnd: { type: MarkerType.ArrowClosed, color: grayStroke, width: 12, height: 12 },
-        });
+          edges.push({
+            id: `edge-org-${teamNodeId}`,
+            source: ORG_CENTER_ID,
+            target: teamNodeId,
+            sourceHandle,
+            targetHandle,
+            type: 'straight',
+            style: { stroke: grayStroke, strokeWidth: 1.2, strokeDasharray: '6 6' },
+          });
+
+          teamData.projects.forEach((proj, projIdx) => {
+            const col = projIdx % cols;
+            const row = Math.floor(projIdx / cols);
+            const projectNodeId = `project-${proj.projectId}`;
+            const px = TEAM_CONTAINER_PADDING + col * (pw + gap);
+            const py = TEAM_CONTAINER_HEADER_HEIGHT + pti + row * (ph + gap);
+
+            if (proj.isExtracting) {
+              nodes.push({
+                id: projectNodeId,
+                type: 'projectCenterNode',
+                position: { x: px, y: py },
+                parentId: teamNodeId,
+                extent: 'parent' as const,
+                data: {
+                  projectName: proj.projectName,
+                  isExtracting: true,
+                  projectId: proj.projectId,
+                  organizationId: organizationId ?? undefined,
+                },
+                draggable: false,
+                selectable: false,
+                style: { zIndex: 1 },
+              });
+            } else {
+              nodes.push({
+                id: projectNodeId,
+                type: 'vulnProjectNode',
+                position: { x: px, y: py },
+                parentId: teamNodeId,
+                extent: 'parent' as const,
+                data: {
+                  projectName: proj.projectName,
+                  projectId: proj.projectId,
+                  framework: proj.framework ?? undefined,
+                  neutralStyle: true,
+                  statusBadge: proj.statusName ?? undefined,
+                  statusBadgeColor: proj.statusColor ?? undefined,
+                  organizationId: organizationId ?? undefined,
+                },
+                draggable: false,
+                selectable: false,
+                style: { zIndex: 1 },
+              });
+            }
+          });
+        } else if (cell.ungroupedProject) {
+          const proj = cell.ungroupedProject;
+          const projectNodeId = `project-${proj.projectId}`;
+          const overviewOrgEdgeOnTargetSide = overviewOrgEdgeTargetSideForSlot(cell.slot);
+
+          if (proj.isExtracting) {
+            nodes.push({
+              id: projectNodeId,
+              type: 'projectCenterNode',
+              position: { x: pos.x, y: pos.y },
+              data: {
+                projectName: proj.projectName,
+                isExtracting: true,
+                projectId: proj.projectId,
+                organizationId: organizationId ?? undefined,
+                ...(overviewOrgEdgeOnTargetSide ? { overviewOrgEdgeOnTargetSide } : {}),
+              },
+              draggable: false,
+              selectable: false,
+            });
+          } else {
+            nodes.push({
+              id: projectNodeId,
+              type: 'vulnProjectNode',
+              position: { x: pos.x, y: pos.y },
+              data: {
+                projectName: proj.projectName,
+                projectId: proj.projectId,
+                framework: proj.framework ?? undefined,
+                neutralStyle: true,
+                statusBadge: proj.statusName ?? undefined,
+                statusBadgeColor: proj.statusColor ?? undefined,
+                organizationId: organizationId ?? undefined,
+                ...(overviewOrgEdgeOnTargetSide ? { overviewOrgEdgeOnTargetSide } : {}),
+              },
+              draggable: false,
+              selectable: false,
+            });
+          }
+
+          edges.push({
+            id: `edge-org-${projectNodeId}`,
+            source: ORG_CENTER_ID,
+            target: projectNodeId,
+            sourceHandle,
+            targetHandle,
+            type: 'straight',
+            style: { stroke: grayStroke, strokeWidth: 1.2, strokeDasharray: '6 6' },
+          });
+        }
       });
-    });
 
     return { nodes, edges };
-  }, [orgName, teamsWithProjects, orgAvatarUrl, orgRoleLabel, orgRoleColor, organizationId, orgRole]);
+  }, [
+    orgName,
+    teamsWithProjects,
+    orgAvatarUrl,
+    orgRoleLabel,
+    orgRoleColor,
+    organizationId,
+    orgRole,
+    orgStatusRollup,
+    teamStatusRollups,
+  ]);
 }

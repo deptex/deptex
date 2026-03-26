@@ -4,7 +4,7 @@ import type { DependencyNodeData, VulnerabilityNodeData } from '../supply-chain/
 
 // Match supply-chain node dimensions for consistent layout (exported for skeleton position)
 export const VULN_CENTER_NODE_WIDTH = 260;
-/** Org center card is two-section (identity + role | risk); keep height in sync with GroupCenterNode org layout */
+/** Graph layout slot for center node (org / project); not tied to project overview card height. */
 export const VULN_CENTER_NODE_HEIGHT = 120;
 const CENTER_NODE_WIDTH = VULN_CENTER_NODE_WIDTH;
 const CENTER_NODE_HEIGHT = VULN_CENTER_NODE_HEIGHT;

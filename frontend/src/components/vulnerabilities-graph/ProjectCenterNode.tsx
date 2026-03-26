@@ -1,7 +1,10 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Folder, Layers, Loader2, Package } from 'lucide-react';
+import { Folder, Loader2, Package } from 'lucide-react';
 import { FrameworkIcon } from '../framework-icon';
+import { OVERVIEW_PROJECT_NODE_HEIGHT } from './VulnProjectNode';
+import { VULN_CENTER_NODE_HEIGHT } from './useVulnerabilitiesGraphLayout';
+import { GraphScopePill } from './GraphScopePill';
 
 export type WorstSeverity = 'critical' | 'high' | 'medium' | 'low' | 'none';
 
@@ -21,14 +24,12 @@ export interface ProjectCenterNodeData {
   /** Org overview: when set, click opens extraction logs sidebar for this project. */
   projectId?: string;
   organizationId?: string;
-  /** When true, use org-overview-style card (border, bottom bar with risk grade + deps count). */
+  /** When true, use org-overview-style card (border, bottom bar with dependency count). */
   overviewStyle?: boolean;
-  /** For overview style: number of direct dependencies (shown in bottom bar). */
+  /** For overview style: dependency count (shown in bottom bar). */
   dependenciesCount?: number;
-  /** For overview style: asset tier name (e.g. Crown Jewels). */
-  assetTierName?: string | null;
-  /** For overview style: asset tier badge color. */
-  assetTierColor?: string | null;
+  /** Org overview extracting card: flat horizontal edge to org; see TeamGroupNodeData. */
+  overviewOrgEdgeOnTargetSide?: 'left' | 'right';
 }
 
 function getColorScheme(worstVulnerabilitySeverity: WorstSeverity) {
@@ -112,10 +113,11 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
     organizationId,
     overviewStyle = false,
     dependenciesCount,
-    assetTierName,
-    assetTierColor,
+    overviewOrgEdgeOnTargetSide,
   } = (data as unknown as ProjectCenterNodeData) ?? {};
   const isOrgOverviewExtracting = Boolean(isExtracting && projectId && organizationId);
+  const overviewFlatY = VULN_CENTER_NODE_HEIGHT / 2;
+  const overviewSideHandleStyle = { top: overviewFlatY, transform: 'translateY(-50%)' } as const;
   const colorScheme = isExtracting ? greyExtractingScheme : getColorScheme(worstVulnerabilitySeverity);
   const hasKnownFramework = frameworkName && frameworkName.toLowerCase() !== 'unknown';
   const frameworkIdForIcon = hasKnownFramework ? frameworkName : undefined;
@@ -132,75 +134,90 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
     <div className="relative cursor-pointer">
       {/* Target handles so edges from team/org can connect (same ids as VulnProjectNode) */}
       <Handle id="top" type="target" position={Position.Top} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
-      <Handle id="right" type="target" position={Position.Right} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
+      <Handle
+        id="right"
+        type="target"
+        position={Position.Right}
+        className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0"
+        style={overviewOrgEdgeOnTargetSide === 'right' ? overviewSideHandleStyle : undefined}
+      />
       <Handle id="bottom" type="target" position={Position.Bottom} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
-      <Handle id="left" type="target" position={Position.Left} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
+      <Handle
+        id="left"
+        type="target"
+        position={Position.Left}
+        className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0"
+        style={overviewOrgEdgeOnTargetSide === 'left' ? overviewSideHandleStyle : undefined}
+      />
       <Handle id="source-top" type="source" position={Position.Top} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
       <Handle id="source-right" type="source" position={Position.Right} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
       <Handle id="source-bottom" type="source" position={Position.Bottom} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
       <Handle id="source-left" type="source" position={Position.Left} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
 
       {overviewStyle && !isExtracting ? (
-        <div className="relative rounded-lg border border-border bg-background-card shadow-md h-full min-h-[80px] min-w-[260px] flex flex-col overflow-hidden cursor-pointer hover:shadow-lg hover:border-border/80 transition-all">
-          <div className="px-3.5 py-3 flex items-center gap-2.5 min-w-0 flex-1">
+        <div
+          className="relative rounded-xl border border-border bg-background-card-header shadow-lg shadow-slate-500/5 h-full min-w-[260px] flex flex-col overflow-hidden cursor-pointer hover:border-border/80 transition-all"
+          style={{ minHeight: OVERVIEW_PROJECT_NODE_HEIGHT }}
+        >
+          <div className="px-4 py-3 flex items-start gap-3 min-w-0 flex-1">
             {frameworkIdForIcon ? (
-              <div className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 bg-[#1a1c1e] text-muted-foreground">
-                <FrameworkIcon frameworkId={frameworkIdForIcon} size={18} className="text-current" />
-              </div>
+              <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center [&_svg]:text-white mt-0.5">
+                <FrameworkIcon frameworkId={frameworkIdForIcon} size={22} className="text-white" />
+              </span>
             ) : (
-              <div className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 bg-[#1a1c1e] text-muted-foreground">
-                <Folder className="w-4 h-4" />
-              </div>
+              <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center text-white mt-0.5">
+                <Folder className="h-5 w-5" strokeWidth={1.75} />
+              </span>
             )}
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-foreground truncate" title={projectName}>
+            <div className="min-w-0 flex-1 pt-0.5">
+              <p className="text-base font-semibold text-foreground truncate leading-tight" title={projectName}>
                 {projectName}
               </p>
             </div>
-            {showStatusBadge && (
-              <span
-                className="flex-shrink-0 inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium"
-                style={
-                  effectiveStatusColor
-                    ? { backgroundColor: `${effectiveStatusColor}20`, color: effectiveStatusColor, borderColor: `${effectiveStatusColor}40` }
-                    : { backgroundColor: 'transparent', color: 'var(--muted-foreground)', borderColor: 'rgba(255,255,255,0.2)' }
-                }
-              >
-                {statusName}
-              </span>
-            )}
+            <div className="flex flex-col items-end gap-1.5 shrink-0">
+              <GraphScopePill type="project" />
+              {showStatusBadge && (
+                <span
+                  className="inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium"
+                  style={
+                    effectiveStatusColor
+                      ? { backgroundColor: `${effectiveStatusColor}20`, color: effectiveStatusColor, borderColor: `${effectiveStatusColor}40` }
+                      : { backgroundColor: 'transparent', color: 'var(--muted-foreground)', borderColor: 'rgba(255,255,255,0.2)' }
+                  }
+                >
+                  {statusName}
+                </span>
+              )}
+            </div>
           </div>
-          <div className="border-t border-border px-3 py-2 flex items-center gap-2 flex-wrap w-full text-left rounded-b-lg">
-            <span className="flex-shrink-0 rounded-md border border-green-500/35 bg-green-500/15 px-2 py-0.5 text-xs font-semibold text-green-500">
-              A+
-            </span>
-            {typeof dependenciesCount === 'number' && (
-              <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                <Package className="h-3 w-3 flex-shrink-0" />
-                {dependenciesCount} direct dep{dependenciesCount === 1 ? '' : 's'}
+          {typeof dependenciesCount === 'number' && (
+            <div
+              className="border-t border-border px-4 py-3 flex items-center justify-end gap-2 text-xs text-muted-foreground rounded-b-xl"
+              title={`${dependenciesCount} ${dependenciesCount === 1 ? 'dependency' : 'dependencies'}`}
+            >
+              <span className="truncate">
+                {dependenciesCount} {dependenciesCount === 1 ? 'dependency' : 'dependencies'}
               </span>
-            )}
-            <div className="flex-1 min-w-0" />
-            {assetTierName && (
-              <span className="flex items-center gap-1 text-[11px] text-muted-foreground truncate max-w-[120px]" title={assetTierName}>
-                <Layers className="h-3 w-3 flex-shrink-0 text-muted-foreground/80" aria-hidden />
-                {assetTierName}
-              </span>
-            )}
-          </div>
+              <Package className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" aria-hidden />
+            </div>
+          )}
         </div>
       ) : isOrgOverviewExtracting ? (
-        <div className="relative rounded-lg border border-border bg-background-card shadow-md h-full min-h-[100px] min-w-[268px] flex flex-col overflow-hidden cursor-pointer hover:shadow-lg hover:border-border/80 transition-all">
-          {/* Top: icon + name only (like team card) */}
-          <div className="px-3.5 py-3 flex items-center gap-2.5 min-w-0 flex-1">
-            <div className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 text-muted-foreground">
-              <FrameworkIcon frameworkId={frameworkIdForIcon} size={18} className="text-current" />
-            </div>
-            <div className="min-w-0 flex-1">
+        <div
+          className="relative rounded-xl border border-border bg-background-card-header shadow-lg shadow-slate-500/5 h-full min-w-[268px] flex flex-col overflow-hidden cursor-pointer hover:border-border/80 transition-all"
+          style={{ minHeight: OVERVIEW_PROJECT_NODE_HEIGHT }}
+        >
+          {/* Top: icon + name + scope (like overview project card) */}
+          <div className="px-3.5 py-3 flex items-start gap-2.5 min-w-0 flex-1">
+            <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center [&_svg]:text-white mt-0.5">
+              <FrameworkIcon frameworkId={frameworkIdForIcon} size={22} className="text-white" />
+            </span>
+            <div className="min-w-0 flex-1 pt-0.5">
               <p className="text-sm font-medium text-foreground truncate" title={projectName}>
                 {projectName}
               </p>
             </div>
+            <GraphScopePill type="project" className="shrink-0" />
           </div>
           {/* Bottom bar: "Project still extracting" + spinner (like team card's bottom bar) */}
           <div className="border-t border-border px-3 py-2 flex items-center gap-3 flex-wrap w-full text-left rounded-b-lg">

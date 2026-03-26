@@ -157,7 +157,7 @@ export default function CompliancePage() {
   }
 
   const complianceLoadingSkeleton = (
-    <div className="flex-1 min-w-0 overflow-auto px-6 py-6 mx-auto max-w-5xl space-y-8">
+    <div className="flex-1 min-w-0 overflow-auto px-4 sm:px-6 lg:px-8 py-6 mx-auto max-w-7xl space-y-8">
       <div className="flex flex-wrap items-center gap-8">
         <div className="flex items-baseline gap-3">
           <div className="h-10 w-20 bg-muted rounded animate-pulse" />
@@ -199,7 +199,7 @@ export default function CompliancePage() {
           {loading ? (
             complianceLoadingSkeleton
           ) : (
-            <div className="mx-auto max-w-5xl px-6 py-6 space-y-8">
+            <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6 space-y-8">
               {/* Aggregate: percent of projects passing policy (binary compliant/not) */}
               <div className="flex flex-wrap items-center gap-8">
                 <div className="flex items-baseline gap-3">

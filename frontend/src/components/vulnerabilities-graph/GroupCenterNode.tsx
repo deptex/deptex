@@ -1,8 +1,11 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { VULN_CENTER_NODE_HEIGHT, VULN_CENTER_NODE_WIDTH } from './useVulnerabilitiesGraphLayout';
 import { Users, AlertTriangle } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
+import { overviewStatusBadgeInlineStyle } from '../../lib/overviewStatusRollup';
 import { RoleBadge } from '../RoleBadge';
+import { GraphScopePill } from './GraphScopePill';
 
 export interface GroupCenterNodeData {
   title: string;
@@ -25,6 +28,10 @@ export interface GroupCenterNodeData {
   organizationRiskScore?: number | null;
   /** Org center: number of alerts to show next to risk score row */
   organizationAlertCount?: number | null;
+  /** Org overview: worst project status across org + tooltip breakdown. */
+  overviewStatusBadgeLabel?: string;
+  overviewStatusBadgeColor?: string | null;
+  overviewStatusTooltip?: string;
   /** @deprecated Members toggle removed from UI; kept for type compat. */
   onExpandMembers?: () => void;
   /** @deprecated */
@@ -45,7 +52,16 @@ function GroupCenterNodeComponent({ data }: NodeProps) {
     organizationRole,
     organizationRiskScore,
     organizationAlertCount,
+    overviewStatusBadgeLabel,
+    overviewStatusBadgeColor,
+    overviewStatusTooltip,
   } = (data as unknown as GroupCenterNodeData) ?? {};
+
+  const hasOrgStatusRollup =
+    overviewStatusBadgeLabel != null &&
+    overviewStatusBadgeLabel !== '' &&
+    overviewStatusTooltip != null &&
+    overviewStatusTooltip !== '';
 
   const useNeutralOrgStyle = kind === 'org';
   const borderClass = useNeutralOrgStyle ? 'border-border' : isHealthy ? 'border-primary/60' : 'border-slate-500/40';
@@ -60,33 +76,65 @@ function GroupCenterNodeComponent({ data }: NodeProps) {
     const roleLabel = roleBadge?.trim() || 'Member';
     const roleForBadge = (organizationRole || roleLabel).toLowerCase();
 
+    const orgConnectY = VULN_CENTER_NODE_HEIGHT / 2;
+    const orgConnectX = VULN_CENTER_NODE_WIDTH / 2;
+    const orgSideHandleStyle = { top: orgConnectY, transform: 'translateY(-50%)' } as const;
+    const orgTBHandleStyle = { left: orgConnectX, transform: 'translateX(-50%)' } as const;
+
     return (
       <div className="relative">
-        <Handle id="top" type="source" position={Position.Top} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
-        <Handle id="right" type="source" position={Position.Right} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
-        <Handle id="bottom" type="source" position={Position.Bottom} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
-        <Handle id="left" type="source" position={Position.Left} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
+        <Handle
+          id="top"
+          type="source"
+          position={Position.Top}
+          className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0"
+          style={orgTBHandleStyle}
+        />
+        <Handle
+          id="right"
+          type="source"
+          position={Position.Right}
+          className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0"
+          style={orgSideHandleStyle}
+        />
+        <Handle
+          id="bottom"
+          type="source"
+          position={Position.Bottom}
+          className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0"
+          style={orgTBHandleStyle}
+        />
+        <Handle
+          id="left"
+          type="source"
+          position={Position.Left}
+          className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0"
+          style={orgSideHandleStyle}
+        />
 
         <div
-          className={`relative rounded-xl border ${borderClass} shadow-lg ${shadowClass} overflow-hidden min-w-[280px] max-w-[320px] bg-background-card`}
+          className={`relative rounded-xl border ${borderClass} shadow-lg ${shadowClass} overflow-hidden min-w-[280px] max-w-[320px] bg-background-card-header`}
         >
-          {/* Top section: avatar + name, then RoleBadge (same as OrganizationSwitcher) */}
+          {/* Top section: avatar + name, scope pill (top-right), then RoleBadge */}
           <div className="px-4 pt-4 pb-3">
-            <div className="flex items-center gap-3">
-              <div
-                className={`flex items-center justify-center w-10 h-10 flex-shrink-0 rounded-lg overflow-hidden ${
-                  showAvatar ? '' : `${iconBgClass} ${iconTextClass}`
-                }`}
-              >
-                {showAvatar ? (
-                  <img src={avatarUrl ?? undefined} alt={title} className="h-full w-full object-contain rounded-lg" />
-                ) : (
-                  <Users className="w-5 h-5" />
-                )}
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-3 min-w-0 flex-1">
+                <div
+                  className={`flex items-center justify-center w-10 h-10 flex-shrink-0 rounded-lg overflow-hidden ${
+                    showAvatar ? '' : `${iconBgClass} ${iconTextClass}`
+                  }`}
+                >
+                  {showAvatar ? (
+                    <img src={avatarUrl ?? undefined} alt={title} className="h-full w-full object-contain rounded-lg" />
+                  ) : (
+                    <Users className="w-5 h-5" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-base font-semibold text-foreground truncate leading-tight">{title}</p>
+                </div>
               </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-base font-semibold text-foreground truncate leading-tight">{title}</p>
-              </div>
+              <GraphScopePill type="organization" className="shrink-0 mt-0.5" />
             </div>
             <div className="mt-4">
               <RoleBadge
@@ -100,23 +148,25 @@ function GroupCenterNodeComponent({ data }: NodeProps) {
           {/* Separator — same weight as outer border for visual consistency */}
           <div className="border-t border-border w-full" />
 
-          {/* Bottom section: risk score + alert count */}
+          {/* Bottom section: aggregated project status + optional alert count */}
           <div className="px-4 py-3 flex items-center justify-between gap-2">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <p className="text-sm cursor-default">
-                  <span className="text-foreground-secondary">Risk score: </span>
-                  <span className="font-medium tabular-nums text-foreground">
-                    {typeof organizationRiskScore === 'number'
-                      ? `${organizationRiskScore}/100`
-                      : '—/100'}
+            {hasOrgStatusRollup ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    className="inline-flex max-w-[min(100%,12rem)] cursor-default items-center truncate rounded-md border px-2 py-0.5 text-[10px] font-medium"
+                    style={overviewStatusBadgeInlineStyle(overviewStatusBadgeLabel!, overviewStatusBadgeColor ?? null)}
+                  >
+                    {overviewStatusBadgeLabel}
                   </span>
-                </p>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" sideOffset={6}>
-                Average project health score (0–100) from vulnerabilities, compliance, freshness, and code findings.
-              </TooltipContent>
-            </Tooltip>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={6} className="max-w-xs">
+                  {overviewStatusTooltip}
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <span className="text-xs text-muted-foreground">Status</span>
+            )}
             {typeof organizationAlertCount === 'number' && organizationAlertCount > 0 && (
               <Tooltip>
                 <TooltipTrigger asChild>

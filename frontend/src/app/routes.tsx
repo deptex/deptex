@@ -31,35 +31,19 @@ import CookiePolicyPage from "./pages/legal/CookiePolicyPage";
 import ProtectedRoute from "../components/ProtectedRoute";
 import PublicRoute from "../components/PublicRoute";
 import NotFoundRedirect from "../components/NotFoundRedirect";
-// Project-level imports
-import ProjectLayout from "./pages/ProjectLayout";
-import ProjectOverviewPage from "./pages/ProjectOverviewPage";
-import ProjectDependenciesPage from "./pages/ProjectDependenciesPage";
-import ProjectCompliancePage from "./pages/ProjectCompliancePage";
-import ProjectVulnerabilitiesPage from "./pages/ProjectVulnerabilitiesPage";
-
-import ProjectSettingsPage from "./pages/ProjectSettingsPage";
-import ProjectWatchtowerPage from "./pages/ProjectWatchtowerPage";
 import OrganizationVulnerabilitiesTabPage from "./pages/OrganizationVulnerabilitiesTabPage";
 import AegisPage from "./pages/AegisPage";
-// Team-level imports
-import TeamLayout from "./pages/TeamLayout";
-import TeamOverviewPage from "./pages/TeamOverviewPage";
-import TeamMembersPage from "./pages/TeamMembersPage";
-import TeamSettingsPage from "./pages/TeamSettingsPage";
 // Redirect /settings to /settings/general while preserving search params (for OAuth callbacks)
 function SettingsRedirect() {
   const { search } = useLocation();
   return <Navigate to={`/settings/general${search}`} replace />;
 }
 
-// Redirect old dependency detail URL (no tab) to project dependencies with overview tab
-function RedirectDependencyToOverview() {
-  const { orgId, projectId, dependencyId } = useParams<{ orgId: string; projectId: string; dependencyId: string }>();
-  const to = orgId && projectId && dependencyId
-    ? `/organizations/${orgId}/projects/${projectId}/dependencies/${dependencyId}/overview`
-    : "/organizations";
-  return <Navigate to={to} replace />;
+/** All project URLs redirect to org overview (project UI lives in org overview sidebar). */
+function RedirectToOrgOverview() {
+  const { orgId } = useParams<{ orgId: string }>();
+  if (!orgId) return <Navigate to="/organizations" replace />;
+  return <Navigate to={`/organizations/${orgId}/overview`} replace />;
 }
 
 /** Root layout that provides AuthProvider so useAuth is available in all route elements */
@@ -154,125 +138,20 @@ export const router = createBrowserRouter([
     ],
   },
   {
-    path: "/organizations/:orgId/projects/:projectId",
+    path: "/organizations/:orgId/projects/:projectId/*",
     element: (
       <ProtectedRoute>
-        <ProjectLayout />
-      </ProtectedRoute>
-    ),
-    children: [
-      {
-        index: true,
-        element: <ProjectOverviewPage />,
-      },
-      {
-        path: "overview",
-        element: <ProjectOverviewPage />,
-      },
-      {
-        path: "security",
-        element: <ProjectVulnerabilitiesPage />,
-      },
-      {
-        path: "vulnerabilities",
-        element: <ProjectVulnerabilitiesPage />,
-      },
-      {
-        path: "dependencies",
-        element: <ProjectDependenciesPage />,
-      },
-      {
-        path: "dependencies/:dependencyId",
-        element: <RedirectDependencyToOverview />,
-      },
-      {
-        path: "dependencies/:dependencyId/overview",
-        element: <ProjectDependenciesPage />,
-      },
-      {
-        path: "dependencies/:dependencyId/watchtower",
-        element: <Navigate to="../overview" replace />,
-      },
-      {
-        path: "watchtower",
-        element: <ProjectWatchtowerPage />,
-      },
-      {
-        path: "dependencies/:dependencyId/supply-chain",
-        element: <ProjectDependenciesPage />,
-      },
-
-      {
-        path: "compliance",
-        element: <ProjectCompliancePage />,
-      },
-      {
-        path: "compliance/:section",
-        element: <ProjectCompliancePage />,
-      },
-      {
-        path: "settings",
-        element: <ProjectSettingsPage />,
-      },
-      {
-        path: "settings/:section",
-        element: <ProjectSettingsPage />,
-      },
-      {
-        path: ":tab",
-        element: <ProjectOverviewPage />,
-      },
-    ],
-  },
-  {
-    path: "/organizations/:orgId/projects/:projectId/dependencies/:dependencyId",
-    element: (
-      <ProtectedRoute>
-        <RedirectDependencyToOverview />
+        <RedirectToOrgOverview />
       </ProtectedRoute>
     ),
   },
   {
-    path: "/organizations/:orgId/teams/:teamId",
+    path: "/organizations/:orgId/teams/:teamId/*",
     element: (
       <ProtectedRoute>
-        <TeamLayout />
+        <RedirectToOrgOverview />
       </ProtectedRoute>
     ),
-    children: [
-      {
-        index: true,
-        element: <TeamOverviewPage />,
-      },
-      {
-        path: "overview",
-        element: <TeamOverviewPage />,
-      },
-      {
-        path: "projects",
-        element: <Navigate to=".." replace />,
-      },
-      {
-        path: "members",
-        element: <TeamMembersPage />,
-      },
-      {
-        path: "alerts",
-        element: <Navigate to=".." replace />,
-      },
-      {
-        path: "settings",
-        element: <TeamSettingsPage />,
-      },
-      {
-        path: "settings/:section",
-        element: <TeamSettingsPage />,
-      },
-      {
-        path: ":tab",
-        element: <TeamOverviewPage />,
-      },
-    ],
   },
   {
     path: "/invite/:invitationId",

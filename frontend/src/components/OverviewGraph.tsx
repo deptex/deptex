@@ -381,8 +381,8 @@ function OverviewGraphInner(props: OverviewGraphProps) {
     if (d.link === 'projects') navigate(`/organizations/${props.organizationId}/teams/${props.teamName ?? ''}/projects`);
   }, [navigate, props.organizationId, props.projectName, props.teamName]);
 
+  /* Canvas matches page bg; card look is for stat strips / panels elsewhere, not the graph pane. */
   return (
-    {/* Canvas matches page bg; card look is for stat strips / panels elsewhere, not the graph pane */}
     <div ref={containerRef} className="rounded-lg border border-border bg-background overflow-hidden" style={{ height: 300 }}>
       <div className="flex items-center justify-between px-4 pt-3 pb-1">
         <h3 className="text-sm font-semibold text-foreground">Dependency Graph</h3>

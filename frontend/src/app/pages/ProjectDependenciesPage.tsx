@@ -27,6 +27,15 @@ interface ProjectContextType {
   userPermissions: ProjectPermissions | null;
 }
 
+/** Props for standalone use (e.g. org overview project sidebar). When embedInSidebar is true, selection is internal state. */
+export interface ProjectDependenciesContentProps {
+  project: ProjectWithRole | null;
+  organizationId: string;
+  userPermissions: ProjectPermissions | null;
+  reloadProject: () => Promise<void>;
+  embedInSidebar?: boolean;
+}
+
 type SuggestionItem =
   | { action: 'current' }
   | { action: 'bump'; safeVersion: string; bumpPrUrl?: string; bumpPrNumber?: number }
@@ -211,19 +220,37 @@ function extractionStepLabel(step: string | null | undefined): string {
   return labels[step] ?? `Processing (${step})...`;
 }
 
-export default function ProjectDependenciesPage() {
-  const { project, organizationId, userPermissions } = useOutletContext<ProjectContextType>();
-  const { projectId, dependencyId: urlDependencyId } = useParams<{ projectId: string; dependencyId?: string }>();
+export function ProjectDependenciesContent(props: ProjectDependenciesContentProps) {
+  const { project, organizationId, userPermissions, reloadProject, embedInSidebar } = props;
+  /** Embedded: room under tabs + inset from drawer edge; full page keeps original spacing. */
+  const listPad = embedInSidebar ? 'pl-3 pr-3' : 'pl-5 pr-3';
+  const rowInset = embedInSidebar ? 'pl-3 pr-3 -ml-3 -mr-3' : 'pl-5 pr-3 -ml-5 -mr-3';
+  const searchPad = embedInSidebar ? 'px-3 pt-3 pb-2' : 'px-3 pt-4 pb-2';
+  const mainEmbedClass =
+    embedInSidebar && '-mx-5 min-h-0 h-full w-[calc(100%+2.5rem)] max-w-none';
+  /** Match org project drawer shell (#050505), not bg-background (#000) or content alone. */
+  const embedShellBg = 'bg-background-card-header';
+
+  const params = useParams<{ projectId: string; dependencyId?: string }>();
   const location = useLocation();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const projectId = project?.id ?? params.projectId ?? '';
+  const [sidebarSelectedDepId, setSidebarSelectedDepId] = useState<string | null>(null);
+  const selectedDepId = embedInSidebar ? sidebarSelectedDepId : (params.dependencyId ?? null);
+  const setSelectedDepId = embedInSidebar
+    ? setSidebarSelectedDepId
+    : (id: string | null) => {
+        const base = organizationId && projectId ? `/organizations/${organizationId}/projects/${projectId}/dependencies` : '';
+        if (id) navigate(`${base}/${id}/overview`, { replace: true });
+        else navigate(base ?? '', { replace: true });
+      };
   const realtime = useRealtimeStatus(organizationId, projectId);
   const isExtractionOngoing = checkExtractionOngoing(realtime.status);
 
-  // URL as source of truth for selection and tab (overview, watchtower, supply-chain; notes is not in URL)
-  const selectedDepId = urlDependencyId ?? null;
   const urlTab = tabFromPathname(location.pathname);
-  const selectedSubTab: 'overview' | 'supply-chain' | 'notes' = urlTab;
+  const [sidebarSubTab, setSidebarSubTab] = useState<'overview' | 'supply-chain' | 'notes'>('overview');
+  const selectedSubTab: 'overview' | 'supply-chain' | 'notes' = embedInSidebar ? sidebarSubTab : urlTab;
 
   const depsBase = organizationId && projectId ? `/organizations/${organizationId}/projects/${projectId}/dependencies` : '';
 
@@ -417,12 +444,15 @@ export default function ProjectDependenciesPage() {
     return () => { cancelled = true; };
   }, [project?.id, projectId, organizationId, userPermissions?.view_dependencies, permissionsChecked]);
 
-  // Redirect to list when URL dependencyId is not in the loaded list
+  // Redirect to list when URL dependencyId is not in the loaded list (or clear sidebar selection)
   useEffect(() => {
-    if (!depsBase || !selectedDepId || dependencies.length === 0 || dependenciesLoading) return;
+    if (!selectedDepId || dependencies.length === 0 || dependenciesLoading) return;
     const found = dependencies.some((d) => d.id === selectedDepId);
-    if (!found) navigate(depsBase, { replace: true });
-  }, [depsBase, selectedDepId, dependencies, dependenciesLoading, navigate]);
+    if (!found) {
+      if (embedInSidebar) setSelectedDepId(null);
+      else if (depsBase) navigate(depsBase, { replace: true });
+    }
+  }, [depsBase, selectedDepId, dependencies, dependenciesLoading, navigate, embedInSidebar]);
 
   // Poll import status when finalizing so Imports column updates when AST completes
   useEffect(() => {
@@ -874,7 +904,7 @@ export default function ProjectDependenciesPage() {
 
   // Skeleton row matching real package list item (icon + name bar). Optional opacity for fade-out effect.
   const PackageRowSkeleton = ({ nameWidth, opacityClass = 'opacity-100' }: { nameWidth: string; opacityClass?: string }) => (
-    <div className={cn('flex items-center gap-1.5 py-1.5 pl-5 pr-3 -ml-5 -mr-3 transition-opacity', opacityClass)}>
+    <div className={cn('flex items-center gap-1.5 py-1.5 transition-opacity', rowInset, opacityClass)}>
       <div className="h-4 w-4 shrink-0 rounded bg-muted/80" />
       <div className={cn('h-4 rounded-md bg-muted/80 min-w-[3rem]', nameWidth)} />
     </div>
@@ -910,12 +940,24 @@ export default function ProjectDependenciesPage() {
   // Show loading until project and permissions are verified
   if (!project || !permissionsChecked) {
     return (
-      <main className="flex h-[calc(100vh-3rem)] min-h-0">
-        <aside style={{ width: effectiveSidebarWidth }} className="shrink-0 bg-background flex flex-col overflow-hidden transition-[width] duration-200 ease-out">
-          <div className="shrink-0 px-3 pt-2 pb-2 animate-pulse">
+      <main
+        className={cn(
+          'flex min-h-0',
+          embedInSidebar ? cn('h-full min-h-0 flex-1', embedShellBg) : 'h-[calc(100vh-3rem)]',
+          mainEmbedClass
+        )}
+      >
+        <aside
+          style={{ width: effectiveSidebarWidth }}
+          className={cn(
+            'shrink-0 flex flex-col overflow-hidden transition-[width] duration-200 ease-out',
+            embedInSidebar ? embedShellBg : 'bg-background-content'
+          )}
+        >
+          <div className={cn('shrink-0 animate-pulse', searchPad)}>
             <div className="h-9 bg-muted/80 rounded-md w-full" />
           </div>
-          <div className="flex-1 min-h-0 pl-5 pr-3 pt-0.5 pb-4 space-y-0.5 animate-pulse">
+          <div className={cn('flex-1 min-h-0 pt-0.5 pb-4 space-y-0.5 animate-pulse', listPad)}>
             {skeletonRows.map((row, i) => (
               <PackageRowSkeleton key={i} nameWidth={row.nameWidth} opacityClass={row.opacityClass} />
             ))}
@@ -954,9 +996,22 @@ export default function ProjectDependenciesPage() {
     .sort((a, b) => (b.files_importing_count || 0) - (a.files_importing_count || 0));
 
   return (
-    <main className="flex h-[calc(100vh-3rem)] min-h-0 relative">
-      {/* Left sidebar: Dependencies (resizable, collapsible) */}
-      <aside style={{ width: sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : effectiveSidebarWidth }} className={cn('flex flex-col overflow-hidden transition-all duration-200 ease-out', sidebarCollapsed ? 'absolute left-0 top-0 bottom-0 z-20 bg-background-content' : 'relative shrink-0 z-10 bg-background')}>
+    <main
+      className={cn(
+        'flex min-h-0 relative',
+        embedInSidebar ? cn('h-full min-h-0 flex-1', embedShellBg) : 'h-[calc(100vh-3rem)]',
+        mainEmbedClass
+      )}
+    >
+      {/* Left sidebar: in org project drawer use same surface as shell (card-header); full page uses content gray */}
+      <aside
+        style={{ width: sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : effectiveSidebarWidth }}
+        className={cn(
+          'flex flex-col overflow-hidden transition-all duration-200 ease-out',
+          embedInSidebar ? embedShellBg : 'bg-background-content',
+          sidebarCollapsed ? 'absolute left-0 top-0 bottom-0 z-20' : 'relative shrink-0 z-10'
+        )}
+      >
         {sidebarCollapsed ? (
           <div className="shrink-0 flex flex-col items-center pt-2">
             <Tooltip>
@@ -976,7 +1031,7 @@ export default function ProjectDependenciesPage() {
         ) : (
         <>
         <div className="shrink-0">
-          <div className="px-3 pt-4 pb-2">
+          <div className={searchPad}>
             <div className="flex items-center gap-2">
               <div className="relative flex-1 min-w-0">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-foreground-secondary" />
@@ -1165,7 +1220,7 @@ export default function ProjectDependenciesPage() {
             </div>
           </div>
         </div>
-        <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pl-5 pr-3 pt-0.5 pb-4">
+        <div className={cn('flex-1 min-h-0 overflow-y-auto custom-scrollbar pt-0.5 pb-4', listPad)}>
           {isExtractionOngoing ? (
             <div className="rounded-lg border border-border bg-background-card p-6">
               <div className="flex items-center gap-4">
@@ -1222,9 +1277,12 @@ export default function ProjectDependenciesPage() {
                       tabIndex={0}
                       onClick={() => {
                         const next = selectedDepId === dep.id ? null : dep.id;
-                        if (!depsBase) return;
-                        if (next !== null) navigate(`${depsBase}/${next}/overview`, { replace: true });
-                        else navigate(depsBase, { replace: true });
+                        if (embedInSidebar) setSelectedDepId(next);
+                        else {
+                          if (!depsBase) return;
+                          if (next !== null) navigate(`${depsBase}/${next}/overview`, { replace: true });
+                          else navigate(depsBase, { replace: true });
+                        }
                       }}
                       onMouseEnter={() => handleRowHover(dep.id)}
                       onMouseLeave={() => handleRowHoverEnd(dep.id)}
@@ -1232,12 +1290,18 @@ export default function ProjectDependenciesPage() {
                         if (e.key === 'Enter' || e.key === ' ') {
                           e.preventDefault();
                           const next = selectedDepId === dep.id ? null : dep.id;
-                          if (!depsBase) return;
-                          if (next !== null) navigate(`${depsBase}/${next}/overview`, { replace: true });
-                          else navigate(depsBase, { replace: true });
+                          if (embedInSidebar) setSelectedDepId(next);
+                          else {
+                            if (!depsBase) return;
+                            if (next !== null) navigate(`${depsBase}/${next}/overview`, { replace: true });
+                            else navigate(depsBase, { replace: true });
+                          }
                         }
                       }}
-                      className="flex items-center gap-1.5 py-1.5 pl-5 pr-3 -ml-5 -mr-3 text-sm transition-colors duration-150 cursor-pointer hover:bg-background-subtle"
+                      className={cn(
+                        'flex items-center gap-1.5 py-1.5 text-sm transition-colors duration-150 cursor-pointer hover:bg-background-subtle',
+                        rowInset
+                      )}
                     >
                       <img src="/images/npm_icon.png" alt="" className="h-4 w-4 shrink-0 object-contain" aria-hidden />
                       <Tooltip>
@@ -1397,6 +1461,8 @@ export default function ProjectDependenciesPage() {
                                   e.stopPropagation();
                                   if (item.id === 'notes') {
                                     setNotesSidebarOpen(true);
+                                  } else if (embedInSidebar) {
+                                    setSidebarSubTab(item.id);
                                   } else if (depsBase && selectedDepId) {
                                     navigate(`${depsBase}/${selectedDepId}/${item.id}`, { replace: true });
                                   }
@@ -1449,7 +1515,13 @@ export default function ProjectDependenciesPage() {
       </div>
       )}
       {/* Right area: overview panel when a dependency is selected and sub-tab is Overview */}
-      <div className={cn("flex-1 min-w-0 bg-background-content flex flex-col overflow-hidden", sidebarCollapsed && selectedSubTab === 'supply-chain' && "w-full")}>
+      <div
+        className={cn(
+          'flex-1 min-w-0 flex flex-col overflow-hidden',
+          embedInSidebar ? embedShellBg : 'bg-background-content',
+          sidebarCollapsed && selectedSubTab === 'supply-chain' && 'w-full'
+        )}
+      >
         {!selectedDepId ? (
           <div className="flex-1 flex items-center justify-center p-8">
             <div className="flex flex-col items-center gap-4 text-center max-w-md">
@@ -1606,5 +1678,17 @@ export default function ProjectDependenciesPage() {
         />
       )}
     </main>
+  );
+}
+
+export default function ProjectDependenciesPage() {
+  const { project, organizationId, userPermissions, reloadProject } = useOutletContext<ProjectContextType>();
+  return (
+    <ProjectDependenciesContent
+      project={project}
+      organizationId={organizationId}
+      userPermissions={userPermissions}
+      reloadProject={reloadProject}
+    />
   );
 }

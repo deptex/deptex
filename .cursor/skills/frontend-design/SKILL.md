@@ -146,13 +146,64 @@ focus:ring-2 focus:ring-primary/50 focus:border-primary
 
 ---
 
+## Slide-In Sidebars & Panels
+
+For overview/detail sidebars (org overview, project details, team summaries):
+
+### Structure
+```txt
+Container: fixed right-0 top-0 bottom-0 w-full max-w-[900px] bg-background-card border-l border-border
+           transition-transform duration-300 ease-out
+           visible: translate-x-0, hidden: translate-x-full
+
+Header: flex-shrink-0 flex items-center justify-between gap-4 border-b border-border px-5 pt-5 pb-4
+        Title: text-lg font-semibold text-foreground
+        Close: X icon, text-foreground-secondary hover:text-foreground
+
+Content: flex-1 overflow-y-auto px-5 py-5 space-y-5
+```
+
+### Cards Inside Sidebars
+Use same card patterns as Settings pages:
+```txt
+Card: rounded-lg border border-border bg-background-card overflow-hidden
+Card header: px-4 py-3 border-b border-border
+Card header title: text-sm font-semibold text-foreground
+Card header subtitle: text-xs text-foreground-secondary mt-0.5
+Card content: p-4 or px-4 py-3
+```
+
+### Tables Inside Sidebar Cards
+```txt
+Table: w-full text-sm
+Thead: bg-background-card-header
+Th: text-left px-4 py-2 font-medium text-foreground-secondary
+Tbody: divide-y divide-border
+Td: px-4 py-2.5
+Row hover: hover:bg-table-hover transition-colors cursor-pointer
+```
+
+### Activity Lists
+```txt
+Container: divide-y divide-border
+Item: px-4 py-3 flex items-start gap-3
+Status dot: h-2 w-2 rounded-full bg-success/info/foreground-secondary mt-1.5 shrink-0
+Text: text-sm text-foreground
+Timestamp: text-xs text-foreground-secondary
+```
+
+---
+
 ## Avoid
 
 - Light backgrounds or washed-out grays for main surfaces
-- Heavy shadows or gradients outside accents
+- **Gradients for cards or sections** — use solid `bg-background-card` with borders instead
+- **Glow effects or blur decorations** — keep surfaces clean and flat
+- Heavy shadows; rely on borders for definition
 - Custom hex colors; prefer Tailwind tokens
 - Mixing `background-subtle` for large surfaces (use `background-card` instead)
 - Inconsistent padding (stick to `px-4 py-3`, `p-6`, etc.)
+- Fancy timeline or progress indicators when simple dots/dividers work
 
 ---
 
