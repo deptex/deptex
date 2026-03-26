@@ -8,13 +8,14 @@ import { execSync, spawn } from 'child_process';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { cloneRepository, cleanupRepository, cloneByProvider } from './clone';
 import { parseSbom, getBomRefToNameVersion, patchDevDependencies, type ParsedSbomDep, type ParsedSbomRelationship } from './sbom';
-import { calculateDepscore, SEVERITY_TO_CVSS, type AssetTier } from './depscore';
+import { calculateBaseDepscoreNoReachability, calculateDepscore, SEVERITY_TO_CVSS, type AssetTier } from './depscore';
 import { analyzeRepository } from './ast-parser';
 import { storeAstAnalysisResults } from './ast-storage';
 import { ExtractionLogger } from './logger';
 import { parsePurl, resolvePurlToDependencyId } from './purl';
 import { parseReachableFlows, parseUsageSlices, parseLlmPrompts, updateReachabilityLevels } from './reachability';
 import { updateJobPayloadCommit, updateJobStatus } from './job-db';
+import { applyEpdScoringFallback, EpdBudgetExceededError } from './epd';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
@@ -801,6 +802,11 @@ export async function runPipeline(
           severity: string | null; summary: string | null; aliases: string[] | null;
           fixed_versions: string[] | null; is_reachable: boolean; epss_score: number | null;
           cvss_score: number | null; cisa_kev: boolean; depscore: number | null; published_at: string | null;
+          base_depscore_no_reachability: number | null;
+          reachability_status: string;
+          epd_status: string;
+          epd_schema_version: string;
+          epd_prompt_version: string;
         }> = [];
 
         if (isCycloneVdr) {
@@ -832,6 +838,11 @@ export async function runPipeline(
                 severity, summary, aliases: null, fixed_versions, is_reachable: isReachable,
                 epss_score: epssFromVdrNum, cvss_score: cvssFromVdr, cisa_kev: false,
                 depscore: null, published_at: v.published ?? null,
+                base_depscore_no_reachability: null,
+                reachability_status: isReachable ? 'reachable' : 'unreachable',
+                epd_status: 'pending',
+                epd_schema_version: 'epd-v1',
+                epd_prompt_version: 'epd-v1',
               });
             }
           }
@@ -850,6 +861,11 @@ export async function runPipeline(
               is_reachable: true, epss_score: v.epss ?? null,
               cvss_score: severity ? (SEVERITY_TO_CVSS[severity] ?? null) : null,
               cisa_kev: false, depscore: null, published_at: null,
+              base_depscore_no_reachability: null,
+              reachability_status: 'reachable',
+              epd_status: 'pending',
+              epd_schema_version: 'epd-v1',
+              epd_prompt_version: 'epd-v1',
             });
           }
         }
@@ -886,17 +902,38 @@ export async function runPipeline(
           row.cisa_kev = allIds.some((id) => CVE_ID_RE.test(id) && kevCveSet.has(id));
           const cvss = row.cvss_score ?? (row.severity ? (SEVERITY_TO_CVSS[row.severity] ?? 0) : 0);
           const epss = row.epss_score ?? 0;
+          row.base_depscore_no_reachability = calculateBaseDepscoreNoReachability({
+            cvss,
+            epss,
+            cisaKev: row.cisa_kev,
+            assetTier,
+            tierMultiplier,
+          });
+          // Keep legacy depscore for compatibility during rollout.
           row.depscore = calculateDepscore({ cvss, epss, cisaKev: row.cisa_kev, isReachable: row.is_reachable, assetTier, tierMultiplier });
         }
 
         if (vulnRows.length > 0) {
           for (let i = 0; i < vulnRows.length; i += 100) {
-            await supabase
+            const chunk = vulnRows.slice(i, i + 100);
+            const { error: upsertErr } = await supabase
               .from('project_dependency_vulnerabilities')
-              .upsert(vulnRows.slice(i, i + 100), {
+              .upsert(chunk, {
                 onConflict: 'project_id,project_dependency_id,osv_id',
                 ignoreDuplicates: true,
               });
+            if (upsertErr) {
+              // Backward-compatible fallback for environments where EPD columns are not migrated yet.
+              const legacyChunk = chunk.map(({ base_depscore_no_reachability, reachability_status, epd_status, epd_schema_version, epd_prompt_version, ...legacy }) => legacy);
+              const { error: legacyErr } = await supabase
+                .from('project_dependency_vulnerabilities')
+                .upsert(legacyChunk, {
+                  onConflict: 'project_id,project_dependency_id,osv_id',
+                  ignoreDuplicates: true,
+                });
+              if (legacyErr) throw legacyErr;
+              await log.warn('vuln_scan', `EPD columns unavailable; stored legacy vulnerability fields only (${upsertErr.message})`);
+            }
           }
         }
 
@@ -932,6 +969,20 @@ export async function runPipeline(
       }
     } catch (reachErr: any) {
       await log.warn('reachability', `Reachability analysis failed (non-fatal): ${reachErr.message}`);
+    }
+
+    // === STEP: EPD contextual scoring ===
+    if (checkCancelled && await checkCancelled()) return;
+    await log.info('epd', 'Computing contextual EPD scores...');
+    const epdStart = Date.now();
+    try {
+      await applyEpdScoringFallback(supabase, projectId, workspaceRoot, log);
+      await log.success('epd', 'EPD contextual scoring complete', Date.now() - epdStart);
+    } catch (epdErr: any) {
+      if (epdErr instanceof EpdBudgetExceededError) {
+        throw epdErr;
+      }
+      await log.warn('epd', `EPD scoring failed (non-fatal): ${epdErr.message}`);
     }
 
     // === STEP: Semgrep (OPTIONAL) ===

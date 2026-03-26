@@ -1085,6 +1085,27 @@ The plan (`.cursor/plans/phase_07b_aegis.plan.md` § 7B-Q) specifies a full test
 
 ---
 
+## Phase 18 Setup Checklist (EPD Contextual Scoring)
+
+After deploying Phase 18 (Execution Path Dominance scoring):
+
+1. **Run database migration:** `phase18_epd_scoring.sql` (adds `base_depscore_no_reachability`, `epd_factor`, `contextual_depscore`, `reachability_status`, EPD explainability/status fields, and indexes on project + rank keys).
+
+2. **Extraction worker flow:** EPD stage runs after reachability parsing in `backend/extraction-worker/src/pipeline.ts`. It computes:
+ - base score without reachability (`calculateBaseDepscoreNoReachability`)
+ - EPD factor (`entry_weight * alpha^depth`, sanitized override to 0)
+ - contextual score (`base * epd_factor`)
+
+3. **BYOK policy (strict):** EPD AI verification uses only org Anthropic keys from `organization_ai_providers` (`provider='anthropic'`). No platform-key fallback for EPD.
+
+4. **Runaway guardrail:** Per-extraction AI cap defaults to `$3` (`EPD_MAX_RUN_COST_USD`, default `3.0`). If exceeded and `EPD_BUDGET_EXCEEDED_BEHAVIOR=fail_job` (default), extraction fails fast to prevent unexpected spend.
+
+5. **Fallback behavior:** If BYOK is missing or AI call fails, extraction continues with conservative fallback semantics and explicit `epd_status` values (`byok_missing`, `ai_error_fallback`, `fallback_no_ai`).
+
+6. **Safety defaults:** `is_sanitized` defaults false on uncertainty; prompt injection is treated as untrusted code text; output is schema-constrained.
+
+---
+
 ## Conventions
 
 - Use git bash, not PowerShell
@@ -1103,5 +1124,6 @@ The plan (`.cursor/plans/phase_07b_aegis.plan.md` § 7B-Q) specifies a full test
 - Phase 14 migrations: phase14_enterprise_security.sql (security_audit_logs, organization_mfa_exemptions, user_sessions, organization_sso_providers, organization_sso_bypass_tokens, organization_ip_allowlist, api_tokens, organization_scim_configs, scim_user_mappings, org columns for mfa/session/ip).
 - Phase 16 migration: phase16_aegis_learning.sql (fix_outcomes, strategy_patterns, cwe_ids on dependency_vulnerabilities, compute_strategy_patterns RPC, match_aegis_memories RPC).
 - Phase 17 migration: phase17_incident_response.sql (incident_playbooks, security_incidents, incident_timeline, incident_notes, allow_autonomous_containment on organizations).
+- Phase 18 migration: phase18_epd_scoring.sql (base_depscore_no_reachability, epd_factor, contextual_depscore, reachability_status, EPD explainability/status fields, ranking indexes).
 - See `.cursor/skills/add-new-features/SKILL.md` for where to add routes and libs
 - See `.cursor/skills/frontend-design/SKILL.md` and `.cursor/skills/ui-principles/SKILL.md` for UI standards
