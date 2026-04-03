@@ -1,10 +1,11 @@
 import { memo, useState, useEffect, useCallback } from 'react';
 import {
-  ShieldAlert, Shield, FileCode, Key, ChevronDown, ChevronRight,
+  ShieldAlert, FileCode, Key, ChevronDown, ChevronRight,
   AlertTriangle, Sparkles, CheckCircle, RotateCcw
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { api, SemgrepFinding, SecretFinding, ProjectVulnerability } from '../../lib/api';
+import VulnerabilityExpandableTable from './VulnerabilityExpandableTable';
 
 interface ProjectSecurityContentProps {
   organizationId: string;
@@ -103,66 +104,50 @@ function ProjectSecurityContent({ organizationId, projectId, canManage, onNaviga
   }
 
   const criticalCount = vulns.filter(v => v.severity === 'critical').length;
-  const highCount = vulns.filter(v => v.severity === 'high').length;
-  const mediumCount = vulns.filter(v => v.severity === 'medium').length;
-  const lowCount = vulns.filter(v => v.severity === 'low').length;
   const reachableCount = vulns.filter(v => v.is_reachable).length;
   const verifiedSecrets = secretFindings.filter(s => s.is_verified).length;
 
-  const urgentDepscore = vulns.filter(v => (v.depscore ?? 0) >= 75).length;
-  const moderateDepscore = vulns.filter(v => (v.depscore ?? 0) >= 40 && (v.depscore ?? 0) < 75).length;
-  const lowDepscore = vulns.filter(v => (v.depscore ?? 0) < 40).length;
-
   return (
     <div className="space-y-4">
-      {/* Vulnerability Summary */}
+      {/* Vulnerability table with inline expanded rows */}
+      <div className="border border-border rounded-lg p-4">
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <div className="flex items-center gap-2">
+            <ShieldAlert className="h-4 w-4 text-zinc-400" />
+            <span className="text-sm font-medium text-foreground">Vulnerabilities</span>
+          </div>
+          <span className="text-xs text-zinc-400">{vulns.length} total • {reachableCount} reachable</span>
+        </div>
+        <VulnerabilityExpandableTable
+          organizationId={organizationId}
+          projectId={projectId}
+          vulnerabilities={vulns}
+          onOpenSidebar={onNavigateToVuln}
+        />
+      </div>
+
+      {/* Project vulnerability summary */}
       <div className="border border-border rounded-lg p-4">
         <div className="flex items-center gap-2 mb-3">
           <ShieldAlert className="h-4 w-4 text-zinc-400" />
-          <span className="text-sm font-medium text-foreground">Vulnerability Summary</span>
+          <span className="text-sm font-medium text-foreground">Security Snapshot</span>
         </div>
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="text-center">
             <div className="text-lg font-semibold text-red-400">{criticalCount}</div>
             <div className="text-[10px] text-zinc-500 uppercase">Critical</div>
           </div>
           <div className="text-center">
-            <div className="text-lg font-semibold text-orange-400">{highCount}</div>
-            <div className="text-[10px] text-zinc-500 uppercase">High</div>
+            <div className="text-lg font-semibold text-zinc-200">{vulns.length}</div>
+            <div className="text-[10px] text-zinc-500 uppercase">All Vulns</div>
           </div>
           <div className="text-center">
-            <div className="text-lg font-semibold text-yellow-400">{mediumCount}</div>
-            <div className="text-[10px] text-zinc-500 uppercase">Medium</div>
+            <div className="text-lg font-semibold text-blue-400">{reachableCount}</div>
+            <div className="text-[10px] text-zinc-500 uppercase">Reachable</div>
           </div>
           <div className="text-center">
-            <div className="text-lg font-semibold text-zinc-400">{lowCount}</div>
-            <div className="text-[10px] text-zinc-500 uppercase">Low</div>
-          </div>
-        </div>
-        <div className="mt-3 pt-3 border-t border-border flex items-center justify-between">
-          <span className="text-xs text-zinc-400">Total: {vulns.length}</span>
-          <span className="text-xs text-zinc-400">{reachableCount} reachable</span>
-        </div>
-      </div>
-
-      {/* Depscore Distribution */}
-      <div className="border border-border rounded-lg p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Shield className="h-4 w-4 text-zinc-400" />
-          <span className="text-sm font-medium text-foreground">Depscore Distribution</span>
-        </div>
-        <div className="grid grid-cols-3 gap-3">
-          <div className="text-center">
-            <div className="text-lg font-semibold text-red-400">{urgentDepscore}</div>
-            <div className="text-[10px] text-zinc-500">75-100 urgent</div>
-          </div>
-          <div className="text-center">
-            <div className="text-lg font-semibold text-amber-400">{moderateDepscore}</div>
-            <div className="text-[10px] text-zinc-500">40-74 moderate</div>
-          </div>
-          <div className="text-center">
-            <div className="text-lg font-semibold text-zinc-400">{lowDepscore}</div>
-            <div className="text-[10px] text-zinc-500">0-39 low</div>
+            <div className="text-lg font-semibold text-amber-400">{semgrepTotal + secretTotal}</div>
+            <div className="text-[10px] text-zinc-500 uppercase">Code Findings</div>
           </div>
         </div>
       </div>

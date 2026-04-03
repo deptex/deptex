@@ -4,8 +4,10 @@ import { Folder, Loader2, Users } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { FrameworkIcon } from '../framework-icon';
 import { TeamIcon } from '../TeamIcon';
-import { type WorstSeverity, VULN_CENTER_NODE_HEIGHT } from './useVulnerabilitiesGraphLayout';
+import { type WorstSeverity } from './useVulnerabilitiesGraphLayout';
 import { GraphScopePill } from './GraphScopePill';
+import type { OrgSatelliteTargetEdge } from './overviewOrgLayout';
+import { OverviewOrgTargetHandleFan } from './overviewOrgFlowHandles';
 
 export interface VulnProjectNodeData {
   projectName: string;
@@ -44,19 +46,22 @@ export interface VulnProjectNodeData {
   assetTierColor?: string | null;
   /** Org overview: number of dependencies to show in bottom bar. */
   dependenciesCount?: number | null;
-  /**
-   * Org overview: target handle side for org→project edge so the connector stays horizontal
-   * (aligned to org layout midline). See TeamGroupNodeData.overviewOrgEdgeOnTargetSide.
-   */
-  overviewOrgEdgeOnTargetSide?: 'left' | 'right';
+  /** Org overview: opens extraction sync sidebar when set (extracting projects). */
+  organizationId?: string | null;
+  /** Org overview: which side receives the org→project edge (handle centered on that edge). */
+  overviewOrgEdgeTargetHandle?: OrgSatelliteTargetEdge;
 }
 
 const NODE_WIDTH = 220;
 const NODE_HEIGHT = 64;
-/** Larger project card for org overview (border, single row: icon, name, status). */
-export const OVERVIEW_PROJECT_NODE_WIDTH = 268;
-/** Org overview project cards: single-row height (no footer). */
-export const OVERVIEW_PROJECT_NODE_HEIGHT = 68;
+/**
+ * Org / team graph: satellite “team” cards on the ring — wider/taller than project cards so hierarchy reads clearly.
+ */
+export const OVERVIEW_TEAM_RING_CARD_WIDTH = 276;
+export const OVERVIEW_TEAM_RING_CARD_HEIGHT = 104;
+/** Org overview project tiles + ungrouped satellites: narrower than team cards; includes a status footer row. */
+export const OVERVIEW_PROJECT_NODE_WIDTH = 220;
+export const OVERVIEW_PROJECT_NODE_HEIGHT = 90;
 
 function getColorScheme(worstSeverity: WorstSeverity | undefined) {
   const s = worstSeverity ?? 'none';
@@ -148,7 +153,7 @@ function statusBadgeColorFallback(label: string | null | undefined): string | nu
 }
 
 function VulnProjectNodeComponent({ data }: NodeProps) {
-  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, hasExtractingProjects, neutralStyle, roleBadge, roleBadgeColor, statusBadge, statusBadgeColor, riskGrade, projectsCount, membersCount, assetTierName, overviewOrgEdgeOnTargetSide } =
+  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, hasExtractingProjects, neutralStyle, roleBadge, roleBadgeColor, statusBadge, statusBadgeColor, riskGrade, projectsCount, membersCount, assetTierName, overviewOrgEdgeTargetHandle } =
     (data as unknown as VulnProjectNodeData) ?? {};
   const hasKnownFramework = framework && framework.toLowerCase() !== 'unknown';
   const frameworkIdForIcon = hasKnownFramework ? framework : undefined;
@@ -160,37 +165,74 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
   const showTeamRiskGrade = !isExtracting && isTeamNode && (riskGrade ?? 'A+');
   const showProjectRiskGrade = !isExtracting && !isTeamNode && neutralStyle && (riskGrade ?? 'A+');
   const showAssetTierSubtext = !isExtracting && !isTeamNode && assetTierName != null && assetTierName !== '';
-  const showCardTooltip = !isTeamNode && neutralStyle;
+  const showCardTooltip = !isTeamNode && neutralStyle && !isExtracting;
   const rawStatusColor = statusBadgeColor?.trim() ? statusBadgeColor : (showStatusBadge ? statusBadgeColorFallback(statusBadge) : null);
   const effectiveStatusColor = rawStatusColor && !rawStatusColor.startsWith('#') ? `#${rawStatusColor}` : rawStatusColor;
 
-  /** Org overview: larger project card with border, single row (no dependency footer). */
-  const isOverviewProjectCard = Boolean(neutralStyle && !isTeamNode && !isExtracting);
-  /** Org overview: larger team card with border, risk badge, bottom bar (x projects, x members), no arrow. */
+  /** Org overview: project card with header + status footer — same shell for ready and extracting. */
+  const isOverviewProjectCard = Boolean(neutralStyle && !isTeamNode);
+  /** Org overview: team satellite card with border, risk badge, bottom bar (x projects, x members). */
   const isOverviewTeamCard = Boolean(neutralStyle && isTeamNode && !isExtracting);
-  const nodeWidth = (isOverviewProjectCard || isOverviewTeamCard) ? OVERVIEW_PROJECT_NODE_WIDTH : NODE_WIDTH;
-  const nodeHeight = (isOverviewProjectCard || isOverviewTeamCard) ? OVERVIEW_PROJECT_NODE_HEIGHT : NODE_HEIGHT;
-  const overviewFlatY = VULN_CENTER_NODE_HEIGHT / 2;
-  const overviewSideHandleStyle = { top: overviewFlatY, transform: 'translateY(-50%)' } as const;
+  const nodeWidth = isOverviewTeamCard
+    ? OVERVIEW_TEAM_RING_CARD_WIDTH
+    : isOverviewProjectCard
+      ? OVERVIEW_PROJECT_NODE_WIDTH
+      : NODE_WIDTH;
+  const nodeHeight = isOverviewTeamCard
+    ? OVERVIEW_TEAM_RING_CARD_HEIGHT
+    : isOverviewProjectCard
+      ? OVERVIEW_PROJECT_NODE_HEIGHT
+      : NODE_HEIGHT;
+  const overviewSideMidY = nodeHeight / 2;
+  const overviewTopBottomMidX = nodeWidth / 2;
+  const overviewSideHandleStyle = { top: overviewSideMidY, transform: 'translateY(-50%)' } as const;
+  const overviewTopBottomHandleStyle = { left: overviewTopBottomMidX, transform: 'translateX(-50%)' } as const;
+  const orgEdge = overviewOrgEdgeTargetHandle;
+
+  /** Fixed box for org overview cards so RF sub-flow slots stay non-overlapping (min-* alone can grow with content). */
+  const rootStyle =
+    isOverviewProjectCard || isOverviewTeamCard
+      ? ({
+          width: nodeWidth,
+          height: nodeHeight,
+          minWidth: nodeWidth,
+          minHeight: nodeHeight,
+          maxWidth: nodeWidth,
+          boxSizing: 'border-box' as const,
+        })
+      : { minWidth: nodeWidth, minHeight: nodeHeight };
 
   return (
-    <div className="relative" style={{ minWidth: nodeWidth, minHeight: nodeHeight }}>
-      <Handle id="top" type="target" position={Position.Top} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
+    <div className="relative" style={rootStyle}>
+      <Handle
+        id="top"
+        type="target"
+        position={Position.Top}
+        className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0"
+        style={orgEdge === 'top' ? overviewTopBottomHandleStyle : undefined}
+      />
       <Handle
         id="right"
         type="target"
         position={Position.Right}
         className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0"
-        style={overviewOrgEdgeOnTargetSide === 'right' ? overviewSideHandleStyle : undefined}
+        style={orgEdge === 'right' ? overviewSideHandleStyle : undefined}
       />
-      <Handle id="bottom" type="target" position={Position.Bottom} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
+      <Handle
+        id="bottom"
+        type="target"
+        position={Position.Bottom}
+        className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0"
+        style={orgEdge === 'bottom' ? overviewTopBottomHandleStyle : undefined}
+      />
       <Handle
         id="left"
         type="target"
         position={Position.Left}
         className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0"
-        style={overviewOrgEdgeOnTargetSide === 'left' ? overviewSideHandleStyle : undefined}
+        style={orgEdge === 'left' ? overviewSideHandleStyle : undefined}
       />
+      {orgEdge != null && <OverviewOrgTargetHandleFan side={orgEdge} />}
       <Handle id="source-top" type="source" position={Position.Top} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
       <Handle id="source-right" type="source" position={Position.Right} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
       <Handle id="source-bottom" type="source" position={Position.Bottom} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
@@ -245,25 +287,38 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
           </div>
         </div>
       ) : isOverviewProjectCard ? (
-        <div className="relative rounded-xl border border-border bg-background-card-header shadow-lg shadow-slate-500/5 h-full flex items-center gap-3 min-w-0 overflow-hidden cursor-pointer hover:border-border/80 transition-all px-4 py-3">
-          {frameworkIdForIcon ? (
-            <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center [&_svg]:text-white">
-              <FrameworkIcon frameworkId={frameworkIdForIcon} size={22} className="text-white" />
-            </span>
-          ) : (
-            <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center text-white">
-              <Folder className="h-5 w-5" strokeWidth={1.75} />
-            </span>
-          )}
-          <div className="min-w-0 flex-1">
-            <p className="text-base font-semibold text-foreground truncate leading-tight" title={projectName}>
-              {projectName}
-            </p>
+        <div className="relative flex h-full w-full min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-background-card-header shadow-lg shadow-slate-500/5 cursor-pointer box-border hover:border-border/80 transition-all">
+          {/* Match org / team: project scope pill in top-right (FolderKanban) */}
+          <div className="pointer-events-auto absolute top-2 right-2 z-[2] flex items-center">
+            <GraphScopePill type="project" />
           </div>
-          <div className="flex items-center justify-end shrink-0">
-            {showStatusBadge && (
+          {/* Top: icon + name (status lives in footer, like team cards) */}
+          <div className="flex min-h-0 flex-1 items-center gap-2.5 px-3 pt-2.5 pb-2 pr-10">
+            {frameworkIdForIcon ? (
+              <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center [&_svg]:text-white">
+                <FrameworkIcon frameworkId={frameworkIdForIcon} size={18} className="text-white" />
+              </span>
+            ) : (
+              <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center text-white">
+                <Folder className="h-4 w-4" strokeWidth={1.75} />
+              </span>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-foreground truncate leading-tight" title={projectName}>
+                {projectName}
+              </p>
+            </div>
+          </div>
+          {/* Bottom: status strip (team card parity) */}
+          <div className="flex shrink-0 items-center border-t border-border bg-background-card-header/95 px-3 py-2">
+            {isExtracting ? (
+              <span className="inline-flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
+                <Loader2 className="h-3 w-3 shrink-0 animate-spin" aria-hidden />
+                Extracting
+              </span>
+            ) : showStatusBadge ? (
               <span
-                className="inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium"
+                className="inline-flex max-w-full items-center truncate rounded-md border px-2 py-0.5 text-[10px] font-medium"
                 style={effectiveStatusColor
                   ? { backgroundColor: `${effectiveStatusColor}20`, color: effectiveStatusColor, borderColor: `${effectiveStatusColor}40` }
                   : { backgroundColor: 'transparent', color: 'var(--muted-foreground)', borderColor: 'rgba(255,255,255,0.2)' }
@@ -271,6 +326,8 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
               >
                 {statusBadge}
               </span>
+            ) : (
+              <span className="text-[10px] text-muted-foreground">No status</span>
             )}
           </div>
         </div>

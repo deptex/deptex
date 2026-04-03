@@ -386,11 +386,11 @@ export const api = {
   _teamDataCache: new Map<string, TeamWithRole>(),
   _teamPrefetchCache: new Map<string, Promise<TeamWithRole>>(),
 
-  async getTeams(organizationId: string): Promise<Team[]> {
+  async getTeams(organizationId: string): Promise<TeamWithRole[]> {
     const teams = await fetchWithAuth(`/api/organizations/${organizationId}/teams`);
-    teams.forEach((team: Team) => {
+    teams.forEach((team: TeamWithRole) => {
       const cacheKey = `${organizationId}:${team.id}`;
-      this._teamDataCache.set(cacheKey, team as TeamWithRole);
+      this._teamDataCache.set(cacheKey, team);
     });
     return teams;
   },
@@ -1812,6 +1812,35 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities`);
   },
 
+  async getOrganizationVulnerabilities(
+    organizationId: string,
+    params?: { page?: number; per_page?: number; severity?: string }
+  ): Promise<{ data: ProjectVulnerability[]; total: number; page: number; per_page: number }> {
+    const p = new URLSearchParams();
+    if (params?.page != null) p.set('page', String(params.page));
+    if (params?.per_page != null) p.set('per_page', String(params.per_page));
+    if (params?.severity) p.set('severity', params.severity);
+    const q = p.toString();
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/vulnerabilities${q ? `?${q}` : ''}`
+    );
+  },
+
+  async getTeamVulnerabilities(
+    organizationId: string,
+    teamId: string,
+    params?: { page?: number; per_page?: number; severity?: string }
+  ): Promise<{ data: ProjectVulnerability[]; total: number; page: number; per_page: number }> {
+    const p = new URLSearchParams();
+    if (params?.page != null) p.set('page', String(params.page));
+    if (params?.per_page != null) p.set('per_page', String(params.per_page));
+    if (params?.severity) p.set('severity', params.severity);
+    const q = p.toString();
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/teams/${teamId}/vulnerabilities${q ? `?${q}` : ''}`
+    );
+  },
+
   // Phase 6: Security Tab API functions
   async getProjectSemgrepFindings(
     organizationId: string,
@@ -2844,6 +2873,8 @@ export interface ProjectRepository {
   webhook_status?: string | null;
   last_webhook_at?: string | null;
   last_webhook_event?: string | null;
+  /** Last successful extraction / dependency sync completion (Phase 8). */
+  last_extracted_at?: string | null;
 }
 
 export interface OpenssfCheck {
@@ -2941,6 +2972,8 @@ export interface DependencyVersionVulnerability {
   from_package?: string;
   /** Depscore (0-100) when available from project vulnerability data. */
   depscore?: number | null;
+  /** Phase 18: contextual score (base × EPD factor) when EPD has run for this project. */
+  contextual_depscore?: number | null;
   cvss_score?: number | null;
   epss_score?: number | null;
   cisa_kev?: boolean;
@@ -3166,6 +3199,8 @@ export interface ProjectVulnerability {
   summary: string | null;
   details: string | null;
   aliases: string[];
+  /** OSV-style ranges / version lists from the advisory (when loaded from dependency_vulnerabilities). */
+  affected_versions?: unknown;
   fixed_versions: string[];
   published_at: string | null;
   modified_at: string | null;
@@ -3178,9 +3213,16 @@ export interface ProjectVulnerability {
   cvss_score?: number;
   cisa_kev?: boolean;
   depscore?: number;
+  /** Phase 18: EPD-weighted score when present; prefer for prioritization over raw depscore. */
+  contextual_depscore?: number | null;
   /** Phase 15: SLA status (on_track, warning, breached, met, resolved_late, exempt). */
   sla_status?: string | null;
   sla_deadline_at?: string | null;
+  /** Phase 6B / org list */
+  reachability_level?: ReachabilityLevel;
+  /** Set on organization-wide vulnerability list rows */
+  project_id?: string;
+  project_name?: string;
 }
 
 export interface ProjectPermissions {

@@ -615,10 +615,6 @@ export async function getCandidateProjectsForAutoBump(
     .in('source', ['dependencies', 'devDependencies']);
   pdError = byDependencyId.error;
   pdRows = byDependencyId.data as PdRow[] | null;
-  // #region agent log
-  const _byDepIdCount = byDependencyId.data?.length ?? 0;
-  let _byNameCount = 0;
-  // #endregion
 
   if (!pdError && pdRows?.length === 0) {
     const byName = await supabase
@@ -627,7 +623,6 @@ export async function getCandidateProjectsForAutoBump(
       .eq('name', packageName)
       .eq('is_direct', true)
       .in('source', ['dependencies', 'devDependencies']);
-    _byNameCount = byName.data?.length ?? 0;
     if (!byName.error && byName.data?.length) {
       pdRows = byName.data as PdRow[];
     }
@@ -656,9 +651,6 @@ export async function getCandidateProjectsForAutoBump(
     .select('id, organization_id')
     .in('id', projectIds)
     .or('auto_bump.eq.true,auto_bump.is.null');
-  // #region agent log
-  fetch('http://127.0.0.1:7243/ingest/abaca787-5416-40c4-b6fe-aea97fa8dfd8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'storage.ts:getCandidateProjectsForAutoBump', message: 'query counts', data: { packageName, dependencyId, byDependencyIdRowCount: _byDepIdCount, byNameRowCount: _byNameCount, pdRowsCount: pdRows?.length ?? 0, projectIdsCount: projectIds.length, projectsWithAutoBumpCount: projects?.length ?? 0 }, timestamp: Date.now(), sessionId: 'debug-session', hypothesisId: 'A', runId: 'post-fix' }) }).catch(() => {});
-  // #endregion
 
   if (projError) {
     console.warn(`[${new Date().toISOString()}] getCandidateProjectsForAutoBump projects query error:`, projError.message);

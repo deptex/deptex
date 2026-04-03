@@ -467,6 +467,14 @@
   padding: 0 !important;
 }
 
+/* Org hub graph: edge layer under nodes so Bézier curves don’t obscure team/project card content */
+.org-overview-hub-flow .react-flow__edges {
+  z-index: 0;
+}
+.org-overview-hub-flow .react-flow__nodes {
+  z-index: 1;
+}
+
 /* Monaco editor: force dark background to match app theme (#1A1C1E) */
 .monaco-editor,
 .monaco-editor .overflowingContentWidgets,

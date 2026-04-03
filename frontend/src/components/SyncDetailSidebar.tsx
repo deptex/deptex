@@ -227,7 +227,7 @@ export function SyncDetailSidebar({ projectId, organizationId, initialRunId, onC
               {isActive && (
                 <span className="flex items-center gap-1.5 text-blue-400">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  In progress
+                  Extracting
                 </span>
               )}
               {!isActive && logs.length === 0 && !logsLoading && (

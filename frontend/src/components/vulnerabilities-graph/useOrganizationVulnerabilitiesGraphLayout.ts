@@ -14,6 +14,14 @@ import {
 } from './TeamGroupNode';
 import type { ProjectWithGraphData } from './useTeamVulnerabilitiesGraphLayout';
 import type { OverviewStatusRollup } from '../../lib/overviewStatusRollup';
+import {
+  layoutOverviewSatellitesAroundOrg,
+  getOrgToSatelliteHandles,
+  computeOrgOverviewEdgeRouting,
+  ORG_OVERVIEW_EDGE_STROKE,
+  ORG_OVERVIEW_CENTER_WIDTH,
+  ORG_OVERVIEW_CENTER_HEIGHT,
+} from './overviewOrgLayout';
 
 export const ORG_CENTER_ID = 'org-center';
 /** @deprecated Synthetic team id for ungrouped projects. Phase 6 places these directly at team ring level. */
@@ -292,7 +300,7 @@ export interface OverviewProjectItem {
   assetTierName?: string | null;
   /** Hex color for asset tier badge (from organization_asset_tiers). */
   assetTierColor?: string | null;
-  /** When true, show as extracting center node (spinner) and clicking opens extraction logs sidebar. */
+  /** When true, same overview card as other projects with an Extracting + spinner badge; click opens sync sidebar. */
   isExtracting?: boolean;
   /** Project health score 0–100 when available (for org center aggregate). */
   healthScore?: number | null;
@@ -319,6 +327,9 @@ const OVERVIEW_DEFAULT_ROLE_COLORS: Record<string, string> = {
   member: '#71717a',
 };
 
+/** When a team has more than this many projects, the org overview grid shows only this many until expanded. */
+export const OVERVIEW_TEAM_PROJECTS_COLLAPSE_AT = 4;
+
 /**
  * Project grid inside a team card: column count grows with √(n) so the container widens predictably.
  * Examples: 2 → 1×2, 3 → 2+1, 4 → 2×2, 5–6 → 3-wide rows, 7–9 → 3 cols, 10+ → 4+ cols as needed.
@@ -331,42 +342,8 @@ function getOverviewTeamProjectGridDimensions(projectCount: number): { cols: num
   return { cols, rows };
 }
 
-const ORG_OVERVIEW_ORG_NODE_HALF_W = VULN_CENTER_NODE_WIDTH / 2;
-const ORG_OVERVIEW_ORG_NODE_HALF_H = VULN_CENTER_NODE_HEIGHT / 2;
-
-/** Cardinal slots: 1st right, 2nd down, 3rd left, 4th up (repeats for additional rings). */
-type OverviewOrgGridSlot = 'right' | 'down' | 'left' | 'up';
-
-const OVERVIEW_ORG_GRID_SLOT_ORDER: OverviewOrgGridSlot[] = ['right', 'down', 'left', 'up'];
-
-/** Gap between stacked nodes in the same cardinal column (px). */
-const OVERVIEW_ORG_GRID_STACK_GAP = 48;
-
-/** Side of satellite node that receives the org edge (flat horizontal segment). */
-function overviewOrgEdgeTargetSideForSlot(slot: OverviewOrgGridSlot): 'left' | 'right' | undefined {
-  if (slot === 'right') return 'left';
-  if (slot === 'left') return 'right';
-  return undefined;
-}
-
-/**
- * Extra horizontal space from org when a team/card is wider than the reference min width.
- * Keeps single-column teams from feeling tighter than wide multi-project teams.
- */
-function overviewOrgGridGapX(containerWidth: number): number {
-  const ref = TEAM_CONTAINER_MIN_WIDTH;
-  return 72 + 0.22 * Math.max(0, containerWidth - ref);
-}
-
-/** Extra vertical gap below/above org for tall team stacks (px). */
-function overviewOrgGridGapY(containerHeight: number): number {
-  const ref = TEAM_CONTAINER_MIN_HEIGHT;
-  return 56 + 0.16 * Math.max(0, containerHeight - ref);
-}
-
 interface OverviewOrgGridCell {
   globalIndex: number;
-  slot: OverviewOrgGridSlot;
   width: number;
   height: number;
   teamData: OverviewTeamWithProjects | null;
@@ -379,69 +356,10 @@ interface OverviewOrgGridCell {
     gap: number;
     projectGridTopInset: number;
     projectGridBottomInset: number;
+    visibleProjectCount: number;
+    totalProjectCount: number;
+    collapsedSummary: boolean;
   };
-}
-
-/**
- * Snap overview satellites to a grid around the org:
- * - Right/left: top aligns with org top; extra rows in that direction stack further out horizontally.
- * - Down/up: horizontally centered on org; stack further down/up; growth extends away from the org.
- */
-function layoutOverviewOrgGrid(
-  cells: OverviewOrgGridCell[],
-  centerY: number
-): Map<number, { x: number; y: number }> {
-  const positions = new Map<number, { x: number; y: number }>();
-  const Wo = ORG_OVERVIEW_ORG_NODE_HALF_W;
-  const Ho = ORG_OVERVIEW_ORG_NODE_HALF_H;
-  const orgTop = centerY - Ho;
-  const orgBottom = centerY + Ho;
-  const stack = OVERVIEW_ORG_GRID_STACK_GAP;
-
-  for (const slot of OVERVIEW_ORG_GRID_SLOT_ORDER) {
-    const inSlot = cells.filter((c) => c.slot === slot).sort((a, b) => a.globalIndex - b.globalIndex);
-    if (inSlot.length === 0) continue;
-
-    if (slot === 'right') {
-      for (let i = 0; i < inSlot.length; i++) {
-        const it = inSlot[i];
-        const x =
-          i === 0
-            ? Wo + overviewOrgGridGapX(it.width)
-            : positions.get(inSlot[i - 1].globalIndex)!.x + inSlot[i - 1].width + stack;
-        positions.set(it.globalIndex, { x, y: orgTop });
-      }
-    } else if (slot === 'down') {
-      for (let i = 0; i < inSlot.length; i++) {
-        const it = inSlot[i];
-        const y =
-          i === 0
-            ? orgBottom + overviewOrgGridGapY(it.height)
-            : positions.get(inSlot[i - 1].globalIndex)!.y + inSlot[i - 1].height + stack;
-        positions.set(it.globalIndex, { x: -it.width / 2, y });
-      }
-    } else if (slot === 'left') {
-      for (let i = 0; i < inSlot.length; i++) {
-        const it = inSlot[i];
-        const x =
-          i === 0
-            ? -Wo - overviewOrgGridGapX(it.width) - it.width
-            : positions.get(inSlot[i - 1].globalIndex)!.x - stack - it.width;
-        positions.set(it.globalIndex, { x, y: orgTop });
-      }
-    } else {
-      for (let i = 0; i < inSlot.length; i++) {
-        const it = inSlot[i];
-        const y =
-          i === 0
-            ? orgTop - overviewOrgGridGapY(it.height) - it.height
-            : positions.get(inSlot[i - 1].globalIndex)!.y - stack - it.height;
-        positions.set(it.globalIndex, { x: -it.width / 2, y });
-      }
-    }
-  }
-
-  return positions;
 }
 
 /**
@@ -465,7 +383,6 @@ export function useOrganizationOverviewGraphLayout(
     const edges: Edge[] = [];
     const centerX = 0;
     const centerY = 0;
-    const grayStroke = '#262626';
 
     const realTeams = teamsWithProjects.filter((t) => t.teamId !== UNGROUPED_TEAM_ID);
     const ungrouped = teamsWithProjects
@@ -493,8 +410,8 @@ export function useOrganizationOverviewGraphLayout(
       id: ORG_CENTER_ID,
       type: 'groupCenterNode',
       position: {
-        x: centerX - VULN_CENTER_NODE_WIDTH / 2,
-        y: centerY - VULN_CENTER_NODE_HEIGHT / 2,
+        x: centerX - ORG_OVERVIEW_CENTER_WIDTH / 2,
+        y: centerY - ORG_OVERVIEW_CENTER_HEIGHT / 2,
       },
       data: {
         title: orgName,
@@ -514,13 +431,16 @@ export function useOrganizationOverviewGraphLayout(
       },
       draggable: false,
       selectable: false,
+      style: { zIndex: 3, width: ORG_OVERVIEW_CENTER_WIDTH, height: ORG_OVERVIEW_CENTER_HEIGHT },
     });
 
     const totalRingItems = realTeams.length + ungrouped.length;
     if (totalRingItems === 0) return { nodes, edges };
 
-    // Handles / edges use pure cardinals (right, down, left, up) matching slot order.
-    const cardinalAngles = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2];
+    const overviewEdgeStyle = {
+      stroke: ORG_OVERVIEW_EDGE_STROKE,
+      strokeWidth: 1,
+    };
 
     const projectWidth = OVERVIEW_PROJECT_NODE_WIDTH;
     const projectHeight = OVERVIEW_PROJECT_NODE_HEIGHT;
@@ -530,25 +450,50 @@ export function useOrganizationOverviewGraphLayout(
 
     const gridCells: OverviewOrgGridCell[] = [];
 
+    const COLLAPSED_SUMMARY_BODY_PX = 32;
+
     realTeams.forEach((teamData, teamIndex) => {
-      const projectCount = teamData.projects.length;
-      const { cols, rows } = getOverviewTeamProjectGridDimensions(projectCount);
-      const containerWidth = Math.max(
-        TEAM_CONTAINER_MIN_WIDTH,
-        cols * projectWidth + Math.max(0, cols - 1) * innerGap + TEAM_CONTAINER_PADDING * 2
-      );
-      const containerHeight = Math.max(
-        TEAM_CONTAINER_MIN_HEIGHT,
-        TEAM_CONTAINER_HEADER_HEIGHT +
-          projectGridTopInset +
-          rows * projectHeight +
-          Math.max(0, rows - 1) * innerGap +
-          projectGridBottomInset +
-          TEAM_CONTAINER_FOOTER_HEIGHT
-      );
+      const totalProjects = teamData.projects.length;
+      /** Org overview always uses compact team cards (project count + members; no in-card project grid). */
+      const collapsedSummary = true;
+
+      let visibleCount: number;
+      let cols: number;
+      let rows: number;
+      let containerWidth: number;
+      let containerHeight: number;
+
+      if (collapsedSummary) {
+        visibleCount = 0;
+        cols = 0;
+        rows = 0;
+        containerWidth = Math.max(TEAM_CONTAINER_MIN_WIDTH, 340);
+        containerHeight = Math.max(
+          120,
+          TEAM_CONTAINER_HEADER_HEIGHT + COLLAPSED_SUMMARY_BODY_PX + TEAM_CONTAINER_FOOTER_HEIGHT
+        );
+      } else {
+        visibleCount = totalProjects;
+        const dim = getOverviewTeamProjectGridDimensions(visibleCount);
+        cols = dim.cols;
+        rows = dim.rows;
+        containerWidth = Math.max(
+          TEAM_CONTAINER_MIN_WIDTH,
+          cols * projectWidth + Math.max(0, cols - 1) * innerGap + TEAM_CONTAINER_PADDING * 2
+        );
+        containerHeight = Math.max(
+          TEAM_CONTAINER_MIN_HEIGHT,
+          TEAM_CONTAINER_HEADER_HEIGHT +
+            projectGridTopInset +
+            rows * projectHeight +
+            Math.max(0, rows - 1) * innerGap +
+            projectGridBottomInset +
+            TEAM_CONTAINER_FOOTER_HEIGHT
+        );
+      }
+
       gridCells.push({
         globalIndex: teamIndex,
-        slot: OVERVIEW_ORG_GRID_SLOT_ORDER[teamIndex % 4],
         width: containerWidth,
         height: containerHeight,
         teamData,
@@ -561,6 +506,9 @@ export function useOrganizationOverviewGraphLayout(
           gap: innerGap,
           projectGridTopInset,
           projectGridBottomInset,
+          visibleProjectCount: visibleCount,
+          totalProjectCount: totalProjects,
+          collapsedSummary,
         },
       });
     });
@@ -569,7 +517,6 @@ export function useOrganizationOverviewGraphLayout(
       const globalIndex = realTeams.length + ungroupedIdx;
       gridCells.push({
         globalIndex,
-        slot: OVERVIEW_ORG_GRID_SLOT_ORDER[globalIndex % 4],
         width: OVERVIEW_PROJECT_NODE_WIDTH,
         height: OVERVIEW_PROJECT_NODE_HEIGHT,
         teamData: null,
@@ -577,27 +524,57 @@ export function useOrganizationOverviewGraphLayout(
       });
     });
 
-    const gridPositions = layoutOverviewOrgGrid(gridCells, centerY);
+    const layoutInputs = gridCells.map((c) => ({
+      globalIndex: c.globalIndex,
+      width: c.width,
+      height: c.height,
+    }));
+    const gridPositions = layoutOverviewSatellitesAroundOrg(layoutInputs);
+
+    const orgLinkItems: Array<{ targetId: string; cx: number; cy: number }> = [];
+    for (const cell of gridCells) {
+      const pos = gridPositions.get(cell.globalIndex);
+      if (!pos) continue;
+      const cx = pos.x + cell.width / 2;
+      const cy = pos.y + cell.height / 2;
+      if (cell.teamData && cell.teamInner) {
+        orgLinkItems.push({ targetId: `team-${cell.teamData.teamId}`, cx, cy });
+      } else if (cell.ungroupedProject) {
+        orgLinkItems.push({ targetId: `project-${cell.ungroupedProject.projectId}`, cx, cy });
+      }
+    }
+    const orgEdgeRouting = computeOrgOverviewEdgeRouting(orgLinkItems);
 
     gridCells
       .sort((a, b) => a.globalIndex - b.globalIndex)
       .forEach((cell) => {
         const pos = gridPositions.get(cell.globalIndex);
         if (!pos) return;
-        const angle = cardinalAngles[cell.globalIndex % 4];
-        const { sourceHandle, targetHandle } = getHandlePair(angle);
+        const cx = pos.x + cell.width / 2;
+        const cy = pos.y + cell.height / 2;
+        const { targetEdge } = getOrgToSatelliteHandles(cx, cy);
 
         if (cell.teamData && cell.teamInner) {
           const teamData = cell.teamData;
           const teamNodeId = `team-${teamData.teamId}`;
-          const { cols, rows, gap, projectGridTopInset: pti, projectHeight: ph, projectWidth: pw } = cell.teamInner;
-          const overviewOrgEdgeOnTargetSide = overviewOrgEdgeTargetSideForSlot(cell.slot);
+          const {
+            cols,
+            rows,
+            gap,
+            projectGridTopInset: pti,
+            projectHeight: ph,
+            projectWidth: pw,
+            totalProjectCount,
+            collapsedSummary,
+          } = cell.teamInner;
           const teamRollup = teamStatusRollups?.[teamData.teamId];
 
           nodes.push({
             id: teamNodeId,
             type: 'teamGroupNode',
             position: { x: pos.x, y: pos.y },
+            width: cell.width,
+            height: cell.height,
             data: {
               teamName: teamData.teamName,
               teamId: teamData.teamId,
@@ -606,7 +583,16 @@ export function useOrganizationOverviewGraphLayout(
               role: teamData.userRoleLabel?.toLowerCase() ?? undefined,
               width: cell.width,
               height: cell.height,
-              ...(overviewOrgEdgeOnTargetSide ? { overviewOrgEdgeOnTargetSide } : {}),
+              overviewOrgEdgeTargetHandle: targetEdge,
+              ...(typeof teamData.memberCount === 'number'
+                ? { overviewMemberCount: teamData.memberCount }
+                : {}),
+              ...(collapsedSummary
+                ? {
+                    overviewProjectsTotal: totalProjectCount,
+                    overviewCollapsedSummary: true,
+                  }
+                : {}),
               ...(teamRollup
                 ? {
                     overviewStatusBadgeLabel: teamRollup.badgeLabel,
@@ -617,20 +603,25 @@ export function useOrganizationOverviewGraphLayout(
             },
             draggable: false,
             selectable: false,
-            style: { zIndex: 0 },
+            style: { zIndex: 1 },
           });
 
-          edges.push({
-            id: `edge-org-${teamNodeId}`,
-            source: ORG_CENTER_ID,
-            target: teamNodeId,
-            sourceHandle,
-            targetHandle,
-            type: 'straight',
-            style: { stroke: grayStroke, strokeWidth: 1.2, strokeDasharray: '6 6' },
-          });
+          const route = orgEdgeRouting.get(teamNodeId);
+          if (route) {
+            edges.push({
+              id: `edge-org-${teamNodeId}`,
+              source: ORG_CENTER_ID,
+              target: teamNodeId,
+              sourceHandle: route.sourceHandle,
+              targetHandle: route.targetHandle,
+              type: 'default',
+              style: overviewEdgeStyle,
+              pathOptions: route.pathOptions,
+            } as Edge);
+          }
 
-          teamData.projects.forEach((proj, projIdx) => {
+          const visibleProjects = teamData.projects.slice(0, cell.teamInner.visibleProjectCount);
+          visibleProjects.forEach((proj, projIdx) => {
             const col = projIdx % cols;
             const row = Math.floor(projIdx / cols);
             const projectNodeId = `project-${proj.projectId}`;
@@ -640,19 +631,23 @@ export function useOrganizationOverviewGraphLayout(
             if (proj.isExtracting) {
               nodes.push({
                 id: projectNodeId,
-                type: 'projectCenterNode',
+                type: 'vulnProjectNode',
                 position: { x: px, y: py },
                 parentId: teamNodeId,
                 extent: 'parent' as const,
+                width: pw,
+                height: ph,
                 data: {
                   projectName: proj.projectName,
-                  isExtracting: true,
                   projectId: proj.projectId,
+                  framework: proj.framework ?? undefined,
+                  neutralStyle: true,
+                  isExtracting: true,
                   organizationId: organizationId ?? undefined,
                 },
                 draggable: false,
                 selectable: false,
-                style: { zIndex: 1 },
+                style: { zIndex: 2 },
               });
             } else {
               nodes.push({
@@ -661,6 +656,8 @@ export function useOrganizationOverviewGraphLayout(
                 position: { x: px, y: py },
                 parentId: teamNodeId,
                 extent: 'parent' as const,
+                width: pw,
+                height: ph,
                 data: {
                   projectName: proj.projectName,
                   projectId: proj.projectId,
@@ -672,35 +669,41 @@ export function useOrganizationOverviewGraphLayout(
                 },
                 draggable: false,
                 selectable: false,
-                style: { zIndex: 1 },
+                style: { zIndex: 2 },
               });
             }
           });
         } else if (cell.ungroupedProject) {
           const proj = cell.ungroupedProject;
           const projectNodeId = `project-${proj.projectId}`;
-          const overviewOrgEdgeOnTargetSide = overviewOrgEdgeTargetSideForSlot(cell.slot);
 
           if (proj.isExtracting) {
             nodes.push({
               id: projectNodeId,
-              type: 'projectCenterNode',
+              type: 'vulnProjectNode',
               position: { x: pos.x, y: pos.y },
+              width: OVERVIEW_PROJECT_NODE_WIDTH,
+              height: OVERVIEW_PROJECT_NODE_HEIGHT,
               data: {
                 projectName: proj.projectName,
-                isExtracting: true,
                 projectId: proj.projectId,
+                framework: proj.framework ?? undefined,
+                neutralStyle: true,
+                isExtracting: true,
                 organizationId: organizationId ?? undefined,
-                ...(overviewOrgEdgeOnTargetSide ? { overviewOrgEdgeOnTargetSide } : {}),
+                overviewOrgEdgeTargetHandle: targetEdge,
               },
               draggable: false,
               selectable: false,
+              style: { zIndex: 1 },
             });
           } else {
             nodes.push({
               id: projectNodeId,
               type: 'vulnProjectNode',
               position: { x: pos.x, y: pos.y },
+              width: OVERVIEW_PROJECT_NODE_WIDTH,
+              height: OVERVIEW_PROJECT_NODE_HEIGHT,
               data: {
                 projectName: proj.projectName,
                 projectId: proj.projectId,
@@ -709,22 +712,27 @@ export function useOrganizationOverviewGraphLayout(
                 statusBadge: proj.statusName ?? undefined,
                 statusBadgeColor: proj.statusColor ?? undefined,
                 organizationId: organizationId ?? undefined,
-                ...(overviewOrgEdgeOnTargetSide ? { overviewOrgEdgeOnTargetSide } : {}),
+                overviewOrgEdgeTargetHandle: targetEdge,
               },
               draggable: false,
               selectable: false,
+              style: { zIndex: 1 },
             });
           }
 
-          edges.push({
-            id: `edge-org-${projectNodeId}`,
-            source: ORG_CENTER_ID,
-            target: projectNodeId,
-            sourceHandle,
-            targetHandle,
-            type: 'straight',
-            style: { stroke: grayStroke, strokeWidth: 1.2, strokeDasharray: '6 6' },
-          });
+          const projRoute = orgEdgeRouting.get(projectNodeId);
+          if (projRoute) {
+            edges.push({
+              id: `edge-org-${projectNodeId}`,
+              source: ORG_CENTER_ID,
+              target: projectNodeId,
+              sourceHandle: projRoute.sourceHandle,
+              targetHandle: projRoute.targetHandle,
+              type: 'default',
+              style: overviewEdgeStyle,
+              pathOptions: projRoute.pathOptions,
+            } as Edge);
+          }
         }
       });
 

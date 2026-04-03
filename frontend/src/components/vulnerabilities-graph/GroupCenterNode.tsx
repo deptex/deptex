@@ -1,11 +1,9 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { VULN_CENTER_NODE_HEIGHT, VULN_CENTER_NODE_WIDTH } from './useVulnerabilitiesGraphLayout';
-import { Users, AlertTriangle } from 'lucide-react';
-import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
-import { overviewStatusBadgeInlineStyle } from '../../lib/overviewStatusRollup';
-import { RoleBadge } from '../RoleBadge';
+import { Users } from 'lucide-react';
 import { GraphScopePill } from './GraphScopePill';
+import { OrgOverviewSourceHandles } from './overviewOrgFlowHandles';
+import { ORG_OVERVIEW_CENTER_WIDTH, ORG_OVERVIEW_CENTER_HEIGHT } from './overviewOrgLayout';
 
 export interface GroupCenterNodeData {
   title: string;
@@ -24,11 +22,11 @@ export interface GroupCenterNodeData {
   organizationRole?: string | null;
   /** @deprecated Replaced by organizationRiskScore inline text */
   organizationRiskGrade?: string | null;
-  /** Org center: average project health 0–100 shown as "Risk score: N/100" */
+  /** @deprecated Org center no longer shows risk row; kept for layout/API compat. */
   organizationRiskScore?: number | null;
-  /** Org center: number of alerts to show next to risk score row */
+  /** @deprecated Org center no longer shows alert row; kept for layout/API compat. */
   organizationAlertCount?: number | null;
-  /** Org overview: worst project status across org + tooltip breakdown. */
+  /** @deprecated Org center footer removed; kept for layout/API compat. */
   overviewStatusBadgeLabel?: string;
   overviewStatusBadgeColor?: string | null;
   overviewStatusTooltip?: string;
@@ -47,21 +45,7 @@ function GroupCenterNodeComponent({ data }: NodeProps) {
     avatarUrl,
     isHealthy = false,
     kind,
-    roleBadge,
-    roleBadgeColor,
-    organizationRole,
-    organizationRiskScore,
-    organizationAlertCount,
-    overviewStatusBadgeLabel,
-    overviewStatusBadgeColor,
-    overviewStatusTooltip,
   } = (data as unknown as GroupCenterNodeData) ?? {};
-
-  const hasOrgStatusRollup =
-    overviewStatusBadgeLabel != null &&
-    overviewStatusBadgeLabel !== '' &&
-    overviewStatusTooltip != null &&
-    overviewStatusTooltip !== '';
 
   const useNeutralOrgStyle = kind === 'org';
   const borderClass = useNeutralOrgStyle ? 'border-border' : isHealthy ? 'border-primary/60' : 'border-slate-500/40';
@@ -71,18 +55,17 @@ function GroupCenterNodeComponent({ data }: NodeProps) {
   const iconTextClass = useNeutralOrgStyle ? 'text-muted-foreground' : isHealthy ? 'text-primary' : 'text-slate-600 dark:text-slate-400';
   const showAvatar = kind === 'org' && avatarUrl;
 
-  // Org overview: two-section card — outer border matches divider subtlety (single border-border)
+  // Org overview: identity card (avatar + title); status lives on team/project nodes
   if (useNeutralOrgStyle) {
-    const roleLabel = roleBadge?.trim() || 'Member';
-    const roleForBadge = (organizationRole || roleLabel).toLowerCase();
-
-    const orgConnectY = VULN_CENTER_NODE_HEIGHT / 2;
-    const orgConnectX = VULN_CENTER_NODE_WIDTH / 2;
+    const orgConnectY = ORG_OVERVIEW_CENTER_HEIGHT / 2;
+    const orgConnectX = ORG_OVERVIEW_CENTER_WIDTH / 2;
     const orgSideHandleStyle = { top: orgConnectY, transform: 'translateY(-50%)' } as const;
     const orgTBHandleStyle = { left: orgConnectX, transform: 'translateX(-50%)' } as const;
 
     return (
-      <div className="relative">
+      <div className="relative h-full w-full min-h-0">
+        <OrgOverviewSourceHandles />
+        {/* Legacy single-point handles (org vuln graph with dep/vuln subgraphs). */}
         <Handle
           id="top"
           type="source"
@@ -113,73 +96,30 @@ function GroupCenterNodeComponent({ data }: NodeProps) {
         />
 
         <div
-          className={`relative rounded-xl border ${borderClass} shadow-lg ${shadowClass} overflow-hidden min-w-[280px] max-w-[320px] bg-background-card-header`}
+          className={`relative flex h-full min-h-0 w-full max-w-[min(100vw-2rem,360px)] flex-col overflow-hidden rounded-xl border ${borderClass} bg-background-card-header shadow-lg ${shadowClass}`}
         >
-          {/* Top section: avatar + name, scope pill (top-right), then RoleBadge */}
-          <div className="px-4 pt-4 pb-3">
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex items-center gap-3 min-w-0 flex-1">
-                <div
-                  className={`flex items-center justify-center w-10 h-10 flex-shrink-0 rounded-lg overflow-hidden ${
-                    showAvatar ? '' : `${iconBgClass} ${iconTextClass}`
-                  }`}
-                >
-                  {showAvatar ? (
-                    <img src={avatarUrl ?? undefined} alt={title} className="h-full w-full object-contain rounded-lg" />
-                  ) : (
-                    <Users className="w-5 h-5" />
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-base font-semibold text-foreground truncate leading-tight">{title}</p>
-                </div>
-              </div>
-              <GraphScopePill type="organization" className="shrink-0 mt-0.5" />
-            </div>
-            <div className="mt-4">
-              <RoleBadge
-                role={roleForBadge}
-                roleDisplayName={roleLabel}
-                roleColor={roleBadgeColor ?? null}
-              />
-            </div>
+          {/* Organization scope pill — pinned to corner (same as team/project), not inset by the flex row */}
+          <div className="pointer-events-auto absolute top-1.5 right-1.5 z-[2]">
+            <GraphScopePill type="organization" />
           </div>
 
-          {/* Separator — same weight as outer border for visual consistency */}
-          <div className="border-t border-border w-full" />
-
-          {/* Bottom section: aggregated project status + optional alert count */}
-          <div className="px-4 py-3 flex items-center justify-between gap-2">
-            {hasOrgStatusRollup ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span
-                    className="inline-flex max-w-[min(100%,12rem)] cursor-default items-center truncate rounded-md border px-2 py-0.5 text-[10px] font-medium"
-                    style={overviewStatusBadgeInlineStyle(overviewStatusBadgeLabel!, overviewStatusBadgeColor ?? null)}
-                  >
-                    {overviewStatusBadgeLabel}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" sideOffset={6} className="max-w-xs">
-                  {overviewStatusTooltip}
-                </TooltipContent>
-              </Tooltip>
-            ) : (
-              <span className="text-xs text-muted-foreground">Status</span>
-            )}
-            {typeof organizationAlertCount === 'number' && organizationAlertCount > 0 && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="flex items-center gap-1 text-amber-500">
-                    <AlertTriangle className="h-4 w-4" />
-                    <span className="text-xs font-medium tabular-nums">{organizationAlertCount}</span>
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" sideOffset={6}>
-                  {organizationAlertCount} action item{organizationAlertCount !== 1 ? 's' : ''} need attention
-                </TooltipContent>
-              </Tooltip>
-            )}
+          <div className="flex min-h-0 flex-1 flex-col justify-center px-5 py-5">
+            <div className="flex min-h-0 items-center gap-4 min-w-0 pr-10">
+              <div
+                className={`flex items-center justify-center w-14 h-14 flex-shrink-0 rounded-xl overflow-hidden ${
+                  showAvatar ? '' : `${iconBgClass} ${iconTextClass}`
+                }`}
+              >
+                {showAvatar ? (
+                  <img src={avatarUrl ?? undefined} alt={title} className="h-full w-full object-contain rounded-xl" />
+                ) : (
+                  <Users className="w-7 h-7" />
+                )}
+              </div>
+              <div className="min-w-0 flex-1 flex items-center">
+                <p className="text-xl font-semibold text-foreground truncate leading-tight tracking-tight">{title}</p>
+              </div>
+            </div>
           </div>
         </div>
       </div>

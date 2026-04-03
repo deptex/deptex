@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs grep:*)",
+      "Bash(grep -n \"OverviewGraph\\\\|overview.*graph\" /c/Coding/Deptex/frontend/src/app/pages/*.tsx)",
+      "Bash(npx tsc:*)"
+    ]
+  }
+}

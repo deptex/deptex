@@ -17,9 +17,11 @@ import {
   api,
   DependencyVersionsResponse,
   DependencyVersionItem,
+  DependencyVersionVulnerability,
   WatchtowerPRItem,
 } from '../lib/api';
 import { useToast } from '../hooks/use-toast';
+import { cn } from '../lib/utils';
 
 interface VersionSidebarProps {
   packageName: string;
@@ -43,6 +45,40 @@ const GHSA_BASE = 'https://github.com/advisories/';
 /** Link to GitHub Advisory for GHSA ids, else OSV. */
 function getVulnUrl(id: string): string {
   return id.startsWith('GHSA-') ? `${GHSA_BASE}${id}` : `${OSV_BASE}${id}`;
+}
+
+/** Project-scoped depscore (current locked version only; API merges from project_dependency_vulnerabilities). */
+function VulnDepscoreBadge({ v }: { v: DependencyVersionVulnerability }) {
+  const raw = v.contextual_depscore ?? v.depscore;
+  if (raw == null || !Number.isFinite(Number(raw))) return null;
+  const n = Number(raw);
+  const tierClass =
+    n >= 75
+      ? 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/25'
+      : n >= 40
+        ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/25'
+        : 'bg-foreground-secondary/10 text-foreground-secondary border-border';
+  const title =
+    v.contextual_depscore != null
+      ? `Contextual depscore (EPD-weighted) for this project: ${n.toFixed(1)} / 100.`
+      : `Depscore for this project: ${n.toFixed(1)} / 100.`;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={cn(
+            'shrink-0 px-1.5 py-0.5 rounded border text-[10px] font-semibold tabular-nums cursor-default',
+            tierClass
+          )}
+        >
+          {n.toFixed(1)}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs">
+        {title} Only shown for your resolved version; bump rows list CVEs without project scores.
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 /** Compare semver-style versions: -1 if a < b, 0 if equal, 1 if a > b. Ensures 5.10.0 > 5.9.0. */
@@ -323,10 +359,13 @@ export function VersionSidebar({
                                         <span className="font-mono text-foreground font-medium truncate max-w-[200px]">
                                           {alias}
                                         </span>
-                                        <span
-                                          className={`shrink-0 px-1.5 py-0.5 rounded border text-[10px] font-medium capitalize ${severityClass}`}
-                                        >
-                                          {v.severity}
+                                        <span className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                                          <VulnDepscoreBadge v={v} />
+                                          <span
+                                            className={`px-1.5 py-0.5 rounded border text-[10px] font-medium capitalize ${severityClass}`}
+                                          >
+                                            {v.severity}
+                                          </span>
                                         </span>
                                       </div>
                                       {v.summary && (
@@ -380,10 +419,13 @@ export function VersionSidebar({
                                         <span className="font-mono text-foreground font-medium truncate max-w-[200px]">
                                           {alias}
                                         </span>
-                                        <span
-                                          className={`shrink-0 px-1.5 py-0.5 rounded border text-[10px] font-medium capitalize ${severityClass}`}
-                                        >
-                                          {v.severity}
+                                        <span className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                                          <VulnDepscoreBadge v={v} />
+                                          <span
+                                            className={`px-1.5 py-0.5 rounded border text-[10px] font-medium capitalize ${severityClass}`}
+                                          >
+                                            {v.severity}
+                                          </span>
                                         </span>
                                       </div>
                                       {v.summary && (

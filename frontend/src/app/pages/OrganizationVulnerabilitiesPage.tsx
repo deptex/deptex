@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useOutletContext, useParams, useNavigate, Link } from 'react-router-dom';
+import { Fragment, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useOutletContext, useParams, useNavigate, Link, useSearchParams } from 'react-router-dom';
 import {
   ReactFlow,
   Background,
@@ -10,12 +10,8 @@ import {
   type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, CircleCheck, Bell, Grid3x3, List, MoreVertical, Trash2, Save, Mail, Webhook, ChevronDown, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck } from 'lucide-react';
+import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, CircleCheck, Bell, Grid3x3, List, MoreVertical, Trash2, Save, Mail, Webhook, ChevronDown, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp } from 'lucide-react';
 import { Button } from '../../components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-} from '../../components/ui/dialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,17 +21,24 @@ import {
 } from '../../components/ui/dropdown-menu';
 import { Checkbox } from '../../components/ui/checkbox';
 import { Badge } from '../../components/ui/badge';
-import { api, Organization, Team, Project, TeamWithRole, type ProjectStats, type ProjectVulnerability, type OrganizationStatus, type TeamStats, type TeamMember, type ProjectDependency, type OrganizationMember, type TeamRole, type TeamPermissions, type CiCdConnection, type ProjectSecuritySummary, type ProjectWithRole } from '../../lib/api';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip';
+import { api, Organization, Team, Project, TeamWithRole, type ProjectStats, type ProjectVulnerability, type OrganizationStatus, type TeamStats, type TeamMember, type ProjectDependency, type OrganizationMember, type TeamRole, type TeamPermissions, type CiCdConnection, type ProjectSecuritySummary, type ProjectWithRole, type VulnerabilityDetail } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { computeOverviewStatusRollup, type OverviewStatusRollup } from '../../lib/overviewStatusRollup';
+import { isExtractionOngoing } from '../../lib/extractionStatus';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
 import {
   useOrganizationOverviewGraphLayout,
   ORG_CENTER_ID,
   type OverviewTeamWithProjects,
+  type OverviewProjectItem,
 } from '../../components/vulnerabilities-graph/useOrganizationVulnerabilitiesGraphLayout';
-import { VULN_CENTER_NODE_WIDTH, VULN_CENTER_NODE_HEIGHT } from '../../components/vulnerabilities-graph/useVulnerabilitiesGraphLayout';
+import {
+  ORG_OVERVIEW_EDGE_STROKE,
+  ORG_OVERVIEW_CENTER_WIDTH,
+  ORG_OVERVIEW_CENTER_HEIGHT,
+} from '../../components/vulnerabilities-graph/overviewOrgLayout';
 import { GroupCenterNode } from '../../components/vulnerabilities-graph/GroupCenterNode';
 import { SkeletonGroupCenterNode } from '../../components/vulnerabilities-graph/SkeletonGroupCenterNode';
 import { VulnProjectNode, OVERVIEW_PROJECT_NODE_WIDTH, OVERVIEW_PROJECT_NODE_HEIGHT } from '../../components/vulnerabilities-graph/VulnProjectNode';
@@ -53,6 +56,12 @@ import type { NodeTypes } from '@xyflow/react';
 import { ProjectDependenciesContent } from './ProjectDependenciesPage';
 import { ProjectComplianceContent } from './ProjectCompliancePage';
 import { ProjectSettingsContent } from './ProjectSettingsPage';
+import {
+  VulnOrgSidebarExpandedSkeleton,
+  VulnerabilityOrgSidebarExpandedContent,
+} from '../../components/security/VulnerabilityOrgSidebarExpandedContent';
+import VulnerabilityExpandableTable from '../../components/security/VulnerabilityExpandableTable';
+import OrganizationVulnerabilitiesTableSkeleton from '../../components/security/OrganizationVulnerabilitiesTableSkeleton';
 
 interface OrganizationContextType {
   organization: Organization | null;
@@ -71,8 +80,8 @@ const skeletonNodeTypes: NodeTypes = {
 };
 
 const ORG_SKELETON_CENTER_POS = {
-  x: -VULN_CENTER_NODE_WIDTH / 2,
-  y: -VULN_CENTER_NODE_HEIGHT / 2,
+  x: -ORG_OVERVIEW_CENTER_WIDTH / 2,
+  y: -ORG_OVERVIEW_CENTER_HEIGHT / 2,
 };
 
 const orgSkeletonNodes = [
@@ -81,51 +90,13 @@ const orgSkeletonNodes = [
     type: 'skeletonGroupCenterNode',
     position: ORG_SKELETON_CENTER_POS,
     data: {},
+    style: { width: ORG_OVERVIEW_CENTER_WIDTH, height: ORG_OVERVIEW_CENTER_HEIGHT },
   },
 ];
 
 const UNGROUPED_TEAM_ID = 'org-ungrouped';
 const UNGROUPED_TEAM_NAME = 'No team';
-const ENABLE_OVERVIEW_LAYOUT_TEST_PROJECTS = true;
-/** Pad each real team to this many projects (layout test). */
-const OVERVIEW_LAYOUT_TEST_PROJECTS_PER_TEAM = 1;
 
-function withOverviewLayoutTestProjects(
-  teams: OverviewTeamWithProjects[]
-): OverviewTeamWithProjects[] {
-  type OverviewProject = OverviewTeamWithProjects['projects'][number];
-
-  return teams.map((team) => {
-    if (team.teamId === UNGROUPED_TEAM_ID) return team;
-
-    const targetCount = OVERVIEW_LAYOUT_TEST_PROJECTS_PER_TEAM;
-    const missing = Math.max(0, targetCount - team.projects.length);
-    if (missing === 0) return team;
-
-    const fakeProjects: OverviewProject[] = Array.from({ length: missing }, (_, i) => {
-      const n = i + 1;
-      return {
-        projectId: `layout-test-${team.teamId}-${n}`,
-        projectName: `Garbage ${n}`,
-        framework: null,
-        statusName: 'Compliant',
-        statusColor: '#22c55e',
-        statusId: null,
-        assetTierName: null,
-        assetTierColor: null,
-        isExtracting: false,
-        healthScore: 100,
-      };
-    });
-
-    const projects = [...team.projects, ...fakeProjects];
-    return {
-      ...team,
-      projects,
-      projectCount: projects.length,
-    };
-  });
-}
 
 /** Top-left of a node in flow coordinates, including parent group offset (nested project nodes). */
 function getNodeFlowTopLeft(getNode: (id: string) => Node | undefined, nodeId: string): { x: number; y: number } | null {
@@ -144,11 +115,25 @@ function getNodeFlowTopLeft(getNode: (id: string) => Node | undefined, nodeId: s
   return { x, y };
 }
 
+/** Match org Security graph overlay panels: `max-w-[1000px] sm:max-w-[1200px]`. */
+function graphSidePanelWidthPx(paneWidth: number): number {
+  if (typeof window === 'undefined') return Math.min(1000, paneWidth);
+  const cap = window.innerWidth >= 640 ? 1200 : 1000;
+  return Math.min(cap, paneWidth);
+}
+
+function getReactFlowPaneSize(paneEl: HTMLElement | null): { width: number; height: number } {
+  const r = paneEl?.getBoundingClientRect();
+  if (r && r.width > 0) return { width: r.width, height: r.height };
+  if (typeof window === 'undefined') return { width: 1200, height: 800 };
+  return { width: window.innerWidth, height: window.innerHeight - 48 };
+}
+
 export type ExpandFilter = 'all' | 'vulnerable' | 'not_allowed' | 'outdated';
 
 function projectStatusLabel(project: Project): { label: string; inProgress: boolean; isError: boolean } {
   const status = project.repo_status;
-  if (status === 'initializing' || status === 'extracting' || status === 'analyzing' || status === 'finalizing') {
+  if (isExtractionOngoing(status || '', project.extraction_step ?? null)) {
     const step = project.extraction_step;
     const labels: Record<string, string> = {
       queued: 'Creating', cloning: 'Creating', sbom: 'Creating', deps_synced: 'Creating',
@@ -173,8 +158,77 @@ const formatDate = (dateString: string): string => {
   return `${day} ${month} ${year}`;
 };
 
+/** Fixed column widths for project sidebar vuln table — keep skeleton + data table aligned (no layout shift). */
+function OrgProjectVulnerabilitiesTableColgroup() {
+  return (
+    <colgroup>
+      <col className="w-[6.75rem]" />
+      <col />
+      <col className="w-[7.5rem]" />
+    </colgroup>
+  );
+}
+
+const ORG_PROJECT_VULN_TABLE_CLASS = 'w-full text-sm table-fixed';
+
+/** Skeleton for the project sidebar vulnerabilities table (matches loaded table chrome + columns). */
+function OrgProjectVulnerabilitiesTableSkeleton({ rowCount = 6 }: { rowCount?: number }) {
+  return (
+    <div
+      className="border border-border rounded-lg overflow-hidden"
+      aria-busy="true"
+      aria-label="Loading vulnerabilities"
+    >
+      <table className={ORG_PROJECT_VULN_TABLE_CLASS}>
+        <OrgProjectVulnerabilitiesTableColgroup />
+        <thead className="bg-background-card-header border-b border-border">
+          <tr>
+            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">
+              Depscore
+            </th>
+            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase min-w-0">
+              Dependency
+            </th>
+            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">
+              Advisory
+            </th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border">
+          {Array.from({ length: rowCount }, (_, i) => (
+            <tr key={i}>
+              <td className="px-4 py-2.5 align-middle">
+                <div
+                  className="h-4 rounded-md bg-muted/55 animate-pulse w-14"
+                />
+              </td>
+              <td className="px-4 py-2.5 align-middle min-w-0">
+                <div className="space-y-1.5 min-w-0 max-w-full">
+                  <div
+                    className={cn(
+                      'h-3.5 rounded-md bg-muted/50 animate-pulse max-w-full',
+                      i % 3 === 0 && 'w-[72%]',
+                      i % 3 === 1 && 'w-[88%]',
+                      i % 3 === 2 && 'w-[64%]',
+                    )}
+                  />
+                  <div className="h-3 max-w-[6rem] rounded-md bg-muted/40 animate-pulse" />
+                </div>
+              </td>
+              <td className="px-4 py-2.5 align-middle">
+                <div className="h-5 w-[4.75rem] rounded-md bg-muted/50 animate-pulse" />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function OrganizationVulnerabilitiesPage() {
   const { id: orgId } = useParams<{ id: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const { user } = useAuth();
   const { toast } = useToast();
@@ -186,9 +240,6 @@ export default function OrganizationVulnerabilitiesPage() {
   const [orgSidebarVisible, setOrgSidebarVisible] = useState(false);
   const [teamSidebarOpen, setTeamSidebarOpen] = useState(false);
   const [teamSidebarVisible, setTeamSidebarVisible] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const searchInputRef = useRef<HTMLInputElement>(null);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [selectedTeamName, setSelectedTeamName] = useState<string | null>(null);
   const [projectSidebarOpen, setProjectSidebarOpen] = useState(false);
@@ -196,9 +247,12 @@ export default function OrganizationVulnerabilitiesPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedProjectName, setSelectedProjectName] = useState<string | null>(null);
   const [selectedProjectFramework, setSelectedProjectFramework] = useState<string | null>(null);
+  const [selectedProjectIsExtracting, setSelectedProjectIsExtracting] = useState(false);
   const [projectStats, setProjectStats] = useState<ProjectStats | null>(null);
   const [projectStatsLoading, setProjectStatsLoading] = useState(false);
   const [projectVulnerabilities, setProjectVulnerabilities] = useState<ProjectVulnerability[] | null>(null);
+  const [expandedProjectVulnRowId, setExpandedProjectVulnRowId] = useState<string | null>(null);
+  const [projectVulnDetailByRowId, setProjectVulnDetailByRowId] = useState<Record<string, { loading: boolean; error: string | null; data: VulnerabilityDetail | null }>>({});
   const [projectSidebarTab, setProjectSidebarTab] = useState<'vulnerabilities' | 'dependencies' | 'compliance' | 'settings'>('vulnerabilities');
   const [projectSidebarProject, setProjectSidebarProject] = useState<ProjectWithRole | null>(null);
   const [projectSidebarOrganization, setProjectSidebarOrganization] = useState<Organization | null>(null);
@@ -207,6 +261,7 @@ export default function OrganizationVulnerabilitiesPage() {
   const [selectedStatusIds, setSelectedStatusIds] = useState<Set<string>>(new Set());
   const [rawTeamsWithProjects, setRawTeamsWithProjects] = useState<OverviewTeamWithProjects[]>([]);
   const [graphRefreshTrigger, setGraphRefreshTrigger] = useState(0);
+  const [silentRefreshTrigger, setSilentRefreshTrigger] = useState(0);
   const [expandingProjectId, setExpandingProjectId] = useState<string | null>(null);
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<Node[]>([]);
@@ -216,6 +271,10 @@ export default function OrganizationVulnerabilitiesPage() {
   const [teamSidebarMembers, setTeamSidebarMembers] = useState<TeamMember[]>([]);
   const [teamSidebarProjects, setTeamSidebarProjects] = useState<Project[]>([]);
   const [teamSidebarSecuritySummary, setTeamSidebarSecuritySummary] = useState<ProjectSecuritySummary[]>([]);
+  const [teamSidebarVulns, setTeamSidebarVulns] = useState<ProjectVulnerability[]>([]);
+  const [teamSidebarVulnsLoading, setTeamSidebarVulnsLoading] = useState(false);
+  const [teamSidebarVulnsTotal, setTeamSidebarVulnsTotal] = useState(0);
+  const [teamSidebarVulnsPage, setTeamSidebarVulnsPage] = useState(1);
   const [teamSidebarOrgMembers, setTeamSidebarOrgMembers] = useState<OrganizationMember[]>([]);
   const [teamSidebarRoles, setTeamSidebarRoles] = useState<TeamRole[]>([]);
   const [teamSidebarDataLoading, setTeamSidebarDataLoading] = useState(false);
@@ -240,6 +299,10 @@ export default function OrganizationVulnerabilitiesPage() {
   const [teamSidebarRemoveConfirmOpen, setTeamSidebarRemoveConfirmOpen] = useState(false);
   const [teamSidebarMemberToRemove, setTeamSidebarMemberToRemove] = useState<string | null>(null);
   const [teamSidebarRemovingMember, setTeamSidebarRemovingMember] = useState(false);
+  // Project settings subtab state (persisted to URL when embedded in sidebar)
+  const [projectSettingsSubTab, setProjectSettingsSubTab] = useState<string>('general');
+  // Ref to ensure URL→state restoration only happens once per mount
+  const restoredRef = useRef(false);
   // Team sidebar settings state
   const [teamSettingsSubTab, setTeamSettingsSubTab] = useState<'general' | 'notifications' | 'roles'>('general');
   const [teamSettingsName, setTeamSettingsName] = useState('');
@@ -281,11 +344,65 @@ export default function OrganizationVulnerabilitiesPage() {
     setViewport: (viewport: { x: number; y: number; zoom: number }, options?: { duration?: number }) => void;
     getNode: (id: string) => Node | undefined;
   } | null>(null);
+  const reactFlowPaneRef = useRef<HTMLDivElement | null>(null);
   const focusedNodeIdRef = useRef<string | null>(null);
 
+  /** Update URL search params in-place (replace, no new history entry). Pass null to delete a key. */
+  const setSidebarParams = useCallback((updates: Record<string, string | null>) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      for (const [k, v] of Object.entries(updates)) {
+        if (v === null) next.delete(k);
+        else next.set(k, v);
+      }
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
+  /** Restore sidebar state from URL params after initial data load (runs once per mount). */
   useEffect(() => {
-    if (searchOpen) setTimeout(() => searchInputRef.current?.focus(), 0);
-  }, [searchOpen]);
+    if (loading || restoredRef.current) return;
+    restoredRef.current = true;
+    const sidebarParam = searchParams.get('sidebar');
+    if (!sidebarParam) return;
+    if (sidebarParam === 'org') {
+      setOrgSidebarOpen(true);
+      requestAnimationFrame(() => setOrgSidebarVisible(true));
+    } else if (sidebarParam === 'team') {
+      const tid = searchParams.get('teamId');
+      const tabRaw = searchParams.get('tab');
+      const validTeamTabs = new Set(['projects', 'security', 'members', 'settings']);
+      const tab = (tabRaw && validTeamTabs.has(tabRaw) ? tabRaw : 'security') as 'projects' | 'security' | 'members' | 'settings';
+      const subtabRaw = searchParams.get('subtab');
+      const validTeamSubtabs = new Set(['general', 'notifications', 'roles']);
+      const subtab = (subtabRaw && validTeamSubtabs.has(subtabRaw) ? subtabRaw : 'general') as 'general' | 'notifications' | 'roles';
+      if (tid) {
+        setSelectedTeamId(tid);
+        setSelectedTeamName(teamsById[tid]?.name ?? null);
+        setTeamSidebarTab(tab);
+        setTeamSettingsSubTab(subtab);
+        setTeamSidebarOpen(true);
+        requestAnimationFrame(() => setTeamSidebarVisible(true));
+      }
+    } else if (sidebarParam === 'project') {
+      const pid = searchParams.get('projectId');
+      const tabRaw = searchParams.get('tab');
+      const validProjectTabs = new Set(['vulnerabilities', 'dependencies', 'compliance', 'settings']);
+      const tab = (tabRaw && validProjectTabs.has(tabRaw) ? tabRaw : 'vulnerabilities') as 'vulnerabilities' | 'dependencies' | 'compliance' | 'settings';
+      const subtab = searchParams.get('subtab') ?? 'general';
+      if (pid) {
+        const projectInfo = rawTeamsWithProjects.flatMap(t => t.projects).find(p => p.projectId === pid);
+        setSelectedProjectId(pid);
+        setSelectedProjectName(projectInfo?.projectName ?? null);
+        setSelectedProjectFramework(projectInfo?.framework ?? null);
+        setProjectSidebarTab(tab);
+        setProjectSettingsSubTab(subtab);
+        setProjectSidebarOpen(true);
+        requestAnimationFrame(() => setProjectSidebarVisible(true));
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, teamsById, rawTeamsWithProjects]);
 
   // Animate graph viewport when org sidebar opens/closes - center the clicked node
   useEffect(() => {
@@ -298,21 +415,17 @@ export default function OrganizationVulnerabilitiesPage() {
     const node = instance.getNode(nodeId);
     if (!node) return;
 
-    // Get the node's center position in flow coordinates
-    // Node position is top-left, estimate center (nodes vary in size, use ~150x80 as typical)
-    const nodeWidth = 268; // GroupCenterNode width
-    const nodeHeight = 100;
+    // Get the node's center position in flow coordinates (org hub uses overview center slot size)
+    const nodeWidth =
+      nodeId === ORG_CENTER_ID ? ORG_OVERVIEW_CENTER_WIDTH : 400;
+    const nodeHeight = nodeId === ORG_CENTER_ID ? ORG_OVERVIEW_CENTER_HEIGHT : 300;
     const nodeCenterX = node.position.x + nodeWidth / 2;
     const nodeCenterY = node.position.y + nodeHeight / 2;
 
     const currentViewport = instance.getViewport();
     const zoom = currentViewport.zoom;
-    const screenWidth = window.innerWidth;
-    const screenHeight = window.innerHeight - 48; // Account for header
-
-    // Calculate sidebar width
-    const sidebarMaxWidth = window.innerWidth >= 640 ? 1000 : 900;
-    const actualSidebarWidth = Math.min(sidebarMaxWidth, screenWidth);
+    const { width: screenWidth, height: screenHeight } = getReactFlowPaneSize(reactFlowPaneRef.current);
+    const actualSidebarWidth = graphSidePanelWidthPx(screenWidth);
 
     if (orgSidebarVisible) {
       // Sidebar opening: center node in the LEFT portion of the screen
@@ -368,11 +481,8 @@ export default function OrganizationVulnerabilitiesPage() {
 
     const currentViewport = instance.getViewport();
     const zoom = currentViewport.zoom;
-    const screenWidth = window.innerWidth;
-    const screenHeight = window.innerHeight - 48;
-
-    const sidebarMaxWidth = window.innerWidth >= 640 ? 1000 : 900;
-    const actualSidebarWidth = Math.min(sidebarMaxWidth, screenWidth);
+    const { width: screenWidth, height: screenHeight } = getReactFlowPaneSize(reactFlowPaneRef.current);
+    const actualSidebarWidth = graphSidePanelWidthPx(screenWidth);
 
     if (teamSidebarVisible) {
       const visibleWidth = screenWidth - actualSidebarWidth;
@@ -421,11 +531,8 @@ export default function OrganizationVulnerabilitiesPage() {
 
     const currentViewport = instance.getViewport();
     const zoom = currentViewport.zoom;
-    const screenWidth = window.innerWidth;
-    const screenHeight = window.innerHeight - 48;
-
-    const sidebarMaxWidth = window.innerWidth >= 640 ? 1000 : 900;
-    const actualSidebarWidth = Math.min(sidebarMaxWidth, screenWidth);
+    const { width: screenWidth, height: screenHeight } = getReactFlowPaneSize(reactFlowPaneRef.current);
+    const actualSidebarWidth = graphSidePanelWidthPx(screenWidth);
 
     if (projectSidebarVisible) {
       const visibleWidth = screenWidth - actualSidebarWidth;
@@ -456,13 +563,60 @@ export default function OrganizationVulnerabilitiesPage() {
   }, [projectSidebarVisible]);
 
   useEffect(() => {
-    const onTeamsUpdated = () => setGraphRefreshTrigger((t) => t + 1);
-    const onProjectsUpdated = () => setGraphRefreshTrigger((t) => t + 1);
+    // Silent background refresh (no loading flash) triggered after sidebar data updates
+    const onTeamsUpdated = () => setSilentRefreshTrigger((t) => t + 1);
+    const onProjectsUpdated = () => setSilentRefreshTrigger((t) => t + 1);
+
+    // Optimistic additions — immediately add new entities to graph without any fetch
+    const onTeamCreated = (e: Event) => {
+      const { id, name, role_display_name, role_color } = (e as CustomEvent).detail as { id: string; name: string; role_display_name: string | null; role_color: string | null };
+      setRawTeamsWithProjects((prev) => [
+        ...prev,
+        { teamId: id, teamName: name, userRoleLabel: role_display_name ?? undefined, userRoleColor: role_color ?? undefined, projects: [], projectCount: 0, memberCount: 1 },
+      ]);
+    };
+    const onProjectCreated = (e: Event) => {
+      const { id, name, owner_team_id, team_ids } = (e as CustomEvent).detail as { id: string; name: string; owner_team_id: string | null; team_ids: string[] };
+      const targetTeamId = owner_team_id ?? (team_ids?.[0] ?? null) ?? UNGROUPED_TEAM_ID;
+      const newProj: OverviewTeamWithProjects['projects'][number] = {
+        projectId: id,
+        projectName: name,
+        framework: null,
+        statusName: null,
+        statusColor: null,
+        statusId: null,
+        assetTierName: null,
+        assetTierColor: null,
+        isExtracting: false,
+        healthScore: null,
+      };
+      setRawTeamsWithProjects((prev) => {
+        const targetExists = prev.some((t) => t.teamId === targetTeamId);
+        if (targetExists) {
+          return prev.map((t) =>
+            t.teamId === targetTeamId
+              ? { ...t, projects: [...t.projects, newProj], projectCount: t.projectCount + 1 }
+              : t
+          );
+        }
+        // If team not yet in graph, add to ungrouped
+        return prev.map((t) =>
+          t.teamId === UNGROUPED_TEAM_ID
+            ? { ...t, projects: [...t.projects, newProj], projectCount: t.projectCount + 1 }
+            : t
+        );
+      });
+    };
+
     window.addEventListener('organization:teamsUpdated', onTeamsUpdated);
     window.addEventListener('organization:projectsUpdated', onProjectsUpdated);
+    window.addEventListener('organization:teamCreated', onTeamCreated);
+    window.addEventListener('organization:projectCreated', onProjectCreated);
     return () => {
       window.removeEventListener('organization:teamsUpdated', onTeamsUpdated);
       window.removeEventListener('organization:projectsUpdated', onProjectsUpdated);
+      window.removeEventListener('organization:teamCreated', onTeamCreated);
+      window.removeEventListener('organization:projectCreated', onProjectCreated);
     };
   }, []);
 
@@ -515,7 +669,7 @@ export default function OrganizationVulnerabilitiesPage() {
             displayTeamId && teamIds.has(displayTeamId) ? displayTeamId : UNGROUPED_TEAM_ID;
           if (byTeam.has(bucket)) {
             const repoStatus = (p as Project).repo_status ?? null;
-            const isExtracting = ['initializing', 'extracting', 'analyzing', 'finalizing'].includes(repoStatus || '');
+            const isExtracting = isExtractionOngoing(repoStatus || '', (p as Project).extraction_step ?? null);
             byTeam.get(bucket)!.push({
               projectId: p.id,
               projectName: p.name,
@@ -551,27 +705,14 @@ export default function OrganizationVulnerabilitiesPage() {
           setRawTeamsWithProjects(result);
         }
 
-        if (realTeamIds.length === 0) {
-          applyResult(new Map());
-        } else {
-          const teamRolePromises = realTeamIds.map((tid) =>
-            api.getTeam(organization.id, tid).then((team: TeamWithRole) => ({
-              teamId: tid,
-              roleLabel: team.role_display_name ?? team.role ?? null,
-              roleColor: team.role_color ?? null,
-            }))
-          );
-          Promise.all(teamRolePromises).then((roleList) => {
-            if (cancelled) return;
-            const roleByTeamId = new Map<string, { label: string | null; color: string | null }>();
-            roleList.forEach(({ teamId, roleLabel, roleColor }) =>
-              roleByTeamId.set(teamId, { label: roleLabel, color: roleColor })
-            );
-            applyResult(roleByTeamId);
-          }).catch(() => {
-            if (!cancelled) applyResult(new Map());
+        const roleByTeamId = new Map<string, { label: string | null; color: string | null }>();
+        (teams as TeamWithRole[]).forEach((t) => {
+          roleByTeamId.set(t.id, {
+            label: t.role_display_name ?? t.role ?? null,
+            color: t.role_color ?? null,
           });
-        }
+        });
+        applyResult(roleByTeamId);
       })
       .catch((err) => {
         if (!cancelled) setError(err?.message ?? 'Failed to load data');
@@ -585,33 +726,92 @@ export default function OrganizationVulnerabilitiesPage() {
     };
   }, [organization?.id, graphRefreshTrigger]);
 
+  // Silent background refresh — syncs graph data after sidebar operations without showing a loading state
+  useEffect(() => {
+    if (!organization?.id || silentRefreshTrigger === 0) return;
+    let cancelled = false;
+    const orgId = organization.id;
+    Promise.all([
+      api.getTeams(orgId),
+      api.getProjects(orgId),
+      api.getOrganizationStatuses(orgId).catch(() => []),
+    ])
+      .then(([teams, allProjects, statusesData]) => {
+        if (cancelled) return;
+        setStatuses((statusesData as OrganizationStatus[]) ?? []);
+        const byId: Record<string, Team> = {};
+        (teams as Team[]).forEach((t) => { byId[t.id] = t; });
+        setTeamsById(byId);
+        const teamIds = new Set(teams.map((t: Team) => t.id));
+        const ungroupedProjects = (allProjects as Project[]).filter((p) => {
+          const tid = p.owner_team_id ?? (p.team_ids && p.team_ids.length > 0 ? p.team_ids[0] : null);
+          return !tid || !teamIds.has(tid);
+        });
+        const teamList: Array<{ id: string; name: string }> = [
+          ...teams.map((t: Team) => ({ id: t.id, name: t.name })),
+          ...(ungroupedProjects.length > 0 ? [{ id: UNGROUPED_TEAM_ID, name: UNGROUPED_TEAM_NAME }] : []),
+        ];
+        const byTeam = new Map<string, OverviewTeamWithProjects['projects']>();
+        teamList.forEach((t) => byTeam.set(t.id, []));
+        (allProjects as Project[]).forEach((p) => {
+          const displayTeamId = p.owner_team_id ?? (p.team_ids && p.team_ids.length > 0 ? p.team_ids[0] : null);
+          const bucket = displayTeamId && teamIds.has(displayTeamId) ? displayTeamId : UNGROUPED_TEAM_ID;
+          if (byTeam.has(bucket)) {
+            const repoStatus = p.repo_status ?? null;
+            const isExtracting = isExtractionOngoing(repoStatus || '', p.extraction_step ?? null);
+            byTeam.get(bucket)!.push({
+              projectId: p.id, projectName: p.name, framework: p.framework ?? null,
+              statusName: p.status_name ?? null, statusColor: p.status_color ?? null, statusId: p.status_id ?? null,
+              assetTierName: p.asset_tier_name ?? null, assetTierColor: p.asset_tier_color ?? null,
+              isExtracting, healthScore: typeof p.health_score === 'number' ? p.health_score : null,
+            });
+          }
+        });
+        const roleByTeamId = new Map<string, { label: string | null; color: string | null }>();
+        (teams as TeamWithRole[]).forEach((t) => {
+          roleByTeamId.set(t.id, { label: t.role_display_name ?? t.role ?? null, color: t.role_color ?? null });
+        });
+        const result: OverviewTeamWithProjects[] = teamList.map((t) => {
+          const roleInfo = t.id === UNGROUPED_TEAM_ID ? null : roleByTeamId.get(t.id);
+          const teamProjects = byTeam.get(t.id) ?? [];
+          const teamMeta = t.id !== UNGROUPED_TEAM_ID ? (teams as Team[]).find((te) => te.id === t.id) : null;
+          return {
+            teamId: t.id, teamName: t.name,
+            userRoleLabel: roleInfo?.label ?? undefined, userRoleColor: roleInfo?.color ?? undefined,
+            projects: teamProjects, projectCount: teamProjects.length, memberCount: teamMeta?.member_count ?? undefined,
+          };
+        });
+        setRawTeamsWithProjects(result);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [organization?.id, silentRefreshTrigger]);
+
   const teamsWithProjects = useMemo(() => {
-    const base = selectedStatusIds.size === 0
-      ? rawTeamsWithProjects
-      : rawTeamsWithProjects.map((t) => ({
+    if (selectedStatusIds.size === 0) return rawTeamsWithProjects;
+    return rawTeamsWithProjects.map((t) => ({
       ...t,
       projects: t.projects.filter(
         (proj) => proj.statusId != null && selectedStatusIds.has(proj.statusId)
       ),
     }));
-
-    if (!ENABLE_OVERVIEW_LAYOUT_TEST_PROJECTS) return base;
-    return withOverviewLayoutTestProjects(base);
   }, [rawTeamsWithProjects, selectedStatusIds]);
 
+  const teamsWithProjectsForGraph = teamsWithProjects;
+
   const orgStatusRollup = useMemo(
-    () => computeOverviewStatusRollup(teamsWithProjects.flatMap((t) => t.projects), statuses),
-    [teamsWithProjects, statuses]
+    () => computeOverviewStatusRollup(teamsWithProjectsForGraph.flatMap((t) => t.projects), statuses),
+    [teamsWithProjectsForGraph, statuses]
   );
 
   const teamStatusRollups = useMemo(() => {
     const m: Record<string, OverviewStatusRollup> = {};
-    for (const t of teamsWithProjects) {
+    for (const t of teamsWithProjectsForGraph) {
       if (t.teamId === UNGROUPED_TEAM_ID) continue;
       m[t.teamId] = computeOverviewStatusRollup(t.projects, statuses);
     }
     return m;
-  }, [teamsWithProjects, statuses]);
+  }, [teamsWithProjectsForGraph, statuses]);
 
   const orgRoleLabel = organization?.role_display_name ?? organization?.role ?? null;
   const orgRoleColor = organization?.role_color ?? null;
@@ -629,7 +829,7 @@ export default function OrganizationVulnerabilitiesPage() {
 
   const { nodes: layoutNodes, edges: layoutEdges } = useOrganizationOverviewGraphLayout(
     organization?.name ?? 'Organization',
-    teamsWithProjects,
+    teamsWithProjectsForGraph,
     organization?.avatar_url || '/images/org_profile.png',
     orgRoleLabel,
     orgRoleColor,
@@ -641,64 +841,17 @@ export default function OrganizationVulnerabilitiesPage() {
 
   const [graphNodes, setGraphNodes, onNodesChange] = useNodesState<Node>([]);
   const [graphEdges, setGraphEdges, onEdgesChange] = useEdgesState<Edge>([]);
-  const stillShowingSkeleton = loading && teamsWithProjects.length === 0;
-
-  const onNodeClick = useCallback(
-    (_: React.MouseEvent, node: Node) => {
-      if (!orgId) return;
-      if (node.id === ORG_CENTER_ID) {
-        focusedNodeIdRef.current = node.id;
-        setOrgSidebarOpen(true);
-        requestAnimationFrame(() => setOrgSidebarVisible(true));
-        return;
-      }
-
-      // Handle new teamGroupNode type (Railway-style team containers)
-      if (node.type === 'teamGroupNode') {
-        const teamData = node.data as { teamId?: string; teamName?: string };
-        if (teamData.teamId) {
-          focusedNodeIdRef.current = node.id;
-          setSelectedTeamId(teamData.teamId);
-          setSelectedTeamName(teamData.teamName ?? null);
-          setTeamSidebarOpen(true);
-          requestAnimationFrame(() => setTeamSidebarVisible(true));
-        }
-        return;
-      }
-
-      const d = node.data as { projectId?: string; projectName?: string; isTeamNode?: boolean; framework?: string | null; organizationId?: string };
-      if (node.type === 'projectCenterNode' && d.projectId && d.organizationId) {
-        setSyncDetailProjectId(d.projectId);
-        return;
-      }
-      if (d.projectId && d.isTeamNode) {
-        setSelectedTeamId(d.projectId);
-        setSelectedTeamName((d.projectName as string) ?? null);
-        setTeamSidebarOpen(true);
-        requestAnimationFrame(() => setTeamSidebarVisible(true));
-        return;
-      }
-      if (d.projectId) {
-        focusedNodeIdRef.current = node.id;
-        setSelectedProjectId(d.projectId);
-        setSelectedProjectName((d.projectName as string) ?? null);
-        setSelectedProjectFramework(d.framework ?? null);
-        setProjectStats(null);
-        setProjectSidebarTab('vulnerabilities');
-        setProjectSidebarOpen(true);
-        requestAnimationFrame(() => setProjectSidebarVisible(true));
-      }
-    },
-    [orgId]
-  );
+  const stillShowingSkeleton = (!organization || loading) && teamsWithProjects.length === 0;
 
   const closeOrgSidebar = useCallback(() => {
     setOrgSidebarVisible(false);
+    setSidebarParams({ sidebar: null, teamId: null, tab: null, subtab: null, projectId: null });
     setTimeout(() => setOrgSidebarOpen(false), 150);
-  }, []);
+  }, [setSidebarParams]);
 
   const closeTeamSidebar = useCallback(() => {
     setTeamSidebarVisible(false);
+    setSidebarParams({ sidebar: null, teamId: null, tab: null, subtab: null, projectId: null });
     setTimeout(() => {
       setTeamSidebarOpen(false);
       setSelectedTeamId(null);
@@ -728,7 +881,7 @@ export default function OrganizationVulnerabilitiesPage() {
       setTeamSettingsShowRoleSettingsModal(false);
       setTeamSettingsRoleSettingsPanelVisible(false);
     }, 150);
-  }, []);
+  }, [setSidebarParams]);
 
   const closeTeamSidebarAddMember = useCallback(() => {
     setTeamSidebarAddMemberVisible(false);
@@ -867,6 +1020,7 @@ export default function OrganizationVulnerabilitiesPage() {
 
   const closeProjectSidebar = useCallback(() => {
     setProjectSidebarVisible(false);
+    setSidebarParams({ sidebar: null, teamId: null, tab: null, subtab: null, projectId: null });
     setTimeout(() => {
       setProjectSidebarOpen(false);
       setSelectedProjectId(null);
@@ -874,10 +1028,153 @@ export default function OrganizationVulnerabilitiesPage() {
       setSelectedProjectFramework(null);
       setProjectStats(null);
       setProjectVulnerabilities(null);
+      setExpandedProjectVulnRowId(null);
+      setProjectVulnDetailByRowId({});
       setProjectSidebarProject(null);
       setProjectSidebarOrganization(null);
+      setProjectSettingsSubTab('general');
     }, 150);
+  }, [setSidebarParams]);
+
+  const closeOrgSidebarImmediate = useCallback(() => {
+    setOrgSidebarVisible(false);
+    setOrgSidebarOpen(false);
   }, []);
+
+  const closeTeamSidebarImmediate = useCallback(() => {
+    setTeamSidebarVisible(false);
+    setTeamSidebarOpen(false);
+    setSelectedTeamId(null);
+    setSelectedTeamName(null);
+    setTeamSidebarAddMemberOpen(false);
+    setTeamSidebarAddMemberVisible(false);
+    setTeamSidebarTab('security');
+    setTeamSidebarProjectsSearch('');
+    setTeamSidebarProjectsViewMode('grid');
+    setTeamSidebarMembersSearch('');
+    setTeamSidebarPermissions(null);
+    setTeamSidebarTeamData(null);
+    setTeamSidebarRoleChangeOpen(false);
+    setTeamSidebarMemberToChangeRole(null);
+    setTeamSidebarRemoveConfirmOpen(false);
+    setTeamSidebarMemberToRemove(null);
+    setTeamSettingsSubTab('general');
+    setTeamSettingsName('');
+    setTeamSettingsDescription('');
+    setTeamSettingsShowDeleteConfirm(false);
+    setTeamSettingsDeleteConfirmText('');
+    setTeamSettingsConnections({ inherited: [], team: [] });
+    setTeamSettingsNotifActiveTab('notifications');
+    setTeamSettingsShowAddRoleSidepanel(false);
+    setTeamSettingsAddRolePanelVisible(false);
+    setTeamSettingsShowRoleSettingsModal(false);
+    setTeamSettingsRoleSettingsPanelVisible(false);
+  }, []);
+
+  const closeProjectSidebarImmediate = useCallback(() => {
+    setProjectSidebarVisible(false);
+    setProjectSidebarOpen(false);
+    setSelectedProjectId(null);
+    setSelectedProjectName(null);
+    setSelectedProjectFramework(null);
+    setSelectedProjectIsExtracting(false);
+    setProjectStats(null);
+    setProjectVulnerabilities(null);
+    setExpandedProjectVulnRowId(null);
+    setProjectVulnDetailByRowId({});
+    setProjectSidebarProject(null);
+    setProjectSidebarOrganization(null);
+    setProjectSettingsSubTab('general');
+  }, []);
+
+  /** Open the project sidebar for a project (e.g. clicked from team projects list). Closes all other sidebars. */
+  const openProjectInSidebar = useCallback((project: Project) => {
+    focusedNodeIdRef.current = null; // prevent viewport re-center when team sidebar closes
+    closeOrgSidebarImmediate();
+    closeTeamSidebarImmediate();
+    setSelectedProjectId(project.id);
+    setSelectedProjectName(project.name);
+    setSelectedProjectFramework(project.framework ?? null);
+    setProjectStats(null);
+    setProjectSidebarTab('vulnerabilities');
+    setProjectSettingsSubTab('general');
+    setSidebarParams({ sidebar: 'project', projectId: project.id, tab: 'vulnerabilities', subtab: null, teamId: null });
+    setProjectSidebarOpen(true);
+    requestAnimationFrame(() => setProjectSidebarVisible(true));
+  }, [closeOrgSidebarImmediate, closeTeamSidebarImmediate, setSidebarParams]);
+
+  const onNodeClick = useCallback(
+    (_: React.MouseEvent, node: Node) => {
+      if (!orgId) return;
+      if (node.id === ORG_CENTER_ID) {
+        closeTeamSidebarImmediate();
+        closeProjectSidebarImmediate();
+        focusedNodeIdRef.current = node.id;
+        setSidebarParams({ sidebar: 'org', teamId: null, tab: null, subtab: null, projectId: null });
+        setOrgSidebarOpen(true);
+        requestAnimationFrame(() => setOrgSidebarVisible(true));
+        return;
+      }
+
+      if (node.type === 'teamGroupNode') {
+        const teamData = node.data as { teamId?: string; teamName?: string };
+        if (teamData.teamId) {
+          closeOrgSidebarImmediate();
+          closeProjectSidebarImmediate();
+          focusedNodeIdRef.current = node.id;
+          setSelectedTeamId(teamData.teamId);
+          setSelectedTeamName(teamData.teamName ?? null);
+          setSidebarParams({ sidebar: 'team', teamId: teamData.teamId, tab: 'security', subtab: null, projectId: null });
+          setTeamSidebarOpen(true);
+          requestAnimationFrame(() => setTeamSidebarVisible(true));
+        }
+        return;
+      }
+
+      const d = node.data as {
+        projectId?: string;
+        projectName?: string;
+        isTeamNode?: boolean;
+        framework?: string | null;
+        organizationId?: string;
+        isExtracting?: boolean;
+      };
+      if (d.projectId && d.isTeamNode) {
+        closeOrgSidebarImmediate();
+        closeProjectSidebarImmediate();
+        focusedNodeIdRef.current = node.id;
+        setSelectedTeamId(d.projectId);
+        setSelectedTeamName((d.projectName as string) ?? null);
+        setSidebarParams({ sidebar: 'team', teamId: d.projectId, tab: 'security', subtab: null, projectId: null });
+        setTeamSidebarOpen(true);
+        requestAnimationFrame(() => setTeamSidebarVisible(true));
+        return;
+      }
+      if (d.projectId) {
+        closeOrgSidebarImmediate();
+        closeTeamSidebarImmediate();
+        focusedNodeIdRef.current = node.id;
+        setSelectedProjectId(d.projectId);
+        setSelectedProjectName((d.projectName as string) ?? null);
+        setSelectedProjectFramework(d.framework ?? null);
+        setSelectedProjectIsExtracting(d.isExtracting ?? false);
+        setProjectStats(null);
+        setProjectSidebarTab('vulnerabilities');
+        setProjectSettingsSubTab('general');
+        setSidebarParams({ sidebar: 'project', projectId: d.projectId, tab: 'vulnerabilities', subtab: null, teamId: null });
+        setProjectSidebarOpen(true);
+        requestAnimationFrame(() => setProjectSidebarVisible(true));
+      }
+    },
+    [
+      orgId,
+      closeOrgSidebarImmediate,
+      closeTeamSidebarImmediate,
+      closeProjectSidebarImmediate,
+      setSidebarParams,
+      toast,
+    ]
+  );
 
   const onExpandProject = useCallback(
     async (projectId: string, filter: ExpandFilter = 'all') => {
@@ -914,8 +1211,8 @@ export default function OrganizationVulnerabilitiesPage() {
         const currentNodes = graphNodesRef.current;
         const projectNode = currentNodes.find((n) => n.id === `project-${projectId}`);
         const pos = projectNode?.position ?? { x: 0, y: 0 };
-        const centerX = pos.x + 268 / 2;
-        const centerY = pos.y + 100 / 2;
+        const centerX = pos.x + OVERVIEW_PROJECT_NODE_WIDTH / 2;
+        const centerY = pos.y + OVERVIEW_PROJECT_NODE_HEIGHT / 2;
         const depNodeWidth = 220;
         const depNodeHeight = 72;
         const n = directDeps.length;
@@ -973,7 +1270,7 @@ export default function OrganizationVulnerabilitiesPage() {
         setExpandingProjectId(null);
       }
     },
-    [orgId, expandedProjectId]
+    [orgId, expandedProjectId, toast]
   );
 
   useEffect(() => {
@@ -1034,6 +1331,29 @@ export default function OrganizationVulnerabilitiesPage() {
       });
     return () => { cancelled = true; };
   }, [orgId, selectedTeamId, teamSidebarOpen]);
+
+  // Load team vulnerabilities for the security tab
+  const loadTeamVulns = useCallback(async (p: number) => {
+    if (!orgId || !selectedTeamId || selectedTeamId === UNGROUPED_TEAM_ID) return;
+    setTeamSidebarVulnsLoading(true);
+    try {
+      const res = await api.getTeamVulnerabilities(orgId, selectedTeamId, { page: p, per_page: 50 });
+      setTeamSidebarVulns(res.data);
+      setTeamSidebarVulnsTotal(res.total);
+      setTeamSidebarVulnsPage(res.page);
+    } catch {
+      setTeamSidebarVulns([]);
+      setTeamSidebarVulnsTotal(0);
+    } finally {
+      setTeamSidebarVulnsLoading(false);
+    }
+  }, [orgId, selectedTeamId]);
+
+  useEffect(() => {
+    if (teamSidebarTab === 'security' && teamSidebarOpen && selectedTeamId && selectedTeamId !== UNGROUPED_TEAM_ID) {
+      void loadTeamVulns(1);
+    }
+  }, [teamSidebarTab, teamSidebarOpen, selectedTeamId, loadTeamVulns]);
 
   // Initialize team settings form data when team data loads
   useEffect(() => {
@@ -1195,6 +1515,8 @@ export default function OrganizationVulnerabilitiesPage() {
     setProjectStatsLoading(true);
     setProjectStats(null);
     setProjectVulnerabilities(null);
+    setExpandedProjectVulnRowId(null);
+    setProjectVulnDetailByRowId({});
     setProjectSidebarProjectLoading(true);
     setProjectSidebarProject(null);
     setProjectSidebarOrganization(null);
@@ -1229,6 +1551,45 @@ export default function OrganizationVulnerabilitiesPage() {
     return () => { cancelled = true; };
   }, [orgId, selectedProjectId, projectSidebarOpen]);
 
+  /** One row per (dependency, CVE); keeps highest depscore. Fixes duplicate rows / shared osv_id expansion. */
+  const dedupedProjectVulnerabilities = useMemo(() => {
+    if (!projectVulnerabilities?.length) return [];
+    const rowScore = (v: ProjectVulnerability) => {
+      const c = v.contextual_depscore;
+      if (c != null && Number.isFinite(Number(c))) return Number(c);
+      const d = v.depscore;
+      if (d != null && Number.isFinite(Number(d))) return Number(d);
+      return -1;
+    };
+    const byKey = new Map<string, ProjectVulnerability>();
+    for (const v of projectVulnerabilities) {
+      const key = `${v.dependency_id}:${v.osv_id}`;
+      const prev = byKey.get(key);
+      if (!prev || rowScore(v) > rowScore(prev)) byKey.set(key, v);
+    }
+    return Array.from(byKey.values()).sort((a, b) => {
+      const diff = rowScore(b) - rowScore(a);
+      if (diff !== 0) return diff;
+      return a.osv_id.localeCompare(b.osv_id);
+    });
+  }, [projectVulnerabilities]);
+
+  const toggleProjectVulnerabilityRow = useCallback(async (rowId: string, osvId: string) => {
+    setExpandedProjectVulnRowId((prev) => (prev === rowId ? null : rowId));
+    if (!orgId || !selectedProjectId) return;
+    if (projectVulnDetailByRowId[rowId]?.loading || projectVulnDetailByRowId[rowId]?.data) return;
+    setProjectVulnDetailByRowId((prev) => ({ ...prev, [rowId]: { loading: true, error: null, data: null } }));
+    try {
+      const detail = await api.getVulnerabilityDetail(orgId, selectedProjectId, osvId);
+      setProjectVulnDetailByRowId((prev) => ({ ...prev, [rowId]: { loading: false, error: null, data: detail } }));
+    } catch (e: any) {
+      setProjectVulnDetailByRowId((prev) => ({
+        ...prev,
+        [rowId]: { loading: false, error: e?.message || 'Failed to load vulnerability details', data: null },
+      }));
+    }
+  }, [orgId, selectedProjectId, projectVulnDetailByRowId]);
+
   useEffect(() => {
     if (loading) return;
     const injectedLayoutNodes = layoutNodes.map((n) => {
@@ -1253,23 +1614,13 @@ export default function OrganizationVulnerabilitiesPage() {
     layoutNodes,
     layoutEdges,
     expandingProjectId,
+    expandedProjectId,
     expandedNodes,
     expandedEdges,
     onExpandProject,
     setGraphNodes,
     setGraphEdges,
   ]);
-
-  if (!organization) {
-    return (
-      <main className="flex flex-col min-h-[calc(100vh-3rem)] w-full">
-        <div className="animate-pulse space-y-6 p-4">
-          <div className="h-8 bg-muted rounded w-48" />
-          <div className="flex-1 min-h-[400px] bg-muted rounded" />
-        </div>
-      </main>
-    );
-  }
 
   return (
     <main className="relative flex flex-col min-h-[calc(100vh-3rem)] w-full bg-background">
@@ -1281,16 +1632,8 @@ export default function OrganizationVulnerabilitiesPage() {
         </div>
       )}
       <div className="flex-1 min-h-0 relative">
-        <div className="absolute top-3 right-3 z-10 flex items-center gap-2 rounded-lg border border-border bg-background-card-header p-1 shadow-sm">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 w-8 p-0 text-foreground-secondary hover:bg-white/5 hover:text-foreground"
-            aria-label="Search"
-            onClick={() => setSearchOpen(true)}
-          >
-            <Search className="h-3.5 w-3.5" />
-          </Button>
+        <div className="absolute top-3 right-3 z-10 flex flex-col items-end gap-2">
+          <div className="flex items-center gap-2 rounded-lg border border-border bg-background-card-header p-1 shadow-sm">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -1417,90 +1760,14 @@ export default function OrganizationVulnerabilitiesPage() {
               </div>
             </DropdownMenuContent>
           </DropdownMenu>
+          </div>
         </div>
-        <Dialog
-          open={searchOpen}
-          onOpenChange={(open) => {
-            setSearchOpen(open);
-            if (!open) setSearchQuery('');
-          }}
-        >
-          <DialogContent
-            hideClose
-            className="max-w-xl w-[90vw] p-0 gap-0 bg-background-card border-border overflow-hidden"
-          >
-            <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
-              <Search className="h-4 w-4 text-foreground-secondary shrink-0" />
-              <input
-                ref={searchInputRef}
-                type="text"
-                placeholder="Search or run a command..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="flex-1 bg-transparent text-sm text-foreground placeholder:text-foreground-secondary border-0 min-h-8 outline-none focus:outline-none focus:ring-0"
-                autoFocus
-              />
-              <kbd className="hidden sm:inline-flex items-center justify-center h-6 min-w-[1.75rem] px-1.5 rounded bg-background border border-border font-mono text-xs text-foreground-secondary">
-                ESC
-              </kbd>
-              <button
-                type="button"
-                onClick={() => setSearchOpen(false)}
-                className="flex items-center justify-center w-8 h-8 rounded-md text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors shrink-0"
-                aria-label="Close"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="max-h-[60vh] overflow-y-auto py-2">
-              {(() => {
-                const options = [
-                  { id: '1', label: 'Go to Projects', description: 'List organization projects', icon: FolderKanban },
-                  { id: '2', label: 'Go to Teams', description: 'View teams', icon: LayoutDashboard },
-                  { id: '3', label: 'Security findings', description: 'Vulnerabilities and code findings', icon: Shield },
-                  { id: '4', label: 'Policies', description: 'Policy-as-code and PR checks', icon: FileCode },
-                  { id: '5', label: 'Organization settings', description: 'Settings and integrations', icon: Settings },
-                  { id: '6', label: 'Recent activity', description: 'Latest syncs and events', icon: Activity },
-                ];
-                const q = searchQuery.trim().toLowerCase();
-                const filtered = q
-                  ? options.filter(
-                      (o) =>
-                        o.label.toLowerCase().includes(q) || o.description.toLowerCase().includes(q)
-                    )
-                  : options;
-                if (filtered.length === 0) {
-                  return (
-                    <p className="px-4 py-4 text-sm text-foreground-secondary">No results match.</p>
-                  );
-                }
-                return filtered.map((o) => {
-                  const Icon = o.icon;
-                  return (
-                    <button
-                      key={o.id}
-                      type="button"
-                      className="w-full flex items-center gap-3 px-4 py-2.5 text-left rounded-none hover:bg-background-subtle transition-colors text-foreground"
-                    >
-                      <span className="text-foreground-secondary">
-                        <Icon className="h-4 w-4" />
-                      </span>
-                      <div className="flex flex-col gap-0.5 min-w-0">
-                        <span className="text-sm font-medium">{o.label}</span>
-                        <span className="text-xs text-foreground-secondary">{o.description}</span>
-                      </div>
-                    </button>
-                  );
-                });
-              })()}
-            </div>
-          </DialogContent>
-        </Dialog>
         <div className="absolute inset-0 flex min-h-0">
           {/* Graph */}
-          <div className="flex-1 min-w-0 min-h-0 overflow-hidden bg-background">
-            <div className="absolute inset-0 overflow-hidden">
+          <div className="flex-1 min-w-0 min-h-0 overflow-hidden bg-background relative">
+            <div ref={reactFlowPaneRef} className="absolute inset-0 overflow-hidden">
               <ReactFlow
+                className="org-overview-hub-flow"
                 nodes={stillShowingSkeleton ? orgSkeletonNodes : graphNodes}
                 edges={stillShowingSkeleton ? [] : graphEdges}
                 onNodesChange={onNodesChange}
@@ -1509,13 +1776,19 @@ export default function OrganizationVulnerabilitiesPage() {
                 onInit={(instance) => { reactFlowInstanceRef.current = instance as any; }}
                 nodeTypes={stillShowingSkeleton ? skeletonNodeTypes : nodeTypes}
                 fitView
-                fitViewOptions={{ padding: 0.3, maxZoom: stillShowingSkeleton ? 1.2 : 1 }}
-                minZoom={0.2}
+                fitViewOptions={{
+                  padding: 0.38,
+                  maxZoom: stillShowingSkeleton ? 1.2 : 1.15,
+                }}
+                minZoom={0.12}
                 maxZoom={2}
                 proOptions={{ hideAttribution: true }}
                 nodesDraggable={false}
                 nodesConnectable={false}
-                defaultEdgeOptions={{ type: 'smoothstep' }}
+                defaultEdgeOptions={{
+                  type: 'default',
+                  style: { stroke: ORG_OVERVIEW_EDGE_STROKE, strokeWidth: 1 },
+                }}
               >
                 <Background
                   variant={BackgroundVariant.Dots}
@@ -1608,7 +1881,7 @@ export default function OrganizationVulnerabilitiesPage() {
                   <button
                     key={tab}
                     type="button"
-                    onClick={() => setTeamSidebarTab(tab)}
+                    onClick={() => { setTeamSidebarTab(tab); setSidebarParams({ tab, subtab: null }); }}
                     className={cn(
                       'relative pb-3 text-sm font-medium transition-colors',
                       teamSidebarTab === tab
@@ -1748,7 +2021,7 @@ export default function OrganizationVulnerabilitiesPage() {
                         return (
                           <div
                             key={project.id}
-                            onClick={() => navigate(`/organizations/${orgId}/projects/${project.id}/overview`)}
+                            onClick={() => openProjectInSidebar(project)}
                             className="bg-background-card border border-border rounded-lg p-5 hover:bg-background-card/80 transition-all cursor-pointer group"
                           >
                             <div className="flex items-center justify-between mb-3">
@@ -1801,7 +2074,7 @@ export default function OrganizationVulnerabilitiesPage() {
                             return (
                               <tr
                                 key={project.id}
-                                onClick={() => navigate(`/organizations/${orgId}/projects/${project.id}/overview`)}
+                                onClick={() => openProjectInSidebar(project)}
                                 className="hover:bg-table-hover transition-colors cursor-pointer group"
                               >
                                 <td className="px-4 py-3">
@@ -1843,19 +2116,9 @@ export default function OrganizationVulnerabilitiesPage() {
               {/* Security Tab */}
               {teamSidebarTab === 'security' && (
                 <div className="space-y-4">
-                  {teamSidebarDataLoading ? (
-                    <div className="bg-background-card border border-border rounded-lg overflow-hidden divide-y divide-border">
-                      {[1, 2, 3].map((i) => (
-                        <div key={i} className="px-4 py-3 flex items-center gap-4 animate-pulse">
-                          <div className="h-5 w-5 rounded bg-muted" />
-                          <div className="flex-1 space-y-2">
-                            <div className="h-4 w-32 rounded bg-muted" />
-                            <div className="h-3 w-48 rounded bg-muted" />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : teamSidebarSecuritySummary.length === 0 || teamSidebarSecuritySummary.every(p => p.vuln_count === 0 && p.semgrep_count === 0 && p.secret_count === 0) ? (
+                  {teamSidebarVulnsLoading && teamSidebarVulns.length === 0 ? (
+                    <OrganizationVulnerabilitiesTableSkeleton />
+                  ) : teamSidebarVulns.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-12 text-center">
                       <div className="h-12 w-12 rounded-lg border border-border bg-background-subtle/50 flex items-center justify-center mb-4">
                         <Shield className="h-6 w-6 text-foreground-secondary" />
@@ -1864,76 +2127,42 @@ export default function OrganizationVulnerabilitiesPage() {
                       <p className="text-sm text-foreground-secondary max-w-[240px]">
                         {teamSidebarProjects.length === 0
                           ? "This team doesn't have any projects yet."
-                          : "All projects in this team are secure with no vulnerabilities or code findings."}
+                          : "All projects in this team are secure with no open vulnerabilities."}
                       </p>
                     </div>
                   ) : (
-                    <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                      <table className="w-full">
-                        <thead className="bg-background-card-header border-b border-border">
-                          <tr>
-                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project</th>
-                            <th className="text-center px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Vulnerabilities</th>
-                            <th className="text-center px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Critical</th>
-                            <th className="text-center px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Findings</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border">
-                          {teamSidebarSecuritySummary
-                            .filter(p => p.vuln_count > 0 || p.semgrep_count > 0 || p.secret_count > 0)
-                            .sort((a, b) => {
-                              if (b.critical_count !== a.critical_count) return b.critical_count - a.critical_count;
-                              if (b.vuln_count !== a.vuln_count) return b.vuln_count - a.vuln_count;
-                              return (b.semgrep_count + b.secret_count) - (a.semgrep_count + a.secret_count);
-                            })
-                            .map((project) => {
-                              const matchedProject = teamSidebarProjects.find(p => p.id === project.project_id);
-                              const totalFindings = project.semgrep_count + project.secret_count;
-                              return (
-                                <tr
-                                  key={project.project_id}
-                                  onClick={() => navigate(`/organizations/${orgId}/projects/${project.project_id}/security`)}
-                                  className="hover:bg-table-hover transition-colors cursor-pointer group"
-                                >
-                                  <td className="px-4 py-3">
-                                    <div className="flex items-center gap-3 min-w-0">
-                                      <FrameworkIcon frameworkId={matchedProject?.framework ?? undefined} size={20} />
-                                      <span className="text-sm font-medium text-foreground truncate">{project.project_name}</span>
-                                    </div>
-                                  </td>
-                                  <td className="px-4 py-3 text-center">
-                                    {project.vuln_count > 0 ? (
-                                      <span className="inline-flex items-center justify-center min-w-[24px] px-2 py-0.5 rounded-full text-xs font-medium bg-destructive/10 text-destructive border border-destructive/20">
-                                        {project.vuln_count}
-                                      </span>
-                                    ) : (
-                                      <span className="text-xs text-foreground-secondary">—</span>
-                                    )}
-                                  </td>
-                                  <td className="px-4 py-3 text-center">
-                                    {project.critical_count > 0 ? (
-                                      <span className="inline-flex items-center justify-center min-w-[24px] px-2 py-0.5 rounded-full text-xs font-medium bg-[#7C3AED]/10 text-[#7C3AED] border border-[#7C3AED]/20">
-                                        {project.critical_count}
-                                      </span>
-                                    ) : (
-                                      <span className="text-xs text-foreground-secondary">—</span>
-                                    )}
-                                  </td>
-                                  <td className="px-4 py-3 text-center">
-                                    {totalFindings > 0 ? (
-                                      <span className="inline-flex items-center justify-center min-w-[24px] px-2 py-0.5 rounded-full text-xs font-medium bg-warning/10 text-warning border border-warning/20">
-                                        {totalFindings}
-                                      </span>
-                                    ) : (
-                                      <span className="text-xs text-foreground-secondary">—</span>
-                                    )}
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                        </tbody>
-                      </table>
-                    </div>
+                    <>
+                      <VulnerabilityExpandableTable organizationId={orgId!} vulnerabilities={teamSidebarVulns} />
+                      {Math.ceil(teamSidebarVulnsTotal / 50) > 1 && (
+                        <div className="flex items-center justify-between gap-3 pt-2">
+                          <span className="text-xs text-foreground-secondary">
+                            Page {teamSidebarVulnsPage} of {Math.ceil(teamSidebarVulnsTotal / 50)}
+                          </span>
+                          <div className="flex gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8"
+                              disabled={teamSidebarVulnsLoading || teamSidebarVulnsPage <= 1}
+                              onClick={() => void loadTeamVulns(teamSidebarVulnsPage - 1)}
+                            >
+                              Previous
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8"
+                              disabled={teamSidebarVulnsLoading || teamSidebarVulnsPage >= Math.ceil(teamSidebarVulnsTotal / 50)}
+                              onClick={() => void loadTeamVulns(teamSidebarVulnsPage + 1)}
+                            >
+                              Next
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               )}
@@ -2117,7 +2346,7 @@ export default function OrganizationVulnerabilitiesPage() {
                     <nav className="space-y-1">
                       <button
                         type="button"
-                        onClick={() => setTeamSettingsSubTab('general')}
+                        onClick={() => { setTeamSettingsSubTab('general'); setSidebarParams({ subtab: 'general' }); }}
                         className={cn(
                           'w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md transition-colors',
                           teamSettingsSubTab === 'general' ? 'text-foreground' : 'text-foreground-secondary hover:text-foreground'
@@ -2129,7 +2358,7 @@ export default function OrganizationVulnerabilitiesPage() {
                       {(teamSidebarPermissions?.manage_notification_settings || teamSidebarHasOrgManagePermission) && (
                         <button
                           type="button"
-                          onClick={() => setTeamSettingsSubTab('notifications')}
+                          onClick={() => { setTeamSettingsSubTab('notifications'); setSidebarParams({ subtab: 'notifications' }); }}
                           className={cn(
                             'w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md transition-colors',
                             teamSettingsSubTab === 'notifications' ? 'text-foreground' : 'text-foreground-secondary hover:text-foreground'
@@ -2142,7 +2371,7 @@ export default function OrganizationVulnerabilitiesPage() {
                       {((teamSidebarPermissions?.view_roles || teamSidebarPermissions?.edit_roles) || teamSidebarHasOrgManagePermission) && (
                         <button
                           type="button"
-                          onClick={() => setTeamSettingsSubTab('roles')}
+                          onClick={() => { setTeamSettingsSubTab('roles'); setSidebarParams({ subtab: 'roles' }); }}
                           className={cn(
                             'w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md transition-colors',
                             teamSettingsSubTab === 'roles' ? 'text-foreground' : 'text-foreground-secondary hover:text-foreground'
@@ -2710,7 +2939,7 @@ export default function OrganizationVulnerabilitiesPage() {
                     <button
                       key={tab}
                       type="button"
-                      onClick={() => setProjectSidebarTab(tab)}
+                      onClick={() => { setProjectSidebarTab(tab); setSidebarParams({ tab, subtab: null }); }}
                       className={cn(
                         'relative pb-3 text-sm font-medium transition-colors',
                         projectSidebarTab === tab ? 'text-foreground' : 'text-foreground-secondary hover:text-foreground'
@@ -2733,46 +2962,183 @@ export default function OrganizationVulnerabilitiesPage() {
                 {projectSidebarTab === 'vulnerabilities' && (
                   <div className="space-y-4">
                     <h3 className="text-sm font-medium text-foreground">Vulnerabilities</h3>
-                    {projectStatsLoading && !projectVulnerabilities ? (
-                      <div className="space-y-2">
-                        {[1, 2, 3].map((i) => (
-                          <div key={i} className="h-12 bg-muted/50 rounded-md animate-pulse" />
-                        ))}
+                    {selectedProjectIsExtracting ? (
+                      <div className="py-10 flex flex-col items-center gap-3 text-center border border-border rounded-lg bg-background-subtle/50">
+                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" aria-hidden />
+                        <p className="text-sm text-muted-foreground">Project is still extracting — check back soon.</p>
                       </div>
-                    ) : !projectVulnerabilities || projectVulnerabilities.length === 0 ? (
+                    ) : projectStatsLoading && !projectVulnerabilities ? (
+                      <OrgProjectVulnerabilitiesTableSkeleton rowCount={8} />
+                    ) : !dedupedProjectVulnerabilities.length ? (
                       <div className="py-8 text-center text-sm text-muted-foreground border border-border rounded-lg bg-background-subtle/50">
                         No vulnerabilities found
                       </div>
                     ) : (
                       <div className="border border-border rounded-lg overflow-hidden">
-                        <table className="w-full text-sm">
+                        <table className={ORG_PROJECT_VULN_TABLE_CLASS}>
+                          <OrgProjectVulnerabilitiesTableColgroup />
                           <thead className="bg-background-card-header border-b border-border">
                             <tr>
-                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Severity</th>
-                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Dependency</th>
-                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Summary</th>
+                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <span
+                                      className="inline-flex items-center gap-1 cursor-help outline-none rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                                      tabIndex={0}
+                                      aria-label="What is Depscore?"
+                                    >
+                                      Depscore
+                                      <CircleHelp className="h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-90" aria-hidden />
+                                    </span>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="top" className="max-w-sm text-left text-xs font-normal normal-case">
+                                    <p className="font-medium text-foreground mb-1.5">Deptex Depscore (0–100)</p>
+                                    <p className="text-muted-foreground mb-2">
+                                      A project-aware priority score—not raw severity alone. It combines CVSS, EPSS,
+                                      CISA KEV, this project&apos;s asset tier, how reachable the issue is from your
+                                      code, direct vs transitive use, environment (e.g. dev), and package reputation.
+                                    </p>
+                                    <p className="text-muted-foreground">
+                                      When EPD has run, the value is <span className="text-foreground">contextual</span>:
+                                      a base score (signals above, without double-counting reachability the same way)
+                                      multiplied by an execution-path factor from entry-point exposure and path depth.
+                                      Strong sanitization on the path can reduce that factor toward zero.
+                                    </p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </th>
+                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase min-w-0">
+                                Dependency
+                              </th>
+                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">
+                                Advisory
+                              </th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-border">
-                            {projectVulnerabilities.map((v) => {
-                              const severityClass =
-                                v.severity === 'critical' ? 'bg-destructive/12 text-destructive border-destructive/30' :
-                                v.severity === 'high' ? 'bg-amber-500/12 text-amber-600 dark:text-amber-400 border-amber-500/30' :
-                                v.severity === 'medium' ? 'bg-yellow-500/12 text-yellow-600 dark:text-yellow-400 border-yellow-500/30' :
-                                'bg-muted/80 text-muted-foreground border-border';
+                            {dedupedProjectVulnerabilities.map((v) => {
+                              const rawScore =
+                                v.contextual_depscore != null && Number.isFinite(Number(v.contextual_depscore))
+                                  ? Number(v.contextual_depscore)
+                                  : v.depscore != null && Number.isFinite(Number(v.depscore))
+                                    ? Number(v.depscore)
+                                    : null;
+                              const isExpanded = expandedProjectVulnRowId === v.id;
+                              const detail = projectVulnDetailByRowId[v.id];
                               return (
-                                <tr key={v.id} className="hover:bg-background-subtle/50">
-                                  <td className="px-4 py-2.5">
-                                    <span className={cn('inline-flex px-1.5 py-0.5 rounded text-xs font-medium border capitalize', severityClass)}>
-                                      {v.severity}
-                                    </span>
-                                  </td>
-                                  <td className="px-4 py-2.5 text-foreground">
-                                    {v.dependency_name}
-                                    <span className="text-muted-foreground font-normal">@{v.dependency_version}</span>
-                                  </td>
-                                  <td className="px-4 py-2.5 text-muted-foreground line-clamp-2">{v.summary || v.osv_id}</td>
-                                </tr>
+                                <Fragment key={v.id}>
+                                  <tr
+                                    className="hover:bg-background-subtle/50 cursor-pointer"
+                                    onClick={() => void toggleProjectVulnerabilityRow(v.id, v.osv_id)}
+                                    aria-expanded={isExpanded}
+                                  >
+                                    <td className="px-4 py-2.5 align-middle">
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <span
+                                            className={cn(
+                                              'inline-flex w-14 min-w-[3.25rem] justify-start text-xs font-semibold tabular-nums cursor-default',
+                                              rawScore == null ? 'text-muted-foreground' : (
+                                                rawScore >= 75
+                                                  ? 'text-destructive'
+                                                  : rawScore >= 40
+                                                    ? 'text-amber-600 dark:text-amber-400'
+                                                    : 'text-muted-foreground'
+                                              )
+                                            )}
+                                          >
+                                            {rawScore != null ? rawScore.toFixed(1) : '—'}
+                                          </span>
+                                        </TooltipTrigger>
+                                        <TooltipContent side="right" className="max-w-xs text-xs space-y-1">
+                                          <p className="font-medium capitalize">Severity: {v.severity}</p>
+                                          {v.contextual_depscore != null && (
+                                            <p>
+                                              Contextual (EPD): {Number(v.contextual_depscore).toFixed(1)}
+                                              {v.depscore != null && (
+                                                <span className="text-muted-foreground"> · Base: {Number(v.depscore).toFixed(1)}</span>
+                                              )}
+                                            </p>
+                                          )}
+                                          {v.contextual_depscore == null && v.depscore != null && (
+                                            <p>Depscore: {Number(v.depscore).toFixed(1)}</p>
+                                          )}
+                                          {rawScore == null && <p className="text-muted-foreground">Score not computed yet (re-run extraction after vuln sync).</p>}
+                                          {v.is_reachable === false && <p className="text-muted-foreground">Not flagged as reachable in this project.</p>}
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    </td>
+                                    <td className="px-4 py-2.5 text-foreground min-w-0 align-middle">
+                                      <div
+                                        className="truncate min-w-0"
+                                        title={`${v.dependency_name}@${v.dependency_version}`}
+                                      >
+                                        {v.dependency_name}
+                                        <span className="text-muted-foreground font-normal">
+                                          @{v.dependency_version}
+                                        </span>
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-2.5 align-middle">
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        {v.cvss_score != null ? (
+                                          <span
+                                            className={cn(
+                                              'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border tabular-nums',
+                                              Number(v.cvss_score) >= 9
+                                                ? 'bg-destructive/12 text-destructive border-destructive/30'
+                                                : Number(v.cvss_score) >= 7
+                                                  ? 'bg-amber-500/12 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                                                  : Number(v.cvss_score) >= 4
+                                                    ? 'bg-yellow-500/12 text-yellow-600 dark:text-yellow-400 border-yellow-500/30'
+                                                    : 'bg-muted/80 text-muted-foreground border-border'
+                                            )}
+                                          >
+                                            CVSS {Number(v.cvss_score).toFixed(1)}
+                                          </span>
+                                        ) : (
+                                          <span
+                                            className={cn(
+                                              'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border',
+                                              v.severity === 'critical'
+                                                ? 'bg-destructive/12 text-destructive border-destructive/30'
+                                                : v.severity === 'high'
+                                                  ? 'bg-amber-500/12 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                                                  : v.severity === 'medium'
+                                                    ? 'bg-yellow-500/12 text-yellow-600 dark:text-yellow-400 border-yellow-500/30'
+                                                    : 'bg-muted/80 text-muted-foreground border-border'
+                                            )}
+                                          >
+                                            {String(v.severity || 'unknown').toUpperCase()}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                  <tr>
+                                    <td colSpan={3} className="px-0 py-0">
+                                      <div
+                                        className="overflow-hidden transition-[max-height,opacity] duration-300 ease-in-out"
+                                        style={{ maxHeight: isExpanded ? 1800 : 0, opacity: isExpanded ? 1 : 0 }}
+                                      >
+                                        <div className="px-4 py-4 bg-background-subtle/30 border-t border-border">
+                                          {detail?.loading ? (
+                                            <VulnOrgSidebarExpandedSkeleton />
+                                          ) : detail?.error ? (
+                                            <div className="text-sm text-destructive">{detail.error}</div>
+                                          ) : detail?.data ? (
+                                            <VulnerabilityOrgSidebarExpandedContent
+                                              detail={detail.data}
+                                              rowSummary={v.summary ?? null}
+                                            />
+                                          ) : (
+                                            <div className="text-sm text-muted-foreground">No details available.</div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                </Fragment>
                               );
                             })}
                           </tbody>
@@ -2820,6 +3186,8 @@ export default function OrganizationVulnerabilitiesPage() {
                       setProjectSidebarOrganization(o);
                     }}
                     embedInSidebar
+                    initialSection={projectSettingsSubTab}
+                    onSectionChange={(s) => { setProjectSettingsSubTab(s); setSidebarParams({ subtab: s }); }}
                   />
                 )}
                 {projectSidebarTab !== 'vulnerabilities' && projectSidebarProjectLoading && (

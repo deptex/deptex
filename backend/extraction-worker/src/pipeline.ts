@@ -20,6 +20,11 @@ import { applyEpdScoringFallback, EpdBudgetExceededError } from './epd';
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
 
+/** Strip ANSI so dep-scan stderr excerpts are readable in logs on failure. */
+function stripAnsi(text: string): string {
+  return text.replace(/\u001b\[[0-9;]*m/g, '');
+}
+
 async function retry<T>(fn: () => Promise<T>, stepName: string): Promise<T> {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
@@ -155,6 +160,9 @@ function runDepScan(
   heartbeat: () => Promise<void>,
   timeoutMs: number = 180 * 60 * 1000,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const verboseLogs =
+    process.env.DEPSCAN_VERBOSE_LOG === '1' || /^true$/i.test(process.env.DEPSCAN_VERBOSE_LOG ?? '');
+
   return new Promise((resolve, reject) => {
     const child = spawn(depScanExe, args, { cwd, stdio: 'pipe' });
     let stdout = '';
@@ -162,10 +170,13 @@ function runDepScan(
     const startTime = Date.now();
 
     child.stdout.on('data', (data: Buffer) => {
-      stdout += data.toString();
-      const trimmed = data.toString().trim();
-      if (trimmed) {
-        logger.info('depscan', trimmed).catch(() => {});
+      const chunk = data.toString();
+      stdout += chunk;
+      if (verboseLogs) {
+        const trimmed = stripAnsi(chunk).trim();
+        if (trimmed) {
+          logger.info('depscan', trimmed).catch(() => {});
+        }
       }
     });
     child.stderr.on('data', (data: Buffer) => {
@@ -176,7 +187,7 @@ function runDepScan(
       try {
         await heartbeat();
         const elapsed = Math.round((Date.now() - startTime) / 60000);
-        await logger.info('depscan', `Atom analysis in progress (${elapsed} min elapsed)...`);
+        await logger.info('vuln_scan', `Scan still running (${elapsed} min elapsed, dep-scan is quiet in logs)...`);
       } catch {}
     }, 60_000);
 
@@ -616,7 +627,7 @@ export async function runPipeline(
       const heartbeatFn = heartbeat ?? (async () => {});
       try {
         let res = await runDepScan(depScanExe, depScanArgs, workspaceRoot, log, heartbeatFn);
-        const rawStderr = (res.stderr ?? '').trim();
+        const rawStderr = stripAnsi((res.stderr ?? '').trim());
         const isVdbCorrupt = /CorruptError|malformed|database disk image is malformed/i.test(rawStderr);
 
         if (res.exitCode !== 0 && isVdbCorrupt) {
@@ -626,7 +637,7 @@ export async function runPipeline(
         }
 
         if (res.exitCode !== 0) {
-          const finalStderr = (res.stderr ?? '').trim();
+          const finalStderr = stripAnsi((res.stderr ?? '').trim());
           const lines = finalStderr ? finalStderr.split(/\r?\n/) : [];
           const excerpt = lines.length > 20 ? lines.slice(-20).join('\n') : finalStderr;
           const stderrSnippet = excerpt.slice(-2000) || 'unknown error';
@@ -939,10 +950,15 @@ export async function runPipeline(
 
         const critCount = vulnRows.filter((r) => r.severity === 'critical').length;
         const highCount = vulnRows.filter((r) => r.severity === 'high').length;
+        const reachableCount = vulnRows.filter((r) => r.is_reachable).length;
         const severitySummary = vulnRows.length > 0
-          ? ` (${critCount} critical, ${highCount} high)`
+          ? `, ${critCount} critical, ${highCount} high`
           : '';
-        await log.success('vuln_scan', `Vulnerability scan complete — found ${vulnRows.length} vulnerabilities${severitySummary}`, Date.now() - scanStart);
+        const summaryMsg =
+          vulnRows.length === 0
+            ? 'Vulnerability scan complete — no issues reported for tracked dependencies'
+            : `Vulnerability scan complete — ${vulnRows.length} found, ${reachableCount} reachable${severitySummary}`;
+        await log.success('vuln_scan', summaryMsg, Date.now() - scanStart);
       } catch (e: any) {
         await log.warn('vuln_scan', `Vulnerability processing failed: ${e.message}`);
       }
@@ -977,12 +993,17 @@ export async function runPipeline(
     const epdStart = Date.now();
     try {
       await applyEpdScoringFallback(supabase, projectId, workspaceRoot, log);
-      await log.success('epd', 'EPD contextual scoring complete', Date.now() - epdStart);
+      await log.success('epd', 'EPD contextual scoring complete', Date.now() - epdStart, {
+        epd_phase: 'pipeline_complete',
+      });
     } catch (epdErr: any) {
       if (epdErr instanceof EpdBudgetExceededError) {
         throw epdErr;
       }
-      await log.warn('epd', `EPD scoring failed (non-fatal): ${epdErr.message}`);
+      await log.warn('epd', `EPD scoring failed (non-fatal): ${epdErr.message}`, {
+        epd_phase: 'pipeline_error',
+        error_message: epdErr?.message ?? String(epdErr),
+      });
     }
 
     // === STEP: Semgrep (OPTIONAL) ===
@@ -1134,9 +1155,6 @@ export async function runPipeline(
     await log.info('uploading', 'Updating project status...');
 
     const status = newDepsToPopulate.length > 0 ? 'analyzing' : 'ready';
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'df7584' }, body: JSON.stringify({ sessionId: 'df7584', location: 'pipeline.ts:before-repo-update', message: 'setting repo status', data: { projectId, status, jobId: job.jobId ?? null }, timestamp: Date.now(), hypothesisId: 'H1' }) }).catch(() => {});
-    // #endregion
     await supabase
       .from('project_repositories')
       .update({
@@ -1153,9 +1171,6 @@ export async function runPipeline(
     if (didUpdateJob) {
       await updateJobStatus(supabase, job.jobId!, 'completed');
     }
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'df7584' }, body: JSON.stringify({ sessionId: 'df7584', location: 'pipeline.ts:after-repo-update', message: 'repo updated, job update', data: { projectId, status, didUpdateJob }, timestamp: Date.now(), hypothesisId: 'H5' }) }).catch(() => {});
-    // #endregion
 
     await supabase
       .from('projects')

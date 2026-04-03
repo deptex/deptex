@@ -246,7 +246,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
         else navigate(base ?? '', { replace: true });
       };
   const realtime = useRealtimeStatus(organizationId, projectId);
-  const isExtractionOngoing = checkExtractionOngoing(realtime.status);
+  const isExtractionOngoing = checkExtractionOngoing(realtime.status, realtime.extractionStep);
 
   const urlTab = tabFromPathname(location.pathname);
   const [sidebarSubTab, setSidebarSubTab] = useState<'overview' | 'supply-chain' | 'notes'>('overview');

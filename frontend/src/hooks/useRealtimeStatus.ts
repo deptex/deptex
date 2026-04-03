@@ -27,18 +27,11 @@ export function useRealtimeStatus(
 
   const fetchStatus = useCallback(async () => {
     if (!organizationId || !projectId) return;
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'df7584'},body:JSON.stringify({sessionId:'df7584',location:'useRealtimeStatus.ts:fetchStatus:entry',message:'fetchStatus called',data:{organizationId,projectId},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
-    // #endregion
     // Always fetch fresh extraction status so Overview shows "still extracting" correctly (no stale cache)
     api.invalidateProjectRepositoriesCache(organizationId, projectId);
     try {
       const data = await api.getProjectRepositories(organizationId, projectId);
       const repo = data.connectedRepository;
-      // #region agent log
-      const repoStatus = repo ? (repo as any).status : null;
-      fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'df7584'},body:JSON.stringify({sessionId:'df7584',location:'useRealtimeStatus.ts:fetchStatus:result',message:'fetchStatus result',data:{hasRepo:!!repo,repoStatus,projectId},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
-      // #endregion
       if (repo) {
         setState({
           status: repo.status ?? 'not_connected',
@@ -91,9 +84,6 @@ export function useRealtimeStatus(
         },
         (payload) => {
           const row = payload.new as any;
-          // #region agent log
-          fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'df7584'},body:JSON.stringify({sessionId:'df7584',location:'useRealtimeStatus.ts:realtime:UPDATE',message:'Realtime UPDATE received',data:{rowStatus:row?.status,projectId:row?.project_id},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
-          // #endregion
           setState({
             status: row.status ?? 'unknown',
             extractionStep: row.extraction_step ?? null,
@@ -104,9 +94,6 @@ export function useRealtimeStatus(
         },
       )
       .subscribe((status) => {
-        // #region agent log
-        fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'df7584'},body:JSON.stringify({sessionId:'df7584',location:'useRealtimeStatus.ts:subscribe',message:'Realtime subscribe status',data:{status,projectId},timestamp:Date.now(),hypothesisId:'H5'})}).catch(()=>{});
-        // #endregion
         if (status === 'SUBSCRIBED') {
           realtimeOk.current = true;
         } else if (status === 'TIMED_OUT' || status === 'CHANNEL_ERROR') {

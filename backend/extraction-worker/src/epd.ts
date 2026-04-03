@@ -32,9 +32,10 @@ export interface EpdRowUpdate {
   epd_status: string;
 }
 
+/** Matches ExtractionLogger so rows land in extraction_logs.metadata. */
 interface LogLike {
-  info(step: string, msg: string): Promise<void>;
-  warn(step: string, msg: string): Promise<void>;
+  info(step: string, msg: string, metadata?: Record<string, unknown>): Promise<void>;
+  warn(step: string, msg: string, metadata?: Record<string, unknown>): Promise<void>;
 }
 
 const DEFAULT_ALPHA = 0.85;
@@ -397,6 +398,16 @@ function calculateEpdFactor(entryWeight: number, depth: number, isSanitized: boo
   return entryWeight * Math.pow(alpha, d);
 }
 
+function countByField<T>(rows: T[], key: keyof T): Record<string, number> {
+  const m: Record<string, number> = {};
+  for (const row of rows) {
+    const v = row[key];
+    const s = v == null ? 'null' : String(v);
+    m[s] = (m[s] ?? 0) + 1;
+  }
+  return m;
+}
+
 /**
  * EPD scoring pass with BYOK Anthropic verification and conservative fallback semantics.
  */
@@ -431,7 +442,11 @@ export async function applyEpdScoringFallback(
         decryptedApiKey = decryptApiKey(providerRow.encrypted_api_key, Number(providerRow.encryption_key_version ?? 1));
       } catch (err: any) {
         hasAnthropicByok = false;
-        await logger.warn('epd', `BYOK decryption failed; using conservative fallback only: ${err.message}`);
+        await logger.warn('epd', `BYOK decryption failed; using conservative fallback only: ${err.message}`, {
+          epd_phase: 'byok_decrypt',
+          organization_id: organizationId,
+          error_message: err?.message ?? String(err),
+        });
       }
     }
   }
@@ -442,12 +457,20 @@ export async function applyEpdScoringFallback(
     .eq('project_id', projectId);
 
   if (pdvErr) {
-    await logger.warn('epd', `Skipping EPD scoring: failed to fetch vulnerabilities: ${pdvErr.message}`);
+    await logger.warn('epd', `Skipping EPD scoring: failed to fetch vulnerabilities: ${pdvErr.message}`, {
+      epd_phase: 'skip',
+      reason: 'pdv_fetch_failed',
+      project_id: projectId,
+    });
     return;
   }
 
   if (!pdvRows || pdvRows.length === 0) {
-    await logger.info('epd', 'No project vulnerabilities available for EPD scoring');
+    await logger.info('epd', 'No project vulnerabilities available for EPD scoring', {
+      epd_phase: 'skip',
+      reason: 'no_vulnerabilities',
+      project_id: projectId,
+    });
     return;
   }
 
@@ -457,7 +480,11 @@ export async function applyEpdScoringFallback(
     .eq('project_id', projectId);
 
   if (depErr) {
-    await logger.warn('epd', `Skipping EPD scoring: failed to fetch dependency map: ${depErr.message}`);
+    await logger.warn('epd', `Skipping EPD scoring: failed to fetch dependency map: ${depErr.message}`, {
+      epd_phase: 'skip',
+      reason: 'dependency_map_fetch_failed',
+      project_id: projectId,
+    });
     return;
   }
 
@@ -472,7 +499,11 @@ export async function applyEpdScoringFallback(
     .eq('project_id', projectId);
 
   if (flowErr) {
-    await logger.warn('epd', `Reachable flows unavailable for depth enrichment: ${flowErr.message}`);
+    await logger.warn('epd', `Reachable flows unavailable for depth enrichment: ${flowErr.message}`, {
+      epd_phase: 'flow_fetch',
+      project_id: projectId,
+      error_message: flowErr.message,
+    });
   }
 
   const flowByDependencyId = new Map<string, { minFlowLength: number; tag: string | null }>();
@@ -511,6 +542,21 @@ export async function applyEpdScoringFallback(
   const runBudgetCap = getRunBudgetCapUsd();
   let runSpendUsd = 0;
   let budgetExceededTriggered = false;
+
+  await logger.info('epd', 'Starting EPD scoring pass', {
+    epd_phase: 'start',
+    project_id: projectId,
+    organization_id: organizationId ?? null,
+    has_anthropic_byok: hasAnthropicByok,
+    pdv_count: pdvRows.length,
+    project_dependency_rows: deps?.length ?? 0,
+    flow_row_count: flows?.length ?? 0,
+    flows_available: !flowErr,
+    max_vulns_ai: maxVulns,
+    budget_cap_usd: runBudgetCap,
+    alpha: DEFAULT_ALPHA,
+    anthropic_model: hasAnthropicByok ? anthropicModel : null,
+  });
 
   const updates: EpdRowUpdate[] = [];
   const candidates = [...pdvRows].sort((a, b) => Number((b.base_depscore_no_reachability ?? b.depscore ?? 0)) - Number((a.base_depscore_no_reachability ?? a.depscore ?? 0)));
@@ -607,7 +653,12 @@ ${sourceContext || 'none'}`;
           modelUsed = anthropicModel;
           epdStatus = 'ai_verified';
         } catch (err: any) {
-          await logger.warn('epd', `AI verification failed for vulnerability ${row.id}: ${err.message}`);
+          await logger.warn('epd', `AI verification failed for vulnerability ${row.id}: ${err.message}`, {
+            epd_phase: 'ai_call',
+            vuln_row_id: row.id,
+            project_dependency_id: projectDependencyId,
+            error_message: err?.message ?? String(err),
+          });
           epdStatus = 'ai_error_fallback';
         }
       }
@@ -647,12 +698,43 @@ ${sourceContext || 'none'}`;
       .upsert(chunk, { onConflict: 'id' });
 
     if (upErr) {
-      await logger.warn('epd', `Failed to upsert EPD updates: ${upErr.message}`);
+      await logger.warn('epd', `Failed to upsert EPD updates: ${upErr.message}`, {
+        epd_phase: 'upsert',
+        project_id: projectId,
+        chunk_index: Math.floor(i / 100),
+        error_message: upErr.message,
+      });
       return;
     }
   }
 
-  await logger.info('epd', `Applied EPD scoring to ${updates.length} vulnerabilities (run AI spend: $${runSpendUsd.toFixed(4)} / $${runBudgetCap.toFixed(2)})`);
+  const epdStatusCounts = countByField(updates, 'epd_status');
+  const reachabilityStatusCounts = countByField(updates, 'reachability_status');
+  const epdConfidenceTierCounts = countByField(updates, 'epd_confidence_tier');
+  const contextualDepscoreMax = updates.reduce((m, u) => Math.max(m, u.contextual_depscore ?? 0), 0);
+  const sanitizedCount = updates.filter((u) => u.is_sanitized).length;
+  const aiVerifiedCount = updates.filter((u) => u.epd_status === 'ai_verified').length;
+  const aiErrorFallbackCount = updates.filter((u) => u.epd_status === 'ai_error_fallback').length;
+  const budgetExceededCount = updates.filter((u) => u.epd_status === 'budget_exceeded').length;
+
+  await logger.info('epd', `Applied EPD scoring to ${updates.length} vulnerabilities (run AI spend: $${runSpendUsd.toFixed(4)} / $${runBudgetCap.toFixed(2)})`, {
+    epd_phase: 'summary',
+    project_id: projectId,
+    organization_id: organizationId ?? null,
+    vulnerabilities_updated: updates.length,
+    run_spend_usd: Number(runSpendUsd.toFixed(6)),
+    budget_cap_usd: runBudgetCap,
+    budget_exceeded_triggered: budgetExceededTriggered,
+    epd_status_counts: epdStatusCounts,
+    reachability_status_counts: reachabilityStatusCounts,
+    epd_confidence_tier_counts: epdConfidenceTierCounts,
+    contextual_depscore_max: contextualDepscoreMax,
+    sanitized_count: sanitizedCount,
+    ai_verified_count: aiVerifiedCount,
+    ai_error_fallback_count: aiErrorFallbackCount,
+    budget_exceeded_vuln_count: budgetExceededCount,
+    max_vulns_ai: maxVulns,
+  });
 
   const onBudgetExceeded = (process.env.EPD_BUDGET_EXCEEDED_BEHAVIOR || 'fail_job').toLowerCase();
   if (budgetExceededTriggered && onBudgetExceeded === 'fail_job') {

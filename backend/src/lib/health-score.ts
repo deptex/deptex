@@ -17,15 +17,12 @@ export async function computeHealthScore(projectId: string): Promise<number> {
     getFindingsScore(projectId),
   ]);
 
-  // #region agent log
   const scorePreClamp = Math.round(
     complianceScore * 0.4 +
     vulnScore * 0.3 +
     freshnessScore * 0.2 +
     findingsScore * 0.1,
   );
-  fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'df8aae' }, body: JSON.stringify({ sessionId: 'df8aae', location: 'health-score.ts:computeHealthScore', message: 'Health score breakdown', data: { projectId, complianceScore, vulnScore, freshnessScore, findingsScore, scorePreClamp, weights: '0.4 0.3 0.2 0.1' }, timestamp: Date.now(), hypothesisId: 'H1-H4' }) }).catch(() => {});
-  // #endregion
 
   const clamped = Math.max(0, Math.min(100, scorePreClamp));
 

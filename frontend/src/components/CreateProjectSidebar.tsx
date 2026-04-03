@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Plus, Search, Check, Lock, Loader2, Save, HelpCircle, ChevronDown } from 'lucide-react';
-import { api, Team, type AssetTier, type CiCdConnection, type RepoWithProvider, type OrganizationAssetTier } from '../lib/api';
+import { api, Team, type Project, type AssetTier, type CiCdConnection, type RepoWithProvider, type OrganizationAssetTier } from '../lib/api';
 import { supabase } from '../lib/supabase';
 import { useToast } from '../hooks/use-toast';
 import { Button } from './ui/button';
@@ -29,6 +28,7 @@ export interface CreateProjectSidebarProps {
   teams: Team[];
   lockedTeam?: Team | null;
   onProjectsReload?: () => void;
+  onProjectCreated?: (project: Project) => void;
 }
 
 export function CreateProjectSidebar({
@@ -38,8 +38,8 @@ export function CreateProjectSidebar({
   teams,
   lockedTeam = null,
   onProjectsReload,
+  onProjectCreated,
 }: CreateProjectSidebarProps) {
-  const navigate = useNavigate();
   const { toast } = useToast();
   const [projectName, setProjectName] = useState('');
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
@@ -76,14 +76,22 @@ export function CreateProjectSidebar({
   const teamLocked = !!lockedTeam;
   const effectiveTeams = teamLocked && lockedTeam ? [lockedTeam] : teams;
   const effectiveTeamId = teamLocked && lockedTeam ? lockedTeam.id : selectedTeamId;
+  const teamInitializedRef = useRef(false);
 
   useEffect(() => {
+    if (!open) {
+      teamInitializedRef.current = false;
+      return;
+    }
+    if (teamInitializedRef.current) return;
     if (teamLocked && lockedTeam) {
       setSelectedTeamId(lockedTeam.id);
-    } else if (!teamLocked && teams.length > 0 && !selectedTeamId) {
-      setSelectedTeamId(teams[0]?.id ?? null);
+      teamInitializedRef.current = true;
+    } else if (!teamLocked && teams.length > 0) {
+      // Do not auto-select — leave null so user can choose "No team"
+      teamInitializedRef.current = true;
     }
-  }, [teamLocked, lockedTeam, teams, selectedTeamId]);
+  }, [open, teamLocked, lockedTeam, teams]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -247,6 +255,7 @@ export function CreateProjectSidebar({
     try {
       const newProject = await api.createProject(organizationId, createPayload);
 
+      onProjectCreated?.(newProject);
       onProjectsReload?.();
 
       if (sidebarRepoToConnect) {
@@ -261,7 +270,6 @@ export function CreateProjectSidebar({
           if (unlinked.length === 0) {
             toast({ title: 'No path available', description: 'All package paths in this repo are already linked to other projects.', variant: 'destructive' });
             closeModal();
-            navigate(`/organizations/${organizationId}/projects/${newProject.id}`);
           } else {
             try {
               await api.connectProjectRepository(organizationId, newProject.id, {
@@ -276,11 +284,9 @@ export function CreateProjectSidebar({
               });
               toast({ title: 'Repository connected', description: 'Extraction has started.' });
               closeModal();
-              navigate(`/organizations/${organizationId}/projects/${newProject.id}`);
             } catch (err: any) {
               toast({ title: 'Connection failed', description: err.message || 'Failed to connect repository', variant: 'destructive' });
               closeModal();
-              navigate(`/organizations/${organizationId}/projects/${newProject.id}`);
             }
           }
         } else {
@@ -290,7 +296,6 @@ export function CreateProjectSidebar({
             if (scanData.potentialProjects.length === 0) {
               toast({ title: 'No manifest file found', description: 'No supported manifest file found in this repository.', variant: 'destructive' });
               closeModal();
-              navigate(`/organizations/${organizationId}/projects/${newProject.id}`);
             } else {
               const unlinked = scanData.potentialProjects.filter((p) => !p.isLinked);
               if (unlinked.length <= 1) {
@@ -306,7 +311,6 @@ export function CreateProjectSidebar({
                 });
                 toast({ title: 'Repository connected', description: 'Extraction has started.' });
                 closeModal();
-                navigate(`/organizations/${organizationId}/projects/${newProject.id}`);
               } else {
                 setCreatedProjectId(newProject.id);
                 setCreatedProjectName(projectName.trim());
@@ -318,14 +322,12 @@ export function CreateProjectSidebar({
           } catch (err: any) {
             toast({ title: 'Scan failed', description: err.message || 'Failed to scan repository', variant: 'destructive' });
             closeModal();
-            navigate(`/organizations/${organizationId}/projects/${newProject.id}`);
           } finally {
             setSidebarScanLoading(false);
           }
         }
       } else {
         closeModal();
-        navigate(`/organizations/${organizationId}/projects/${newProject.id}`);
       }
     } catch (error: any) {
       toast({ title: 'Error', description: error.message || 'Failed to create project', variant: 'destructive' });
@@ -350,9 +352,7 @@ export function CreateProjectSidebar({
         provider: sidebarRepoToConnect.provider,
         integration_id: sidebarRepoToConnect.integration_id,
       });
-      const projectId = createdProjectId;
       closeModal();
-      navigate(`/organizations/${organizationId}/projects/${projectId}`);
       toast({ title: 'Repository connected', description: 'Extraction has started. This may take a few minutes.' });
     } catch (err: any) {
       toast({ title: 'Connection failed', description: err.message || 'Failed to connect repository', variant: 'destructive' });
@@ -362,11 +362,7 @@ export function CreateProjectSidebar({
   };
 
   const handleSkipRepo = () => {
-    const projectId = createdProjectId;
     closeModal();
-    if (projectId) {
-      navigate(`/organizations/${organizationId}/projects/${projectId}`);
-    }
   };
 
   const gitConnections = sidebarConnections.filter((c) => ['github', 'gitlab', 'bitbucket'].includes(c.provider));

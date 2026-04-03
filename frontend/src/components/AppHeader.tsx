@@ -92,7 +92,7 @@ export default function AppHeader({ breadcrumb, showSearch = false, showNewOrg =
             <FeedbackPopover />
 
             {/* Command palette trigger (Ctrl+K) */}
-            <button
+            {/* <button
               type="button"
               onClick={() => setCommandOpen(true)}
               className="group hidden sm:flex items-center gap-1.5 px-2.5 py-1 h-8 rounded-md border border-border bg-background-card text-sm text-foreground-secondary hover:text-foreground hover:border-vercel-border-hover hover:bg-background-subtle transition-colors"
@@ -105,7 +105,7 @@ export default function AppHeader({ breadcrumb, showSearch = false, showNewOrg =
                 <span className="font-mono text-[13px] leading-none font-medium">K</span>
               </span>
             </button>
-            <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} />
+            <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} /> */}
 
             {/* Help dropdown */}
             <DropdownMenu>

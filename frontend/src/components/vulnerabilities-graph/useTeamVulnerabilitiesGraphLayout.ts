@@ -3,7 +3,14 @@ import { type Node, type Edge, MarkerType } from '@xyflow/react';
 import { buildDepAndVulnNodesAndEdges, getWorstSeverity } from './useVulnerabilitiesGraphLayout';
 import type { VulnGraphDepNode, WorstSeverity } from './useVulnerabilitiesGraphLayout';
 import { getSlaBreachCount } from './useVulnerabilitiesGraphLayout';
-import { OVERVIEW_PROJECT_NODE_WIDTH, OVERVIEW_PROJECT_NODE_HEIGHT, VULN_PROJECT_NODE_WIDTH, VULN_PROJECT_NODE_HEIGHT } from './VulnProjectNode';
+import {
+  OVERVIEW_PROJECT_NODE_WIDTH,
+  OVERVIEW_PROJECT_NODE_HEIGHT,
+  OVERVIEW_TEAM_RING_CARD_WIDTH,
+  OVERVIEW_TEAM_RING_CARD_HEIGHT,
+  VULN_PROJECT_NODE_WIDTH,
+  VULN_PROJECT_NODE_HEIGHT,
+} from './VulnProjectNode';
 
 export const TEAM_CENTER_ID = 'team-center';
 
@@ -61,8 +68,8 @@ export function useTeamVulnerabilitiesGraphLayout(
       id: TEAM_CENTER_ID,
       type: 'vulnProjectNode',
       position: {
-        x: centerX - OVERVIEW_PROJECT_NODE_WIDTH / 2,
-        y: centerY - OVERVIEW_PROJECT_NODE_HEIGHT / 2,
+        x: centerX - OVERVIEW_TEAM_RING_CARD_WIDTH / 2,
+        y: centerY - OVERVIEW_TEAM_RING_CARD_HEIGHT / 2,
       },
       data: {
         projectName: teamName,

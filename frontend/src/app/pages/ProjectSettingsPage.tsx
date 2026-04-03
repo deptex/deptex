@@ -31,6 +31,7 @@ import { PolicyAIAssistant } from '../../components/PolicyAIAssistant';
 import { PolicyExceptionSidebar } from '../../components/PolicyExceptionSidebar';
 import { CODE_BLOCK_BG } from '../../components/policy-monaco-setup';
 import { SyncDetailSidebar } from '../../components/SyncDetailSidebar';
+import { isExtractionOngoing } from '../../lib/extractionStatus';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
 import { ProjectTeamSelect } from '../../components/ProjectTeamSelect';
 import { RoleBadge } from '../../components/RoleBadge';
@@ -54,6 +55,10 @@ export interface ProjectSettingsContentProps {
   userPermissions: ProjectPermissions | null;
   reloadProject: () => Promise<void>;
   embedInSidebar?: boolean;
+  /** When embedded in a sidebar, the section to show on mount (e.g. 'general', 'repository'). */
+  initialSection?: string;
+  /** Called when the active section changes while embedded in a sidebar. */
+  onSectionChange?: (section: string) => void;
 }
 
 /** Repo name without account prefix: "owner/repo" -> "repo" */
@@ -367,14 +372,14 @@ function ProjectSettingsTabSkeleton({ section }: { section: string }) {
 }
 
 export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
-  const { project, reloadProject, organizationId, organization, userPermissions, embedInSidebar } = props;
+  const { project, reloadProject, organizationId, organization, userPermissions, embedInSidebar, initialSection, onSectionChange } = props;
   const params = useParams<{ projectId: string; section?: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
   const projectId = project?.id ?? params.projectId ?? '';
   const sectionParam = params.section;
-  const [sidebarSection, setSidebarSection] = useState<string>('general');
+  const [sidebarSection, setSidebarSection] = useState<string>(initialSection ?? 'general');
   const activeSection = embedInSidebar ? sidebarSection : (sectionParam && VALID_PROJECT_SETTINGS_SECTIONS.has(sectionParam) ? sectionParam : 'general');
   /** Match Dependencies / Compliance embed: bleed past org project drawer px-5; same shell as drawer (not lighter bg-background-content). */
   const mainEmbedClass = embedInSidebar
@@ -1734,7 +1739,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                     key={section.id}
                     type="button"
                     onClick={() => {
-                      if (embedInSidebar) setSidebarSection(section.id);
+                      if (embedInSidebar) { setSidebarSection(section.id); onSectionChange?.(section.id); }
                       else if (organizationId && projectId) navigate(`/organizations/${organizationId}/projects/${projectId}/settings/${section.id}`);
                     }}
                     className={cn(
@@ -2090,7 +2095,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                                   <span>{getWorkspaceDisplayPath(connectedRepository.package_json_path)}</span>
                                 </>
                               )}
-                              {(importStatus?.status === 'finalizing' || connectedRepository.status === 'extracting' || connectedRepository.status === 'analyzing' || connectedRepository.status === 'finalizing') && (
+                              {(importStatus?.status === 'finalizing' || isExtractionOngoing(connectedRepository.status, connectedRepository.extraction_step ?? null)) && (
                                 <>
                                   <span>·</span>
                                   <span>
@@ -2361,7 +2366,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                                         {isActive ? (
                                           <>
                                             <span className="h-2 w-2 rounded-full shrink-0 bg-amber-400" aria-hidden />
-                                            <span className="text-sm text-foreground">In progress</span>
+                                            <span className="text-sm text-foreground">Extracting</span>
                                           </>
                                         ) : run.status === 'completed' ? (
                                           <>

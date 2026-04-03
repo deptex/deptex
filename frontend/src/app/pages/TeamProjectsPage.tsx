@@ -7,6 +7,7 @@ import { Button } from '../../components/ui/button';
 import { FrameworkIcon } from '../../components/framework-icon';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
 import { CreateProjectSidebar } from '../../components/CreateProjectSidebar';
+import { isExtractionOngoing } from '../../lib/extractionStatus';
 
 interface TeamContextType {
   team: TeamWithRole | null;
@@ -18,7 +19,7 @@ interface TeamContextType {
 // Short extraction status label for project cards
 function projectStatusLabel(project: Project): { label: string; inProgress: boolean; isError: boolean } {
   const status = project.repo_status;
-  if (status === 'initializing' || status === 'extracting' || status === 'analyzing' || status === 'finalizing') {
+  if (isExtractionOngoing(status || '', project.extraction_step ?? null)) {
     const step = project.extraction_step;
     const labels: Record<string, string> = {
       queued: 'Creating',

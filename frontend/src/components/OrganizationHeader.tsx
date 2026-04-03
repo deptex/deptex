@@ -29,29 +29,29 @@ function OrganizationHeader({ organization, aegisSidebarOpen, onToggleAegis }: O
     return null;
   }
 
-  const searchButton = (
-    <>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={() => setCommandOpen(true)}
-            className="group hidden sm:flex items-center gap-1.5 px-2.5 py-1 h-8 rounded-md border border-border bg-background-card text-sm text-foreground-secondary hover:text-foreground hover:border-vercel-border-hover hover:bg-background-subtle transition-colors"
-            aria-label="Search or run a command (Ctrl+K)"
-          >
-            <Search className="h-3.5 w-3.5 shrink-0" />
-            <span>Search...</span>
-            <span className="hidden md:inline-flex items-center gap-0.5 h-4 shrink-0 text-foreground-secondary transition-colors group-hover:text-foreground">
-              <img src="/images/commandicon.png" alt="⌘" className="h-3 w-3 invert opacity-70 group-hover:opacity-90 transition-opacity" aria-hidden />
-              <span className="font-mono text-[13px] leading-none font-medium">K</span>
-            </span>
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Search or run a command (Ctrl+K)</TooltipContent>
-      </Tooltip>
-      <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} />
-    </>
-  );
+  // const searchButton = (
+  //   <>
+  //     <Tooltip>
+  //       <TooltipTrigger asChild>
+  //         <button
+  //           type="button"
+  //           onClick={() => setCommandOpen(true)}
+  //           className="group hidden sm:flex items-center gap-1.5 px-2.5 py-1 h-8 rounded-md border border-border bg-background-card text-sm text-foreground-secondary hover:text-foreground hover:border-vercel-border-hover hover:bg-background-subtle transition-colors"
+  //           aria-label="Search or run a command (Ctrl+K)"
+  //         >
+  //           <Search className="h-3.5 w-3.5 shrink-0" />
+  //           <span>Search...</span>
+  //           <span className="hidden md:inline-flex items-center gap-0.5 h-4 shrink-0 text-foreground-secondary transition-colors group-hover:text-foreground">
+  //             <img src="/images/commandicon.png" alt="⌘" className="h-3 w-3 invert opacity-70 group-hover:opacity-90 transition-opacity" aria-hidden />
+  //             <span className="font-mono text-[13px] leading-none font-medium">K</span>
+  //           </span>
+  //         </button>
+  //       </TooltipTrigger>
+  //       <TooltipContent side="bottom">Search or run a command (Ctrl+K)</TooltipContent>
+  //     </Tooltip>
+  //     <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} />
+  //   </>
+  // );
 
   const aegisButton =
     onToggleAegis != null ? (
@@ -80,7 +80,7 @@ function OrganizationHeader({ organization, aegisSidebarOpen, onToggleAegis }: O
 
   const rightContent = (
     <div className="flex items-center gap-2">
-      {searchButton}
+      {/* {searchButton} */}
       {aegisButton}
     </div>
   );

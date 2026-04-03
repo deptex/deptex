@@ -552,7 +552,7 @@ export function ProjectComplianceContent(props: ProjectComplianceContentProps) {
 
   const canManageSettings = userPermissions?.edit_settings === true || userPermissions?.view_settings === true;
   const realtime = useRealtimeStatus(organizationId, projectId);
-  const isExtracting = checkExtractionOngoing(realtime.status);
+  const isExtracting = checkExtractionOngoing(realtime.status, realtime.extractionStep);
 
   const loadData = useCallback(async () => {
     if (!organizationId || !projectId) return;

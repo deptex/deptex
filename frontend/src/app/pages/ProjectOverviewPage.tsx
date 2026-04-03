@@ -41,7 +41,7 @@ export default function ProjectOverviewPage() {
   const [vulnHeaderContent, setVulnHeaderContent] = useState<VulnerabilityHeaderContent | null>(null);
 
   const realtime = useRealtimeStatus(organizationId, projectId);
-  const isExtractionOngoing = checkExtractionOngoing(realtime.status);
+  const isExtractionOngoing = checkExtractionOngoing(realtime.status, realtime.extractionStep);
 
   const canManageSidebars = useMemo(() => {
     if (!userPermissions) return false;
