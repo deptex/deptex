@@ -4,7 +4,6 @@ import { Package, ChevronDown, GitPullRequest, Loader2, Scale, Ban, CheckCircle2
 import type { CenterNodeData } from './useGraphLayout';
 import { api } from '../../lib/api';
 import type { BannedVersion } from '../../lib/api';
-import { isLicenseAllowed } from '../../lib/compliance-utils';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -123,15 +122,9 @@ function CenterNodeComponent({ data }: NodeProps) {
 
   const colorScheme = getColorScheme();
 
-  // License badge color
-  const licenseAllowed = isLicenseAllowed(license, policies ?? null);
+  // License badge color — always neutral gray
   const licenseLabel = license && license !== 'Unknown' ? license : null;
-  let licenseBadgeClass = 'bg-transparent text-foreground-secondary border border-border/60';
-  if (licenseAllowed === true) {
-    licenseBadgeClass = 'bg-transparent text-foreground-secondary border border-border/60';
-  } else if (licenseAllowed === false) {
-    licenseBadgeClass = 'bg-destructive/10 text-destructive border-destructive/20';
-  }
+  const licenseBadgeClass = 'bg-transparent text-foreground-secondary border border-border/60';
 
   return (
     <div
@@ -307,7 +300,7 @@ function CenterNodeComponent({ data }: NodeProps) {
         const banStripBelow = isViewingAlternateVersion && (bannedVersionsLoading || isBanned || canManage);
         if (!isViewingAlternateVersion || !hasPrContent) return null;
         return (
-          <div className={`mt-2 -mx-5 px-5 ${banStripBelow ? 'pt-2.5 pb-1.5' : 'py-2.5'} border-t border-border bg-[#141618] ${!banStripBelow ? 'rounded-b-xl' : ''}`}>
+          <div className={`mt-2 -mx-5 px-5 ${banStripBelow ? 'pt-2.5 pb-1.5' : 'py-2.5'} border-t border-border bg-background-card ${!banStripBelow ? 'rounded-b-xl' : ''}`}>
           {existingPr ? (
             <a
               href={existingPr.pr_url}
@@ -339,7 +332,7 @@ function CenterNodeComponent({ data }: NodeProps) {
 
       {/* Ban / Banned button — full-width strip; compact (mt-0) only when PR strip is directly above. Show loading when banned status OR bump scope (canManage) is still loading to avoid empty flash when prefetch wins. */}
       {(bannedVersionsLoading || bumpScopeLoading) ? (
-        <div className={`${isViewingAlternateVersion && (existingPr || !bannedVersions?.some((b: BannedVersion) => b.banned_version === version)) ? 'mt-0 border-t-0 pt-1.5 pb-2.5' : 'mt-2 border-t border-border py-2.5'} -mx-5 px-5 bg-[#141618] rounded-b-xl`}>
+        <div className={`${isViewingAlternateVersion && (existingPr || !bannedVersions?.some((b: BannedVersion) => b.banned_version === version)) ? 'mt-0 border-t-0 pt-1.5 pb-2.5' : 'mt-2 border-t border-border py-2.5'} -mx-5 px-5 bg-background-card rounded-b-xl`}>
           <div
             className="flex items-center justify-center gap-1.5 w-full px-3 py-1.5 rounded-md text-xs font-medium bg-foreground-secondary/5 text-foreground-secondary border border-border cursor-default"
             aria-busy="true"
@@ -354,7 +347,7 @@ function CenterNodeComponent({ data }: NodeProps) {
         if (activeBan) {
           const hasPrStripAbove = isViewingAlternateVersion && (existingPr || !bannedVersions?.some((b: BannedVersion) => b.banned_version === version));
           return (
-            <div className={`${hasPrStripAbove ? 'mt-0 border-t-0 pt-1.5 pb-2.5' : 'mt-2 border-t border-border py-2.5'} -mx-5 px-5 bg-[#141618] rounded-b-xl`}>
+            <div className={`${hasPrStripAbove ? 'mt-0 border-t-0 pt-1.5 pb-2.5' : 'mt-2 border-t border-border py-2.5'} -mx-5 px-5 bg-background-card rounded-b-xl`}>
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -371,13 +364,13 @@ function CenterNodeComponent({ data }: NodeProps) {
         if (canManage) {
           const hasPrStripAbove = isViewingAlternateVersion && (existingPr || !bannedVersions?.some((b: BannedVersion) => b.banned_version === version));
           return (
-            <div className={`${hasPrStripAbove ? 'mt-0 border-t-0 pt-1.5 pb-2.5' : 'mt-2 border-t border-border py-2.5'} -mx-5 px-5 bg-[#141618] rounded-b-xl`}>
+            <div className={`${hasPrStripAbove ? 'mt-0 border-t-0 pt-1.5 pb-2.5' : 'mt-2 border-t border-border py-2.5'} -mx-5 px-5 bg-background-card rounded-b-xl`}>
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   onBanClick?.(version);
                 }}
-                className="flex items-center justify-center gap-1.5 w-full px-3 py-1.5 rounded-md text-xs font-medium bg-foreground-secondary/5 text-foreground-secondary border border-border hover:bg-destructive/10 hover:text-destructive hover:border-destructive/20 transition-colors cursor-pointer"
+                className="flex items-center justify-center gap-1.5 w-full px-3 py-1.5 rounded-md text-xs font-medium bg-destructive/5 text-destructive/70 border border-destructive/15 hover:bg-destructive/10 hover:text-destructive hover:border-destructive/25 transition-colors cursor-pointer"
               >
                 <Ban className="h-3 w-3" />
                 Ban version

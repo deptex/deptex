@@ -46,6 +46,7 @@ import { isExtractionOngoing as checkExtractionOngoing } from '../../lib/extract
 import { Toaster } from '../../components/ui/toaster';
 import { cn } from '../../lib/utils';
 import { ComplianceSidepanel, type ComplianceSection } from '../../components/ComplianceSidepanel';
+import { ExtractionProgressCard } from '../../components/ExtractionProgressCard';
 
 interface ProjectContextType {
   project: ProjectWithRole | null;
@@ -883,7 +884,7 @@ export function ProjectComplianceContent(props: ProjectComplianceContentProps) {
             embedInSidebar ? embedShellBg : 'bg-background-content'
           )}
         >
-          {loading ? (
+          {(loading || realtime.isLoading) ? (
             contentSkeleton
           ) : error ? (
             <div className={contentShellClass}>
@@ -896,19 +897,13 @@ export function ProjectComplianceContent(props: ProjectComplianceContentProps) {
             {activeSection === 'project' && (
             <div className="space-y-8">
               {isExtracting ? (
-                <div className="rounded-lg border border-border bg-background-card shadow-sm p-6">
-                  <div className="flex items-center gap-4">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border bg-background-subtle">
-                      <Loader2 className="h-5 w-5 animate-spin text-foreground-secondary" aria-hidden />
-                    </div>
-                    <div className="flex-1 space-y-1 min-w-0">
-                      <h3 className="text-sm font-semibold text-foreground">Extraction in progress</h3>
-                      <p className="text-sm text-foreground-secondary">
-                        Compliance status will appear here once the scan completes.
-                      </p>
-                    </div>
-                  </div>
-                </div>
+                <ExtractionProgressCard
+                  title="Extraction in progress"
+                  description="Compliance status will appear here once the scan completes."
+                  organizationId={organizationId}
+                  projectId={projectId}
+                  onCancelled={loadData}
+                />
               ) : noExtraction ? (
                 <div className="rounded-lg border border-border bg-background-card shadow-sm p-10 text-center">
                   <div className="flex justify-center">

@@ -574,13 +574,21 @@ export async function applyEpdScoringFallback(
     const depth = hasFlowDepth
       ? Math.max(0, (flow!.minFlowLength - 1))
       : fallbackDepthFromLevel((row.reachability_level as string | null) ?? null);
+    // When no BYOK: assume worst-case entry point (PUBLIC_UNAUTH, weight 1.0).
+    // When BYOK exists but AI isn't called or fails: use heuristic from entry tags.
     const fallbackEntry = classifyFallbackEntryPoint(flow?.tag ?? null);
-    let finalClassification = fallbackEntry.classification;
-    let finalWeight = fallbackEntry.weight;
+    let finalClassification: EntryPointClassification = hasAnthropicByok
+      ? fallbackEntry.classification
+      : 'PUBLIC_UNAUTH';
+    let finalWeight = hasAnthropicByok
+      ? fallbackEntry.weight
+      : ENTRY_WEIGHT_BY_CLASS['PUBLIC_UNAUTH'];
     let finalIsSanitized = false;
     let sinkPrecondition: string | null = null;
     let sanitizationPostcondition: string | null = null;
-    let confidence: 'high' | 'medium' | 'low' = hasFlowDepth ? 'medium' : 'low';
+    let confidence: 'high' | 'medium' | 'low' = hasAnthropicByok
+      ? (hasFlowDepth ? 'medium' : 'low')
+      : 'low';
     let modelUsed: string | null = null;
     let epdStatus = hasAnthropicByok ? 'fallback_no_ai' : 'byok_missing';
 

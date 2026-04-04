@@ -186,8 +186,8 @@ function buildProjectGraph(props: OverviewGraphProps): { nodes: Node[]; edges: E
       id: `e-center-${dep.id}`,
       source: 'center', target: `dep-${dep.id}`,
       sourceHandle: handles.source, targetHandle: handles.target,
-      style: { stroke: 'rgba(113,113,122,0.3)', strokeWidth: 1 },
-      type: 'straight',
+      style: { stroke: 'rgba(113,113,122,0.3)', strokeWidth: 1, strokeDasharray: '5 5' },
+      type: 'step',
     });
   });
 
@@ -238,8 +238,8 @@ function buildTeamGraph(props: OverviewGraphProps): { nodes: Node[]; edges: Edge
       id: `e-center-${proj.id}`,
       source: 'center', target: `proj-${proj.id}`,
       sourceHandle: handles.source, targetHandle: handles.target,
-      style: { stroke: 'rgba(113,113,122,0.3)', strokeWidth: 1 },
-      type: 'straight',
+      style: { stroke: 'rgba(113,113,122,0.3)', strokeWidth: 1, strokeDasharray: '5 5' },
+      type: 'step',
     });
   });
 
@@ -291,8 +291,8 @@ function buildOrgGraph(props: OverviewGraphProps): { nodes: Node[]; edges: Edge[
       id: `e-center-${team.id}`,
       source: 'center', target: `team-${team.id}`,
       sourceHandle: handles.source, targetHandle: handles.target,
-      style: { stroke: 'rgba(113,113,122,0.3)', strokeWidth: 1 },
-      type: 'straight',
+      style: { stroke: 'rgba(113,113,122,0.3)', strokeWidth: 1, strokeDasharray: '5 5' },
+      type: 'step',
     });
 
     // Team's projects
@@ -316,8 +316,8 @@ function buildOrgGraph(props: OverviewGraphProps): { nodes: Node[]; edges: Edge[
         id: `e-${team.id}-${proj.id}`,
         source: `team-${team.id}`, target: `proj-${proj.id}`,
         sourceHandle: `s-${ph.source}`, targetHandle: ph.target,
-        style: { stroke: 'rgba(113,113,122,0.2)', strokeWidth: 1 },
-        type: 'straight',
+        style: { stroke: 'rgba(113,113,122,0.2)', strokeWidth: 1, strokeDasharray: '5 5' },
+        type: 'step',
       });
       projectCount++;
     });

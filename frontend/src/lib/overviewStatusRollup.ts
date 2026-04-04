@@ -19,12 +19,14 @@ export interface OverviewStatusRollup {
   badgeColor: string | null;
   /** Single-line tooltip: "3 Compliant, 1 Non-Compliant, 1 No status". */
   tooltipText: string;
+  /** Number of projects whose status has is_passing === false. */
+  nonPassingCount: number;
 }
 
-function buildMetaById(statuses: OrganizationStatus[]): Map<string, { rank: number; name: string; color: string | null }> {
-  const m = new Map<string, { rank: number; name: string; color: string | null }>();
+function buildMetaById(statuses: OrganizationStatus[]): Map<string, { rank: number; name: string; color: string | null; isPassing: boolean }> {
+  const m = new Map<string, { rank: number; name: string; color: string | null; isPassing: boolean }>();
   for (const s of statuses) {
-    m.set(s.id, { rank: s.rank, name: s.name, color: s.color });
+    m.set(s.id, { rank: s.rank, name: s.name, color: s.color, isPassing: s.is_passing ?? true });
   }
   return m;
 }
@@ -39,20 +41,20 @@ export function computeOverviewStatusRollup(
   statuses: OrganizationStatus[]
 ): OverviewStatusRollup {
   const metaById = buildMetaById(statuses);
-  const metaByName = new Map<string, { rank: number; name: string; color: string | null; id: string }>();
+  const metaByName = new Map<string, { rank: number; name: string; color: string | null; id: string; isPassing: boolean }>();
   for (const s of statuses) {
-    metaByName.set(s.name.trim().toLowerCase(), { rank: s.rank, name: s.name, color: s.color, id: s.id });
+    metaByName.set(s.name.trim().toLowerCase(), { rank: s.rank, name: s.name, color: s.color, id: s.id, isPassing: s.is_passing ?? true });
   }
 
-  type Agg = { count: number; label: string; color: string | null; rank: number };
+  type Agg = { count: number; label: string; color: string | null; rank: number; isPassing: boolean };
   const buckets = new Map<string, Agg>();
 
-  const bump = (key: string, label: string, color: string | null, rank: number) => {
+  const bump = (key: string, label: string, color: string | null, rank: number, isPassing: boolean) => {
     const cur = buckets.get(key);
     if (cur) {
       cur.count += 1;
     } else {
-      buckets.set(key, { count: 1, label, color, rank });
+      buckets.set(key, { count: 1, label, color, rank, isPassing });
     }
   };
 
@@ -60,7 +62,7 @@ export function computeOverviewStatusRollup(
     const sid = p.statusId;
     if (sid && metaById.has(sid)) {
       const m = metaById.get(sid)!;
-      bump(sid, m.name, m.color, m.rank);
+      bump(sid, m.name, m.color, m.rank, m.isPassing);
       continue;
     }
 
@@ -68,14 +70,14 @@ export function computeOverviewStatusRollup(
     if (sname) {
       const mByName = metaByName.get(sname.toLowerCase());
       if (mByName) {
-        bump(mByName.id, mByName.name, mByName.color, mByName.rank);
+        bump(mByName.id, mByName.name, mByName.color, mByName.rank, mByName.isPassing);
         continue;
       }
     } else {
       // fall through to unknown
     }
 
-    bump(UNKNOWN_KEY, 'No status', null, Number.NEGATIVE_INFINITY);
+    bump(UNKNOWN_KEY, 'No status', null, Number.NEGATIVE_INFINITY, false);
   }
 
   const bucketEntries = Array.from(buckets.entries()).filter(([key]) => key !== UNKNOWN_KEY);
@@ -106,10 +108,15 @@ export function computeOverviewStatusRollup(
 
   const tooltipText = breakdownRows.map((row) => `${row.count} ${row.label}`).join(', ');
 
+  const nonPassingCount = Array.from(buckets.entries())
+    .filter(([key, v]) => key !== UNKNOWN_KEY && !v.isPassing)
+    .reduce((sum, [, v]) => sum + v.count, 0);
+
   return {
     badgeLabel,
     badgeColor,
     tooltipText: tooltipText || 'No projects',
+    nonPassingCount,
   };
 }
 

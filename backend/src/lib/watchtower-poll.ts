@@ -64,6 +64,57 @@ async function fetchLatestNpmVersion(name: string): Promise<{ latestVersion: str
   }
 }
 
+const DOWNLOAD_DELAY_MS = Number(process.env.DOWNLOAD_REFRESH_DELAY_MS) || 2000;
+
+async function fetchNpmWeeklyDownloads(name: string): Promise<number | null> {
+  try {
+    // npm downloads API expects scoped packages with slash (not encoded)
+    const url = `https://api.npmjs.org/downloads/point/last-week/${name}`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Deptex-Poller' },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as any;
+    return typeof data?.downloads === 'number' ? data.downloads : null;
+  } catch {
+    return null;
+  }
+}
+
+async function refreshDownloadCounts(byName: Map<string, { ids: string[]; directIds: string[] }>): Promise<{ updated: number; errors: number }> {
+  // Only fetch downloads for direct dependencies (user-facing)
+  const directNames = Array.from(byName.entries())
+    .filter(([, g]) => g.directIds.length > 0)
+    .map(([name]) => name);
+
+  console.log(`[watchtower-poll] Refreshing download counts for ${directNames.length} direct dependencies (${DOWNLOAD_DELAY_MS}ms delay)...`);
+
+  let updated = 0;
+  let errors = 0;
+
+  for (const name of directNames) {
+    await delay(DOWNLOAD_DELAY_MS);
+    try {
+      const downloads = await fetchNpmWeeklyDownloads(name);
+      if (downloads != null) {
+        await supabase
+          .from('dependencies')
+          .update({
+            weekly_downloads: downloads,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('name', name);
+        updated++;
+      }
+    } catch {
+      errors++;
+    }
+  }
+
+  console.log(`[watchtower-poll] Download refresh complete. Updated: ${updated}, Errors: ${errors}`);
+  return { updated, errors };
+}
+
 export async function runDependencyRefresh(): Promise<{ processed: number; errors: number; vulnsUpdated: number; newVersionJobs: number }> {
   console.log('[watchtower-poll] Dependency refresh starting...');
 
@@ -182,7 +233,10 @@ export async function runDependencyRefresh(): Promise<{ processed: number; error
     }
   }
 
-  console.log(`[watchtower-poll] Refresh complete. Processed: ${processed}, Errors: ${errors}, Vulns: ${vulnsUpdated}, New-version jobs: ${newVersionJobsInserted}`);
+  // Refresh weekly download counts (sequential, slow — runs after version + vuln refresh)
+  const downloads = await refreshDownloadCounts(byName);
+
+  console.log(`[watchtower-poll] Refresh complete. Processed: ${processed}, Errors: ${errors}, Vulns: ${vulnsUpdated}, New-version jobs: ${newVersionJobsInserted}, Downloads updated: ${downloads.updated}`);
   return { processed, errors, vulnsUpdated, newVersionJobs: newVersionJobsInserted };
 }
 

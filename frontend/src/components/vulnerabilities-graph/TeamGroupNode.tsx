@@ -2,7 +2,6 @@ import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { overviewStatusBadgeInlineStyle } from '../../lib/overviewStatusRollup';
-import { RoleBadge } from '../RoleBadge';
 import { GraphScopePill } from './GraphScopePill';
 import type { OrgSatelliteTargetEdge } from './overviewOrgLayout';
 import { OverviewOrgTargetHandleFan } from './overviewOrgFlowHandles';
@@ -35,6 +34,8 @@ export interface TeamGroupNodeData {
   overviewCollapsedSummary?: boolean;
   /** Optional member count for collapsed summary line. */
   overviewMemberCount?: number;
+  /** Count of projects with a non-passing status (for "X issues" display). */
+  overviewNonPassingCount?: number;
 }
 
 /** Floor only for empty / degenerate layouts; normal sizes come from content. */
@@ -52,9 +53,6 @@ export const TEAM_CONTAINER_FOOTER_HEIGHT = 36;
 function TeamGroupNodeComponent({ data }: NodeProps) {
   const {
     teamName = 'Team',
-    roleLabel,
-    roleColor,
-    role,
     width = TEAM_CONTAINER_MIN_WIDTH,
     height = TEAM_CONTAINER_MIN_HEIGHT,
     overviewOrgEdgeTargetHandle,
@@ -64,6 +62,7 @@ function TeamGroupNodeComponent({ data }: NodeProps) {
     overviewProjectsTotal,
     overviewCollapsedSummary,
     overviewMemberCount,
+    overviewNonPassingCount,
   } = (data as unknown as TeamGroupNodeData) ?? {};
 
   const hasStatusRollup =
@@ -72,7 +71,6 @@ function TeamGroupNodeComponent({ data }: NodeProps) {
     overviewStatusTooltip != null &&
     overviewStatusTooltip !== '';
 
-  const roleForBadge = (role || roleLabel || 'member').toLowerCase();
   const sideMid = height / 2;
   const tbMid = width / 2;
   const overviewSideHandleStyle = { top: sideMid, transform: 'translateY(-50%)' } as const;
@@ -123,10 +121,10 @@ function TeamGroupNodeComponent({ data }: NodeProps) {
       <Handle id="source-left" type="source" position={Position.Left} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
 
       {/* Header: team name + role badge vertically centered as a row (2-line title: badge centers on block) */}
-      <div className="relative z-[1] flex shrink-0 items-center gap-2 px-4 pr-11 pt-3 pb-1.5">
+      <div className="relative z-[1] flex flex-1 flex-col justify-start gap-0.5 px-4 pr-11 pt-4">
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="min-w-0 flex-1 text-left text-base font-semibold leading-snug text-foreground line-clamp-2 break-words">
+            <span className="min-w-0 text-left text-base font-semibold leading-snug text-foreground line-clamp-2 break-words">
               {teamName}
             </span>
           </TooltipTrigger>
@@ -134,14 +132,10 @@ function TeamGroupNodeComponent({ data }: NodeProps) {
             {teamName}
           </TooltipContent>
         </Tooltip>
-        {roleLabel && (
-          <div className="shrink-0">
-            <RoleBadge
-              role={roleForBadge}
-              roleDisplayName={roleLabel}
-              roleColor={roleColor ?? null}
-            />
-          </div>
+        {overviewCollapsedSummary && overviewProjectsTotal != null && (
+          <p className="text-xs text-muted-foreground tabular-nums">
+            {overviewProjectsTotal} {overviewProjectsTotal === 1 ? 'project' : 'projects'}
+          </p>
         )}
       </div>
 
@@ -150,28 +144,11 @@ function TeamGroupNodeComponent({ data }: NodeProps) {
         <GraphScopePill type="team" />
       </div>
 
-      {/* Collapsed: hug summary; card height from layout matches (no flex-1 gap before footer) */}
-      {overviewCollapsedSummary && overviewProjectsTotal != null && (
-        <div className="relative z-[1] shrink-0 px-4 pb-1.5 pt-0">
-          <div className="min-w-0 flex flex-col gap-0.5">
-            <p className="text-sm font-medium text-foreground tabular-nums">
-              {overviewProjectsTotal} {overviewProjectsTotal === 1 ? 'project' : 'projects'}
-            </p>
-            {typeof overviewMemberCount === 'number' && (
-              <p className="text-xs text-foreground-secondary tabular-nums">
-                {overviewMemberCount} {overviewMemberCount === 1 ? 'member' : 'members'}
-              </p>
-            )}
-          </div>
-        </div>
-      )}
 
-      {/* Spacer fills remaining card height so the status footer sits flush to the bottom (same flex pattern as org overview project tiles). */}
-      <div className="min-h-0 flex-1" aria-hidden />
 
       {/* Bottom bar: aggregated project status (worst-of + breakdown tooltip) — parity with VulnProjectNode org overview footer */}
       {hasStatusRollup && (
-        <div className="relative z-[1] flex shrink-0 items-center gap-2 border-t border-border bg-background-card-header/95 px-3 py-2">
+        <div className="relative z-[1] flex shrink-0 items-center gap-2 bg-background-card-header/95 px-4 py-3">
           <Tooltip>
             <TooltipTrigger asChild>
               <span

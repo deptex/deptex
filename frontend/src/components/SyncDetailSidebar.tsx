@@ -3,8 +3,14 @@ import { Check, Copy, ChevronDown, Loader2, Ban } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Button } from './ui/button';
 import { useToast } from '../hooks/use-toast';
-import { supabase } from '../lib/supabase';
-import { api, type ExtractionLog, type ExtractionRun } from '../lib/api';
+import { api, type ExtractionRun } from '../lib/api';
+import {
+  useExtractionLogs,
+  formatTimestamp,
+  formatDuration,
+  levelColor,
+  levelDotClass,
+} from '../hooks/useExtractionLogs';
 
 export interface SyncLogEntry {
   id: number;
@@ -26,46 +32,22 @@ interface SyncDetailSidebarProps {
   onCancelled?: () => void;
 }
 
-function formatTimestamp(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-function levelColor(level: string): string {
-  switch (level) {
-    case 'success': return 'text-emerald-400';
-    case 'warning': return 'text-amber-400';
-    case 'error': return 'text-red-400';
-    default: return 'text-zinc-400';
-  }
-}
-
-function levelDot(level: string): string {
-  switch (level) {
-    case 'success': return 'bg-emerald-400';
-    case 'warning': return 'bg-amber-400';
-    case 'error': return 'bg-red-400';
-    default: return 'bg-blue-400';
-  }
-}
-
 export function SyncDetailSidebar({ projectId, organizationId, initialRunId, onClose, onCancelled }: SyncDetailSidebarProps) {
   const [panelVisible, setPanelVisible] = useState(false);
-  const [logs, setLogs] = useState<ExtractionLog[]>([]);
   const [runs, setRuns] = useState<ExtractionRun[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [showRunSelector, setShowRunSelector] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
-  const [logsLoading, setLogsLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
+
+  const { logs, filteredLogs, isLoading: logsLoading, isComplete, hasError, isActive } = useExtractionLogs({
+    projectId,
+    organizationId,
+    runId: selectedRunId,
+  });
 
   useEffect(() => {
     setPanelVisible(false);
@@ -87,46 +69,10 @@ export function SyncDetailSidebar({ projectId, organizationId, initialRunId, onC
   }, [initialRunId, runs]);
 
   useEffect(() => {
-    const runId = selectedRunId || undefined;
-    setLogsLoading(true);
-    api.getExtractionLogs(organizationId, projectId, runId).then((data) => {
-      setLogs(data);
-      setLogsLoading(false);
-    }).catch(() => {
-      setLogs([]);
-      setLogsLoading(false);
-    });
-  }, [organizationId, projectId, selectedRunId]);
-
-  useEffect(() => {
-    const channel = supabase
-      .channel(`extraction-logs-${projectId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'extraction_logs',
-          filter: `project_id=eq.${projectId}`,
-        },
-        (payload) => {
-          const newLog = payload.new as ExtractionLog;
-          if (selectedRunId && newLog.run_id !== selectedRunId) return;
-          setLogs((prev) => [...prev, newLog]);
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [projectId, selectedRunId]);
-
-  useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [logs]);
+  }, [filteredLogs]);
 
   const handleClose = useCallback(() => {
     setPanelVisible(false);
@@ -146,14 +92,6 @@ export function SyncDetailSidebar({ projectId, organizationId, initialRunId, onC
     }
   }, [organizationId, projectId, toast, onCancelled]);
 
-  // Filter out atom analysis progress / elapsed messages
-  const filteredLogs = logs.filter((line) => {
-    const msg = (line.message || '').toLowerCase();
-    if (/atom analysis in progress/i.test(msg)) return false;
-    if (/\d+\s*minute\s*elapsed|elapsed\s*:\s*\d+/i.test(msg)) return false;
-    return true;
-  });
-
   const logText = filteredLogs.map((l) => `${formatTimestamp(l.created_at)}  [${l.level}] ${l.message}`).join('\n');
 
   const handleCopyLogs = useCallback(() => {
@@ -162,11 +100,6 @@ export function SyncDetailSidebar({ projectId, organizationId, initialRunId, onC
     toast({ title: 'Logs copied to clipboard' });
     setTimeout(() => setCopied(false), 2000);
   }, [logText, toast]);
-
-  const lastLog = logs[logs.length - 1];
-  const isComplete = lastLog?.step === 'complete' && (lastLog.level === 'success' || lastLog.level === 'error');
-  const hasError = lastLog?.level === 'error';
-  const isActive = !isComplete && logs.length > 0;
 
   const currentRun = runs.find((r) => selectedRunId ? r.run_id === selectedRunId : true);
 
@@ -319,7 +252,7 @@ export function SyncDetailSidebar({ projectId, organizationId, initialRunId, onC
                     <span className="text-zinc-600 shrink-0 tabular-nums select-none">
                       {formatTimestamp(line.created_at)}
                     </span>
-                    <span className={cn('h-2 w-2 rounded-full shrink-0 mt-1.5', levelDot(line.level))} />
+                    <span className={cn('h-2 w-2 rounded-full shrink-0 mt-1.5', levelDotClass(line.level))} />
                     <span className={cn('break-all', levelColor(line.level))}>
                       {line.message}
                     </span>

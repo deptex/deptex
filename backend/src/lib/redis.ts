@@ -213,11 +213,56 @@ export async function queueExtractionJob(
       `[${new Date().toISOString()}] Queued extraction job for project ${projectId}, repo ${repoRecord.repo_full_name} (run_id: ${runId})`
     );
 
+    // Write initial log entry so the frontend shows a timestamp immediately
+    try {
+      await supabase.from('extraction_logs').insert({
+        project_id: projectId,
+        run_id: runId,
+        step: 'cloning',
+        level: 'info',
+        message: 'Extraction queued — starting worker machine…',
+        duration_ms: null,
+        metadata: null,
+      });
+    } catch {
+      // Fire-and-forget: log write failure must not block extraction
+    }
+
     // Start a Fly machine (best-effort — job is safe in Supabase if this fails)
     try {
-      await startExtractionMachine();
+      const machineId = await startExtractionMachine();
+      if (!machineId) {
+        console.warn(`[EXTRACT] Failed to start Fly machine (job stays queued for recovery)`);
+        // Write machine failure to extraction_logs so frontend can display it
+        try {
+          await supabase.from('extraction_logs').insert({
+            project_id: projectId,
+            run_id: runId,
+            step: 'cloning',
+            level: 'warning',
+            message: 'Failed to start worker machine — job queued for automatic retry',
+            duration_ms: null,
+            metadata: null,
+          });
+        } catch {
+          // Fire-and-forget
+        }
+      }
     } catch (e: any) {
       console.warn(`[EXTRACT] Failed to start Fly machine (job stays queued for recovery): ${e.message}`);
+      try {
+        await supabase.from('extraction_logs').insert({
+          project_id: projectId,
+          run_id: runId,
+          step: 'cloning',
+          level: 'error',
+          message: `Failed to start extraction machine: ${e.message}`,
+          duration_ms: null,
+          metadata: null,
+        });
+      } catch {
+        // Fire-and-forget
+      }
     }
 
     return { success: true, run_id: runId };

@@ -22,8 +22,8 @@ jest.mock('../lib/supabase', () => ({
 jest.mock('../lib/fly-machines', () => ({
   startAiderMachine: jest.fn().mockResolvedValue('machine-123'),
   stopFlyMachine: jest.fn(),
-  AIDER_CONFIG: { app: 'test-aider', guest: { cpus: 4, memory_mb: 8192, cpu_kind: 'shared' }, maxBurst: 3, stopTimeout: '15m' },
-  EXTRACTION_CONFIG: { app: 'test-extraction', guest: { cpus: 8, memory_mb: 65536, cpu_kind: 'performance' }, maxBurst: 5, stopTimeout: '4h' },
+  AIDER_CONFIG: { app: 'test-aider', guest: { cpus: 4, memory_mb: 8192, cpu_kind: 'shared' }, maxBurst: 3 },
+  EXTRACTION_CONFIG: { app: 'test-extraction', guest: { cpus: 8, memory_mb: 65536, cpu_kind: 'performance' }, maxBurst: 5 },
 }));
 
 const mockRedis = {
@@ -114,7 +114,6 @@ describe('Phase 7: AI Fix Engine', () => {
       expect(AIDER_CONFIG.guest.cpus).toBe(4);
       expect(AIDER_CONFIG.guest.memory_mb).toBe(8192);
       expect(AIDER_CONFIG.guest.cpu_kind).toBe('shared');
-      expect(AIDER_CONFIG.stopTimeout).toBe('15m');
     });
 
     it('6. EXTRACTION_CONFIG preserved after refactor', async () => {
@@ -122,7 +121,6 @@ describe('Phase 7: AI Fix Engine', () => {
       expect(EXTRACTION_CONFIG.guest.cpus).toBe(8);
       expect(EXTRACTION_CONFIG.guest.memory_mb).toBe(65536);
       expect(EXTRACTION_CONFIG.guest.cpu_kind).toBe('performance');
-      expect(EXTRACTION_CONFIG.stopTimeout).toBe('4h');
     });
   });
 

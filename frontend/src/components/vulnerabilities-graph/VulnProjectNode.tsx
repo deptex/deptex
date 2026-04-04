@@ -61,7 +61,7 @@ export const OVERVIEW_TEAM_RING_CARD_WIDTH = 276;
 export const OVERVIEW_TEAM_RING_CARD_HEIGHT = 104;
 /** Org overview project tiles + ungrouped satellites: narrower than team cards; includes a status footer row. */
 export const OVERVIEW_PROJECT_NODE_WIDTH = 220;
-export const OVERVIEW_PROJECT_NODE_HEIGHT = 90;
+export const OVERVIEW_PROJECT_NODE_HEIGHT = 88;
 
 function getColorScheme(worstSeverity: WorstSeverity | undefined) {
   const s = worstSeverity ?? 'none';
@@ -153,7 +153,7 @@ function statusBadgeColorFallback(label: string | null | undefined): string | nu
 }
 
 function VulnProjectNodeComponent({ data }: NodeProps) {
-  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, hasExtractingProjects, neutralStyle, roleBadge, roleBadgeColor, statusBadge, statusBadgeColor, riskGrade, projectsCount, membersCount, assetTierName, overviewOrgEdgeTargetHandle } =
+  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, hasExtractingProjects, neutralStyle, roleBadge, roleBadgeColor, statusBadge, statusBadgeColor, riskGrade, projectsCount, membersCount, dependenciesCount, assetTierName, overviewOrgEdgeTargetHandle } =
     (data as unknown as VulnProjectNodeData) ?? {};
   const hasKnownFramework = framework && framework.toLowerCase() !== 'unknown';
   const frameworkIdForIcon = hasKnownFramework ? framework : undefined;
@@ -293,7 +293,7 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
             <GraphScopePill type="project" />
           </div>
           {/* Top: icon + name (status lives in footer, like team cards) */}
-          <div className="flex min-h-0 flex-1 items-center gap-2.5 px-3 pt-2.5 pb-2 pr-10">
+          <div className="flex items-center gap-1 pl-[6px] pr-10 pt-2 pb-2">
             {frameworkIdForIcon ? (
               <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center [&_svg]:text-white">
                 <FrameworkIcon frameworkId={frameworkIdForIcon} size={18} className="text-white" />
@@ -310,7 +310,7 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
             </div>
           </div>
           {/* Bottom: status strip (team card parity) */}
-          <div className="flex shrink-0 items-center border-t border-border bg-background-card-header/95 px-3 py-2">
+          <div className="mt-auto flex shrink-0 items-center bg-background-card-header/95 px-3 pt-2 pb-3">
             {isExtracting ? (
               <span className="inline-flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
                 <Loader2 className="h-3 w-3 shrink-0 animate-spin" aria-hidden />

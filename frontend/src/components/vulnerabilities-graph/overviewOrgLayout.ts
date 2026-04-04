@@ -2,9 +2,9 @@
  * Layout slot + collision box for the org hub center card (larger than default vuln graph center).
  * Keeps satellite placement from overlapping the beefier org node.
  */
-export const ORG_OVERVIEW_CENTER_WIDTH = 328;
-/** Approx. rendered height of the org center card (avatar + title block only). */
-export const ORG_OVERVIEW_CENTER_HEIGHT = 104;
+export const ORG_OVERVIEW_CENTER_WIDTH = 300;
+/** Rendered height of the org center card. */
+export const ORG_OVERVIEW_CENTER_HEIGHT = 140;
 
 const ORG_HALF_W = ORG_OVERVIEW_CENTER_WIDTH / 2;
 const ORG_HALF_H = ORG_OVERVIEW_CENTER_HEIGHT / 2;

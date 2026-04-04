@@ -5,7 +5,6 @@ export interface FlyMachineConfig {
   image?: string;
   guest: { cpus: number; memory_mb: number; cpu_kind: 'shared' | 'performance' };
   maxBurst: number;
-  stopTimeout: string;
   region?: string;
 }
 
@@ -13,21 +12,18 @@ export const EXTRACTION_CONFIG: FlyMachineConfig = {
   app: process.env.FLY_EXTRACTION_APP || 'deptex-extraction-worker',
   guest: { cpus: 8, memory_mb: 65536, cpu_kind: 'performance' },
   maxBurst: parseInt(process.env.FLY_MAX_BURST_MACHINES || '5', 10),
-  stopTimeout: '4h',
 };
 
 export const AIDER_CONFIG: FlyMachineConfig = {
   app: process.env.FLY_AIDER_APP || 'deptex-aider-worker',
   guest: { cpus: 4, memory_mb: 8192, cpu_kind: 'shared' },
   maxBurst: parseInt(process.env.FLY_AIDER_MAX_BURST || '3', 10),
-  stopTimeout: '15m',
 };
 
 export const WATCHTOWER_CONFIG: FlyMachineConfig = {
   app: process.env.FLY_WATCHTOWER_APP || 'deptex-watchtower-worker',
   guest: { cpus: 1, memory_mb: 1024, cpu_kind: 'shared' },
   maxBurst: 1,
-  stopTimeout: '4h',
 };
 
 interface FlyMachine {
@@ -82,8 +78,16 @@ export async function stopFlyMachine(app: string, machineId: string): Promise<vo
   }
 }
 
-async function createBurstMachine(config: FlyMachineConfig): Promise<string> {
-  const image = config.image || `registry.fly.io/${config.app}:latest`;
+/** Extract the image reference from an existing machine's config. */
+function getImageFromMachine(machine: FlyMachine): string | null {
+  const cfg = machine.config as Record<string, unknown> | undefined;
+  if (!cfg) return null;
+  if (typeof cfg.image === 'string' && cfg.image) return cfg.image;
+  return null;
+}
+
+async function createBurstMachine(config: FlyMachineConfig, imageOverride?: string): Promise<string> {
+  const image = imageOverride || config.image || `registry.fly.io/${config.app}:latest`;
   const region = config.region || 'iad';
 
   const res = await flyFetch(config.app, '/machines', {
@@ -96,7 +100,6 @@ async function createBurstMachine(config: FlyMachineConfig): Promise<string> {
         restart: { policy: 'no' },
         image,
         guest: config.guest,
-        stop_config: { timeout: config.stopTimeout },
       },
     }),
   });
@@ -130,6 +133,17 @@ export async function startFlyMachine(config: FlyMachineConfig): Promise<string 
       const machines = await listMachines(config.app);
       const stopped = machines.filter((m) => m.state === 'stopped');
 
+      // Resolve the image from an existing machine so burst machines use the
+      // same deployed image instead of guessing `:latest` (which may not exist).
+      let resolvedImage: string | null = null;
+      for (const m of machines) {
+        resolvedImage = getImageFromMachine(m);
+        if (resolvedImage) break;
+      }
+      if (resolvedImage) {
+        console.log(`[FLY] Resolved image from existing machine: ${resolvedImage}`);
+      }
+
       if (stopped.length > 0) {
         for (const machine of stopped) {
           try {
@@ -144,7 +158,7 @@ export async function startFlyMachine(config: FlyMachineConfig): Promise<string 
 
       if (machines.length < config.maxBurst) {
         try {
-          const machineId = await createBurstMachine(config);
+          const machineId = await createBurstMachine(config, resolvedImage ?? undefined);
           console.log(`[FLY] Created ${config.app} burst machine ${machineId} (total: ${machines.length + 1}/${config.maxBurst})`);
           return machineId;
         } catch (e: any) {

@@ -26,6 +26,8 @@ import { api, Organization, Team, Project, TeamWithRole, type ProjectStats, type
 import { cn } from '../../lib/utils';
 import { computeOverviewStatusRollup, type OverviewStatusRollup } from '../../lib/overviewStatusRollup';
 import { isExtractionOngoing } from '../../lib/extractionStatus';
+import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
+import { ExtractionProgressCard } from '../../components/ExtractionProgressCard';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
 import {
@@ -346,6 +348,12 @@ export default function OrganizationVulnerabilitiesPage() {
   } | null>(null);
   const reactFlowPaneRef = useRef<HTMLDivElement | null>(null);
   const focusedNodeIdRef = useRef<string | null>(null);
+
+  // Real-time extraction status for the currently selected project (more accurate than graph node snapshot)
+  const selectedProjectRealtime = useRealtimeStatus(orgId, selectedProjectId ?? undefined);
+  const selectedProjectEffectiveIsExtracting =
+    isExtractionOngoing(selectedProjectRealtime.status, selectedProjectRealtime.extractionStep)
+    || (selectedProjectRealtime.isLoading && selectedProjectIsExtracting);
 
   /** Update URL search params in-place (replace, no new history entry). Pass null to delete a key. */
   const setSidebarParams = useCallback((updates: Record<string, string | null>) => {
@@ -681,6 +689,7 @@ export default function OrganizationVulnerabilitiesPage() {
               assetTierColor: p.asset_tier_color ?? null,
               isExtracting,
               healthScore: typeof (p as Project).health_score === 'number' ? (p as Project).health_score : null,
+              dependenciesCount: (p as Project).direct_dependencies_count ?? null,
             });
           }
         });
@@ -764,6 +773,7 @@ export default function OrganizationVulnerabilitiesPage() {
               statusName: p.status_name ?? null, statusColor: p.status_color ?? null, statusId: p.status_id ?? null,
               assetTierName: p.asset_tier_name ?? null, assetTierColor: p.asset_tier_color ?? null,
               isExtracting, healthScore: typeof p.health_score === 'number' ? p.health_score : null,
+              dependenciesCount: p.direct_dependencies_count ?? null,
             });
           }
         });
@@ -836,7 +846,8 @@ export default function OrganizationVulnerabilitiesPage() {
     organization?.id ?? null,
     organization?.role ?? null,
     orgStatusRollup,
-    teamStatusRollups
+    teamStatusRollups,
+    organization?.plan ?? null
   );
 
   const [graphNodes, setGraphNodes, onNodesChange] = useNodesState<Node>([]);
@@ -1786,8 +1797,9 @@ export default function OrganizationVulnerabilitiesPage() {
                 nodesDraggable={false}
                 nodesConnectable={false}
                 defaultEdgeOptions={{
-                  type: 'default',
+                  type: 'smoothstep',
                   style: { stroke: ORG_OVERVIEW_EDGE_STROKE, strokeWidth: 1 },
+                  pathOptions: { borderRadius: 20 },
                 }}
               >
                 <Background
@@ -2961,12 +2973,17 @@ export default function OrganizationVulnerabilitiesPage() {
               >
                 {projectSidebarTab === 'vulnerabilities' && (
                   <div className="space-y-4">
-                    <h3 className="text-sm font-medium text-foreground">Vulnerabilities</h3>
-                    {selectedProjectIsExtracting ? (
-                      <div className="py-10 flex flex-col items-center gap-3 text-center border border-border rounded-lg bg-background-subtle/50">
-                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" aria-hidden />
-                        <p className="text-sm text-muted-foreground">Project is still extracting — check back soon.</p>
-                      </div>
+                    {!selectedProjectEffectiveIsExtracting && (
+                      <h3 className="text-sm font-medium text-foreground">Vulnerabilities</h3>
+                    )}
+                    {selectedProjectEffectiveIsExtracting ? (
+                      <ExtractionProgressCard
+                        title="Project extraction still in progress"
+                        description="Vulnerabilities will appear here once extraction completes."
+                        showLogsToggle
+                        organizationId={orgId}
+                        projectId={selectedProjectId ?? ''}
+                      />
                     ) : projectStatsLoading && !projectVulnerabilities ? (
                       <OrgProjectVulnerabilitiesTableSkeleton rowCount={8} />
                     ) : !dedupedProjectVulnerabilities.length ? (

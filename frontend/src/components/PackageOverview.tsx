@@ -3,33 +3,25 @@ import {
   Scale,
   Download,
   ExternalLink,
-  CheckCircle,
-  AlertCircle,
   XCircle,
-  Clock,
   Info,
   FileCode,
   GitFork,
   Github,
   Loader2,
   RefreshCw,
-  Wand2,
-  Building2,
   Ghost,
-  GitPullRequest,
   AlertTriangle,
   Ban,
   Sparkles,
-  ArrowUpCircle,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
-import { ProjectDependency, ProjectEffectivePolicies, api, type LatestSafeVersionResponse } from '../lib/api';
+import { Popover, PopoverTrigger, PopoverContent } from './ui/popover';
+import { ProjectDependency, ProjectEffectivePolicies, api } from '../lib/api';
 import { useToast } from '../hooks/use-toast';
-import { isLicenseAllowed, getComplianceStatus, getIssueLabel } from '../lib/compliance-utils';
 
-import { ScoreBreakdownSidebar } from './ScoreBreakdownSidebar';
 import { DeprecateSidebar } from './DeprecateSidebar';
 
 interface PackageOverviewProps {
@@ -48,26 +40,6 @@ interface PackageOverviewProps {
   onDeprecate?: (alternativeName: string) => Promise<void>;
   /** Callback to remove the deprecation for this dependency. */
   onRemoveDeprecation?: () => Promise<void>;
-  /** Existing removal PR URL from overview API (so "View removal PR" persists after reload). */
-  removePrUrlFromOverview?: string | null;
-  /** Latest safe version data from supply chain analysis. */
-  safeVersionData?: LatestSafeVersionResponse | null;
-  /** Current severity filter for safe version calculation. */
-  safeVersionSeverity?: string;
-  /** Callback when severity filter changes. */
-  onSeverityChange?: (severity: string) => void;
-  /** Callback to create bump PR for safe version. */
-  onBumpVersion?: () => Promise<void>;
-  /** Whether safe version data is loading. */
-  safeVersionLoading?: boolean;
-  /** Existing bump PR URL for the safe version. */
-  bumpPrUrl?: string | null;
-  /** Whether we're still checking if a bump PR exists. */
-  bumpPrCheckLoading?: boolean;
-  /** Whether bump PR is being created. */
-  bumping?: boolean;
-  /** When true, show "X other projects across your org"; when false, show "X other projects in your team". Set false when user lacks org-level manage teams & projects. */
-  otherProjectsScopeIsOrg?: boolean;
   /** When true, show a "Dev dependency" badge (package is in devDependencies, not used at runtime in production). */
   isDevDependency?: boolean;
 }
@@ -232,38 +204,16 @@ function AiSummaryRenderer({ content }: { content: string }) {
   );
 }
 
-export default function PackageOverview({ dependency, organizationId, projectId, latestVersion, policies, deprecation, canManageDeprecations, onDeprecate, onRemoveDeprecation, removePrUrlFromOverview, safeVersionData, safeVersionSeverity = 'high', onSeverityChange, onBumpVersion, safeVersionLoading = false, bumpPrUrl = null, bumpPrCheckLoading = false, bumping = false, otherProjectsScopeIsOrg = true, isDevDependency = false }: PackageOverviewProps) {
+export default function PackageOverview({ dependency, organizationId, projectId, latestVersion, policies, deprecation, canManageDeprecations, onDeprecate, onRemoveDeprecation, isDevDependency = false }: PackageOverviewProps) {
 
-  const [scoreSidebarOpen, setScoreSidebarOpen] = useState(false);
   const [aiSummary, setAiSummary] = useState<string | null>(dependency.ai_usage_summary ?? null);
   const [aiAnalyzedAt, setAiAnalyzedAt] = useState<string | null>(dependency.ai_usage_analyzed_at ?? null);
   const [analyzing, setAnalyzing] = useState(false);
-  const [removingPr, setRemovingPr] = useState(false);
-  const [removePrUrl, setRemovePrUrl] = useState<string | null>(removePrUrlFromOverview ?? null);
   const [deprecateSidebarOpen, setDeprecateSidebarOpen] = useState(false);
   const [deprecating, setDeprecating] = useState(false);
   const [removingDeprecation, setRemovingDeprecation] = useState(false);
   const { toast } = useToast();
 
-  useEffect(() => {
-    if (removePrUrlFromOverview != null) setRemovePrUrl(removePrUrlFromOverview);
-  }, [removePrUrlFromOverview]);
-
-  const isZombie = dependency.is_direct && dependency.files_importing_count === 0;
-
-  const handleCreateRemovePr = useCallback(async () => {
-    setRemovingPr(true);
-    try {
-      const result = await api.createRemoveDependencyPR(organizationId, projectId, dependency.id);
-      setRemovePrUrl(result.pr_url);
-      window.open(result.pr_url, '_blank');
-      toast({ title: 'PR Created', description: `Pull request created to remove ${dependency.name}.` });
-    } catch {
-      toast({ title: 'Error', description: 'Failed to create removal PR. Please try again.' });
-    } finally {
-      setRemovingPr(false);
-    }
-  }, [organizationId, projectId, dependency.id, dependency.name, toast]);
 
   const handleAnalyzeUsage = useCallback(async () => {
     setAnalyzing(true);
@@ -316,9 +266,6 @@ export default function PackageOverview({ dependency, organizationId, projectId,
     (analysis?.low_vulns || 0);
 
   const licenseInfo = getLicenseInfo(dependency.license);
-  const compliance = getComplianceStatus(dependency, policies ?? null);
-  const licenseAllowed =
-    dependency.policy_result != null ? dependency.policy_result.allowed : isLicenseAllowed(dependency.license, policies ?? null);
 
   return (
     <div className="space-y-6">
@@ -361,45 +308,7 @@ export default function PackageOverview({ dependency, organizationId, projectId,
               )}
               {dependency.license && (
                 <span className="flex items-center gap-1.5">
-                  {policies != null ? (
-                    compliance.status === 'COMPLIANT' && licenseAllowed === true ? (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span className="inline-flex cursor-default">
-                            <CheckCircle className="h-3.5 w-3.5 text-green-600" />
-                          </span>
-                        </TooltipTrigger>
-                        <TooltipContent>License complies with project policies</TooltipContent>
-                      </Tooltip>
-                    ) : compliance.status === 'VIOLATION' ? (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span className="inline-flex cursor-default">
-                            <XCircle className="h-3.5 w-3.5 text-destructive" />
-                          </span>
-                        </TooltipTrigger>
-                        <TooltipContent>License does not comply with project policies</TooltipContent>
-                      </Tooltip>
-                    ) : (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span className="inline-flex cursor-default">
-                            <AlertCircle className="h-3.5 w-3.5 text-warning" />
-                          </span>
-                        </TooltipTrigger>
-                        <TooltipContent>License unknown or not in project policy list</TooltipContent>
-                      </Tooltip>
-                    )
-                  ) : (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="inline-flex cursor-default">
-                          <Scale className="h-4 w-4" />
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent>No project license policy configured</TooltipContent>
-                    </Tooltip>
-                  )}
+                  <Scale className="h-4 w-4" />
                   {dependency.license}
                 </span>
               )}
@@ -411,91 +320,58 @@ export default function PackageOverview({ dependency, organizationId, projectId,
               )}
             </div>
           </div>
-          {/* Reputation score (x/100) - click to open breakdown */}
-          <button
-            type="button"
-            onClick={() => setScoreSidebarOpen(true)}
-            className={`ml-auto inline-flex items-center rounded-lg border px-3 py-2 w-fit shrink-0 transition-all hover:ring-2 hover:ring-primary/20 ${scoreColors.border} bg-background-card`}
-          >
-            {analysis?.status === 'pending' || analysis?.status === 'analyzing' ? (
-              <Loader2 className="h-5 w-5 animate-spin text-foreground-secondary" />
-            ) : (
-              <span className={`text-lg font-bold ${scoreColors.text}`}>
-                {score !== null ? score : '—'}<span className="text-foreground-secondary font-normal">/100</span>
-              </span>
-            )}
-          </button>
-        </div>
-
-        {/* Package Description row – description on left, Suggestion aligned right (hidden for ghost packages) */}
-        <div className="flex items-center gap-4 justify-between">
-          <div className="flex items-start gap-3 min-w-0 flex-1">
-            {dependency.description && (
-              <>
-                <Info className="h-4 w-4 text-foreground-secondary mt-0.5 shrink-0" />
-                <p className="text-sm text-foreground-secondary leading-relaxed">
-                  {dependency.description}
-                </p>
-              </>
-            )}
-          </div>
-          {!isZombie && (
-          <div className="flex items-center gap-2 shrink-0">
-              <span className="text-xs font-medium text-foreground-secondary shrink-0">Suggestion</span>
-              {safeVersionLoading && !safeVersionData ? (
-                <div className="flex items-center gap-2 text-xs text-foreground-secondary">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  <span>Checking...</span>
-                </div>
-              ) : safeVersionData?.isCurrent ? (
-                <div className="flex items-center gap-2">
-                  <CheckCircle className="h-3.5 w-3.5 text-green-600 shrink-0" />
-                  <span className="text-xs text-foreground-secondary">Using latest safe version</span>
-                </div>
-              ) : safeVersionData?.safeVersion ? (
-                <>
-                  <span className="text-xs text-foreground-secondary">
-                    v{dependency.version} → v{safeVersionData.safeVersion}
+          {/* Reputation score (x/100) - click for breakdown */}
+          <Popover>
+            <PopoverTrigger asChild>
+              <button className={`ml-auto inline-flex items-center rounded-lg border px-3 py-2 w-fit shrink-0 cursor-pointer hover:bg-background-subtle transition-colors ${scoreColors.border} bg-background-card`}>
+                {analysis?.status === 'pending' || analysis?.status === 'analyzing' ? (
+                  <Loader2 className="h-5 w-5 animate-spin text-foreground-secondary" />
+                ) : (
+                  <span className={`text-lg font-bold ${scoreColors.text}`}>
+                    {score !== null ? score : '—'}<span className="text-foreground-secondary font-normal">/100</span>
                   </span>
-                  {onBumpVersion && (
-                    bumpPrUrl ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => window.open(bumpPrUrl, '_blank')}
-                        className="h-7 text-xs px-2"
-                      >
-                        <GitPullRequest className="h-3 w-3 mr-1" />
-                        View PR
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={onBumpVersion}
-                        disabled={bumping || bumpPrCheckLoading}
-                        className="h-7 text-xs px-2 text-foreground-secondary hover:text-foreground hover:bg-transparent"
-                      >
-                        {bumping || bumpPrCheckLoading ? (
-                          <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                        ) : (
-                          <ArrowUpCircle className="h-3 w-3 mr-1" />
-                        )}
-                        Bump
-                      </Button>
-                    )
-                  )}
-                </>
-              ) : (
-                <div className="flex items-center gap-2 text-xs text-foreground-secondary">
-                  <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                  <span>No safe version</span>
+                )}
+              </button>
+            </PopoverTrigger>
+            <PopoverContent side="bottom" align="end" className="w-64 p-3 space-y-2">
+              <p className="text-xs font-medium text-foreground mb-2">Reputation Score Breakdown</p>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-foreground-secondary">OpenSSF Scorecard</span>
+                <span className="font-mono text-foreground tabular-nums">{analysis?.openssf_score != null ? analysis.openssf_score.toFixed(1) : '—'}/10</span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-foreground-secondary">Weekly downloads</span>
+                <span className="font-mono text-foreground tabular-nums">{analysis?.weekly_downloads != null ? (analysis.weekly_downloads >= 1_000_000 ? `${(analysis.weekly_downloads / 1_000_000).toFixed(1)}M` : analysis.weekly_downloads >= 1_000 ? `${(analysis.weekly_downloads / 1_000).toFixed(1)}k` : analysis.weekly_downloads.toLocaleString()) : '—'}</span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-foreground-secondary">Releases past 12 months</span>
+                <span className="font-mono text-foreground tabular-nums">{analysis?.releases_last_12_months ?? '—'}</span>
+              </div>
+              {dependency.slsa_level != null && (
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-foreground-secondary">SLSA level</span>
+                  <span className="font-mono text-foreground tabular-nums">L{dependency.slsa_level}</span>
                 </div>
               )}
-            </div>
-          )}
-          </div>
+              {analysis?.is_malicious && (
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-red-400 font-medium">Flagged as malicious</span>
+                </div>
+              )}
+            </PopoverContent>
+          </Popover>
         </div>
+
+        {/* Package Description */}
+        {dependency.description && (
+          <div className="flex items-start gap-3">
+            <Info className="h-4 w-4 text-foreground-secondary mt-0.5 shrink-0" />
+            <p className="text-sm text-foreground-secondary leading-relaxed">
+              {dependency.description}
+            </p>
+          </div>
+        )}
+      </div>
 
       {/* Deprecation Banner – shown when deprecated (org or team); Remove button gated by canManageDeprecations */}
       {deprecation && (
@@ -545,41 +421,15 @@ export default function PackageOverview({ dependency, organizationId, projectId,
               {/* Left side: Usage status + zombie PR */}
               <div className="flex items-center gap-3 min-w-0">
                 {dependency.is_direct ? (
-                  isZombie ? (
+                  (dependency.files_importing_count === 0) ? (
                     <>
                       <div className="w-8 h-8 rounded-md bg-warning/10 border border-warning/20 flex items-center justify-center shrink-0">
                         <Ghost className="h-4 w-4 text-warning" />
                       </div>
                       <div className="min-w-0">
-                        <p className="text-sm font-medium text-warning">Zombie Package</p>
+                        <p className="text-sm font-medium text-warning">Unused Package</p>
                         <p className="text-xs text-foreground-secondary mt-0.5">Not imported in any file</p>
                       </div>
-                      {/* Create PR to Remove - right beside the zombie text */}
-                      {removePrUrl ? (
-                        <a
-                          href={removePrUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-2 text-sm font-medium text-warning hover:underline shrink-0"
-                        >
-                          View removal PR
-                        </a>
-                      ) : (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={handleCreateRemovePr}
-                          disabled={removingPr}
-                          className="h-7 px-2 bg-warning/10 border border-warning/20 text-warning hover:bg-warning/20 hover:border-warning/30 shrink-0"
-                        >
-                          {removingPr ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
-                          ) : (
-                            <GitPullRequest className="h-3.5 w-3.5 mr-1.5" />
-                          )}
-                          Create PR to Remove
-                        </Button>
-                      )}
                     </>
                   ) : (() => {
                     const filePaths = dependency.imported_file_paths ?? [];
@@ -591,7 +441,7 @@ export default function PackageOverview({ dependency, organizationId, projectId,
                       <p className="text-sm text-foreground-secondary">
                         Imported in <span className="font-medium text-foreground">{dependency.files_importing_count ?? 0}</span> {(dependency.files_importing_count ?? 0) === 1 ? 'file' : 'files'}
                         {' · '}
-                        Used in <span className="font-medium text-foreground">{dependency.other_projects_using_count ?? 0}</span> other {(dependency.other_projects_using_count ?? 0) === 1 ? 'project' : 'projects'} {otherProjectsScopeIsOrg ? 'across your org' : 'in your team'}
+                        Used in <span className="font-medium text-foreground">{dependency.other_projects_using_count ?? 0}</span> other {(dependency.other_projects_using_count ?? 0) === 1 ? 'project' : 'projects'} across your org
                       </p>
                     );
                     if (hasFileList) {
@@ -713,14 +563,6 @@ export default function PackageOverview({ dependency, organizationId, projectId,
         </CardContent>
       </Card>
 
-      {scoreSidebarOpen && (
-        <ScoreBreakdownSidebar
-          dependency={dependency}
-          organizationId={organizationId}
-          projectId={projectId}
-          onClose={() => setScoreSidebarOpen(false)}
-        />
-      )}
 
       {deprecateSidebarOpen && (
         <DeprecateSidebar

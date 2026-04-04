@@ -139,8 +139,8 @@ export function useOrganizationVulnerabilitiesGraphLayout(
         target: projectNodeId,
         sourceHandle,
         targetHandle,
-        type: 'default',
-        style: { stroke: grayStroke, strokeWidth: 1.2 },
+        type: 'step',
+        style: { stroke: grayStroke, strokeWidth: 1.2, strokeDasharray: '5 5' },
         markerEnd: { type: MarkerType.ArrowClosed, color: grayStroke, width: 12, height: 12 },
       });
 
@@ -200,8 +200,8 @@ export function useOrganizationVulnerabilitiesGraphLayout(
         target: teamNodeId,
         sourceHandle,
         targetHandle,
-        type: 'default',
-        style: { stroke: grayStroke, strokeWidth: 1.2 },
+        type: 'step',
+        style: { stroke: grayStroke, strokeWidth: 1.2, strokeDasharray: '5 5' },
         markerEnd: { type: MarkerType.ArrowClosed, color: grayStroke, width: 12, height: 12 },
       });
 
@@ -245,8 +245,8 @@ export function useOrganizationVulnerabilitiesGraphLayout(
           target: projectNodeId,
           sourceHandle: 'source-' + teamSourceHandle,
           targetHandle: teamTargetHandle,
-          type: 'default',
-          style: { stroke: grayStroke, strokeWidth: 1.2 },
+          type: 'step',
+          style: { stroke: grayStroke, strokeWidth: 1.2, strokeDasharray: '5 5' },
           markerEnd: { type: MarkerType.ArrowClosed, color: grayStroke, width: 12, height: 12 },
         });
 
@@ -304,6 +304,8 @@ export interface OverviewProjectItem {
   isExtracting?: boolean;
   /** Project health score 0–100 when available (for org center aggregate). */
   healthScore?: number | null;
+  /** Number of direct dependencies shown as subtext on project card. */
+  dependenciesCount?: number | null;
 }
 
 export interface OverviewTeamWithProjects {
@@ -376,7 +378,8 @@ export function useOrganizationOverviewGraphLayout(
   /** Raw role name (owner/admin/member) for RoleBadge color fallback — same as OrganizationSwitcher */
   orgRole?: string | null,
   orgStatusRollup?: OverviewStatusRollup | null,
-  teamStatusRollups?: Record<string, OverviewStatusRollup> | null
+  teamStatusRollups?: Record<string, OverviewStatusRollup> | null,
+  orgPlan?: string | null
 ): { nodes: Node[]; edges: Edge[] } {
   return useMemo(() => {
     const nodes: Node[] = [];
@@ -406,6 +409,30 @@ export function useOrganizationOverviewGraphLayout(
         ? Math.round(healthScores.reduce((a, b) => a + b, 0) / healthScores.length)
         : null;
 
+    const totalProjectCount = allOverviewProjects.length;
+    const totalMemberCount = teamsWithProjects.reduce((sum, t) => sum + (t.memberCount ?? 0), 0);
+
+    const orgCenterData = {
+      title: orgName,
+      avatarUrl: orgAvatarUrl,
+      kind: 'org' as const,
+      roleBadge: orgRoleLabel ?? undefined,
+      roleBadgeColor: resolvedRoleColor,
+      organizationRole: orgRole ?? undefined,
+      organizationRiskScore,
+      projectCount: totalProjectCount,
+      teamCount: realTeams.length,
+      memberCount: totalMemberCount,
+      plan: orgPlan ?? undefined,
+      ...(orgStatusRollup
+        ? {
+            overviewStatusBadgeLabel: orgStatusRollup.badgeLabel,
+            overviewStatusBadgeColor: orgStatusRollup.badgeColor,
+            overviewStatusTooltip: orgStatusRollup.tooltipText,
+          }
+        : {}),
+    };
+
     nodes.push({
       id: ORG_CENTER_ID,
       type: 'groupCenterNode',
@@ -413,22 +440,7 @@ export function useOrganizationOverviewGraphLayout(
         x: centerX - ORG_OVERVIEW_CENTER_WIDTH / 2,
         y: centerY - ORG_OVERVIEW_CENTER_HEIGHT / 2,
       },
-      data: {
-        title: orgName,
-        avatarUrl: orgAvatarUrl,
-        kind: 'org',
-        roleBadge: orgRoleLabel ?? undefined,
-        roleBadgeColor: resolvedRoleColor,
-        organizationRole: orgRole ?? undefined,
-        organizationRiskScore,
-        ...(orgStatusRollup
-          ? {
-              overviewStatusBadgeLabel: orgStatusRollup.badgeLabel,
-              overviewStatusBadgeColor: orgStatusRollup.badgeColor,
-              overviewStatusTooltip: orgStatusRollup.tooltipText,
-            }
-          : {}),
-      },
+      data: orgCenterData,
       draggable: false,
       selectable: false,
       style: { zIndex: 3, width: ORG_OVERVIEW_CENTER_WIDTH, height: ORG_OVERVIEW_CENTER_HEIGHT },
@@ -440,6 +452,7 @@ export function useOrganizationOverviewGraphLayout(
     const overviewEdgeStyle = {
       stroke: ORG_OVERVIEW_EDGE_STROKE,
       strokeWidth: 1,
+      strokeDasharray: '5 5',
     };
 
     const projectWidth = OVERVIEW_PROJECT_NODE_WIDTH;
@@ -467,11 +480,8 @@ export function useOrganizationOverviewGraphLayout(
         visibleCount = 0;
         cols = 0;
         rows = 0;
-        containerWidth = Math.max(TEAM_CONTAINER_MIN_WIDTH, 340);
-        containerHeight = Math.max(
-          120,
-          TEAM_CONTAINER_HEADER_HEIGHT + COLLAPSED_SUMMARY_BODY_PX + TEAM_CONTAINER_FOOTER_HEIGHT
-        );
+        containerWidth = 270;
+        containerHeight = 118;
       } else {
         visibleCount = totalProjects;
         const dim = getOverviewTeamProjectGridDimensions(visibleCount);
@@ -598,6 +608,7 @@ export function useOrganizationOverviewGraphLayout(
                     overviewStatusBadgeLabel: teamRollup.badgeLabel,
                     overviewStatusBadgeColor: teamRollup.badgeColor,
                     overviewStatusTooltip: teamRollup.tooltipText,
+                    overviewNonPassingCount: teamRollup.nonPassingCount,
                   }
                 : {}),
             },
@@ -614,9 +625,9 @@ export function useOrganizationOverviewGraphLayout(
               target: teamNodeId,
               sourceHandle: route.sourceHandle,
               targetHandle: route.targetHandle,
-              type: 'default',
+              type: 'smoothstep',
               style: overviewEdgeStyle,
-              pathOptions: route.pathOptions,
+              pathOptions: { borderRadius: 20 },
             } as Edge);
           }
 
@@ -665,6 +676,7 @@ export function useOrganizationOverviewGraphLayout(
                   neutralStyle: true,
                   statusBadge: proj.statusName ?? undefined,
                   statusBadgeColor: proj.statusColor ?? undefined,
+                  dependenciesCount: proj.dependenciesCount ?? undefined,
                   organizationId: organizationId ?? undefined,
                 },
                 draggable: false,
@@ -728,9 +740,9 @@ export function useOrganizationOverviewGraphLayout(
               target: projectNodeId,
               sourceHandle: projRoute.sourceHandle,
               targetHandle: projRoute.targetHandle,
-              type: 'default',
+              type: 'smoothstep',
               style: overviewEdgeStyle,
-              pathOptions: projRoute.pathOptions,
+              pathOptions: { borderRadius: 20 },
             } as Edge);
           }
         }

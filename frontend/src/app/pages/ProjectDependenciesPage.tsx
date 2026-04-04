@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useOutletContext, useNavigate, useParams, useLocation } from 'react-router-dom';
-import { Search, SlidersHorizontal, TowerControl, ArrowUp, ArrowDown, X, Loader2, PanelLeftClose, PanelLeftOpen, Package, LayoutDashboard, GitBranch, MessageSquareText, RefreshCw } from 'lucide-react';
+import { Search, SlidersHorizontal, TowerControl, Loader2, PanelLeftClose, PanelLeftOpen, Package, LayoutDashboard, GitBranch, MessageSquareText, RefreshCw, ShieldAlert } from 'lucide-react';
 import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
 import { isExtractionOngoing as checkExtractionOngoing } from '../../lib/extractionStatus';
-import { api, ProjectWithRole, ProjectPermissions, ProjectDependency, ProjectEffectivePolicies, ProjectImportStatus, type LatestSafeVersionResponse } from '../../lib/api';
+import { ExtractionProgressCard } from '../../components/ExtractionProgressCard';
+import { api, ProjectWithRole, ProjectPermissions, ProjectDependency, ProjectEffectivePolicies, ProjectImportStatus } from '../../lib/api';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
-import { useToast } from '../../hooks/use-toast';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -34,32 +34,6 @@ export interface ProjectDependenciesContentProps {
   userPermissions: ProjectPermissions | null;
   reloadProject: () => Promise<void>;
   embedInSidebar?: boolean;
-}
-
-type SuggestionItem =
-  | { action: 'current' }
-  | { action: 'bump'; safeVersion: string; bumpPrUrl?: string; bumpPrNumber?: number }
-  | { action: 'decrease'; decreasePrUrl?: string; decreasePrNumber?: number }
-  | { action: 'remove'; removePrUrl?: string; removePrNumber?: number }
-  | 'loading';
-
-/** Compare semver-style versions: -1 if a < b, 0 if equal, 1 if a > b. */
-function compareVersions(a: string, b: string): number {
-  const parse = (v: string) =>
-    v
-      .replace(/^v/, '')
-      .split('.')
-      .map((p) => parseInt(p, 10) || 0);
-  const pa = parse(a);
-  const pb = parse(b);
-  const maxLen = Math.max(pa.length, pb.length);
-  for (let i = 0; i < maxLen; i++) {
-    const na = pa[i] ?? 0;
-    const nb = pb[i] ?? 0;
-    if (na < nb) return -1;
-    if (na > nb) return 1;
-  }
-  return 0;
 }
 
 function getVulnSeverityInfo(dep: ProjectDependency): { maxSeverity: 'critical' | 'high' | 'medium' | 'low'; total: number; colorClass: string; label: string } | null {
@@ -234,7 +208,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
   const params = useParams<{ projectId: string; dependencyId?: string }>();
   const location = useLocation();
   const navigate = useNavigate();
-  const { toast } = useToast();
   const projectId = project?.id ?? params.projectId ?? '';
   const [sidebarSelectedDepId, setSidebarSelectedDepId] = useState<string | null>(null);
   const selectedDepId = embedInSidebar ? sidebarSelectedDepId : (params.dependencyId ?? null);
@@ -259,7 +232,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
   const [filterVulnerability, setFilterVulnerability] = useState(false);
   const [filterLicenseIssue, setFilterLicenseIssue] = useState(false);
   const [filterDeprecated, setFilterDeprecated] = useState(false);
-  const [filterActionable, setFilterActionable] = useState(false);
   const [permissionsChecked, setPermissionsChecked] = useState(false);
   const [dependencies, setDependencies] = useState<ProjectDependency[]>([]);
   const [dependenciesLoading, setDependenciesLoading] = useState(false);
@@ -268,11 +240,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
   const [refreshingDependencies, setRefreshingDependencies] = useState(false);
   const [policies, setPolicies] = useState<ProjectEffectivePolicies | null>(null);
   const [importStatus, setImportStatus] = useState<ProjectImportStatus | null>(null);
-  const [suggestionByDepId, setSuggestionByDepId] = useState<Record<string, SuggestionItem>>({});
-  const [bumpingDepId, setBumpingDepId] = useState<string | null>(null);
-  const [decreasingDepId, setDecreasingDepId] = useState<string | null>(null);
-  const [creatingRemoveForId, setCreatingRemoveForId] = useState<string | null>(null);
-  const suggestionLoadedIdsRef = useRef<Set<string>>(new Set());
   const prefetchTabTimeoutsRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const prefetchRowTimeoutsRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const hasUserRefreshedRef = useRef(false);
@@ -295,12 +262,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
   } | null>(null);
   const [panelBumpScope, setPanelBumpScope] = useState<'org' | 'team' | 'project'>('project');
   const [panelBumpTeamId, setPanelBumpTeamId] = useState<string | undefined>(undefined);
-  const [panelSafeVersionData, setPanelSafeVersionData] = useState<LatestSafeVersionResponse | null>(null);
-  const [panelSafeVersionSeverity, setPanelSafeVersionSeverity] = useState<string>('high');
-  const [panelSafeVersionLoading, setPanelSafeVersionLoading] = useState(false);
-  const [panelBumpPrUrl, setPanelBumpPrUrl] = useState<string | null>(null);
-  const [panelBumpPrCheckLoading, setPanelBumpPrCheckLoading] = useState(false);
-  const [panelBumping, setPanelBumping] = useState(false);
 
   // Resizable sidebar: width state (persisted), drag refs
   const SIDEBAR_MIN = 200;
@@ -461,94 +422,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
     return () => clearInterval(id);
   }, [importStatus?.status, organizationId, projectId, loadImportStatus]);
 
-  // Load suggestions for direct deps after list is visible (deferred so first paint is fast)
-  useEffect(() => {
-    if (!organizationId || !projectId || dependencies.length === 0) return;
-    const directDeps = dependencies.filter((d) => d.is_direct);
-    const depIds = new Set(directDeps.map((d) => d.id));
-    const prevIds = suggestionLoadedIdsRef.current;
-    const idsChanged =
-      depIds.size !== prevIds.size || [...depIds].some((id) => !prevIds.has(id)) || [...prevIds].some((id) => !depIds.has(id));
-    if (!idsChanged && depIds.size > 0) return;
-    suggestionLoadedIdsRef.current = new Set(depIds);
-
-    const initial: Record<string, SuggestionItem> = {};
-    const depsNeedingSuggestions: string[] = [];
-    for (const dep of directDeps) {
-      if ((dep.files_importing_count ?? 0) === 0) {
-        initial[dep.id] = {
-          action: 'remove',
-          removePrUrl: dep.remove_pr_url ?? undefined,
-          removePrNumber: dep.remove_pr_number ?? undefined,
-        };
-      } else {
-        initial[dep.id] = 'loading';
-        depsNeedingSuggestions.push(dep.id);
-      }
-    }
-    setSuggestionByDepId(initial);
-
-    if (depsNeedingSuggestions.length === 0) return;
-
-    // Defer batch and per-dep calls until after list has painted
-    const timeoutId = setTimeout(() => {
-      api.getProjectDependencySuggestionsBatch(organizationId, projectId, depsNeedingSuggestions)
-        .then((batch) => {
-          setSuggestionByDepId((prev) => {
-            const next = { ...prev };
-            for (const depId of depsNeedingSuggestions) {
-              const s = batch[depId];
-              if (s) {
-                next[depId] = s.action === 'current' ? { action: 'current' } : {
-                  action: 'bump',
-                  safeVersion: s.safeVersion!,
-                  bumpPrUrl: s.bumpPrUrl,
-                  bumpPrNumber: s.bumpPrNumber,
-                };
-              } else {
-                next[depId] = { action: 'current' };
-              }
-            }
-            return next;
-          });
-        })
-        .catch((err) => {
-          setSuggestionByDepId((prev) => {
-            const next = { ...prev };
-            depsNeedingSuggestions.forEach((id) => { next[id] = { action: 'current' }; });
-            return next;
-          });
-        });
-
-      // Per-dep safe version + Watchtower for banned deps: deferred (panel loads when dep selected)
-      const bannedDirectDeps = directDeps.filter((d) => d.is_current_version_banned && (d.files_importing_count ?? 0) > 0);
-      bannedDirectDeps.forEach((dep) => {
-        Promise.all([
-          api.getLatestSafeVersion(organizationId, projectId, dep.id, 'high', true),
-          api.getWatchtowerSummary(dep.name, dep.id),
-        ])
-          .then(([safeVersionData, summary]) => {
-            if (safeVersionData?.safeVersion && !safeVersionData.isCurrent) {
-              const cmp = compareVersions(safeVersionData.safeVersion, dep.version);
-              setSuggestionByDepId((prev) => ({
-                ...prev,
-                [dep.id]:
-                  cmp < 0
-                    ? { action: 'decrease', decreasePrUrl: summary.decrease_pr_url ?? undefined }
-                    : {
-                        action: 'bump',
-                        safeVersion: safeVersionData.safeVersion!,
-                        bumpPrUrl: summary.bump_pr_url ?? undefined,
-                      },
-              }));
-            }
-          })
-          .catch(() => {});
-      });
-    }, 150);
-
-    return () => clearTimeout(timeoutId);
-  }, [organizationId, projectId, dependencies]);
 
   // Fetch overview for right panel when a dependency is selected and sub-tab is Overview (use prefetched if available)
   useEffect(() => {
@@ -556,8 +429,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
       setPanelOverview(null);
       setPanelOverviewError(null);
       setPanelDeprecation(null);
-      setPanelSafeVersionData(null);
-      setPanelBumpPrUrl(null);
       return;
     }
     let cancelled = false;
@@ -623,161 +494,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
       .catch(() => setPanelBumpScope('project'));
   }, [organizationId, projectId, selectedDepId, selectedSubTab]);
 
-  // Safe version for panel
-  useEffect(() => {
-    if (!organizationId || !projectId || !selectedDepId || selectedSubTab !== 'overview') return;
-    setPanelSafeVersionLoading(true);
-    api.getLatestSafeVersion(organizationId, projectId, selectedDepId, panelSafeVersionSeverity, true, { refresh: true })
-      .then((data) => setPanelSafeVersionData(data))
-      .catch(() => setPanelSafeVersionData(null))
-      .finally(() => setPanelSafeVersionLoading(false));
-  }, [organizationId, projectId, selectedDepId, selectedSubTab, panelSafeVersionSeverity]);
-
-  // Bump PR URL from Watchtower summary for panel; also sync sidebar suggestion (bump/decrease) from same source as overview
-  useEffect(() => {
-    if (!panelOverview?.name || !selectedDepId) {
-      if (!panelSafeVersionData?.safeVersion) setPanelBumpPrUrl(null);
-      setPanelBumpPrCheckLoading(false);
-      return;
-    }
-    if (!panelSafeVersionData?.safeVersion) {
-      setPanelBumpPrUrl(null);
-      setPanelBumpPrCheckLoading(false);
-      return;
-    }
-    setPanelBumpPrCheckLoading(true);
-    api.getWatchtowerSummary(panelOverview.name, selectedDepId)
-      .then((summary) => {
-        setPanelBumpPrUrl(summary.bump_pr_url ?? null);
-        const dep = dependencies.find((d) => d.id === selectedDepId);
-        if (dep?.is_direct && panelSafeVersionData && !panelSafeVersionData.isCurrent && panelSafeVersionData.safeVersion) {
-          const cmp = compareVersions(panelSafeVersionData.safeVersion, dep.version);
-          setSuggestionByDepId((prev) => {
-            const next = { ...prev };
-            if (cmp < 0) {
-              next[selectedDepId] = { action: 'decrease', decreasePrUrl: summary.decrease_pr_url ?? undefined };
-            } else if (cmp > 0 && panelSafeVersionData.safeVersion) {
-              next[selectedDepId] = {
-                action: 'bump',
-                safeVersion: panelSafeVersionData.safeVersion,
-                bumpPrUrl: summary.bump_pr_url ?? undefined,
-              };
-            }
-            return next;
-          });
-        }
-      })
-      .catch(() => setPanelBumpPrUrl(null))
-      .finally(() => setPanelBumpPrCheckLoading(false));
-  }, [panelOverview?.name, selectedDepId, panelSafeVersionData?.safeVersion, panelSafeVersionData?.isCurrent, dependencies]);
-
-  const handleCreateRemovePr = useCallback(
-    async (dep: ProjectDependency, e: React.MouseEvent) => {
-      e.stopPropagation();
-      if (!organizationId || !projectId || creatingRemoveForId) return;
-      setCreatingRemoveForId(dep.id);
-      try {
-        const result = await api.createRemoveDependencyPR(organizationId, projectId, dep.id);
-        toast({
-          title: 'Pull request created',
-          description: 'Open the PR to review and merge the dependency removal.',
-        });
-        window.open(result.pr_url, '_blank');
-        setSuggestionByDepId((prev) => ({
-          ...prev,
-          [dep.id]: {
-            action: 'remove',
-            removePrUrl: result.pr_url,
-            removePrNumber: result.pr_number,
-          },
-        }));
-      } catch (err) {
-        toast({
-          title: 'Failed to create removal PR',
-          description: err instanceof Error ? err.message : 'Request failed',
-          variant: 'destructive',
-        });
-      } finally {
-        setCreatingRemoveForId(null);
-      }
-    },
-    [organizationId, projectId, creatingRemoveForId, toast]
-  );
-
-  const handleBumpClick = useCallback(
-    async (dep: ProjectDependency, e: React.MouseEvent) => {
-      e.stopPropagation();
-      const s = suggestionByDepId[dep.id];
-      if (s === 'loading' || s?.action !== 'bump' || !s.safeVersion || bumpingDepId) return;
-      if (!organizationId || !projectId) return;
-      setBumpingDepId(dep.id);
-      try {
-        const result = await api.createWatchtowerBumpPR(organizationId, projectId, dep.id, s.safeVersion);
-        toast({
-          title: 'Pull request created',
-          description: 'Open the PR to review and merge the version bump.',
-        });
-        window.open(result.pr_url, '_blank');
-        setSuggestionByDepId((prev) => ({
-          ...prev,
-          [dep.id]: {
-            action: 'bump',
-            safeVersion: s.safeVersion,
-            bumpPrUrl: result.pr_url,
-            bumpPrNumber: result.pr_number,
-          },
-        }));
-      } catch (err) {
-        toast({
-          title: 'Failed to create bump PR',
-          description: err instanceof Error ? err.message : 'Request failed',
-          variant: 'destructive',
-        });
-      } finally {
-        setBumpingDepId(null);
-      }
-    },
-    [organizationId, projectId, suggestionByDepId, bumpingDepId, toast]
-  );
-
-  const handleDecreaseClick = useCallback(
-    async (dep: ProjectDependency, e: React.MouseEvent) => {
-      e.stopPropagation();
-      const s = suggestionByDepId[dep.id];
-      if (s === 'loading' || s?.action !== 'decrease' || decreasingDepId) return;
-      if (!organizationId || !projectId) return;
-      if (s.decreasePrUrl) {
-        window.open(s.decreasePrUrl, '_blank');
-        return;
-      }
-      setDecreasingDepId(dep.id);
-      try {
-        const result = await api.createWatchtowerDecreasePR(organizationId, projectId, dep.id);
-        toast({
-          title: 'Pull request created',
-          description: result.already_exists ? 'Opening existing decrease PR.' : 'Open the PR to review and merge the version decrease.',
-        });
-        if (result.pr_url) window.open(result.pr_url, '_blank');
-        setSuggestionByDepId((prev) => ({
-          ...prev,
-          [dep.id]: {
-            action: 'decrease',
-            decreasePrUrl: result.pr_url,
-          },
-        }));
-      } catch (err) {
-        toast({
-          title: 'Failed to create decrease PR',
-          description: err instanceof Error ? err.message : 'Request failed',
-          variant: 'destructive',
-        });
-      } finally {
-        setDecreasingDepId(null);
-      }
-    },
-    [organizationId, projectId, suggestionByDepId, decreasingDepId, toast]
-  );
-
   const panelCanManageDeprecations = panelBumpScope === 'org' || panelBumpScope === 'team';
 
   const handlePanelDeprecate = useCallback(async (alternativeName: string) => {
@@ -823,29 +539,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
     );
   }, [organizationId, panelOverview?.dependency_id, panelDeprecation?.scope, panelDeprecation?.team_id, selectedDepId]);
 
-  const handlePanelSeverityChange = useCallback((severity: string) => {
-    setPanelSafeVersionSeverity(severity);
-  }, []);
-
-  const handlePanelBumpVersion = useCallback(async () => {
-    if (!organizationId || !projectId || !selectedDepId || !panelSafeVersionData?.safeVersion || panelBumping) return;
-    setPanelBumping(true);
-    try {
-      const result = await api.createWatchtowerBumpPR(organizationId, projectId, selectedDepId, panelSafeVersionData.safeVersion);
-      if (result.pr_url) {
-        setPanelBumpPrUrl(result.pr_url);
-        window.open(result.pr_url, '_blank');
-      }
-    } catch (err) {
-      toast({
-        title: 'Failed to create bump PR',
-        description: err instanceof Error ? err.message : 'Request failed',
-        variant: 'destructive',
-      });
-    } finally {
-      setPanelBumping(false);
-    }
-  }, [organizationId, projectId, selectedDepId, panelSafeVersionData?.safeVersion, panelBumping, toast]);
 
   const selectedDepFromList = selectedDepId ? dependencies.find((d) => d.id === selectedDepId) : null;
 
@@ -987,10 +680,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
       const hasLicenseIssue = dep.policy_result != null && dep.policy_result.allowed === false;
       if (filterLicenseIssue && !hasLicenseIssue) return false;
       if (filterDeprecated && !dep.deprecation) return false;
-      if (filterActionable) {
-        const s = suggestionByDepId[dep.id];
-        if (s === 'loading' || s === undefined || s.action === 'current') return false;
-      }
       return true;
     })
     .sort((a, b) => (b.files_importing_count || 0) - (a.files_importing_count || 0));
@@ -1078,7 +767,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                       <button
                         type="button"
                         className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-xs font-medium px-2 py-1 rounded-md border border-foreground/40 bg-transparent text-foreground hover:bg-foreground/10 focus:opacity-100 focus:outline-none"
-                        onClick={(e) => { e.stopPropagation(); setFilterWatchtower(true); setFilterVulnerability(false); setFilterLicenseIssue(false); setFilterDeprecated(false); setFilterActionable(false); }}
+                        onClick={(e) => { e.stopPropagation(); setFilterWatchtower(true); setFilterVulnerability(false); setFilterLicenseIssue(false); setFilterDeprecated(false); }}
                       >
                         Select only
                       </button>
@@ -1103,7 +792,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                       <button
                         type="button"
                         className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-xs font-medium px-2 py-1 rounded-md border border-foreground/40 bg-transparent text-foreground hover:bg-foreground/10 focus:opacity-100 focus:outline-none"
-                        onClick={(e) => { e.stopPropagation(); setFilterVulnerability(true); setFilterWatchtower(false); setFilterLicenseIssue(false); setFilterDeprecated(false); setFilterActionable(false); }}
+                        onClick={(e) => { e.stopPropagation(); setFilterVulnerability(true); setFilterWatchtower(false); setFilterLicenseIssue(false); setFilterDeprecated(false); }}
                       >
                         Select only
                       </button>
@@ -1128,7 +817,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                       <button
                         type="button"
                         className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-xs font-medium px-2 py-1 rounded-md border border-foreground/40 bg-transparent text-foreground hover:bg-foreground/10 focus:opacity-100 focus:outline-none"
-                        onClick={(e) => { e.stopPropagation(); setFilterLicenseIssue(true); setFilterWatchtower(false); setFilterVulnerability(false); setFilterDeprecated(false); setFilterActionable(false); }}
+                        onClick={(e) => { e.stopPropagation(); setFilterLicenseIssue(true); setFilterWatchtower(false); setFilterVulnerability(false); setFilterDeprecated(false); }}
                       >
                         Select only
                       </button>
@@ -1153,32 +842,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                       <button
                         type="button"
                         className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-xs font-medium px-2 py-1 rounded-md border border-foreground/40 bg-transparent text-foreground hover:bg-foreground/10 focus:opacity-100 focus:outline-none"
-                        onClick={(e) => { e.stopPropagation(); setFilterDeprecated(true); setFilterWatchtower(false); setFilterVulnerability(false); setFilterLicenseIssue(false); setFilterActionable(false); }}
-                      >
-                        Select only
-                      </button>
-                    </div>
-                    <div
-                      className="group flex items-center gap-2 py-1 px-0 rounded-md cursor-pointer"
-                      onClick={() => setFilterActionable((v) => !v)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFilterActionable((v) => !v); } }}
-                      role="option"
-                      aria-selected={filterActionable}
-                      tabIndex={0}
-                    >
-                      <Checkbox
-                        id="filter-actionable"
-                        checked={filterActionable}
-                        onCheckedChange={(checked) => setFilterActionable(checked === true)}
-                        className="data-[state=checked]:bg-foreground data-[state=checked]:text-background data-[state=checked]:border-foreground"
-                      />
-                      <label htmlFor="filter-actionable" className="text-sm font-normal cursor-pointer flex-1 text-foreground">
-                        Actionable
-                      </label>
-                      <button
-                        type="button"
-                        className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-xs font-medium px-2 py-1 rounded-md border border-foreground/40 bg-transparent text-foreground hover:bg-foreground/10 focus:opacity-100 focus:outline-none"
-                        onClick={(e) => { e.stopPropagation(); setFilterActionable(true); setFilterWatchtower(false); setFilterVulnerability(false); setFilterLicenseIssue(false); setFilterDeprecated(false); }}
+                        onClick={(e) => { e.stopPropagation(); setFilterDeprecated(true); setFilterWatchtower(false); setFilterVulnerability(false); setFilterLicenseIssue(false); }}
                       >
                         Select only
                       </button>
@@ -1222,21 +886,15 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
         </div>
         <div className={cn('flex-1 min-h-0 overflow-y-auto custom-scrollbar pt-0.5 pb-4', listPad)}>
           {isExtractionOngoing ? (
-            <div className="rounded-lg border border-border bg-background-card p-6">
-              <div className="flex items-center gap-4">
-                <div className="flex-1 space-y-2 min-w-0">
-                  <h3 className="text-sm font-semibold text-foreground">Project extraction still in progress</h3>
-                  <p className="text-sm text-foreground-secondary">
-                    {!realtime.isLoading && realtime.status === 'not_connected'
-                      ? 'Connect a repository in Project Settings to see dependencies.'
-                      : 'Dependencies will appear here once extraction completes.'}
-                  </p>
-                </div>
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
-                  <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" aria-hidden />
-                </div>
-              </div>
-            </div>
+            <ExtractionProgressCard
+              description={
+                !realtime.isLoading && realtime.status === 'not_connected'
+                  ? 'Connect a repository in Project Settings to see dependencies.'
+                  : 'Dependencies will appear here once extraction completes.'
+              }
+              organizationId={organizationId}
+              projectId={projectId}
+            />
           ) : showListLoading ? (
             <div className="space-y-0.5 animate-pulse">
               {skeletonRows.map((row, i) => (
@@ -1253,7 +911,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
               <p className="text-sm text-foreground-secondary mt-1">
                 {searchQuery.trim()
                   ? `Your search for "${searchQuery.trim()}" did not return any results`
-                  : filterWatchtower || filterVulnerability || filterLicenseIssue || filterDeprecated || filterActionable
+                  : filterWatchtower || filterVulnerability || filterLicenseIssue || filterDeprecated
                     ? 'Your filters did not return any results'
                     : 'No dependencies found yet.'}
               </p>
@@ -1265,10 +923,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                 // Show "License" badge only when policy was evaluated and failed (allowed: false).
                 // When policy_result is null, policy hasn't run yet — don't show license issue.
                 const hasLicenseIssue = dep.policy_result != null && dep.policy_result.allowed === false;
-                const suggestion = suggestionByDepId[dep.id];
-                const isBumping = bumpingDepId === dep.id;
-                const isDecreasing = decreasingDepId === dep.id;
-                const isCreatingRemove = creatingRemoveForId === dep.id;
                 const isSelected = selectedDepId === dep.id;
                 return (
                   <li key={dep.id} className="transition-[height] duration-200 ease-out">
@@ -1334,11 +988,17 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                           <TooltipContent side="right">License doesn’t match project policy</TooltipContent>
                         </Tooltip>
                       )}
+                      {dep.source === 'devDependencies' && (
+                        <span className="shrink-0 inline-flex items-center rounded px-1 py-0.5 text-[10px] font-medium bg-foreground/5 text-foreground-secondary border border-foreground/10 cursor-default">
+                          Dev
+                        </span>
+                      )}
                       {vulnInfo && (
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <span className={cn('shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium border cursor-default', vulnInfo.maxSeverity === 'critical' && 'bg-destructive/10 text-destructive border-destructive/30', vulnInfo.maxSeverity === 'high' && 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/30', vulnInfo.maxSeverity === 'medium' && 'bg-warning/15 text-warning border-warning/30', vulnInfo.maxSeverity === 'low' && 'bg-foreground/5 text-foreground-secondary border-foreground/10')}>
-                              Vulnerable
+                            <span className={cn('shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium border cursor-default', vulnInfo.maxSeverity === 'critical' && 'bg-destructive/10 text-destructive border-destructive/30', vulnInfo.maxSeverity === 'high' && 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/30', vulnInfo.maxSeverity === 'medium' && 'bg-warning/15 text-warning border-warning/30', vulnInfo.maxSeverity === 'low' && 'bg-foreground/5 text-foreground-secondary border-foreground/10')}>
+                              <ShieldAlert className="h-2.5 w-2.5" />
+                              {vulnInfo.total}
                             </span>
                           </TooltipTrigger>
                           <TooltipContent side="right" className="max-w-[min(20rem,80vw)]">
@@ -1346,11 +1006,21 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                           </TooltipContent>
                         </Tooltip>
                       )}
+                      {(dep.files_importing_count ?? 0) === 0 && dep.is_direct && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-warning/15 text-warning border border-warning/30 cursor-default">
+                              Unused
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent side="right">Not imported in any file</TooltipContent>
+                        </Tooltip>
+                      )}
                       {dep.deprecation && (
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <span className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-warning/15 text-warning border border-warning/30 cursor-default">
-                              Package deprecated
+                            <span className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-warning/15 text-warning border border-warning/30 cursor-default">
+                              Deprecated
                             </span>
                           </TooltipTrigger>
                           <TooltipContent side="right">Package is deprecated</TooltipContent>
@@ -1359,8 +1029,8 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                       {dep.is_current_version_banned && (
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <span className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-destructive/10 text-destructive border border-destructive/30 cursor-default">
-                              Version banned
+                            <span className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-destructive/10 text-destructive border border-destructive/30 cursor-default">
+                              Banned
                             </span>
                           </TooltipTrigger>
                           <TooltipContent side="right">This version is banned by org policy</TooltipContent>
@@ -1369,7 +1039,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                       {dep.is_outdated && (
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <span className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/30 cursor-default">
+                            <span className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/30 cursor-default">
                               {dep.versions_behind && dep.versions_behind > 0 ? `${dep.versions_behind} behind` : 'Outdated'}
                             </span>
                           </TooltipTrigger>
@@ -1378,68 +1048,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                               ? `${dep.versions_behind} version${dep.versions_behind > 1 ? 's' : ''} behind latest`
                               : 'A newer version is available'}
                           </TooltipContent>
-                        </Tooltip>
-                      )}
-                      {dep.is_direct && suggestion !== undefined && suggestion !== 'loading' && suggestion.action === 'bump' && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (suggestion.bumpPrUrl) {
-                                  window.open(suggestion.bumpPrUrl, '_blank');
-                                } else {
-                                  handleBumpClick(dep, e);
-                                }
-                              }}
-                              disabled={isBumping}
-                              className="shrink-0 flex items-center justify-center w-6 h-6 rounded text-foreground-secondary hover:text-foreground hover:bg-background-subtle disabled:opacity-60"
-                              aria-label="Open bump PR"
-                            >
-                              {isBumping ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowUp className="h-3.5 w-3.5" />}
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent side="right">{suggestion.bumpPrUrl ? 'Open bump PR' : 'Create bump PR'}</TooltipContent>
-                        </Tooltip>
-                      )}
-                      {dep.is_direct && suggestion !== undefined && suggestion !== 'loading' && suggestion.action === 'decrease' && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button
-                              type="button"
-                              onClick={(e) => handleDecreaseClick(dep, e)}
-                              disabled={isDecreasing}
-                              className="shrink-0 flex items-center justify-center w-6 h-6 rounded text-foreground-secondary hover:text-foreground hover:bg-background-subtle disabled:opacity-60"
-                              aria-label="Decrease version"
-                            >
-                              {isDecreasing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowDown className="h-3.5 w-3.5" />}
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent side="right">{suggestion.decreasePrUrl ? 'Open decrease PR' : 'Create decrease PR'}</TooltipContent>
-                        </Tooltip>
-                      )}
-                      {dep.is_direct && suggestion !== undefined && suggestion !== 'loading' && suggestion.action === 'remove' && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (suggestion.removePrUrl) {
-                                  window.open(suggestion.removePrUrl, '_blank');
-                                } else {
-                                  handleCreateRemovePr(dep, e);
-                                }
-                              }}
-                              disabled={isCreatingRemove}
-                              className="shrink-0 flex items-center justify-center w-6 h-6 rounded text-foreground-secondary hover:text-foreground hover:bg-background-subtle disabled:opacity-60"
-                              aria-label="Open removal PR"
-                            >
-                              {isCreatingRemove ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent side="right">{suggestion.removePrUrl ? 'Open removal PR' : 'Create removal PR'}</TooltipContent>
                         </Tooltip>
                       )}
                     </div>
@@ -1553,67 +1161,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                       d.id === selectedDepId ? { ...d, is_current_version_banned: isBanned } : d
                     )
                   );
-                  // Refetch recommended action (bump/decrease) from same source as overview (safe version + Watchtower)
-                  if (selectedDepFromList?.is_direct && organizationId && projectId && selectedDepId && selectedDepFromList?.name) {
-                    const depVersion = selectedDepFromList.version;
-                    Promise.all([
-                      api.getLatestSafeVersion(organizationId, projectId, selectedDepId, 'high', true, { refresh: true }),
-                      api.getWatchtowerSummary(selectedDepFromList.name, selectedDepId),
-                    ])
-                      .then(([safeVersionData, summary]) => {
-                        if (safeVersionData?.safeVersion && !safeVersionData.isCurrent) {
-                          const cmp = compareVersions(safeVersionData.safeVersion, depVersion);
-                          setSuggestionByDepId((prev) => ({
-                            ...prev,
-                            [selectedDepId]:
-                              cmp < 0
-                                ? { action: 'decrease', decreasePrUrl: summary.decrease_pr_url ?? undefined }
-                                : {
-                                    action: 'bump',
-                                    safeVersion: safeVersionData.safeVersion!,
-                                    bumpPrUrl: summary.bump_pr_url ?? undefined,
-                                  },
-                          }));
-                        } else {
-                          api.getProjectDependencySuggestionsBatch(organizationId, projectId, [selectedDepId]).then((batch) => {
-                            const s = batch[selectedDepId];
-                            setSuggestionByDepId((prev) => ({
-                              ...prev,
-                              [selectedDepId]: s
-                                ? s.action === 'current'
-                                  ? { action: 'current' as const }
-                                  : {
-                                      action: 'bump' as const,
-                                      safeVersion: s.safeVersion!,
-                                      bumpPrUrl: s.bumpPrUrl,
-                                      bumpPrNumber: s.bumpPrNumber,
-                                    }
-                                : { action: 'current' as const },
-                            }));
-                          }).catch(() => {});
-                        }
-                      })
-                      .catch(() => {
-                        api.getProjectDependencySuggestionsBatch(organizationId, projectId, [selectedDepId])
-                          .then((batch) => {
-                            const s = batch[selectedDepId];
-                            setSuggestionByDepId((prev) => ({
-                              ...prev,
-                              [selectedDepId]: s
-                                ? s.action === 'current'
-                                  ? { action: 'current' as const }
-                                  : {
-                                      action: 'bump' as const,
-                                      safeVersion: s.safeVersion!,
-                                      bumpPrUrl: s.bumpPrUrl,
-                                      bumpPrNumber: s.bumpPrNumber,
-                                    }
-                                : { action: 'current' as const },
-                            }));
-                          })
-                          .catch(() => {});
-                      });
-                  }
                 }
               }}
             />
@@ -1645,16 +1192,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
               canManageDeprecations={panelCanManageDeprecations}
               onDeprecate={handlePanelDeprecate}
               onRemoveDeprecation={handlePanelRemoveDeprecation}
-              removePrUrlFromOverview={panelOverview?.remove_pr_url ?? null}
-              safeVersionData={panelSafeVersionData}
-              safeVersionSeverity={panelSafeVersionSeverity}
-              onSeverityChange={handlePanelSeverityChange}
-              onBumpVersion={handlePanelBumpVersion}
-              safeVersionLoading={panelSafeVersionLoading}
-              bumpPrUrl={panelBumpPrUrl}
-              bumpPrCheckLoading={panelBumpPrCheckLoading}
-              bumping={panelBumping}
-              otherProjectsScopeIsOrg={true}
               isDevDependency={selectedDepFromList?.source === 'devDependencies'}
             />
             </div>

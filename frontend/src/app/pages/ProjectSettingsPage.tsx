@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from 'react';
 import { createPortal } from 'react-dom';
 import { useOutletContext, useNavigate, useParams, useLocation, Link, useSearchParams } from 'react-router-dom';
 import { cn } from '../../lib/utils';
@@ -30,7 +30,7 @@ import { JsLangBadge } from '../../components/JsLangBadge';
 import { PolicyAIAssistant } from '../../components/PolicyAIAssistant';
 import { PolicyExceptionSidebar } from '../../components/PolicyExceptionSidebar';
 import { CODE_BLOCK_BG } from '../../components/policy-monaco-setup';
-import { SyncDetailSidebar } from '../../components/SyncDetailSidebar';
+import { InlineExtractionLogs } from '../../components/InlineExtractionLogs';
 import { isExtractionOngoing } from '../../lib/extractionStatus';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
 import { ProjectTeamSelect } from '../../components/ProjectTeamSelect';
@@ -38,6 +38,64 @@ import { RoleBadge } from '../../components/RoleBadge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Switch } from '../../components/ui/switch';
 import { Avatar, AvatarFallback, AvatarImage } from '../../components/ui/avatar';
+
+/** Animated expansion row for extraction log display in the recent activity table. */
+function ExpandableLogRow({
+  isExpanded,
+  organizationId,
+  projectId,
+  runId,
+  isActive,
+  onCancelled,
+}: {
+  isExpanded: boolean;
+  organizationId: string;
+  projectId: string;
+  runId: string;
+  isActive: boolean;
+  onCancelled: () => void;
+}) {
+  const [mounted, setMounted] = useState(false);
+  const [animateOpen, setAnimateOpen] = useState(false);
+
+  useEffect(() => {
+    if (isExpanded) {
+      setMounted(true);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => setAnimateOpen(true));
+      });
+    } else {
+      setAnimateOpen(false);
+    }
+  }, [isExpanded]);
+
+  if (!mounted) return null;
+
+  return (
+    <tr className="border-t-0">
+      <td colSpan={3} className="p-0 border-t border-border/40">
+        <div
+          className="grid transition-[grid-template-rows] duration-300 ease-out"
+          style={{ gridTemplateRows: animateOpen ? '1fr' : '0fr' }}
+          onTransitionEnd={() => { if (!isExpanded) setMounted(false); }}
+        >
+          <div className="overflow-hidden">
+            <div className="px-4 pb-4">
+              <InlineExtractionLogs
+                organizationId={organizationId}
+                projectId={projectId}
+                runId={runId}
+                maxHeightClass="max-h-72"
+                showCancelButton={isActive}
+                onCancelled={onCancelled}
+              />
+            </div>
+          </div>
+        </div>
+      </td>
+    </tr>
+  );
+}
 
 interface ProjectContextType {
   project: ProjectWithRole | null;
@@ -447,8 +505,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
   const [syncFrequencySaving, setSyncFrequencySaving] = useState(false);
   const [extractionRuns, setExtractionRuns] = useState<ExtractionRun[]>([]);
   const [extractionRunsLoading, setExtractionRunsLoading] = useState(false);
-  const [selectedExtractionRunId, setSelectedExtractionRunId] = useState<string | null>(null);
-  const [showExtractionLogs, setShowExtractionLogs] = useState(false);
+  const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
   // Transfer project state
   const [teams, setTeams] = useState<Team[]>([]);
   const [loadingTeams, setLoadingTeams] = useState(false);
@@ -2069,97 +2126,24 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                     </div>
                   ) : connectedRepository ? (
                     <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                      <div className="flex items-center justify-between gap-4 p-5">
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          <img
-                            src={(connectedRepository as { provider?: string }).provider === 'gitlab'
-                              ? '/images/integrations/gitlab.png'
-                              : (connectedRepository as { provider?: string }).provider === 'bitbucket'
-                                ? '/images/integrations/bitbucket.png'
-                                : '/images/integrations/github.png'}
-                            alt=""
-                            className="h-5 w-5 rounded-sm flex-shrink-0 object-contain"
-                          />
-                          <div className="min-w-0 flex-1">
-                            <div className="text-base font-semibold text-foreground truncate font-mono">
-                              {connectedRepository.repo_full_name}
-                            </div>
-                            <div className="text-xs text-foreground-secondary flex items-center gap-2 mt-0.5 flex-wrap">
-                              <span className="flex items-center gap-1">
-                                <GitBranch className="h-3.5 w-3.5" />
-                                {connectedRepository.default_branch || 'main'}
-                              </span>
-                              {getWorkspaceDisplayPath(connectedRepository.package_json_path) !== 'Root' && (
-                                <>
-                                  <span>·</span>
-                                  <span>{getWorkspaceDisplayPath(connectedRepository.package_json_path)}</span>
-                                </>
-                              )}
-                              {(importStatus?.status === 'finalizing' || isExtractionOngoing(connectedRepository.status, connectedRepository.extraction_step ?? null)) && (
-                                <>
-                                  <span>·</span>
-                                  <span>
-                                    {importStatus?.status === 'finalizing' || connectedRepository.status === 'finalizing'
-                                      ? 'Finalizing'
-                                      : connectedRepository.status === 'extracting'
-                                        ? 'Syncing…'
-                                        : 'Analyzing…'}
-                                  </span>
-                                </>
-                              )}
-                            </div>
-                            {(connectedRepository.webhook_status === 'active' ||
-                              connectedRepository.webhook_status === 'inactive' ||
-                              connectedRepository.webhook_status === 'error' ||
-                              connectedRepository.last_webhook_at) && (
-                            <div className="text-xs text-foreground-secondary flex items-center gap-1.5 mt-2">
-                              <span
-                                className={cn(
-                                  'w-1.5 h-1.5 rounded-full shrink-0',
-                                  connectedRepository.webhook_status === 'active'
-                                    ? 'bg-emerald-500'
-                                    : connectedRepository.webhook_status === 'inactive'
-                                      ? 'bg-amber-500'
-                                      : connectedRepository.webhook_status === 'error'
-                                        ? 'bg-destructive'
-                                        : 'bg-zinc-500'
-                                )}
-                                aria-hidden
-                              />
-                              <span>
-                                {connectedRepository.webhook_status === 'active' && connectedRepository.last_webhook_at
-                                  ? `Webhook: Active (last event ${formatWebhookTimeAgo(connectedRepository.last_webhook_at)}${connectedRepository.last_webhook_event ? `: ${connectedRepository.last_webhook_event}` : ''})`
-                                  : connectedRepository.webhook_status === 'inactive'
-                                    ? 'Webhook: Inactive (no events in 7 days)'
-                                    : connectedRepository.webhook_status === 'error'
-                                      ? 'Webhook: Error'
-                                      : connectedRepository.last_webhook_at
-                                        ? `Webhook: Last event ${formatWebhookTimeAgo(connectedRepository.last_webhook_at)}`
-                                        : null}
-                              </span>
-                            </div>
-                            )}
+                      <div className="flex items-center gap-4 p-5">
+                        <img
+                          src={(connectedRepository as { provider?: string }).provider === 'gitlab'
+                            ? '/images/integrations/gitlab.png'
+                            : (connectedRepository as { provider?: string }).provider === 'bitbucket'
+                              ? '/images/integrations/bitbucket.png'
+                              : '/images/integrations/github.png'}
+                          alt=""
+                          className="h-5 w-5 rounded-sm flex-shrink-0 object-contain"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-base font-semibold text-foreground truncate font-mono">
+                            {connectedRepository.repo_full_name}
                           </div>
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          {(connectedRepository.status === 'ready' && importStatus?.status !== 'finalizing' && !isRepoDisconnected) ? (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <button
-                                  type="button"
-                                  className="h-9 w-9 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
-                                  aria-label="Sync repository"
-                                >
-                                  <RefreshCw className="h-4 w-4" />
-                                </button>
-                              </TooltipTrigger>
-                              <TooltipContent>Sync</TooltipContent>
-                            </Tooltip>
-                          ) : (
-                            <div className="h-9 w-9 rounded-md flex items-center justify-center">
-                              <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" />
-                            </div>
-                          )}
+                          <div className="text-xs text-foreground-secondary flex items-center gap-1 mt-0.5">
+                            <GitBranch className="h-3.5 w-3.5 shrink-0" />
+                            {connectedRepository.default_branch || 'main'}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -2329,83 +2313,92 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                             extractionRuns.map((run) => {
                               const isActive = run.status === 'queued' || run.status === 'processing';
                               const duration = formatRunDuration(run.created_at, run.completed_at ?? null, run.status);
-                              const triggerSubtext = run.trigger_type === 'initial' ? 'Initial extraction' : 'Sync';
-                              const byDisplay = run.commit_author?.username
-                                ? run.commit_author.username
-                                : run.started_by?.full_name ?? 'Deptex';
-                              const byAvatarUrl = run.commit_author?.avatar_url ?? run.started_by?.avatar_url;
+                              const isExpanded = expandedRunId === run.run_id;
                               return (
-                                <tr
-                                  key={run.run_id}
-                                  onClick={() => setSelectedExtractionRunId(run.run_id)}
-                                  className="group hover:bg-table-hover transition-colors cursor-pointer"
-                                >
-                                  <td className="px-4 py-3">
-                                    <div className="flex flex-col gap-0.5 min-w-0">
-                                      {/* Main line: commit when available, otherwise trigger type */}
-                                      <div className="flex items-center gap-2 min-w-0">
-                                        {run.commit_sha ? (
-                                          <>
-                                            <GitCommit className="h-4 w-4 text-foreground-secondary shrink-0" />
-                                            <span className="text-sm font-medium font-mono text-foreground truncate">
-                                              {run.branch || 'main'} {(run.commit_sha as string).slice(0, 7)}
-                                              {run.commit_message ? ` — ${(run.commit_message as string).split('\n')[0].slice(0, 40)}` : ''}
+                                <Fragment key={run.run_id}>
+                                  <tr
+                                    onClick={() => setExpandedRunId(prev => prev === run.run_id ? null : run.run_id)}
+                                    className={cn(
+                                      'group hover:bg-table-hover transition-colors cursor-pointer',
+                                      isExpanded && 'bg-table-hover'
+                                    )}
+                                  >
+                                    {/* Source — Vercel style: branch row + commit row */}
+                                    <td className="px-4 py-3">
+                                      <div className="flex flex-col gap-1 min-w-0">
+                                        <div className="flex items-center gap-1.5 min-w-0">
+                                          <GitBranch className="h-3.5 w-3.5 text-foreground-secondary shrink-0" />
+                                          <span className="text-xs text-foreground-secondary truncate">{run.branch || 'main'}</span>
+                                        </div>
+                                        <div className="flex items-center gap-1.5 min-w-0">
+                                          <GitCommit className="h-3.5 w-3.5 text-foreground-secondary shrink-0" />
+                                          {run.commit_sha ? (
+                                            <span className="text-sm text-foreground font-mono truncate">
+                                              {(run.commit_sha as string).slice(0, 7)}
+                                              {run.commit_message ? (
+                                                <span className="font-sans font-normal"> {(run.commit_message as string).split('\n')[0].slice(0, 48)}</span>
+                                              ) : null}
                                             </span>
-                                          </>
-                                        ) : (
-                                          <span className="text-sm font-medium text-foreground">{triggerSubtext}</span>
-                                        )}
+                                          ) : (
+                                            <span className="text-sm text-foreground">
+                                              {run.trigger_type === 'initial' ? 'Initial extraction' : 'Manual sync'}
+                                            </span>
+                                          )}
+                                        </div>
                                       </div>
-                                      {/* Sub line: always trigger type */}
-                                      <span className="text-xs text-muted-foreground">{triggerSubtext}</span>
-                                    </div>
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <div className="flex flex-col gap-0.5">
-                                      <div className="flex items-center gap-2">
-                                        {isActive ? (
-                                          <>
-                                            <span className="h-2 w-2 rounded-full shrink-0 bg-amber-400" aria-hidden />
-                                            <span className="text-sm text-foreground">Extracting</span>
-                                          </>
-                                        ) : run.status === 'completed' ? (
-                                          <>
-                                            <span className="h-2 w-2 rounded-full shrink-0 bg-emerald-500" />
-                                            <span className="text-sm text-foreground-secondary">Ready</span>
-                                          </>
-                                        ) : run.status === 'cancelled' ? (
-                                          <>
-                                            <span className="h-2 w-2 rounded-full shrink-0 bg-amber-500" />
-                                            <span className="text-sm text-foreground-secondary">Cancelled</span>
-                                          </>
-                                        ) : (
-                                          <>
-                                            <span className="h-2 w-2 rounded-full shrink-0 bg-destructive" />
-                                            <span className="text-sm text-foreground-secondary">Error</span>
-                                          </>
-                                        )}
+                                    </td>
+
+                                    {/* Status */}
+                                    <td className="px-4 py-3">
+                                      <div className="flex flex-col gap-0.5">
+                                        <div className="flex items-center gap-2">
+                                          {isActive ? (
+                                            <>
+                                              <span className="h-2 w-2 rounded-full shrink-0 bg-amber-400" aria-hidden />
+                                              <span className="text-sm text-foreground-secondary">Extracting</span>
+                                            </>
+                                          ) : run.status === 'completed' ? (
+                                            <>
+                                              <span className="h-2 w-2 rounded-full shrink-0 bg-emerald-500" />
+                                              <span className="text-sm text-foreground-secondary">Ready</span>
+                                            </>
+                                          ) : run.status === 'cancelled' ? (
+                                            <>
+                                              <span className="h-2 w-2 rounded-full shrink-0 bg-amber-500" />
+                                              <span className="text-sm text-foreground-secondary">Cancelled</span>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <span className="h-2 w-2 rounded-full shrink-0 bg-destructive" />
+                                              <span className="text-sm text-foreground-secondary">Error</span>
+                                            </>
+                                          )}
+                                        </div>
+                                        <span className="text-xs text-muted-foreground">{duration}</span>
                                       </div>
-                                      <span className="text-xs text-muted-foreground">{duration}</span>
-                                    </div>
-                                  </td>
-                                  <td className="px-4 py-3 text-right">
-                                    <div className="flex flex-col items-end gap-0.5">
-                                      <span className="text-sm text-foreground-secondary">{formatConnectedAgo(run.created_at)}</span>
-                                      <span className="text-xs text-muted-foreground flex items-center gap-1.5 justify-end">
-                                        by
-                                        {run.commit_author ? (
-                                          <Avatar className="h-5 w-5">
-                                            {byAvatarUrl && <AvatarImage src={byAvatarUrl} alt="" />}
-                                            <AvatarFallback className="text-[10px]">{byDisplay.slice(0, 2).toUpperCase()}</AvatarFallback>
-                                          </Avatar>
-                                        ) : (
-                                          <img src="/images/logo.png" alt="" className="h-5 w-5 rounded-full object-contain shrink-0" aria-hidden />
-                                        )}
-                                        <span className="truncate max-w-[100px]">{byDisplay}</span>
+                                    </td>
+
+                                    {/* Time — just "X minutes ago" */}
+                                    <td className="px-4 py-3 text-right">
+                                      <span className="text-sm text-foreground-secondary tabular-nums">
+                                        {formatConnectedAgo(run.created_at)}
                                       </span>
-                                    </div>
-                                  </td>
-                                </tr>
+                                    </td>
+                                  </tr>
+
+                                  {/* Animated expansion row */}
+                                  <ExpandableLogRow
+                                    isExpanded={isExpanded}
+                                    organizationId={organizationId}
+                                    projectId={projectId!}
+                                    runId={run.run_id}
+                                    isActive={isActive}
+                                    onCancelled={() => {
+                                      reloadProject?.();
+                                      api.getExtractionRuns(organizationId, projectId!).then(setExtractionRuns).catch(() => {});
+                                    }}
+                                  />
+                                </Fragment>
                               );
                             })
                           )}
@@ -2415,16 +2408,6 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                   </div>
                 )}
 
-                {/* Sync detail sidebar — live extraction logs */}
-                {(selectedExtractionRunId !== null || showExtractionLogs) && (
-                  <SyncDetailSidebar
-                    projectId={projectId!}
-                    organizationId={organizationId}
-                    initialRunId={selectedExtractionRunId ?? undefined}
-                    onClose={() => { setSelectedExtractionRunId(null); setShowExtractionLogs(false); }}
-                    onCancelled={() => reloadProject?.()}
-                  />
-                )}
               </div>
             )}
 
