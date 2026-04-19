@@ -44,6 +44,7 @@ import learningRouter from './routes/learning';
 import incidentsRouter from './routes/incidents';
 import gitlabWebhooksRouter from './routes/gitlab-webhooks';
 import bitbucketWebhooksRouter from './routes/bitbucket-webhooks';
+import flowsRouter from './routes/flows';
 
 const app = express();
 app.set('trust proxy', true);
@@ -136,6 +137,7 @@ app.use('/api/internal', internalRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/organizations', learningRouter);
 app.use('/api/organizations', incidentsRouter);
+app.use('/api/flows', flowsRouter);
 app.post('/api/webhook/github', githubWebhookHandler);
 app.use('/api/integrations', gitlabWebhooksRouter);
 app.use('/api/integrations', bitbucketWebhooksRouter);
