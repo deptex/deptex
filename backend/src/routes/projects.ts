@@ -21,7 +21,6 @@ import { detectMonorepo } from '../lib/detect-monorepo';
 import { createProvider, GitHubProvider, type GitProvider, type OrgIntegration } from '../lib/git-provider';
 import { queueExtractionJob, cancelExtractionJob } from '../lib/extraction-jobs';
 import { MANIFEST_FILES, detectFrameworkForEcosystem, ECOSYSTEM_DEFAULTS } from '../lib/ecosystems';
-import { queueWatchtowerJob, queueWatchtowerJobs } from '../lib/watchtower-queue';
 import { createBumpPrForProject } from '../lib/create-bump-pr';
 import { createRemovePrForProject } from '../lib/create-remove-pr';
 import { isVersionAffected, isVersionFixed } from '../lib/semver-affected';
@@ -48,7 +47,6 @@ import {
   invalidateDependencyNotesCache,
   invalidateDependencyVersionsCacheByDependencyId,
   invalidateLatestSafeVersionCacheByDependencyId,
-  invalidateWatchtowerSummaryCache,
   invalidateAllProjectCachesInOrg,
   invalidateProjectCachesForTeam,
   CACHE_TTL_SECONDS,
@@ -570,9 +568,9 @@ async function getAccessibleProjectIdsInOrganization(
   return { projectIds: (scopedProjects || []).map((p: any) => p.id) };
 }
 
-/** Check if user can manage watchtower (enable/disable, clear commits, quarantine).
+/** Check if user can manage a project (enable integrations, suppress findings, accept risk, etc.).
  * Requires org-level manage_teams_and_projects OR team-level manage_projects (owner team). */
-async function checkWatchtowerManagePermission(userId: string, organizationId: string, projectId: string): Promise<boolean> {
+async function checkProjectManagePermission(userId: string, organizationId: string, projectId: string): Promise<boolean> {
   const { data: membership } = await supabase
     .from('organization_members')
     .select('role')
@@ -1777,7 +1775,6 @@ router.get('/:id/projects/:projectId', async (req: AuthRequest, res) => {
         manage_members: membership.role === 'owner',
         view_settings: true,
         edit_settings: membership.role === 'owner',
-        can_manage_watchtower: true,
       };
     } else {
       // Check org-level manage_teams_and_projects permission
@@ -1839,7 +1836,6 @@ router.get('/:id/projects/:projectId', async (req: AuthRequest, res) => {
           userPermissions.view_settings = true;
           userPermissions.edit_settings = true;
         }
-        (userPermissions as any).can_manage_watchtower = hasOrgManagePermission || hasOwnerTeamManageProjects;
       } else {
         // Check if user is in a team assigned to this project
         const { data: teamMemberships } = await supabase
@@ -1861,7 +1857,6 @@ router.get('/:id/projects/:projectId', async (req: AuthRequest, res) => {
             manage_members: hasOrgManagePermission || hasOwnerTeamManageProjects,
             view_settings: hasOrgManagePermission || hasOwnerTeamManageProjects,
             edit_settings: hasOrgManagePermission || hasOwnerTeamManageProjects,
-            can_manage_watchtower: hasOrgManagePermission || hasOwnerTeamManageProjects,
           };
         }
       }
@@ -1999,7 +1994,7 @@ router.delete('/:id/projects/:projectId/connections/:connectionId', async (req: 
     const userId = req.user!.id;
     const { id: orgId, projectId, connectionId } = req.params;
 
-    if (!(await checkWatchtowerManagePermission(userId, orgId, projectId))) {
+    if (!(await checkProjectManagePermission(userId, orgId, projectId))) {
       return res.status(403).json({ error: 'You do not have permission to manage project integrations' });
     }
 
@@ -2073,7 +2068,7 @@ router.post('/:id/projects/:projectId/notification-rules', async (req: AuthReque
     const { id: orgId, projectId } = req.params;
     const { name, triggerType, minDepscoreThreshold, customCode, destinations, createdByName } = req.body;
 
-    if (!(await checkWatchtowerManagePermission(userId, orgId, projectId))) {
+    if (!(await checkProjectManagePermission(userId, orgId, projectId))) {
       return res.status(403).json({ error: 'You do not have permission to manage notification rules' });
     }
 
@@ -2141,7 +2136,7 @@ router.put('/:id/projects/:projectId/notification-rules/:ruleId', async (req: Au
     const { id: orgId, projectId, ruleId } = req.params;
     const { name, triggerType, minDepscoreThreshold, customCode, destinations } = req.body;
 
-    if (!(await checkWatchtowerManagePermission(userId, orgId, projectId))) {
+    if (!(await checkProjectManagePermission(userId, orgId, projectId))) {
       return res.status(403).json({ error: 'You do not have permission to manage notification rules' });
     }
 
@@ -2204,7 +2199,7 @@ router.delete('/:id/projects/:projectId/notification-rules/:ruleId', async (req:
     const userId = req.user!.id;
     const { id: orgId, projectId, ruleId } = req.params;
 
-    if (!(await checkWatchtowerManagePermission(userId, orgId, projectId))) {
+    if (!(await checkProjectManagePermission(userId, orgId, projectId))) {
       return res.status(403).json({ error: 'You do not have permission to manage notification rules' });
     }
 
@@ -2229,7 +2224,7 @@ router.patch('/:id/projects/:projectId/notification-rules/:ruleId/snooze', async
     const { id: orgId, projectId, ruleId } = req.params;
     const { snoozedUntil } = req.body;
 
-    if (!(await checkWatchtowerManagePermission(userId, orgId, projectId))) {
+    if (!(await checkProjectManagePermission(userId, orgId, projectId))) {
       return res.status(403).json({ error: 'You do not have permission to manage notification rules' });
     }
 
@@ -2256,7 +2251,7 @@ router.post('/:id/projects/:projectId/email-notifications', async (req: AuthRequ
     const { id: orgId, projectId } = req.params;
     const { email } = req.body;
 
-    if (!(await checkWatchtowerManagePermission(userId, orgId, projectId))) {
+    if (!(await checkProjectManagePermission(userId, orgId, projectId))) {
       return res.status(403).json({ error: 'You do not have permission to manage project integrations' });
     }
 
@@ -2312,7 +2307,7 @@ router.post('/:id/projects/:projectId/custom-integrations', async (req: AuthRequ
     const { id: orgId, projectId } = req.params;
     const { name, type, webhook_url, icon_url } = req.body;
 
-    if (!(await checkWatchtowerManagePermission(userId, orgId, projectId))) {
+    if (!(await checkProjectManagePermission(userId, orgId, projectId))) {
       return res.status(403).json({ error: 'You do not have permission to manage project integrations' });
     }
 
@@ -4793,7 +4788,6 @@ async function fetchEnrichedDependenciesForProject(
   const t0 = debugTiming ? Date.now() : 0;
   // Get project dependencies with joined dependency analysis data
     // Note: license column was removed from project_dependencies - it now comes from dependencies table
-    // is_watching and watchtower_cleared_at come from organization_watchlist (org-level)
     const { data: projectDeps, error: depsError } = await supabase
       .from('project_dependencies')
       .select(`
@@ -4833,7 +4827,6 @@ async function fetchEnrichedDependenciesForProject(
 
     // Wave 1: run independent fetches in parallel
     const [
-      watchlistResult,
       depsByIdBatches,
       dvBatches,
       edgesBatches,
@@ -4842,7 +4835,6 @@ async function fetchEnrichedDependenciesForProject(
       depsByNameResult,
       projectTeamsResult,
     ] = await Promise.all([
-      supabase.from('organization_watchlist').select('dependency_id, watchtower_cleared_at').eq('organization_id', organizationId),
       dependencyIds.length > 0
         ? Promise.all(
             Array.from({ length: Math.ceil(dependencyIds.length / BATCH_SIZE) }, (_, i) => {
@@ -4883,15 +4875,6 @@ async function fetchEnrichedDependenciesForProject(
     ]);
     const t1 = debugTiming ? Date.now() : 0;
     if (debugTiming) console.log('[fetchEnrichedDependencies] project_deps + wave1', t1 - t0, 'ms');
-
-    const watchlistByDependencyId = new Map<string, { watchtower_cleared_at: string | null }>();
-    if (watchlistResult.data) {
-      watchlistResult.data.forEach((row: any) => {
-        if (row.dependency_id) {
-          watchlistByDependencyId.set(row.dependency_id, { watchtower_cleared_at: row.watchtower_cleared_at ?? null });
-        }
-      });
-    }
 
     const analysisData = new Map<string, any>();
     for (const { data: deps } of depsByIdBatches as Array<{ data: any[] | null }>) {
@@ -5143,7 +5126,6 @@ async function fetchEnrichedDependenciesForProject(
       const byNameRow = dependencyByNameFallback.get(pd.name) ?? dependencyByNameFallback.get((pd.name || '').toLowerCase()) ?? null;
       const githubFromAnalysis = effectivePackageAnalysis?.github_url || null;
       const githubFromFallback = githubUrlByName.get(pd.name) || null;
-      const watchlistRow = pd.dependency_id ? watchlistByDependencyId.get(pd.dependency_id) : null;
       // Score and status come from dependencies (package-level), not dependency_versions
       const status = effectivePackageAnalysis?.status ?? byNameRow?.status ?? 'pending';
       const score = effectivePackageAnalysis?.score ?? byNameRow?.score ?? null;
@@ -5191,8 +5173,6 @@ async function fetchEnrichedDependenciesForProject(
         ...pd,
         ecosystem: ecosystemVal,
         slsa_level: slsaLevelVal,
-        is_watching: !!watchlistRow,
-        watchtower_cleared_at: watchlistRow?.watchtower_cleared_at ?? null,
         license: licenseFromJoin ?? null,
         github_url: githubFromAnalysis || githubFromFallback || null,
         imported_functions: importedFunctionsByDepId.get(pd.id) || [],
@@ -5661,7 +5641,7 @@ ${allFilePaths.length > 0 ? allFilePaths.map((fp: string) => `- ${fp}`).join('\n
   }
 });
 
-// GET /api/organizations/:id/projects/:projectId/dependencies/:projectDependencyId/versions - List versions with vuln counts, CVE details, watchtower checks, and PRs
+// GET /api/organizations/:id/projects/:projectId/dependencies/:projectDependencyId/versions - List versions with vuln counts, CVE details, and PRs
 // Query: limit, offset (optional). When provided, returns only that page and a total count for faster initial load; omit for full list (e.g. VersionSidebar).
 router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/versions', async (req: AuthRequest, res) => {
   try {
@@ -6355,9 +6335,9 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
     const { currentDvRow, availableVersions } = dvAndVersions;
     const parentDepId = (currentDvRow as any)?.dependency_id ?? null;
 
-    // Parallel 2: parent license, parent vulns, bump PRs, remove PR, watchtower, banned versions
+    // Parallel 2: parent license, parent vulns, bump PRs, remove PR, banned versions
     const parentDepIdForRemove = (pd as any).dependency_id ?? null;
-    const [parentLicenseResult, parentVulnRows, bumpPrRows, removePrRow, versionSecurityData, bannedVersionsResult] = await Promise.all([
+    const [parentLicenseResult, parentVulnRows, bumpPrRows, removePrRow, bannedVersionsResult] = await Promise.all([
       parentDepId != null
         ? supabase.from('dependencies').select('license').eq('id', parentDepId).single().then(({ data }) => (data as any)?.license ?? null)
         : Promise.resolve(null as string | null),
@@ -6396,46 +6376,6 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
             .maybeSingle()
             .then((r) => r.data)
         : Promise.resolve(null),
-      (async () => {
-        const out: {
-          onWatchtower: boolean;
-          quarantinedVersions: string[];
-          securityChecks: Record<string, { registry_integrity_status: string | null; install_scripts_status: string | null; entropy_analysis_status: string | null }>;
-        } = { onWatchtower: false, quarantinedVersions: [], securityChecks: {} };
-        if (parentDepId == null) return out;
-        const { data: wlRow } = await supabase
-          .from('organization_watchlist')
-          .select('quarantine_until, is_current_version_quarantined')
-          .eq('organization_id', id)
-          .eq('dependency_id', parentDepId)
-          .maybeSingle();
-        if (!wlRow) return out;
-        out.onWatchtower = true;
-        const wl = wlRow as any;
-        if (wl.is_current_version_quarantined && wl.quarantine_until && new Date(wl.quarantine_until) > new Date()) {
-          const { data: depRow } = await supabase.from('dependencies').select('latest_version').eq('id', parentDepId).single();
-          if (depRow && (depRow as any).latest_version) {
-            out.quarantinedVersions = [(depRow as any).latest_version];
-          }
-        }
-        if (availableVersions.length > 0) {
-          const { data: secRows } = await supabase
-            .from('dependency_versions')
-            .select('version, registry_integrity_status, install_scripts_status, entropy_analysis_status')
-            .eq('dependency_id', parentDepId)
-            .in('version', availableVersions.map((v: any) => v.version));
-          if (secRows) {
-            for (const row of secRows as any[]) {
-              out.securityChecks[row.version] = {
-                registry_integrity_status: row.registry_integrity_status ?? null,
-                install_scripts_status: row.install_scripts_status ?? null,
-                entropy_analysis_status: row.entropy_analysis_status ?? null,
-              };
-            }
-          }
-        }
-        return out;
-      })(),
       (async () => {
         if (parentDepId == null) return [] as Array<{ id: string; dependency_id: string; banned_version: string; bump_to_version: string; banned_by: string; created_at: string; source: 'org' | 'team'; team_id?: string }>;
         const { data: orgBans } = await supabase
@@ -6577,7 +6517,6 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
       ancestors,
       availableVersions,
       bumpPrs,
-      versionSecurityData,
       versionVulnerabilitySummary,
       banned_versions: bannedVersionsResult,
     });
@@ -6938,743 +6877,7 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
   }
 });
 
-// PATCH /api/organizations/:id/projects/:projectId/dependencies/:dependencyId/watching - Toggle watchtower watching for a dependency (org-level)
-router.patch('/:id/projects/:projectId/dependencies/:dependencyId/watching', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const { id, projectId, dependencyId } = req.params;
-    const organizationId = id;
-    const { is_watching } = req.body;
 
-    if (typeof is_watching !== 'boolean') {
-      return res.status(400).json({ error: 'is_watching must be a boolean' });
-    }
-
-    const accessCheck = await checkProjectAccess(userId, id, projectId);
-    if (!accessCheck.hasAccess) {
-      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
-    }
-
-    const canManage = await checkWatchtowerManagePermission(userId, id, projectId);
-    if (!canManage) {
-      return res.status(403).json({ error: 'You do not have permission to manage Watchtower. Org-level manage teams & projects or team-level manage projects is required.' });
-    }
-
-    // Get dependency details (project_dependency row: need name, version; resolve package dependency_id for watchlist)
-    const { data: depDetails, error: detailsError } = await supabase
-      .from('project_dependencies')
-      .select('id, name, version, dependency_version_id')
-      .eq('id', dependencyId)
-      .eq('project_id', projectId)
-      .single();
-
-    if (detailsError) {
-      if (detailsError.code === 'PGRST116') {
-        return res.status(404).json({ error: 'Dependency not found' });
-      }
-      throw detailsError;
-    }
-
-    // Invalidate watchtower summary cache first so the next summary fetch is never stale (fixes re-enable showing old "ready" from cache)
-    await invalidateWatchtowerSummaryCache(depDetails.name, dependencyId).catch((err: any) => {
-      console.warn('[Cache] Failed to invalidate watchtower summary on watching toggle:', err?.message);
-    });
-
-    // Resolve package dependency_id (dependencies.id) for organization_watchlist
-    let packageDependencyId: string | null = null;
-    if (depDetails.dependency_version_id) {
-      const { data: dv } = await supabase
-        .from('dependency_versions')
-        .select('dependency_id')
-        .eq('id', depDetails.dependency_version_id)
-        .single();
-      if (dv) packageDependencyId = (dv as any).dependency_id;
-    }
-    if (!packageDependencyId) {
-      const { data: depByName } = await supabase
-        .from('dependencies')
-        .select('id')
-        .eq('name', depDetails.name)
-        .limit(1)
-        .single();
-      if (depByName) packageDependencyId = (depByName as any).id;
-    }
-
-    // Update organization_watchlist (org-level watching, by dependency_id)
-    if (is_watching) {
-      if (!packageDependencyId) {
-        return res.status(400).json({ error: 'Could not resolve package for watchlist' });
-      }
-
-      // Plan limit check: watchtower packages
-      try {
-        const { checkPlanLimit, TIER_DISPLAY_NAMES } = require('../lib/plan-limits');
-        const planCheck = await checkPlanLimit(organizationId, 'watchtower');
-        if (!planCheck.allowed) {
-          return res.status(403).json({
-            error: 'PLAN_LIMIT',
-            message: `Your ${TIER_DISPLAY_NAMES[planCheck.tier]} plan supports up to ${planCheck.limit} watched packages.`,
-            resource: 'watchtower', current: planCheck.current, limit: planCheck.limit,
-            tier: planCheck.tier, upgradeTier: planCheck.upgradeTier,
-          });
-        }
-      } catch (e) { /* fail open */ }
-
-      const npmLatest = await fetchLatestNpmVersion(depDetails.name);
-      const latestAllowedVersion = npmLatest.latest_version ?? depDetails.version;
-      const { error: insertError } = await supabase
-        .from('organization_watchlist')
-        .insert({
-          organization_id: organizationId,
-          dependency_id: packageDependencyId,
-          watchtower_cleared_at: null,
-          latest_allowed_version: latestAllowedVersion,
-        });
-      if (insertError && insertError.code !== '23505') throw insertError; // 23505 = unique violation, row exists
-    } else {
-      let clearedCommitDepId: string | null = packageDependencyId;
-      if (packageDependencyId) {
-        const { error: deleteError } = await supabase
-          .from('organization_watchlist')
-          .delete()
-          .eq('organization_id', organizationId)
-          .eq('dependency_id', packageDependencyId);
-        if (deleteError) throw deleteError;
-      } else {
-        const { data: depByName } = await supabase
-          .from('dependencies')
-          .select('id')
-          .eq('name', depDetails.name)
-          .limit(1)
-          .single();
-        if (depByName) {
-          clearedCommitDepId = (depByName as any).id;
-          await supabase
-            .from('organization_watchlist')
-            .delete()
-            .eq('organization_id', organizationId)
-            .eq('dependency_id', (depByName as any).id);
-        }
-      }
-      if (clearedCommitDepId) {
-        await supabase
-          .from('organization_watchlist_cleared_commits')
-          .delete()
-          .eq('organization_id', organizationId)
-          .eq('dependency_id', clearedCommitDepId);
-      }
-    }
-
-    // If enabling watching, upsert into watched_packages and queue worker job
-    if (is_watching && depDetails) {
-      // 1. Resolve dependency_id from dependencies table (or insert if missing)
-      // We need to ensure the package exists in the central 'dependencies' table first
-      let dependencyIdForWatch: string | null = null;
-
-      const { data: existingDep, error: depError } = await supabase
-        .from('dependencies')
-        .select('id')
-        .eq('name', depDetails.name)
-        .eq('version', depDetails.version)
-        .single();
-
-      if (existingDep) {
-        dependencyIdForWatch = existingDep.id;
-      } else {
-        // Try getting just by name (any version) as fallback if exact version missing
-        const { data: anyDep } = await supabase
-          .from('dependencies')
-          .select('id')
-          .eq('name', depDetails.name)
-          .limit(1)
-          .single();
-
-        if (anyDep) {
-          dependencyIdForWatch = anyDep.id;
-        } else {
-          // Insert new dependency entry
-          const { data: newDep, error: insertDepError } = await supabase
-            .from('dependencies')
-            .insert({
-              name: depDetails.name,
-              license: (depDetails as { license?: string }).license ?? null,
-            })
-            .select('id')
-            .single();
-
-          if (newDep) {
-            dependencyIdForWatch = newDep.id;
-          } else if (insertDepError) {
-            console.error('Failed to create dependency entry for watch:', insertDepError);
-          }
-        }
-      }
-
-      if (dependencyIdForWatch) {
-        // 2. Upsert into watched_packages using dependency_id
-        const { data: existingPkg, error: checkError } = await supabase
-          .from('watched_packages')
-          .select('id, status')
-          .eq('dependency_id', dependencyIdForWatch)
-          .single();
-
-        let watchedPkgId: string | null = null;
-        let shouldQueueJob = false;
-
-        if ((checkError && checkError.code === 'PGRST116') || !existingPkg) {
-          // Package doesn't exist: fetch latest from npm, update dependencies by name, then insert watched_package
-          const npmLatest = await fetchLatestNpmVersion(depDetails.name);
-          await supabase
-            .from('dependencies')
-            .update({
-              ...(npmLatest.latest_version && { latest_version: npmLatest.latest_version }),
-              ...(npmLatest.latest_release_date && { latest_release_date: npmLatest.latest_release_date }),
-            })
-            .eq('name', depDetails.name);
-          const { data: newPkg, error: insertError } = await supabase
-            .from('watched_packages')
-            .insert({
-              dependency_id: dependencyIdForWatch,
-              status: 'pending',
-              updated_at: new Date().toISOString(),
-            })
-            .select('id')
-            .single();
-
-          if (insertError) {
-            console.error('Failed to insert watched_packages:', insertError);
-          } else if (newPkg) {
-            watchedPkgId = newPkg.id;
-            shouldQueueJob = true; // First project to watch this package
-            console.log(`First project to watch ${depDetails.name}, will queue analysis job`);
-          }
-        } else if (existingPkg) {
-          // Package already exists
-          watchedPkgId = existingPkg.id;
-
-          // Only queue job if status is 'error' (retry) - don't queue if already 'analyzing' or 'ready'
-          if (existingPkg.status === 'error') {
-            // Reset to pending and retry
-            await supabase
-              .from('watched_packages')
-              .update({ status: 'pending', error_message: null, updated_at: new Date().toISOString() })
-              .eq('id', existingPkg.id);
-            shouldQueueJob = true;
-            console.log(`Retrying analysis for ${depDetails.name} (was in error state)`);
-          } else {
-            console.log(`Package ${depDetails.name} already watched with status '${existingPkg.status}', skipping job queue`);
-          }
-        }
-
-        // Queue watchtower job via Supabase only if this is a new package or needs retry
-        if (watchedPkgId && shouldQueueJob) {
-          const queueResult = await queueWatchtowerJob({
-            packageName: depDetails.name,
-            payload: {
-              watchedPackageId: watchedPkgId,
-              projectDependencyId: dependencyId,
-              currentVersion: depDetails.version,
-            },
-            organizationId: orgId,
-            dependencyId: depDetails.dependency_id,
-          });
-          if (!queueResult.success) {
-            console.warn(`Failed to queue Watchtower job for ${depDetails.name}: ${queueResult.error}`);
-          }
-        }
-      } else {
-        console.error(`Could not resolve dependency_id for ${depDetails.name}, skipping watch setup`);
-      }
-    }
-
-    // If disabling watching, check if any other orgs are still watching this package (by dependency_id)
-    if (!is_watching && depDetails && packageDependencyId) {
-      const { count, error: countError } = await supabase
-        .from('organization_watchlist')
-        .select('id', { count: 'exact', head: true })
-        .eq('dependency_id', packageDependencyId);
-
-      if (countError) {
-        console.error('Failed to count orgs watching package:', countError);
-      } else if (count === 0) {
-        const { error: deleteError } = await supabase
-          .from('watched_packages')
-          .delete()
-          .eq('dependency_id', packageDependencyId);
-
-        if (deleteError) {
-          console.error('Failed to delete from watched_packages:', deleteError);
-        } else {
-          console.log(`Removed ${depDetails.name} from watched_packages (no longer watched by any org)`);
-        }
-      }
-    }
-
-    await invalidateDependenciesCache(id, projectId).catch((err: any) => {
-      console.warn('[Cache] Failed to invalidate dependencies cache on watching toggle:', err?.message);
-    });
-    res.json({ id: dependencyId, is_watching });
-  } catch (error: any) {
-    console.error('Error updating dependency watching status:', error);
-    res.status(500).json({ error: error.message || 'Failed to update watching status' });
-  }
-});
-
-// PATCH /api/organizations/:id/projects/:projectId/dependencies/:dependencyId/clear-commits - Clear watchtower commits for a dependency (org-level)
-router.patch('/:id/projects/:projectId/dependencies/:dependencyId/clear-commits', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const { id, projectId, dependencyId } = req.params;
-    const organizationId = id;
-
-    const accessCheck = await checkProjectAccess(userId, id, projectId);
-    if (!accessCheck.hasAccess) {
-      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
-    }
-
-    const canManage = await checkWatchtowerManagePermission(userId, id, projectId);
-    if (!canManage) {
-      return res.status(403).json({ error: 'You do not have permission to clear commits. Org-level manage teams & projects or team-level manage projects is required.' });
-    }
-
-    const { data: depDetails, error: detailsError } = await supabase
-      .from('project_dependencies')
-      .select('id, name, dependency_version_id')
-      .eq('id', dependencyId)
-      .eq('project_id', projectId)
-      .single();
-
-    if (detailsError || !depDetails) {
-      if (detailsError?.code === 'PGRST116') {
-        return res.status(404).json({ error: 'Dependency not found' });
-      }
-      throw detailsError;
-    }
-
-    let packageDependencyId: string | null = null;
-    if ((depDetails as any).dependency_version_id) {
-      const { data: dv } = await supabase
-        .from('dependency_versions')
-        .select('dependency_id')
-        .eq('id', (depDetails as any).dependency_version_id)
-        .single();
-      if (dv) packageDependencyId = (dv as any).dependency_id;
-    }
-    if (!packageDependencyId) {
-      const { data: d } = await supabase
-        .from('dependencies')
-        .select('id')
-        .eq('name', depDetails.name)
-        .limit(1)
-        .single();
-      if (d) packageDependencyId = (d as any).id;
-    }
-    if (!packageDependencyId) {
-      return res.status(400).json({ error: 'Could not resolve package for watchlist' });
-    }
-
-    const clearedAt = new Date().toISOString();
-    const { error: upsertError } = await supabase
-      .from('organization_watchlist')
-      .upsert(
-        { organization_id: organizationId, dependency_id: packageDependencyId, watchtower_cleared_at: clearedAt },
-        { onConflict: 'organization_id,dependency_id' }
-      );
-
-    if (upsertError) throw upsertError;
-
-    await supabase
-      .from('organization_watchlist_cleared_commits')
-      .delete()
-      .eq('organization_id', organizationId)
-      .eq('dependency_id', packageDependencyId);
-
-    await invalidateDependenciesCache(id, projectId).catch((err: any) => {
-      console.warn('[Cache] Failed to invalidate dependencies cache on clear-commits:', err?.message);
-    });
-    res.json({ id: dependencyId, watchtower_cleared_at: clearedAt });
-  } catch (error: any) {
-    console.error('Error clearing watchtower commits:', error);
-    res.status(500).json({ error: error.message || 'Failed to clear commits' });
-  }
-});
-
-// POST /api/organizations/:id/projects/:projectId/dependencies/:dependencyId/cleared-commits - Mark a single commit as cleared (acknowledged)
-router.post('/:id/projects/:projectId/dependencies/:dependencyId/cleared-commits', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const { id, projectId, dependencyId } = req.params;
-    const organizationId = id;
-    const { commit_sha } = req.body as { commit_sha?: string };
-
-    if (!commit_sha || typeof commit_sha !== 'string' || !commit_sha.trim()) {
-      return res.status(400).json({ error: 'commit_sha is required' });
-    }
-
-    const accessCheck = await checkProjectAccess(userId, id, projectId);
-    if (!accessCheck.hasAccess) {
-      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
-    }
-
-    const canManage = await checkWatchtowerManagePermission(userId, id, projectId);
-    if (!canManage) {
-      return res.status(403).json({ error: 'You do not have permission to acknowledge commits. Org-level manage teams & projects or team-level manage projects is required.' });
-    }
-
-    const { data: depDetails, error: detailsError } = await supabase
-      .from('project_dependencies')
-      .select('id, name, dependency_id, dependency_version_id')
-      .eq('id', dependencyId)
-      .eq('project_id', projectId)
-      .single();
-
-    if (detailsError || !depDetails) {
-      if (detailsError?.code === 'PGRST116') {
-        return res.status(404).json({ error: 'Dependency not found' });
-      }
-      throw detailsError;
-    }
-
-    let packageDependencyId: string | null = (depDetails as any).dependency_id ?? null;
-    if (!packageDependencyId) {
-      const { data: dv } = await supabase
-        .from('dependency_versions')
-        .select('dependency_id')
-        .eq('id', (depDetails as any).dependency_version_id)
-        .single();
-      if (dv) packageDependencyId = (dv as any).dependency_id;
-    }
-    if (!packageDependencyId) {
-      const { data: d } = await supabase
-        .from('dependencies')
-        .select('id')
-        .eq('name', (depDetails as any).name)
-        .limit(1)
-        .single();
-      if (d) packageDependencyId = (d as any).id;
-    }
-    if (!packageDependencyId) {
-      return res.status(400).json({ error: 'Could not resolve dependency_id for this project dependency' });
-    }
-
-    const { error: insertError } = await supabase
-      .from('organization_watchlist_cleared_commits')
-      .upsert(
-        {
-          organization_id: organizationId,
-          dependency_id: packageDependencyId,
-          commit_sha: commit_sha.trim(),
-          cleared_at: new Date().toISOString(),
-        },
-        { onConflict: 'organization_id,dependency_id,commit_sha' }
-      );
-
-    if (insertError) throw insertError;
-
-    res.status(204).send();
-  } catch (error: any) {
-    console.error('Error clearing single watchtower commit:', error);
-    res.status(500).json({ error: error.message || 'Failed to clear commit' });
-  }
-});
-
-/**
- * Update a dependency version in package.json (dependencies or devDependencies).
- * Preserves range prefix (^ or ~) if the current value has one, so e.g. "^18.2.0" -> "^18.3.2".
- */
-function updatePackageJsonDependency(
-  packageJsonStr: string,
-  packageName: string,
-  targetVersion: string
-): { content: string } | { error: string } {
-  let pkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-  try {
-    pkg = JSON.parse(packageJsonStr);
-  } catch {
-    return { error: 'Invalid package.json' };
-  }
-  const dep = pkg.dependencies?.[packageName];
-  const devDep = pkg.devDependencies?.[packageName];
-  const current = dep ?? devDep;
-  if (current === undefined) {
-    return { error: 'This dependency is transitive; only direct dependencies can be bumped via PR.' };
-  }
-  // Preserve ^ or ~ from current value so Dependabot and install behavior stay consistent
-  const prefix = current.startsWith('^') ? '^' : current.startsWith('~') ? '~' : '';
-  const versionToWrite = prefix + targetVersion.replace(/^[\^~]/, '');
-  if (dep !== undefined) {
-    pkg.dependencies = { ...pkg.dependencies, [packageName]: versionToWrite };
-  } else {
-    pkg.devDependencies = { ...pkg.devDependencies, [packageName]: versionToWrite };
-  }
-  return { content: JSON.stringify(pkg, null, 2) };
-}
-
-// POST /api/organizations/:id/projects/:projectId/dependencies/:dependencyId/watchtower/bump - Create PR to bump dependency (body.target_version optional; else uses org latest allowed)
-router.post('/:id/projects/:projectId/dependencies/:dependencyId/watchtower/bump', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const { id, projectId, dependencyId } = req.params;
-    const organizationId = id;
-    const bodyTargetVersion = typeof (req.body as any)?.target_version === 'string' ? (req.body as any).target_version.trim() : null;
-
-    const accessCheck = await checkProjectAccess(userId, id, projectId);
-    if (!accessCheck.hasAccess) {
-      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
-    }
-
-    const { data: depDetails, error: detailsError } = await supabase
-      .from('project_dependencies')
-      .select('id, name, version, dependency_version_id')
-      .eq('id', dependencyId)
-      .eq('project_id', projectId)
-      .single();
-
-    if (detailsError || !depDetails) {
-      if (detailsError?.code === 'PGRST116') {
-        return res.status(404).json({ error: 'Dependency not found' });
-      }
-      throw detailsError;
-    }
-
-    let packageDependencyId: string | null = null;
-    if ((depDetails as any).dependency_version_id) {
-      const { data: dv } = await supabase
-        .from('dependency_versions')
-        .select('dependency_id')
-        .eq('id', (depDetails as any).dependency_version_id)
-        .single();
-      if (dv) packageDependencyId = (dv as any).dependency_id;
-    }
-    if (!packageDependencyId) {
-      const { data: d } = await supabase
-        .from('dependencies')
-        .select('id')
-        .eq('name', depDetails.name)
-        .limit(1)
-        .single();
-      if (d) packageDependencyId = (d as any).id;
-    }
-    if (!packageDependencyId) {
-      return res.status(400).json({ error: 'Could not resolve package for watchlist' });
-    }
-
-    let targetVersion: string | null = bodyTargetVersion || null;
-    if (!targetVersion) {
-      const { data: watchlistRow } = await supabase
-        .from('organization_watchlist')
-        .select('latest_allowed_version')
-        .eq('organization_id', organizationId)
-        .eq('dependency_id', packageDependencyId)
-        .maybeSingle();
-      targetVersion = (watchlistRow as any)?.latest_allowed_version ?? null;
-      if (!targetVersion) {
-        return res.status(400).json({ error: 'No latest allowed version set for this package. Set it in organization watchlist or re-enable watching, or pass target_version in the request body.' });
-      }
-    }
-
-    const bumpResult = await createBumpPrForProject(
-      organizationId,
-      projectId,
-      depDetails.name,
-      targetVersion,
-      depDetails.version
-    );
-    if ('error' in bumpResult) {
-      return res.status(400).json({ error: bumpResult.error });
-    }
-    const { data: existingBumpPr } = await supabase
-      .from('dependency_prs')
-      .select('pr_url, pr_number')
-      .eq('project_id', projectId)
-      .eq('dependency_id', packageDependencyId)
-      .eq('type', 'bump')
-      .eq('target_version', targetVersion)
-      .maybeSingle();
-    res.json({
-      pr_url: bumpResult.pr_url,
-      pr_number: bumpResult.pr_number,
-      already_exists: !!existingBumpPr && (existingBumpPr as any).pr_url === bumpResult.pr_url,
-    });
-  } catch (error: any) {
-    console.error('Error creating bump PR:', error);
-    res.status(500).json({ error: error.message || 'Failed to create bump PR' });
-  }
-});
-
-// POST /api/organizations/:id/projects/:projectId/dependencies/:dependencyId/watchtower/decrease - Create PR to decrease dependency to org's latest allowed version
-router.post('/:id/projects/:projectId/dependencies/:dependencyId/watchtower/decrease', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const { id, projectId, dependencyId } = req.params;
-    const organizationId = id;
-
-    const accessCheck = await checkProjectAccess(userId, id, projectId);
-    if (!accessCheck.hasAccess) {
-      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
-    }
-
-    const { data: depDetails, error: detailsError } = await supabase
-      .from('project_dependencies')
-      .select('id, name, version, dependency_version_id')
-      .eq('id', dependencyId)
-      .eq('project_id', projectId)
-      .single();
-
-    if (detailsError || !depDetails) {
-      if (detailsError?.code === 'PGRST116') {
-        return res.status(404).json({ error: 'Dependency not found' });
-      }
-      throw detailsError;
-    }
-
-    let packageDependencyId: string | null = null;
-    if ((depDetails as any).dependency_version_id) {
-      const { data: dv } = await supabase
-        .from('dependency_versions')
-        .select('dependency_id')
-        .eq('id', (depDetails as any).dependency_version_id)
-        .single();
-      if (dv) packageDependencyId = (dv as any).dependency_id;
-    }
-    if (!packageDependencyId) {
-      const { data: d } = await supabase
-        .from('dependencies')
-        .select('id')
-        .eq('name', depDetails.name)
-        .limit(1)
-        .single();
-      if (d) packageDependencyId = (d as any).id;
-    }
-    if (!packageDependencyId) {
-      return res.status(400).json({ error: 'Could not resolve package for watchlist' });
-    }
-
-    const { data: watchlistRow } = await supabase
-      .from('organization_watchlist')
-      .select('latest_allowed_version')
-      .eq('organization_id', organizationId)
-      .eq('dependency_id', packageDependencyId)
-      .maybeSingle();
-
-    const targetVersion = (watchlistRow as any)?.latest_allowed_version ?? null;
-    if (!targetVersion) {
-      return res.status(400).json({ error: 'No latest allowed version set for this package. Set it in organization watchlist or re-enable watching.' });
-    }
-
-    const { data: existingDecreasePr } = await supabase
-      .from('dependency_prs')
-      .select('pr_url, pr_number')
-      .eq('project_id', projectId)
-      .eq('dependency_id', packageDependencyId)
-      .eq('type', 'decrease')
-      .eq('target_version', targetVersion)
-      .maybeSingle();
-    if (existingDecreasePr) {
-      return res.json({
-        pr_url: (existingDecreasePr as any).pr_url,
-        pr_number: (existingDecreasePr as any).pr_number,
-        already_exists: true,
-      });
-    }
-
-    const { data: orgRow } = await supabase
-      .from('organizations')
-      .select('github_installation_id')
-      .eq('id', organizationId)
-      .single();
-
-    if (!orgRow?.github_installation_id) {
-      return res.status(400).json({ error: 'Organization has no GitHub App connected.' });
-    }
-
-    const { data: repoRow } = await supabase
-      .from('project_repositories')
-      .select('repo_full_name, default_branch, installation_id, package_json_path')
-      .eq('project_id', projectId)
-      .maybeSingle();
-
-    if (!repoRow?.repo_full_name || !repoRow?.default_branch) {
-      return res.status(400).json({ error: 'Project has no GitHub repository connected.' });
-    }
-
-    const installationId = (repoRow as any).installation_id ?? orgRow.github_installation_id;
-    const token = await createInstallationToken(installationId);
-    const repoFullName = repoRow.repo_full_name;
-    const defaultBranch = repoRow.default_branch;
-    const packageJsonDir = (repoRow as { package_json_path?: string }).package_json_path ?? '';
-    const packageJsonPath = packageJsonDir ? `${packageJsonDir}/package.json` : 'package.json';
-
-    const { data: oldDecreasePrs } = await supabase
-      .from('dependency_prs')
-      .select('pr_number')
-      .eq('project_id', projectId)
-      .eq('dependency_id', packageDependencyId)
-      .eq('type', 'decrease')
-      .neq('target_version', targetVersion);
-    if (oldDecreasePrs && Array.isArray(oldDecreasePrs)) {
-      for (const row of oldDecreasePrs) {
-        try {
-          const prState = await getPullRequest(token, repoFullName, (row as any).pr_number);
-          if (prState.state === 'open') {
-            await closePullRequest(token, repoFullName, (row as any).pr_number);
-          }
-        } catch (e) {
-          console.warn('Could not close old decrease PR:', (row as any).pr_number, e);
-        }
-      }
-    }
-
-    const fromSha = await getBranchSha(token, repoFullName, defaultBranch);
-    const branchName = `deptex/decrease-${depDetails.name.replace(/[@/]/g, '-')}-${targetVersion}`;
-    await createBranch(token, repoFullName, branchName, fromSha);
-
-    const { content: currentContent, sha: fileSha } = await getRepositoryFileWithSha(
-      token,
-      repoFullName,
-      packageJsonPath,
-      branchName
-    );
-    const result = updatePackageJsonDependency(currentContent, depDetails.name, targetVersion);
-    if ('error' in result) {
-      return res.status(400).json({ error: result.error });
-    }
-
-    await createOrUpdateFileOnBranch(
-      token,
-      repoFullName,
-      branchName,
-      packageJsonPath,
-      result.content,
-      `chore(deps): decrease ${depDetails.name} to ${targetVersion}`,
-      fileSha
-    );
-
-    const pr = await createPullRequest(
-      token,
-      repoFullName,
-      defaultBranch,
-      branchName,
-      `Decrease ${depDetails.name} to ${targetVersion}`,
-      `Downgrades \`${depDetails.name}\` from \`${depDetails.version}\` to \`${targetVersion}\` (organization's latest allowed version).`
-    );
-
-    await supabase.from('dependency_prs').insert({
-      project_id: projectId,
-      dependency_id: packageDependencyId,
-      type: 'decrease',
-      target_version: targetVersion,
-      pr_url: pr.html_url,
-      pr_number: pr.number,
-      branch_name: branchName,
-    });
-
-    res.json({ pr_url: pr.html_url, pr_number: pr.number, already_exists: false });
-  } catch (error: any) {
-    console.error('Error creating decrease PR:', error);
-    res.status(500).json({ error: error.message || 'Failed to create decrease PR' });
-  }
-});
 
 // POST /api/organizations/:id/projects/:projectId/dependencies/:dependencyId/remove-pr - Create PR to remove an unused (zombie) dependency
 router.post('/:id/projects/:projectId/dependencies/:dependencyId/remove-pr', async (req: AuthRequest, res) => {
@@ -7728,90 +6931,6 @@ router.post('/:id/projects/:projectId/dependencies/:dependencyId/remove-pr', asy
   }
 });
 
-// PATCH /api/organizations/:id/projects/:projectId/dependencies/:dependencyId/watchlist-quarantine - Toggle quarantine next release (org-level)
-router.patch('/:id/projects/:projectId/dependencies/:dependencyId/watchlist-quarantine', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const { id, projectId, dependencyId } = req.params;
-    const organizationId = id;
-
-    const accessCheck = await checkProjectAccess(userId, id, projectId);
-    if (!accessCheck.hasAccess) {
-      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
-    }
-
-    const canManage = await checkWatchtowerManagePermission(userId, id, projectId);
-    if (!canManage) {
-      return res.status(403).json({ error: 'You do not have permission to update quarantine. Org-level manage teams & projects or team-level manage projects is required.' });
-    }
-
-    const { data: depDetails, error: detailsError } = await supabase
-      .from('project_dependencies')
-      .select('id, name, dependency_version_id')
-      .eq('id', dependencyId)
-      .eq('project_id', projectId)
-      .single();
-
-    if (detailsError || !depDetails) {
-      if (detailsError?.code === 'PGRST116') {
-        return res.status(404).json({ error: 'Dependency not found' });
-      }
-      throw detailsError;
-    }
-
-    let packageDependencyId: string | null = null;
-    if ((depDetails as any).dependency_version_id) {
-      const { data: dv } = await supabase
-        .from('dependency_versions')
-        .select('dependency_id')
-        .eq('id', (depDetails as any).dependency_version_id)
-        .single();
-      if (dv) packageDependencyId = (dv as any).dependency_id;
-    }
-    if (!packageDependencyId) {
-      const { data: d } = await supabase
-        .from('dependencies')
-        .select('id')
-        .eq('name', depDetails.name)
-        .limit(1)
-        .single();
-      if (d) packageDependencyId = (d as any).id;
-    }
-    if (!packageDependencyId) {
-      return res.status(400).json({ error: 'Could not resolve package for watchlist' });
-    }
-
-    const quarantine_next_release = req.body?.quarantine_next_release;
-    if (typeof quarantine_next_release !== 'boolean') {
-      return res.status(400).json({ error: 'Body must include quarantine_next_release (boolean)' });
-    }
-
-    const { data: watchlistRow, error: updateError } = await supabase
-      .from('organization_watchlist')
-      .update({ quarantine_next_release })
-      .eq('organization_id', organizationId)
-      .eq('dependency_id', packageDependencyId)
-      .select('quarantine_next_release')
-      .single();
-
-    if (updateError) {
-      if (updateError.code === 'PGRST116') {
-        return res.status(404).json({ error: 'Package not in organization watchlist' });
-      }
-      throw updateError;
-    }
-
-    // Invalidate watchtower summary cache
-    await invalidateWatchtowerSummaryCache(depDetails.name, dependencyId).catch((err: any) => {
-      console.warn(`[Cache] Failed to invalidate watchtower summary cache:`, err.message);
-    });
-
-    res.json({ quarantine_next_release: watchlistRow?.quarantine_next_release ?? quarantine_next_release });
-  } catch (error: any) {
-    console.error('Error updating watchlist quarantine:', error);
-    res.status(500).json({ error: error.message || 'Failed to update quarantine' });
-  }
-});
 
 // GET /api/organizations/:id/projects/:projectId/vulnerabilities - List all vulnerabilities for project dependencies
 router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, res) => {
@@ -8775,7 +7894,6 @@ router.post('/:id/ban-version', async (req: AuthRequest, res) => {
       .eq('organization_id', organizationId)
       .eq('dependency_id', resolvedDependencyId)
       .maybeSingle();
-    let watchlistUpdated = false;
     if (watchlistRow && (watchlistRow as any).id) {
       const currentAllowed = (watchlistRow as any).latest_allowed_version;
       if (currentAllowed === banned_version || currentAllowed == null) {
@@ -8783,23 +7901,8 @@ router.post('/:id/ban-version', async (req: AuthRequest, res) => {
           .from('organization_watchlist')
           .update({ latest_allowed_version: bump_to_version })
           .eq('id', (watchlistRow as any).id);
-        watchlistUpdated = true;
       }
     }
-    if (watchlistUpdated) {
-      const { data: depNameRow } = await supabase
-        .from('dependencies')
-        .select('name')
-        .eq('id', resolvedDependencyId)
-        .single();
-      const packageName = (depNameRow as any)?.name ?? 'unknown';
-      if (packageName) {
-        await invalidateWatchtowerSummaryCache(packageName).catch((err: any) => {
-          console.warn(`[Cache] Failed to invalidate watchtower summary after ban:`, err.message);
-        });
-      }
-    }
-
     const { data: orgProjects } = await supabase
       .from('projects')
       .select('id')
@@ -9103,17 +8206,6 @@ router.delete('/:id/ban-version/:banId', async (req: AuthRequest, res) => {
               .from('organization_watchlist')
               .update({ latest_allowed_version: unbannedVersion })
               .eq('id', (watchlistRow as any).id);
-            const { data: depRow } = await supabase
-              .from('dependencies')
-              .select('name')
-              .eq('id', orgDepId)
-              .single();
-            const packageName = (depRow as any)?.name;
-            if (packageName) {
-              await invalidateWatchtowerSummaryCache(packageName).catch((err: any) => {
-                console.warn(`[Cache] Failed to invalidate watchtower summary after unban:`, err.message);
-              });
-            }
           }
         }
       }
@@ -10419,7 +9511,7 @@ router.get('/:id/projects/:projectId/secret-findings', async (req: AuthRequest, 
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
-    const canManage = await checkWatchtowerManagePermission(userId, id, projectId);
+    const canManage = await checkProjectManagePermission(userId, id, projectId);
     if (!canManage) {
       return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
     }
@@ -10602,7 +9694,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/suppress', async (
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
-    const canManage = await checkWatchtowerManagePermission(userId, id, projectId);
+    const canManage = await checkProjectManagePermission(userId, id, projectId);
     if (!canManage) {
       return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
     }
@@ -10645,7 +9737,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unsuppress', async
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
-    const canManage = await checkWatchtowerManagePermission(userId, id, projectId);
+    const canManage = await checkProjectManagePermission(userId, id, projectId);
     if (!canManage) {
       return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
     }
@@ -10683,7 +9775,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/accept-risk', asyn
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
-    const canManage = await checkWatchtowerManagePermission(userId, id, projectId);
+    const canManage = await checkProjectManagePermission(userId, id, projectId);
     if (!canManage) {
       return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
     }
@@ -10728,7 +9820,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unaccept-risk', as
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
-    const canManage = await checkWatchtowerManagePermission(userId, id, projectId);
+    const canManage = await checkProjectManagePermission(userId, id, projectId);
     if (!canManage) {
       return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
     }
@@ -10799,19 +9891,6 @@ router.get('/:id/projects/:projectId/dependencies/:depId/security-summary', asyn
       .eq('project_id', projectId)
       .eq('package_name', projDep.name);
 
-    let watchtowerSummary = null;
-    if (projDep.dependency_id) {
-      const { data: watched } = await supabase
-        .from('watched_packages')
-        .select('status, analysis_data')
-        .eq('dependency_id', projDep.dependency_id)
-        .limit(1)
-        .single();
-      if (watched) {
-        watchtowerSummary = watched;
-      }
-    }
-
     // fetch usage slices for this dependency
     let usageSlices: any[] = [];
     if (projDep.name) {
@@ -10843,7 +9922,6 @@ router.get('/:id/projects/:projectId/dependencies/:depId/security-summary', asyn
       files: (files ?? []).map((f: any) => f.file_path),
       vulnerabilities: vulns ?? [],
       version_candidates: candidates ?? [],
-      watchtower: watchtowerSummary,
       usage_slices: usageSlices,
       reachable_flows: reachableFlows,
     });
@@ -12032,540 +11110,6 @@ router.get('/:id/projects/:projectId/fix-status', async (req: AuthRequest, res) 
     res.json(data || []);
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Failed to fetch fix status' });
-  }
-});
-
-// ===== PROJECT WATCHTOWER ENDPOINTS =====
-
-router.post('/:orgId/projects/:projectId/watchtower/toggle', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const { orgId, projectId } = req.params;
-    const { enabled } = req.body;
-
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', orgId)
-      .eq('user_id', userId)
-      .single();
-
-    if (!membership) {
-      res.status(403).json({ error: 'Not a member of this organization' });
-      return;
-    }
-
-    if (enabled) {
-      await supabase
-        .from('projects')
-        .update({ watchtower_enabled: true, watchtower_enabled_at: new Date().toISOString() })
-        .eq('id', projectId);
-
-      const { data: directDeps } = await supabase
-        .from('project_dependencies')
-        .select('dependency_id, name, version')
-        .eq('project_id', projectId)
-        .eq('is_direct', true);
-
-      const deps = directDeps || [];
-      let packagesWatched = 0;
-      const newJobs: Array<{ packageName: string; payload: Record<string, any>; organizationId: string; projectId: string; dependencyId: string }> = [];
-
-      for (const dep of deps) {
-        const { data: existing } = await supabase
-          .from('organization_watchlist')
-          .select('id')
-          .eq('organization_id', orgId)
-          .eq('dependency_id', dep.dependency_id)
-          .single();
-
-        let watchlistId: string;
-        let isNew = false;
-
-        if (existing) {
-          watchlistId = existing.id;
-        } else {
-          const { data: inserted } = await supabase
-            .from('organization_watchlist')
-            .upsert({ organization_id: orgId, dependency_id: dep.dependency_id }, { onConflict: 'organization_id,dependency_id' })
-            .select('id')
-            .single();
-          watchlistId = inserted?.id;
-          isNew = true;
-        }
-
-        if (watchlistId) {
-          await supabase
-            .from('project_watchlist')
-            .upsert({ project_id: projectId, organization_watchlist_id: watchlistId }, { onConflict: 'project_id,organization_watchlist_id' });
-          packagesWatched++;
-
-          if (isNew) {
-            const { data: wp } = await supabase
-              .from('watched_packages')
-              .select('id')
-              .eq('name', dep.name)
-              .single();
-
-            if (wp) {
-              newJobs.push({
-                packageName: dep.name,
-                payload: { watchedPackageId: wp.id, currentVersion: dep.version },
-                organizationId: orgId,
-                projectId,
-                dependencyId: dep.dependency_id,
-              });
-            }
-          }
-        }
-      }
-
-      if (newJobs.length > 0) {
-        await queueWatchtowerJobs(newJobs);
-      }
-
-      await invalidateCache(`watchtower-project-stats:${projectId}`);
-      await invalidateCache(`watchtower-org-stats:${orgId}`);
-
-      res.json({ watchtower_enabled: true, packages_watched: packagesWatched });
-    } else {
-      await supabase
-        .from('projects')
-        .update({ watchtower_enabled: false })
-        .eq('id', projectId);
-
-      const { data: projectWatchlistRows } = await supabase
-        .from('project_watchlist')
-        .select('id, organization_watchlist_id')
-        .eq('project_id', projectId);
-
-      for (const row of projectWatchlistRows || []) {
-        const { data: otherRefs } = await supabase
-          .from('project_watchlist')
-          .select('id')
-          .eq('organization_watchlist_id', row.organization_watchlist_id)
-          .neq('project_id', projectId)
-          .limit(1);
-
-        if (!otherRefs?.length) {
-          await supabase.from('organization_watchlist').delete().eq('id', row.organization_watchlist_id);
-        } else {
-          await supabase.from('project_watchlist').delete().eq('id', row.id);
-        }
-      }
-
-      await invalidateCache(`watchtower-project-stats:${projectId}`);
-      await invalidateCache(`watchtower-org-stats:${orgId}`);
-
-      res.json({ watchtower_enabled: false, packages_watched: 0 });
-    }
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to toggle Watchtower' });
-  }
-});
-
-router.get('/:orgId/projects/:projectId/watchtower/stats', async (req: AuthRequest, res) => {
-  try {
-    const { orgId, projectId } = req.params;
-    const userId = req.user!.id;
-
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', orgId)
-      .eq('user_id', userId)
-      .single();
-
-    if (!membership) {
-      res.status(403).json({ error: 'Not a member' });
-      return;
-    }
-
-    const cacheKey = `watchtower-project-stats:${projectId}`;
-    const cached = await getCached(cacheKey);
-    if (cached) { res.json(cached); return; }
-
-    const { data: project } = await supabase
-      .from('projects')
-      .select('watchtower_enabled, watchtower_enabled_at')
-      .eq('id', projectId)
-      .single();
-
-    if (!project?.watchtower_enabled) {
-      res.json({ enabled: false });
-      return;
-    }
-
-    const { count: totalDirect } = await supabase
-      .from('project_dependencies')
-      .select('id', { count: 'exact', head: true })
-      .eq('project_id', projectId)
-      .eq('is_direct', true);
-
-    const { data: watchlistRows } = await supabase
-      .from('project_watchlist')
-      .select('organization_watchlist_id')
-      .eq('project_id', projectId);
-
-    const watchlistIds = (watchlistRows || []).map((r: any) => r.organization_watchlist_id);
-
-    let analyzedCount = 0;
-    let alertCount = 0;
-    let blockedCount = 0;
-    let erroredCount = 0;
-
-    if (watchlistIds.length > 0) {
-      const { data: watchlistEntries } = await supabase
-        .from('organization_watchlist')
-        .select('dependency_id')
-        .in('id', watchlistIds);
-
-      const depIds = (watchlistEntries || []).map((e: any) => e.dependency_id);
-
-      if (depIds.length > 0) {
-        const { data: watchedPkgs } = await supabase
-          .from('watched_packages')
-          .select('id, name, status, analysis_data')
-          .in('name', depIds.length > 0 ? [] : []);
-
-        // Join via dependency names
-        const { data: deps } = await supabase
-          .from('dependencies')
-          .select('id, name')
-          .in('id', depIds);
-
-        const depNames = (deps || []).map((d: any) => d.name);
-
-        if (depNames.length > 0) {
-          const { data: pkgs } = await supabase
-            .from('watched_packages')
-            .select('id, name, status, analysis_data')
-            .in('name', depNames);
-
-          for (const pkg of pkgs || []) {
-            if (pkg.status === 'ready') {
-              analyzedCount++;
-              const ad = pkg.analysis_data as any;
-              if (ad?.registryIntegrityStatus === 'fail' || ad?.installScriptsStatus === 'fail' || ad?.entropyAnalysisStatus === 'fail') {
-                alertCount++;
-              }
-            } else if (pkg.status === 'error') {
-              erroredCount++;
-            }
-          }
-        }
-      }
-    }
-
-    const result = {
-      enabled: true,
-      enabled_at: project.watchtower_enabled_at,
-      total_direct: totalDirect ?? 0,
-      analyzed: analyzedCount,
-      alerts: alertCount,
-      blocked: blockedCount,
-      errored: erroredCount,
-    };
-
-    await setCached(cacheKey, result, 60);
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch stats' });
-  }
-});
-
-router.get('/:orgId/projects/:projectId/watchtower/packages', async (req: AuthRequest, res) => {
-  try {
-    const { orgId, projectId } = req.params;
-    const userId = req.user!.id;
-
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', orgId)
-      .eq('user_id', userId)
-      .single();
-
-    if (!membership) {
-      res.status(403).json({ error: 'Not a member' });
-      return;
-    }
-
-    const { data: directDeps } = await supabase
-      .from('project_dependencies')
-      .select('dependency_id, name, version, files_importing_count')
-      .eq('project_id', projectId)
-      .eq('is_direct', true);
-
-    const deps = directDeps || [];
-    if (deps.length === 0) {
-      res.json({ packages: [], total_direct_deps: 0 });
-      return;
-    }
-
-    const depNames = deps.map((d: any) => d.name);
-    const depIdMap = new Map(deps.map((d: any) => [d.name, d]));
-
-    const { data: watchedPkgs } = await supabase
-      .from('watched_packages')
-      .select('id, name, status, analysis_data, error_message')
-      .in('name', depNames);
-
-    const watchedMap = new Map((watchedPkgs || []).map((p: any) => [p.name, p]));
-
-    const { data: depRows } = await supabase
-      .from('dependencies')
-      .select('id, name, latest_version, ecosystem')
-      .in('name', depNames);
-
-    const latestMap = new Map((depRows || []).map((d: any) => [d.name, d]));
-
-    const { data: watchlistRows } = await supabase
-      .from('organization_watchlist')
-      .select('id, dependency_id, quarantine_next_release, quarantine_until, is_current_version_quarantined, latest_allowed_version')
-      .eq('organization_id', orgId);
-
-    const watchlistByDepId = new Map((watchlistRows || []).map((w: any) => [w.dependency_id, w]));
-
-    const packages = deps.map((dep: any) => {
-      const watched = watchedMap.get(dep.name);
-      const latest = latestMap.get(dep.name);
-      const watchlist = watchlistByDepId.get(dep.dependency_id);
-      const ad = watched?.analysis_data as any;
-
-      let nextVersionStatus: string | null = null;
-      if (latest?.latest_version && dep.version !== latest.latest_version) {
-        if (watchlist?.is_current_version_quarantined || (watchlist?.quarantine_until && new Date(watchlist.quarantine_until) > new Date())) {
-          nextVersionStatus = 'quarantined';
-        } else if (ad?.registryIntegrityStatus === 'fail' || ad?.installScriptsStatus === 'fail' || ad?.entropyAnalysisStatus === 'fail') {
-          nextVersionStatus = 'blocked';
-        } else if (watched?.status === 'ready') {
-          nextVersionStatus = 'ready';
-        }
-      } else if (latest?.latest_version && dep.version === latest.latest_version) {
-        nextVersionStatus = 'latest';
-      }
-
-      return {
-        watchlist_id: watchlist?.id || null,
-        dependency_id: dep.dependency_id,
-        name: dep.name,
-        version: dep.version,
-        registry_integrity_status: ad?.registryIntegrityStatus || null,
-        registry_integrity_reason: ad?.registryIntegrityReason || null,
-        install_scripts_status: ad?.installScriptsStatus || null,
-        install_scripts_reason: ad?.installScriptsReason || null,
-        entropy_analysis_status: ad?.entropyAnalysisStatus || null,
-        entropy_analysis_reason: ad?.entropyAnalysisReason || null,
-        max_anomaly_score: ad?.maxAnomalyScore ?? null,
-        latest_version: latest?.latest_version || null,
-        latest_allowed_version: watchlist?.latest_allowed_version || null,
-        next_version_status: nextVersionStatus,
-        quarantine_next_release: watchlist?.quarantine_next_release ?? false,
-        quarantine_until: watchlist?.quarantine_until || null,
-        is_current_version_quarantined: watchlist?.is_current_version_quarantined ?? false,
-        bump_pr_url: null,
-        decrease_pr_url: null,
-        import_count: dep.files_importing_count || 0,
-        analysis_status: watched?.status || 'pending',
-        analysis_error: watched?.error_message || null,
-        ecosystem: latest?.ecosystem || 'npm',
-      };
-    });
-
-    packages.sort((a: any, b: any) => {
-      if (a.analysis_status === 'error' && b.analysis_status !== 'error') return -1;
-      if (b.analysis_status === 'error' && a.analysis_status !== 'error') return 1;
-      const aAlert = a.registry_integrity_status === 'fail' || a.install_scripts_status === 'fail' || a.entropy_analysis_status === 'fail';
-      const bAlert = b.registry_integrity_status === 'fail' || b.install_scripts_status === 'fail' || b.entropy_analysis_status === 'fail';
-      if (aAlert && !bAlert) return -1;
-      if (bAlert && !aAlert) return 1;
-      return a.name.localeCompare(b.name);
-    });
-
-    res.json({ packages, total_direct_deps: deps.length });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch packages' });
-  }
-});
-
-router.get('/:orgId/projects/:projectId/watchtower/commits', async (req: AuthRequest, res) => {
-  try {
-    const { orgId, projectId } = req.params;
-    const userId = req.user!.id;
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
-    const offset = parseInt(req.query.offset as string) || 0;
-    const sort = (req.query.sort as string) || 'recent';
-    const filter = (req.query.filter as string) || 'all';
-    const packageFilter = req.query.package as string;
-
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', orgId)
-      .eq('user_id', userId)
-      .single();
-
-    if (!membership) {
-      res.status(403).json({ error: 'Not a member' });
-      return;
-    }
-
-    const { data: directDeps } = await supabase
-      .from('project_dependencies')
-      .select('name')
-      .eq('project_id', projectId)
-      .eq('is_direct', true);
-
-    let depNames = (directDeps || []).map((d: any) => d.name);
-    if (packageFilter) {
-      depNames = depNames.filter((n: string) => n === packageFilter);
-    }
-
-    if (depNames.length === 0) {
-      res.json({ commits: [], total: 0 });
-      return;
-    }
-
-    const { data: watchedPkgs } = await supabase
-      .from('watched_packages')
-      .select('id, name')
-      .in('name', depNames);
-
-    const watchedIds = (watchedPkgs || []).map((p: any) => p.id);
-    const watchedNameMap = new Map((watchedPkgs || []).map((p: any) => [p.id, p.name]));
-
-    if (watchedIds.length === 0) {
-      res.json({ commits: [], total: 0 });
-      return;
-    }
-
-    let query = supabase
-      .from('package_commits')
-      .select('*, package_anomalies(anomaly_score)', { count: 'exact' })
-      .in('watched_package_id', watchedIds);
-
-    if (filter === 'high_anomaly') {
-      query = query.gte('anomaly_score', 60);
-    }
-
-    if (sort === 'anomaly') {
-      query = query.order('anomaly_score', { ascending: false, nullsFirst: false });
-    } else {
-      query = query.order('committed_at', { ascending: false });
-    }
-
-    const { data: commits, count } = await query.range(offset, offset + limit - 1);
-
-    const enriched = (commits || []).map((c: any) => ({
-      ...c,
-      package_name: watchedNameMap.get(c.watched_package_id) || 'unknown',
-    }));
-
-    res.json({ commits: enriched, total: count ?? 0 });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch commits' });
-  }
-});
-
-router.post('/:orgId/projects/:projectId/watchtower/clear-commits', async (req: AuthRequest, res) => {
-  try {
-    const { orgId, projectId } = req.params;
-    const userId = req.user!.id;
-
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', orgId)
-      .eq('user_id', userId)
-      .single();
-
-    if (!membership) {
-      res.status(403).json({ error: 'Not a member' });
-      return;
-    }
-
-    const { data: directDeps } = await supabase
-      .from('project_dependencies')
-      .select('name')
-      .eq('project_id', projectId)
-      .eq('is_direct', true);
-
-    const depNames = (directDeps || []).map((d: any) => d.name);
-
-    const { data: watchedPkgs } = await supabase
-      .from('watched_packages')
-      .select('id, name')
-      .in('name', depNames);
-
-    for (const pkg of watchedPkgs || []) {
-      await supabase
-        .from('organization_watchlist_cleared_commits')
-        .upsert({
-          organization_id: orgId,
-          watched_package_id: pkg.id,
-          cleared_at: new Date().toISOString(),
-        }, { onConflict: 'organization_id,watched_package_id' });
-    }
-
-    await invalidateCache(`watchtower-project-stats:${projectId}`);
-    res.json({ cleared: true });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to clear commits' });
-  }
-});
-
-router.post('/:orgId/projects/:projectId/watchtower/packages/:watchlistId/reanalyze', async (req: AuthRequest, res) => {
-  try {
-    const { orgId, projectId, watchlistId } = req.params;
-
-    const { data: existing } = await supabase
-      .from('watchtower_jobs')
-      .select('id')
-      .eq('status', 'queued')
-      .or(`status.eq.processing`)
-      .limit(1);
-
-    const { data: watchlistEntry } = await supabase
-      .from('organization_watchlist')
-      .select('id, dependency_id')
-      .eq('id', watchlistId)
-      .single();
-
-    if (!watchlistEntry) {
-      res.status(404).json({ error: 'Watchlist entry not found' });
-      return;
-    }
-
-    const { data: dep } = await supabase
-      .from('dependencies')
-      .select('name')
-      .eq('id', watchlistEntry.dependency_id)
-      .single();
-
-    const { data: wp } = await supabase
-      .from('watched_packages')
-      .select('id')
-      .eq('name', dep?.name)
-      .single();
-
-    const result = await queueWatchtowerJob({
-      packageName: dep?.name || '',
-      payload: { watchedPackageId: wp?.id },
-      organizationId: orgId,
-      projectId,
-      dependencyId: watchlistEntry.dependency_id,
-    });
-
-    if (!result.success) {
-      res.status(500).json({ error: result.error || 'Failed to queue analysis' });
-      return;
-    }
-
-    await invalidateCache(`watchtower-project-stats:${projectId}`);
-    res.json({ queued: true, jobId: result.jobId });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to reanalyze' });
   }
 });
 

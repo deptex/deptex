@@ -57,7 +57,7 @@ async function callInternal(path: string, method: 'POST' = 'POST', body?: object
 /**
  * POST /api/internal/cron/every-5-min
  * Run every 5 minutes (cron: 5-min interval).
- * Jobs: extraction recovery, fix recovery, watchtower recovery, Aegis due automations.
+ * Jobs: extraction recovery, fix recovery, Aegis due automations.
  */
 router.post('/every-5-min', async (req, res) => {
   if (!(await verifyInternalAuth(req))) {
@@ -66,7 +66,6 @@ router.post('/every-5-min', async (req, res) => {
   const jobs = [
     '/api/internal/recovery/extraction-jobs',
     '/api/internal/recovery/fix-jobs',
-    '/api/internal/recovery/watchtower-jobs',
     '/api/internal/aegis/check-due-automations',
   ];
   const results: JobResult[] = [];
@@ -133,7 +132,7 @@ router.post('/hourly', async (req, res) => {
 /**
  * POST /api/internal/cron/daily
  * Run once per day at 4 AM UTC: 0 4 * * *
- * Jobs: Aegis debt snapshot, learning recompute-patterns, notification cleanup (EE), watchtower daily poll.
+ * Jobs: Aegis debt snapshot, learning recompute-patterns, notification cleanup, daily dep-refresh poll.
  */
 router.post('/daily', async (req, res) => {
   if (!(await verifyInternalAuth(req))) {

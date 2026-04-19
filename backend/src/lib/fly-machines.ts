@@ -20,12 +20,6 @@ export const AIDER_CONFIG: FlyMachineConfig = {
   maxBurst: parseInt(process.env.FLY_AIDER_MAX_BURST || '3', 10),
 };
 
-export const WATCHTOWER_CONFIG: FlyMachineConfig = {
-  app: process.env.FLY_WATCHTOWER_APP || 'deptex-watchtower-worker',
-  guest: { cpus: 1, memory_mb: 1024, cpu_kind: 'shared' },
-  maxBurst: 1,
-};
-
 interface FlyMachine {
   id: string;
   name: string;
@@ -188,4 +182,3 @@ export async function startFlyMachine(config: FlyMachineConfig): Promise<string 
 
 export const startExtractionMachine = () => startFlyMachine(EXTRACTION_CONFIG);
 export const startAiderMachine = () => startFlyMachine(AIDER_CONFIG);
-export const startWatchtowerMachine = () => startFlyMachine(WATCHTOWER_CONFIG);

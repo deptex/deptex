@@ -1,6 +1,0 @@
-# flyctl launch added from .gitignore
-**\node_modules
-**\dist
-**\.env
-**\*.log
-fly.toml
