@@ -1,5 +1,6 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { Loader2 } from 'lucide-react';
 import { FrameworkIcon } from '../framework-icon';
 
 export type WorstSeverity = 'critical' | 'high' | 'medium' | 'low' | 'none';
@@ -12,6 +13,8 @@ export interface ProjectCenterNodeData {
   vulnCount?: number;
   semgrepCount?: number;
   secretCount?: number;
+  /** When true, show spinner and "Project still extracting" instead of framework/vuln counts */
+  isExtracting?: boolean;
 }
 
 function getColorScheme(worstVulnerabilitySeverity: WorstSeverity) {
@@ -60,6 +63,14 @@ function getColorScheme(worstVulnerabilitySeverity: WorstSeverity) {
   }
 }
 
+const greyExtractingScheme = {
+  border: 'border-slate-400/40',
+  shadow: 'shadow-slate-400/5',
+  glow: 'bg-slate-400',
+  iconBg: 'bg-slate-400/15',
+  iconText: 'text-slate-500',
+};
+
 function ProjectCenterNodeComponent({ data }: NodeProps) {
   const {
     projectName = 'Project',
@@ -69,8 +80,9 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
     vulnCount,
     semgrepCount,
     secretCount,
+    isExtracting = false,
   } = (data as unknown as ProjectCenterNodeData) ?? {};
-  const colorScheme = getColorScheme(worstVulnerabilitySeverity);
+  const colorScheme = isExtracting ? greyExtractingScheme : getColorScheme(worstVulnerabilitySeverity);
   const hasKnownFramework = frameworkName && frameworkName.toLowerCase() !== 'unknown';
   const frameworkIdForIcon = hasKnownFramework ? frameworkName : undefined;
 
@@ -87,7 +99,7 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
         className={`relative rounded-xl border-2 shadow-lg overflow-hidden min-w-[260px] ${colorScheme.border} ${colorScheme.shadow}`}
       >
         <div className={`absolute inset-0 rounded-xl blur-xl opacity-20 -z-10 ${colorScheme.glow}`} />
-        <div className={`bg-background-card px-5 pt-4 pb-4 rounded-xl`}>
+        <div className="bg-background-card px-5 pt-4 pb-4 rounded-xl">
           <div className="flex items-center gap-2.5">
             <div
               className={`flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 ${colorScheme.iconBg} ${colorScheme.iconText}`}
@@ -96,7 +108,9 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-foreground truncate">{projectName}</p>
-              {hasCounts && (
+              {isExtracting ? (
+                <p className="text-[10px] text-foreground-secondary mt-0.5">Project still extracting</p>
+              ) : hasCounts ? (
                 <p className="text-[10px] text-foreground-secondary mt-0.5">
                   {[
                     vulnCount ? `${vulnCount} vulns` : null,
@@ -104,8 +118,13 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
                     secretCount ? `${secretCount} secrets` : null,
                   ].filter(Boolean).join(' · ')}
                 </p>
-              )}
+              ) : null}
             </div>
+            {isExtracting && (
+              <div className="flex-shrink-0" aria-hidden>
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            )}
           </div>
         </div>
       </div>

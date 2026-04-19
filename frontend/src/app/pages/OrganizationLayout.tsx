@@ -3,7 +3,6 @@ import { useParams, Outlet, useNavigate, Link } from 'react-router-dom';
 import { User, HelpCircle, Settings, LogOut, BookOpen, Mail, ChevronRight } from 'lucide-react';
 import OrganizationHeader from '../../components/OrganizationHeader';
 import OrganizationSidebar from '../../components/OrganizationSidebar';
-import PlanLimitBanner from '../../components/PlanLimitBanner';
 import { api, Organization, RolePermissions } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { useAuth } from '../../contexts/AuthContext';
@@ -112,7 +111,15 @@ export default function OrganizationLayout() {
     loadDbPermissions();
   }, [organization?.id, organization?.role, organization?.permissions]);
 
-
+  // Tab title: "Organization name | Deptex" when viewing an org
+  useEffect(() => {
+    if (!organization?.name) return;
+    const prev = document.title;
+    document.title = `${organization.name} | Deptex`;
+    return () => {
+      document.title = prev;
+    };
+  }, [organization?.name]);
 
   useEffect(() => {
     if (id) {
@@ -307,7 +314,6 @@ export default function OrganizationLayout() {
           </>
         ) : null}
         <PlanProvider organizationId={id || ''}>
-          {id && <PlanLimitBanner organizationId={id} />}
           <main className={organization ? 'pl-12' : ''}>
             <Outlet context={{ organization, reloadOrganization }} />
           </main>

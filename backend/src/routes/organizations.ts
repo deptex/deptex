@@ -243,8 +243,12 @@ router.post('/', async (req: AuthRequest, res) => {
             view_activity: true,
             manage_compliance: true,
             manage_statuses: true,
-            interact_with_security_agent: true,
+            interact_with_aegis: true,
+            trigger_fix: true,
             manage_aegis: true,
+            view_ai_spending: true,
+            manage_incidents: true,
+            manage_watchtower: true,
             view_members: true,
             add_members: true,
             edit_roles: true,
@@ -267,9 +271,13 @@ router.post('/', async (req: AuthRequest, res) => {
             manage_security: true,
             view_activity: true,
             manage_compliance: true,
-            manage_statuses: false,
-            interact_with_security_agent: true,
+            manage_statuses: true,
+            interact_with_aegis: true,
+            trigger_fix: true,
             manage_aegis: true,
+            view_ai_spending: true,
+            manage_incidents: true,
+            manage_watchtower: true,
             view_members: true,
             add_members: true,
             edit_roles: true,
@@ -1978,12 +1986,20 @@ router.post('/:id/roles', async (req: AuthRequest, res) => {
       view_settings: false,
       view_activity: false,
       manage_compliance: false,
-      interact_with_security_agent: false,
+      manage_statuses: false,
+      interact_with_aegis: false,
+      trigger_fix: false,
+      manage_aegis: false,
+      view_ai_spending: false,
+      manage_incidents: false,
+      manage_watchtower: false,
       view_members: false,
       add_members: false,
       edit_roles: false,
       kick_members: false,
       manage_teams_and_projects: false,
+      manage_integrations: false,
+      manage_notifications: false,
     };
 
     // Use provided permissions or default to all false
@@ -2195,7 +2211,8 @@ router.put('/:id/roles/:roleId', async (req: AuthRequest, res) => {
 
       // Check all permission keys
       const allPermissionKeys = [
-        'view_settings', 'manage_billing', 'manage_security', 'view_activity', 'manage_compliance', 'interact_with_security_agent',
+        'view_settings', 'manage_billing', 'manage_security', 'view_activity', 'manage_compliance', 'manage_statuses',
+        'interact_with_aegis', 'trigger_fix', 'manage_aegis', 'view_ai_spending', 'manage_incidents', 'manage_watchtower',
         'view_members', 'add_members', 'edit_roles', 'edit_permissions',
         'kick_members', 'manage_teams_and_projects', 'manage_integrations', 'manage_notifications', 'view_overview'
       ];

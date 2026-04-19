@@ -7,7 +7,7 @@ import { Button } from '../../components/ui/button';
 import { Switch } from '../../components/ui/switch';
 import { Toaster } from '../../components/ui/toaster';
 import { useToast } from '../../hooks/use-toast';
-import { Save, Edit2, Loader2, Shield, Monitor, Trash2 } from 'lucide-react';
+import { Save, Edit2 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useSearchParams, useLocation } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
@@ -15,7 +15,6 @@ import { supabase } from '../../lib/supabase';
 export default function SettingsPage() {
   const { pathname } = useLocation();
   const isConnectedAccounts = pathname === '/settings/general/connected-accounts';
-  const isSecurity = pathname === '/settings/security';
   const { user, signInWithGitHub, signInWithGoogle } = useAuth();
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -28,17 +27,14 @@ export default function SettingsPage() {
     google: false,
   });
 
-  // Security tab state
-  const [mfaEnabled, setMfaEnabled] = useState(false);
-  const [mfaLoading, setMfaLoading] = useState(false);
-  const [sessions, setSessions] = useState<Array<{
-    id: string;
-    device_info?: { browser?: string; os?: string };
-    ip_address?: string;
-    last_active_at?: string;
-    is_current?: boolean;
-  }>>([]);
-  const [loadingSessions, setLoadingSessions] = useState(false);
+  // Tab title for user settings
+  useEffect(() => {
+    const prev = document.title;
+    document.title = 'Settings | Deptex';
+    return () => {
+      document.title = prev;
+    };
+  }, []);
 
   // Sync display name from hook
   useEffect(() => {
@@ -172,33 +168,6 @@ export default function SettingsPage() {
   };
 
 
-  // Load sessions when Security tab is active
-  useEffect(() => {
-    if (!isSecurity) return;
-    let cancelled = false;
-    setLoadingSessions(true);
-    (async () => {
-      try {
-        const token = (await supabase.auth.getSession()).data.session?.access_token;
-        const apiBase = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:3001';
-        const res = await fetch(`${apiBase}/api/user/sessions`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.ok && !cancelled) {
-          const data = await res.json();
-          setSessions(Array.isArray(data) ? data : data.sessions || []);
-        } else if (!cancelled) {
-          setSessions([]);
-        }
-      } catch {
-        if (!cancelled) setSessions([]);
-      } finally {
-        if (!cancelled) setLoadingSessions(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [isSecurity]);
-
   const integrationList = [
     { id: 'github', name: 'GitHub', image: '/images/integrations/github.png', description: 'Use GitHub to sign in to your account' },
     { id: 'google', name: 'Google', image: '/images/integrations/google.png', description: 'Use Google to sign in to your account' },
@@ -220,15 +189,8 @@ export default function SettingsPage() {
 
             {/* Content */}
             <div className="flex-1">
-              {!isConnectedAccounts && !isSecurity && (
+              {!isConnectedAccounts && (
                 <div className="space-y-6">
-                  <div>
-                    <h2 className="text-2xl font-bold text-foreground">General</h2>
-                    <p className="text-foreground-secondary mt-1">
-                      Manage your profile and account settings.
-                    </p>
-                  </div>
-
                   {/* Profile Card: Display Name + Avatar */}
                   <div className="bg-background-card border border-border rounded-lg overflow-hidden">
                     <div className="p-6">
@@ -244,7 +206,7 @@ export default function SettingsPage() {
                               value={displayName}
                               onChange={(e) => setDisplayName(e.target.value)}
                               placeholder="Enter your display name"
-                              className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                              className="w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground-secondary placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                             />
                           </div>
                         </div>
@@ -362,153 +324,6 @@ export default function SettingsPage() {
                       >
                         Save
                       </Button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {isSecurity && (
-                <div className="space-y-6">
-                  <div>
-                    <h2 className="text-2xl font-bold text-foreground">Security</h2>
-                    <p className="text-foreground-secondary mt-1">
-                      Manage two-factor authentication and active sessions.
-                    </p>
-                  </div>
-
-                  {/* Two-Factor Authentication */}
-                  <div className="bg-background-card border border-border rounded-lg p-6">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
-                          <Shield className="h-4 w-4" />
-                          Two-Factor Authentication
-                        </h3>
-                        <p className="text-sm text-foreground-secondary mt-1">
-                          Add an extra layer of security to your account by requiring a second factor when signing in.
-                        </p>
-                      </div>
-                      <Button
-                        size="sm"
-                        disabled={mfaLoading}
-                        variant={mfaEnabled ? 'outline' : 'default'}
-                        onClick={async () => {
-                          setMfaLoading(true);
-                          try {
-                            if (mfaEnabled) {
-                              // Placeholder for MFA disable flow
-                              setMfaEnabled(false);
-                              toast({ title: '2FA disabled', description: 'Two-factor authentication has been disabled.' });
-                            } else {
-                              // Placeholder for MFA enrollment flow
-                              setMfaEnabled(true);
-                              toast({ title: '2FA enabled', description: 'Two-factor authentication has been enabled.' });
-                            }
-                          } catch (err: any) {
-                            toast({ title: 'Failed', description: err.message || 'Could not update 2FA', variant: 'destructive' });
-                          } finally {
-                            setMfaLoading(false);
-                          }
-                        }}
-                      >
-                        {mfaLoading && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
-                        {mfaEnabled ? 'Disable 2FA' : 'Enable 2FA'}
-                      </Button>
-                    </div>
-                  </div>
-
-                  {/* Active Sessions */}
-                  <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                    <div className="p-6">
-                      <div className="flex items-center justify-between mb-4">
-                        <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
-                          <Monitor className="h-4 w-4" />
-                          Active Sessions
-                        </h3>
-                        {sessions.length > 1 && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={async () => {
-                              const token = (await supabase.auth.getSession()).data.session?.access_token;
-                              const nonCurrent = sessions.filter((s) => !s.is_current);
-                              for (const s of nonCurrent) {
-                                await fetch(`${import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:3001'}/api/user/sessions/${s.id}`, {
-                                  method: 'DELETE',
-                                  headers: { Authorization: `Bearer ${token}` },
-                                });
-                              }
-                              setSessions(sessions.filter((s) => s.is_current));
-                              toast({ title: 'Sessions signed out', description: 'All other sessions have been signed out.' });
-                            }}
-                          >
-                            <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-                            Sign Out All Other Sessions
-                          </Button>
-                        )}
-                      </div>
-                      {loadingSessions ? (
-                        <div className="flex items-center justify-center py-8">
-                          <Loader2 className="h-5 w-5 animate-spin text-foreground-secondary" />
-                        </div>
-                      ) : sessions.length === 0 ? (
-                        <p className="text-sm text-foreground-secondary py-4">No active sessions.</p>
-                      ) : (
-                        <table className="w-full">
-                          <thead className="border-b border-border">
-                            <tr>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Device</th>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">IP Address</th>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Last Active</th>
-                              <th className="w-24"></th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-border">
-                            {sessions.map((session) => (
-                              <tr key={session.id} className="hover:bg-table-hover transition-colors">
-                                <td className="px-4 py-3">
-                                  <div className="text-sm text-foreground">
-                                    {[session.device_info?.browser, session.device_info?.os].filter(Boolean).join(' on ') || 'Unknown'}
-                                  </div>
-                                </td>
-                                <td className="px-4 py-3 text-sm text-foreground-secondary">{session.ip_address || '—'}</td>
-                                <td className="px-4 py-3 text-sm text-foreground-secondary">
-                                  {session.last_active_at
-                                    ? new Date(session.last_active_at).toLocaleString()
-                                    : '—'}
-                                </td>
-                                <td className="px-4 py-3">
-                                  {session.is_current ? (
-                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-primary/10 text-primary border border-primary/20">
-                                      Current
-                                    </span>
-                                  ) : (
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      onClick={async () => {
-                                        const authToken = (await supabase.auth.getSession()).data.session?.access_token;
-                                        const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:3001'}/api/user/sessions/${session.id}`, {
-                                          method: 'DELETE',
-                                          headers: { Authorization: `Bearer ${authToken}` },
-                                        });
-                                        if (res.ok) {
-                                          setSessions((prev) => prev.filter((s) => s.id !== session.id));
-                                          toast({ title: 'Session signed out', description: 'The session has been signed out.' });
-                                        } else {
-                                          toast({ title: 'Failed', description: 'Could not sign out session', variant: 'destructive' });
-                                        }
-                                      }}
-                                    >
-                                      Sign Out
-                                    </Button>
-                                  )}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      )}
                     </div>
                   </div>
                 </div>

@@ -199,6 +199,16 @@ export default function TeamLayout() {
     loadDbPermissions();
   }, [orgId, team?.id, team?.role, team?.role_display_name, team?.permissions]);
 
+  // Tab title: "Team name | Organization name | Deptex" when viewing a team
+  useEffect(() => {
+    if (!team?.name || !organization?.name) return;
+    const prev = document.title;
+    document.title = `${team.name} | ${organization.name} | Deptex`;
+    return () => {
+      document.title = prev;
+    };
+  }, [team?.name, organization?.name]);
+
   // Note: Overview is always accessible for all team members, no redirect needed
 
   useEffect(() => {
