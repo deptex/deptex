@@ -520,7 +520,7 @@ export default function OrganizationVulnerabilitiesPage() {
               projectId: p.id,
               projectName: p.name,
               framework: p.framework ?? null,
-              statusName: p.status_name ?? p.status ?? null,
+              statusName: p.status_name ?? null,
               statusColor: p.status_color ?? null,
               statusId: p.status_id ?? null,
               assetTierName: p.asset_tier_name ?? null,

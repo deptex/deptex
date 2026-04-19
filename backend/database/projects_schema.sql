@@ -13,7 +13,6 @@ CREATE TABLE projects (
   team_id UUID REFERENCES teams(id) ON DELETE SET NULL,
   health_score INTEGER DEFAULT 0 CHECK (health_score >= 0 AND health_score <= 100),
   asset_tier asset_tier NOT NULL DEFAULT 'EXTERNAL',
-  status TEXT DEFAULT 'compliant',
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   UNIQUE(organization_id, name)
