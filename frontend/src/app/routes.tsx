@@ -9,11 +9,8 @@ import LoginPage from "./pages/LoginPage";
 import SSOCallbackPage from "./pages/SSOCallbackPage";
 import OrganizationsPage from "./pages/OrganizationsPage";
 import OrganizationLayout from "./pages/OrganizationLayout";
-import OrganizationDetailPage from "./pages/OrganizationDetailPage";
 import OrganizationSettingsPage from "./pages/OrganizationSettingsPage";
 
-import TeamsPage from "./pages/TeamsPage";
-import ProjectsPage from "./pages/ProjectsPage";
 import PoliciesPage from "./pages/PoliciesPage";
 import CompliancePage from "./pages/CompliancePage";
 import OrganizationVulnerabilitiesPage from "./pages/OrganizationVulnerabilitiesPage";
@@ -38,8 +35,8 @@ import NotFoundRedirect from "../components/NotFoundRedirect";
 import ProjectLayout from "./pages/ProjectLayout";
 import ProjectOverviewPage from "./pages/ProjectOverviewPage";
 import ProjectDependenciesPage from "./pages/ProjectDependenciesPage";
-import ProjectVulnerabilitiesPage from "./pages/ProjectVulnerabilitiesPage";
 import ProjectCompliancePage from "./pages/ProjectCompliancePage";
+import ProjectVulnerabilitiesPage from "./pages/ProjectVulnerabilitiesPage";
 
 import ProjectSettingsPage from "./pages/ProjectSettingsPage";
 import ProjectWatchtowerPage from "./pages/ProjectWatchtowerPage";
@@ -48,9 +45,7 @@ import AegisPage from "./pages/AegisPage";
 // Team-level imports
 import TeamLayout from "./pages/TeamLayout";
 import TeamOverviewPage from "./pages/TeamOverviewPage";
-import TeamProjectsPage from "./pages/TeamProjectsPage";
 import TeamMembersPage from "./pages/TeamMembersPage";
-import TeamAlertsPage from "./pages/TeamAlertsPage";
 import TeamSettingsPage from "./pages/TeamSettingsPage";
 // Redirect /settings to /settings/general while preserving search params (for OAuth callbacks)
 function SettingsRedirect() {
@@ -102,24 +97,27 @@ export const router = createBrowserRouter([
     children: [
       {
         index: true,
-        element: <OrganizationDetailPage />,
-      },
-
-      {
-        path: "teams",
-        element: <TeamsPage />,
-      },
-      {
-        path: "security",
         element: <OrganizationVulnerabilitiesPage />,
       },
       {
+        path: "overview",
+        element: <OrganizationVulnerabilitiesPage />,
+      },
+      {
+        path: "teams",
+        element: <Navigate to="overview" replace />,
+      },
+      {
+        path: "security",
+        element: <Navigate to=".." replace />,
+      },
+      {
         path: "vulnerabilities",
-        element: <Navigate to="../security" replace />,
+        element: <Navigate to=".." replace />,
       },
       {
         path: "projects",
-        element: <ProjectsPage />,
+        element: <Navigate to="overview" replace />,
       },
       {
         path: "settings",
@@ -138,6 +136,10 @@ export const router = createBrowserRouter([
         element: <CompliancePage />,
       },
       {
+        path: "compliance/:section",
+        element: <CompliancePage />,
+      },
+      {
         path: "watchtower",
         element: <OrganizationWatchtowerPage />,
       },
@@ -151,7 +153,7 @@ export const router = createBrowserRouter([
       },
       {
         path: ":tab",
-        element: <OrganizationDetailPage />,
+        element: <Navigate to=".." replace />,
       },
     ],
   },
@@ -177,7 +179,7 @@ export const router = createBrowserRouter([
       },
       {
         path: "vulnerabilities",
-        element: <Navigate to="../security" replace />,
+        element: <ProjectVulnerabilitiesPage />,
       },
       {
         path: "dependencies",
@@ -193,7 +195,7 @@ export const router = createBrowserRouter([
       },
       {
         path: "dependencies/:dependencyId/watchtower",
-        element: <Navigate to="../../../watchtower" replace />,
+        element: <Navigate to="../overview" replace />,
       },
       {
         path: "watchtower",
@@ -252,7 +254,7 @@ export const router = createBrowserRouter([
       },
       {
         path: "projects",
-        element: <TeamProjectsPage />,
+        element: <Navigate to=".." replace />,
       },
       {
         path: "members",
@@ -260,7 +262,7 @@ export const router = createBrowserRouter([
       },
       {
         path: "alerts",
-        element: <TeamAlertsPage />,
+        element: <Navigate to=".." replace />,
       },
       {
         path: "settings",

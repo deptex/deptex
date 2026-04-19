@@ -1,8 +1,23 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Package, Scale } from 'lucide-react';
+import { Package, Scale, Check, X } from 'lucide-react';
 import type { DependencyNodeData } from './useGraphLayout';
 import { isLicenseAllowed } from '../../lib/compliance-utils';
+
+const ECOSYSTEM_ICON: Record<string, string> = {
+  npm: '/images/npm_icon.png',
+  pypi: '/images/frameworks/python.png',
+  maven: '/images/frameworks/java.png',
+  golang: '/images/frameworks/go.png',
+  cargo: '/images/frameworks/rust.png',
+  gem: '/images/frameworks/ruby.png',
+  composer: '/images/frameworks/php.png',
+};
+
+function getEcosystemIcon(ecosystem: string | null | undefined): string | null {
+  if (!ecosystem) return null;
+  return ECOSYSTEM_ICON[ecosystem.toLowerCase()] ?? null;
+}
 
 function DependencyNodeComponent({ data }: NodeProps) {
   const nodeData = data as unknown as DependencyNodeData;
@@ -18,6 +33,8 @@ function DependencyNodeComponent({ data }: NodeProps) {
     licenseBadgeClass = 'bg-destructive/10 text-destructive border-destructive/20';
   }
   const showNotImported = nodeData.notImported === true;
+  const ecosystemIcon = getEcosystemIcon(nodeData.ecosystem);
+  const showPolicyBadge = nodeData.policyAllowed !== undefined && nodeData.policyAllowed !== null;
 
   return (
     <div className="relative group">
@@ -40,13 +57,28 @@ function DependencyNodeComponent({ data }: NodeProps) {
       >
         {/* Header row */}
         <div className="px-3.5 py-3 flex items-center gap-2.5">
-          <Package className="h-4 w-4 text-foreground-secondary flex-shrink-0" />
+          {ecosystemIcon ? (
+            <img src={ecosystemIcon} alt="" className="h-4 w-4 flex-shrink-0 object-contain" aria-hidden />
+          ) : (
+            <Package className="h-4 w-4 text-foreground-secondary flex-shrink-0" />
+          )}
           <div className="min-w-0 flex-1">
             <p className="text-[13px] font-medium text-foreground truncate">{nodeData.name}</p>
-            <div className="flex items-center gap-2 mt-0.5">
+            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
               <span className="text-[11px] text-foreground-secondary font-mono">
                 {nodeData.version}
               </span>
+              {showPolicyBadge && (
+                <span
+                  className={nodeData.policyAllowed
+                    ? 'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium border border-green-500/30 bg-green-500/10 text-green-600 dark:text-green-400'
+                    : 'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium border border-destructive/30 bg-destructive/10 text-destructive'
+                  }
+                >
+                  {nodeData.policyAllowed ? <Check className="h-2.5 w-2.5" /> : <X className="h-2.5 w-2.5" />}
+                  {nodeData.policyAllowed ? 'Allowed' : 'Not allowed'}
+                </span>
+              )}
             </div>
           </div>
           {/* License badge (right side) */}

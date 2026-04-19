@@ -2,7 +2,7 @@ import { memo, useState, useEffect, useCallback, ReactNode } from 'react';
 import { cn } from '../../lib/utils';
 
 export type ActiveSidebar = {
-  type: 'vulnerability' | 'dependency' | 'project';
+  type: 'vulnerability' | 'dependency' | 'project' | 'extraction-logs';
   id: string;
 } | null;
 
@@ -10,12 +10,17 @@ interface SecuritySidebarProps {
   isOpen: boolean;
   onClose: () => void;
   title: string;
-  subtitle?: string;
+  /** When set, the title is rendered as a link (e.g. to GitHub Advisory). */
+  titleHref?: string;
+  /** Subtitle or custom node (e.g. depscore badge). */
+  subtitle?: ReactNode;
+  /** Rendered in the top-right of the header (e.g. Suppress button). */
+  headerRight?: ReactNode;
   footer?: ReactNode;
   children: ReactNode;
 }
 
-function SecuritySidebar({ isOpen, onClose, title, subtitle, footer, children }: SecuritySidebarProps) {
+function SecuritySidebar({ isOpen, onClose, title, titleHref, subtitle, headerRight, footer, children }: SecuritySidebarProps) {
   const [panelVisible, setPanelVisible] = useState(false);
 
   useEffect(() => {
@@ -53,11 +58,25 @@ function SecuritySidebar({ isOpen, onClose, title, subtitle, footer, children }:
         )}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="px-6 pt-5 pb-3 flex-shrink-0">
-          <h2 className="text-xl font-semibold text-foreground">{title}</h2>
-          {subtitle && (
-            <p className="text-sm text-foreground-secondary mt-1">{subtitle}</p>
-          )}
+        <div className="px-6 pt-5 pb-3 flex-shrink-0 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            {titleHref ? (
+              <a
+                href={titleHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xl font-semibold text-foreground hover:text-foreground-secondary transition-colors block"
+              >
+                {title}
+              </a>
+            ) : (
+              <h2 className="text-xl font-semibold text-foreground">{title}</h2>
+            )}
+            {subtitle != null && subtitle !== '' && (
+              <div className="mt-1.5">{subtitle}</div>
+            )}
+          </div>
+          {headerRight && <div className="flex-shrink-0">{headerRight}</div>}
         </div>
 
         <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4">

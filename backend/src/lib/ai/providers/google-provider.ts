@@ -91,9 +91,14 @@ export class GoogleProvider implements AIProvider {
       const model = this.getModel(options?.model);
       const { systemInstruction, contents } = this.mapMessages(messages);
 
+      // Gemini can reject system_instruction on generateContent; prepend as first user message instead
+      const history = contents.slice(0, -1);
+      if (systemInstruction) {
+        history.unshift({ role: 'user', parts: [{ text: `[System instructions - follow these]\n\n${systemInstruction}` }] });
+      }
+
       const chat = model.startChat({
-        history: contents.slice(0, -1),
-        ...(systemInstruction ? { systemInstruction } : {}),
+        history,
       });
 
       const lastContent = contents[contents.length - 1];
@@ -167,12 +172,17 @@ export class GoogleProvider implements AIProvider {
       const model = this.getModel(options?.model);
       const { systemInstruction, contents } = this.mapMessages(messages);
 
+      // Gemini streaming does not support system_instruction (400 Bad Request). Prepend it as the first user message.
+      const history = contents.slice(0, -1);
+      const lastContent = contents[contents.length - 1];
+      if (systemInstruction) {
+        history.unshift({ role: 'user', parts: [{ text: `[System instructions - follow these]\n\n${systemInstruction}` }] });
+      }
+
       const chat = model.startChat({
-        history: contents.slice(0, -1),
-        ...(systemInstruction ? { systemInstruction } : {}),
+        history,
       });
 
-      const lastContent = contents[contents.length - 1];
       const result = await chat.sendMessageStream(lastContent?.parts?.map(p => (p as any).text).join('') || '');
 
       let inputTokens = 0;

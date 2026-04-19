@@ -317,7 +317,8 @@ export default function PackageOverview({ dependency, organizationId, projectId,
 
   const licenseInfo = getLicenseInfo(dependency.license);
   const compliance = getComplianceStatus(dependency, policies ?? null);
-  const licenseAllowed = isLicenseAllowed(dependency.license, policies ?? null);
+  const licenseAllowed =
+    dependency.policy_result != null ? dependency.policy_result.allowed : isLicenseAllowed(dependency.license, policies ?? null);
 
   return (
     <div className="space-y-6">

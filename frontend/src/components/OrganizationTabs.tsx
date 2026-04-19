@@ -1,6 +1,6 @@
 import { memo, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, FolderKanban, Users, ShieldAlert, ClipboardCheck, Settings } from 'lucide-react';
+import { LayoutDashboard, FolderKanban, Users, ClipboardCheck, Settings } from 'lucide-react';
 import { RolePermissions } from '../lib/api';
 
 interface OrganizationTabsProps {
@@ -10,7 +10,6 @@ interface OrganizationTabsProps {
 
 const allTabs = [
   { id: 'overview', label: 'Overview', path: 'overview', icon: LayoutDashboard, requiredPermission: null },
-  { id: 'security', label: 'Security', path: 'security', icon: ShieldAlert, requiredPermission: null },
   { id: 'projects', label: 'Projects', path: 'projects', icon: FolderKanban, requiredPermission: null },
   { id: 'teams', label: 'Teams', path: 'teams', icon: Users, requiredPermission: null },
   { id: 'compliance', label: 'Compliance', path: 'compliance', icon: ClipboardCheck, requiredPermission: null },

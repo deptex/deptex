@@ -1,10 +1,18 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { ArrowUp, X, User, ChevronDown, Brain } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { ArrowUp, X, User, ChevronDown, Brain, Eraser } from 'lucide-react';
 import { api } from '../lib/api';
 import { useUserProfile } from '../hooks/useUserProfile';
 import { Avatar, AvatarImage, AvatarFallback } from './ui/avatar';
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { cn } from '../lib/utils';
 import { PolicyDiffViewer, getDiffLineCounts } from './PolicyDiffViewer';
+
+const CONTEXT_WINDOW = 1_000_000; // Gemini 2.5 Flash
+
+const SLASH_COMMANDS: Array<{ id: string; label: string; description: string; icon: React.ReactNode }> = [
+  { id: 'clear', label: 'Clear conversation', description: 'Remove all messages', icon: <Eraser className="h-3.5 w-3.5" /> },
+];
 
 type TargetEditor = 'compliance' | 'pullRequest';
 
@@ -26,6 +34,8 @@ interface PolicyAIAssistantProps {
   onClose: () => void;
   /** When 'edge', renders flush to container with dark theme, no X button. Use when fixed overlay sidebar. */
   variant?: 'inline' | 'edge';
+  /** Optional ref to receive the panel's close handler (cleanup + onClose). Parent should call this when closing via backdrop so slash menu is cleared. */
+  innerCloseRef?: React.MutableRefObject<(() => void) | null>;
 }
 
 const TARGET_LABELS: Record<TargetEditor, string> = {
@@ -154,16 +164,37 @@ export function PolicyAIAssistant({
   onUpdatePullRequest,
   onClose,
   variant = 'inline',
+  innerCloseRef,
 }: PolicyAIAssistantProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [targetEditor, setTargetEditor] = useState<TargetEditor>('compliance');
   const [isStreaming, setIsStreaming] = useState(false);
   const [showTargetDropdown, setShowTargetDropdown] = useState(false);
+  const [contextUsage, setContextUsage] = useState<{ inputTokens: number; outputTokens: number } | null>(null);
   const { avatarUrl, fullName } = useUserProfile();
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const inputContainerRef = useRef<HTMLDivElement>(null);
+  const [slashPopOpen, setSlashPopOpen] = useState(false);
+  const [slashMenuRect, setSlashMenuRect] = useState<{ top: number; left: number; width: number } | null>(null);
+
+  const handleClose = useCallback(() => {
+    setSlashPopOpen(false);
+    setSlashMenuRect(null);
+    setInput((prev) => prev.replace(/\/[^/]*$/, ''));
+    onClose();
+  }, [onClose]);
+
+  useEffect(() => {
+    if (innerCloseRef) {
+      innerCloseRef.current = handleClose;
+      return () => {
+        innerCloseRef.current = null;
+      };
+    }
+  }, [handleClose, innerCloseRef]);
 
   const scrollToBottom = useCallback(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -189,11 +220,11 @@ export function PolicyAIAssistant({
 
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !isStreaming) onClose();
+      if (e.key === 'Escape' && !isStreaming) handleClose();
     };
     document.addEventListener('keydown', handleEsc);
     return () => document.removeEventListener('keydown', handleEsc);
-  }, [isStreaming, onClose]);
+  }, [isStreaming, handleClose]);
 
   const handleSend = async (overrideMessage?: string, overrideTarget?: TargetEditor) => {
     const msg = overrideMessage ?? input.trim();
@@ -251,6 +282,7 @@ export function PolicyAIAssistant({
               const fullContent = event.fullContent ?? accumulated;
               const parsed = parseAIResponse(fullContent);
               const baseAtSuggestion = parsed.code ? (target === 'compliance' ? baseCompliance : basePullRequest) : undefined;
+              if (event.usage) setContextUsage(event.usage);
               setMessages(prev => {
                 const updated = [...prev];
                 updated[updated.length - 1] = {
@@ -309,6 +341,39 @@ export function PolicyAIAssistant({
       handleSend();
     }
   };
+
+  const showSlashMenu = input.includes('/');
+  const slashFilter = showSlashMenu ? input.slice(input.indexOf('/') + 1).toLowerCase() : '';
+  const slashOptions = SLASH_COMMANDS.filter(
+    (c) => !slashFilter || c.label.toLowerCase().includes(slashFilter) || c.id.toLowerCase().startsWith(slashFilter),
+  );
+
+  useEffect(() => {
+    if (showSlashMenu && inputContainerRef.current) {
+      const rect = inputContainerRef.current.getBoundingClientRect();
+      setSlashMenuRect({ top: rect.top, left: rect.left, width: rect.width });
+      setSlashPopOpen(false);
+      const t = requestAnimationFrame(() => requestAnimationFrame(() => setSlashPopOpen(true)));
+      return () => cancelAnimationFrame(t);
+    } else {
+      setSlashPopOpen(false);
+      setSlashMenuRect(null);
+    }
+  }, [showSlashMenu]);
+
+  const runSlashCommand = useCallback((id: string) => {
+    setShowTargetDropdown(false);
+    setInput((prev) => prev.replace(/\/[^/]*$/, ''));
+
+    if (id === 'clear') {
+      setMessages([]);
+      setContextUsage(null);
+    }
+    inputRef.current?.focus();
+  }, []);
+
+  const contextUsed = contextUsage?.inputTokens ?? 0;
+  const contextPercent = Math.min(100, (contextUsed / CONTEXT_WINDOW) * 100);
 
   const hasMessages = messages.length > 0;
 
@@ -379,7 +444,7 @@ export function PolicyAIAssistant({
         <span className="text-[13px] font-medium text-foreground">Policy assistant</span>
         {!isEdge && (
           <button
-            onClick={onClose}
+            onClick={handleClose}
             className="h-6 w-6 rounded flex items-center justify-center text-foreground-muted hover:text-foreground hover:bg-background-subtle transition-colors"
           >
             <X className="h-3.5 w-3.5" />
@@ -405,7 +470,7 @@ export function PolicyAIAssistant({
                 <button
                   key={i}
                   onClick={() => handleSend(s.prompt, s.target)}
-                  className="w-full text-left py-2 px-1 -mx-1 text-sm text-foreground-secondary hover:text-foreground hover:bg-table-hover rounded transition-colors"
+                  className="w-full text-left py-2 px-1 -mx-1 text-sm text-foreground-secondary hover:text-foreground/90 rounded transition-colors"
                 >
                   {s.label}
                 </button>
@@ -468,23 +533,59 @@ export function PolicyAIAssistant({
           </div>
         )}
         <div
+          ref={inputContainerRef}
           className={cn(
-            'relative flex flex-col overflow-hidden border border-border bg-table-hover shadow-sm rounded-lg',
+            'relative flex flex-col overflow-hidden border border-border bg-background-card shadow-sm rounded-lg',
             ''
           )}
         >
+          {showSlashMenu && slashMenuRect != null && createPortal(
+            <div
+              className={cn(
+                'fixed z-[9999] py-1 rounded-lg border border-border bg-background-card shadow-lg max-h-48 overflow-y-auto transition-all duration-150',
+                slashPopOpen ? 'opacity-100' : 'opacity-0',
+              )}
+              style={{
+                top: slashMenuRect.top,
+                left: slashMenuRect.left + 16,
+                width: slashMenuRect.width - 32,
+                transform: 'translateY(calc(-100% - 8px))',
+              }}
+            >
+              <p className="px-3 py-1.5 text-[11px] font-medium text-foreground-secondary uppercase tracking-wider">Commands</p>
+              {slashOptions.length === 0 ? (
+                <p className="px-3 py-2 text-sm text-muted-foreground">No match</p>
+              ) : (
+                slashOptions.map((cmd) => (
+                  <button
+                    key={cmd.id}
+                    type="button"
+                    onClick={() => runSlashCommand(cmd.id)}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-foreground hover:bg-table-hover transition-colors"
+                  >
+                    <span className="text-muted-foreground flex-shrink-0">{cmd.icon}</span>
+                    <div className="min-w-0">
+                      <span className="font-medium">{cmd.label}</span>
+                      <span className="text-muted-foreground text-xs block truncate">{cmd.description}</span>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>,
+            document.body,
+          )}
           <textarea
             ref={inputRef}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Describe what your policy should do..."
+            placeholder="Describe what your policy should do... (type / for commands)"
             rows={3}
             disabled={isStreaming}
             className="w-full resize-none px-4 pt-4 pb-12 text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-0 focus:border-0 disabled:opacity-50 min-h-[88px] max-h-32 overflow-y-auto border-0 bg-transparent"
           />
-          {/* Dropdown and send inside the input area */}
-          <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 py-2 gap-2 border-t border-border bg-table-hover">
+          {/* Dropdown, context circle, and send inside the input area */}
+          <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 py-2 gap-2 border-t border-border bg-background-card">
             <div className="relative" ref={dropdownRef}>
               <button
                 onClick={() => setShowTargetDropdown(prev => !prev)}
@@ -512,19 +613,46 @@ export function PolicyAIAssistant({
                 </div>
               )}
             </div>
-            <button
-              type="button"
-              onClick={() => handleSend()}
-              disabled={!input.trim() || isStreaming}
-              className={cn(
-                'h-8 w-8 rounded-full flex items-center justify-center transition-all shrink-0',
-                !input.trim() || isStreaming
-                  ? 'bg-primary/25 text-primary/80 border border-primary/40 cursor-not-allowed'
-                  : 'bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40'
-              )}
-            >
-              <ArrowUp className="h-4 w-4" />
-            </button>
+            <div className="flex items-center gap-1.5">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="flex items-center justify-center shrink-0 h-6 w-6" aria-label="Context usage">
+                    <svg className="h-5 w-5 -rotate-90 text-foreground-muted" viewBox="0 0 20 20">
+                      <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" className="text-border" />
+                      <circle
+                        cx="10"
+                        cy="10"
+                        r="8"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeDasharray={`${(contextPercent / 100) * 50.3} 50.3`}
+                        strokeLinecap="round"
+                        className="text-foreground-muted transition-all duration-300"
+                      />
+                    </svg>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs">
+                  {contextUsed > 0
+                    ? `${contextPercent.toFixed(1)}% of context used (${contextUsed.toLocaleString()} input tokens)`
+                    : 'Context usage will appear after a response'}
+                </TooltipContent>
+              </Tooltip>
+              <button
+                type="button"
+                onClick={() => handleSend()}
+                disabled={!input.trim() || isStreaming}
+                className={cn(
+                  'h-8 w-8 rounded-full flex items-center justify-center transition-all shrink-0',
+                  !input.trim() || isStreaming
+                    ? 'bg-primary/25 text-primary/80 border border-primary/40 cursor-not-allowed'
+                    : 'bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40'
+                )}
+              >
+                <ArrowUp className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         </div>
       </div>

@@ -1597,6 +1597,7 @@ export default function OrganizationSettingsPage() {
   const [webhookDeliveries, setWebhookDeliveries] = useState<any[]>([]);
   const [webhookTotalCount, setWebhookTotalCount] = useState(0);
   const [webhookLoading, setWebhookLoading] = useState(false);
+  const [webhookLoadMoreLoading, setWebhookLoadMoreLoading] = useState(false);
   const [webhookProvider, setWebhookProvider] = useState('all');
   const [webhookStatus, setWebhookStatus] = useState('all');
   const [webhookEvent, setWebhookEvent] = useState('all');
@@ -1863,9 +1864,10 @@ export default function OrganizationSettingsPage() {
     }
   }, [activeSection, id]);
 
-  const loadWebhookDeliveries = async (opts?: { silent?: boolean }) => {
+  const loadWebhookDeliveries = async (opts?: { silent?: boolean; page?: number }) => {
     if (!id) return;
     const silent = opts?.silent ?? false;
+    const page = opts?.page ?? webhookPage;
     if (!silent) setWebhookLoading(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -1873,7 +1875,7 @@ export default function OrganizationSettingsPage() {
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
       const params = new URLSearchParams({
         timeframe: webhookTimeframe,
-        page: String(webhookPage),
+        page: String(page),
         per_page: String(WEBHOOK_PER_PAGE),
       });
       if (webhookProvider !== 'all') params.set('provider', webhookProvider);
@@ -1885,15 +1887,16 @@ export default function OrganizationSettingsPage() {
       if (res.ok) {
         const data = await res.json();
         const deliveries = data.deliveries ?? data.items ?? data ?? [];
-        const totalCount = data.total ?? data.total_count ?? deliveries.length ?? 0;
+        const totalCount = data.total ?? data.total_count ?? 0;
         setWebhookDeliveries(deliveries);
         setWebhookTotalCount(totalCount);
+        setWebhookPage(page);
         const snapshot: WebhookCacheSnapshot = {
           provider: webhookProvider,
           status: webhookStatus,
           event: webhookEvent,
           timeframe: webhookTimeframe,
-          page: webhookPage,
+          page,
           deliveries,
           totalCount,
         };
@@ -1907,6 +1910,38 @@ export default function OrganizationSettingsPage() {
     }
   };
 
+  const loadMoreWebhookDeliveries = async () => {
+    if (!id || webhookLoadMoreLoading) return;
+    const nextPage = webhookPage + 1;
+    setWebhookLoadMoreLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+      const params = new URLSearchParams({
+        timeframe: webhookTimeframe,
+        page: String(nextPage),
+        per_page: String(WEBHOOK_PER_PAGE),
+      });
+      if (webhookProvider !== 'all') params.set('provider', webhookProvider);
+      if (webhookStatus !== 'all') params.set('status', webhookStatus);
+      if (webhookEvent !== 'all') params.set('event_type', webhookEvent);
+      const res = await fetch(`${API_BASE_URL}/api/organizations/${id}/webhook-deliveries?${params}`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const more = data.deliveries ?? data.items ?? data ?? [];
+        const totalCount = data.total ?? data.total_count ?? webhookTotalCount;
+        setWebhookDeliveries((prev) => [...prev, ...more]);
+        setWebhookTotalCount(totalCount);
+        setWebhookPage(nextPage);
+      }
+    } catch { /* ignore */ } finally {
+      setWebhookLoadMoreLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (activeSection === 'webhooks' && id) {
       const cached = getCachedWebhooks(id);
@@ -1914,10 +1949,10 @@ export default function OrganizationSettingsPage() {
       if (paramsMatch && cached.deliveries.length >= 0) {
         setWebhookDeliveries(cached.deliveries);
         setWebhookTotalCount(cached.totalCount);
-        loadWebhookDeliveries({ silent: true });
+        setWebhookPage(cached.page ?? 1);
+        loadWebhookDeliveries({ silent: true, page: 1 });
       } else {
-        const hasData = webhookDeliveries.length > 0;
-        loadWebhookDeliveries({ silent: hasData });
+        loadWebhookDeliveries({ page: 1 });
       }
     }
   }, [activeSection, id, webhookTimeframe]);
@@ -1929,13 +1964,13 @@ export default function OrganizationSettingsPage() {
       if (paramsMatch && cached.deliveries.length >= 0) {
         setWebhookDeliveries(cached.deliveries);
         setWebhookTotalCount(cached.totalCount);
-        loadWebhookDeliveries({ silent: true });
+        setWebhookPage(cached.page ?? 1);
+        loadWebhookDeliveries({ silent: true, page: 1 });
       } else {
-        const hasData = webhookDeliveries.length > 0;
-        loadWebhookDeliveries({ silent: hasData });
+        loadWebhookDeliveries({ page: 1 });
       }
     }
-  }, [webhookProvider, webhookStatus, webhookEvent, webhookPage]);
+  }, [webhookProvider, webhookStatus, webhookEvent]);
 
   const formatWebhookTime = (dateString: string | null): string => {
     if (!dateString) return '—';
@@ -1957,6 +1992,9 @@ export default function OrganizationSettingsPage() {
       default: return 'bg-foreground-secondary';
     }
   };
+
+  const webhookEventLabel = (eventType: string) =>
+    eventType ? eventType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : '—';
 
   // Handle integration connection callbacks (GitHub, GitLab, Bitbucket)
   useEffect(() => {
@@ -3276,19 +3314,6 @@ export default function OrganizationSettingsPage() {
                     )}
                   </div>
 
-                  <Card className="rounded-lg border border-border bg-background-card/80">
-                    <CardContent className="p-4 flex gap-3">
-                      <div className="flex-shrink-0 mt-0.5">
-                        <Info className="h-5 w-5 text-foreground-muted" />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-sm text-foreground-secondary">
-                          Create customizable roles for your organization and control what permissions each role has. Permissions determine which screens and actions are visible and available—members see only what their role allows, so the app adapts to their access level.
-                        </p>
-                      </div>
-                    </CardContent>
-                  </Card>
-
                   {/* Roles List */}
                   {loadingRoles ? (
                     <div className="bg-background-card border border-border rounded-lg overflow-hidden">
@@ -4165,9 +4190,14 @@ export default function OrganizationSettingsPage() {
               {/* Keep Notifications mounted after first visit so it doesn't reload when switching tabs (like Integrations) */}
               {(activeSection === 'notifications' || hasVisitedNotifications) && id && (
                 <div className="pt-8 space-y-6" style={{ display: activeSection === 'notifications' ? undefined : 'none' }}>
-                  {/* Header: title only, Pause + Create Rule (no border under title) */}
-                  <div className="flex items-center justify-between pb-2">
-                    <h2 className="text-2xl font-bold text-foreground">Notifications</h2>
+                  {/* Header: title + description, Pause + Create Rule (no border under title) */}
+                  <div className="flex items-center justify-between gap-4 flex-wrap pb-2">
+                    <div>
+                      <h2 className="text-2xl font-bold text-foreground">Notifications</h2>
+                      <p className="mt-1.5 text-sm text-foreground-secondary">
+                        Create custom rules with code to decide when to notify. Send alerts to Slack, email, Jira, webhooks, and more. The AI assistant can help you write the trigger logic.
+                      </p>
+                    </div>
                     <div className="flex items-center gap-2">
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -4239,19 +4269,6 @@ export default function OrganizationSettingsPage() {
                       </span>
                     </div>
                   )}
-
-                  <Card className="rounded-lg border border-border bg-background-card/80">
-                    <CardContent className="p-4 flex gap-3">
-                      <div className="flex-shrink-0 mt-0.5">
-                        <Info className="h-5 w-5 text-foreground-muted" />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-sm text-foreground-secondary">
-                          Create custom rules with code to decide when to notify. Send alerts to Slack, email, Jira, webhooks, and more. The AI assistant can help you write the trigger logic.
-                        </p>
-                      </div>
-                    </CardContent>
-                  </Card>
 
                   {/* Sub-tabs - Members style (border-b, underline active) */}
                   <div className="flex items-center justify-between border-b border-border mb-4">
@@ -4362,7 +4379,7 @@ export default function OrganizationSettingsPage() {
                   <div>
                     <h2 className="text-2xl font-bold text-foreground">Webhooks</h2>
                     <p className="mt-1.5 text-sm text-foreground-secondary">
-                      View recent webhook deliveries and logs for your projects. Filter by provider, event type, and status to inspect push and PR events from GitHub, GitLab, and Bitbucket.
+                      Recent webhook deliveries for your projects (push, pull_request, repository, etc.). Check suite and check run events are excluded. Filter by provider, event, and status.
                     </p>
                   </div>
 
@@ -4403,8 +4420,9 @@ export default function OrganizationSettingsPage() {
                         {[
                           { value: 'all', label: 'All Statuses' },
                           { value: 'processed', label: 'Processed' },
-                          { value: 'error', label: 'Error' },
+                          { value: 'received', label: 'Received' },
                           { value: 'skipped', label: 'Skipped' },
+                          { value: 'error', label: 'Error' },
                         ].map(({ value, label }) => (
                           <DropdownMenuItem key={value} onClick={() => { setWebhookStatus(value); setWebhookPage(1); }}>
                             {label}
@@ -4418,16 +4436,16 @@ export default function OrganizationSettingsPage() {
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button variant="outline" size="sm" className="text-xs gap-1.5">
-                          {webhookEvent === 'all' ? 'All Events' : webhookEvent}
+                          {webhookEvent === 'all' ? 'All Events' : webhookEventLabel(webhookEvent)}
                           <ChevronDown className="h-3 w-3 opacity-50" />
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="start">
                         {[
                           { value: 'all', label: 'All Events' },
-                          { value: 'push', label: 'push' },
-                          { value: 'pull_request', label: 'pull_request' },
-                          { value: 'repository', label: 'repository' },
+                          { value: 'push', label: 'Push' },
+                          { value: 'pull_request', label: 'Pull Request' },
+                          { value: 'repository', label: 'Repository' },
                         ].map(({ value, label }) => (
                           <DropdownMenuItem key={value} onClick={() => { setWebhookEvent(value); setWebhookPage(1); }}>
                             {label}
@@ -4478,11 +4496,11 @@ export default function OrganizationSettingsPage() {
                           <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider min-w-0">Repository</th>
                           <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[90px]">Status</th>
                           <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[80px]">Duration</th>
-                          <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[70px]">Size</th>
+                          <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[100px]">Size</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-border">
-                        {webhookLoading && webhookDeliveries.length === 0 ? (
+                        {webhookLoading ? (
                           [1, 2, 3, 4, 5].map((i) => (
                             <tr key={i}>
                               <td className="px-4 py-3"><div className="h-4 w-16 bg-muted animate-pulse rounded" /></td>
@@ -4496,7 +4514,7 @@ export default function OrganizationSettingsPage() {
                           ))
                         ) : webhookDeliveries.length === 0 ? (
                           <tr>
-                            <td colSpan={7} className="px-4 py-8 text-center text-sm text-foreground-secondary">
+                            <td colSpan={7} className="px-4 py-3 text-center text-sm text-foreground-secondary">
                               No deliveries
                             </td>
                           </tr>
@@ -4508,7 +4526,8 @@ export default function OrganizationSettingsPage() {
                             const providerLabel = d.provider === 'github' ? 'GitHub'
                               : d.provider === 'gitlab' ? 'GitLab'
                               : d.provider === 'bitbucket' ? 'Bitbucket' : d.provider ?? '—';
-                            const isError = d.status === 'error';
+                            const processingStatus = d.processing_status ?? d.status ?? 'received';
+                            const isError = processingStatus === 'error';
                             const durationMs = d.processing_duration_ms ?? d.duration_ms ?? null;
                             const sizeKb = d.payload_size_bytes ? (d.payload_size_bytes / 1024).toFixed(1) : null;
                             return (
@@ -4529,26 +4548,21 @@ export default function OrganizationSettingsPage() {
                                   </div>
                                 </td>
                                 <td className="px-4 py-3">
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="text-sm text-foreground">{d.event_type ?? '—'}</span>
-                                    {d.event_action && (
-                                      <Badge variant="default" className="text-[10px] px-1.5 py-0">{d.event_action}</Badge>
-                                    )}
-                                  </div>
+                                  <span className="text-sm text-foreground">{webhookEventLabel(d.event_type)}</span>
                                 </td>
                                 <td className="px-4 py-3 min-w-0 overflow-hidden">
                                   <span className="text-sm text-foreground truncate block" title={d.repo_full_name}>{d.repo_full_name ?? '—'}</span>
                                 </td>
                                 <td className="px-4 py-3">
                                   <div className="flex items-center gap-1.5">
-                                    <div className={cn('h-2 w-2 rounded-full flex-shrink-0', webhookStatusDot(d.status))} />
-                                    <span className="text-sm text-foreground capitalize">{d.status ?? '—'}</span>
+                                    <div className={cn('h-2 w-2 rounded-full flex-shrink-0', webhookStatusDot(processingStatus))} />
+                                    <span className="text-sm text-foreground capitalize">{processingStatus}</span>
                                   </div>
                                 </td>
                                 <td className="px-4 py-3 text-right">
                                   <span className="text-sm text-foreground-secondary tabular-nums">{durationMs != null ? `${durationMs}ms` : '—'}</span>
                                 </td>
-                                <td className="px-4 py-3 text-right">
+                                <td className="px-4 py-3 text-right whitespace-nowrap">
                                   <span className="text-sm text-foreground-secondary tabular-nums">{sizeKb != null ? `${sizeKb} KB` : '—'}</span>
                                 </td>
                               </tr>
@@ -4559,20 +4573,25 @@ export default function OrganizationSettingsPage() {
                     </table>
                   </div>
 
-                  {/* Pagination */}
-                  {webhookTotalCount > 0 && (
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-foreground-secondary">
-                        Showing {((webhookPage - 1) * WEBHOOK_PER_PAGE) + 1}–{Math.min(webhookPage * WEBHOOK_PER_PAGE, webhookTotalCount)} of {webhookTotalCount.toLocaleString()}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <Button variant="outline" size="sm" className="text-xs" disabled={webhookPage <= 1 || webhookLoading} onClick={() => setWebhookPage((p) => Math.max(1, p - 1))}>
-                          Prev
-                        </Button>
-                        <Button variant="outline" size="sm" className="text-xs" disabled={webhookPage * WEBHOOK_PER_PAGE >= webhookTotalCount || webhookLoading} onClick={() => setWebhookPage((p) => p + 1)}>
-                          Next
-                        </Button>
-                      </div>
+                  {/* Load more */}
+                  {webhookDeliveries.length < webhookTotalCount && webhookTotalCount > 0 && (
+                    <div className="flex justify-center pt-3 pb-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-sm"
+                        disabled={webhookLoadMoreLoading || webhookLoading}
+                        onClick={() => loadMoreWebhookDeliveries()}
+                      >
+                        {webhookLoadMoreLoading ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Loading…
+                          </>
+                        ) : (
+                          `Load more (${webhookDeliveries.length} of ${webhookTotalCount.toLocaleString()})`
+                        )}
+                      </Button>
                     </div>
                   )}
                 </div>
@@ -4679,6 +4698,9 @@ export default function OrganizationSettingsPage() {
                     {/* Header – no X, no border */}
                     <div className="px-6 pt-5 pb-3 flex-shrink-0">
                       <h2 className="text-xl font-semibold text-foreground">Create New Role</h2>
+                      <p className="mt-2 text-sm text-foreground-secondary">
+                        Create customizable roles for your organization and control what permissions each role has. Permissions determine which screens and actions are visible and available—members see only what their role allows, so the app adapts to their access level.
+                      </p>
                     </div>
 
                     {/* Content */}

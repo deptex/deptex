@@ -22,9 +22,6 @@ function makeDep(overrides: Partial<PolicyDependencyContext> = {}): PolicyDepend
     dependencyScore: 75,
     maliciousIndicator: null,
     slsaLevel: 0,
-    registryIntegrityStatus: 'pass',
-    installScriptsStatus: 'pass',
-    entropyAnalysisStatus: 'pass',
     ...overrides,
   };
 }

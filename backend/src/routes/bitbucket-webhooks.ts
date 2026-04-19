@@ -246,7 +246,7 @@ async function handleBitbucketPushEvent(payload: any): Promise<void> {
 
   const { data: rows } = await supabase
     .from('project_repositories')
-    .select('project_id, default_branch, package_json_path, sync_frequency, status, projects(organization_id)')
+    .select('project_id, repo_full_name, default_branch, package_json_path, sync_frequency, status, integration_id, ecosystem, projects(organization_id)')
     .eq('repo_full_name', repoFullName)
     .eq('provider', 'bitbucket');
 
@@ -290,7 +290,29 @@ async function handleBitbucketPushEvent(payload: any): Promise<void> {
 
       if (isAffected && row.sync_frequency === 'on_commit' && extractionCount < MAX_EXTRACTION_PER_PUSH) {
         try {
-          const result = await queueExtractionJob(row.project_id, orgId, row);
+          const commitInfo = change?.new?.target;
+          const meta = {
+            trigger_type: 'webhook' as const,
+            commit_sha: commitInfo?.hash ?? after,
+            commit_message: commitInfo?.message ? (commitInfo.message as string).slice(0, 500) : undefined,
+            branch: branchName,
+            commit_author: commitInfo?.author
+              ? {
+                  username: commitInfo.author.raw?.split('<')[0]?.trim() ?? commitInfo.author.user?.display_name,
+                  avatar_url: commitInfo.author.user?.links?.avatar?.href,
+                }
+              : undefined,
+          };
+          const repoRecord = {
+            repo_full_name: row.repo_full_name ?? repoFullName,
+            installation_id: '',
+            default_branch: row.default_branch,
+            package_json_path: row.package_json_path ?? '',
+            ecosystem: row.ecosystem ?? 'npm',
+            provider: 'bitbucket',
+            integration_id: row.integration_id ?? undefined,
+          };
+          const result = await queueExtractionJob(row.project_id, orgId, repoRecord, meta);
           if (result.success) extractionCount++;
         } catch (err: any) {
           console.error(`[bitbucket-webhook] Extraction queue failed:`, err?.message);
