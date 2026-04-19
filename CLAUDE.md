@@ -30,7 +30,7 @@ Deptex is an AI-powered open-core dependency security platform. It combines depe
 | Routing | React Router v6 (`createBrowserRouter`) |
 | Graphs | @xyflow/react (dependency + vulnerability graphs) |
 | Code editor | Monaco Editor (policy code) |
-| Workers | 3 workers on Fly.io: extraction-worker, watchtower-worker, aider-worker (Python) |
+| Workers | 2 workers on Fly.io: extraction-worker, aider-worker (Python) |
 | SBOM | cdxgen (CycloneDX). dep-scan (VDR, reachability). Semgrep, TruffleHog |
 | AST parsing | oxc-parser (JS/TS import extraction) |
 | Queues | Upstash QStash (async jobs, cron schedules) |
@@ -52,7 +52,6 @@ backend/
     lib/                  Shared libraries (ai/, aegis/, learning/, github, policy-engine, etc.)
     middleware/            auth.ts (JWT), ip-allowlist.ts
   extraction-worker/      Clone + cdxgen + dep-scan + AST (oxc-parser) + Semgrep + TruffleHog (Fly.io scale-to-zero)
-  watchtower-worker/      Supply-chain forensic analysis (Fly.io scale-to-zero)
   aider-worker/           AI-powered fix worker (Aider/Python on Fly.io)
   database/               ~140 SQL migration files
 
