@@ -19,7 +19,7 @@ router.post('/', async (req: Request, res: Response) => {
     // Lazy-import EE stripe lib to avoid requiring stripe SDK in CE builds
     let stripeLib: any;
     try {
-      stripeLib = require('../../../ee/backend/lib/stripe');
+      stripeLib = require('../lib/stripe');
     } catch {
       return res.status(503).json({ error: 'Billing module not available' });
     }

@@ -2,10 +2,15 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Key, Check, X, AlertCircle, Loader2, BarChart3,
   Users, Clock, Settings, Shield, Zap, ChevronLeft,
-  ChevronRight, Eye, EyeOff, Radio,
+  ChevronRight, Eye, EyeOff, Radio, Plus, SlidersHorizontal,
 } from 'lucide-react';
+import { SiOpenai, SiAnthropic, SiGoogle } from '@icons-pack/react-simple-icons';
 import { api, AIProviderConfig, AIUsageSummary } from '../../lib/api';
 import { Button } from '../ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../ui/dialog';
+import { Label } from '../ui/label';
+import { Input } from '../ui/input';
+import { cn } from '../../lib/utils';
 import { useToast } from '../../hooks/use-toast';
 
 interface AIConfigurationSectionProps {
@@ -14,11 +19,22 @@ interface AIConfigurationSectionProps {
 
 type ProviderKey = 'openai' | 'anthropic' | 'google';
 
+const PROVIDER_ICONS = {
+  openai: SiOpenai,
+  anthropic: SiAnthropic,
+  google: SiGoogle,
+} as const;
+
+const PROVIDER_COLORS: Record<ProviderKey, string> = {
+  openai: '#10a37f',
+  anthropic: '#cc785c',
+  google: '#4285F4',
+};
+
 interface ProviderMeta {
   key: ProviderKey;
   name: string;
   description: string;
-  icon: string;
   models: string[];
 }
 
@@ -27,24 +43,23 @@ const PROVIDERS: ProviderMeta[] = [
     key: 'openai',
     name: 'OpenAI',
     description: 'GPT-4o, o1, and more',
-    icon: '◯',
-    models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o1', 'o1-mini'],
+    models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4.5', 'gpt-5', 'o1', 'o1-mini'],
   },
   {
     key: 'anthropic',
     name: 'Anthropic',
     description: 'Claude Sonnet, Haiku',
-    icon: '◈',
     models: ['claude-sonnet-4-20250514', 'claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307'],
   },
   {
     key: 'google',
     name: 'Google',
     description: 'Gemini Flash & Pro',
-    icon: '◆',
     models: ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'],
   },
 ];
+
+const CUSTOM_OPENAI_MODELS = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4.5', 'gpt-5', 'o1', 'o1-mini'];
 
 const DEFAULT_COST_CAP = 100;
 const LOGS_PER_PAGE = 10;
@@ -60,17 +75,22 @@ function formatTokens(n: number): string {
 }
 
 function formatModelName(model: string): string {
-  return model
-    .replace('gpt-4o-mini', 'GPT-4o Mini')
-    .replace('gpt-4o', 'GPT-4o')
-    .replace('gpt-4-turbo', 'GPT-4 Turbo')
-    .replace('o1-mini', 'o1 Mini')
-    .replace('claude-sonnet-4-20250514', 'Claude Sonnet 4')
-    .replace('claude-3-5-sonnet-20241022', 'Claude 3.5 Sonnet')
-    .replace('claude-3-haiku-20240307', 'Claude 3 Haiku')
-    .replace('gemini-2.5-flash', 'Gemini 2.5 Flash')
-    .replace('gemini-2.0-flash', 'Gemini 2.0 Flash')
-    .replace('gemini-1.5-pro', 'Gemini 1.5 Pro');
+  const known: Record<string, string> = {
+    'gpt-4o-mini': 'GPT-4o Mini',
+    'gpt-4o': 'GPT-4o',
+    'gpt-4-turbo': 'GPT-4 Turbo',
+    'gpt-4.5': 'GPT-4.5',
+    'gpt-5': 'GPT-5',
+    'o1-mini': 'o1 Mini',
+    'o1': 'o1',
+    'claude-sonnet-4-20250514': 'Claude Sonnet 4',
+    'claude-3-5-sonnet-20241022': 'Claude 3.5 Sonnet',
+    'claude-3-haiku-20240307': 'Claude 3 Haiku',
+    'gemini-2.5-flash': 'Gemini 2.5 Flash',
+    'gemini-2.0-flash': 'Gemini 2.0 Flash',
+    'gemini-1.5-pro': 'Gemini 1.5 Pro',
+  };
+  return known[model] ?? model.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 export default function AIConfigurationSection({ organizationId }: AIConfigurationSectionProps) {
@@ -88,9 +108,11 @@ export default function AIConfigurationSection({ organizationId }: AIConfigurati
   const [loadingLogs, setLoadingLogs] = useState(false);
 
   const [connectModal, setConnectModal] = useState<ProviderMeta | null>(null);
+  const [customModalOpen, setCustomModalOpen] = useState(false);
   const [modalApiKey, setModalApiKey] = useState('');
-  const [modalModel, setModalModel] = useState('');
   const [modalCostCap, setModalCostCap] = useState(String(DEFAULT_COST_CAP));
+  const [modalDisplayName, setModalDisplayName] = useState('');
+  const [modalApiRoute, setModalApiRoute] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; error?: string } | null>(null);
@@ -98,6 +120,8 @@ export default function AIConfigurationSection({ organizationId }: AIConfigurati
 
   const [settingDefault, setSettingDefault] = useState<string | null>(null);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
+  const [updatingModelId, setUpdatingModelId] = useState<string | null>(null);
+  const [aiConfigSubTab, setAiConfigSubTab] = useState<'providers' | 'usage'>('providers');
 
   const loadProviders = useCallback(async () => {
     try {
@@ -140,14 +164,17 @@ export default function AIConfigurationSection({ organizationId }: AIConfigurati
 
   const providerMap = useMemo(() => {
     const map: Partial<Record<ProviderKey, AIProviderConfig>> = {};
-    for (const p of providers) map[p.provider] = p;
+    for (const p of providers) {
+      if (p.provider !== 'custom') map[p.provider as ProviderKey] = p;
+    }
     return map;
   }, [providers]);
+
+  const builtInMeta = (key: ProviderKey) => PROVIDERS.find((m) => m.key === key);
 
   const openConnectModal = (provider: ProviderMeta) => {
     setConnectModal(provider);
     setModalApiKey('');
-    setModalModel(provider.models[0]);
     setModalCostCap(String(DEFAULT_COST_CAP));
     setShowApiKey(false);
     setTesting(false);
@@ -159,12 +186,27 @@ export default function AIConfigurationSection({ organizationId }: AIConfigurati
     setConnectModal(null);
   };
 
+  const openCustomModal = () => {
+    setCustomModalOpen(true);
+    setModalDisplayName('');
+    setModalApiRoute('');
+    setModalApiKey('');
+    setShowApiKey(false);
+    setTesting(false);
+    setTestResult(null);
+    setSaving(false);
+  };
+
+  const closeCustomModal = () => {
+    setCustomModalOpen(false);
+  };
+
   const handleTest = async () => {
     if (!connectModal || !modalApiKey.trim()) return;
     setTesting(true);
     setTestResult(null);
     try {
-      const result = await api.testAIProvider(organizationId, connectModal.key, modalApiKey.trim(), modalModel || undefined);
+      const result = await api.testAIProvider(organizationId, connectModal.key, modalApiKey.trim(), {});
       setTestResult(result);
     } catch (err: any) {
       setTestResult({ success: false, error: err.message || 'Connection test failed' });
@@ -177,8 +219,7 @@ export default function AIConfigurationSection({ organizationId }: AIConfigurati
     if (!connectModal || !modalApiKey.trim()) return;
     setSaving(true);
     try {
-      const cap = parseFloat(modalCostCap) || DEFAULT_COST_CAP;
-      await api.addAIProvider(organizationId, connectModal.key, modalApiKey.trim(), modalModel || undefined, cap);
+      await api.addAIProvider(organizationId, connectModal.key, modalApiKey.trim(), {});
       toast({ title: `${connectModal.name} connected successfully` });
       closeConnectModal();
       await loadProviders();
@@ -186,6 +227,50 @@ export default function AIConfigurationSection({ organizationId }: AIConfigurati
       toast({ title: 'Failed to connect provider', description: err.message, variant: 'destructive' });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleTestCustom = async () => {
+    if (!modalApiKey.trim() || !modalApiRoute.trim()) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await api.testAIProvider(organizationId, 'custom', modalApiKey.trim(), { api_base_url: modalApiRoute.trim() });
+      setTestResult(result);
+    } catch (err: any) {
+      setTestResult({ success: false, error: err.message || 'Connection test failed' });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleSaveCustom = async () => {
+    if (!modalDisplayName.trim() || !modalApiKey.trim() || !modalApiRoute.trim()) return;
+    setSaving(true);
+    try {
+      await api.addAIProvider(organizationId, 'custom', modalApiKey.trim(), {
+        display_name: modalDisplayName.trim(),
+        api_base_url: modalApiRoute.trim().replace(/\/$/, ''),
+      });
+      toast({ title: 'Custom provider added' });
+      closeCustomModal();
+      await loadProviders();
+    } catch (err: any) {
+      toast({ title: 'Failed to add custom provider', description: err.message, variant: 'destructive' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleModelChange = async (providerId: string, model: string) => {
+    setUpdatingModelId(providerId);
+    try {
+      await api.updateAIProvider(organizationId, providerId, { model_preference: model || null });
+      await loadProviders();
+    } catch (err: any) {
+      toast({ title: 'Failed to update model', description: err.message, variant: 'destructive' });
+    } finally {
+      setUpdatingModelId(null);
     }
   };
 
@@ -224,242 +309,319 @@ export default function AIConfigurationSection({ organizationId }: AIConfigurati
   const totalLogsPages = Math.ceil(logsTotal / LOGS_PER_PAGE);
 
   return (
-    <div className="space-y-8 pt-8">
-      {/* Header */}
-      <div>
+    <div className="space-y-6 pt-8">
+      <div className="flex items-center justify-between">
         <h2 className="text-2xl font-bold text-foreground">AI Configuration</h2>
-        <p className="mt-1 text-sm text-foreground-secondary">
-          Connect your own API keys for AI-powered features like Aegis and Aider. Your keys are encrypted at rest and never shared.
-        </p>
       </div>
 
-      {/* Provider Cards */}
-      <div>
-        <h3 className="text-lg font-semibold text-foreground mb-4">Providers</h3>
-        <div className="grid gap-4 sm:grid-cols-3">
-          {PROVIDERS.map((meta) => {
-            const config = providerMap[meta.key];
-            const isConnected = !!config?.connected;
-            const isDefault = !!config?.is_default;
+      {/* Sub-tabs – same style as Members / Notifications */}
+      <div className="flex items-center gap-6 border-b border-border mb-6">
+        <button
+          type="button"
+          onClick={() => setAiConfigSubTab('providers')}
+          className={cn(
+            'pb-3 text-sm font-medium transition-colors',
+            aiConfigSubTab === 'providers'
+              ? 'text-foreground border-b-2 border-foreground'
+              : 'text-foreground-secondary hover:text-foreground'
+          )}
+        >
+          Providers
+        </button>
+        <button
+          type="button"
+          onClick={() => setAiConfigSubTab('usage')}
+          className={cn(
+            'pb-3 text-sm font-medium transition-colors',
+            aiConfigSubTab === 'usage'
+              ? 'text-foreground border-b-2 border-foreground'
+              : 'text-foreground-secondary hover:text-foreground'
+          )}
+        >
+          Usage
+        </button>
+      </div>
 
-            return (
-              <div
-                key={meta.key}
-                className="rounded-lg border border-border bg-background-card p-5 flex flex-col gap-4"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="h-10 w-10 rounded-lg bg-background-subtle border border-border flex items-center justify-center text-lg font-semibold text-foreground-secondary">
-                      {meta.icon}
-                    </div>
-                    <div>
-                      <p className="text-sm font-semibold text-foreground">{meta.name}</p>
-                      <p className="text-xs text-foreground-secondary">{meta.description}</p>
-                    </div>
-                  </div>
-                  {isConnected && (
-                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-400">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                      Connected
-                    </span>
-                  )}
-                </div>
-
-                {isConnected && config ? (
-                  <div className="space-y-3">
-                    {config.model_preference && (
-                      <div className="text-xs text-foreground-secondary">
-                        Model: <span className="text-foreground">{formatModelName(config.model_preference)}</span>
-                      </div>
-                    )}
-                    <div className="text-xs text-foreground-secondary">
-                      Cost cap: <span className="text-foreground">{formatCurrency(config.monthly_cost_cap)}/mo</span>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleSetDefault(config.id)}
-                        disabled={isDefault || settingDefault === config.id}
-                        className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md transition-colors ${
-                          isDefault
-                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 cursor-default'
-                            : 'border border-border text-foreground-secondary hover:text-foreground hover:bg-background-subtle'
-                        }`}
-                      >
-                        {settingDefault === config.id ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : isDefault ? (
-                          <Check className="h-3 w-3" />
-                        ) : (
-                          <Radio className="h-3 w-3" />
-                        )}
-                        {isDefault ? 'Default' : 'Set default'}
-                      </button>
-
-                      <button
-                        onClick={() => handleDisconnect(config.id, meta.name)}
-                        disabled={disconnecting === config.id}
-                        className="flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-md border border-border text-foreground-secondary hover:text-destructive hover:border-destructive/30 transition-colors"
-                      >
-                        {disconnecting === config.id ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : (
-                          <X className="h-3 w-3" />
-                        )}
-                        Disconnect
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <Button
-                    onClick={() => openConnectModal(meta)}
-                    disabled={loadingProviders}
-                    className="w-full mt-auto bg-background-subtle border border-border text-foreground hover:bg-background-subtle/80 h-8 text-xs"
+      {aiConfigSubTab === 'providers' && (
+        <>
+          {/* Add providers – styled cards */}
+          <div>
+            <h3 className="text-lg font-semibold text-foreground mb-4">Add providers</h3>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {PROVIDERS.map((meta) => {
+                const config = providerMap[meta.key];
+                const isConnected = !!config?.connected;
+                const color = PROVIDER_COLORS[meta.key];
+                return (
+                  <div
+                    key={meta.key}
+                    className="rounded-xl border border-border bg-background-card/80 p-5 flex flex-col gap-4 transition-colors hover:border-foreground-secondary/30 hover:bg-background-card"
                   >
-                    <Key className="h-3.5 w-3.5 mr-1.5" />
-                    Connect
-                  </Button>
-                )}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="h-11 w-11 rounded-xl bg-background-subtle/80 flex items-center justify-center flex-shrink-0 [&>svg]:size-6" style={{ color }}>
+                          {(() => {
+                            const IconComponent = PROVIDER_ICONS[meta.key];
+                            return IconComponent ? <IconComponent size={22} color={color} /> : null;
+                          })()}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-foreground truncate">{meta.name}</p>
+                          <p className="text-xs text-foreground-secondary truncate">{meta.description}</p>
+                        </div>
+                      </div>
+                      {isConnected && (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-500 flex-shrink-0">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                          Connected
+                        </span>
+                      )}
+                    </div>
+                    {!isConnected && (
+                      <Button
+                        onClick={() => openConnectModal(meta)}
+                        disabled={loadingProviders}
+                        variant="outline"
+                        className="w-full mt-auto h-9 text-sm font-medium rounded-lg bg-background-card/50 border-border text-foreground hover:bg-background-card/80 hover:border-foreground-secondary/30"
+                      >
+                        {loadingProviders ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <>
+                            <Key className="h-4 w-4 mr-2" />
+                            Connect
+                          </>
+                        )}
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+              <div
+                className="rounded-xl border border-border bg-background-card/80 p-5 flex flex-col gap-4 transition-colors hover:border-foreground-secondary/30 hover:bg-background-card"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="h-11 w-11 rounded-xl bg-background-subtle/80 flex items-center justify-center flex-shrink-0 text-violet-400">
+                      <SlidersHorizontal className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-foreground truncate">Custom</p>
+                      <p className="text-xs text-foreground-secondary truncate">OpenAI-compatible API</p>
+                    </div>
+                  </div>
+                </div>
+                <Button
+                  onClick={openCustomModal}
+                  disabled={loadingProviders}
+                  variant="outline"
+                  className="w-full mt-auto h-9 text-sm font-medium rounded-lg bg-background-card/50 border-border text-foreground hover:bg-background-card/80 hover:border-foreground-secondary/30"
+                >
+                  {loadingProviders ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <>
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add custom
+                    </>
+                  )}
+                </Button>
               </div>
-            );
-          })}
-        </div>
-      </div>
+            </div>
+          </div>
 
-      {/* Cost explainer */}
-      <div className="rounded-lg border border-border bg-background-card p-4 flex items-start gap-3">
-        <AlertCircle className="h-4 w-4 text-foreground-secondary mt-0.5 flex-shrink-0" />
-        <div className="text-xs text-foreground-secondary leading-relaxed">
-          <p className="font-medium text-foreground mb-1">Bring Your Own Key (BYOK)</p>
-          <p>
-            AI features like Aegis and Aider use your organization's API keys.
-            Costs are billed directly by each provider.
-            Set a monthly cost cap per provider to prevent unexpected charges.
-            Deptex tracks usage and will pause AI features when the cap is reached.
-          </p>
-        </div>
-      </div>
+          {/* Your providers: list with model + API route + actions */}
+          {providers.length > 0 && (
+            <div>
+              <h3 className="text-lg font-semibold text-foreground mb-4">Your providers</h3>
+              <p className="text-sm text-foreground-secondary mb-4">Select which provider to use as default and choose the model for each.</p>
+              <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+                <table className="w-full">
+                  <thead className="bg-background-card-header border-b border-border">
+                    <tr>
+                      <th className="text-left px-5 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
+                      <th className="text-left px-5 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">API route</th>
+                      <th className="text-left px-5 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Model</th>
+                      <th className="text-right px-5 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {providers.map((config) => {
+                      const meta = config.provider !== 'custom' ? builtInMeta(config.provider as ProviderKey) : null;
+                      const displayName = config.provider === 'custom' ? (config.display_name || 'Custom') : (meta?.name ?? config.provider);
+                      const apiRoute = config.api_base_url || (config.provider === 'openai' ? 'api.openai.com' : config.provider === 'anthropic' ? 'api.anthropic.com' : config.provider === 'google' ? 'generativelanguage.googleapis.com' : '—');
+                      const models = config.provider === 'custom' ? CUSTOM_OPENAI_MODELS : meta?.models ?? [];
+                      const color = config.provider !== 'custom' ? PROVIDER_COLORS[config.provider as ProviderKey] : undefined;
+                      return (
+                        <tr key={config.id} className="hover:bg-table-hover transition-colors">
+                          <td className="px-5 py-2.5">
+                            <div className="flex items-center gap-2">
+                              {config.provider !== 'custom' && PROVIDER_ICONS[config.provider as ProviderKey] ? (
+                                <span className="flex items-center justify-center [&>svg]:size-4" style={{ color }}>
+                                  {(() => {
+                                    const IconComponent = PROVIDER_ICONS[config.provider as ProviderKey];
+                                    return IconComponent ? <IconComponent size={16} color={color} /> : null;
+                                  })()}
+                                </span>
+                              ) : (
+                                <SlidersHorizontal className="h-4 w-4 text-violet-400" />
+                              )}
+                              <span className="text-sm font-medium text-foreground">{displayName}</span>
+                              {config.is_default && (
+                                <span className="text-xs font-medium text-emerald-400">Default</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-5 py-2.5 text-xs text-foreground-secondary font-mono max-w-[200px] truncate" title={apiRoute}>{apiRoute}</td>
+                          <td className="px-5 py-2.5">
+                            {models.length > 0 ? (
+                              <select
+                                value={config.model_preference || ''}
+                                onChange={(e) => handleModelChange(config.id, e.target.value)}
+                                disabled={updatingModelId === config.id}
+                                className="h-8 px-2 pr-6 bg-background border border-border rounded-md text-xs text-foreground focus:ring-2 focus:ring-primary/50 focus:border-primary outline-none appearance-none cursor-pointer"
+                              >
+                                <option value="">Default</option>
+                                {models.map((m) => (
+                                  <option key={m} value={m}>{formatModelName(m)}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <span className="text-xs text-foreground-secondary">—</span>
+                            )}
+                            {updatingModelId === config.id && <Loader2 className="inline h-3 w-3 animate-spin ml-1 text-foreground-secondary" />}
+                          </td>
+                          <td className="px-5 py-2.5 text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <button
+                                onClick={() => handleSetDefault(config.id)}
+                                disabled={config.is_default || settingDefault === config.id}
+                                className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-md border border-border text-foreground-secondary hover:text-foreground hover:bg-background-subtle disabled:opacity-50"
+                              >
+                                {settingDefault === config.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Radio className="h-3 w-3" />}
+                                {config.is_default ? 'Default' : 'Set default'}
+                              </button>
+                              <button
+                                onClick={() => handleDisconnect(config.id, displayName)}
+                                disabled={disconnecting === config.id}
+                                className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-md border border-border text-foreground-secondary hover:text-destructive hover:border-destructive/30"
+                              >
+                                {disconnecting === config.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+                                Disconnect
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
-      {/* AI Usage Dashboard */}
-      <div>
-        <div className="flex items-center gap-2 mb-4">
-          <BarChart3 className="h-5 w-5 text-foreground-secondary" />
-          <h3 className="text-lg font-semibold text-foreground">AI Usage Dashboard</h3>
-        </div>
+          <div className="rounded-xl border border-border bg-background-card/50 p-4 flex items-start gap-3">
+            <AlertCircle className="h-4 w-4 text-foreground-secondary mt-0.5 flex-shrink-0" />
+            <div className="text-xs text-foreground-secondary leading-relaxed">
+              <p className="font-medium text-foreground mb-1">Bring Your Own Key (BYOK)</p>
+              <p>
+                AI features like Aegis and Aider use your organization&apos;s API keys. Costs are billed directly by each provider.
+                Custom providers use an OpenAI-compatible API endpoint.
+              </p>
+            </div>
+          </div>
+        </>
+      )}
 
+      {aiConfigSubTab === 'usage' && (
+      <>
+      <div className="space-y-10">
         {loadingUsage ? (
-          <div className="grid gap-4 sm:grid-cols-2">
-            {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="rounded-lg border border-border bg-background-card p-5">
-                <div className="h-4 w-24 bg-muted animate-pulse rounded mb-3" />
-                <div className="h-6 w-32 bg-muted animate-pulse rounded" />
+          <div className="grid gap-4 sm:grid-cols-3">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="rounded-xl border border-border bg-background-card/50 p-6">
+                <div className="h-3 w-24 bg-muted/50 animate-pulse rounded mb-3" />
+                <div className="h-8 w-28 bg-muted/50 animate-pulse rounded" />
               </div>
             ))}
           </div>
         ) : usage ? (
-          <div className="space-y-6">
-            {/* Monthly Summary */}
-            <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-              <div className="px-5 py-3 border-b border-border bg-black/20">
-                <h4 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                  <Zap className="h-4 w-4 text-foreground-secondary" />
-                  Monthly Summary
-                </h4>
+          <>
+            {/* Stats row – three cards like BYOK tone */}
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div className="rounded-xl border border-border bg-background-card/50 p-5">
+                <p className="text-xs font-medium text-foreground-secondary mb-1">Total tokens</p>
+                <p className="text-2xl font-semibold tracking-tight text-foreground">
+                  {formatTokens(usage.totalInputTokens + usage.totalOutputTokens)}
+                </p>
+                <p className="text-xs text-foreground-secondary mt-1">
+                  {formatTokens(usage.totalInputTokens)} in / {formatTokens(usage.totalOutputTokens)} out
+                </p>
               </div>
-              <div className="p-5 space-y-5">
-                <div className="grid gap-6 sm:grid-cols-3">
-                  <div>
-                    <p className="text-xs font-medium uppercase tracking-wider text-foreground-secondary mb-1">Total Tokens</p>
-                    <p className="text-xl font-bold text-foreground">
-                      {formatTokens(usage.totalInputTokens + usage.totalOutputTokens)}
-                    </p>
-                    <p className="text-xs text-foreground-secondary mt-0.5">
-                      {formatTokens(usage.totalInputTokens)} in / {formatTokens(usage.totalOutputTokens)} out
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-medium uppercase tracking-wider text-foreground-secondary mb-1">Estimated Cost</p>
-                    <p className="text-xl font-bold text-foreground">{formatCurrency(usage.totalEstimatedCost)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-medium uppercase tracking-wider text-foreground-secondary mb-1">Cost Cap</p>
-                    <p className="text-xl font-bold text-foreground">{formatCurrency(usage.monthlyCostCap)}</p>
-                  </div>
-                </div>
-
-                {/* Progress bar */}
-                <div>
-                  <div className="flex items-center justify-between text-xs text-foreground-secondary mb-1.5">
-                    <span>Usage against cap</span>
-                    <span>{costCapPercent.toFixed(1)}%</span>
-                  </div>
-                  <div className="h-2 rounded-full bg-background-subtle overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all duration-500 ${
-                        costCapPercent > 90 ? 'bg-destructive' : costCapPercent > 70 ? 'bg-warning' : 'bg-emerald-500'
-                      }`}
-                      style={{ width: `${costCapPercent}%` }}
-                    />
-                  </div>
-                </div>
+              <div className="rounded-xl border border-border bg-background-card/50 p-5">
+                <p className="text-xs font-medium text-foreground-secondary mb-1">Estimated cost</p>
+                <p className="text-2xl font-semibold tracking-tight text-foreground">{formatCurrency(usage.totalEstimatedCost)}</p>
+              </div>
+              <div className="rounded-xl border border-border bg-background-card/50 p-5">
+                <p className="text-xs font-medium text-foreground-secondary mb-1">Monthly cost cap</p>
+                <p className="text-2xl font-semibold tracking-tight text-foreground">{formatCurrency(usage.monthlyCostCap)}</p>
               </div>
             </div>
 
-            {/* Cost Breakdown by Feature */}
+            {/* Usage vs cap – compact */}
+            <div className="rounded-xl border border-border bg-background-card/50 p-5">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-sm font-medium text-foreground">Usage against cap</span>
+                <span className="text-sm tabular-nums text-foreground-secondary">{costCapPercent.toFixed(1)}%</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-background-subtle overflow-hidden">
+                <div
+                  className={cn(
+                    'h-full rounded-full transition-all duration-500',
+                    costCapPercent > 90 ? 'bg-destructive' : costCapPercent > 70 ? 'bg-amber-500' : 'bg-foreground-secondary/60'
+                  )}
+                  style={{ width: `${Math.min(100, costCapPercent)}%` }}
+                />
+              </div>
+            </div>
+
             {featureEntries.length > 0 && (
-              <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                <div className="px-5 py-3 border-b border-border bg-black/20">
-                  <h4 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                    <Settings className="h-4 w-4 text-foreground-secondary" />
-                    Cost Breakdown by Feature
-                  </h4>
+              <div className="rounded-xl border border-border bg-background-card/50 overflow-hidden">
+                <div className="px-5 py-3 border-b border-border">
+                  <h4 className="text-sm font-medium text-foreground">Cost by feature</h4>
                 </div>
                 <div className="p-5 space-y-3">
                   {featureEntries.map(([feature, data]) => (
-                    <div key={feature} className="space-y-1">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-foreground font-medium capitalize">{feature.replace(/_/g, ' ')}</span>
-                        <span className="text-foreground-secondary">
-                          {formatCurrency(data.cost)} &middot; {data.count} calls
-                        </span>
-                      </div>
-                      <div className="h-1.5 rounded-full bg-background-subtle overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-emerald-500/70 transition-all duration-300"
-                          style={{ width: `${(data.cost / maxFeatureCost) * 100}%` }}
-                        />
-                      </div>
+                    <div key={feature} className="flex items-center justify-between gap-4">
+                      <span className="text-sm text-foreground capitalize">{feature.replace(/_/g, ' ')}</span>
+                      <span className="text-sm text-foreground-secondary tabular-nums">{formatCurrency(data.cost)} · {data.count} calls</span>
                     </div>
                   ))}
                 </div>
               </div>
             )}
 
-            {/* Cost by User */}
             {usage.byUser.length > 0 && (
-              <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                <div className="px-5 py-3 border-b border-border bg-black/20">
-                  <h4 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                    <Users className="h-4 w-4 text-foreground-secondary" />
-                    Cost by User
-                  </h4>
+              <div className="rounded-xl border border-border bg-background-card/50 overflow-hidden">
+                <div className="px-5 py-3 border-b border-border">
+                  <h4 className="text-sm font-medium text-foreground">Cost by user</h4>
                 </div>
-                <table className="w-full">
-                  <thead className="bg-background-card-header border-b border-border">
-                    <tr>
-                      <th className="text-left px-5 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">User</th>
-                      <th className="text-right px-5 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Tokens</th>
-                      <th className="text-right px-5 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Cost</th>
-                      <th className="text-right px-5 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Requests</th>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border">
+                      <th className="text-left px-5 py-2.5 font-medium text-foreground-secondary">User</th>
+                      <th className="text-right px-5 py-2.5 font-medium text-foreground-secondary">Tokens</th>
+                      <th className="text-right px-5 py-2.5 font-medium text-foreground-secondary">Cost</th>
+                      <th className="text-right px-5 py-2.5 font-medium text-foreground-secondary">Requests</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
                     {usage.byUser.map((u) => (
-                      <tr key={u.userId} className="hover:bg-table-hover transition-colors">
-                        <td className="px-5 py-2.5 text-sm text-foreground font-mono">{u.userId.slice(0, 8)}...</td>
-                        <td className="px-5 py-2.5 text-sm text-foreground-secondary text-right">{formatTokens(u.tokens)}</td>
-                        <td className="px-5 py-2.5 text-sm text-foreground text-right">{formatCurrency(u.cost)}</td>
-                        <td className="px-5 py-2.5 text-sm text-foreground-secondary text-right">{u.count}</td>
+                      <tr key={u.userId} className="hover:bg-background-subtle/30">
+                        <td className="px-5 py-2.5 font-mono text-foreground">{u.userId.slice(0, 8)}…</td>
+                        <td className="px-5 py-2.5 text-right text-foreground-secondary tabular-nums">{formatTokens(u.tokens)}</td>
+                        <td className="px-5 py-2.5 text-right text-foreground tabular-nums">{formatCurrency(u.cost)}</td>
+                        <td className="px-5 py-2.5 text-right text-foreground-secondary tabular-nums">{u.count}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -467,195 +629,213 @@ export default function AIConfigurationSection({ organizationId }: AIConfigurati
               </div>
             )}
 
-            {/* Recent Activity Log */}
-            <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-              <div className="px-5 py-3 border-b border-border bg-black/20 flex items-center justify-between">
-                <h4 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                  <Clock className="h-4 w-4 text-foreground-secondary" />
-                  Recent Activity
-                </h4>
+            {/* Recent activity */}
+            <div className="rounded-xl border border-border bg-background-card/50 overflow-hidden">
+              <div className="px-5 py-3 border-b border-border flex items-center justify-between">
+                <h4 className="text-sm font-medium text-foreground">Recent activity</h4>
                 {totalLogsPages > 1 && (
                   <div className="flex items-center gap-1">
                     <button
                       onClick={() => setLogsPage((p) => Math.max(1, p - 1))}
                       disabled={logsPage <= 1 || loadingLogs}
-                      className="h-7 w-7 rounded-md border border-border bg-background-card flex items-center justify-center text-foreground-secondary hover:bg-background-subtle disabled:opacity-40 transition-colors"
+                      className="h-7 w-7 rounded-md border border-border flex items-center justify-center text-foreground-secondary hover:bg-background-subtle hover:text-foreground disabled:opacity-40"
                     >
                       <ChevronLeft className="h-3.5 w-3.5" />
                     </button>
-                    <span className="text-xs text-foreground-secondary px-2">
-                      {logsPage} / {totalLogsPages}
-                    </span>
+                    <span className="text-xs text-foreground-secondary px-1.5">{logsPage}/{totalLogsPages}</span>
                     <button
                       onClick={() => setLogsPage((p) => Math.min(totalLogsPages, p + 1))}
                       disabled={logsPage >= totalLogsPages || loadingLogs}
-                      className="h-7 w-7 rounded-md border border-border bg-background-card flex items-center justify-center text-foreground-secondary hover:bg-background-subtle disabled:opacity-40 transition-colors"
+                      className="h-7 w-7 rounded-md border border-border flex items-center justify-center text-foreground-secondary hover:bg-background-subtle hover:text-foreground disabled:opacity-40"
                     >
                       <ChevronRight className="h-3.5 w-3.5" />
                     </button>
                   </div>
                 )}
               </div>
-
               {loadingLogs ? (
-                <div className="p-8 flex items-center justify-center">
+                <div className="p-10 flex items-center justify-center">
                   <Loader2 className="h-5 w-5 animate-spin text-foreground-secondary" />
                 </div>
               ) : logs.length === 0 ? (
-                <div className="p-8 text-center text-sm text-foreground-secondary">No activity recorded yet.</div>
+                <div className="p-10 flex flex-col items-center justify-center text-center">
+                  <div className="h-12 w-12 rounded-full bg-background-subtle flex items-center justify-center mb-3">
+                    <Clock className="h-6 w-6 text-foreground-secondary" />
+                  </div>
+                  <p className="text-sm font-medium text-foreground">No activity yet</p>
+                  <p className="text-xs text-foreground-secondary mt-1 max-w-[260px]">Usage will appear here once you use Aegis or other AI features.</p>
+                </div>
               ) : (
-                <table className="w-full">
-                  <thead className="bg-background-card-header border-b border-border">
-                    <tr>
-                      <th className="text-left px-5 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Timestamp</th>
-                      <th className="text-left px-5 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Feature</th>
-                      <th className="text-left px-5 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                      <th className="text-right px-5 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Tokens</th>
-                      <th className="text-right px-5 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Cost</th>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border">
+                      <th className="text-left px-5 py-2.5 font-medium text-foreground-secondary">Time</th>
+                      <th className="text-left px-5 py-2.5 font-medium text-foreground-secondary">Feature</th>
+                      <th className="text-left px-5 py-2.5 font-medium text-foreground-secondary">Provider</th>
+                      <th className="text-right px-5 py-2.5 font-medium text-foreground-secondary">Tokens</th>
+                      <th className="text-right px-5 py-2.5 font-medium text-foreground-secondary">Cost</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
                     {logs.map((log, i) => (
-                      <tr key={log.id || i} className="hover:bg-table-hover transition-colors">
-                        <td className="px-5 py-2.5 text-xs text-foreground-secondary whitespace-nowrap">
+                      <tr key={log.id || i} className="hover:bg-background-subtle/30">
+                        <td className="px-5 py-2.5 text-foreground-secondary whitespace-nowrap">
                           {log.created_at ? new Date(log.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
                         </td>
-                        <td className="px-5 py-2.5 text-sm text-foreground capitalize">{(log.feature || '—').replace(/_/g, ' ')}</td>
-                        <td className="px-5 py-2.5 text-sm text-foreground-secondary capitalize">{log.provider || '—'}</td>
-                        <td className="px-5 py-2.5 text-sm text-foreground-secondary text-right">{formatTokens((log.input_tokens || 0) + (log.output_tokens || 0))}</td>
-                        <td className="px-5 py-2.5 text-sm text-foreground text-right">{formatCurrency(log.estimated_cost || 0)}</td>
+                        <td className="px-5 py-2.5 text-foreground capitalize">{(log.feature || '—').replace(/_/g, ' ')}</td>
+                        <td className="px-5 py-2.5 text-foreground-secondary capitalize">{log.provider || '—'}</td>
+                        <td className="px-5 py-2.5 text-right text-foreground-secondary tabular-nums">{formatTokens((log.input_tokens || 0) + (log.output_tokens || 0))}</td>
+                        <td className="px-5 py-2.5 text-right text-foreground tabular-nums">{formatCurrency(log.estimated_cost || 0)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               )}
             </div>
-          </div>
+          </>
         ) : (
-          <div className="rounded-lg border border-border bg-background-card p-8 text-center">
-            <Shield className="h-8 w-8 text-foreground-secondary mx-auto mb-3" />
-            <p className="text-sm text-foreground-secondary">Connect a provider to start tracking AI usage.</p>
+          <div className="rounded-xl border border-border bg-background-card/50 p-12 flex flex-col items-center justify-center text-center">
+            <div className="h-14 w-14 rounded-full bg-background-subtle flex items-center justify-center mb-4">
+              <BarChart3 className="h-7 w-7 text-foreground-secondary" />
+            </div>
+            <p className="text-sm font-medium text-foreground">No usage data</p>
+            <p className="text-xs text-foreground-secondary mt-1 max-w-[280px]">Connect a provider in the Providers tab to start tracking AI usage.</p>
           </div>
         )}
       </div>
+      </>
+      )}
 
-      {/* Connect Provider Modal */}
-      {connectModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={closeConnectModal} />
-          <div className="relative w-full max-w-md rounded-lg border border-border bg-background-card shadow-2xl">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-              <div className="flex items-center gap-3">
-                <div className="h-8 w-8 rounded-lg bg-background-subtle border border-border flex items-center justify-center text-sm font-semibold text-foreground-secondary">
-                  {connectModal.icon}
-                </div>
-                <div>
-                  <h3 className="text-sm font-semibold text-foreground">Connect {connectModal.name}</h3>
-                  <p className="text-xs text-foreground-secondary">Enter your API key to connect</p>
-                </div>
-              </div>
-              <button
-                onClick={closeConnectModal}
-                className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-4">
-              {/* API Key */}
-              <div>
-                <label className="block text-xs font-medium text-foreground-secondary mb-1.5">API Key</label>
-                <div className="relative">
-                  <input
-                    type={showApiKey ? 'text' : 'password'}
-                    value={modalApiKey}
-                    onChange={(e) => setModalApiKey(e.target.value)}
-                    placeholder={`sk-...`}
-                    className="w-full h-9 px-3 pr-9 bg-background border border-border rounded-md text-sm text-foreground placeholder:text-foreground-muted focus:ring-2 focus:ring-primary/50 focus:border-primary outline-none transition-colors"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowApiKey(!showApiKey)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-foreground-secondary hover:text-foreground transition-colors"
-                  >
-                    {showApiKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                  </button>
+      {/* Connect Provider Dialog – Integrations-style */}
+      <Dialog open={!!connectModal} onOpenChange={(open) => { if (!open) closeConnectModal(); }}>
+        <DialogContent hideClose className="sm:max-w-[440px] bg-background p-0 gap-0 overflow-hidden">
+          {connectModal && (
+            <>
+              <div className="px-6 pt-6 pb-4 border-b border-border">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-xl bg-background-subtle flex items-center justify-center [&>svg]:size-5 flex-shrink-0" style={{ color: PROVIDER_COLORS[connectModal.key] }}>
+                    {(() => {
+                      const IconComponent = PROVIDER_ICONS[connectModal.key];
+                      return IconComponent ? <IconComponent size={20} color={PROVIDER_COLORS[connectModal.key]} /> : null;
+                    })()}
+                  </div>
+                  <div>
+                    <DialogTitle>Connect {connectModal.name}</DialogTitle>
+                    <DialogDescription className="mt-1">Enter your API key. Choose model in Your providers after connecting.</DialogDescription>
+                  </div>
                 </div>
               </div>
 
-              {/* Model selector */}
-              <div>
-                <label className="block text-xs font-medium text-foreground-secondary mb-1.5">Preferred Model</label>
-                <select
-                  value={modalModel}
-                  onChange={(e) => setModalModel(e.target.value)}
-                  className="w-full h-9 px-3 bg-background border border-border rounded-md text-sm text-foreground focus:ring-2 focus:ring-primary/50 focus:border-primary outline-none transition-colors appearance-none cursor-pointer"
-                >
-                  {connectModal.models.map((m) => (
-                    <option key={m} value={m}>{formatModelName(m)}</option>
-                  ))}
-                </select>
+              <div className="px-6 py-4 grid gap-4 bg-background">
+                <div className="grid gap-2">
+                  <Label htmlFor="connect-api-key">API Key</Label>
+                  <div className="relative">
+                    <Input
+                      id="connect-api-key"
+                      type={showApiKey ? 'text' : 'password'}
+                      value={modalApiKey}
+                      onChange={(e) => setModalApiKey(e.target.value)}
+                      placeholder="sk-..."
+                      className="pr-9"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowApiKey(!showApiKey)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-foreground-secondary hover:text-foreground"
+                    >
+                      {showApiKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
+                </div>
+                <p className="text-xs text-foreground-secondary">View and manage monthly cost cap in the Usage tab.</p>
               </div>
 
-              {/* Monthly cost cap */}
-              <div>
-                <label className="block text-xs font-medium text-foreground-secondary mb-1.5">Monthly Cost Cap (USD)</label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-foreground-secondary">$</span>
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={modalCostCap}
-                    onChange={(e) => setModalCostCap(e.target.value)}
-                    className="w-full h-9 pl-7 pr-3 bg-background border border-border rounded-md text-sm text-foreground focus:ring-2 focus:ring-primary/50 focus:border-primary outline-none transition-colors"
-                  />
-                </div>
-              </div>
-
-              {/* Test result */}
-              {testResult && (
-                <div className={`flex items-start gap-2 rounded-md p-3 text-xs ${
-                  testResult.success
-                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                    : 'bg-destructive/10 text-destructive border border-destructive/20'
-                }`}>
-                  {testResult.success ? <Check className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" /> : <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />}
-                  <span>{testResult.success ? 'Connection successful. Your API key is valid.' : (testResult.error || 'Connection failed.')}</span>
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-center justify-between px-5 py-4 border-t border-border bg-black/20">
-              <Button
-                onClick={handleTest}
-                disabled={!modalApiKey.trim() || testing}
-                className="bg-background-subtle border border-border text-foreground hover:bg-background-subtle/80 h-8 text-xs"
-              >
-                {testing ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Zap className="h-3.5 w-3.5 mr-1.5" />}
-                Test Connection
-              </Button>
-              <div className="flex items-center gap-2">
-                <Button
-                  onClick={closeConnectModal}
-                  className="bg-transparent border border-border text-foreground-secondary hover:text-foreground hover:bg-background-subtle h-8 text-xs"
-                >
-                  Cancel
-                </Button>
+              <DialogFooter className="px-6 py-4 bg-background">
+                <Button variant="outline" onClick={closeConnectModal}>Cancel</Button>
                 <Button
                   onClick={handleSave}
                   disabled={!modalApiKey.trim() || saving}
-                  className="bg-primary text-primary-foreground border border-primary/50 hover:bg-primary/90 h-8 text-xs"
+                  className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
                 >
                   {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Key className="h-3.5 w-3.5 mr-1.5" />}
                   Connect
                 </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Custom provider Dialog – Integrations-style */}
+      <Dialog open={customModalOpen} onOpenChange={(open) => { if (!open) closeCustomModal(); }}>
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-hidden">
+          <div className="px-6 pt-6 pb-4 border-b border-border">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-xl bg-background-subtle flex items-center justify-center text-violet-400 flex-shrink-0">
+                <SlidersHorizontal className="h-5 w-5" />
+              </div>
+              <div>
+                <DialogTitle>Add custom provider</DialogTitle>
+                <DialogDescription className="mt-1">OpenAI-compatible API. Enter a name, base URL, and API key.</DialogDescription>
               </div>
             </div>
           </div>
-        </div>
-      )}
+
+          <div className="px-6 py-4 grid gap-4 bg-background">
+            <div className="grid gap-2">
+              <Label htmlFor="custom-name">Name</Label>
+              <Input
+                id="custom-name"
+                value={modalDisplayName}
+                onChange={(e) => setModalDisplayName(e.target.value)}
+                placeholder="e.g. Kimi K2"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="custom-api-route">API route</Label>
+              <Input
+                id="custom-api-route"
+                type="url"
+                value={modalApiRoute}
+                onChange={(e) => setModalApiRoute(e.target.value)}
+                placeholder="https://api.example.com/v1"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="custom-api-key">API Key</Label>
+              <div className="relative">
+                <Input
+                  id="custom-api-key"
+                  type={showApiKey ? 'text' : 'password'}
+                  value={modalApiKey}
+                  onChange={(e) => setModalApiKey(e.target.value)}
+                  placeholder="sk-..."
+                  className="pr-9"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-foreground-secondary hover:text-foreground"
+                >
+                  {showApiKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter className="px-6 py-4 bg-background">
+            <Button variant="outline" onClick={closeCustomModal}>Cancel</Button>
+            <Button
+              onClick={handleSaveCustom}
+              disabled={!modalDisplayName.trim() || !modalApiKey.trim() || !modalApiRoute.trim() || saving}
+              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+            >
+              {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Plus className="h-3.5 w-3.5 mr-1.5" />}
+              Add provider
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

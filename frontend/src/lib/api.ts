@@ -107,7 +107,7 @@ export interface OrganizationStatus {
   id: string;
   organization_id: string;
   name: string;
-  color: string;
+  color: string | null;
   rank: number;
   description?: string | null;
   is_system: boolean;
@@ -1093,10 +1093,36 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/ai-providers`);
   },
 
-  async addAIProvider(orgId: string, provider: string, apiKey: string, modelPreference?: string, monthlyCostCap?: number): Promise<AIProviderConfig> {
+  async addAIProvider(
+    orgId: string,
+    provider: string,
+    apiKey: string,
+    opts?: { model_preference?: string; monthly_cost_cap?: number; display_name?: string; api_base_url?: string },
+  ): Promise<AIProviderConfig> {
+    const body: Record<string, unknown> = {
+      provider,
+      api_key: apiKey,
+      model_preference: opts?.model_preference,
+      monthly_cost_cap: opts?.monthly_cost_cap,
+    };
+    if (provider === 'custom' && opts) {
+      if (opts.display_name != null) body.display_name = opts.display_name;
+      if (opts.api_base_url != null) body.api_base_url = opts.api_base_url;
+    }
     return fetchWithAuth(`/api/organizations/${orgId}/ai-providers`, {
       method: 'POST',
-      body: JSON.stringify({ provider, api_key: apiKey, model_preference: modelPreference, monthly_cost_cap: monthlyCostCap }),
+      body: JSON.stringify(body),
+    });
+  },
+
+  async updateAIProvider(
+    orgId: string,
+    providerId: string,
+    updates: { model_preference?: string | null; display_name?: string | null; api_base_url?: string | null },
+  ): Promise<AIProviderConfig> {
+    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers/${providerId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
     });
   },
 
@@ -1104,10 +1130,18 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/ai-providers/${providerId}`, { method: 'DELETE' });
   },
 
-  async testAIProvider(orgId: string, provider: string, apiKey: string, model?: string): Promise<{ success: boolean; model?: string; error?: string; code?: string }> {
+  async testAIProvider(
+    orgId: string,
+    provider: string,
+    apiKey: string,
+    opts?: { model?: string; api_base_url?: string },
+  ): Promise<{ success: boolean; model?: string; error?: string; code?: string }> {
+    const body: Record<string, unknown> = { provider, api_key: apiKey };
+    if (opts?.model != null) body.model = opts.model;
+    if (provider === 'custom' && opts?.api_base_url != null) body.api_base_url = opts.api_base_url;
     return fetchWithAuth(`/api/organizations/${orgId}/ai-providers/test`, {
       method: 'POST',
-      body: JSON.stringify({ provider, api_key: apiKey, model }),
+      body: JSON.stringify(body),
     });
   },
 
@@ -2279,7 +2313,7 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/statuses`);
   },
 
-  async createOrganizationStatus(orgId: string, data: { name: string; color: string; description?: string; is_passing: boolean; rank: number }): Promise<OrganizationStatus> {
+  async createOrganizationStatus(orgId: string, data: { name: string; color: string | null; description?: string; is_passing: boolean; rank: number }): Promise<OrganizationStatus> {
     return fetchWithAuth(`/api/organizations/${orgId}/statuses`, {
       method: 'POST',
       body: JSON.stringify(data),
@@ -2298,10 +2332,11 @@ export const api = {
   },
 
   async reorderOrganizationStatuses(orgId: string, order: { id: string; rank: number }[]): Promise<OrganizationStatus[]> {
-    return fetchWithAuth(`/api/organizations/${orgId}/statuses/reorder`, {
-      method: 'PUT',
-      body: JSON.stringify({ order }),
-    });
+    const res = await fetchWithAuth(
+      `/api/organizations/${orgId}/statuses/reorder`,
+      { method: 'PUT', body: JSON.stringify({ order }) }
+    ) as { statuses?: OrganizationStatus[] } | OrganizationStatus[];
+    return Array.isArray(res) ? res : (res?.statuses ?? []);
   },
 
   // ───── Phase 4: Asset Tiers ─────
@@ -2383,6 +2418,10 @@ export const api = {
 
   async resumeSlaPolicies(orgId: string): Promise<{ sla_paused_at: string | null }> {
     return fetchWithAuth(`/api/organizations/${orgId}/sla-policies/resume`, { method: 'POST' });
+  },
+
+  async disableSlaPolicies(orgId: string): Promise<void> {
+    return fetchWithAuth(`/api/organizations/${orgId}/sla-policies/disable`, { method: 'POST' });
   },
 
   async getSlaCompliance(orgId: string, timeRange?: string): Promise<SlaComplianceResponse> {
@@ -3207,6 +3246,8 @@ export interface OrganizationPolicyChange {
   new_code: string;
   message: string;
   created_at: string;
+  author_display_name?: string | null;
+  author_avatar_url?: string | null;
 }
 
 export interface SlaPolicy {
@@ -3281,6 +3322,7 @@ export interface SlaPolicyChange {
   previous_values: Record<string, unknown> | null;
   new_values: Record<string, unknown> | null;
   created_at: string;
+  changed_by_user?: { full_name: string | null };
 }
 
 export interface ProjectPolicyChange {
@@ -3378,11 +3420,13 @@ export interface AegisInboxMessage {
 
 export interface AIProviderConfig {
   id: string;
-  provider: 'openai' | 'anthropic' | 'google';
+  provider: 'openai' | 'anthropic' | 'google' | 'custom';
   model_preference: string | null;
   is_default: boolean;
   monthly_cost_cap: number;
   connected: boolean;
+  display_name?: string | null;
+  api_base_url?: string | null;
   created_at?: string;
   updated_at?: string;
 }

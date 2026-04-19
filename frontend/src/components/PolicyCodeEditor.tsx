@@ -249,15 +249,15 @@ function cleanupDisposables() {
 }
 
 const LINE_HEIGHT = 20;
-const PADDING = 20;
+const PADDING_TOP = 8;
+const PADDING_BOTTOM = 2;
 const MIN_LINES = 1;
-const MAX_LINES = 28;
 
+/** When fitContent is true, height grows/shrinks with content (no scroll). Add one line buffer so Monaco never shows scrollbar. */
 function computeFitHeight(value: string): number {
   const lineCount = Math.max(1, (value.split('\n').length || 1));
   const lines = Math.max(MIN_LINES, lineCount);
-  const cappedLines = Math.min(MAX_LINES, lines);
-  return cappedLines * LINE_HEIGHT + PADDING;
+  return (lines + 1) * LINE_HEIGHT + PADDING_TOP + PADDING_BOTTOM;
 }
 
 interface PolicyCodeEditorProps {
@@ -550,6 +550,7 @@ export function PolicyCodeEditor({
           theme: 'deptex',
           minimap: { enabled: false },
           fontSize: 13,
+          lineHeight: LINE_HEIGHT,
           fontFamily: "Consolas, 'Courier New', monospace",
           lineNumbers: 'on',
           lineNumbersMinChars: 2,
@@ -557,7 +558,7 @@ export function PolicyCodeEditor({
           automaticLayout: true,
           tabSize: 2,
           wordWrap: 'off',
-          padding: { top: 10, bottom: 10 },
+          padding: { top: PADDING_TOP, bottom: PADDING_BOTTOM },
         }}
       />
     </div>

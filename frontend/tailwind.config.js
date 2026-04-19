@@ -188,6 +188,20 @@ export default {
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
       },
+      keyframes: {
+        "pulse-glow": {
+          "0%, 100%": { boxShadow: "0 0 0 0 rgba(2, 82, 48, 0.18)" },
+          "50%": { boxShadow: "0 0 0 12px rgba(2, 82, 48, 0)" },
+        },
+        "node-signal": {
+          "0%": { transform: "scale(1)", opacity: "0.8" },
+          "100%": { transform: "scale(4)", opacity: "0" },
+        },
+      },
+      animation: {
+        "pulse-glow": "pulse-glow 2.5s ease-in-out infinite",
+        "node-signal": "node-signal 0.8s ease-out 1 forwards",
+      },
       boxShadow: {
         1: "0px 1px 3px rgba(0, 0, 0, 0.08)",
         2: "0px 1px 4px rgba(0, 0, 0, 0.12)",

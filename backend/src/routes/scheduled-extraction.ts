@@ -6,8 +6,6 @@
 
 import express from 'express';
 import { supabase } from '../lib/supabase';
-import { getEeModulePath } from '../lib/ee-loader';
-
 const router = express.Router();
 
 const MAX_JOBS_PER_INVOCATION = 20;
@@ -85,7 +83,7 @@ router.post('/scheduled-extraction', async (req, res) => {
         }
 
         try {
-          const { queueExtractionJob } = await import(getEeModulePath('redis'));
+          const { queueExtractionJob } = await import('../lib/redis');
           const { data: repo } = await supabase
             .from('project_repositories')
             .select('*')

@@ -3,22 +3,22 @@ import app from '../../index';
 import { supabase, queryBuilder, setTableResponse, clearTableRegistry } from '../../test/mocks/supabaseSingleton';
 
 jest.mock('../../lib/supabase', () => ({ ...require('../../test/mocks/supabaseSingleton'), createUserClient: jest.fn() }));
-jest.mock('../../../../ee/backend/lib/activities', () => ({
+jest.mock('../../lib/activities', () => ({
   createActivity: jest.fn(),
 }));
 
-jest.mock('../../../../ee/backend/lib/email', () => ({
+jest.mock('../../lib/email', () => ({
   sendInvitationEmail: jest.fn(),
 }));
 
 // Mock OpenAI
-jest.mock('../../../../ee/backend/lib/openai', () => ({
+jest.mock('../../lib/openai', () => ({
   getOpenAIClient: jest.fn().mockReturnValue({
     chat: { completions: { create: jest.fn() } }
   }),
 }));
 
-jest.mock('../../../../ee/backend/lib/policy-seed', () => ({
+jest.mock('../../lib/policy-seed', () => ({
   seedOrganizationPolicyDefaults: jest.fn().mockResolvedValue(undefined),
 }));
 

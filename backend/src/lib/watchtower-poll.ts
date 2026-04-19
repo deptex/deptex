@@ -172,14 +172,13 @@ export async function runDependencyRefresh(): Promise<{ processed: number; error
     console.error('[watchtower-poll] GHSA sync error:', err?.message);
   }
 
-  // Start watchtower machine if we inserted new-version jobs (EE only; path is runtime so tsc does not compile ee/)
+  // Start watchtower machine if we inserted new-version jobs
   if (newVersionJobsInserted > 0) {
     try {
-      const { getEeModulePath } = await import('./ee-loader');
-      const { startWatchtowerMachine } = require(getEeModulePath('fly-machines'));
+      const { startWatchtowerMachine } = require('./fly-machines');
       await startWatchtowerMachine();
     } catch {
-      // fly-machines not available in CE mode
+      // fly-machines not available
     }
   }
 
@@ -217,7 +216,7 @@ export async function runPollSweep(): Promise<{ packagesPolled: number; jobsQueu
 
   // Start watchtower machine once after all jobs are inserted
   try {
-    const { startWatchtowerMachine } = require('../../../ee/backend/lib/fly-machines');
+    const { startWatchtowerMachine } = require('../lib/fly-machines');
     await startWatchtowerMachine();
   } catch {
     // fly-machines not available in CE mode

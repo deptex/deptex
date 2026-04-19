@@ -367,7 +367,7 @@ export function PolicyAIAssistant({
     <div
       className={`flex flex-col min-h-0 flex-1 overflow-hidden ${
         isEdge
-          ? 'bg-background-card-header'
+          ? 'bg-background'
           : 'w-[26rem] min-w-[26rem] flex-shrink-0 self-stretch ml-4 bg-background-card border border-border rounded-lg'
       }`}
     >

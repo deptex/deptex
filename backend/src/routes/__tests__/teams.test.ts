@@ -3,7 +3,7 @@ import app from '../../index';
 import { supabase, queryBuilder, setTableResponse, clearTableRegistry } from '../../test/mocks/supabaseSingleton';
 
 jest.mock('../../lib/supabase', () => ({ ...require('../../test/mocks/supabaseSingleton'), createUserClient: jest.fn() }));
-jest.mock('../../../../ee/backend/lib/activities', () => ({
+jest.mock('../../lib/activities', () => ({
   createActivity: jest.fn(),
 }));
 

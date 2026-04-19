@@ -16,6 +16,7 @@ import {
 } from '../../components/ui/dropdown-menu';
 import { Button } from '../../components/ui/button';
 import { useAuth } from '../../contexts/AuthContext';
+import { usePlan, TIER_DISPLAY } from '../../contexts/PlanContext';
 import { RolePermissions } from '../../lib/api';
 
 interface OrganizationContextType {
@@ -118,6 +119,7 @@ const ITEMS_PER_PAGE = 30;
 export default function AuditLogsSection() {
     const { id } = useParams<{ id: string }>();
     const navigate = useNavigate();
+    const gate = usePlan().getPlanGate('audit_logs');
     const { user } = useAuth();
     const { organization } = useOutletContext<OrganizationContextType>();
 
@@ -475,10 +477,10 @@ export default function AuditLogsSection() {
                             View complete audit history of organization changes, member actions, and security events.
                         </p>
                         <Button
-                            onClick={() => id && navigate(`/organizations/${id}/settings/plan`)}
+                            onClick={() => navigate(gate.upgradeUrl || (id ? `/organizations/${id}/settings/plan` : '#'))}
                             className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm px-4"
                         >
-                            Upgrade to Pro
+                            Upgrade to {gate.requiredTier === 'free' ? 'Team' : TIER_DISPLAY[gate.requiredTier]}
                         </Button>
                     </div>
                 </div>

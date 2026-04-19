@@ -1,11 +1,12 @@
 import { Link } from "react-router-dom";
-import { Github, Twitter } from "lucide-react";
+
+const GITHUB_REPO_URL = "https://github.com/deptex/deptex";
 
 export default function Footer() {
   return (
     <footer className="border-t border-border bg-background">
       <div className="container mx-auto px-4 py-12">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-8 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 mb-8">
           {/* Branding */}
           <div className="lg:col-span-1">
             <Link to="/" className="flex items-center gap-2 mb-4">
@@ -16,48 +17,66 @@ export default function Footer() {
             </p>
             <div className="flex gap-4">
               <a
-                href="https://twitter.com"
+                href={GITHUB_REPO_URL}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-foreground-secondary hover:text-foreground transition-colors"
-                aria-label="Twitter"
+                aria-label="Deptex on GitHub"
               >
-                <Twitter className="h-5 w-5" />
-              </a>
-              <a
-                href="https://github.com"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-foreground-secondary hover:text-foreground transition-colors"
-                aria-label="GitHub"
-              >
-                <Github className="h-5 w-5" />
+                <img src="/images/integrations/github.png" alt="" className="h-5 w-5 rounded-full" aria-hidden />
               </a>
             </div>
           </div>
 
-          {/* Product */}
+          {/* Product — same items and labels as NavBar Product dropdown */}
           <div>
             <h3 className="text-sm font-semibold text-foreground mb-4">Product</h3>
             <ul className="space-y-3">
               <li>
-                <Link to="/product/tracking" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  Dependency Tracking
+                <Link to="/platform-features/ai-security-agent" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
+                  AI Security Agent
                 </Link>
               </li>
               <li>
-                <Link to="/product/policy" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  Policy Enforcement
+                <Link to="/platform-features/vulnerability-intelligence" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
+                  Vulnerability Intelligence
                 </Link>
               </li>
               <li>
-                <Link to="/product/ai" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  AI Remediation
+                <Link to="/platform-features/customizable-compliance" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
+                  Customizable Compliance
                 </Link>
               </li>
               <li>
-                <Link to="/product/sbom" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  SBOM Generation
+                <Link to="/platform-features/customizable-notifications" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
+                  Customizable Notifications
+                </Link>
+              </li>
+              <li>
+                <Link to="/platform-features/advanced-upstream-insights" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
+                  Advanced Upstream Insights
+                </Link>
+              </li>
+            </ul>
+          </div>
+
+          {/* Resources — Docs, Open Source, Help, Pricing */}
+          <div>
+            <h3 className="text-sm font-semibold text-foreground mb-4">Resources</h3>
+            <ul className="space-y-3">
+              <li>
+                <Link to="/docs" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
+                  Docs
+                </Link>
+              </li>
+              <li>
+                <Link to="/open-source" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
+                  Open Source
+                </Link>
+              </li>
+              <li>
+                <Link to="/support" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
+                  Help
                 </Link>
               </li>
               <li>
@@ -68,104 +87,36 @@ export default function Footer() {
             </ul>
           </div>
 
-          {/* Solutions */}
+          {/* Legal — terms, privacy, security */}
           <div>
-            <h3 className="text-sm font-semibold text-foreground mb-4">Solutions</h3>
+            <h3 className="text-sm font-semibold text-foreground mb-4">Legal</h3>
             <ul className="space-y-3">
               <li>
-                <Link to="/solutions/enterprise" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  Enterprise
+                <Link to="/docs/terms" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
+                  Terms of Service
                 </Link>
               </li>
               <li>
-                <Link to="/solutions/startups" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  Startups
-                </Link>
-              </li>
-              <li>
-                <Link to="/solutions/compliance" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  Compliance
-                </Link>
-              </li>
-            </ul>
-          </div>
-
-          {/* Developers */}
-          <div>
-            <h3 className="text-sm font-semibold text-foreground mb-4">Developers</h3>
-            <ul className="space-y-3">
-              <li>
-                <Link to="/docs" target="_blank" rel="noopener noreferrer" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  Documentation
-                </Link>
-              </li>
-              <li>
-                <Link to="/developers/github" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  GitHub Integration
-                </Link>
-              </li>
-              <li>
-                <Link to="/developers/cli" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  CLI Tools
-                </Link>
-              </li>
-              <li>
-                <Link to="/developers/webhooks" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  Webhooks
-                </Link>
-              </li>
-            </ul>
-          </div>
-
-          {/* Company */}
-          <div>
-            <h3 className="text-sm font-semibold text-foreground mb-4">Company</h3>
-            <ul className="space-y-3">
-              <li>
-                <Link to="/about" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  About
-                </Link>
-              </li>
-              <li>
-                <Link to="/blog" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  Blog
-                </Link>
-              </li>
-              <li>
-                <Link to="/careers" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  Careers
-                </Link>
-              </li>
-              <li>
-                <Link to="/privacy" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
+                <Link to="/docs/privacy" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
                   Privacy Policy
                 </Link>
               </li>
               <li>
-                <Link to="/terms" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  Terms of Service
+                <Link to="/docs/security" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
+                  Security
                 </Link>
               </li>
             </ul>
           </div>
         </div>
 
-        {/* Bottom Bar */}
-        <div className="border-t border-border pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
+        {/* Bottom bar — copyright only; legal links are in Legal column above */}
+        <div className="border-t border-border pt-8">
           <p className="text-sm text-foreground-secondary">
             © {new Date().getFullYear()} Deptex. All rights reserved.
           </p>
-          <div className="flex gap-6">
-            <Link to="/security" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-              Security
-            </Link>
-            <Link to="/status" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-              Status
-            </Link>
-          </div>
         </div>
       </div>
     </footer>
   );
 }
-

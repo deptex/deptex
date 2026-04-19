@@ -9,19 +9,22 @@ import {
   Clock,
   AlertCircle,
   Inbox,
+  Check,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '../../components/ui/select';
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../../components/ui/dropdown-menu';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
 import { cn } from '../../lib/utils';
+import { api, type CiCdConnection } from '../../lib/api';
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 interface NotificationHistorySectionProps {
   organizationId: string;
@@ -56,17 +59,6 @@ interface HistoryResponse {
   perPage: number;
 }
 
-const EVENT_TYPES = [
-  'vulnerability_discovered',
-  'malicious_package_detected',
-  'dependency_added',
-  'extraction_completed',
-  'extraction_failed',
-  'policy_violation',
-  'status_changed',
-  'pr_check_completed',
-] as const;
-
 const EVENT_TYPE_LABELS: Record<string, string> = {
   vulnerability_discovered: 'Vulnerability Discovered',
   malicious_package_detected: 'Malicious Package',
@@ -89,6 +81,42 @@ const EVENT_TYPE_COLORS: Record<string, string> = {
   pr_check_completed: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20',
 };
 
+/** Notification-capable providers (match NotificationRulesSection) */
+const DESTINATION_PROVIDERS = ['slack', 'discord', 'jira', 'linear', 'asana', 'pagerduty', 'custom_notification', 'custom_ticketing', 'email'] as const;
+
+function getProviderLabel(conn: CiCdConnection): string {
+  const isCustom = conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing';
+  if (isCustom) return 'Custom';
+  if (conn.provider === 'email') return 'Email';
+  if (conn.provider === 'slack') return 'Slack';
+  if (conn.provider === 'discord') return 'Discord';
+  if (conn.provider === 'jira') return conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira';
+  if (conn.provider === 'linear') return 'Linear';
+  if (conn.provider === 'asana') return 'Asana';
+  if (conn.provider === 'pagerduty') return 'PagerDuty';
+  return conn.provider;
+}
+
+function getConnectionName(conn: CiCdConnection): string {
+  const isCustom = conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing';
+  const isEmail = conn.provider === 'email';
+  if (isCustom) return conn.metadata?.custom_name || conn.display_name || (conn.metadata?.webhook_url ? conn.metadata.webhook_url.replace(/^https?:\/\//, '').slice(0, 45) : 'Webhook');
+  if (isEmail) return conn.metadata?.email || conn.display_name || 'Email';
+  if (conn.provider === 'slack') {
+    const channelRaw = conn.metadata?.channel || conn.metadata?.incoming_webhook?.channel || null;
+    const channel = channelRaw ? (channelRaw.startsWith('#') ? channelRaw : `#${channelRaw}`) : null;
+    const workspace = conn.display_name || conn.metadata?.team_name || 'Slack Workspace';
+    return channel ? `${workspace} · ${channel}` : workspace;
+  }
+  if (conn.provider === 'discord') return conn.display_name !== 'Discord Server' ? (conn.display_name || '') : (conn.metadata?.guild_name || 'Discord Server');
+  if (conn.provider === 'jira' || conn.provider === 'linear' || conn.provider === 'asana') return conn.display_name || 'Connected';
+  return conn.display_name || conn.provider;
+}
+
+function getConnectionLabel(conn: CiCdConnection): string {
+  return `${getProviderLabel(conn)} · ${getConnectionName(conn)}`;
+}
+
 const STATUS_STYLES: Record<string, string> = {
   delivered: 'bg-green-500/10 text-green-400 border-green-500/20',
   failed: 'bg-red-500/10 text-red-400 border-red-500/20',
@@ -106,18 +134,6 @@ const STATUS_LABELS: Record<string, string> = {
   dry_run: 'Dry Run',
   pending: 'Pending',
 };
-
-const DESTINATION_TYPES = [
-  'slack',
-  'discord',
-  'email',
-  'jira',
-  'linear',
-  'asana',
-  'custom_notification',
-  'custom_ticketing',
-  'pagerduty',
-] as const;
 
 const DESTINATION_LABELS: Record<string, string> = {
   slack: 'Slack',
@@ -178,14 +194,26 @@ export default function NotificationHistorySection({ organizationId }: Notificat
   const [loading, setLoading] = useState(true);
   const [retrying, setRetrying] = useState<string | null>(null);
 
-  const [eventType, setEventType] = useState('all');
-  const [destType, setDestType] = useState('all');
+  const [connections, setConnections] = useState<CiCdConnection[]>([]);
+  const [destId, setDestId] = useState<string>('all');
   const [status, setStatus] = useState('all');
   const [timeframe, setTimeframe] = useState<Timeframe>('7d');
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
+  const destinationConnections = connections.filter((c) =>
+    DESTINATION_PROVIDERS.includes(c.provider as (typeof DESTINATION_PROVIDERS)[number])
+  );
+
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
+
+  useEffect(() => {
+    if (!organizationId) {
+      setConnections([]);
+      return;
+    }
+    api.getOrganizationConnections(organizationId).then(setConnections).catch(() => setConnections([]));
+  }, [organizationId]);
 
   const fetchHistory = useCallback(async () => {
     if (!organizationId || !session?.access_token) return;
@@ -196,27 +224,35 @@ export default function NotificationHistorySection({ organizationId }: Notificat
         per_page: String(PER_PAGE),
         timeframe,
       });
-      if (eventType !== 'all') params.set('event_type', eventType);
-      if (destType !== 'all') params.set('destination_type', destType);
+      if (destId !== 'all') params.set('destination_id', destId);
       if (status !== 'all') params.set('status', status);
 
       const res = await fetch(
-        `/api/organizations/${organizationId}/notification-history?${params.toString()}`,
+        `${API_BASE_URL}/api/organizations/${organizationId}/notification-history?${params.toString()}`,
         { headers: { Authorization: `Bearer ${session.access_token}` } }
       );
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(err.error || `HTTP ${res.status}`);
+        const text = await res.text();
+        let errMessage = `HTTP ${res.status}`;
+        try {
+          const err = JSON.parse(text);
+          if (err?.error) errMessage = err.error;
+        } catch {
+          if (text.startsWith('<!') || text.startsWith('<!doctype')) {
+            errMessage = 'Server returned an unexpected response. Is the backend running and reachable?';
+          }
+        }
+        throw new Error(errMessage);
       }
       const data: HistoryResponse = await res.json();
       setDeliveries(data.deliveries);
       setTotal(data.total);
     } catch (err: any) {
-      toast({ title: 'Failed to load history', description: err.message, variant: 'destructive' });
+      toast({ title: 'Failed to load history', description: err?.message ?? 'Unknown error', variant: 'destructive' });
     } finally {
       setLoading(false);
     }
-  }, [organizationId, session?.access_token, page, eventType, destType, status, timeframe, toast]);
+  }, [organizationId, session?.access_token, page, destId, status, timeframe, toast]);
 
   useEffect(() => {
     fetchHistory();
@@ -224,14 +260,14 @@ export default function NotificationHistorySection({ organizationId }: Notificat
 
   useEffect(() => {
     setPage(1);
-  }, [eventType, destType, status, timeframe]);
+  }, [destId, status, timeframe]);
 
   const handleRetry = async (deliveryId: string) => {
     if (!session?.access_token) return;
     setRetrying(deliveryId);
     try {
       const res = await fetch(
-        `/api/organizations/${organizationId}/notification-history/${deliveryId}/retry`,
+        `${API_BASE_URL}/api/organizations/${organizationId}/notification-history/${deliveryId}/retry`,
         {
           method: 'POST',
           headers: { Authorization: `Bearer ${session.access_token}` },
@@ -250,86 +286,101 @@ export default function NotificationHistorySection({ organizationId }: Notificat
     }
   };
 
+  const timeframeLabel = timeframe === '24h' ? '24 hours' : timeframe === '7d' ? '7 days' : '30 days';
+
   return (
     <div className="space-y-4">
-      {/* Filters */}
+      {/* Filters - Destinations = org integrations; no events dropdown */}
       <div className="flex flex-wrap items-center gap-3">
-        <Select value={eventType} onValueChange={setEventType}>
-          <SelectTrigger className="w-[200px] h-8 text-xs">
-            <SelectValue placeholder="Event type" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Events</SelectItem>
-            {EVENT_TYPES.map((t) => (
-              <SelectItem key={t} value={t}>
-                {EVENT_TYPE_LABELS[t] ?? t}
-              </SelectItem>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="text-xs gap-1.5" disabled={destinationConnections.length === 0}>
+              {destinationConnections.length === 0
+                ? 'No destinations'
+                : destId === 'all'
+                  ? 'All Destinations'
+                  : (() => {
+                      const conn = destinationConnections.find((c) => c.id === destId);
+                      return conn ? getConnectionLabel(conn) : 'All Destinations';
+                    })()}
+              <ChevronDown className="h-3 w-3 opacity-50" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuItem onClick={() => setDestId('all')}>
+              All Destinations
+              {destId === 'all' && <Check className="h-3.5 w-3.5 ml-auto" />}
+            </DropdownMenuItem>
+            {destinationConnections.map((conn) => (
+              <DropdownMenuItem key={conn.id} onClick={() => setDestId(conn.id)}>
+                {getConnectionLabel(conn)}
+                {destId === conn.id && <Check className="h-3.5 w-3.5 ml-auto" />}
+              </DropdownMenuItem>
             ))}
-          </SelectContent>
-        </Select>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-        <Select value={destType} onValueChange={setDestType}>
-          <SelectTrigger className="w-[180px] h-8 text-xs">
-            <SelectValue placeholder="Destination" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Destinations</SelectItem>
-            {DESTINATION_TYPES.map((d) => (
-              <SelectItem key={d} value={d}>
-                {DESTINATION_LABELS[d] ?? d}
-              </SelectItem>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="text-xs gap-1.5">
+              {status === 'all' ? 'All Statuses' : (STATUS_LABELS[status] ?? status)}
+              <ChevronDown className="h-3 w-3 opacity-50" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuItem onClick={() => setStatus('all')}>
+              All Statuses
+              {status === 'all' && <Check className="h-3.5 w-3.5 ml-auto" />}
+            </DropdownMenuItem>
+            {(['delivered', 'failed', 'rate_limited', 'skipped', 'pending', 'dry_run'] as const).map((s) => (
+              <DropdownMenuItem key={s} onClick={() => setStatus(s)}>
+                {STATUS_LABELS[s]}
+                {status === s && <Check className="h-3.5 w-3.5 ml-auto" />}
+              </DropdownMenuItem>
             ))}
-          </SelectContent>
-        </Select>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-        <Select value={status} onValueChange={setStatus}>
-          <SelectTrigger className="w-[160px] h-8 text-xs">
-            <SelectValue placeholder="Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Statuses</SelectItem>
-            <SelectItem value="delivered">Delivered</SelectItem>
-            <SelectItem value="failed">Failed</SelectItem>
-            <SelectItem value="rate_limited">Rate Limited</SelectItem>
-            <SelectItem value="skipped">Skipped</SelectItem>
-            <SelectItem value="pending">Pending</SelectItem>
-            <SelectItem value="dry_run">Dry Run</SelectItem>
-          </SelectContent>
-        </Select>
-
-        {/* Timeframe toggle */}
-        <div className="flex items-center rounded-md border border-border bg-background-card overflow-hidden ml-auto">
-          {(['24h', '7d', '30d'] as Timeframe[]).map((t) => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => setTimeframe(t)}
-              className={cn(
-                'px-3 py-1.5 text-xs font-medium transition-colors',
-                timeframe === t
-                  ? 'bg-foreground text-background'
-                  : 'text-foreground-secondary hover:text-foreground hover:bg-background-subtle'
-              )}
-            >
-              {t.toUpperCase()}
-            </button>
-          ))}
-        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="text-xs gap-1.5 ml-auto">
+              {timeframeLabel}
+              <ChevronDown className="h-3 w-3 opacity-50" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {(['24h', '7d', '30d'] as Timeframe[]).map((t) => (
+              <DropdownMenuItem key={t} onClick={() => setTimeframe(t)}>
+                {t === '24h' ? '24 hours' : t === '7d' ? '7 days' : '30 days'}
+                {timeframe === t && <Check className="h-3.5 w-3.5 ml-auto" />}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
-      {/* Table */}
+      {/* Table - table-fixed + colgroup so columns don't shift when loading */}
       <div className="bg-background-card border border-border rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full table-fixed">
+            <colgroup>
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '16%' }} />
+              <col style={{ width: '16%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '12%' }} />
+            </colgroup>
             <thead className="bg-background-card-header border-b border-border">
               <tr>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[14%]">Time</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[18%]">Event</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[14%]">Project</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[16%]">Rule</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[16%]">Destination</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[12%]">Status</th>
-                <th className="text-right px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[10%]" />
+                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Time</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Event</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Rule</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Destination</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</th>
+                <th className="text-right px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider" />
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -352,10 +403,13 @@ export default function NotificationHistorySection({ organizationId }: Notificat
               {!loading && deliveries.length === 0 && (
                 <tr>
                   <td colSpan={7} className="px-4 py-12 text-center">
-                    <div className="flex flex-col items-center gap-2">
-                      <Inbox className="h-8 w-8 text-foreground-secondary" />
-                      <span className="text-sm text-foreground-secondary">No delivery history found</span>
-                      <span className="text-xs text-foreground-muted">Notifications will appear here once rules are triggered.</span>
+                    <div className="flex flex-col items-center gap-4 text-center max-w-md mx-auto">
+                      <div className="rounded-full bg-background-card/80 border border-border p-5 shadow-sm ring-1 ring-foreground/[0.04]">
+                        <Inbox className="h-10 w-10 text-foreground-secondary" aria-hidden />
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-base font-medium text-foreground-secondary">No delivery history found</p>
+                      </div>
                     </div>
                   </td>
                 </tr>
@@ -377,34 +431,34 @@ export default function NotificationHistorySection({ organizationId }: Notificat
                           className="w-full flex items-center px-4 py-3 text-left hover:bg-table-hover transition-colors"
                         >
                           {/* Time */}
-                          <div className="w-[14%] flex items-center gap-1.5 pr-2">
+                          <div className="w-[12%] flex items-center gap-1.5 pr-2 min-w-0 overflow-hidden flex-shrink-0">
                             <Clock className="h-3.5 w-3.5 text-foreground-secondary flex-shrink-0" />
-                            <span className="text-xs text-foreground-secondary whitespace-nowrap" title={new Date(d.created_at).toLocaleString()}>
+                            <span className="text-xs text-foreground-secondary whitespace-nowrap truncate" title={new Date(d.created_at).toLocaleString()}>
                               {relativeTime(d.created_at)}
                             </span>
                           </div>
 
                           {/* Event type */}
-                          <div className="w-[18%] pr-2">
-                            <Badge className={cn('text-[11px] whitespace-nowrap', EVENT_TYPE_COLORS[d.event_type] ?? 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20')}>
+                          <div className="w-[18%] pr-2 min-w-0 overflow-hidden flex-shrink-0">
+                            <Badge className={cn('text-[11px] whitespace-nowrap truncate max-w-full', EVENT_TYPE_COLORS[d.event_type] ?? 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20')}>
                               {EVENT_TYPE_LABELS[d.event_type] ?? d.event_type.replace(/_/g, ' ')}
                             </Badge>
                           </div>
 
                           {/* Project */}
-                          <div className="w-[14%] pr-2">
+                          <div className="w-[14%] pr-2 min-w-0 overflow-hidden flex-shrink-0">
                             <span className="text-sm text-foreground truncate block">
                               {d.project_name ?? '—'}
                             </span>
                           </div>
 
                           {/* Rule name */}
-                          <div className="w-[16%] pr-2">
+                          <div className="w-[16%] pr-2 min-w-0 overflow-hidden flex-shrink-0">
                             <span className="text-sm text-foreground truncate block">{d.rule_name}</span>
                           </div>
 
                           {/* Destination */}
-                          <div className="w-[16%] pr-2">
+                          <div className="w-[16%] pr-2 min-w-0 overflow-hidden flex-shrink-0">
                             <div className="flex items-center gap-1.5 min-w-0">
                               <DestinationIcon type={d.destination_type} />
                               <span className="text-sm text-foreground truncate">
@@ -414,14 +468,14 @@ export default function NotificationHistorySection({ organizationId }: Notificat
                           </div>
 
                           {/* Status */}
-                          <div className="w-[12%] pr-2">
+                          <div className="w-[12%] pr-2 min-w-0 overflow-hidden flex-shrink-0">
                             <Badge className={cn('text-[11px]', STATUS_STYLES[d.status] ?? STATUS_STYLES.pending)}>
                               {STATUS_LABELS[d.status] ?? d.status}
                             </Badge>
                           </div>
 
                           {/* Expand indicator */}
-                          <div className="w-[10%] flex items-center justify-end gap-1">
+                          <div className="flex items-center justify-end gap-1 flex-shrink-0">
                             {d.status === 'failed' && (
                               <Button
                                 variant="ghost"

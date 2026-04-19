@@ -44,9 +44,9 @@ todos:
   - id: phase-10b-watchtower
     content: "Phase 10B: Watchtower Refactor - Per-project activation (direct deps only), first-class project tab (packages security table + aggregated commits), remove dependency-level Watchtower tab, org-level Watchtower page with project-based sidebar, auto-sync watchlist on extraction, manage_watchtower org permission, PR guardrails integration (block unsafe upgrades), Watchtower docs page, notification preset, watchtower-poller cloud deployment (QStash cron or Fly.io)"
     status: pending
-  - id: phase-11-merged
-    content: "Phase 11: MERGED INTO PHASE 7B - All advanced LLM features (AI dep review, vuln explanation, policy assistant, smart upgrades, security reports, anomaly detection) are now Aegis capabilities in Phase 7B. This phase is retired."
-    status: cancelled
+  - id: phase-11-landing
+    content: "Phase 11: Landing Page & Marketing Site Overhaul — app-style header, remove fake content (company banner, feature cards), Get Demo page, product showcase with real assets, accurate Footer/NavBar/Open Source links and copy"
+    status: in_progress
   - id: phase-12-docs
     content: "Phase 12: Documentation Overhaul - Update 4 existing docs (Policies, Notifications, Integrations, Introduction), create 7 new docs (Vulnerabilities, Projects, Dependencies, Compliance, Quick Start, Organizations, SBOM Compliance), remove merged nav items"
     status: pending

@@ -556,7 +556,7 @@ After deploying Phase 14 (Enterprise Security):
 
 4. **CE routes:** SSO (`/api/sso/*`), user sessions (`/api/user/sessions`), API tokens (`/api/user/api-tokens`), SCIM (`/api/scim/v2/*`).
 
-5. **Frontend:** `/sso-callback` (public), `/settings/security` (user). Org Settings sidebar: Session Policy, IP Allowlist, API Tokens, SCIM under Security.
+5. **Frontend:** `/sso-callback` (public), `/settings/security` (user). Org Settings sidebar: IP Allowlist, API Tokens, SCIM under Security.
 
 6. **MFA:** Supabase Auth TOTP + AAL. MFAGate wraps ProtectedRoute.
 

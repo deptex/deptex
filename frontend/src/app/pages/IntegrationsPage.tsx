@@ -1,150 +1,147 @@
 import { useState } from "react";
-import { Button } from "../../components/ui/button";
-import { 
-  Github, 
-  Slack, 
-  Mail, 
-  Zap, 
-  GitBranch,
-  Webhook,
-  Code,
-  Shield,
-  FileCode
-} from "lucide-react";
+import { Mail, Webhook } from "lucide-react";
 
 const integrations = [
   {
     name: "GitHub",
-    icon: <Github className="h-6 w-6" />,
+    iconSrc: "/images/integrations/github.png",
     description: "Connect your repositories for automatic dependency scanning and security monitoring.",
     category: "Source Control",
   },
   {
     name: "GitLab",
-    icon: <GitBranch className="h-6 w-6" />,
+    iconSrc: "/images/integrations/gitlab.png",
     description: "Integrate with GitLab repositories and CI/CD pipelines for seamless security workflows.",
     category: "Source Control",
   },
   {
+    name: "Bitbucket",
+    iconSrc: "/images/integrations/bitbucket.png",
+    description: "Connect Bitbucket repositories for dependency scanning and security monitoring.",
+    category: "Source Control",
+  },
+  {
     name: "Slack",
-    icon: <Slack className="h-6 w-6" />,
+    iconSrc: "/images/integrations/slack.png",
     description: "Get real-time security alerts and vulnerability notifications directly in your Slack channels.",
     category: "Communication",
   },
   {
+    name: "Discord",
+    iconSrc: "/images/integrations/discord.png",
+    description: "Send security alerts and notifications to your Discord channels.",
+    category: "Communication",
+  },
+  {
     name: "Email",
-    icon: <Mail className="h-6 w-6" />,
+    iconSrc: null,
     description: "Configure email notifications for critical vulnerabilities and compliance violations.",
     category: "Communication",
   },
   {
     name: "Jira",
-    icon: <FileCode className="h-6 w-6" />,
+    iconSrc: "/images/integrations/jira.png",
     description: "Automatically create Jira tickets for security issues and track remediation progress.",
     category: "Project Management",
   },
   {
     name: "Linear",
-    icon: <Code className="h-6 w-6" />,
+    iconSrc: "/images/integrations/linear.png",
     description: "Sync security issues with Linear for streamlined issue tracking and team collaboration.",
     category: "Project Management",
   },
   {
-    name: "PagerDuty",
-    icon: <Zap className="h-6 w-6" />,
-    description: "Escalate critical security incidents to on-call teams via PagerDuty.",
-    category: "Incident Management",
+    name: "Asana",
+    iconSrc: "/images/integrations/asana.png",
+    description: "Track security remediation and tasks in Asana.",
+    category: "Project Management",
   },
   {
     name: "Webhooks",
-    icon: <Webhook className="h-6 w-6" />,
+    iconSrc: null,
     description: "Build custom integrations with webhooks for any event in your security workflow.",
     category: "Custom",
   },
-  {
-    name: "CI/CD",
-    icon: <Shield className="h-6 w-6" />,
-    description: "Integrate with GitHub Actions, GitLab CI, Jenkins, and other CI/CD platforms.",
-    category: "DevOps",
-  },
 ];
 
-const categories = ["All", "Source Control", "Communication", "Project Management", "Incident Management", "DevOps", "Custom"];
+const categories = ["All", "Source Control", "Communication", "Project Management", "Custom"];
+
+function IntegrationIcon({ integration }: { integration: typeof integrations[0] }) {
+  if (integration.iconSrc) {
+    return (
+      <img
+        src={integration.iconSrc}
+        alt=""
+        className="h-8 w-8 rounded-lg object-contain flex-shrink-0"
+        aria-hidden
+      />
+    );
+  }
+  if (integration.name === "Email") return <Mail className="h-6 w-6 text-foreground-secondary flex-shrink-0" />;
+  return <Webhook className="h-6 w-6 text-foreground-secondary flex-shrink-0" />;
+}
 
 export default function IntegrationsPage() {
   const [selectedCategory, setSelectedCategory] = useState("All");
 
-  const filteredIntegrations = selectedCategory === "All" 
-    ? integrations 
-    : integrations.filter(integration => integration.category === selectedCategory);
+  const filteredIntegrations = selectedCategory === "All"
+    ? integrations
+    : integrations.filter((i) => i.category === selectedCategory);
 
   return (
     <div className="min-h-screen">
-      {/* Hero Section */}
-      <section className="container mx-auto px-4 py-20 lg:py-32">
+      {/* Hero + Category in one tighter block */}
+      <section className="container mx-auto px-4 pt-[84px] pb-6 lg:pt-[100px] lg:pb-8">
         <div className="max-w-5xl mx-auto text-center">
           <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold mb-6 text-foreground">
             Integrations
           </h1>
-          <p className="text-xl text-foreground-secondary mb-12 max-w-3xl mx-auto leading-relaxed">
+          <p className="text-xl text-foreground-secondary mb-8 max-w-3xl mx-auto leading-relaxed">
             Connect Deptex with your favorite tools and workflows. Seamlessly integrate security monitoring into your existing development and operations stack.
           </p>
-        </div>
-      </section>
 
-      {/* Category Filter */}
-      <section className="container mx-auto px-4 pb-8">
-        <div className="max-w-7xl mx-auto">
-          <div className="flex flex-wrap justify-center gap-3">
-            {categories.map((category) => (
-              <button
-                key={category}
-                onClick={() => setSelectedCategory(category)}
-                className={`px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 ${
-                  selectedCategory === category
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-background-card/50 text-foreground-secondary hover:bg-background-card hover:text-foreground border border-border/30"
-                }`}
-              >
-                {category}
-              </button>
-            ))}
+          {/* Category filter – closer to subtitle */}
+          <div className="flex flex-wrap justify-center gap-2">
+            {categories.map((category) => {
+              const isSelected = selectedCategory === category;
+              return (
+                <button
+                  key={category}
+                  onClick={() => setSelectedCategory(category)}
+                  className={`px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 ${
+                    isSelected
+                      ? "bg-primary text-primary-foreground border-2 border-primary-foreground/30 hover:border-primary-foreground/50"
+                      : "bg-background-card/50 text-foreground-secondary border border-border/50 hover:bg-background-card hover:text-foreground hover:border-border"
+                  }`}
+                >
+                  {category}
+                </button>
+              );
+            })}
           </div>
         </div>
       </section>
 
       {/* Integrations Grid */}
-      <section className="container mx-auto px-4 py-12">
+      <section className="container mx-auto px-4 py-10">
         <div className="max-w-7xl mx-auto">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {filteredIntegrations.map((integration) => (
               <div
                 key={integration.name}
-                className="rounded-lg border border-border/30 bg-background-card/35 backdrop-blur-lg p-6 hover:border-border hover:bg-background-card/60 transition-all duration-300"
+                className="rounded-xl border border-border/40 bg-background-card/40 backdrop-blur-sm p-5 hover:border-border hover:bg-background-card/70 transition-all duration-200"
               >
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="text-foreground-secondary">
-                    {integration.icon}
+                <div className="flex items-start gap-3 mb-3">
+                  <div className="flex items-center justify-center w-10 h-10 rounded-lg text-foreground-secondary flex-shrink-0">
+                    <IntegrationIcon integration={integration} />
                   </div>
-                  <h3 className="text-xl font-semibold text-foreground">
+                  <h3 className="text-lg font-semibold text-foreground pt-1">
                     {integration.name}
                   </h3>
                 </div>
-                <p className="text-foreground-secondary leading-relaxed mb-4">
+                <p className="text-sm text-foreground-secondary leading-relaxed">
                   {integration.description}
                 </p>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-foreground-secondary/70 bg-background-subtle px-2 py-1 rounded">
-                    {integration.category}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="text-xs"
-                  >
-                    Configure
-                  </Button>
-                </div>
               </div>
             ))}
           </div>
@@ -153,4 +150,3 @@ export default function IntegrationsPage() {
     </div>
   );
 }
-
