@@ -152,28 +152,12 @@ PR -> check runs + smart comments + policy engine + PR tracking
 
 ## Depscore
 
-Composite vulnerability priority score. Uses `tierMultiplier` from `organization_asset_tiers` (project's `asset_tier_id`). Tiered `reachabilityLevel` weights: confirmed=1.0, data_flow=0.9, function=0.7, module=0.5. EPD contextual scoring (Phase 18) adds `epd_factor` for execution path dominance.
+Composite vulnerability priority score. Uses `tierMultiplier` from `organization_asset_tiers` (project's `asset_tier_id`). Tiered `reachabilityLevel` weights: confirmed=1.0, data_flow=0.9, function=0.7, module=0.5. EPD contextual scoring adds `epd_factor` for execution path dominance.
 
 ---
 
-## Phase Status
+## Migrations
 
-Completed: 6B, 6C, 7, 9, 10, 14, 16, 17. Refined (impl done): 7B (tests pending). Outline: 13, 15, 18.
-Full roadmap: `.cursor/plans/deptex_projects_roadmap_index.plan.md`
+All SQL migrations live in `backend/database/`. Files are prefixed by their original feature phase (e.g. `phase7b_aegis_platform.sql`, `phase18_epd_scoring.sql`); the prefix is historical and stable but carries no load-bearing ordering beyond what the filenames themselves imply. For a fresh install, run them in filename-sorted order. A dedicated migration runner is tracked for self-hosting readiness.
 
----
-
-## Migration Reference
-
-Migrations live in `backend/database/`. Key migrations by phase:
-- **6B:** `phase6b_reachability_tables.sql`
-- **6C:** `aegis_chat_threads_schema.sql` (prereq), `phase6c_ai_infrastructure.sql`
-- **7:** `phase7_ai_fix.sql`
-- **7B:** Run in order: `aegis_chat_threads_schema.sql`, `aegis_chat_messages_schema.sql`, `aegis_automations_schema.sql`, `phase6c_ai_infrastructure.sql`, `phase7b_aegis_platform.sql`
-- **8:** `phase8_migrations.sql`, `phase8_project_commits.sql`, `phase8_webhook_deliveries.sql`, `phase8_project_pull_requests.sql`
-- **9:** `phase9_notifications.sql`
-- **10:** `phase10_gin_index.sql`
-- **14:** `phase14_enterprise_security.sql`
-- **16:** `phase16_aegis_learning.sql`
-- **17:** `phase17_incident_response.sql`
-- **18:** `phase18_epd_scoring.sql`
+Historical plan documents for each feature phase are archived in `.cursor/plans/archive/`.
