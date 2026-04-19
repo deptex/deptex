@@ -36,7 +36,6 @@ const tiers = [
       'Aegis AI Security Copilot (BYOK)',
       'AI-powered fixes & sprints',
       'Background vulnerability monitoring',
-      'Watchtower supply-chain forensics',
       'Configurable sync frequency',
       'All integrations (Slack, Jira, Linear, etc.)',
     ],
