@@ -145,7 +145,7 @@ const ZERO_DAY_TEMPLATE: PlaybookTemplate = {
 
 const SUPPLY_CHAIN_TEMPLATE: PlaybookTemplate = {
   name: 'Supply Chain Compromise',
-  description: 'Respond to supply chain attacks: Watchtower anomaly detection, malicious package indicators. Blocks compromised versions and orchestrates safe rollback.',
+  description: 'Respond to supply chain attacks based on malicious package indicators. Blocks compromised versions and orchestrates safe rollback.',
   trigger_type: 'supply_chain',
   trigger_criteria: null,
   phases: [
@@ -173,12 +173,6 @@ const SUPPLY_CHAIN_TEMPLATE: PlaybookTemplate = {
           id: 'sc-assess-1',
           tool: 'assessBlastRadius',
           params: { packageName: '$affected_packages', organizationId: '$organization_id' },
-          onFailure: 'continue',
-        },
-        {
-          id: 'sc-assess-2',
-          tool: 'getWatchtowerSummary',
-          params: { packageName: '$affected_packages' },
           onFailure: 'continue',
         },
       ],

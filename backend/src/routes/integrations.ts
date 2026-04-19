@@ -2221,47 +2221,6 @@ async function handlePullRequestEvent(payload: any): Promise<void> {
             ? `${v.critical_vulns} critical, ${v.high_vulns} high, ${v.medium_vulns} medium, ${v.low_vulns} low vulnerabilities`
             : '0 vulnerabilities';
 
-        // Watchtower check for upgraded packages
-        const { data: wtProject } = await supabase.from('projects').select('watchtower_enabled').eq('id', projectId).single();
-        if (wtProject?.watchtower_enabled && directBumpedPkgs.length > 0) {
-          for (const { name: pkgName, newVersion } of directBumpedPkgs) {
-            const { data: dep } = await supabase.from('dependencies').select('id').eq('name', pkgName).single();
-            if (!dep) continue;
-
-            const { data: wlEntry } = await supabase
-              .from('organization_watchlist')
-              .select('id, quarantine_until, is_current_version_quarantined')
-              .eq('organization_id', organizationId)
-              .eq('dependency_id', dep.id)
-              .single();
-
-            if (!wlEntry) continue;
-
-            const isQuarantined = wlEntry.quarantine_until && new Date(wlEntry.quarantine_until) > new Date();
-            if (isQuarantined) {
-              const daysLeft = Math.ceil((new Date(wlEntry.quarantine_until).getTime() - Date.now()) / 86400000);
-              blocked = true;
-              blockedBy.watchtower_quarantine = (blockedBy.watchtower_quarantine ?? 0) + 1;
-              lines.push(`- **${pkgName}@${newVersion}** — blocked by Watchtower: quarantined (${daysLeft} day${daysLeft !== 1 ? 's' : ''} remaining)`);
-            }
-
-            const { data: wp } = await supabase.from('watched_packages').select('analysis_data').eq('name', pkgName).single();
-            if (wp) {
-              const ad = wp.analysis_data as any;
-              if (ad?.registryIntegrityStatus === 'fail' || ad?.installScriptsStatus === 'fail' || ad?.entropyAnalysisStatus === 'fail') {
-                blocked = true;
-                blockedBy.watchtower_check_failed = (blockedBy.watchtower_check_failed ?? 0) + 1;
-                const failedChecks = [
-                  ad?.registryIntegrityStatus === 'fail' ? 'registry integrity' : null,
-                  ad?.installScriptsStatus === 'fail' ? 'install scripts' : null,
-                  ad?.entropyAnalysisStatus === 'fail' ? 'entropy analysis' : null,
-                ].filter(Boolean).join(', ');
-                lines.push(`- **${pkgName}@${newVersion}** — blocked by Watchtower: ${failedChecks} check(s) failed`);
-              }
-            }
-          }
-        }
-
         // Run org/project pullRequestCheck policy when code is present
         if (prCheckCode?.trim() && (directAddedPkgs.length > 0 || directBumpedPkgs.length > 0)) {
           let projectAssetTier: string | null = null;
