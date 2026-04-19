@@ -10,7 +10,7 @@ For users who want a quick integration without writing code, Deptex also support
 
 ### 1. Add the backend route
 
-**File:** `ee/backend/routes/integrations.ts`
+**File:** `backend/src/routes/integrations.ts`
 
 Add two routes: an install endpoint (initiates OAuth) and a callback endpoint (handles the redirect).
 
@@ -100,12 +100,12 @@ User clicks "Add Provider"
 
 | File | Role |
 |------|------|
-| `ee/backend/routes/integrations.ts` | All integration routes (OAuth, callbacks, CRUD, webhooks) |
+| `backend/src/routes/integrations.ts` | All integration routes (OAuth, callbacks, CRUD, webhooks) |
 | `frontend/src/lib/api.ts` | TypeScript API client with auth methods for each provider |
 | `frontend/src/app/pages/OrganizationSettingsPage.tsx` | Settings UI with tables for each integration category |
 | `backend/database/organization_integrations_schema.sql` | Database schema for `organization_integrations` table |
 | `backend/database/migration_multi_provider_integrations.sql` | Migration enabling multiple connections per provider |
-| `ee/backend/lib/github.ts` | GitHub-specific API helpers (tokens, check runs, PR comments) |
+| `backend/src/lib/github.ts` | GitHub-specific API helpers (tokens, check runs, PR comments) |
 
 ### Database schema
 

@@ -244,7 +244,7 @@ export default function SLAConfigurationSection({ organizationId }: SLAConfigura
         <div className="rounded-lg border border-border bg-background-card p-6">
           <div className="flex gap-3">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
-              <Shield className="h-4 w-4 text-foreground-secondary" />
+              <Info className="h-4 w-4 text-foreground-secondary" />
             </div>
             <div className="flex-1 space-y-2">
               <h3 className="text-sm font-semibold text-foreground">Upgrade to unlock Security SLAs</h3>

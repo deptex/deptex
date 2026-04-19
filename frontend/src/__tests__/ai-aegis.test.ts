@@ -282,24 +282,24 @@ describe('BYOK UI', () => {
   it('13 — AI Configuration section renders provider cards in org settings', async () => {
     renderConfig();
     expect(await screen.findByText('AI Configuration')).toBeInTheDocument();
-    expect(screen.getByText('OpenAI')).toBeInTheDocument();
-    expect(screen.getByText('Anthropic')).toBeInTheDocument();
-    expect(screen.getByText('Google')).toBeInTheDocument();
+    expect(await screen.findByText('Add providers')).toBeInTheDocument();
+    expect(screen.getAllByText('OpenAI').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Anthropic').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Google').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('14 — connect modal: password input, model selector, test button', async () => {
+  it('14 — connect modal: password input and Connect action', async () => {
     renderConfig();
     const buttons = await screen.findAllByText('Connect');
     fireEvent.click(buttons[0]);
 
     const keyInput = await screen.findByPlaceholderText('sk-...');
     expect(keyInput.getAttribute('type')).toBe('password');
-    expect(screen.getByText('Test Connection')).toBeInTheDocument();
-    expect(screen.getByText('Preferred Model')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Connect$/ })).toBeInTheDocument();
   });
 
-  it('15 — successful test shows "Connected" badge', async () => {
-    vi.mocked(api.testAIProvider).mockResolvedValue({ success: true } as any);
+  it('15 — connect flow calls addAIProvider when saving from modal', async () => {
+    vi.mocked(api.addAIProvider).mockResolvedValue({} as any);
     renderConfig();
 
     const buttons = await screen.findAllByText('Connect');
@@ -307,9 +307,12 @@ describe('BYOK UI', () => {
 
     const keyInput = await screen.findByPlaceholderText('sk-...');
     fireEvent.change(keyInput, { target: { value: 'sk-key-123' } });
-    fireEvent.click(screen.getByText('Test Connection'));
+    const connectFooterButtons = screen.getAllByRole('button', { name: /^Connect$/ });
+    fireEvent.click(connectFooterButtons[connectFooterButtons.length - 1]);
 
-    expect(await screen.findByText(/Connection successful/)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(api.addAIProvider).toHaveBeenCalled();
+    });
   });
 
   it('16 — non-admin users (without manage_integrations) cannot see AI Configuration', () => {
@@ -326,16 +329,20 @@ describe('BYOK UI', () => {
     expect(screen.getByText('Restricted')).toBeInTheDocument();
   });
 
-  it('17 — monthly cost cap input updates provider settings', async () => {
+  it('17 — Usage tab shows monthly cost cap from API', async () => {
+    vi.mocked(api.getAIUsage).mockResolvedValue({
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalEstimatedCost: 0,
+      monthlyCostCap: 100,
+      byFeature: {},
+      byUser: [],
+    } as any);
     renderConfig();
 
-    const buttons = await screen.findAllByText('Connect');
-    fireEvent.click(buttons[0]);
-
-    const capInput = await screen.findByDisplayValue('100');
-    expect(capInput).toBeInTheDocument();
-    fireEvent.change(capInput, { target: { value: '250' } });
-    expect((capInput as HTMLInputElement).value).toBe('250');
+    fireEvent.click(await screen.findByRole('button', { name: 'Usage' }));
+    expect(await screen.findByText('Monthly cost cap')).toBeInTheDocument();
+    expect(screen.getByText('$100.00')).toBeInTheDocument();
   });
 });
 
@@ -384,7 +391,7 @@ describe('Rate Limits and Usage', () => {
     ).toBe(true);
   });
 
-  it('20 — AI Usage Dashboard renders monthly summary with aggregated data', async () => {
+  it('20 — Usage tab renders cost and cap from API', async () => {
     vi.mocked(api.getAIUsage).mockResolvedValue({
       totalInputTokens: 150_000,
       totalOutputTokens: 50_000,
@@ -395,15 +402,16 @@ describe('Rate Limits and Usage', () => {
     } as any);
 
     render(React.createElement(AIConfigurationSection, { organizationId: 'org-1' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Usage' }));
 
-    expect(await screen.findByText('Monthly Summary')).toBeInTheDocument();
+    expect(await screen.findByText('Estimated cost')).toBeInTheDocument();
     expect(screen.getByText('$12.50')).toBeInTheDocument();
     expect(screen.getByText('$100.00')).toBeInTheDocument();
   });
 
-  it('21 — usage dashboard only visible to manage_integrations users', async () => {
+  it('21 — Usage tab label present when section renders', async () => {
     render(React.createElement(AIConfigurationSection, { organizationId: 'org-1' }));
-    expect(await screen.findByText('AI Usage Dashboard')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Usage' })).toBeInTheDocument();
     cleanup();
 
     const hasManageIntegrations = false;
@@ -412,7 +420,7 @@ describe('Rate Limits and Usage', () => {
         ? React.createElement(AIConfigurationSection, { organizationId: 'org-1' })
         : React.createElement('div', null, 'Access denied'),
     );
-    expect(screen.queryByText('AI Usage Dashboard')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Usage' })).not.toBeInTheDocument();
     expect(screen.getByText('Access denied')).toBeInTheDocument();
   });
 });

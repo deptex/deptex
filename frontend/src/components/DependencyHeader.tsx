@@ -176,40 +176,22 @@ function DependencyHeader({
         showNewOrg={false}
         customLeftContent={
           <div className="flex items-center gap-3">
-            {/* Logo */}
-            <Link to="/organizations" className="flex items-center">
-              <img
-                src="/images/logo.png"
-                alt="Deptex"
-                className="h-8 w-8"
-              />
-            </Link>
-
-            {/* Slash separator */}
-            <span className="text-border text-lg font-light -ml-1">/</span>
+            <img
+              src="/images/logo.png"
+              alt="Deptex"
+              className="h-8 w-8 flex-shrink-0"
+            />
+            <div className="h-4 w-px bg-border flex-shrink-0 ml-1.5 mr-3" aria-hidden />
 
             {/* Organization section */}
-            <Link
-              to={`/organizations/${organization?.id}`}
-              className="flex items-center gap-3"
-            >
-              <img
-                src={organization?.avatar_url || '/images/org_profile.png'}
-                alt={organization?.name}
-                className="h-8 w-8 rounded-full object-cover border border-border"
+            {organization && (
+              <OrganizationSwitcher
+                currentOrganizationId={organization.id}
+                currentOrganizationName={organization.name}
+                currentOrganizationAvatarUrl={organization.avatar_url}
+                triggerVariant="full"
               />
-              <span className="text-foreground font-medium">{organization?.name}</span>
-            </Link>
-            <RoleBadge
-              role={organization?.role || 'member'}
-              roleDisplayName={orgRoleDisplayName}
-              roleColor={orgRoleColor}
-            />
-            <OrganizationSwitcher
-              currentOrganizationId={organization?.id || ''}
-              currentOrganizationName={organization?.name || ''}
-              showOrgName={false}
-            />
+            )}
 
             {/* Team section (if project has an owner team) */}
             {(project.owner_team_id || project.team_ids?.[0]) && (project.owner_team_name || project.team_names?.[0]) && (

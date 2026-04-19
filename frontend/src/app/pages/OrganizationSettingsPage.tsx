@@ -36,6 +36,7 @@ import NotificationRulesSection from './NotificationRulesSection';
 import NotificationHistorySection from './NotificationHistorySection';
 import AIConfigurationSection from '../../components/settings/AIConfigurationSection';
 import { AegisManagementConsole } from '../../components/settings/AegisManagementConsole';
+import { CODE_BLOCK_BG } from '../../components/policy-monaco-setup';
 import SLAConfigurationSection from '../../components/settings/SLAConfigurationSection';
 
 interface OrganizationContextType {
@@ -240,20 +241,31 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
             <div className={`h-8 w-24 ${pulse}`} />
           </div>
           <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-            <div className="px-4 py-2 border-b border-border bg-background-subtle/30">
-              <div className={`h-4 w-16 ${pulse}`} />
-            </div>
-            <div className="divide-y divide-border">
-              {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="px-4 py-3 flex items-center justify-between">
-                  <div className="flex items-center gap-3 flex-1">
-                    <div className={`h-5 w-28 ${pulse}`} />
-                    <div className={`h-4 w-20 ${pulse}`} />
-                  </div>
-                  <div className={`h-5 w-16 ${pulse}`} />
-                </div>
-              ))}
-            </div>
+            <table className="w-full table-fixed">
+              <thead className="bg-background-card-header border-b border-border">
+                <tr>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                    Role
+                  </th>
+                  <th className="w-[120px]"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {[1, 2, 3, 4].map((i) => (
+                  <tr key={i}>
+                    <td className="px-4 py-3">
+                      <div className="space-y-1">
+                        <div className={`h-5 w-28 ${pulse}`} />
+                        <div className={`h-4 w-24 ${pulse}`} />
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className={`h-5 w-5 ${pulse}`} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       );
@@ -439,17 +451,20 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
                 <div className="px-4 py-2.5 bg-background-card-header border-b border-border">
                   <div className={`h-3.5 w-32 ${pulse} rounded`} />
                 </div>
-                <div className="bg-[#1d1f21] px-4 py-3 font-mono text-[13px] leading-6" style={{ minHeight: '180px' }}>
+                <div
+                  className="px-4 py-3 font-mono text-[13px] leading-6"
+                  style={{ minHeight: '180px', backgroundColor: CODE_BLOCK_BG }}
+                >
                   <div className="space-y-1.5 animate-pulse">
-                    <div className="h-3 bg-white/[0.06] rounded w-[70%]" />
-                    <div className="h-3 bg-white/[0.06] rounded w-[55%] ml-4" />
-                    <div className="h-3 bg-white/[0.06] rounded w-[80%] ml-4" />
-                    <div className="h-3 bg-white/[0.06] rounded w-[40%] ml-8" />
-                    <div className="h-3 bg-white/[0.06] rounded w-[60%] ml-4" />
-                    <div className="h-3 bg-white/[0.06] rounded w-[30%]" />
+                    <div className="h-3 bg-white/10 rounded w-[70%]" />
+                    <div className="h-3 bg-white/10 rounded w-[55%] ml-4" />
+                    <div className="h-3 bg-white/10 rounded w-[80%] ml-4" />
+                    <div className="h-3 bg-white/10 rounded w-[40%] ml-8" />
+                    <div className="h-3 bg-white/10 rounded w-[60%] ml-4" />
+                    <div className="h-3 bg-white/10 rounded w-[30%]" />
                     <div className="h-3" />
-                    <div className="h-3 bg-white/[0.06] rounded w-[50%] ml-4" />
-                    <div className="h-3 bg-white/[0.06] rounded w-[45%] ml-4" />
+                    <div className="h-3 bg-white/10 rounded w-[50%] ml-4" />
+                    <div className="h-3 bg-white/10 rounded w-[45%] ml-4" />
                   </div>
                 </div>
               </div>
@@ -1655,28 +1670,12 @@ export default function OrganizationSettingsPage() {
   const planGateAegisChat = usePlan().getPlanGate('aegis_chat');
   const planGateAegisManagement = usePlan().getPlanGate('aegis_management');
 
-  // Permission check - redirect if user doesn't have view_settings
+  // Any org member can open Settings; individual sections are gated by their permissions (sidebar + redirects)
   useEffect(() => {
     if (organization && id && !permissionsChecked) {
-      const cachedPerms = getCachedPermissions();
-
-      // If we have cached permissions and user has view_settings, allow access
-      if (cachedPerms?.view_settings === true) {
-        setPermissionsChecked(true);
-        return;
-      }
-
-      // If we have cached permissions and user doesn't have view_settings, redirect
-      if (cachedPerms && !cachedPerms.view_settings) {
-        navigate(`/organizations/${id}`, { replace: true });
-        return;
-      }
-
-      // No cached permissions yet - wait for them to load
-      // Don't check permissionsChecked yet, let the roles load
       setPermissionsChecked(true);
     }
-  }, [organization, id, navigate, permissionsChecked]);
+  }, [organization, id, permissionsChecked]);
 
   // Redirect to settings/general when section param is invalid
   useEffect(() => {
@@ -1693,7 +1692,7 @@ export default function OrganizationSettingsPage() {
   }, [id, sectionParam, permissionsChecked, canManageCompliance, navigate]);
 
   // Redirect away from security sections when user lacks manage_security
-  const securitySections = ['sso', 'mfa', 'ip_allowlist', 'legal_documents'];
+  const securitySections = ['sso', 'mfa', 'ip_allowlist'];
   useEffect(() => {
     if (id && sectionParam && securitySections.includes(sectionParam) && permissionsChecked && !effectivePermissions?.manage_security) {
       navigate(`/organizations/${id}/settings/general`, { replace: true });
@@ -2058,20 +2057,7 @@ export default function OrganizationSettingsPage() {
     }
   }, [userRolePermissions, organization, id]);
 
-  // Refine permissions check with database values after roles load
-  useEffect(() => {
-    if (userRolePermissions !== null && organization && id && permissionsChecked) {
-      // Double-check with database permissions (more accurate)
-      if (!userRolePermissions.view_settings) {
-        toast({
-          title: 'Access Denied',
-          description: 'You do not have permission to view settings.',
-          variant: 'destructive',
-        });
-        navigate(`/organizations/${id}`, { replace: true });
-      }
-    }
-  }, [userRolePermissions, organization, id, navigate, toast, permissionsChecked]);
+  // Settings access is not gated by view_settings; section-level permissions handle access
 
   const loadRoles = async () => {
     if (!id) return;
@@ -2817,11 +2803,6 @@ export default function OrganizationSettingsPage() {
     );
   }
 
-  // Check actual permissions instead of role name
-  if (!effectivePermissions?.view_settings) {
-    return null; // Will redirect via useEffect
-  }
-
   return (
     <>
       <div className="bg-background">
@@ -2883,7 +2864,7 @@ export default function OrganizationSettingsPage() {
                                 onChange={(e) => isOrgOwner && setOrgName(e.target.value)}
                                 placeholder="Enter organization name"
                                 disabled={!isOrgOwner}
-                                className={`w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground-secondary placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${!isOrgOwner ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                className={`w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${!isOrgOwner ? 'opacity-60 cursor-not-allowed' : ''}`}
                               />
                             </div>
                           ) : (
@@ -2977,7 +2958,7 @@ export default function OrganizationSettingsPage() {
                                   <button
                                     type="button"
                                     onClick={() => setShowMemberDropdown(!showMemberDropdown)}
-                                    className="w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary flex items-center justify-between hover:border-foreground-secondary/50 transition-all"
+                                    className="w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary flex items-center justify-between hover:bg-background-subtle/50 transition-colors"
                                   >
                                     <div className="flex items-center gap-2 flex-1 min-w-0 text-left">
                                       {selectedTransferMemberId && !loadingMembers ? (
@@ -3047,7 +3028,7 @@ export default function OrganizationSettingsPage() {
                                                     setSelectedTransferMemberId(member.user_id);
                                                     setShowMemberDropdown(false);
                                                   }}
-                                                  className={`w-full px-3 py-2.5 flex items-center gap-3 hover:bg-table-hover transition-colors text-left ${selectedTransferMemberId === member.user_id ? 'bg-background-subtle/50' : ''}`}
+                                                  className={`w-full px-3 py-2.5 flex items-center gap-3 hover:bg-background-subtle/50 transition-colors text-left ${selectedTransferMemberId === member.user_id ? 'bg-background-subtle/50' : ''}`}
                                                 >
                                                   <img
                                                     src={member.avatar_url || '/images/blank_profile_image.png'}
@@ -3096,7 +3077,7 @@ export default function OrganizationSettingsPage() {
                                   <button
                                     type="button"
                                     onClick={() => setShowRoleDropdown(!showRoleDropdown)}
-                                    className="w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary flex items-center justify-between hover:border-foreground-secondary/50 transition-all"
+                                    className="w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary flex items-center justify-between hover:bg-background-subtle/50 transition-colors"
                                   >
                                     <div className="flex items-center gap-2">
                                       {(() => {
@@ -3137,7 +3118,7 @@ export default function OrganizationSettingsPage() {
                                                     setSelectedNewRole(role.name);
                                                     setShowRoleDropdown(false);
                                                   }}
-                                                  className={`w-full px-3 py-2.5 flex items-center justify-between hover:bg-table-hover transition-colors text-left ${isSelected ? 'bg-background-subtle/50' : ''
+                                                  className={`w-full px-3 py-2.5 flex items-center justify-between hover:bg-background-subtle/50 transition-colors text-left ${isSelected ? 'bg-background-subtle/50' : ''
                                                     }`}
                                                 >
                                                   <div className="flex flex-col gap-1 min-w-0 flex-1">
@@ -3317,30 +3298,52 @@ export default function OrganizationSettingsPage() {
                   {/* Roles List */}
                   {loadingRoles ? (
                     <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                      {/* Header */}
-                      <div className="px-4 py-2 border-b border-border bg-background-card-header text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
-                        Roles
-                      </div>
-                      <div className="divide-y divide-border">
-                        {[1, 2, 3].map((i) => (
-                          <div key={i} className="px-4 py-3 flex items-center justify-between">
-                            <div className="flex items-center gap-3 flex-1">
-                              <div className="h-5 w-32 bg-muted animate-pulse rounded"></div>
-                              <div className="h-5 w-16 bg-muted animate-pulse rounded"></div>
-                            </div>
-                            <div className="h-5 w-5 bg-muted animate-pulse rounded"></div>
-                          </div>
-                        ))}
-                      </div>
+                      <table className="w-full table-fixed">
+                        <colgroup>
+                          <col style={{ width: 'auto' }} />
+                          <col style={{ width: '120px' }} />
+                        </colgroup>
+                        <thead className="bg-background-card-header border-b border-border">
+                          <tr>
+                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                              Role
+                            </th>
+                            <th className="w-[120px]"></th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {[1, 2, 3].map((i) => (
+                            <tr key={i} className="animate-pulse">
+                              <td className="px-4 py-3">
+                                <div className="space-y-1">
+                                  <div className="h-5 w-32 bg-muted rounded" />
+                                  <div className="h-4 w-24 bg-muted rounded" />
+                                </div>
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="h-5 w-5 bg-muted rounded ml-auto" />
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
                   ) : allRoles.length > 0 ? (
                     <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                      {/* Header */}
-                      <div className="px-4 py-2 border-b border-border bg-background-card-header text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
-                        Roles
-                      </div>
-
-                      <div className="divide-y divide-border">
+                      <table className="w-full table-fixed">
+                        <colgroup>
+                          <col style={{ width: 'auto' }} />
+                          <col style={{ width: '120px' }} />
+                        </colgroup>
+                        <thead className="bg-background-card-header border-b border-border">
+                          <tr>
+                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                              Role
+                            </th>
+                            <th className="w-[120px]"></th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
                         {(dragPreviewRoles || allRoles).map((role) => {
                           const isUserRole = organization?.role === role.name;
                           const userRank = organization?.user_rank ?? 0;
@@ -3353,10 +3356,9 @@ export default function OrganizationSettingsPage() {
                           const memberCount = members.filter(m => m.role === role.name).length;
 
                           return (
-                            <div
+                            <tr
                               key={role.id || role.name}
-                              className={`px-4 py-3 flex items-center justify-between transition-all duration-150 group ${isDragging ? 'opacity-50 bg-primary/10 scale-[0.98]' : 'hover:bg-table-hover'
-                                }`}
+                              className={`transition-all duration-150 group ${isDragging ? 'opacity-50 bg-primary/10 scale-[0.98]' : 'hover:bg-table-hover'}`}
                               draggable={canDrag}
                               onDragStart={(e) => {
                                 if (!canDrag) return;
@@ -3382,8 +3384,8 @@ export default function OrganizationSettingsPage() {
                                 setDraggedRoleId(null);
                               }}
                             >
-                              {/* Left: Role Name + Member count subtext + Type + Your Role badge */}
-                              <div className="flex items-center gap-2 min-w-0 flex-1">
+                              {/* Role name + Your Role badge + member count line (original layout) */}
+                              <td className="px-4 py-3 min-w-0">
                                 <div className="flex flex-col min-w-0">
                                   <div className="flex items-center gap-2">
                                     {editingRoleNameId === role.id ? (
@@ -3425,8 +3427,8 @@ export default function OrganizationSettingsPage() {
                                       </span>
                                     )}
                                   </div>
-                                  <div className="flex items-center gap-1 text-foreground-secondary">
-                                    <Users className="h-3 w-3" />
+                                  <div className="flex items-center gap-1 text-foreground-secondary mt-0.5">
+                                    <Users className="h-3 w-3 flex-shrink-0" />
                                     <span className="text-xs">
                                       {memberCount} {memberCount === 1 ? 'member' : 'members'}
                                       {role.is_default && (
@@ -3435,64 +3437,66 @@ export default function OrganizationSettingsPage() {
                                     </span>
                                   </div>
                                 </div>
-                              </div>
+                              </td>
+                              {/* Badge + actions */}
+                              <td className="px-4 py-3">
+                                <div className="flex items-center justify-end gap-0.5 w-full relative">
+                                  {/* Badge - visible by default, hidden on hover when there are actions */}
+                                  <div className={`flex justify-end transition-opacity ${effectivePermissions?.edit_roles ? 'group-hover:opacity-0' : ''}`}>
+                                    <RoleBadge
+                                      role={role.name}
+                                      roleDisplayName={role.display_name}
+                                      roleColor={role.color}
+                                    />
+                                  </div>
 
-                              {/* Right side - Badge transforms to actions on hover */}
-                              <div className="flex items-center justify-end flex-shrink-0 w-36 relative">
-                                {/* Badge - visible by default, hidden on hover when there are actions */}
-                                <div className={`flex justify-end transition-opacity ${effectivePermissions?.edit_roles ? 'group-hover:opacity-0' : ''}`}>
-                                  <RoleBadge
-                                    role={role.name}
-                                    roleDisplayName={role.display_name}
-                                    roleColor={role.color}
-                                  />
-                                </div>
-
-                                {/* Actions - hidden by default, visible on hover */}
-                                {effectivePermissions?.edit_roles && (
-                                  <div className="absolute inset-0 flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    {/* Always show settings button to view role settings */}
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      onClick={() => handleEditRolePermissions(role)}
-                                      className="h-7 w-7 text-foreground-secondary hover:text-foreground"
-                                      title="Settings"
-                                    >
-                                      <Settings className="h-4 w-4" />
-                                    </Button>
-
-                                    {/* Delete button - only for non-default roles below your rank */}
-                                    {!role.is_default && canEditRole && (
+                                  {/* Actions - hidden by default, visible on hover */}
+                                  {effectivePermissions?.edit_roles && (
+                                    <div className="absolute inset-0 flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                      {/* Always show settings button to view role settings */}
                                       <Button
                                         variant="ghost"
                                         size="icon"
-                                        onClick={() => handleDeleteRole(role)}
-                                        disabled={deletingRoleId === role.id}
-                                        className="h-7 w-7 text-foreground-secondary hover:text-destructive disabled:opacity-100"
-                                        title="Delete"
+                                        onClick={() => handleEditRolePermissions(role)}
+                                        className="h-7 w-7 text-foreground-secondary hover:text-foreground"
+                                        title="Settings"
                                       >
-                                        {deletingRoleId === role.id ? (
-                                          <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full" />
-                                        ) : (
-                                          <Trash2 className="h-4 w-4" />
-                                        )}
+                                        <Settings className="h-4 w-4" />
                                       </Button>
-                                    )}
 
-                                    {/* Drag handle - only for roles you can edit */}
-                                    {canDrag && (
-                                      <div className="cursor-grab active:cursor-grabbing text-foreground-secondary hover:text-foreground transition-colors">
-                                        <GripVertical className="h-4 w-4" />
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
+                                      {/* Delete button - only for non-default roles below your rank */}
+                                      {!role.is_default && canEditRole && (
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          onClick={() => handleDeleteRole(role)}
+                                          disabled={deletingRoleId === role.id}
+                                          className="h-7 w-7 text-foreground-secondary hover:text-destructive disabled:opacity-100"
+                                          title="Delete"
+                                        >
+                                          {deletingRoleId === role.id ? (
+                                            <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full" />
+                                          ) : (
+                                            <Trash2 className="h-4 w-4" />
+                                          )}
+                                        </Button>
+                                      )}
+
+                                      {/* Drag handle - only for roles you can edit */}
+                                      {canDrag && (
+                                        <div className="cursor-grab active:cursor-grabbing text-foreground-secondary hover:text-foreground transition-colors">
+                                          <GripVertical className="h-4 w-4" />
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
                           );
                         })}
-                      </div>
+                        </tbody>
+                      </table>
                     </div>
                   ) : (
                     <div className="bg-background-card border border-border rounded-lg p-12 flex flex-col items-center justify-center text-center">
@@ -4695,16 +4699,16 @@ export default function OrganizationSettingsPage() {
                     )}
                     onClick={(e) => e.stopPropagation()}
                   >
-                    {/* Header – no X, no border */}
-                    <div className="px-6 pt-5 pb-3 flex-shrink-0">
+                    {/* Header – light, same as content (table body) */}
+                    <div className="px-6 pt-5 pb-3 flex-shrink-0 bg-background-card">
                       <h2 className="text-xl font-semibold text-foreground">Create New Role</h2>
                       <p className="mt-2 text-sm text-foreground-secondary">
                         Create customizable roles for your organization and control what permissions each role has. Permissions determine which screens and actions are visible and available—members see only what their role allows, so the app adapts to their access level.
                       </p>
                     </div>
 
-                    {/* Content */}
-                    <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4">
+                    {/* Content – same as table body (lighter); footer = table header (darker) */}
+                    <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4 bg-background-card">
                       <div className="space-y-6">
                         {/* Role Name Input */}
                         <div className="space-y-3">
@@ -4718,7 +4722,7 @@ export default function OrganizationSettingsPage() {
                             value={newRoleNameInput}
                             onChange={(e) => setNewRoleNameInput(e.target.value)}
                             maxLength={24}
-                            className="w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
+                            className="w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                             autoFocus
                             disabled={isCreatingRole}
                           />
@@ -4928,15 +4932,15 @@ export default function OrganizationSettingsPage() {
                       )}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {/* Header */}
-                      <div className="px-6 pt-5 pb-3 flex-shrink-0">
+                      {/* Header – light, same as content (table body) */}
+                      <div className="px-6 pt-5 pb-3 flex-shrink-0 bg-background-card">
                         <h2 className="text-xl font-semibold text-foreground">
                           {selectedRoleForSettings.display_name || selectedRoleForSettings.name.charAt(0).toUpperCase() + selectedRoleForSettings.name.slice(1)} Settings
                         </h2>
                       </div>
 
-                      {/* Content */}
-                      <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4">
+                      {/* Content – same as table body (lighter); footer = table header (darker) */}
+                      <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4 bg-background-card">
                         <div className="space-y-6">
                           {/* Read-only notice when user cannot edit name/color */}
                           {!canEditNameAndColor && (
@@ -4964,7 +4968,7 @@ export default function OrganizationSettingsPage() {
                               placeholder="Enter role name"
                               maxLength={24}
                               disabled={!canEditNameAndColor}
-                              className={`w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all ${!canEditNameAndColor ? 'opacity-60 cursor-not-allowed' : ''}`}
+                              className={`w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${!canEditNameAndColor ? 'opacity-60 cursor-not-allowed' : ''}`}
                             />
                           </div>
 

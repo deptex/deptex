@@ -81,12 +81,12 @@ flowchart TB
 
 ## Open core
 
-Deptex uses an open-core model: the core engine (extraction, ingestion, vulnerability processing) is open source; the cloud platform (organizations, teams, integrations, Aegis, Watchtower) is commercial.
+Deptex uses an open-core model: the core engine (extraction, ingestion, vulnerability processing) is open source; org/team/integrations/Aegis/Watchtower live in the same `backend/` tree—licensing for those surfaces follows project policy.
 
 | Layer | What | License |
 |-------|------|---------|
 | **Core** | backend/, frontend/, extraction-worker | Apache 2.0 |
-| **Cloud** | ee/ (orgs, teams, GitHub App, Aegis, Watchtower) | Proprietary |
+| **Platform** | orgs, teams, integrations, Aegis, Watchtower (in `backend/src/`) | See project LICENSE / commercial terms |
 
 ---
 
@@ -100,6 +100,5 @@ Deptex uses an open-core model: the core engine (extraction, ingestion, vulnerab
 
 ## License
 
-- **Core**: Apache 2.0 — see [LICENSE](./LICENSE)
-- **ee/**: Proprietary — see [ee/LICENSE](./ee/LICENSE)
+- **License**: See [LICENSE](./LICENSE) and any commercial terms applicable to your deployment.
 

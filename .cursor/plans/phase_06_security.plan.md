@@ -239,7 +239,7 @@ log('finalize', 'Cleaned up stale findings from previous extraction runs');
 
 This matches the existing pipeline pattern where `status = 'ready'` is only set on success.
 
-**New API Endpoints** (in [projects.ts](ee/backend/routes/projects.ts)):
+**New API Endpoints** (in [projects.ts](backend/src/routes/projects.ts)):
 
 - `GET /api/organizations/:orgId/projects/:projectId/semgrep-findings` - returns parsed Semgrep findings with pagination (`?page=1&per_page=50`, default 50, max 200). Auth: project member (any role).
 - `GET /api/organizations/:orgId/projects/:projectId/secret-findings` - returns parsed TruffleHog findings (redacted values only) with pagination (`?page=1&per_page=50`, default 50, max 100). Auth: requires `manage_projects` (team-level) or `manage_teams_and_projects` (org-level) -- secret findings are sensitive security data.
@@ -591,7 +591,7 @@ CREATE TABLE project_version_candidates (
 CREATE INDEX idx_pvc_project_package ON project_version_candidates(project_id, package_name, ecosystem);
 ```
 
-**Pipeline addition** ([workers.ts](ee/backend/routes/workers.ts) populate-dependencies callback):
+**Pipeline addition** ([workers.ts](backend/src/routes/workers.ts) populate-dependencies callback):
 
 After vulnerability parsing, add a new step:
 
@@ -606,7 +606,7 @@ After vulnerability parsing, add a new step:
 
 **Banned version exclusion:** Before finalizing candidates, query `banned_versions` (org-level) and `team_banned_versions` (for the project's owner team). Any candidate version that appears in the banned list is stored with `is_org_banned = true` so the UI can show "Safe version exists but is banned by your organization."
 
-**Supply chain tab alignment (consolidation deferred):** `project_version_candidates` serves as the precomputed source for the Security tab and sidebars. The supply chain tab continues to use `[latest-safe-version.ts](ee/backend/lib/latest-safe-version.ts)` (which includes transitive dep checking, Watchtower quarantine, and security check filtering that `project_version_candidates` doesn't replicate). Consolidating these two systems into one is tracked as a follow-up task after Phase 6 ships. Until then, both systems coexist -- version candidates for Security tab, latest-safe-version for Supply Chain tab.
+**Supply chain tab alignment (consolidation deferred):** `project_version_candidates` serves as the precomputed source for the Security tab and sidebars. The supply chain tab continues to use `[latest-safe-version.ts](backend/src/lib/latest-safe-version.ts)` (which includes transitive dep checking, Watchtower quarantine, and security check filtering that `project_version_candidates` doesn't replicate). Consolidating these two systems into one is tracked as a follow-up task after Phase 6 ships. Until then, both systems coexist -- version candidates for Security tab, latest-safe-version for Supply Chain tab.
 
 **Version candidates API endpoint:**
 
@@ -765,7 +765,7 @@ vi.mock('@xyflow/react', () => ({
 
 Import this mock in any test file that renders graph nodes.
 
-#### Backend Tests (`ee/backend/routes/__tests__/security-api.test.ts`) -- 17 tests
+#### Backend Tests (`backend/src/routes/__tests__/security-api.test.ts`) -- 17 tests
 
 Tests 1-5 (Semgrep/TruffleHog Parsing):
 

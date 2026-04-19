@@ -1,5 +1,4 @@
 import express from 'express';
-import { isEeEdition } from '../lib/features';
 
 const router = express.Router();
 
@@ -23,9 +22,7 @@ router.use(requireInternalKey);
 
 /**
  * POST /api/internal/watchtower-event
- * Called by watchtower-worker (Fly.io) to emit notification events.
- * In EE mode, calls emitEvent() from the event bus.
- * In CE mode, this is a no-op that returns 200.
+ * Called by watchtower-worker (Fly.io) to emit notification events via the event bus.
  */
 router.post('/', async (req, res) => {
   try {
@@ -36,23 +33,21 @@ router.post('/', async (req, res) => {
       return;
     }
 
-    if (isEeEdition()) {
-      try {
-        const { emitEvent } = require('../lib/event-bus');
-        await emitEvent({
-          event_type,
-          organization_id,
-          project_id: project_id || null,
-          payload: {
-            package_name,
-            ...payload,
-          },
-          source: 'watchtower',
-          priority: priority || 'normal',
-        });
-      } catch (err: any) {
-        console.warn('[watchtower-event] Failed to emit event:', err?.message);
-      }
+    try {
+      const { emitEvent } = require('../lib/event-bus');
+      await emitEvent({
+        event_type,
+        organization_id,
+        project_id: project_id || null,
+        payload: {
+          package_name,
+          ...payload,
+        },
+        source: 'watchtower',
+        priority: priority || 'normal',
+      });
+    } catch (err: any) {
+      console.warn('[watchtower-event] Failed to emit event:', err?.message);
     }
 
     res.json({ ok: true });

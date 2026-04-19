@@ -2,7 +2,7 @@
 
 Deptex is an AI-powered open-core dependency security platform. It combines dependency intelligence, continuous supply-chain monitoring, policy-as-code, and an autonomous AI security agent (Aegis) to automate software security for organizations.
 
-**Open-core model:** CE (open-source core) in `backend/` + `frontend/`, EE (commercial) in `ee/`. Toggle: `DEPTEX_EDITION=ce|ee` (default: ee). CE must never import from `ee/`; EE can import from `backend/src/`.
+**Architecture:** Express API and workers in `backend/`, UI in `frontend/`. Routes live in `backend/src/routes/`, libs in `backend/src/lib/`.
 
 ---
 
@@ -26,7 +26,7 @@ Deptex is an AI-powered open-core dependency security platform. It combines depe
 | AST parsing | oxc-parser (JS/TS import extraction) |
 | Queues | Upstash QStash (async jobs, cron schedules). Phase 8: scheduled-extraction (every 6h), watchtower-daily-poll (daily 4AM UTC). Phase 9: dispatch-notification, dispatch-notification-batch, reconcile-stuck-notifications (every 15min), digest-check (hourly), notification-cleanup (daily 3AM UTC). |
 | Cache | Upstash Redis (caching, ast-parsing-jobs, watchtower-jobs, webhook-delivery dedup, notification rate limiting). Extraction jobs use Supabase `extraction_jobs` table. |
-| AI - Tier 1 | Google Gemini Flash (platform features — we pay, ~$0.0001/call). getPlatformProvider() in ee/backend/lib/ai/provider.ts |
+| AI - Tier 1 | Google Gemini Flash (platform features — we pay, ~$0.0001/call). getPlatformProvider() in backend/src/lib/ai/provider.ts |
 | AI - Tier 2 | BYOK OpenAI/Anthropic/Google (Aegis Security Copilot, Aider — org pays). organization_ai_providers, AES-256-GCM key encryption |
 | AI - Agent engine | Phase 7B: Vercel AI SDK (`ai`, `@ai-sdk/openai`, `@ai-sdk/anthropic`, `@ai-sdk/google`) for multi-turn tool calling, SSE streaming. Frontend: `@ai-sdk/react` useChat. |
 | Memory (Aegis) | Phase 7B: pgvector in Supabase for semantic memory; Google text-embedding-004 for embeddings. |
@@ -40,7 +40,7 @@ Deptex is an AI-powered open-core dependency security platform. It combines depe
 ```
 backend/
   src/
-    index.ts                    Express entry. CE routes always mounted, EE routes via load-ee-routes.js
+    index.ts                    Express entry. All routes mounted in one app (former EE merged into backend/src/routes)
     routes/
       userProfile.ts            GET/PUT /api/user-profile (avatar, full_name)
       docs-assistant.ts         POST /api/docs-assistant (Gemini-powered docs Q&A, no auth, IP rate limited)
@@ -59,7 +59,6 @@ backend/
       learning-cron.ts            Phase 16: POST /api/internal/learning/recompute-patterns (daily QStash), POST /api/internal/learning/check-feedback-prompts (hourly QStash)
     lib/
       supabase.ts               Lazy-init Supabase client (service role). createUserClient(jwt) for user-scoped
-      features.ts               getEdition(), isEeEdition() -- CE vs EE toggle
       ecosystems.ts             MANIFEST_FILES map, FRAMEWORK_RULES, 11 ecosystems (npm, pypi, maven, golang, cargo, gem, composer, pub, hex, swift, nuget)
       ghsa.ts                   GitHub Advisory GraphQL batch fetch (up to 100 pkgs), severity mapping, version filtering
       semver-affected.ts        OSV-style affected range matching (introduced/fixed)
@@ -86,12 +85,11 @@ backend/
    git-ops.ts                  Clone, branch naming (collision handling), commit, push, diff summary, PR creation via Git provider API
    Dockerfile                  node:20-slim + Python venv + aider-chat + git
    fly.toml                    shared-cpu-4x, 8GB RAM, 15m auto-stop
-  database/                     ~140 SQL migration files (CE + EE tables). data/spdx-obligations.json for license seed reference.
-  load-ee-routes.js             Plain JS loader so tsc doesn't compile ee/
+  database/                     ~140 SQL migration files. data/spdx-obligations.json for license seed reference.
+  (organizations, teams, projects, integrations, aegis, workers, watchtower, etc. live under backend/src/routes/ and backend/src/lib/)
 
-ee/backend/
-  routes/
-    organizations.ts            Org CRUD, members, invitations, roles, policies, notification rules, deprecations, join link. Phase 4: statuses CRUD, asset tiers CRUD, split policy code. Phase 6C: AI provider CRUD. Phase 9: validate-notification-rule, test-notification-rule, notification-history (paginated, retry), notification-stats, notification-rules/:id/history, revert, pagerduty/connect, snooze, notification-rule-templates. PATCH notifications_paused_until for org pause. Phase 10: GET /:id/stats (org-level aggregated stats, 60s cache).
+  routes/ (additional — org & SaaS surface)
+    organizations.ts            Org CRUD, members, invitations, roles, policies, notifications, …
     teams.ts                    Team CRUD, roles, members, transfer ownership. Phase 6: GET teams/:teamId/security-summary (aggregate security counts). Phase 10: GET teams/:teamId/stats (team-level aggregated stats, 60s cache).
     projects.ts                 Project CRUD, repos, dependencies (list/overview/versions/supply-chain/safe-version), vulnerabilities, policies, exceptions, PR guardrails, Watchtower actions (bump/decrease/remove PRs), notes, contributing teams, AST import status. Extraction: POST extraction/cancel, GET extraction/logs, GET extraction/runs. Phase 5 compliance: GET sbom (real cdxgen from storage), GET legal-notice (grouped by license, Redis-cached), GET registry-search (proxy to npm/Maven/Cargo/RubyGems/PyPI/Go), POST apply-exception (Gemini AI policy exception), GET license-obligations. Policy engine: POST evaluate-policy, POST preflight-check (ecosystem param), POST validate-policy, policy-changes CRUD, revert-policy. Phase 6 Security: GET semgrep-findings, GET secret-findings (permission-gated), GET vulnerabilities/:osvId/detail, PATCH suppress/unsuppress, PATCH accept-risk/unaccept-risk, GET dependencies/:depId/security-summary, GET version-candidates, GET security-summary (org aggregate). Phase 6B: GET reachable-flows (paginated), GET usage-slices (paginated), GET reachable-flows/:flowId/code-context (lazy git provider fetch, rate-limited 30/min). Phase 10: GET projects/:projectId/stats (aggregated dashboard, 60s cache), GET projects/:projectId/recent-activity (union: activities, vuln events, extraction jobs), POST projects/:projectId/sync (retrigger extraction, 60s cooldown).
     activities.ts               GET activities with date/type/team filters
@@ -448,7 +446,7 @@ button, input, label, checkbox, switch, slider, progress, badge, avatar, card, d
 | `user_profiles` | User avatar_url, full_name | FK auth.users |
 | `license_obligations` | SPDX license reference: requires_attribution, requires_notice_file, requires_source_disclosure, requires_license_text, is_copyleft, is_weak_copyleft, summary, full_text. Seeded with ~50 common licenses (phase5_license_obligations.sql, seed_license_obligations.sql). Used by legal-notice export and License Obligations UI. | UNIQUE(license_spdx_id) |
 
-### EE Organization Tables
+### Organization Tables
 | Table | Purpose | Key Relations |
 |-------|---------|---------------|
 | `organization_ai_providers` | Phase 6C: BYOK provider config per org. provider (openai/anthropic/google), encrypted_api_key, model_preference, is_default, monthly_cost_cap. AES-256-GCM encryption. | FK organization_id, UNIQUE(organization_id, provider) |
@@ -471,7 +469,7 @@ button, input, label, checkbox, switch, slider, progress, badge, avatar, card, d
 | `banned_versions` | Org-level banned versions with bump_to_version | FK organization_id |
 | `activities` | Activity log: type, description, metadata. Phase 10: GIN index on metadata for project-scoped queries (metadata->>'project_id') | FK organization_id, user_id |
 
-### EE Team Tables
+### Team Tables
 | Table | Purpose |
 |-------|---------|
 | `teams` | Teams within orgs |
@@ -483,7 +481,7 @@ button, input, label, checkbox, switch, slider, progress, badge, avatar, card, d
 | `team_integrations` | Team-scoped integrations |
 | `team_notification_rules` | Team notification rules |
 
-### EE Project Extension Tables
+### Project Extension Tables
 | Table | Purpose |
 |-------|---------|
 | `project_integrations` | Project-scoped integrations |
@@ -919,7 +917,7 @@ After deploying Phase 6C (AI Infrastructure & Aegis Security Copilot):
 
 2. **Set AI_ENCRYPTION_KEY** (required for BYOK): 32-byte hex key. Generate with `openssl rand -hex 32`. Without it, BYOK endpoints return 503. Server logs a warning on startup if missing.
 
-3. **ee/backend dependencies:** `npm install` in ee/backend adds `@anthropic-ai/sdk` and `@google/generative-ai`.
+3. **Backend dependencies (Aegis AI SDK, etc.):** `cd backend && npm install` adds `@anthropic-ai/sdk` and `@google/generative-ai` as needed.
 
 4. **Optional QStash cron for vuln-check:** `0 * * * *` (hourly) → `POST https://<your-backend>/api/internal/vuln-check` with `X-Internal-Api-Key`. Checks projects due for vuln scan (last_vuln_check_at + vuln_check_frequency), OSV batch query, logs to project_vulnerability_events.
 
@@ -953,7 +951,7 @@ After deploying Phase 10 (UI Overhaul / Overview Screens):
 
 2. **Backend:** New stats endpoints in projects.ts, organizations.ts, teams.ts. Cache keys: `project-stats:{projectId}`, `org-stats:{orgId}`, `team-stats:{teamId}` (60s TTL). Sync endpoint sets `sync-cooldown:{projectId}` (60s).
 
-3. **Health score:** `computeHealthScore()` in `ee/backend/lib/health-score.ts` runs after populate-dependencies + policy evaluation. Existing projects get `health_score` updated on next extraction; no backfill.
+3. **Health score:** `computeHealthScore()` in `backend/src/lib/health-score.ts` runs after populate-dependencies + policy evaluation. Existing projects get `health_score` updated on next extraction; no backfill.
 
 4. **Frontend:** New components — StatsStrip, ActionableItems, ActivityFeed, OverviewGraph. useRealtimeStatus hook subscribes to `project_repositories`; requires Supabase Realtime enabled for that table.
 
@@ -992,7 +990,7 @@ After deploying Phase 7B (Aegis Autonomous Security Platform):
    - `phase6c_ai_infrastructure.sql`
    - `phase7b_aegis_platform.sql` (pgvector, 10 new tables, ALTERs; permission migration interact_with_security_agent → interact_with_aegis, adds trigger_fix, view_ai_spending, manage_incidents)
 
-2. **Dependencies:** `ee/backend`: `ai`, `@ai-sdk/openai`, `@ai-sdk/anthropic`, `@ai-sdk/google`. `frontend`: `@ai-sdk/react`.
+2. **Dependencies:** `backend`: `ai`, `@ai-sdk/openai`, `@ai-sdk/anthropic`, `@ai-sdk/google`. `frontend`: `@ai-sdk/react`.
 
 3. **Configure QStash cron schedules** (Upstash dashboard):
    - **Aegis due automations:** `*/5 * * * *` → `POST https://<your-backend>/api/internal/aegis/check-due-automations`
@@ -1066,13 +1064,13 @@ After deploying Phase 17 (Incident Response Orchestration):
 
 6. **No new npm dependencies.** Frontend PDF export uses `window.print()` (zero deps).
 
-7. **Seed playbook templates:** Call `seedPlaybookTemplates(orgId)` from `ee/backend/lib/incident-templates.ts` when an org first enables incident response, or add to Aegis onboarding flow.
+7. **Seed playbook templates:** Call `seedPlaybookTemplates(orgId)` from `backend/src/lib/incident-templates.ts` when an org first enables incident response, or add to Aegis onboarding flow.
 
 8. **Frontend:** AegisPage now shows Active Incidents in the left sidebar with Realtime subscription. Clicking opens incident detail view with 6-phase progress bar, timeline, and affected scope panel. AegisManagementConsole Incidents tab shows stats, playbooks, and incident history.
 
 9. **CE routes:** `POST /api/internal/incidents/escalate` registered in `backend/src/index.ts`.
 
-10. **EE routes:** `ee/backend/routes/incidents.ts` registered in `load-ee-routes.js` under `/api/organizations`.
+10. **Incidents routes:** `backend/src/routes/incidents.ts` mounted under `/api/organizations` in `backend/src/index.ts`.
 
 ---
 
@@ -1083,7 +1081,7 @@ The plan (`.cursor/plans/phase_07b_aegis.plan.md` § 7B-Q) specifies a full test
 - **Backend (66 tests):** Core agentic loop (1–8), tool system (9–16), task system (17–24), memory (25–30), automations (31–36), Slack bot (37–42), PR review (43–48), compliance (49–54), management console (55–60), permissions (61–66).
 - **Frontend (50 tests):** Aegis screen layout & navigation (67–76), chat interface (77–84), right panel & context (85–90), management console (91–106), security debt (107–112), cross-platform touchpoints (113–116).
 
-**Current state:** Phase 6C tests exist: `ee/backend/routes/__tests__/ai-infrastructure.test.ts` (AI providers, usage logging, thread helpers). Frontend `frontend/src/__tests__/ai-aegis.test.ts` covers AegisPanel with legacy stream. **Phase 7B-specific tests** (executor-v2, tool registry, tasks, sprint orchestrator, slack-bot, automations-engine, security-debt, pr-review, v2/stream endpoint, permissions, AegisPage, AegisManagementConsole) are **not yet implemented**. Add tests per 7B-Q in `ee/backend/routes/__tests__/` and `frontend/src/__tests__/`; see plan for full list. A minimal scaffold exists at `ee/backend/routes/__tests__/aegis-phase7b.test.ts` (placeholder specs and 1–2 real tests) to document coverage goals.
+**Current state:** Phase 6C tests exist: `backend/src/routes/__tests__/ai-infrastructure.test.ts` (AI providers, usage logging, thread helpers). Frontend `frontend/src/__tests__/ai-aegis.test.ts` covers AegisPanel with legacy stream. **Phase 7B-specific tests** (executor-v2, tool registry, tasks, sprint orchestrator, slack-bot, automations-engine, security-debt, pr-review, v2/stream endpoint, permissions, AegisPage, AegisManagementConsole) are **not yet implemented**. Add tests per 7B-Q in `backend/src/routes/__tests__/` and `frontend/src/__tests__/`; see plan for full list. A minimal scaffold exists at `frontend/src/__tests__/aegis-phase7b.test.tsx` (placeholder specs and 1–2 real tests) to document coverage goals.
 
 ---
 
@@ -1091,10 +1089,8 @@ The plan (`.cursor/plans/phase_07b_aegis.plan.md` § 7B-Q) specifies a full test
 
 - Use git bash, not PowerShell
 - Backend: `cd backend && npm run dev` (port 3001). Frontend: `cd frontend && npm run dev` (port 3000)
-- CE route: add to `backend/src/routes/`, register in `backend/src/index.ts` OUTSIDE `isEeEdition()` block
-- EE route: add to `ee/backend/routes/`, register INSIDE `isEeEdition()` block
-- CE must never import from `ee/`. EE imports from `backend/src/` via relative paths
-- DB migrations: `backend/database/` for both CE and EE. Document EE-only tables in `ee/database/README.md`
+- API route: add to `backend/src/routes/`, register in `backend/src/index.ts`
+- DB migrations: `backend/database/`
 - UI components: Radix primitives + Tailwind (shadcn pattern). Add new components via `npx shadcn@latest`
 - See `DEVELOPERS.md` for full setup, `CONTRIBUTING.md` for PR flow. See `fly.md` for extraction worker Fly.io deployment.
 - Phase 6B migrations: phase6b_reachability_tables.sql (project_reachable_flows, project_usage_slices, reachability_level/reachability_details on project_dependency_vulnerabilities).
@@ -1107,5 +1103,5 @@ The plan (`.cursor/plans/phase_07b_aegis.plan.md` § 7B-Q) specifies a full test
 - Phase 14 migrations: phase14_enterprise_security.sql (security_audit_logs, organization_mfa_exemptions, user_sessions, organization_sso_providers, organization_sso_bypass_tokens, organization_ip_allowlist, api_tokens, organization_scim_configs, scim_user_mappings, org columns for mfa/session/ip).
 - Phase 16 migration: phase16_aegis_learning.sql (fix_outcomes, strategy_patterns, cwe_ids on dependency_vulnerabilities, compute_strategy_patterns RPC, match_aegis_memories RPC).
 - Phase 17 migration: phase17_incident_response.sql (incident_playbooks, security_incidents, incident_timeline, incident_notes, allow_autonomous_containment on organizations).
-- See `.cursor/skills/add-new-features/SKILL.md` for CE vs EE placement decisions
+- See `.cursor/skills/add-new-features/SKILL.md` for where to add routes and libs
 - See `.cursor/skills/frontend-design/SKILL.md` and `.cursor/skills/ui-principles/SKILL.md` for UI standards

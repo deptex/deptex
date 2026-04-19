@@ -161,6 +161,7 @@ export interface OrganizationInvitation {
   id: string;
   organization_id: string;
   organization_name?: string;
+  organization_avatar_url?: string | null;
   email: string;
   role: string;
   status: string;
@@ -851,11 +852,11 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/roles/${roleId}`, { method: 'DELETE' });
   },
 
-  async getUserProfile(): Promise<{ user_id: string; avatar_url: string | null; full_name: string | null }> {
+  async getUserProfile(): Promise<{ user_id: string; avatar_url: string | null; full_name: string | null; default_organization_id: string | null }> {
     return fetchWithAuth('/api/user-profile');
   },
 
-  async updateUserProfile(data: { avatar_url?: string; full_name?: string }): Promise<{ user_id: string; avatar_url: string | null; full_name: string | null }> {
+  async updateUserProfile(data: { avatar_url?: string; full_name?: string; default_organization_id?: string | null }): Promise<{ user_id: string; avatar_url: string | null; full_name: string | null; default_organization_id: string | null }> {
     return fetchWithAuth('/api/user-profile', {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -940,9 +941,10 @@ export const api = {
     organizationId: string,
     params: {
       message: string;
-      targetEditor: 'compliance' | 'pullRequest';
-      currentComplianceCode: string;
-      currentPullRequestCode: string;
+      targetEditor: 'compliance' | 'pullRequest' | 'projectStatus';
+      currentComplianceCode?: string;
+      currentPullRequestCode?: string;
+      currentProjectStatusCode?: string;
       conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>;
     },
   ): Promise<Response> {
@@ -2821,6 +2823,8 @@ export interface Project {
   asset_tier_name?: string;
   asset_tier_color?: string;
   policy_evaluated_at?: string | null;
+  /** Percent of dependencies with passing licenses/policy (0–100). Used on org Compliance tab. */
+  compliance_score_pct?: number | null;
 }
 
 export interface ProjectRepository {
@@ -3801,10 +3805,16 @@ export interface VulnerabilityDetail {
     dependency_id: string;
     files_importing_count: number;
     files: string[];
+    environment?: string | null;
+    package_score?: number | null;
   }>;
   version_candidates: VersionCandidate[];
   timeline_events: VulnerabilityEvent[];
   reachable_flows?: ReachableFlow[];
+  /** For depscore breakdown: project asset tier enum (e.g. EXTERNAL). */
+  project_asset_tier?: string | null;
+  /** For depscore breakdown: custom tier multiplier when project uses org asset tier. */
+  project_tier_multiplier?: number | null;
 }
 
 export interface DependencySecuritySummary {

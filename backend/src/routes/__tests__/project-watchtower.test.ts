@@ -1,6 +1,6 @@
 /**
  * Phase 10B: Project Watchtower API tests (toggle, stats).
- * Requires DEPTEX_EDITION=ee (EE routes mounted).
+ * Project Watchtower API tests (backend/src/routes/projects.ts).
  */
 
 import request from 'supertest';

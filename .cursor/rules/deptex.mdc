@@ -7,7 +7,7 @@ alwaysApply: true
 
 Deptex is an AI-powered open-core dependency security platform. It combines dependency intelligence, continuous supply-chain monitoring, policy-as-code, and an autonomous AI security agent (Aegis) to automate software security for organizations.
 
-**Open-core model:** CE (open-source core) in `backend/` + `frontend/`, EE (commercial) in `ee/`. Toggle: `DEPTEX_EDITION=ce|ee` (default: ee). CE must never import from `ee/`; EE can import from `backend/src/`.
+**Architecture:** Single app in `backend/` + `frontend/`. API routes in **`backend/src/routes/`**, libs in **`backend/src/lib/`**, mounted from **`backend/src/index.ts`**.
 
 ---
 
@@ -43,13 +43,21 @@ Deptex is an AI-powered open-core dependency security platform. It combines depe
 ```
 backend/
   src/
-    index.ts                    Express entry. CE routes always mounted, EE routes via load-ee-routes.js
+    index.ts                    Express entry. All API routes mounted here (former EE merged into backend/src/routes)
     routes/
       userProfile.ts            GET/PUT /api/user-profile (avatar, full_name)
       docs-assistant.ts         POST /api/docs-assistant (Gemini-powered docs Q&A, no auth, IP rate limited)
+      organizations.ts          Org CRUD, members, invitations, roles, policies, notifications, etc.
+      teams.ts                  Team CRUD, roles, members
+      projects.ts               Projects, repos, dependencies, vulnerabilities, policies, workers callbacks
+      integrations.ts           OAuth + webhooks (GitHub, GitLab, Bitbucket, Slack, …)
+      aegis.ts                  Aegis AI chat, threads, automations, v2 stream
+      workers.ts                populate-dependencies, QStash callbacks, extraction pipeline
+      watchtower.ts             Watchtower supply-chain endpoints
+      internal.ts               X-Internal-Api-Key (e.g. create-bump-pr)
+      …                         See index.ts for full mount list
     lib/
       supabase.ts               Lazy-init Supabase client (service role). createUserClient(jwt) for user-scoped
-      features.ts               getEdition(), isEeEdition() -- CE vs EE toggle
       ecosystems.ts             MANIFEST_FILES map, FRAMEWORK_RULES, 11 ecosystems (npm, pypi, maven, golang, cargo, gem, composer, pub, hex, swift, nuget)
       ghsa.ts                   GitHub Advisory GraphQL batch fetch (up to 100 pkgs), severity mapping, version filtering
       semver-affected.ts        OSV-style affected range matching (introduced/fixed)
@@ -63,47 +71,7 @@ backend/
   parser-worker/                Standalone AST import analysis (oxc-parser)
   watchtower-worker/            Supply-chain forensic analysis (registry integrity, scripts, entropy, commits, contributors, anomalies)
   watchtower-poller/            Daily cron: dependency refresh (npm latest, GHSA batch), new commit detection for watched packages
-  database/                     ~140 SQL migration files (CE + EE tables)
-  load-ee-routes.js             Plain JS loader so tsc doesn't compile ee/
-
-ee/backend/
-  routes/
-    organizations.ts            Org CRUD, members, invitations, roles, policies, notification rules, deprecations, join link
-    teams.ts                    Team CRUD, roles, members, transfer ownership
-    projects.ts                 Project CRUD, repos, dependencies (list/overview/versions/supply-chain/safe-version), vulnerabilities, policies, exceptions, PR guardrails, Watchtower actions (bump/decrease/remove PRs), notes, contributing teams, AST import status
-    activities.ts               GET activities with date/type/team filters
-    integrations.ts             OAuth flows + webhooks for GitHub App, GitLab, Bitbucket, Slack, Discord, Jira, Linear, Stripe, Asana. Org connections CRUD, custom integrations, email notifications
-    aegis.ts                    Aegis AI: enable/status, chat (handle message with tool execution), threads, automations CRUD + run, inbox, activity logs
-    workers.ts                  Extraction pipeline: queue-populate, populate-dependencies (QStash), backfill-dependency-trees, extract-deps. Houses extractDependencies() for lockfile parsing
-    watchtower.ts               Supply-chain endpoints: full analysis, commits (with anomaly sort + touches_imported filter), contributors, anomalies, summary, AI commit analysis (GPT-4)
-    internal.ts                 Internal API (X-Internal-Api-Key): create-bump-pr
-    invitations.ts              GET pending invitations for current user
-  lib/
-    aegis/
-      executor.ts               Main Aegis entry: executeMessage() runs OpenAI with tool definitions, handles tool calls, logs to aegis_activity_logs
-      systemPrompt.ts           Aegis system prompt (role, capabilities, guidelines)
-      actions/
-        index.ts                Action registry: registerAction(), getActionHandler(), getActionDefinitionsForOpenAI()
-        init.ts                 Imports teams, members, policies to register actions
-        teams.ts                listTeams, addMemberToTeam, moveAllMembers
-        members.ts              listMembers (with team info)
-        policies.ts             listPolicies, getPolicy
-      queue.ts                  Automation processor: parseScheduleToNextRun, processAutomationJobs, scheduleAutomations, startQueueProcessor
-    github.ts                   GitHub App: JWT, installation tokens, repo file/tree access, branch/PR operations, commit diffs
-    gitlab-api.ts               GitLab OAuth: repo listing, file content, tree access
-    bitbucket-api.ts            Bitbucket OAuth: repo listing, file content
-    git-provider.ts             GitHubProvider, GitLabProvider, BitbucketProvider implementing GitProvider interface. createProvider(integration) factory
-    qstash.ts                   QStash helpers: signature verification, queuePopulateDependencyBatch, queueBackfillDependencyTrees, queueDependencyAnalysis
-    redis.ts                    Redis helpers: queueASTParsingJob, queueExtractionJob, queue names (extraction-jobs, ast-parsing-jobs)
-    cache.ts                    Redis cache: getCached/setCached/invalidateCache, TTL constants, cache key helpers for projects/deps/versions/safe-versions/watchtower
-    openai.ts                   Lazy-init OpenAI client
-    email.ts                    sendEmail, sendInvitationEmail (nodemailer/Gmail)
-    activities.ts               createActivity() -- insert activity log
-    create-bump-pr.ts           Create version bump PR via GitHub/GitLab/Bitbucket
-    create-remove-pr.ts         Create package removal PR
-    latest-safe-version.ts      Calculate latest safe version (vuln checks + cache)
-    project-policies.ts         isLicenseAllowed(), getEffectivePolicies() (org policy_code for a project)
-    watchtower-queue.ts         queueWatchtowerJob() to Redis watchtower-jobs queue
+  database/                     ~140 SQL migration files (all tables; org/aegis/etc. live here too)
 
 frontend/src/
   main.tsx                      RouterProvider + TooltipProvider entry
@@ -570,10 +538,8 @@ After deploying Phase 14 (Enterprise Security):
 
 - Use git bash, not PowerShell
 - Backend: `cd backend && npm run dev` (port 3001). Frontend: `cd frontend && npm run dev` (port 3000)
-- CE route: add to `backend/src/routes/`, register in `backend/src/index.ts` OUTSIDE `isEeEdition()` block
-- EE route: add to `ee/backend/routes/`, register INSIDE `isEeEdition()` block
-- CE must never import from `ee/`. EE imports from `backend/src/` via relative paths
-- DB migrations: `backend/database/` for both CE and EE. Document EE-only tables in `ee/database/README.md`
+- API route: add to `backend/src/routes/`, register in `backend/src/index.ts` (all routes merged; no separate EE loader)
+- DB migrations: `backend/database/` for all tables
 - UI components: Radix primitives + Tailwind (shadcn pattern). Use shadcn MCP to add new components
 - See `DEVELOPERS.md` for full setup, `CONTRIBUTING.md` for PR flow
 - See `.cursor/skills/add-new-features/SKILL.md` for CE vs EE placement decisions

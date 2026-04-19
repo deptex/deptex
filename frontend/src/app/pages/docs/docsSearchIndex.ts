@@ -167,8 +167,8 @@ export const docsSearchIndex: SearchEntry[] = [
     slug: "compliance",
     section: "Core Concepts",
     heading: "Custom Statuses",
-    content: "Organizations define statuses in Settings with name, color, rank, and is_passing flag. Policy code returns status names to classify projects.",
-    keywords: ["custom status", "is_passing", "status label", "compliant", "non-compliant"],
+    content: "Organizations define statuses in Settings with name, color, and rank. projectStatus returns a status name string to classify projects; pullRequestCheck uses passed true/false for merge gating.",
+    keywords: ["custom status", "projectStatus", "status label", "compliant", "non-compliant"],
   },
   {
     slug: "compliance",

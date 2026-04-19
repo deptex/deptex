@@ -13,7 +13,10 @@ import { Avatar, AvatarFallback, AvatarImage } from '../../components/ui/avatar'
 import { Toaster } from '../../components/ui/toaster';
 import { PolicyAIAssistant } from '../../components/PolicyAIAssistant';
 import { PolicyExceptionSidebar } from '../../components/PolicyExceptionSidebar';
-import { PolicyDiffViewer, getDiffLineCounts } from '../../components/PolicyDiffViewer';
+import { getDiffLineCounts } from '../../components/PolicyDiffViewer';
+import { PolicyDiffCodeEditor } from '../../components/PolicyDiffCodeEditor';
+import { CODE_BLOCK_BG } from '../../components/policy-monaco-setup';
+import { JsLangBadge } from '../../components/JsLangBadge';
 import { Card, CardContent } from '../../components/ui/card';
 
 /** Extract the body of a named function from full code. */
@@ -82,17 +85,20 @@ function PolicyEditorSkeleton() {
       <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
         <div className={`h-3.5 w-40 bg-muted rounded ${pulse}`} />
       </div>
-      <div className="bg-[#1d1f21] px-4 py-3 font-mono text-[13px] leading-6" style={{ minHeight: '180px' }}>
+      <div
+        className="px-4 py-3 font-mono text-[13px] leading-6"
+        style={{ minHeight: '180px', backgroundColor: CODE_BLOCK_BG }}
+      >
         <div className="space-y-1.5">
-          <div className="h-3 bg-white/[0.06] rounded w-[70%] animate-pulse" />
-          <div className="h-3 bg-white/[0.06] rounded w-[55%] ml-4 animate-pulse" />
-          <div className="h-3 bg-white/[0.06] rounded w-[80%] ml-4 animate-pulse" />
-          <div className="h-3 bg-white/[0.06] rounded w-[40%] ml-8 animate-pulse" />
-          <div className="h-3 bg-white/[0.06] rounded w-[60%] ml-4 animate-pulse" />
-          <div className="h-3 bg-white/[0.06] rounded w-[30%] animate-pulse" />
+          <div className="h-3 bg-white/10 rounded w-[70%] animate-pulse" />
+          <div className="h-3 bg-white/10 rounded w-[55%] ml-4 animate-pulse" />
+          <div className="h-3 bg-white/10 rounded w-[80%] ml-4 animate-pulse" />
+          <div className="h-3 bg-white/10 rounded w-[40%] ml-8 animate-pulse" />
+          <div className="h-3 bg-white/10 rounded w-[60%] ml-4 animate-pulse" />
+          <div className="h-3 bg-white/10 rounded w-[30%] animate-pulse" />
           <div className="h-3" />
-          <div className="h-3 bg-white/[0.06] rounded w-[50%] ml-4 animate-pulse" />
-          <div className="h-3 bg-white/[0.06] rounded w-[45%] ml-4 animate-pulse" />
+          <div className="h-3 bg-white/10 rounded w-[50%] ml-4 animate-pulse" />
+          <div className="h-3 bg-white/10 rounded w-[45%] ml-4 animate-pulse" />
         </div>
       </div>
     </div>
@@ -567,7 +573,8 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
             {subTab === 'package_policy' && (
               <div className="space-y-4">
                 <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                  <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center">
+                  <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center gap-2">
+                    <JsLangBadge className="text-xs" />
                     <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">packagePolicy</span>
                   </div>
                   <div className="bg-background-card relative">
@@ -629,13 +636,11 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
                   </div>
                 )}
                 <Card className="rounded-lg border border-border bg-background-card/80 mt-6">
-                  <CardContent className="p-4 flex gap-3">
-                    <div className="flex-shrink-0 mt-0.5">
-                      <Info className="h-5 w-5 text-foreground-muted" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm text-foreground-secondary">
-                        Define your organization&apos;s package policies as code. This runs on each dependency in your projects and checks against license, score, tier, and other metadata to allow or block packages.
+                  <CardContent className="p-5 flex gap-3">
+                    <Info className="h-4 w-4 text-foreground-muted flex-shrink-0 mt-0.5" />
+                    <div className="min-w-0 space-y-2 text-sm text-foreground-secondary leading-relaxed">
+                      <p>
+                        Define your organization&apos;s package policies as code. This runs once per dependency — you get a single package in <code className="font-mono text-foreground/90">context.dependency</code> and <code className="font-mono text-foreground/90">context.tier</code>. Return <code className="font-mono text-foreground/90">&#123; allowed, reasons &#125;</code>. Available on the dependency: name, version, license, dependencyScore, openSsfScore, weeklyDownloads, lastPublishedAt, releasesLast12Months, slsaLevel.
                       </p>
                     </div>
                   </CardContent>
@@ -647,7 +652,8 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
             {subTab === 'pr_check' && (
               <div className="space-y-4">
                 <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                  <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center">
+                  <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center gap-2">
+                    <JsLangBadge className="text-xs" />
                     <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">pullRequestCheck</span>
                   </div>
                   <div className="bg-background-card relative">
@@ -709,13 +715,11 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
                   </div>
                 )}
                 <Card className="rounded-lg border border-border bg-background-card/80 mt-6">
-                  <CardContent className="p-4 flex gap-3">
-                    <div className="flex-shrink-0 mt-0.5">
-                      <Info className="h-5 w-5 text-foreground-muted" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm text-foreground-secondary">
-                        Runs when pull requests change lockfiles or manifests. It receives PR context (changed files, diffs, added/removed packages) and returns whether the PR should pass or be blocked.
+                  <CardContent className="p-5 flex gap-3">
+                    <Info className="h-4 w-4 text-foreground-muted flex-shrink-0 mt-0.5" />
+                    <div className="min-w-0 space-y-2 text-sm text-foreground-secondary leading-relaxed">
+                      <p>
+                        Runs when a pull request changes lockfiles or manifests. You receive <code className="font-mono text-foreground/90">context.project</code>, <code className="font-mono text-foreground/90">context.added</code>, <code className="font-mono text-foreground/90">context.updated</code>, and <code className="font-mono text-foreground/90">context.removed</code> (arrays of dependencies). Return <code className="font-mono text-foreground/90">&#123; passed: boolean, violations: string[] &#125;</code> — <code className="font-mono text-foreground/90">passed: true</code> to allow the merge, <code className="font-mono text-foreground/90">passed: false</code> to block. Each item in added/updated has: name, version, license, policyResult, vulnerability counts (critical, high, medium, low), is_direct, openssf_score, and vulnerability details. Use this to block PRs that add disallowed licenses, high-risk vulns, or low-score packages.
                       </p>
                     </div>
                   </CardContent>
@@ -977,17 +981,35 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
                 </div>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto min-h-0 px-4 pb-4">
-              <div className="rounded-lg overflow-hidden border border-border">
-                <PolicyDiffViewer
-                  baseCode={selectedChange.previous_code}
-                  requestedCode={selectedChange.new_code}
-                  minHeight="200px"
-                  className="text-[11px]"
+            <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4">
+              <div className="rounded-lg overflow-hidden border border-border bg-background-card">
+                <div className="px-3 py-2 border-b border-border flex items-center justify-between gap-2 bg-background-card">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <JsLangBadge className="text-xs" />
+                    <span className="text-xs font-medium text-foreground truncate">
+                      {codeTypeLabel(selectedChange.code_type)}
+                    </span>
+                    {(() => {
+                      const { added, removed } = getDiffLineCounts(
+                        selectedChange.previous_code ?? '',
+                        selectedChange.new_code ?? ''
+                      );
+                      return (
+                        <>
+                          {added > 0 && <span className="text-xs text-green-500">+{added}</span>}
+                          {removed > 0 && <span className="text-xs text-red-500">-{removed}</span>}
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+                <PolicyDiffCodeEditor
+                  original={selectedChange.previous_code ?? ''}
+                  modified={selectedChange.new_code ?? ''}
                 />
               </div>
             </div>
-            <div className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header flex items-center justify-end">
+            <div className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header flex items-center justify-end gap-3">
               <Button variant="outline" size="sm" onClick={closeChangeDetail}>
                 Close
               </Button>
@@ -1035,17 +1057,35 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
                 <span className="text-sm text-muted-foreground">Requested by {selectedRequest.author_display_name || 'Unknown'}</span>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto min-h-0 px-4 pb-4">
-              <div className="rounded-lg overflow-hidden border border-border">
-                <PolicyDiffViewer
-                  baseCode={selectedRequest.base_code}
-                  requestedCode={selectedRequest.proposed_code}
-                  minHeight="200px"
-                  className="text-[11px]"
+            <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4">
+              <div className="rounded-lg overflow-hidden border border-border bg-background-card">
+                <div className="px-3 py-2 border-b border-border flex items-center justify-between gap-2 bg-background-card">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <JsLangBadge className="text-xs" />
+                    <span className="text-xs font-medium text-foreground truncate">
+                      {codeTypeLabel(selectedRequest.code_type)}
+                    </span>
+                    {(() => {
+                      const { added, removed } = getDiffLineCounts(
+                        selectedRequest.base_code ?? '',
+                        selectedRequest.proposed_code ?? ''
+                      );
+                      return (
+                        <>
+                          {added > 0 && <span className="text-xs text-green-500">+{added}</span>}
+                          {removed > 0 && <span className="text-xs text-red-500">-{removed}</span>}
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+                <PolicyDiffCodeEditor
+                  original={selectedRequest.base_code ?? ''}
+                  modified={selectedRequest.proposed_code ?? ''}
                 />
               </div>
             </div>
-            <div className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header flex items-center justify-between">
+            <div className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header flex items-center justify-between gap-3">
               <Button variant="outline" size="sm" onClick={closeRequestDetail}>
                 Close
               </Button>
@@ -1111,24 +1151,27 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
                     className="h-9 w-full"
                   />
                 </div>
-                <div className="space-y-2">
-                  <span className="text-sm font-medium text-foreground">Changes</span>
-                  <div className="rounded-lg overflow-hidden border border-border bg-[#1a1c1e] shadow-inner">
-                    <PolicyDiffViewer
-                      baseCode={
-                        commitSidebarCodeType === 'package_policy'
-                          ? wrapPackagePolicyBody(packagePolicyOriginal)
-                          : wrapPrCheckBody(prCheckOriginal)
-                      }
-                      requestedCode={
-                        commitSidebarCodeType === 'package_policy'
-                          ? wrapPackagePolicyBody(packagePolicyCode)
-                          : wrapPrCheckBody(prCheckCode)
-                      }
-                      minHeight="200px"
-                      className="text-[11px]"
-                    />
+                <div className="rounded-lg overflow-hidden border border-border bg-background-card">
+                  <div className="px-3 py-2 border-b border-border flex items-center justify-between gap-2 bg-background-card">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <JsLangBadge className="text-xs" />
+                      <span className="text-xs font-medium text-foreground">
+                        {commitSidebarCodeType === 'package_policy' ? 'Package policy' : 'PR Check'}
+                      </span>
+                    </div>
                   </div>
+                  <PolicyDiffCodeEditor
+                    original={
+                      commitSidebarCodeType === 'package_policy'
+                        ? wrapPackagePolicyBody(packagePolicyOriginal)
+                        : wrapPrCheckBody(prCheckOriginal)
+                    }
+                    modified={
+                      commitSidebarCodeType === 'package_policy'
+                        ? wrapPackagePolicyBody(packagePolicyCode)
+                        : wrapPrCheckBody(prCheckCode)
+                    }
+                  />
                 </div>
               </div>
             </div>
@@ -1164,7 +1207,8 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
           <div
             className={cn(
               'fixed right-4 top-4 bottom-4 w-full max-w-[680px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
-              !showAI ? 'translate-x-full' : (aiPanelVisible ? 'translate-x-0' : 'translate-x-full')
+              // Extra offset past 100% so border/shadow don’t peek when closed
+              !showAI ? 'translate-x-[calc(100%+32px)]' : (aiPanelVisible ? 'translate-x-0' : 'translate-x-[calc(100%+32px)]')
             )}
           >
             <PolicyAIAssistant

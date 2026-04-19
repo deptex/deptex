@@ -14,28 +14,24 @@ export default {
         mono: ['JetBrains Mono', ...defaultTheme.fontFamily.mono],
       },
       colors: {
-        // Custom Deptex Color Palette
+        // Vercel-style app palette (black + neutral grays). Primary stays green for brand.
         primary: {
           DEFAULT: "#025230",
           foreground: "#F0F4F8",
         },
         background: {
-          DEFAULT: "#0D0F12",
+          DEFAULT: "#000000",
         },
-        "background-card": "#1A1C1E",
-        // Main content area (e.g. dependency overview) — slightly lighter than page so cards (background-card) stand out.
-        "background-content": "#16181C",
-        // Card header strip (e.g. Usage card title bar) — slightly darker than card body for definition.
-        "background-card-header": "#141618",
-        // background-subtle now matches background-card — avoid using the old washed-out gray (#2C3138).
-        // Use background-card directly for surface colors; keep background-subtle only for hover/focus states.
-        "background-subtle": "#1A1C1E",
-        // Subtle row hover for tables (noticeable but softer than muted).
-        "table-hover": "#1f2124",
+        "background-card": "#0a0a0a",
+        "background-content": "#0a0a0a",
+        "background-card-header": "#050505",
+        "background-table-header": "#050505",
+        "background-subtle": "#171717",
+        "table-hover": "#111111",
         foreground: {
-          DEFAULT: "#F0F4F8",
-          secondary: "#A0A6AD",
-          muted: "#6C757D",
+          DEFAULT: "#fafafa",
+          secondary: "#a1a1a1",
+          muted: "#71717a",
         },
         success: {
           DEFAULT: "#22c55e",
@@ -53,16 +49,16 @@ export default {
           DEFAULT: "#2196F3",
           foreground: "#F0F4F8",
         },
-        border: "#2C3138",
-        input: "#2C3138",
-        ring: "#025230",
+        border: "#262626",
+        input: "#262626",
+        ring: "#525252",
         card: {
-          DEFAULT: "#1A1C1E",
-          foreground: "#F0F4F8",
+          DEFAULT: "#0a0a0a",
+          foreground: "#fafafa",
         },
         muted: {
-          DEFAULT: "#2C3138",
-          foreground: "#A0A6AD",
+          DEFAULT: "#171717",
+          foreground: "#a1a1a1",
         },
         accent: {
           DEFAULT: "#025230",
@@ -73,12 +69,23 @@ export default {
           foreground: "#F0F4F8",
         },
         popover: {
-          DEFAULT: "#1A1C1E",
-          foreground: "#F0F4F8",
+          DEFAULT: "#0a0a0a",
+          foreground: "#fafafa",
         },
         secondary: {
-          DEFAULT: "#2C3138",
-          foreground: "#F0F4F8",
+          DEFAULT: "#171717",
+          foreground: "#fafafa",
+        },
+        // Explicit Vercel tokens for one-off use (e.g. focus border)
+        vercel: {
+          bg: "#000000",
+          card: "#0a0a0a",
+          hover: "#171717",
+          border: "#262626",
+          "border-hover": "#404040",
+          text: "#fafafa",
+          "text-secondary": "#a1a1a1",
+          "text-muted": "#71717a",
         },
       },
       screens: {

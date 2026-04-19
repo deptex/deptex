@@ -251,6 +251,7 @@ export async function getDashboardData(orgId: string, timeRange?: string) {
   // Learning Curve (monthly success rates)
   const monthlyBuckets: Record<string, { total: number; success: number }> = {};
   for (const o of allOutcomes) {
+    if (!o.created_at || typeof o.created_at !== 'string') continue;
     const month = o.created_at.slice(0, 7); // YYYY-MM
     if (!monthlyBuckets[month]) monthlyBuckets[month] = { total: 0, success: 0 };
     monthlyBuckets[month].total++;

@@ -130,8 +130,8 @@ describe('runPRCheck', () => {
   it('passes clean PR', async () => {
     const code = `function pullRequestCheck(ctx) {
       var violations = ctx.added.concat(ctx.updated).filter(function(d) { return !d.policyResult.allowed; });
-      if (violations.length > 0) return { status: 'Non-Compliant', violations: ['blocked'] };
-      return { status: 'Compliant', violations: [] };
+      if (violations.length > 0) return { passed: false, violations: ['blocked'] };
+      return { passed: true, violations: [] };
     }`;
     const context = {
       project: { name: 'test', tier: TIER_INTERNAL },
@@ -141,14 +141,15 @@ describe('runPRCheck', () => {
       statuses: ['Compliant', 'Non-Compliant'],
     };
     const result = await runPRCheck(code, context);
-    expect(result.status).toBe('Compliant');
+    expect(result.passed).toBe(true);
+    expect(result.violations).toEqual([]);
   });
 
   it('blocks PR adding disallowed dependency', async () => {
     const code = `function pullRequestCheck(ctx) {
       var violations = ctx.added.concat(ctx.updated).filter(function(d) { return !d.policyResult.allowed; });
-      if (violations.length > 0) return { status: 'Non-Compliant', violations: ['blocked'] };
-      return { status: 'Compliant', violations: [] };
+      if (violations.length > 0) return { passed: false, violations: ['blocked'] };
+      return { passed: true, violations: [] };
     }`;
     const context = {
       project: { name: 'test', tier: TIER_INTERNAL },
@@ -158,7 +159,29 @@ describe('runPRCheck', () => {
       statuses: ['Compliant', 'Non-Compliant'],
     };
     const result = await runPRCheck(code, context);
-    expect(result.status).toBe('Non-Compliant');
+    expect(result.passed).toBe(false);
+    expect(result.violations).toEqual(['blocked']);
+  });
+
+  it('accepts return { passed: true, violations: [] }', async () => {
+    const code = `function pullRequestCheck(ctx) { return { passed: true, violations: [] }; }`;
+    const context = {
+      project: { name: 'test' },
+      added: [],
+      updated: [],
+      removed: [],
+    };
+    const result = await runPRCheck(code, context);
+    expect(result.passed).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  it('accepts return { passed: false, violations: ["x"] }', async () => {
+    const code = `function pullRequestCheck(ctx) { return { passed: false, violations: ['x'] }; }`;
+    const context = { project: { name: 'test' }, added: [], updated: [], removed: [] };
+    const result = await runPRCheck(code, context);
+    expect(result.passed).toBe(false);
+    expect(result.violations).toEqual(['x']);
   });
 });
 
@@ -208,7 +231,14 @@ describe('validatePolicyCode', () => {
   });
 
   it('passes valid PR check code', async () => {
-    const code = `function pullRequestCheck(ctx) { return { status: 'Compliant', violations: [] }; }`;
+    // pr_check shape requires { passed, violations } (not projectStatus-style { status })
+    const code = `function pullRequestCheck(ctx) { return { passed: true, violations: [] }; }`;
+    const result = await validatePolicyCode(code, 'pr_check', 'test-org');
+    expect(result.allPassed).toBe(true);
+  });
+
+  it('passes PR check code returning { passed, violations }', async () => {
+    const code = `function pullRequestCheck(ctx) { return { passed: true, violations: [] }; }`;
     const result = await validatePolicyCode(code, 'pr_check', 'test-org');
     expect(result.allPassed).toBe(true);
   });

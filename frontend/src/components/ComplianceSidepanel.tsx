@@ -7,6 +7,8 @@ interface ComplianceSidepanelBaseProps {
   canViewSettings: boolean;
   disabledExports?: boolean;
   exporting?: 'notice' | 'sbom' | null;
+  /** Darker shell to match org Security project drawer (same as Dependencies embed). */
+  embedSurface?: boolean;
 }
 
 interface ComplianceSidepanelProjectProps extends ComplianceSidepanelBaseProps {
@@ -32,12 +34,17 @@ interface ComplianceSidepanelOrganizationProps extends ComplianceSidepanelBasePr
 export type ComplianceSidepanelProps = ComplianceSidepanelProjectProps | ComplianceSidepanelOrganizationProps;
 
 export function ComplianceSidepanel(props: ComplianceSidepanelProps) {
-  const { canViewSettings, disabledExports = false, exporting = null } = props;
+  const { canViewSettings, disabledExports = false, exporting = null, embedSurface = false } = props;
   const mode = props.mode ?? 'project';
   const isOrg = mode === 'organization';
 
   return (
-    <aside className="w-52 shrink-0 border-r border-border bg-background flex flex-col py-4">
+    <aside
+      className={cn(
+        'w-52 shrink-0 border-r border-border flex flex-col py-4',
+        embedSurface ? 'bg-background-card-header' : 'bg-background-content'
+      )}
+    >
       <div className="px-3 mb-2">
         <h2 className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
           Compliance

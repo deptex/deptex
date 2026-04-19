@@ -140,13 +140,10 @@ export default function ProjectsContent() {
         <div className="space-y-3 text-foreground/90 leading-relaxed">
           <p>
             After each extraction, Deptex evaluates the project against all applicable{" "}
-            <Link to="/docs/policies" className="text-foreground underline hover:no-underline">policies</Link> and assigns a custom status.
-            The <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">is_passing</code> flag
-            indicates whether the project satisfies every active policy rule.
+            <Link to="/docs/policies" className="text-foreground underline hover:no-underline">policies</Link> and assigns a custom status by running your <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">projectStatus</code> function. You return a status name string (and optional violation messages); that name must match a status defined under Organization Settings → Statuses.
           </p>
           <p>
-            Statuses are determined entirely by policy evaluation &mdash; there are no hard-coded pass/fail thresholds.
-            This lets your organization define what &ldquo;passing&rdquo; means based on your own risk tolerance and compliance requirements.
+            There are no hard-coded thresholds — you encode what each status means in JavaScript (e.g. return <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">&quot;Compliant&quot;</code> or <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">&quot;Action Required&quot;</code> based on dependencies and <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">policyResult</code>).
           </p>
         </div>
       </div>

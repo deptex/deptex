@@ -135,19 +135,19 @@ function IntroductionContent() {
         <div className="rounded-lg border border-border bg-background-card overflow-hidden shadow-md aspect-video bg-background-subtle flex items-center justify-center min-h-[200px]">
           {screenshotError ? (
             <p className="text-sm text-foreground/70 px-4 text-center">
-              Add a screenshot at <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs">public/images/docs-app-overview.png</code> to show your app here.
+              Overview image at <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs">public/images/dashboardimage.png</code> could not be loaded.
             </p>
           ) : (
             <img
-              src="/images/docs-app-overview.png"
-              alt="Deptex app overview — organization dashboard with projects and dependency insights"
+              src="/images/dashboardimage.png"
+              alt="Deptex organization overview — org graph with teams, projects, health scores, and extraction status"
               className="w-full h-full object-cover object-top"
               onError={() => setScreenshotError(true)}
             />
           )}
         </div>
         <p className="mt-2 text-sm text-foreground/70">
-          Organization dashboard and project overview.
+          Organization dashboard: org graph with teams, projects, health scores (A+), and extraction status.
         </p>
       </div>
 

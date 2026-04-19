@@ -1,97 +1,57 @@
 ---
 name: deptex-add-new-features
-description: When adding new features to Deptex, use this skill to decide whether the feature belongs in the open-source core (CE) or the commercial layer (ee/) and how to implement it correctly.
+description: When adding new features to Deptex, use this skill for where to put routes and libs in the backend.
 ---
 
 # Adding New Features to Deptex
 
-Deptex uses an **open-core model**: open-source core (CE) and a commercial layer in `ee/`. When adding a new feature, you must decide where it belongs and implement it accordingly.
+The app uses a **single backend** in `backend/`. All API routes live in **`backend/src/routes/`** and are registered in **`backend/src/index.ts`**. Shared logic lives in **`backend/src/lib/`**.
 
 ---
 
-## Step 1: Decide CE vs EE
+## Where to put the feature
 
 | If the feature... | Put it in |
 |-------------------|-----------|
-| Is dependency/vulnerability logic, SBOM parsing, ecosystem detection, or pure analysis | **CE** — `backend/src/lib/`, `backend/extraction-worker/` |
-| Involves organizations, teams, invitations, roles, or billing | **EE** — `ee/backend/routes/`, `ee/backend/lib/` |
-| Involves GitHub App, GitLab, Bitbucket OAuth, or installation tokens | **EE** — `ee/backend/lib/` |
-| Involves QStash, Redis queues, email, or Aegis (AI agent) | **EE** — `ee/backend/lib/` |
-| Is a new API route for org-scoped resources | **EE** — `ee/backend/routes/` |
-| Is a minimal shared route (e.g. user profile) | **CE** — `backend/src/routes/` |
+| Is a new HTTP API surface | **`backend/src/routes/`** — add router + register in **`backend/src/index.ts`** |
+| Is shared logic (policy engine, AI, GitHub, Redis, etc.) | **`backend/src/lib/`** |
+| Is extraction / SBOM / vuln pipeline worker logic | **`backend/extraction-worker/`** (and related workers under `backend/`) |
+| Is org/team/project/integrations/Aegis | **`backend/src/routes/`** + **`backend/src/lib/`** |
 
 ---
 
-## Step 2: Where to Add the Code
+## Routes and registration
 
-### CE Feature (Open Source)
-
-- **Routes**: `backend/src/routes/`
-- **Libraries**: `backend/src/lib/`
-- **Worker logic**: `backend/extraction-worker/src/`
-
-**Rules:**
-
-- Do not import from `ee/` — CE must work when `DEPTEX_EDITION=ce`
-- If CE needs a provider interface, define a minimal interface in CE (e.g. `MonorepoGitProvider` in `detect-monorepo.ts`) so EE can implement it
-- For types shared with EE, put them in CE and have EE import from backend
-
-### EE Feature (Commercial)
-
-- **Routes**: `ee/backend/routes/`
-- **Libraries**: `ee/backend/lib/`
-
-**Rules:**
-
-- EE can import from `backend/` via `../../../backend/src/lib/xyz` or `../../../backend/src/middleware/auth`
-- EE routes are loaded only when `DEPTEX_EDITION=ee` (or unset); see `backend/src/index.ts`
-- When adding a new EE route, register it in the `if (isEeEdition()) { ... }` block in `backend/src/index.ts`
+- **Routes:** `backend/src/routes/<name>.ts` — export a router, mount with `app.use('/api/...', router)` in `backend/src/index.ts`.
+- **Pattern:** Follow existing routers (`organizations.ts`, `integrations.ts`, `aegis.ts`, etc.) for `authenticateUser`, org membership checks, and error handling.
 
 ---
 
-## Step 3: Feature Flag (EE Only)
+## Libraries
 
-EE features are gated by `DEPTEX_EDITION`:
-
-- `DEPTEX_EDITION=ce` — EE routes and libs are not loaded
-- `DEPTEX_EDITION=ee` or unset — Full SaaS behavior
-
-EE route registration is in `backend/src/index.ts`:
-
-```typescript
-if (isEeEdition()) {
-  app.use('/api/organizations', require('../../ee/backend/routes/organizations').default);
-  // ... add your route here
-}
-```
+- **Libs:** `backend/src/lib/` — AI (`lib/ai/`), Aegis (`lib/aegis/`), GitHub (`lib/github.ts`), notification dispatchers, policy engine, etc.
+- **Imports:** Use relative imports within `backend/src/`.
 
 ---
 
-## Step 4: Database Migrations
+## Database migrations
 
-- **CE tables** (projects, dependencies, vulnerabilities, etc.): Add SQL to `backend/database/`
-- **EE tables** (organizations, teams, integrations, aegis_*, etc.): Add SQL to `backend/database/` (migrations live there; document in `ee/database/README.md` which are EE-only)
-
----
-
-## Step 5: Frontend
-
-- **CE-only UI**: Can live in `frontend/` and render when `isEeEdition()` is false (Phase 5 of open-core strategy, currently deferred)
-- **EE UI** (org/team/projects): Stays in `frontend/`; it calls EE routes and only works when backend runs in EE mode
+- **All tables:** migrations in **`backend/database/`**.
 
 ---
 
-## Quick Reference
+## Frontend
 
-| Component | CE Location | EE Location |
-|-----------|-------------|-------------|
-| Routes | `backend/src/routes/` | `ee/backend/routes/` |
-| Libs | `backend/src/lib/` | `ee/backend/lib/` |
-| Middleware | `backend/src/middleware/` | shared |
-| DB migrations | `backend/database/` | same dir, document in `ee/database/README.md` |
+- **Frontend** in **`frontend/`** — calls `/api/...` as usual.
 
 ---
 
-## See Also
+## Quick reference
 
-- [ee/database/README.md](../../ee/database/README.md) — EE migrations
+| Component | Location |
+|-----------|----------|
+| API routes | `backend/src/routes/` |
+| Shared libs | `backend/src/lib/` |
+| Middleware | `backend/src/middleware/` |
+| Express entry + mounts | `backend/src/index.ts` |
+| DB migrations | `backend/database/` |

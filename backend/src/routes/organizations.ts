@@ -190,10 +190,25 @@ router.post('/', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'Organization name is required' });
     }
 
+    // Use creator's avatar for the new organization (user_profiles, then auth metadata)
+    let creatorAvatarUrl = null;
+    const { data: profile } = await supabase
+      .from('user_profiles')
+      .select('avatar_url')
+      .eq('user_id', userId)
+      .single();
+    if (profile?.avatar_url) {
+      creatorAvatarUrl = profile.avatar_url;
+    } else {
+      const { data: { user: authUser } } = await supabase.auth.admin.getUserById(userId);
+      const meta = authUser?.user_metadata;
+      creatorAvatarUrl = meta?.picture ?? meta?.avatar_url ?? null;
+    }
+
     // Create organization (plan tier lives in organization_plans only)
     const { data: organization, error: orgError } = await supabase
       .from('organizations')
-      .insert({ name: name.trim() })
+      .insert({ name: name.trim(), avatar_url: creatorAvatarUrl })
       .select()
       .single();
 
@@ -249,7 +264,6 @@ router.post('/', async (req: AuthRequest, res) => {
             manage_aegis: true,
             view_ai_spending: true,
             manage_incidents: true,
-            manage_watchtower: true,
             view_members: true,
             add_members: true,
             edit_roles: true,
@@ -278,7 +292,6 @@ router.post('/', async (req: AuthRequest, res) => {
             manage_aegis: true,
             view_ai_spending: true,
             manage_incidents: true,
-            manage_watchtower: true,
             view_members: true,
             add_members: true,
             edit_roles: true,
@@ -1982,9 +1995,9 @@ router.post('/:id/roles', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'Role with this name already exists' });
     }
 
-    // Default permissions: all false for custom roles
+    // Default permissions: all false for custom roles (view_settings always true on save from UI so any member can open Settings)
     const defaultPermissions = {
-      view_settings: false,
+      view_settings: true,
       view_activity: false,
       manage_compliance: false,
       manage_statuses: false,
@@ -1993,7 +2006,6 @@ router.post('/:id/roles', async (req: AuthRequest, res) => {
       manage_aegis: false,
       view_ai_spending: false,
       manage_incidents: false,
-      manage_watchtower: false,
       view_members: false,
       add_members: false,
       edit_roles: false,
@@ -2213,7 +2225,7 @@ router.put('/:id/roles/:roleId', async (req: AuthRequest, res) => {
       // Check all permission keys
       const allPermissionKeys = [
         'view_settings', 'manage_billing', 'manage_security', 'view_activity', 'manage_compliance', 'manage_statuses',
-        'interact_with_aegis', 'trigger_fix', 'manage_aegis', 'view_ai_spending', 'manage_incidents', 'manage_watchtower',
+        'interact_with_aegis', 'trigger_fix', 'manage_aegis', 'view_ai_spending', 'manage_incidents',
         'view_members', 'add_members', 'edit_roles', 'edit_permissions',
         'kick_members', 'manage_teams_and_projects', 'manage_integrations', 'manage_notifications', 'view_overview'
       ];
@@ -5030,13 +5042,21 @@ router.post('/:id/policies/ai-assist', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id } = req.params;
-    const { message, targetEditor, currentComplianceCode, currentPullRequestCode, conversationHistory } = req.body;
+    const {
+      message,
+      targetEditor,
+      currentComplianceCode,
+      currentPullRequestCode,
+      currentProjectStatusCode,
+      conversationHistory,
+    } = req.body;
 
     if (!message || typeof message !== 'string') {
       return res.status(400).json({ error: 'message is required' });
     }
-    if (!targetEditor || (targetEditor !== 'compliance' && targetEditor !== 'pullRequest')) {
-      return res.status(400).json({ error: 'targetEditor must be "compliance" or "pullRequest"' });
+    const validTargets = ['compliance', 'pullRequest', 'projectStatus'];
+    if (!targetEditor || !validTargets.includes(targetEditor)) {
+      return res.status(400).json({ error: 'targetEditor must be "compliance", "pullRequest", or "projectStatus"' });
     }
 
     const { data: membership } = await supabase
@@ -5101,6 +5121,23 @@ interface Project {
   asset_tier: AssetTier;
 }
 
+// packagePolicy receives (ONE dependency per call; no context.dependencies):
+interface PackagePolicyContext {
+  dependency: {
+    name: string;
+    version: string;
+    license: string | null;
+    dependencyScore: number | null;
+    openSsfScore: number | null;
+    weeklyDownloads: number | null;
+    lastPublishedAt: string | null;
+    releasesLast12Months: number | null;
+    maliciousIndicator: { source?: string; confidence?: number; reason?: string } | null;
+    slsaLevel: number | null;
+  };
+  tier: { name: string; rank: number; multiplier: number };
+}
+
 // pullRequestCheck receives:
 interface PullRequestCheckContext {
   project: Project;
@@ -5109,30 +5146,43 @@ interface PullRequestCheckContext {
   removed: RemovedDependency[];
 }
 
-// projectCompliance receives:
-interface ProjectComplianceContext {
-  project: Project;
-  dependencies: Dependency[];
+// projectStatus receives (body-only in editor; engine wraps as function projectStatus(context)):
+interface ProjectStatusContext {
+  project: { name: string; tier: { name: string; rank: number; multiplier: number }; teamName: string };
+  dependencies: Array<{
+    name: string;
+    version: string;
+    license: string | null;
+    dependencyScore: number | null;
+    policyResult: { allowed: boolean; reasons: string[] };
+    isDirect: boolean;
+    isDevDependency: boolean;
+    filesImportingCount: number;
+    isOutdated: boolean;
+    versionsBehind: number;
+    vulnerabilities: Array<{ osvId: string; severity: string; depscore: number | null; isReachable: boolean; cisaKev: boolean; fixedVersions: string[]; summary: string }>;
+  }>;
+  statuses: string[];  // org status names you may return as status (must match exactly)
 }
+
+// packagePolicy must return:
+interface PackagePolicyResult { allowed: boolean; reasons: string[]; }
 
 // pullRequestCheck must return:
 interface PullRequestCheckResult { passed: boolean; violations: string[]; }
 
-// projectCompliance must return:
-interface ComplianceResult { compliant: boolean; violations: string[]; }`;
+// projectStatus must return:
+interface ProjectStatusResult { status: string; violations: string[]; }`;
 
     const EXAMPLE_POLICIES = `
-EXAMPLE 1 - License Allowlist (projectCompliance body):
+EXAMPLE 1 - License allowlist (packagePolicy body). The engine calls packagePolicy once per dependency; you only have context.dependency (one package) and context.tier. Return { allowed, reasons }:
 \`\`\`
 const ALLOWED = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC"];
-const violations = [];
-for (const dep of context.dependencies) {
-  const lic = dep.license || "UNKNOWN";
-  if (!ALLOWED.some(a => lic.includes(a))) {
-    violations.push(\`License \${lic} not allowed on \${dep.name}@\${dep.version}\`);
-  }
+const lic = context.dependency.license || "UNKNOWN";
+if (!ALLOWED.some(a => lic.includes(a))) {
+  return { allowed: false, reasons: ["License " + lic + " not allowed on " + context.dependency.name + "@" + context.dependency.version] };
 }
-return { compliant: violations.length === 0, violations };
+return { allowed: true, reasons: [] };
 \`\`\`
 
 EXAMPLE 2 - Block critical reachable vulns (pullRequestCheck body):
@@ -5174,15 +5224,64 @@ for (const pkg of [...context.added, ...context.updated]) {
     violations.push(\`High entropy (obfuscation): \${pkg.name}@\${pkg.version}\`);
 }
 return { passed: violations.length === 0, violations };
+\`\`\`
+
+EXAMPLE 5 - Non-Compliant if any dependency blocked by packagePolicy (projectStatus body):
+\`\`\`
+var deps = context.dependencies || [];
+var blocked = deps.filter(function(d) {
+  return d.policyResult && d.policyResult.allowed === false;
+});
+if (blocked.length > 0) {
+  return {
+    status: 'Non-Compliant',
+    violations: blocked.map(function(d) {
+      return d.name + ': ' + (d.policyResult.reasons || []).join(', ');
+    })
+  };
+}
+return { status: 'Compliant', violations: [] };
 \`\`\``;
 
-    const targetFnName = targetEditor === 'compliance' ? 'projectCompliance' : 'pullRequestCheck';
-    const targetReturnType = targetEditor === 'compliance'
-      ? '{ compliant: boolean, violations: string[] }'
-      : '{ passed: boolean, violations: string[] }';
-    const targetContextType = targetEditor === 'compliance' ? 'ProjectComplianceContext' : 'PullRequestCheckContext';
+    // Org-specific labels for projectStatus assistant (tiers + status names)
+    let orgTiersLine = '';
+    let orgStatusesLine = '';
+    if (targetEditor === 'projectStatus') {
+      const { data: tiers } = await supabase
+        .from('organization_asset_tiers')
+        .select('name, rank, environmental_multiplier')
+        .eq('organization_id', id)
+        .order('rank', { ascending: true });
+      const { data: statuses } = await supabase
+        .from('organization_statuses')
+        .select('name')
+        .eq('organization_id', id)
+        .order('rank', { ascending: true });
+      const tierNames = (tiers ?? []).map((t: any) => `${t.name} (rank ${t.rank})`).join(', ') || 'Internal (default)';
+      const statusNames = (statuses ?? []).map((s: any) => s.name).join(', ') || 'Compliant, Non-Compliant';
+      orgTiersLine = `\n## This organization's asset tiers (for context — packagePolicy runs per-dep with context.tier)\n${tierNames}\n`;
+      orgStatusesLine = `\n## Status names you MUST use for context.status and return value\nReturn status as one of these strings exactly: ${statusNames}\n`;
+    }
+
+    const targetFnName =
+      targetEditor === 'compliance' ? 'packagePolicy'
+        : targetEditor === 'pullRequest' ? 'pullRequestCheck'
+          : 'projectStatus';
+    const targetReturnType =
+      targetEditor === 'compliance' ? '{ allowed: boolean, reasons: string[] }'
+        : targetEditor === 'pullRequest' ? '{ passed: boolean, violations: string[] }'
+          : '{ status: string, violations: string[] } — status must be one of the org status names listed below';
+    const targetContextType =
+      targetEditor === 'compliance' ? 'PackagePolicyContext'
+        : targetEditor === 'pullRequest' ? 'PullRequestCheckContext'
+          : 'ProjectStatusContext';
+
+    const packagePolicyInstruction = targetEditor === 'compliance'
+      ? ` The engine calls this function once per dependency. You only have context.dependency (one package) and context.tier. There is no context.dependencies — do not iterate over context.dependencies. Return { allowed: boolean, reasons: string[] }.`
+      : '';
 
     const systemPrompt = `You are an expert AI assistant that helps users write Deptex policy-as-code. You can chat normally or suggest JavaScript function bodies for dependency security policies.
+${orgTiersLine}${orgStatusesLine}
 
 ## When to respond with code vs chat only
 
@@ -5198,18 +5297,21 @@ ${POLICY_TYPEDEFS}
 ${EXAMPLE_POLICIES}
 
 ## Your Task (when the user asks for a code change)
-The user is editing the body of \`function ${targetFnName}(context: ${targetContextType})\`. You write ONLY the function body — do NOT include the function declaration or wrapping braces. The variable \`context\` is available.
+The user is editing the body of \`function ${targetFnName}(context: ${targetContextType})\`. You write ONLY the function body — do NOT include the function declaration or wrapping braces. The variable \`context\` is available.${packagePolicyInstruction}
 
 The function must return ${targetReturnType}.
 
 ## Current Code State
-Current ${targetEditor === 'compliance' ? 'Project Compliance' : 'Pull Request Check'} body:
+Current ${targetEditor === 'compliance' ? 'Package Policy' : targetEditor === 'pullRequest' ? 'Pull Request Check' : 'Status Code (projectStatus)'} body:
 \`\`\`
-${targetEditor === 'compliance' ? (currentComplianceCode || 'return { compliant: true };') : (currentPullRequestCode || 'return { passed: true };')}
+${targetEditor === 'compliance' ? (currentComplianceCode || 'return { allowed: true, reasons: [] };')
+  : targetEditor === 'pullRequest' ? (currentPullRequestCode || 'return { passed: true, violations: [] };')
+    : (currentProjectStatusCode || "return { status: 'Compliant', violations: [] };")}
 \`\`\`
 
 ${targetEditor === 'compliance' && currentPullRequestCode ? `Current Pull Request Check body (for reference):\n\`\`\`\n${currentPullRequestCode}\n\`\`\`` : ''}
-${targetEditor === 'pullRequest' && currentComplianceCode ? `Current Project Compliance body (for reference):\n\`\`\`\n${currentComplianceCode}\n\`\`\`` : ''}
+${targetEditor === 'pullRequest' && currentComplianceCode ? `Current Package Policy body (for reference):\n\`\`\`\n${currentComplianceCode}\n\`\`\`` : ''}
+${targetEditor === 'projectStatus' && currentComplianceCode ? `Current Package Policy body (for reference — projectStatus reads policyResult on each dependency):\n\`\`\`\n${currentComplianceCode}\n\`\`\`` : ''}
 
 ## Response Format
 Respond with a JSON object. ONLY output valid JSON, nothing else:

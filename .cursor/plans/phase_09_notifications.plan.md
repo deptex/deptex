@@ -68,7 +68,7 @@ isProject: false
 - Events are **persisted** to a `notification_events` table before dispatch (audit trail, replay, debugging)
 - Dispatch is **async via QStash** -- the event source (extraction, PR handler, etc.) fires and forgets; delivery happens in the background
 - Rule cascade is **additive**: org rules + team rules + project rules ALL fire independently (not override). Deduplication prevents the same destination receiving the same event twice
-- Trigger code runs in the **same `Function()` sandbox** as Phase 4 policy code (`ee/backend/lib/policy-engine.ts`), with the same `controlledFetch()` support (SSRF-protected via `resolveAndCheckSSRF()`), timeout limits, and fetch caps. Note: the sandbox is NOT `isolated-vm` -- it uses `new Function()`. There is no memory limit enforcement; true isolation is a Phase 14 (Enterprise Security) consideration
+- Trigger code runs in the **same `Function()` sandbox** as Phase 4 policy code (`backend/src/lib/policy-engine.ts`), with the same `controlledFetch()` support (SSRF-protected via `resolveAndCheckSSRF()`), timeout limits, and fetch caps. Note: the sandbox is NOT `isolated-vm` -- it uses `new Function()`. There is no memory limit enforcement; true isolation is a Phase 14 (Enterprise Security) consideration
 - Code validation on save uses the **same 3-check pattern** as Phase 4: syntax compilation, shape validation (must return boolean or enhanced object), fetch resilience
 - **Batching** groups high-volume events (e.g., 50 deps changed in one extraction) into a single summary notification. Critical events (malicious package, CISA KEV) bypass batching for immediate delivery
 - **Rate limiting** prevents notification storms: per-org and per-destination hourly caps with burst allowance
@@ -82,7 +82,7 @@ isProject: false
 - Frontend: `NotificationRulesSection.tsx` with create/edit sidebar, `PolicyCodeEditor` for custom code, `NotificationAIAssistant` for AI-generated trigger code, destination picker (Slack, Discord, Jira, Linear, Asana, email, custom webhooks)
 - Integration connections: `organization_integrations`, `team_integrations`, `project_integrations` tables storing OAuth tokens, webhook URLs, HMAC secrets for all providers
 - Custom webhook test ping: `POST /organizations/:orgId/custom-integrations/:id/test` with HMAC signing and 10s timeout
-- Email: `ee/backend/lib/email.ts` with nodemailer/Gmail transport
+- Email: `backend/src/lib/email.ts` with nodemailer/Gmail transport
 - Docs page: `NotificationRulesContent` with 10 trigger event types, context object reference, 6 example trigger functions
 - **NOT implemented**: `notification-dispatcher.ts`, event emission, rule execution, destination delivery, batching, rate limiting, delivery tracking, weekly digest
 
@@ -190,7 +190,7 @@ Complete catalog of events that flow through the notification system. Each event
 
 Central event emission and async dispatch system. Every event goes through a single `emitEvent()` function that persists the event and queues delivery.
 
-**File:** `ee/backend/lib/event-bus.ts`
+**File:** `backend/src/lib/event-bus.ts`
 
 ```typescript
 export interface DeptexEvent {
@@ -464,7 +464,7 @@ router.post('/reconcile-stuck-notifications', verifyQStash, async (req, res) => 
 
 ### 9B.1: Sandbox fetch() SSRF Protection
 
-**Note:** SSRF protection is **already implemented** in `ee/backend/lib/policy-engine.ts` (lines 61-106) via `resolveAndCheckSSRF()`. Phase 9 reuses this existing implementation -- no need to duplicate. The `controlledFetch()` function already calls `resolveAndCheckSSRF()` before every outbound request.
+**Note:** SSRF protection is **already implemented** in `backend/src/lib/policy-engine.ts` (lines 61-106) via `resolveAndCheckSSRF()`. Phase 9 reuses this existing implementation -- no need to duplicate. The `controlledFetch()` function already calls `resolveAndCheckSSRF()` before every outbound request.
 
 The `fetch()` proxy used by trigger code (same `Function()` sandbox as Phase 4 policy code) blocks requests to private networks and cloud metadata endpoints before forwarding. This prevents malicious or careless org admins from using trigger code to probe internal infrastructure.
 
@@ -534,12 +534,12 @@ All fetch() calls from notification trigger code are logged to the same audit tr
 
 The core engine that evaluates rules against events and dispatches to destinations.
 
-**File:** `ee/backend/lib/notification-dispatcher.ts`
+**File:** `backend/src/lib/notification-dispatcher.ts`
 
 **9C.1: Dispatch endpoint (QStash consumer)**
 
 ```typescript
-// In ee/backend/routes/workers.ts
+// In backend/src/routes/workers.ts
 router.post('/dispatch-notification', verifyQStash, async (req, res) => {
   const { eventId } = req.body;
   try {
@@ -816,7 +816,7 @@ When validating, run the code against 3 different sample contexts (vulnerability
 
 **9D.4: Integration into save endpoints**
 
-Modify the existing notification rule CRUD endpoints in [ee/backend/routes/organizations.ts](ee/backend/routes/organizations.ts) and [ee/backend/routes/projects.ts](ee/backend/routes/projects.ts):
+Modify the existing notification rule CRUD endpoints in [backend/src/routes/organizations.ts](backend/src/routes/organizations.ts) and [backend/src/routes/projects.ts](backend/src/routes/projects.ts):
 
 ```typescript
 // In POST /api/organizations/:id/notification-rules
@@ -1014,7 +1014,7 @@ function normalizeReturn(result: any): { notify: boolean; message?: string; titl
 
 Each integration type has a dedicated dispatcher that formats the event into the native message format and delivers it.
 
-**File:** `ee/backend/lib/destination-dispatchers.ts` (or split into per-destination files in `ee/backend/lib/dispatchers/`)
+**File:** `backend/src/lib/destination-dispatchers.ts` (or split into per-destination files in `backend/src/lib/dispatchers/`)
 
 **9F.1: Dispatcher interface**
 
@@ -1410,7 +1410,7 @@ async function dispatchAsana(
 
 **9F.8: Email dispatcher**
 
-Uses the existing `ee/backend/lib/email.ts` nodemailer transport with an HTML template.
+Uses the existing `backend/src/lib/email.ts` nodemailer transport with an HTML template.
 
 ```typescript
 async function dispatchEmail(
@@ -2134,7 +2134,7 @@ Where `emitEvent()` and `emitEventBatch()` are called across the codebase. Each 
 
 **9M.1: Extraction pipeline completion**
 
-In [ee/backend/routes/workers.ts](ee/backend/routes/workers.ts) `extractDependencies()`, after successful extraction:
+In [backend/src/routes/workers.ts](backend/src/routes/workers.ts) `extractDependencies()`, after successful extraction:
 
 ```
 After extraction completes:
@@ -2191,7 +2191,7 @@ After projectStatus() returns:
 
 **9M.3: PR webhook handler**
 
-In [ee/backend/routes/integrations.ts](ee/backend/routes/integrations.ts) `handlePullRequestEvent()`, after check runs are created:
+In [backend/src/routes/integrations.ts](backend/src/routes/integrations.ts) `handlePullRequestEvent()`, after check runs are created:
 
 ```
 After PR check completes (pass or fail):
@@ -2281,7 +2281,7 @@ If abs(newScore - previousScore) >= 10:
 
 **9M.9: Membership events**
 
-In [ee/backend/routes/organizations.ts](ee/backend/routes/organizations.ts), after member operations:
+In [backend/src/routes/organizations.ts](backend/src/routes/organizations.ts), after member operations:
 
 ```
 After POST /invitations (invite member):
@@ -2296,7 +2296,7 @@ After DELETE /members/:memberId:
 
 **9M.10: Integration events**
 
-In [ee/backend/routes/integrations.ts](ee/backend/routes/integrations.ts), after OAuth callbacks and disconnections:
+In [backend/src/routes/integrations.ts](backend/src/routes/integrations.ts), after OAuth callbacks and disconnections:
 
 ```
 After successful OAuth callback (Slack, Discord, Jira, etc.):
@@ -2308,7 +2308,7 @@ After DELETE /connections/:connectionId:
 
 **9M.11: Project lifecycle events**
 
-In [ee/backend/routes/projects.ts](ee/backend/routes/projects.ts):
+In [backend/src/routes/projects.ts](backend/src/routes/projects.ts):
 
 ```
 After POST /projects (create project):
@@ -2320,7 +2320,7 @@ After DELETE /projects/:projectId:
 
 **9M.12: Policy code changes**
 
-In [ee/backend/routes/organizations.ts](ee/backend/routes/organizations.ts), after policy code updates:
+In [backend/src/routes/organizations.ts](backend/src/routes/organizations.ts), after policy code updates:
 
 ```
 After PUT /policy-code/:codeType:
@@ -2329,7 +2329,7 @@ After PUT /policy-code/:codeType:
 
 **9M.13: Extraction start**
 
-In [ee/backend/lib/redis.ts](ee/backend/lib/redis.ts) `queueExtractionJob()`, after job is queued:
+In [backend/src/lib/redis.ts](backend/src/lib/redis.ts) `queueExtractionJob()`, after job is queued:
 
 ```
 emitEvent({ type: 'extraction_started', payload: { projectName, repositoryFullName }, priority: 'normal' })
@@ -2614,12 +2614,12 @@ CREATE INDEX idx_rule_changes_rule ON notification_rule_changes(rule_id, created
 
 **New files:**
 
-- `ee/backend/lib/event-bus.ts` -- event emission, QStash dispatch queuing, batch emission (9B)
-- `ee/backend/lib/notification-dispatcher.ts` -- core dispatch engine, rule resolution, sandbox execution, OAuth refresh mutex (9C, 9C.5)
-- `ee/backend/lib/notification-validator.ts` -- trigger code validation (syntax, shape, fetch resilience) (9D)
-- `ee/backend/lib/destination-dispatchers.ts` -- all 9 destination dispatchers + message templates + message length enforcement (9F, 9G.5)
-- `ee/backend/lib/notification-rate-limiter.ts` -- Redis sliding window rate limiting (9I)
-- `ee/backend/lib/notification-health.ts` -- connection health monitoring, auto-disable after consecutive failures (9V)
+- `backend/src/lib/event-bus.ts` -- event emission, QStash dispatch queuing, batch emission (9B)
+- `backend/src/lib/notification-dispatcher.ts` -- core dispatch engine, rule resolution, sandbox execution, OAuth refresh mutex (9C, 9C.5)
+- `backend/src/lib/notification-validator.ts` -- trigger code validation (syntax, shape, fetch resilience) (9D)
+- `backend/src/lib/destination-dispatchers.ts` -- all 9 destination dispatchers + message templates + message length enforcement (9F, 9G.5)
+- `backend/src/lib/notification-rate-limiter.ts` -- Redis sliding window rate limiting (9I)
+- `backend/src/lib/notification-health.ts` -- connection health monitoring, auto-disable after consecutive failures (9V)
 - `backend/database/notification_events_schema.sql` -- events table with dispatch_attempts column, UNIQUE dedup index (9N)
 - `backend/database/notification_deliveries_schema.sql` -- deliveries table with denormalized organization_id (9N)
 - `backend/database/phase9_prerequisites.sql` -- token_expires_at, timezone, schedule_config, consecutive_failures columns (9N.0)
@@ -2632,11 +2632,11 @@ CREATE INDEX idx_rule_changes_rule ON notification_rule_changes(rule_id, created
 
 **Modified files:**
 
-- `ee/backend/routes/workers.ts` -- add QStash consumer endpoints: `dispatch-notification`, `dispatch-notification-batch`, `digest-check`, `reconcile-stuck-notifications` (9C, 9K, 9B.2); add `emitEvent()` calls after extraction (9M.1)
-- `ee/backend/routes/organizations.ts` -- add validation to notification rule CRUD endpoints (9D.4); add `/validate-notification-rule` endpoint (9D); add `/test-notification-rule` endpoint (9L); add `/notification-history` + retry endpoints (9J.2); add PagerDuty connect endpoint (9F.10a); add rule change history recording (9U); add emitEvent calls for member/integration events (9M)
-- `ee/backend/routes/projects.ts` -- add validation to project notification rule CRUD endpoints (9D.4); add project-scoped notification history endpoint; add emitEvent calls for project_created/deleted (9M)
-- `ee/backend/routes/integrations.ts` -- add `emitEvent()` calls in `handlePullRequestEvent` (9M.3); add emitEvent for integration_connected/disconnected; populate token_expires_at on OAuth callbacks
-- `ee/backend/lib/qstash.ts` -- add `queueNotificationDispatch()` function (9B)
+- `backend/src/routes/workers.ts` -- add QStash consumer endpoints: `dispatch-notification`, `dispatch-notification-batch`, `digest-check`, `reconcile-stuck-notifications` (9C, 9K, 9B.2); add `emitEvent()` calls after extraction (9M.1)
+- `backend/src/routes/organizations.ts` -- add validation to notification rule CRUD endpoints (9D.4); add `/validate-notification-rule` endpoint (9D); add `/test-notification-rule` endpoint (9L); add `/notification-history` + retry endpoints (9J.2); add PagerDuty connect endpoint (9F.10a); add rule change history recording (9U); add emitEvent calls for member/integration events (9M)
+- `backend/src/routes/projects.ts` -- add validation to project notification rule CRUD endpoints (9D.4); add project-scoped notification history endpoint; add emitEvent calls for project_created/deleted (9M)
+- `backend/src/routes/integrations.ts` -- add `emitEvent()` calls in `handlePullRequestEvent` (9M.3); add emitEvent for integration_connected/disconnected; populate token_expires_at on OAuth callbacks
+- `backend/src/lib/qstash.ts` -- add `queueNotificationDispatch()` function (9B)
 - `backend/watchtower-poller/src/dependency-refresh.ts` -- add `emitEvent()` calls for new versions, deprecations, anomalies (9M.5)
 - `backend/src/index.ts` -- mount notification-unsubscribe CE route, mount user-notifications CE route
 - `frontend/src/app/pages/NotificationRulesSection.tsx` -- add validation error display (9D.5), live syntax validation (9D.6), IntelliSense (9D.7), auto-save drafts (9D.8), "Test Rule" button and results UI (9L.3), "Send Test" button (9L.4), enable/disable toggle, rule change history viewer (9U), dry-run mode toggle (9X), PagerDuty in ConnectionDropdown
@@ -2645,7 +2645,7 @@ CREATE INDEX idx_rule_changes_rule ON notification_rule_changes(rule_id, created
 - `frontend/src/components/AppHeader.tsx` -- add NotificationBell component (9S)
 - `frontend/src/components/NotificationAIAssistant.tsx` -- update with all 33+ event types, new context fields (pr, batch, previous), enhanced return value format
 - `frontend/src/app/pages/DocsPage.tsx` -- update NotificationRulesContent with new event types, context shape, PagerDuty, validation, test/preview, delivery tracking, digest configuration (9Z)
-- `backend/load-ee-routes.js` -- mount new QStash consumer routes
+- `backend/src/index.ts` -- mount new QStash consumer routes
 
 ### 9P: Edge Cases and Error Handling
 

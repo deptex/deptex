@@ -11,7 +11,6 @@ import { SyncDetailSidebar } from '../../components/SyncDetailSidebar';
 import VulnerabilityDetailContent, { type VulnerabilityHeaderContent } from '../../components/security/VulnerabilityDetailContent';
 import DependencySecurityContent from '../../components/security/DependencySecurityContent';
 import ProjectSecurityContent from '../../components/security/ProjectSecurityContent';
-import SecurityFilterBar, { type SecurityFilters, DEFAULT_FILTERS } from '../../components/security/SecurityFilterBar';
 import type { VulnGraphDepNode, VulnGraphCenterExtras } from '../../components/vulnerabilities-graph/useVulnerabilitiesGraphLayout';
 import type { Node } from '@xyflow/react';
 import { VULN_CENTER_ID } from '../../components/vulnerabilities-graph/useVulnerabilitiesGraphLayout';
@@ -40,7 +39,6 @@ export default function ProjectOverviewPage() {
   const [simulateLoading, setSimulateLoading] = useState(false);
   const [activeSidebar, setActiveSidebar] = useState<ActiveSidebar>(null);
   const [vulnHeaderContent, setVulnHeaderContent] = useState<VulnerabilityHeaderContent | null>(null);
-  const [securityFilters, setSecurityFilters] = useState<SecurityFilters>(DEFAULT_FILTERS);
 
   const realtime = useRealtimeStatus(organizationId, projectId);
   const isExtractionOngoing = checkExtractionOngoing(realtime.status);
@@ -271,18 +269,7 @@ export default function ProjectOverviewPage() {
       }
     : null;
 
-  const graphDepNodesForLayout = useMemo(() => {
-    const sla = securityFilters.slaStatus;
-    if (sla === 'all') return effectiveGraphDepNodes;
-    return effectiveGraphDepNodes
-      .map((node) => ({
-        ...node,
-        vulnerabilities: node.vulnerabilities.filter((v) => (v.sla_status ?? null) === sla),
-      }))
-      .filter((node) => node.vulnerabilities.length > 0);
-  }, [effectiveGraphDepNodes, securityFilters.slaStatus]);
-
-  const vulnerableCount = graphDepNodesForLayout.length;
+  const vulnerableCount = effectiveGraphDepNodes.length;
   const vulnerableDependenciesLabel =
     vulnerableCount === 0
       ? 'No vulnerable dependencies'
@@ -330,31 +317,27 @@ export default function ProjectOverviewPage() {
     <main className="relative flex flex-col min-h-[calc(100vh-3rem)] w-full bg-background-content">
       <div className="flex-1 min-h-0 relative">
         <div className="absolute inset-0 overflow-hidden">
+          {graphError && (
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive shadow-md">
+              {graphError}
+            </div>
+          )}
           <ProjectVulnerabilitiesGraph
             projectName={project?.name ?? 'Project'}
             vulnerableDependenciesLabel={vulnerableDependenciesLabel}
             framework={project?.framework}
-            graphDepNodes={graphDepNodesForLayout}
+            graphDepNodes={effectiveGraphDepNodes}
             graphLoading={graphLoading}
             vulnerabilitiesLoading={graphDataLoading}
             centerExtras={centerExtras}
-            showOnlyReachable={securityFilters.reachableOnly}
             extractionOngoing={isExtractionOngoing}
             extractionStatusKnown={!realtime.isLoading}
             onNodeClick={handleGraphNodeClick}
             statusName={project?.status_name}
             statusColor={project?.status_color}
+            assetTierName={project?.asset_tier_name ?? undefined}
+            assetTierColor={project?.asset_tier_color ?? undefined}
           />
-        </div>
-        <div className="absolute top-3 right-3 z-30 rounded-lg border border-border bg-background-card/95 backdrop-blur-sm shadow-md pointer-events-auto min-w-0">
-          <div className="px-3 py-2">
-            <SecurityFilterBar filters={securityFilters} onFiltersChange={setSecurityFilters} />
-          </div>
-          {graphError && (
-            <div className="mx-3 mb-2 bg-destructive/10 border border-destructive/30 rounded-lg p-3 text-sm text-destructive">
-              {graphError}
-            </div>
-          )}
         </div>
       </div>
 

@@ -1,48 +1,52 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+// Jest (backend uses Jest; file was mistakenly using vitest APIs)
 
 // ─── Mocks ───
 
 const mockSupabase = {
-  from: vi.fn().mockReturnThis(),
-  select: vi.fn().mockReturnThis(),
-  eq: vi.fn().mockReturnThis(),
-  in: vi.fn().mockReturnThis(),
-  match: vi.fn().mockReturnThis(),
-  single: vi.fn(),
-  maybeSingle: vi.fn(),
-  order: vi.fn().mockReturnThis(),
-  limit: vi.fn().mockReturnThis(),
-  lt: vi.fn().mockReturnThis(),
-  gt: vi.fn().mockReturnThis(),
-  neq: vi.fn().mockReturnThis(),
-  insert: vi.fn().mockReturnThis(),
-  update: vi.fn().mockReturnThis(),
-  rpc: vi.fn(),
+  from: jest.fn().mockReturnThis(),
+  select: jest.fn().mockReturnThis(),
+  eq: jest.fn().mockReturnThis(),
+  in: jest.fn().mockReturnThis(),
+  match: jest.fn().mockReturnThis(),
+  single: jest.fn(),
+  maybeSingle: jest.fn(),
+  order: jest.fn().mockReturnThis(),
+  limit: jest.fn().mockReturnThis(),
+  lt: jest.fn().mockReturnThis(),
+  gt: jest.fn().mockReturnThis(),
+  neq: jest.fn().mockReturnThis(),
+  insert: jest.fn().mockReturnThis(),
+  update: jest.fn().mockReturnThis(),
+  rpc: jest.fn(),
 };
 
-vi.mock('../../lib/supabase', () => ({
+jest.mock('../../lib/supabase', () => ({
   supabase: mockSupabase,
 }));
 
-vi.mock('../../lib/activities', () => ({
-  createActivity: vi.fn(),
+jest.mock('../../lib/activities', () => ({
+  createActivity: jest.fn(),
 }));
 
 const mockStripe = {
-  customers: { create: vi.fn() },
-  checkout: { sessions: { create: vi.fn() } },
-  subscriptions: { retrieve: vi.fn() },
-  billingPortal: { sessions: { create: vi.fn() } },
-  invoices: { list: vi.fn() },
-  webhooks: { constructEvent: vi.fn() },
+  customers: { create: jest.fn() },
+  checkout: { sessions: { create: jest.fn() } },
+  subscriptions: { retrieve: jest.fn() },
+  billingPortal: { sessions: { create: jest.fn() } },
+  invoices: { list: jest.fn() },
+  webhooks: { constructEvent: jest.fn() },
 };
 
-vi.mock('stripe', () => ({
-  default: vi.fn().mockImplementation(() => mockStripe),
-}));
+// Stripe SDK is used as `new Stripe(key)` — mock must be constructible and return our instance
+jest.mock('stripe', () => {
+  function StripeMock() {
+    return mockStripe;
+  }
+  return { __esModule: true, default: StripeMock };
+});
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  jest.clearAllMocks();
 
   mockSupabase.from.mockReturnThis();
   mockSupabase.select.mockReturnThis();
@@ -109,7 +113,7 @@ describe('Phase 13: Plan Limits Engine', () => {
 
     // Count: projects
     mockSupabase.select.mockReturnValueOnce({
-      match: vi.fn().mockReturnValue({ count: 3, error: null }),
+      match: jest.fn().mockReturnValue({ count: 3, error: null }),
     });
 
     const result = await checkPlanLimit('org-1', 'projects');
@@ -127,7 +131,7 @@ describe('Phase 13: Plan Limits Engine', () => {
     });
 
     mockSupabase.select.mockReturnValueOnce({
-      match: vi.fn().mockReturnValue({ count: 3, error: null }),
+      match: jest.fn().mockReturnValue({ count: 3, error: null }),
     });
 
     const result = await checkPlanLimit('org-at-limit', 'projects');
@@ -214,7 +218,7 @@ describe('Phase 13: Downgrade Validation', () => {
     const counts = [15, 3, 2, 1, 1, 2, 0];
     let callIndex = 0;
     mockSupabase.select.mockImplementation(() => ({
-      match: vi.fn().mockReturnValue({ count: counts[callIndex++] || 0, error: null }),
+      match: jest.fn().mockReturnValue({ count: counts[callIndex++] || 0, error: null }),
     }));
 
     const result = await checkDowngradeAllowed('org-1', 'free');
@@ -228,7 +232,7 @@ describe('Phase 13: Downgrade Validation', () => {
     const counts = [2, 3, 1, 1, 1, 1, 0];
     let callIndex = 0;
     mockSupabase.select.mockImplementation(() => ({
-      match: vi.fn().mockReturnValue({ count: counts[callIndex++] || 0, error: null }),
+      match: jest.fn().mockReturnValue({ count: counts[callIndex++] || 0, error: null }),
     }));
 
     const result = await checkDowngradeAllowed('org-fits', 'free');
@@ -299,7 +303,7 @@ describe('Phase 13: Stripe Integration', () => {
       current_period_end: Math.floor(Date.now() / 1000) + 30 * 86400,
     });
 
-    mockSupabase.update.mockReturnValueOnce({ eq: vi.fn().mockReturnValue({ error: null }) });
+    mockSupabase.update.mockReturnValueOnce({ eq: jest.fn().mockReturnValue({ error: null }) });
 
     await handleCheckoutCompleted({
       metadata: { organization_id: 'org-1' },
@@ -314,7 +318,7 @@ describe('Phase 13: Stripe Integration', () => {
   it('19. handleSubscriptionDeleted downgrades to free', async () => {
     const { handleSubscriptionDeleted } = await import('../../lib/stripe');
 
-    mockSupabase.update.mockReturnValueOnce({ eq: vi.fn().mockReturnValue({ error: null }) });
+    mockSupabase.update.mockReturnValueOnce({ eq: jest.fn().mockReturnValue({ error: null }) });
 
     await handleSubscriptionDeleted({
       metadata: { organization_id: 'org-1' },
@@ -330,7 +334,7 @@ describe('Phase 13: Stripe Integration', () => {
       data: { organization_id: 'org-1' },
       error: null,
     });
-    mockSupabase.update.mockReturnValueOnce({ eq: vi.fn().mockReturnValue({ error: null }) });
+    mockSupabase.update.mockReturnValueOnce({ eq: jest.fn().mockReturnValue({ error: null }) });
 
     await handlePaymentFailed({
       customer: 'cus_123',
@@ -347,7 +351,7 @@ describe('Phase 13: Stripe Integration', () => {
       data: { organization_id: 'org-1', subscription_status: 'past_due' },
       error: null,
     });
-    mockSupabase.update.mockReturnValueOnce({ eq: vi.fn().mockReturnValue({ error: null }) });
+    mockSupabase.update.mockReturnValueOnce({ eq: jest.fn().mockReturnValue({ error: null }) });
 
     await handlePaymentSucceeded({
       customer: 'cus_123',
@@ -369,9 +373,9 @@ describe('Phase 13: Sync Counter', () => {
 
     // First call: paid orgs past period
     mockSupabase.select.mockReturnValueOnce({
-      lt: vi.fn().mockReturnValue({
-        neq: vi.fn().mockReturnValue({
-          gt: vi.fn().mockReturnValue({
+      lt: jest.fn().mockReturnValue({
+        neq: jest.fn().mockReturnValue({
+          gt: jest.fn().mockReturnValue({
             data: [{ organization_id: 'org-1' }],
             error: null,
           }),
@@ -379,13 +383,13 @@ describe('Phase 13: Sync Counter', () => {
       }),
     });
 
-    mockSupabase.update.mockReturnValueOnce({ eq: vi.fn().mockReturnValue({ error: null }) });
+    mockSupabase.update.mockReturnValueOnce({ eq: jest.fn().mockReturnValue({ error: null }) });
 
     // Second call: free orgs past 30 days
     mockSupabase.select.mockReturnValueOnce({
-      eq: vi.fn().mockReturnValue({
-        lt: vi.fn().mockReturnValue({
-          gt: vi.fn().mockReturnValue({
+      eq: jest.fn().mockReturnValue({
+        lt: jest.fn().mockReturnValue({
+          gt: jest.fn().mockReturnValue({
             data: [],
             error: null,
           }),
@@ -415,7 +419,7 @@ describe('Phase 13: Usage Summary', () => {
     const countResults = [5, 8, 3, 4, 2, 3, 1];
     let idx = 0;
     mockSupabase.select.mockImplementation(() => ({
-      match: vi.fn().mockReturnValue({ count: countResults[idx++] || 0, error: null }),
+      match: jest.fn().mockReturnValue({ count: countResults[idx++] || 0, error: null }),
     }));
 
     const summary = await getUsageSummary('org-usage');
@@ -498,13 +502,13 @@ describe('Phase 13: Middleware', () => {
     });
 
     mockSupabase.select.mockReturnValueOnce({
-      match: vi.fn().mockReturnValue({ count: 3, error: null }),
+      match: jest.fn().mockReturnValue({ count: 3, error: null }),
     });
 
     const middleware = requirePlanLimit('projects');
     const req = { params: { id: 'org-limit-test' }, user: { id: 'u1' } } as any;
-    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as any;
-    const next = vi.fn();
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() } as any;
+    const next = jest.fn();
 
     await middleware(req, res, next);
 
@@ -524,8 +528,8 @@ describe('Phase 13: Middleware', () => {
 
     const middleware = requirePlanFeature('aegis_chat');
     const req = { params: { id: 'org-feat-test' }, user: { id: 'u1' } } as any;
-    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as any;
-    const next = vi.fn();
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() } as any;
+    const next = jest.fn();
 
     await middleware(req, res, next);
 
@@ -544,8 +548,8 @@ describe('Phase 13: Middleware', () => {
 
     const middleware = requirePlanLimit('projects');
     const req = { params: { id: 'org-ok' }, user: { id: 'u1' } } as any;
-    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as any;
-    const next = vi.fn();
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() } as any;
+    const next = jest.fn();
 
     await middleware(req, res, next);
 
@@ -557,8 +561,8 @@ describe('Phase 13: Middleware', () => {
 
     const middleware = requirePlanLimit('projects');
     const req = { params: {}, user: { id: 'u1' } } as any;
-    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() } as any;
-    const next = vi.fn();
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() } as any;
+    const next = jest.fn();
 
     await middleware(req, res, next);
     expect(next).toHaveBeenCalled();
@@ -573,7 +577,7 @@ describe('Phase 13: Billing Lifecycle', () => {
   it('36. handleSubscriptionUpdated syncs tier', async () => {
     const { handleSubscriptionUpdated } = await import('../../lib/stripe');
 
-    mockSupabase.update.mockReturnValueOnce({ eq: vi.fn().mockReturnValue({ error: null }) });
+    mockSupabase.update.mockReturnValueOnce({ eq: jest.fn().mockReturnValue({ error: null }) });
 
     await handleSubscriptionUpdated({
       metadata: { organization_id: 'org-1' },
