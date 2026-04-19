@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+
+*.pem
+
+# TypeScript compiled outputs and source maps
+*.js.map
+*.d.ts.map
+src/**/*.js
+src/**/*.d.ts
+watchtower-*/src/**/*.js
+watchtower-*/src/**/*.d.ts

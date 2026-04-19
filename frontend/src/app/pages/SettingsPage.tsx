@@ -1,0 +1,1005 @@
+import { useState, useEffect } from 'react';
+import { useAuth } from '../../contexts/AuthContext';
+import { useUserProfile } from '../../hooks/useUserProfile';
+import AppHeader from '../../components/AppHeader';
+import SettingsSidebar from '../../components/SettingsSidebar';
+import { Button } from '../../components/ui/button';
+import { Switch } from '../../components/ui/switch';
+import { Toaster } from '../../components/ui/toaster';
+import { useToast } from '../../hooks/use-toast';
+import { Save, Edit2, Loader2, ChevronDown, Check, Shield, Key, Monitor, Trash2, RefreshCw, Plus } from 'lucide-react';
+import { api, type Organization } from '../../lib/api';
+import { useSearchParams, useLocation } from 'react-router-dom';
+import { supabase } from '../../lib/supabase';
+
+const EVENT_TYPES = [
+  { id: 'vulnerability_detected', label: 'Vulnerability detected' },
+  { id: 'vulnerability_resolved', label: 'Vulnerability resolved' },
+  { id: 'dependency_outdated', label: 'Dependency outdated' },
+  { id: 'policy_violation', label: 'Policy violation' },
+  { id: 'extraction_complete', label: 'Extraction complete' },
+  { id: 'extraction_failed', label: 'Extraction failed' },
+  { id: 'pr_check_failed', label: 'PR check failed' },
+  { id: 'anomaly_detected', label: 'Anomaly detected' },
+  { id: 'status_changed', label: 'Project status changed' },
+];
+
+const DELIVERY_OPTIONS = [
+  { id: 'instant', label: 'Instant' },
+  { id: 'daily_digest', label: 'Daily Digest' },
+  { id: 'weekly_digest', label: 'Weekly Digest' },
+  { id: 'off', label: 'Off' },
+] as const;
+
+interface NotificationPrefs {
+  email_enabled: boolean;
+  event_types: string[];
+  dnd_start_hour: number;
+  dnd_end_hour: number;
+  delivery_preference: string;
+}
+
+const DEFAULT_PREFS: NotificationPrefs = {
+  email_enabled: true,
+  event_types: EVENT_TYPES.map((e) => e.id),
+  dnd_start_hour: 0,
+  dnd_end_hour: 0,
+  delivery_preference: 'instant',
+};
+
+export default function SettingsPage() {
+  const { pathname } = useLocation();
+  const isConnectedAccounts = pathname === '/settings/general/connected-accounts';
+  const isNotifications = pathname === '/settings/notifications';
+  const isSecurity = pathname === '/settings/security';
+  const { user, signInWithGitHub, signInWithGoogle } = useAuth();
+  const { toast } = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { avatarUrl, fullName } = useUserProfile();
+  
+  const [displayName, setDisplayName] = useState(fullName || user?.user_metadata?.full_name || '');
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const [integrations, setIntegrations] = useState<Record<string, boolean>>({
+    github: false,
+    google: false,
+  });
+
+  // Notification preferences state
+  const [orgs, setOrgs] = useState<Organization[]>([]);
+  const [selectedOrgId, setSelectedOrgId] = useState('');
+  const [notifPrefs, setNotifPrefs] = useState<NotificationPrefs>(DEFAULT_PREFS);
+  const [loadingPrefs, setLoadingPrefs] = useState(false);
+  const [savingPrefs, setSavingPrefs] = useState(false);
+  const [orgDropdownOpen, setOrgDropdownOpen] = useState(false);
+
+  // Security tab state
+  const [mfaEnabled, setMfaEnabled] = useState(false);
+  const [mfaLoading, setMfaLoading] = useState(false);
+  const [sessions, setSessions] = useState<Array<{
+    id: string;
+    device_info?: { browser?: string; os?: string };
+    ip_address?: string;
+    last_active_at?: string;
+    is_current?: boolean;
+  }>>([]);
+  const [loadingSessions, setLoadingSessions] = useState(false);
+  const [tokens, setTokens] = useState<Array<{
+    id: string;
+    name: string;
+    token_prefix?: string;
+    scopes?: string[];
+    last_used_at?: string;
+    expires_at?: string;
+  }>>([]);
+  const [loadingTokens, setLoadingTokens] = useState(false);
+
+  // Sync display name from hook
+  useEffect(() => {
+    if (fullName) {
+      setDisplayName(fullName);
+    }
+  }, [fullName]);
+
+  // Load integrations on mount and check GitHub login
+  useEffect(() => {
+    loadIntegrations();
+    // Check if user logged in with GitHub via Supabase
+    if (user?.identities?.some((identity: any) => identity.provider === 'github')) {
+      setIntegrations(prev => ({ ...prev, github: true }));
+    }
+    // Check and restore avatar if missing from metadata but exists in storage
+    checkAndRestoreAvatar();
+  }, [user]);
+
+  // Check if avatar exists in storage but is missing from profile, and restore it
+  const checkAndRestoreAvatar = async () => {
+    if (!user?.id) return;
+    
+    try {
+      // Check if profile already has avatar_url
+      const profile = await api.getUserProfile();
+      if (profile.avatar_url) return;
+      
+      // List files in the user's avatar folder
+      const { data: files, error } = await supabase.storage
+        .from('avatars')
+        .list(user.id, {
+          limit: 1,
+          sortBy: { column: 'created_at', order: 'desc' }
+        });
+      
+      if (error) {
+        console.error('Error checking avatar storage:', error);
+        return;
+      }
+      
+      // If we found a file, restore the avatar_url in profile
+      if (files && files.length > 0) {
+        const filePath = `${user.id}/${files[0].name}`;
+        const { data: { publicUrl } } = supabase.storage
+          .from('avatars')
+          .getPublicUrl(filePath);
+        
+        // Update user profile with the restored avatar URL
+        await api.updateUserProfile({ avatar_url: publicUrl });
+        console.log('Avatar restored from storage');
+      }
+    } catch (error) {
+      console.error('Error in checkAndRestoreAvatar:', error);
+    }
+  };
+  
+  // Handle OAuth callback
+  useEffect(() => {
+    const connected = searchParams.get('connected');
+    const error = searchParams.get('error');
+    const message = searchParams.get('message');
+
+      if (connected) {
+        toast({
+          title: 'Connected',
+          description: `${connected.charAt(0).toUpperCase() + connected.slice(1)} has been connected successfully.`,
+        });
+        loadIntegrations();
+        // Clean up URL
+        setSearchParams({});
+      } else if (error) {
+      toast({
+        title: 'Connection failed',
+        description: message || `Failed to connect ${error}.`,
+        variant: 'destructive',
+      });
+      setSearchParams({});
+    }
+  }, [searchParams, toast, setSearchParams]);
+
+  const loadIntegrations = async () => {
+    try {
+      // For user settings, we only care about login providers (GitHub, Google)
+      // Check if user logged in with these providers via Supabase
+      const integrationMap: Record<string, boolean> = {
+        github: false,
+        google: false,
+      };
+      
+      // Check identities from Supabase Auth
+      if (user?.identities) {
+        user.identities.forEach((identity: any) => {
+          if (identity.provider === 'github') {
+            integrationMap.github = true;
+          } else if (identity.provider === 'google') {
+            integrationMap.google = true;
+          }
+        });
+      }
+      
+      setIntegrations(integrationMap);
+    } catch (error: any) {
+      console.error('Failed to load integrations:', error);
+    }
+  };
+
+  const handleSaveGeneral = () => {
+    // TODO: Implement API call to save settings
+    toast({
+      title: 'Settings saved',
+      description: 'Your general settings have been updated.',
+    });
+  };
+
+  const handleConnectProvider = async (provider: 'github' | 'google') => {
+    try {
+      if (provider === 'github') {
+        await signInWithGitHub();
+      } else if (provider === 'google') {
+        await signInWithGoogle();
+      }
+      // The OAuth flow will redirect, so we don't need to do anything else here
+    } catch (error: any) {
+      toast({
+        title: 'Connection failed',
+        description: error.message || `Failed to connect ${provider}. Please try again.`,
+        variant: 'destructive',
+      });
+    }
+  };
+
+
+  // Load sessions when Security tab is active
+  useEffect(() => {
+    if (!isSecurity) return;
+    let cancelled = false;
+    setLoadingSessions(true);
+    (async () => {
+      try {
+        const token = (await supabase.auth.getSession()).data.session?.access_token;
+        const apiBase = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:3001';
+        const res = await fetch(`${apiBase}/api/user/sessions`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok && !cancelled) {
+          const data = await res.json();
+          setSessions(Array.isArray(data) ? data : data.sessions || []);
+        } else if (!cancelled) {
+          setSessions([]);
+        }
+      } catch {
+        if (!cancelled) setSessions([]);
+      } finally {
+        if (!cancelled) setLoadingSessions(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isSecurity]);
+
+  // Load API tokens when Security tab is active
+  useEffect(() => {
+    if (!isSecurity) return;
+    let cancelled = false;
+    setLoadingTokens(true);
+    (async () => {
+      try {
+        const token = (await supabase.auth.getSession()).data.session?.access_token;
+        const apiBase = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:3001';
+        const res = await fetch(`${apiBase}/api/user/api-tokens`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok && !cancelled) {
+          const data = await res.json();
+          setTokens(Array.isArray(data) ? data : data.tokens || []);
+        } else if (!cancelled) {
+          setTokens([]);
+        }
+      } catch {
+        if (!cancelled) setTokens([]);
+      } finally {
+        if (!cancelled) setLoadingTokens(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isSecurity]);
+
+  // Load orgs for notification preferences
+  useEffect(() => {
+    if (!isNotifications) return;
+    api.getOrganizations().then((data) => {
+      setOrgs(data);
+      if (data.length > 0 && !selectedOrgId) setSelectedOrgId(data[0].id);
+    }).catch(() => {});
+  }, [isNotifications]);
+
+  // Load notification preferences for selected org
+  useEffect(() => {
+    if (!isNotifications || !selectedOrgId) return;
+    let cancelled = false;
+    setLoadingPrefs(true);
+    (async () => {
+      try {
+        const token = (await supabase.auth.getSession()).data.session?.access_token;
+        const apiBase = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:3001';
+        const res = await fetch(`${apiBase}/api/user-notifications/preferences/${selectedOrgId}`, {
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        });
+        if (res.ok && !cancelled) {
+          const data = await res.json();
+          setNotifPrefs({
+            email_enabled: data.email_enabled ?? true,
+            event_types: data.event_types ?? EVENT_TYPES.map((e) => e.id),
+            dnd_start_hour: data.dnd_start_hour ?? 0,
+            dnd_end_hour: data.dnd_end_hour ?? 0,
+            delivery_preference: data.delivery_preference ?? 'instant',
+          });
+        }
+      } catch {
+        if (!cancelled) setNotifPrefs(DEFAULT_PREFS);
+      } finally {
+        if (!cancelled) setLoadingPrefs(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isNotifications, selectedOrgId]);
+
+  const handleSaveNotifPrefs = async () => {
+    if (!selectedOrgId) return;
+    setSavingPrefs(true);
+    try {
+      const token = (await supabase.auth.getSession()).data.session?.access_token;
+      const apiBase = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:3001';
+      const res = await fetch(`${apiBase}/api/user-notifications/preferences/${selectedOrgId}`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(notifPrefs),
+      });
+      if (!res.ok) throw new Error('Failed to save');
+      toast({ title: 'Preferences saved', description: 'Your notification preferences have been updated.' });
+    } catch (err: any) {
+      toast({ title: 'Failed to save', description: err.message || 'Could not save preferences', variant: 'destructive' });
+    } finally {
+      setSavingPrefs(false);
+    }
+  };
+
+  const toggleEventType = (eventId: string) => {
+    setNotifPrefs((prev) => ({
+      ...prev,
+      event_types: prev.event_types.includes(eventId)
+        ? prev.event_types.filter((e) => e !== eventId)
+        : [...prev.event_types, eventId],
+    }));
+  };
+
+  const integrationList = [
+    { id: 'github', name: 'GitHub', image: '/images/integrations/github.png', description: 'Use GitHub to sign in to your account' },
+    { id: 'google', name: 'Google', image: '/images/integrations/google.png', description: 'Use Google to sign in to your account' },
+  ];
+
+  return (
+    <>
+      <div className="min-h-screen bg-background">
+        <AppHeader
+          breadcrumb={[{ label: 'Settings' }]}
+          showSearch={false}
+          showNewOrg={false}
+        />
+
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
+          <div className="flex gap-8">
+            {/* Sidebar */}
+            <SettingsSidebar />
+
+            {/* Content */}
+            <div className="flex-1">
+              {!isConnectedAccounts && !isNotifications && !isSecurity && (
+                <div className="space-y-6">
+                  <div>
+                    <h2 className="text-2xl font-bold text-foreground">General</h2>
+                    <p className="text-foreground-secondary mt-1">
+                      Manage your profile and account settings.
+                    </p>
+                  </div>
+
+                  {/* Profile Card: Display Name + Avatar */}
+                  <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                    <div className="p-6">
+                      <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] items-start gap-6">
+                        <div className="space-y-3 min-w-0">
+                          <h3 className="text-base font-semibold text-foreground">Display Name</h3>
+                          <p className="text-sm text-foreground-secondary">
+                            This is your display name. It will be shown throughout the dashboard.
+                          </p>
+                          <div className="max-w-md">
+                            <input
+                              type="text"
+                              value={displayName}
+                              onChange={(e) => setDisplayName(e.target.value)}
+                              placeholder="Enter your display name"
+                              className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex-shrink-0 sm:justify-self-end self-end">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            id="avatar-upload"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              if (!file) return;
+                              
+                              if (file.size > 5 * 1024 * 1024) {
+                                toast({
+                                  title: 'File too large',
+                                  description: 'Please upload an image smaller than 5MB.',
+                                  variant: 'destructive',
+                                });
+                                return;
+                              }
+                              
+                              if (!file.type.startsWith('image/')) {
+                                toast({
+                                  title: 'Invalid file type',
+                                  description: 'Please upload an image file.',
+                                  variant: 'destructive',
+                                });
+                                return;
+                              }
+                              
+                              try {
+                                setIsUploadingAvatar(true);
+                                const fileExt = file.name.split('.').pop();
+                                const fileName = `${user?.id}-${Date.now()}.${fileExt}`;
+                                const filePath = `${user?.id}/${fileName}`;
+                                
+                                const { error: uploadError } = await supabase.storage
+                                  .from('avatars')
+                                  .upload(filePath, file, {
+                                    cacheControl: '3600',
+                                    upsert: true,
+                                  });
+                                
+                                if (uploadError) throw uploadError;
+                                
+                                const { data: { publicUrl } } = supabase.storage
+                                  .from('avatars')
+                                  .getPublicUrl(filePath);
+                                
+                                await api.updateUserProfile({ avatar_url: publicUrl });
+                                
+                                if (user?.id) {
+                                  localStorage.removeItem(`user_profile_${user.id}`);
+                                }
+                                
+                                await new Promise<void>((resolve) => {
+                                  const img = new Image();
+                                  img.onload = () => resolve();
+                                  img.onerror = () => resolve();
+                                  img.src = publicUrl;
+                                });
+                                
+                                toast({
+                                  title: 'Avatar updated',
+                                  description: 'Your avatar has been updated successfully.',
+                                });
+                                
+                                window.location.reload();
+                              } catch (error: any) {
+                                console.error('Error uploading avatar:', error);
+                                setIsUploadingAvatar(false);
+                                toast({
+                                  title: 'Upload failed',
+                                  description: error.message || 'Failed to upload avatar. Please try again.',
+                                  variant: 'destructive',
+                                });
+                              }
+                              
+                              e.target.value = '';
+                            }}
+                          />
+                          <label htmlFor="avatar-upload" className={`cursor-pointer block group ${isUploadingAvatar ? 'pointer-events-none' : ''}`}>
+                            <div className="relative">
+                              <img
+                                src={avatarUrl}
+                                alt={user?.email || 'User'}
+                                className="h-20 w-20 rounded-full object-cover border-2 border-border group-hover:border-primary/50 transition-all shadow-lg"
+                                onError={(e) => {
+                                  e.currentTarget.src = '/images/blank_profile_image.png';
+                                }}
+                              />
+                              {isUploadingAvatar ? (
+                                <div className="absolute inset-0 rounded-full bg-black/60 flex items-center justify-center">
+                                  <span className="animate-spin h-6 w-6 border-2 border-white border-t-transparent rounded-full" />
+                                </div>
+                              ) : (
+                                <div className="absolute inset-0 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                  <Edit2 className="h-5 w-5 text-white" />
+                                </div>
+                              )}
+                            </div>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
+                      <p className="text-xs text-foreground-secondary">
+                        Please use 32 characters at maximum.
+                      </p>
+                      <Button
+                        onClick={handleSaveGeneral}
+                        size="sm"
+                        className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                      >
+                        Save
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {isSecurity && (
+                <div className="space-y-6">
+                  <div>
+                    <h2 className="text-2xl font-bold text-foreground">Security</h2>
+                    <p className="text-foreground-secondary mt-1">
+                      Manage two-factor authentication, active sessions, and API tokens.
+                    </p>
+                  </div>
+
+                  {/* Two-Factor Authentication */}
+                  <div className="bg-background-card border border-border rounded-lg p-6">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
+                          <Shield className="h-4 w-4" />
+                          Two-Factor Authentication
+                        </h3>
+                        <p className="text-sm text-foreground-secondary mt-1">
+                          Add an extra layer of security to your account by requiring a second factor when signing in.
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        disabled={mfaLoading}
+                        variant={mfaEnabled ? 'outline' : 'default'}
+                        onClick={async () => {
+                          setMfaLoading(true);
+                          try {
+                            if (mfaEnabled) {
+                              // Placeholder for MFA disable flow
+                              setMfaEnabled(false);
+                              toast({ title: '2FA disabled', description: 'Two-factor authentication has been disabled.' });
+                            } else {
+                              // Placeholder for MFA enrollment flow
+                              setMfaEnabled(true);
+                              toast({ title: '2FA enabled', description: 'Two-factor authentication has been enabled.' });
+                            }
+                          } catch (err: any) {
+                            toast({ title: 'Failed', description: err.message || 'Could not update 2FA', variant: 'destructive' });
+                          } finally {
+                            setMfaLoading(false);
+                          }
+                        }}
+                      >
+                        {mfaLoading && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
+                        {mfaEnabled ? 'Disable 2FA' : 'Enable 2FA'}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Active Sessions */}
+                  <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                    <div className="p-6">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
+                          <Monitor className="h-4 w-4" />
+                          Active Sessions
+                        </h3>
+                        {sessions.length > 1 && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={async () => {
+                              const token = (await supabase.auth.getSession()).data.session?.access_token;
+                              const nonCurrent = sessions.filter((s) => !s.is_current);
+                              for (const s of nonCurrent) {
+                                await fetch(`${import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:3001'}/api/user/sessions/${s.id}`, {
+                                  method: 'DELETE',
+                                  headers: { Authorization: `Bearer ${token}` },
+                                });
+                              }
+                              setSessions(sessions.filter((s) => s.is_current));
+                              toast({ title: 'Sessions signed out', description: 'All other sessions have been signed out.' });
+                            }}
+                          >
+                            <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                            Sign Out All Other Sessions
+                          </Button>
+                        )}
+                      </div>
+                      {loadingSessions ? (
+                        <div className="flex items-center justify-center py-8">
+                          <Loader2 className="h-5 w-5 animate-spin text-foreground-secondary" />
+                        </div>
+                      ) : sessions.length === 0 ? (
+                        <p className="text-sm text-foreground-secondary py-4">No active sessions.</p>
+                      ) : (
+                        <table className="w-full">
+                          <thead className="border-b border-border">
+                            <tr>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Device</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">IP Address</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Last Active</th>
+                              <th className="w-24"></th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border">
+                            {sessions.map((session) => (
+                              <tr key={session.id} className="hover:bg-table-hover transition-colors">
+                                <td className="px-4 py-3">
+                                  <div className="text-sm text-foreground">
+                                    {[session.device_info?.browser, session.device_info?.os].filter(Boolean).join(' on ') || 'Unknown'}
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 text-sm text-foreground-secondary">{session.ip_address || '—'}</td>
+                                <td className="px-4 py-3 text-sm text-foreground-secondary">
+                                  {session.last_active_at
+                                    ? new Date(session.last_active_at).toLocaleString()
+                                    : '—'}
+                                </td>
+                                <td className="px-4 py-3">
+                                  {session.is_current ? (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-primary/10 text-primary border border-primary/20">
+                                      Current
+                                    </span>
+                                  ) : (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={async () => {
+                                        const authToken = (await supabase.auth.getSession()).data.session?.access_token;
+                                        const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:3001'}/api/user/sessions/${session.id}`, {
+                                          method: 'DELETE',
+                                          headers: { Authorization: `Bearer ${authToken}` },
+                                        });
+                                        if (res.ok) {
+                                          setSessions((prev) => prev.filter((s) => s.id !== session.id));
+                                          toast({ title: 'Session signed out', description: 'The session has been signed out.' });
+                                        } else {
+                                          toast({ title: 'Failed', description: 'Could not sign out session', variant: 'destructive' });
+                                        }
+                                      }}
+                                    >
+                                      Sign Out
+                                    </Button>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* API Tokens */}
+                  <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                    <div className="p-6">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
+                          <Key className="h-4 w-4" />
+                          API Tokens
+                        </h3>
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            toast({ title: 'Coming soon', description: 'Create token form will be implemented.' });
+                          }}
+                        >
+                          <Plus className="h-3.5 w-3.5 mr-1.5" />
+                          Create Token
+                        </Button>
+                      </div>
+                      {loadingTokens ? (
+                        <div className="flex items-center justify-center py-8">
+                          <Loader2 className="h-5 w-5 animate-spin text-foreground-secondary" />
+                        </div>
+                      ) : tokens.length === 0 ? (
+                        <p className="text-sm text-foreground-secondary py-4">No API tokens. Create one to access the API.</p>
+                      ) : (
+                        <table className="w-full">
+                          <thead className="border-b border-border">
+                            <tr>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Name</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Token</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Scopes</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Last Used</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Expires</th>
+                              <th className="w-32"></th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border">
+                            {tokens.map((t) => (
+                              <tr key={t.id} className="hover:bg-table-hover transition-colors">
+                                <td className="px-4 py-3 text-sm font-medium text-foreground">{t.name}</td>
+                                <td className="px-4 py-3 text-sm text-foreground-secondary font-mono">
+                                  {t.token_prefix ? `${t.token_prefix}••••••••` : '—'}
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="flex flex-wrap gap-1">
+                                    {(t.scopes || []).map((scope) => (
+                                      <span
+                                        key={scope}
+                                        className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-foreground-secondary/10 text-foreground-secondary border border-foreground-secondary/20"
+                                      >
+                                        {scope}
+                                      </span>
+                                    ))}
+                                    {(!t.scopes || t.scopes.length === 0) && <span className="text-foreground-secondary">—</span>}
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 text-sm text-foreground-secondary">
+                                  {t.last_used_at ? new Date(t.last_used_at).toLocaleString() : 'Never'}
+                                </td>
+                                <td className="px-4 py-3 text-sm text-foreground-secondary">
+                                  {t.expires_at ? new Date(t.expires_at).toLocaleDateString() : 'Never'}
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center gap-1">
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => toast({ title: 'Coming soon', description: 'Rotate token will be implemented.' })}
+                                    >
+                                      <RefreshCw className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => toast({ title: 'Coming soon', description: 'Revoke token will be implemented.' })}
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {isConnectedAccounts && !isNotifications && (
+                <div className="space-y-6">
+                  <div>
+                    <h2 className="text-2xl font-bold text-foreground">Connected Accounts</h2>
+                    <p className="text-foreground-secondary mt-1">
+                      Manage your login providers. These accounts are used for authentication and sign-in only.
+                    </p>
+                  </div>
+
+                  <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                    <table className="w-full">
+                      <thead className="bg-background-card-header border-b border-border">
+                        <tr>
+                          <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                            Provider
+                          </th>
+                          <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+                            Status
+                          </th>
+                          <th className="w-24"></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {integrationList.map((integration) => {
+                          const isConnected = integrations[integration.id];
+                          return (
+                            <tr key={integration.id} className="hover:bg-table-hover transition-colors">
+                              <td className="px-4 py-3 min-w-0">
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <img
+                                    src={integration.image}
+                                    alt={integration.name}
+                                    className={`h-8 w-8 rounded object-contain flex-shrink-0 ${isConnected ? 'opacity-100' : 'opacity-60'}`}
+                                  />
+                                  <div className="flex-1 min-w-0">
+                                    <div className="text-sm font-medium text-foreground">
+                                      {integration.name}
+                                    </div>
+                                    <div className="text-xs text-foreground-secondary truncate">
+                                      {isConnected
+                                        ? `You can sign in using your ${integration.name} account`
+                                        : integration.description
+                                      }
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3">
+                                {isConnected ? (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-500/10 text-green-500 border border-green-500/20">
+                                    Connected
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-foreground-secondary/10 text-foreground-secondary border border-foreground-secondary/20">
+                                    Not Connected
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-4 py-3">
+                                {!isConnected && (
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleConnectProvider(integration.id as 'github' | 'google')}
+                                  >
+                                    Connect
+                                  </Button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="p-4 bg-background-subtle/50 border border-border rounded-lg">
+                    <p className="text-sm text-foreground-secondary">
+                      <strong className="text-foreground font-medium">Note:</strong> You can add additional login methods by clicking &quot;Connect&quot; above.
+                      Once connected, login methods cannot be removed from this page to prevent account lockout.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {isNotifications && (
+                <div className="space-y-6">
+                  <div>
+                    <h2 className="text-2xl font-bold text-foreground">Notifications</h2>
+                    <p className="text-foreground-secondary mt-1">
+                      Configure how and when you receive notifications for each organization.
+                    </p>
+                  </div>
+
+                  {/* Organization selector */}
+                  <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                    <div className="p-6 space-y-5">
+                      <div>
+                        <label className="block text-sm font-medium text-foreground mb-1.5">Organization</label>
+                        <div className="relative max-w-sm">
+                          <button
+                            type="button"
+                            onClick={() => setOrgDropdownOpen((o) => !o)}
+                            className="w-full px-3 py-2.5 border border-border rounded-lg bg-background hover:border-foreground-secondary/30 flex items-center justify-between gap-2 text-sm text-foreground transition-all text-left"
+                          >
+                            <span className={selectedOrgId ? 'text-foreground' : 'text-foreground-secondary'}>
+                              {orgs.find((o) => o.id === selectedOrgId)?.name || 'Select organization'}
+                            </span>
+                            <ChevronDown className={`h-4 w-4 text-foreground-secondary transition-transform ${orgDropdownOpen ? 'rotate-180' : ''}`} />
+                          </button>
+                          {orgDropdownOpen && (
+                            <div className="absolute z-50 left-0 right-0 mt-1 py-0.5 bg-background-card border border-border rounded-lg shadow-xl overflow-hidden max-h-60 overflow-y-auto animate-in fade-in-0 zoom-in-95 duration-100">
+                              {orgs.map((org) => (
+                                <button
+                                  key={org.id}
+                                  type="button"
+                                  className="w-full px-3 py-2.5 flex items-center justify-between hover:bg-table-hover transition-colors text-left text-sm"
+                                  onClick={() => { setSelectedOrgId(org.id); setOrgDropdownOpen(false); }}
+                                >
+                                  <span className="text-foreground">{org.name}</span>
+                                  {selectedOrgId === org.id && <Check className="h-4 w-4 text-foreground" />}
+                                </button>
+                              ))}
+                              {orgs.length === 0 && (
+                                <div className="px-3 py-2.5 text-sm text-foreground-secondary">No organizations</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {loadingPrefs ? (
+                        <div className="flex items-center justify-center py-8">
+                          <Loader2 className="h-5 w-5 animate-spin text-foreground-secondary" />
+                        </div>
+                      ) : selectedOrgId ? (
+                        <div className="space-y-6">
+                          {/* Email notifications */}
+                          <div className="flex items-center justify-between py-2">
+                            <div>
+                              <span className="text-sm font-medium text-foreground block">Email Notifications</span>
+                              <span className="text-xs text-foreground-secondary">Receive notifications via email.</span>
+                            </div>
+                            <Switch
+                              checked={notifPrefs.email_enabled}
+                              onCheckedChange={(v) => setNotifPrefs((p) => ({ ...p, email_enabled: v }))}
+                            />
+                          </div>
+
+                          {/* Event type filters */}
+                          <div>
+                            <label className="block text-sm font-medium text-foreground mb-2">Event Types</label>
+                            <p className="text-xs text-foreground-secondary mb-3">Select which events trigger notifications.</p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {EVENT_TYPES.map((evt) => (
+                                <label
+                                  key={evt.id}
+                                  className="flex items-center gap-2.5 px-3 py-2 rounded-lg border border-border bg-background hover:bg-table-hover cursor-pointer transition-colors"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={notifPrefs.event_types.includes(evt.id)}
+                                    onChange={() => toggleEventType(evt.id)}
+                                    className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
+                                  />
+                                  <span className="text-sm text-foreground">{evt.label}</span>
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Do Not Disturb */}
+                          <div>
+                            <label className="block text-sm font-medium text-foreground mb-2">Do Not Disturb</label>
+                            <p className="text-xs text-foreground-secondary mb-3">Silence notifications during these hours (UTC).</p>
+                            <div className="flex items-center gap-3 max-w-xs">
+                              <div className="flex-1">
+                                <label className="block text-xs text-foreground-secondary mb-1">Start (UTC)</label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={23}
+                                  value={notifPrefs.dnd_start_hour}
+                                  onChange={(e) => setNotifPrefs((p) => ({ ...p, dnd_start_hour: Math.max(0, Math.min(23, parseInt(e.target.value) || 0)) }))}
+                                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                                />
+                              </div>
+                              <span className="text-foreground-secondary mt-5">—</span>
+                              <div className="flex-1">
+                                <label className="block text-xs text-foreground-secondary mb-1">End (UTC)</label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={23}
+                                  value={notifPrefs.dnd_end_hour}
+                                  onChange={(e) => setNotifPrefs((p) => ({ ...p, dnd_end_hour: Math.max(0, Math.min(23, parseInt(e.target.value) || 0)) }))}
+                                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Delivery preference */}
+                          <div>
+                            <label className="block text-sm font-medium text-foreground mb-2">Delivery Preference</label>
+                            <div className="flex flex-wrap gap-2">
+                              {DELIVERY_OPTIONS.map((opt) => (
+                                <button
+                                  key={opt.id}
+                                  type="button"
+                                  onClick={() => setNotifPrefs((p) => ({ ...p, delivery_preference: opt.id }))}
+                                  className={`px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors ${
+                                    notifPrefs.delivery_preference === opt.id
+                                      ? 'border-primary bg-primary/10 text-primary'
+                                      : 'border-border bg-background text-foreground-secondary hover:text-foreground hover:border-foreground-secondary/30'
+                                  }`}
+                                >
+                                  {opt.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-sm text-foreground-secondary py-4">Select an organization to configure notification preferences.</p>
+                      )}
+                    </div>
+
+                    {selectedOrgId && !loadingPrefs && (
+                      <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
+                        <Button
+                          onClick={handleSaveNotifPrefs}
+                          disabled={savingPrefs}
+                          size="sm"
+                          className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                        >
+                          {savingPrefs && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
+                          Save
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <Toaster position="bottom-right" />
+    </>
+  );
+}

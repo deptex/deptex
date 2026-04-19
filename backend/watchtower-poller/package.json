@@ -1,0 +1,37 @@
+{
+  "name": "deptex-watchtower-poller",
+  "version": "0.1.0",
+  "description": "Watchtower Poller for Deptex - Monitors watched packages for new commits and analyzes them",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "seed": "tsx seed-queue.ts",
+    "refresh-once": "tsx src/run-refresh-once.ts",
+    "trigger-daily-now": "tsx src/trigger-daily-now.ts",
+    "type-check": "tsc --noEmit"
+  },
+  "keywords": [
+    "watchtower",
+    "supply-chain-security",
+    "commit-monitoring",
+    "anomaly-detection"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "@upstash/redis": "^1.25.0",
+    "dotenv": "^16.3.1",
+    "oxc-parser": "^0.111.0",
+    "semver": "^7.6.0",
+    "simple-git": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "@types/semver": "^7.7.1",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}
