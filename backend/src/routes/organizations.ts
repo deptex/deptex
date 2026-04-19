@@ -1687,6 +1687,55 @@ router.put('/:id', async (req: AuthRequest, res) => {
   }
 });
 
+// PATCH /api/organizations/:id - Partial update (e.g. notifications_paused_until)
+router.patch('/:id', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const { notifications_paused_until } = req.body;
+
+    const { data: membership, error: membershipError } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (membershipError || !membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    if (membership.role !== 'owner' && membership.role !== 'admin') {
+      return res.status(403).json({ error: 'Only admins and owners can update organization' });
+    }
+
+    const updateData: any = { updated_at: new Date().toISOString() };
+    if (notifications_paused_until !== undefined) {
+      updateData.notifications_paused_until = notifications_paused_until;
+    }
+
+    const { data: organization, error: updateError } = await supabase
+      .from('organizations')
+      .update(updateData)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (updateError) throw updateError;
+
+    const { data: planRow } = await supabase
+      .from('organization_plans')
+      .select('plan_tier')
+      .eq('organization_id', id)
+      .single();
+
+    res.json({ ...organization, plan: planRow?.plan_tier ?? 'free' });
+  } catch (error: any) {
+    console.error('Error patching organization:', error);
+    res.status(500).json({ error: error.message || 'Failed to update organization' });
+  }
+});
+
 // DELETE /api/organizations/:id - Delete organization
 router.delete('/:id', async (req: AuthRequest, res) => {
   try {
@@ -3812,6 +3861,92 @@ router.get('/:id/policy-changes', async (req: AuthRequest, res) => {
   }
 });
 
+// GET /api/organizations/:id/policy-change-requests - Pending project policy change requests (for org Policies UI)
+router.get('/:id/policy-change-requests', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const { data: changes, error } = await supabase
+      .from('project_policy_changes')
+      .select('*')
+      .eq('organization_id', id)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (error) throw error;
+    const list = changes ?? [];
+
+    const projectIds = [...new Set(list.map((c: any) => c.project_id))];
+    const authorIds = [...new Set(list.map((c: any) => c.author_id).filter(Boolean))];
+
+    let projectNames: Record<string, string> = {};
+    if (projectIds.length > 0) {
+      const { data: projects } = await supabase
+        .from('projects')
+        .select('id, name')
+        .in('id', projectIds);
+      for (const p of projects ?? []) {
+        projectNames[p.id] = p.name ?? 'Unknown project';
+      }
+    }
+
+    let profiles: Record<string, { full_name: string | null; avatar_url: string | null }> = {};
+    if (authorIds.length > 0) {
+      const { data: profileRows } = await supabase
+        .from('user_profiles')
+        .select('user_id, full_name, avatar_url')
+        .in('user_id', authorIds);
+      for (const p of profileRows ?? []) {
+        profiles[p.user_id] = { full_name: p.full_name ?? null, avatar_url: p.avatar_url ?? null };
+      }
+      for (const uid of authorIds) {
+        if (!profiles[uid]?.full_name?.trim()) {
+          const { data: { user: authUser } } = await supabase.auth.admin.getUserById(uid);
+          const fallbackName = authUser?.user_metadata?.full_name
+            || authUser?.user_metadata?.name
+            || authUser?.email
+            || null;
+          if (fallbackName) {
+            if (!profiles[uid]) profiles[uid] = { full_name: null, avatar_url: null };
+            profiles[uid].full_name = fallbackName;
+          }
+          if (profiles[uid] && !profiles[uid].avatar_url && authUser?.user_metadata?.picture) {
+            profiles[uid].avatar_url = authUser.user_metadata.picture;
+          }
+          if (profiles[uid] && !profiles[uid].avatar_url && authUser?.user_metadata?.avatar_url) {
+            profiles[uid].avatar_url = authUser.user_metadata.avatar_url;
+          }
+        }
+      }
+    }
+
+    const enriched = list.map((c: any) => ({
+      ...c,
+      project_name: projectNames[c.project_id] ?? 'Unknown project',
+      author_display_name: profiles[c.author_id]?.full_name ?? null,
+      author_avatar_url: profiles[c.author_id]?.avatar_url ?? null,
+    }));
+
+    res.json(enriched);
+  } catch (error: any) {
+    console.error('Error fetching policy change requests:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch policy change requests' });
+  }
+});
+
 // POST /api/organizations/:id/policy-code/:codeType/revert
 router.post('/:id/policy-code/:codeType/revert', async (req: AuthRequest, res) => {
   try {
@@ -3969,6 +4104,7 @@ router.get('/:id/notification-rules', async (req: AuthRequest, res) => {
       active: r.active ?? true,
       createdByUserId: r.created_by_user_id ?? undefined,
       createdByName: r.created_by_name ?? undefined,
+      snoozedUntil: (r.snoozed_until as string) ?? undefined,
     }));
 
     res.json(mapped);
@@ -4025,6 +4161,13 @@ router.post('/:id/notification-rules', async (req: AuthRequest, res) => {
       insertData.min_depscore_threshold = minDepscoreThreshold;
     }
     if (triggerType === 'custom_code_pipeline' && typeof customCode === 'string') {
+      const { validateNotificationTriggerCode } = require('../lib/notification-validator');
+      if (customCode.trim()) {
+        const validation = await validateNotificationTriggerCode(customCode);
+        if (!validation.passed) {
+          return res.status(422).json({ error: 'Validation failed', checks: validation.checks });
+        }
+      }
       insertData.custom_code = customCode;
     }
 
@@ -5677,6 +5820,7 @@ router.get('/:id/teams/:teamId/notification-rules', async (req: AuthRequest, res
       active: r.active ?? true,
       createdByUserId: r.created_by_user_id ?? undefined,
       createdByName: r.created_by_name ?? undefined,
+      snoozedUntil: r.snoozed_until ?? undefined,
     }));
 
     res.json(mapped);
@@ -5727,6 +5871,13 @@ router.post('/:id/teams/:teamId/notification-rules', async (req: AuthRequest, re
       insertData.min_depscore_threshold = minDepscoreThreshold;
     }
     if (triggerType === 'custom_code_pipeline' && typeof customCode === 'string') {
+      const { validateNotificationTriggerCode } = require('../lib/notification-validator');
+      if (customCode.trim()) {
+        const validation = await validateNotificationTriggerCode(customCode);
+        if (!validation.passed) {
+          return res.status(422).json({ error: 'Validation failed', checks: validation.checks });
+        }
+      }
       insertData.custom_code = customCode;
     }
 
@@ -5775,8 +5926,17 @@ router.put('/:id/teams/:teamId/notification-rules/:ruleId', async (req: AuthRequ
     } else {
       updateData.min_depscore_threshold = null;
     }
-    if (triggerType === 'custom_code_pipeline') {
-      updateData.custom_code = typeof customCode === 'string' ? customCode : null;
+    if (triggerType === 'custom_code_pipeline' && typeof customCode === 'string') {
+      const { validateNotificationTriggerCode } = require('../lib/notification-validator');
+      if (customCode.trim()) {
+        const validation = await validateNotificationTriggerCode(customCode);
+        if (!validation.passed) {
+          return res.status(422).json({ error: 'Validation failed', checks: validation.checks });
+        }
+      }
+      updateData.custom_code = customCode;
+    } else if (triggerType === 'custom_code_pipeline') {
+      updateData.custom_code = null;
     } else {
       updateData.custom_code = null;
     }
@@ -5831,6 +5991,33 @@ router.delete('/:id/teams/:teamId/notification-rules/:ruleId', async (req: AuthR
   } catch (error: any) {
     console.error('Error deleting team notification rule:', error);
     res.status(500).json({ error: error.message || 'Failed to delete notification rule' });
+  }
+});
+
+// PATCH /api/organizations/:id/teams/:teamId/notification-rules/:ruleId/snooze - Snooze a team rule
+router.patch('/:id/teams/:teamId/notification-rules/:ruleId/snooze', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, teamId, ruleId } = req.params;
+    const { snoozedUntil } = req.body;
+
+    if (!(await canManageTeamNotifications(orgId, teamId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage notification rules' });
+    }
+
+    const { data, error } = await supabase
+      .from('team_notification_rules')
+      .update({ snoozed_until: snoozedUntil || null })
+      .eq('id', ruleId)
+      .eq('team_id', teamId)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json(data);
+  } catch (error: any) {
+    console.error('Error snoozing team notification rule:', error);
+    res.status(500).json({ error: error.message || 'Failed to snooze' });
   }
 });
 

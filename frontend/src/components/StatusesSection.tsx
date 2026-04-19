@@ -1,15 +1,20 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams } from 'react-router-dom';
-import { Plus, Lock, Trash2, Loader2, Check, X } from 'lucide-react';
-import { api, OrganizationStatus, OrganizationAssetTier } from '@/lib/api';
+import { Plus, Lock, Trash2, Loader2, Check, X, Info } from 'lucide-react';
+import { api, OrganizationStatus, OrganizationAssetTier, OrganizationPolicyChange } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Card, CardContent } from '@/components/ui/card';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useToast } from '@/hooks/use-toast';
 import { PolicyCodeEditor } from '@/components/PolicyCodeEditor';
+import { PolicyDiffViewer, getDiffLineCounts } from '@/components/PolicyDiffViewer';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '@/components/ui/dialog';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { RoleBadge } from '@/components/RoleBadge';
+import { cn } from '@/lib/utils';
 
 /** Extract the body of a named function from full code. */
 function extractFunctionBody(code: string, fnName: string): string | null {
@@ -35,6 +40,17 @@ function wrapProjectStatusBody(body: string): string {
 
 const DEFAULT_PROJECT_STATUS_BODY = 'return { status: "Compliant", violations: [] };';
 
+function formatRelativeTime(dateStr: string): string {
+  const d = new Date(dateStr);
+  const now = new Date();
+  const sec = Math.floor((now.getTime() - d.getTime()) / 1000);
+  if (sec < 60) return 'just now';
+  if (sec < 3600) return `${Math.floor(sec / 60)} minutes ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)} hours ago`;
+  if (sec < 604800) return `${Math.floor(sec / 86400)} days ago`;
+  return d.toLocaleDateString();
+}
+
 const COLOR_PRESETS = [
   { color: '#ef4444', name: 'Red' },
   { color: '#f97316', name: 'Orange' },
@@ -59,7 +75,14 @@ export default function StatusesSection() {
   const [statusCodeValue, setStatusCodeValue] = useState('');
   const [statusCodeOriginal, setStatusCodeOriginal] = useState('');
   const [statusCodeDirty, setStatusCodeDirty] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [validating, setValidating] = useState(false);
+  const [validationResult, setValidationResult] = useState<any>(null);
+  const [showCommitSidebar, setShowCommitSidebar] = useState(false);
+  const [commitMessage, setCommitMessage] = useState('');
+  const [commitSidebarVisible, setCommitSidebarVisible] = useState(false);
+  const [committing, setCommitting] = useState(false);
+  const commitSidebarCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const validationCardRef = useRef<HTMLDivElement>(null);
 
   // Add Status dialog
   const [addStatusOpen, setAddStatusOpen] = useState(false);
@@ -80,8 +103,12 @@ export default function StatusesSection() {
   const [deletingTierId, setDeletingTierId] = useState<string | null>(null);
 
   // Change history
-  const [changes, setChanges] = useState<any[]>([]);
+  const [changes, setChanges] = useState<OrganizationPolicyChange[]>([]);
   const [loadingChanges, setLoadingChanges] = useState(false);
+  const [selectedChange, setSelectedChange] = useState<OrganizationPolicyChange | null>(null);
+  const [changeDetailVisible, setChangeDetailVisible] = useState(false);
+  const changeDetailCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const changeHistoryLoadedRef = useRef(false);
 
   const load = useCallback(async () => {
     if (!orgId) return;
@@ -108,10 +135,17 @@ export default function StatusesSection() {
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
-    if (subTab === 'change_history' && orgId) {
+    changeHistoryLoadedRef.current = false;
+  }, [orgId]);
+
+  useEffect(() => {
+    if (subTab === 'change_history' && orgId && !changeHistoryLoadedRef.current) {
       setLoadingChanges(true);
       api.getOrganizationPolicyChanges(orgId, 'project_status')
-        .then(setChanges)
+        .then((list) => {
+          setChanges(list);
+          changeHistoryLoadedRef.current = true;
+        })
         .catch(console.error)
         .finally(() => setLoadingChanges(false));
     }
@@ -193,27 +227,108 @@ export default function StatusesSection() {
     }
   };
 
-  const handleSaveStatusCode = async () => {
+  const closeCommitSidebar = useCallback(() => {
+    setCommitSidebarVisible(false);
+    if (commitSidebarCloseTimeoutRef.current) clearTimeout(commitSidebarCloseTimeoutRef.current);
+    commitSidebarCloseTimeoutRef.current = setTimeout(() => {
+      commitSidebarCloseTimeoutRef.current = null;
+      setShowCommitSidebar(false);
+      setCommitMessage('');
+    }, 150);
+  }, []);
+
+  const handleCommitClick = async () => {
     if (!orgId) return;
     const fullCode = wrapProjectStatusBody(statusCodeValue);
-    setSaving(true);
+    setValidating(true);
+    setValidationResult(null);
     try {
       const validation = await api.validatePolicyCode(orgId, fullCode, 'project_status');
-      if (!validation.allPassed) {
-        const errorMsg = validation.syntaxError || validation.shapeError || validation.fetchResilienceError || 'Validation failed';
-        toast({ title: 'Validation failed', description: errorMsg, variant: 'destructive' });
-        return;
+      setValidationResult(validation);
+      if (validation.allPassed) {
+        setValidationResult(null);
+        setCommitMessage('');
+        setShowCommitSidebar(true);
+      } else {
+        toast({ title: 'Validation failed', description: 'Fix the issues below before committing.', variant: 'destructive' });
+        setTimeout(() => validationCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50);
       }
-      await api.updateOrganizationPolicyCode(orgId, 'project_status', fullCode, 'Updated project status code');
-      setStatusCodeOriginal(statusCodeValue);
-      setStatusCodeDirty(false);
-      toast({ title: 'Status code saved' });
     } catch (err: any) {
-      toast({ title: 'Error', description: err.message, variant: 'destructive' });
+      setValidationResult(null);
+      toast({ title: 'Error', description: err.message || 'Validation failed', variant: 'destructive' });
     } finally {
-      setSaving(false);
+      setValidating(false);
     }
   };
+
+  const handleCommitSubmit = async () => {
+    if (!orgId) return;
+    const fullCode = wrapProjectStatusBody(statusCodeValue);
+    setCommitting(true);
+    try {
+      await api.updateOrganizationPolicyCode(orgId, 'project_status', fullCode, commitMessage.trim() || undefined);
+      setStatusCodeOriginal(statusCodeValue);
+      setStatusCodeDirty(false);
+      closeCommitSidebar();
+      if (orgId) {
+        const list = await api.getOrganizationPolicyChanges(orgId, 'project_status');
+        setChanges(list);
+      }
+      toast({ title: 'Status code saved', description: 'Project status code updated successfully.' });
+    } catch (err: any) {
+      toast({ title: 'Error', description: err.message || 'Failed to save', variant: 'destructive' });
+    } finally {
+      setCommitting(false);
+    }
+  };
+
+  const closeChangeDetail = useCallback(() => {
+    setChangeDetailVisible(false);
+    if (changeDetailCloseTimeoutRef.current) clearTimeout(changeDetailCloseTimeoutRef.current);
+    changeDetailCloseTimeoutRef.current = setTimeout(() => {
+      changeDetailCloseTimeoutRef.current = null;
+      setSelectedChange(null);
+    }, 150);
+  }, []);
+
+  useEffect(() => () => {
+    if (commitSidebarCloseTimeoutRef.current) clearTimeout(commitSidebarCloseTimeoutRef.current);
+    if (changeDetailCloseTimeoutRef.current) clearTimeout(changeDetailCloseTimeoutRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (selectedChange) {
+      setChangeDetailVisible(false);
+      const raf = requestAnimationFrame(() => {
+        requestAnimationFrame(() => setChangeDetailVisible(true));
+      });
+      return () => cancelAnimationFrame(raf);
+    } else {
+      setChangeDetailVisible(false);
+    }
+  }, [selectedChange]);
+
+  useEffect(() => {
+    if (showCommitSidebar) {
+      setCommitSidebarVisible(false);
+      const raf = requestAnimationFrame(() => {
+        requestAnimationFrame(() => setCommitSidebarVisible(true));
+      });
+      return () => cancelAnimationFrame(raf);
+    } else {
+      setCommitSidebarVisible(false);
+    }
+  }, [showCommitSidebar]);
+
+  const validationChecksFromResult = validationResult
+    ? [
+        { name: 'syntax' as const, pass: validationResult.syntaxPass, error: validationResult.syntaxError },
+        { name: 'shape' as const, pass: validationResult.shapePass, error: validationResult.shapeError },
+        { name: 'fetch_resilience' as const, pass: validationResult.fetchResiliencePass, error: validationResult.fetchResilienceError },
+      ]
+    : null;
+  const showValidationFailedCard =
+    validationResult && validationChecksFromResult && validationChecksFromResult.some((c) => !c.pass);
 
   const subTabs: { id: SubTab; label: string }[] = [
     { id: 'statuses', label: 'Statuses' },
@@ -222,19 +337,30 @@ export default function StatusesSection() {
     { id: 'change_history', label: 'Change History' },
   ];
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+  const pulse = 'bg-muted animate-pulse rounded';
+
+  /** Skeleton for the statuses/asset-tiers list table (same card + rows pattern). */
+  const TableSkeleton = ({ title }: { title: string }) => (
+    <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+      <div className="px-4 py-2 border-b border-border bg-background-card-header text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+        {title}
       </div>
-    );
-  }
+      <div className="divide-y divide-border">
+        {[1, 2, 3, 4, 5].map((i) => (
+          <div key={i} className="px-4 py-3 flex items-center justify-between">
+            <div className={`h-4 w-32 ${pulse}`} />
+            <div className={`h-6 w-24 ${pulse}`} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 
   return (
     <div className="space-y-6 pt-8">
       <div className="flex items-center justify-between">
         <h2 className="text-2xl font-bold text-foreground">Statuses & Tiers</h2>
-        {subTab === 'statuses' && (
+        {!loading && subTab === 'statuses' && (
           <Button
             onClick={() => setAddStatusOpen(true)}
             disabled={addingStatus}
@@ -243,7 +369,7 @@ export default function StatusesSection() {
             Add Status
           </Button>
         )}
-        {subTab === 'asset_tiers' && (
+        {!loading && subTab === 'asset_tiers' && (
           <Button
             onClick={() => setAddTierOpen(true)}
             disabled={addingTier}
@@ -253,6 +379,23 @@ export default function StatusesSection() {
           </Button>
         )}
       </div>
+
+      {/* Info card – same pattern as Notifications section */}
+      <Card className="rounded-lg border border-border bg-background-card/80">
+        <CardContent className="p-4 flex gap-3">
+          <div className="flex-shrink-0 mt-0.5">
+            <Info className="h-5 w-5 text-foreground-muted" />
+          </div>
+          <div className="min-w-0 space-y-1">
+            <p className="text-sm text-foreground-secondary">
+              Create and define custom statuses and asset tiers for your organization. Use them in policy to label project health and weight vulnerability scores (Depscore).
+            </p>
+            <p className="text-sm text-foreground-secondary">
+              <span className="font-medium text-foreground">Custom status code</span> — In the Status Code tab, write a <code className="px-1 py-0.5 rounded bg-muted text-foreground text-xs font-mono">projectStatus(context)</code> function that assigns one of your statuses to each project based on policy.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Sub-tabs */}
       <div className="flex gap-1 border-b border-border">
@@ -274,6 +417,10 @@ export default function StatusesSection() {
       {/* Statuses sub-tab */}
       {subTab === 'statuses' && (
         <div>
+          {loading ? (
+            <TableSkeleton title="Statuses" />
+          ) : (
+          <>
           <div className="bg-background-card border border-border rounded-lg overflow-hidden">
             <div className="px-4 py-2 border-b border-border bg-background-card-header text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
               Statuses
@@ -414,12 +561,18 @@ export default function StatusesSection() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+          </>
+          )}
         </div>
       )}
 
       {/* Asset Tiers sub-tab */}
       {subTab === 'asset_tiers' && (
         <div>
+          {loading ? (
+            <TableSkeleton title="Asset Tiers" />
+          ) : (
+          <>
           <div className="bg-background-card border border-border rounded-lg overflow-hidden">
             <div className="px-4 py-2 border-b border-border bg-background-card-header text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
               Asset Tiers
@@ -576,99 +729,308 @@ export default function StatusesSection() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+          </>
+          )}
         </div>
       )}
 
-      {/* Status Code sub-tab: header with function title + Save, body-only in editor */}
+      {/* Status Code sub-tab: header Project Status + Clear/Commit, body-only in editor */}
       {subTab === 'status_code' && (
-        <div className="flex flex-col gap-4 min-h-0">
+        <div className="space-y-4">
           <div className="rounded-lg border border-border bg-background-card overflow-hidden">
             <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
-              <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">projectStatus(context)</span>
-              <div className="flex items-center gap-1.5">
-                {statusCodeDirty && (
+              <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project Status</span>
+              {!loading && statusCodeDirty && (
+                <div className="flex items-center gap-1.5">
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => { setStatusCodeValue(statusCodeOriginal); setStatusCodeDirty(false); }}
-                    disabled={saving}
-                    className="h-7 min-h-7 px-2 py-0 text-xs"
+                    onClick={() => { setStatusCodeValue(statusCodeOriginal); setStatusCodeDirty(false); setValidationResult(null); }}
+                    disabled={validating}
+                    className="h-6 min-h-6 px-1.5 py-0 text-[11px] font-medium"
                   >
-                    Discard
+                    Clear
                   </Button>
-                )}
-                <Button
-                  size="sm"
-                  onClick={handleSaveStatusCode}
-                  disabled={!statusCodeDirty || saving}
-                  className="h-7 min-h-7 px-2 py-0 text-xs"
-                >
-                  {saving && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
-                  Save
-                </Button>
-              </div>
+                  <Button
+                    size="sm"
+                    onClick={handleCommitClick}
+                    disabled={validating}
+                    className="h-6 min-h-6 px-1.5 py-0 text-[11px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                  >
+                    {validating && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+                    Commit
+                  </Button>
+                </div>
+              )}
             </div>
             <div className="bg-background-card">
-              <PolicyCodeEditor
-                value={statusCodeValue}
-                onChange={(val) => {
-                  setStatusCodeValue(val || '');
-                  setStatusCodeDirty((val || '') !== statusCodeOriginal);
-                }}
-                fitContent
-              />
+              {loading ? (
+                <div className="p-4 space-y-2 min-h-[200px]">
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
+                    <div key={i} className={`h-4 ${pulse} ${i === 3 ? 'w-3/4' : i === 5 ? 'w-1/2' : 'w-full'}`} />
+                  ))}
+                </div>
+              ) : (
+                <PolicyCodeEditor
+                  value={statusCodeValue}
+                  onChange={(val) => {
+                    setStatusCodeValue(val || '');
+                    setStatusCodeDirty((val || '') !== statusCodeOriginal);
+                    setValidationResult(null);
+                  }}
+                  fitContent
+                />
+              )}
             </div>
           </div>
-          <p className="text-sm text-muted-foreground">
-            This code determines the project status based on dependency policy results and vulnerabilities.
-          </p>
-        </div>
-      )}
-
-      {/* Change History sub-tab */}
-      {subTab === 'change_history' && (
-        <div className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            History of status code changes across the organization.
-          </p>
-
-          {loadingChanges ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-            </div>
-          ) : (
-            <div className="border border-border rounded-lg overflow-hidden">
-              <table className="w-full">
-                <thead className="bg-background-card-header border-b border-border">
-                  <tr>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Type</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Message</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[120px]">Date</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {changes.length === 0 ? (
-                    <tr>
-                      <td colSpan={3} className="px-4 py-8 text-sm text-muted-foreground text-center">
-                        No changes recorded yet.
-                      </td>
-                    </tr>
-                  ) : (
-                    changes.map((change: any) => (
-                      <tr key={change.id} className="hover:bg-table-hover transition-colors">
-                        <td className="px-4 py-3">
-                          <Badge variant="outline" className="text-xs">{change.code_type?.replace('_', ' ') ?? '—'}</Badge>
-                        </td>
-                        <td className="px-4 py-3 text-sm text-foreground truncate max-w-[320px]">{change.message ?? '—'}</td>
-                        <td className="px-4 py-3 text-xs text-muted-foreground">{change.created_at ? new Date(change.created_at).toLocaleDateString() : '—'}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+          {showValidationFailedCard && subTab === 'status_code' && validationChecksFromResult && (
+            <div
+              ref={validationCardRef}
+              className="p-4 rounded-lg border border-destructive/30 bg-destructive/10"
+            >
+              <div className="flex items-center gap-3">
+                <div className="rounded-md bg-destructive/20 border border-destructive/40 w-9 h-9 flex items-center justify-center flex-shrink-0 text-destructive">
+                  <X className="h-4 w-4" />
+                </div>
+                <span className="text-base font-medium text-destructive">Validation failed</span>
+              </div>
+              <div className="mt-3 space-y-2 pl-12">
+                {validationChecksFromResult
+                  .filter((c) => !c.pass)
+                  .map((check, i) => (
+                    <div key={i} className="text-sm">
+                      <span className="font-medium text-destructive">
+                        {check.name === 'syntax' ? 'Syntax' : check.name === 'shape' ? 'Return value' : check.name === 'fetch_resilience' ? 'Fetch handling' : check.name.replace(/_/g, ' ')} failed
+                      </span>
+                      {check.error && (
+                        <p className="text-foreground-secondary mt-0.5">{check.error}</p>
+                      )}
+                    </div>
+                  ))}
+              </div>
             </div>
           )}
         </div>
+      )}
+
+      {/* Change History sub-tab – table with header and one empty row when no data */}
+      {subTab === 'change_history' && (
+        <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-background-card-header border-b border-border">
+              <tr>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Change</th>
+                <th className="text-right px-4 py-3 w-[120px]" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {loadingChanges ? (
+                <tr className="animate-pulse">
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-4">
+                      <div>
+                        <div className="h-4 bg-muted rounded w-48" />
+                        <div className="h-3 bg-muted rounded w-28 mt-1" />
+                      </div>
+                      <div className="h-4 bg-muted rounded w-12 flex-shrink-0" />
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <div className="inline-flex items-center gap-2 justify-end">
+                      <div className="h-4 bg-muted rounded w-16" />
+                      <div className="h-8 w-8 rounded-full bg-muted flex-shrink-0" />
+                    </div>
+                  </td>
+                </tr>
+              ) : changes.length === 0 ? (
+                <tr>
+                  <td colSpan={2} className="px-4 py-6 text-sm text-muted-foreground">
+                    No change history
+                  </td>
+                </tr>
+              ) : (
+                changes.map((change) => {
+                  const { added, removed } = getDiffLineCounts(change.previous_code ?? '', change.new_code ?? '');
+                  return (
+                    <tr
+                      key={change.id}
+                      onClick={() => setSelectedChange(change)}
+                      className="hover:bg-table-hover transition-colors cursor-pointer"
+                    >
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-4 min-w-0">
+                          <div className="min-w-0">
+                            <p className={cn('text-sm truncate', change.message?.trim() ? 'text-foreground' : 'text-muted-foreground')}>
+                              {change.message?.trim() || '—'}
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-0.5">Project Status</p>
+                          </div>
+                          {(added > 0 || removed > 0) && (
+                            <span className="inline-flex items-center gap-1.5 text-xs font-mono flex-shrink-0">
+                              {added > 0 && <span className="text-emerald-600 dark:text-emerald-400">+{added}</span>}
+                              {removed > 0 && <span className="text-red-600 dark:text-red-400">-{removed}</span>}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right align-middle">
+                        <div className="inline-flex items-center gap-2 justify-end" title={change.author_display_name || undefined}>
+                          <span className="text-xs text-muted-foreground whitespace-nowrap">
+                            {formatRelativeTime(change.created_at)}
+                          </span>
+                          <Avatar className="h-8 w-8 flex-shrink-0 ring-1 ring-border rounded-full">
+                            <AvatarImage src={change.author_avatar_url ?? undefined} alt="" />
+                            <AvatarFallback className="text-xs bg-muted text-muted-foreground">
+                              {(change.author_display_name || 'User').trim().slice(0, 2).toUpperCase() || '?'}
+                            </AvatarFallback>
+                          </Avatar>
+                        </div>
+                      </td>
+                        </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Change detail sidebar – diff view */}
+      {selectedChange && createPortal(
+        <div className="fixed inset-0 z-50">
+          <div
+            className={cn(
+              'fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150',
+              changeDetailVisible ? 'opacity-100' : 'opacity-0'
+            )}
+            onClick={closeChangeDetail}
+          />
+          <div
+            className={cn(
+              'fixed right-4 top-4 bottom-4 w-full max-w-[560px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
+              changeDetailVisible ? 'translate-x-0' : 'translate-x-full'
+            )}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 pt-5 pb-3 flex-shrink-0">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <h2 className={cn('text-base font-semibold text-foreground', !selectedChange.message?.trim() && 'text-muted-foreground')}>
+                    {selectedChange.message?.trim() || '—'}
+                  </h2>
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    <p className="text-xs text-muted-foreground">Project Status</p>
+                    {(() => {
+                      const { added, removed } = getDiffLineCounts(selectedChange.previous_code ?? '', selectedChange.new_code ?? '');
+                      if (added > 0 || removed > 0) {
+                        return (
+                          <span className="inline-flex items-center gap-1.5 text-xs font-mono">
+                            {added > 0 && <span className="text-emerald-600 dark:text-emerald-400">+{added}</span>}
+                            {removed > 0 && <span className="text-red-600 dark:text-red-400">-{removed}</span>}
+                          </span>
+                        );
+                      }
+                      return null;
+                    })()}
+                  </div>
+                </div>
+                <div className="inline-flex items-center gap-2 flex-shrink-0" title={selectedChange.author_display_name || undefined}>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">
+                    {formatRelativeTime(selectedChange.created_at)}
+                  </span>
+                  <Avatar className="h-8 w-8 flex-shrink-0 ring-1 ring-border rounded-full">
+                    <AvatarImage src={selectedChange.author_avatar_url ?? undefined} alt="" />
+                    <AvatarFallback className="text-xs bg-muted text-muted-foreground">
+                      {(selectedChange.author_display_name || 'User').trim().slice(0, 2).toUpperCase() || '?'}
+                    </AvatarFallback>
+                  </Avatar>
+                </div>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto min-h-0 px-4 pb-4">
+              <div className="rounded-lg overflow-hidden border border-border">
+                <PolicyDiffViewer
+                  baseCode={selectedChange.previous_code}
+                  requestedCode={selectedChange.new_code}
+                  minHeight="200px"
+                  className="text-[11px]"
+                />
+              </div>
+            </div>
+            <div className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header flex items-center justify-end">
+              <Button variant="outline" size="sm" onClick={closeChangeDetail}>
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* Commit sidebar – message + diff, open after validation passes */}
+      {showCommitSidebar && createPortal(
+        <div className="fixed inset-0 z-50">
+          <div
+            className={cn(
+              'fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150',
+              commitSidebarVisible ? 'opacity-100' : 'opacity-0'
+            )}
+            onClick={closeCommitSidebar}
+          />
+          <div
+            className={cn(
+              'fixed right-4 top-4 bottom-4 w-full max-w-[560px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
+              commitSidebarVisible ? 'translate-x-0' : 'translate-x-full'
+            )}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 pt-5 pb-3 flex-shrink-0">
+              <h2 className="text-xl font-semibold text-foreground">Commit status code change</h2>
+              <p className="text-sm text-muted-foreground mt-1">Add a message and review the diff before applying.</p>
+            </div>
+            <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4">
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground">Message</label>
+                  <textarea
+                    value={commitMessage}
+                    onChange={(e) => setCommitMessage(e.target.value)}
+                    placeholder=""
+                    rows={2}
+                    className="w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent resize-none"
+                    disabled={committing}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <span className="text-sm font-medium text-foreground">Changes</span>
+                  <div className="rounded-lg overflow-hidden border border-border bg-[#1a1c1e] shadow-inner">
+                    <PolicyDiffViewer
+                      baseCode={wrapProjectStatusBody(statusCodeOriginal)}
+                      requestedCode={wrapProjectStatusBody(statusCodeValue)}
+                      minHeight="200px"
+                      className="text-[11px]"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header flex items-center justify-end gap-3">
+              <Button variant="outline" size="sm" onClick={closeCommitSidebar} disabled={committing}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleCommitSubmit}
+                disabled={committing || !commitMessage.trim()}
+                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+              >
+                {committing && <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />}
+                Commit
+              </Button>
+            </div>
+          </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

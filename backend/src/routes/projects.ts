@@ -1715,6 +1715,7 @@ router.get('/:id/projects/:projectId/notification-rules', async (req: AuthReques
       active: r.active ?? true,
       createdByUserId: r.created_by_user_id ?? undefined,
       createdByName: r.created_by_name ?? undefined,
+      snoozedUntil: r.snoozed_until ?? undefined,
     }));
 
     res.json(mapped);
@@ -1757,6 +1758,13 @@ router.post('/:id/projects/:projectId/notification-rules', async (req: AuthReque
       insertData.min_depscore_threshold = minDepscoreThreshold;
     }
     if (triggerType === 'custom_code_pipeline' && typeof customCode === 'string') {
+      const { validateNotificationTriggerCode } = require('../lib/notification-validator');
+      if (customCode.trim()) {
+        const validation = await validateNotificationTriggerCode(customCode);
+        if (!validation.passed) {
+          return res.status(422).json({ error: 'Validation failed', checks: validation.checks });
+        }
+      }
       insertData.custom_code = customCode;
     }
 
@@ -1805,8 +1813,17 @@ router.put('/:id/projects/:projectId/notification-rules/:ruleId', async (req: Au
     } else {
       updateData.min_depscore_threshold = null;
     }
-    if (triggerType === 'custom_code_pipeline') {
-      updateData.custom_code = typeof customCode === 'string' ? customCode : null;
+    if (triggerType === 'custom_code_pipeline' && typeof customCode === 'string') {
+      const { validateNotificationTriggerCode } = require('../lib/notification-validator');
+      if (customCode.trim()) {
+        const validation = await validateNotificationTriggerCode(customCode);
+        if (!validation.passed) {
+          return res.status(422).json({ error: 'Validation failed', checks: validation.checks });
+        }
+      }
+      updateData.custom_code = customCode;
+    } else if (triggerType === 'custom_code_pipeline') {
+      updateData.custom_code = null;
     } else {
       updateData.custom_code = null;
     }
@@ -1861,6 +1878,33 @@ router.delete('/:id/projects/:projectId/notification-rules/:ruleId', async (req:
   } catch (error: any) {
     console.error('Error deleting project notification rule:', error);
     res.status(500).json({ error: error.message || 'Failed to delete notification rule' });
+  }
+});
+
+// PATCH /api/organizations/:id/projects/:projectId/notification-rules/:ruleId/snooze - Snooze a project rule
+router.patch('/:id/projects/:projectId/notification-rules/:ruleId/snooze', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, projectId, ruleId } = req.params;
+    const { snoozedUntil } = req.body;
+
+    if (!(await checkWatchtowerManagePermission(userId, orgId, projectId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage notification rules' });
+    }
+
+    const { data, error } = await supabase
+      .from('project_notification_rules')
+      .update({ snoozed_until: snoozedUntil || null })
+      .eq('id', ruleId)
+      .eq('project_id', projectId)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json(data);
+  } catch (error: any) {
+    console.error('Error snoozing project notification rule:', error);
+    res.status(500).json({ error: error.message || 'Failed to snooze' });
   }
 });
 

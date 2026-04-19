@@ -240,6 +240,97 @@ declare function semverLt(a: string, b: string): boolean;
 declare function daysSince(dateString: string): number;
 `;
 
+/** Shared context field definitions for completion and hover. */
+const CONTEXT_FIELDS = [
+  { label: 'project', detail: 'Project', doc: 'Project metadata (name, asset_tier).' },
+  { label: 'dependencies', detail: 'Dependency[]', doc: 'All project dependencies (projectCompliance / projectStatus).' },
+  { label: 'added', detail: 'Dependency[]', doc: 'Newly added dependencies (pullRequestCheck).' },
+  { label: 'updated', detail: 'UpdatedDependency[]', doc: 'Updated dependencies (pullRequestCheck).' },
+  { label: 'removed', detail: 'RemovedDependency[]', doc: 'Removed dependencies (pullRequestCheck).' },
+  { label: 'dependency', detail: 'PackageDependency', doc: 'Package data (packagePolicy).' },
+  { label: 'tier', detail: 'Tier', doc: 'Asset tier: { name, rank, multiplier } (packagePolicy / projectStatus).' },
+  { label: 'statuses', detail: 'string[]', doc: 'Available status names (projectStatus / pullRequestCheck).' },
+  { label: 'fetch', detail: 'function', doc: 'Controlled fetch() for external API calls.' },
+] as const;
+
+/** Language ID for policy editor; no built-in TS hover so no "any" in tooltips. */
+const POLICY_LANGUAGE_ID = 'deptex-policy';
+
+/** JavaScript-like monarch tokenizer for policy code (no TS language service = no "any" hover). */
+const POLICY_MONARCH: languages.IMonarchLanguage = {
+  defaultToken: 'source',
+  tokenPostfix: '.js',
+  brackets: [
+    ['{', '}', 'delimiter.curly'],
+    ['[', ']', 'delimiter.square'],
+    ['(', ')', 'delimiter.parenthesis'],
+  ],
+  keywords: [
+    'function', 'return', 'const', 'let', 'var', 'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'break', 'continue',
+    'true', 'false', 'null', 'undefined', 'in', 'of', 'new', 'typeof', 'instanceof', 'delete', 'void',
+    'try', 'catch', 'finally', 'throw', 'async', 'await',
+  ],
+  operators: ['=', '>', '<', '!', '~', '?', ':', '==', '<=', '>=', '!=', '&&', '||', '++', '--', '+', '-', '*', '/', '&', '|', '^', '%', '=>'],
+  symbols: /[=><!~?:&|+\-*\/\^%]+/,
+  escapes: /\\(?:[abfnrtv\\"']|x[0-9A-Fa-f]{1,4}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})/,
+  tokenizer: {
+    root: [
+      [/[a-zA-Z_$][\w$]*/, { cases: { '@keywords': 'keyword', '@default': 'identifier' } }],
+      [/[ \t\r\n]+/, ''],
+      [/[{}()\[\]]/, '@brackets'],
+      [/@symbols/, { cases: { '@operators': 'operator', '@default': '' } }],
+      [/\d*\.\d+([eE][\-+]?\d+)?/, 'number.float'],
+      [/0[xX][0-9a-fA-F]+/, 'number.hex'],
+      [/\d+/, 'number'],
+      [/[;,.]/, 'delimiter'],
+      [/"([^"\\]|\\.)*$/, 'string.invalid'],
+      [/"/, 'string', '@string_double'],
+      [/'([^'\\]|\\.)*$/, 'string.invalid'],
+      [/'/, 'string', '@string_single'],
+      [/\/\*/, 'comment', '@comment_block'],
+      [/\/\/.*$/, 'comment'],
+    ],
+    string_double: [
+      [/[^\\"]+/, 'string'],
+      [/@escapes/, 'string.escape'],
+      [/\\./, 'string.escape.invalid'],
+      [/"/, 'string', '@pop'],
+    ],
+    string_single: [
+      [/[^\\']+/, 'string'],
+      [/@escapes/, 'string.escape'],
+      [/\\./, 'string.escape.invalid'],
+      [/'/, 'string', '@pop'],
+    ],
+    comment_block: [
+      [/[^\/*]+/, 'comment'],
+      [/\/\*/, 'comment', '@push'],
+      [/\*\//, 'comment', '@pop'],
+      [/[\/*]/, 'comment'],
+    ],
+  },
+};
+
+/** Policy globals for prefix completion and hover. */
+const POLICY_GLOBALS: Array<{
+  label: string;
+  detail: string;
+  doc: string;
+  kind: 'function' | 'variable';
+  snippet?: string;
+}> = [
+  { label: 'context', detail: 'PackagePolicyContext | ProjectStatusContext | ...', doc: 'Parameter passed to packagePolicy, projectStatus, pullRequestCheck, or projectCompliance. Contains dependency, tier, project, dependencies, fetch, etc.', kind: 'variable' },
+  { label: 'packagePolicy', detail: '(context) => PackagePolicyResult', doc: 'Evaluate a single package against org policy. Return { allowed, reasons }.', kind: 'function' },
+  { label: 'projectStatus', detail: '(context) => ProjectStatusResult', doc: 'Determine project status from dependency policy results and vulnerabilities. Return { status, violations }.', kind: 'function' },
+  { label: 'pullRequestCheck', detail: '(context) => PullRequestCheckResult', doc: 'Define the PR/merge gate policy function.', kind: 'function', snippet: 'function pullRequestCheck(context) {\n\tconst violations = [];\n\t$0\n\treturn { passed: violations.length === 0, violations };\n}' },
+  { label: 'projectCompliance', detail: '(context) => ComplianceResult', doc: 'Define the project compliance policy function.', kind: 'function', snippet: 'function projectCompliance(context) {\n\tconst violations = [];\n\t$0\n\treturn { compliant: violations.length === 0, violations };\n}' },
+  { label: 'isLicenseAllowed', detail: '(license, allowList) => boolean', doc: 'Helper: check if license is in the allow list.', kind: 'function' },
+  { label: 'isLicenseBanned', detail: '(license, banList) => boolean', doc: 'Helper: check if license is in the ban list.', kind: 'function' },
+  { label: 'semverGt', detail: '(a, b) => boolean', doc: 'Helper: semver greater-than comparison.', kind: 'function' },
+  { label: 'semverLt', detail: '(a, b) => boolean', doc: 'Helper: semver less-than comparison.', kind: 'function' },
+  { label: 'daysSince', detail: '(dateString) => number', doc: 'Helper: days since date string.', kind: 'function' },
+];
+
 const disposablesRef: IDisposable[] = [];
 
 function cleanupDisposables() {
@@ -291,6 +382,11 @@ export function PolicyCodeEditor({
 
     monaco.editor.defineTheme('deptex', DEPTEX_THEME);
 
+    if (!monaco.languages.getLanguages().some((l) => l.id === POLICY_LANGUAGE_ID)) {
+      monaco.languages.register({ id: POLICY_LANGUAGE_ID });
+      monaco.languages.setMonarchTokensProvider(POLICY_LANGUAGE_ID, POLICY_MONARCH);
+    }
+
     monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
       noSemanticValidation: true,
       noSyntaxValidation: false,
@@ -307,7 +403,39 @@ export function PolicyCodeEditor({
       monaco.languages.typescript.javascriptDefaults.addExtraLib(POLICY_TYPEDEFS, 'policy-context.d.ts')
     );
 
-    const completionProvider = monaco.languages.registerCompletionItemProvider('javascript', {
+    const hoverMap = new Map<string, string>();
+    for (const g of POLICY_GLOBALS) {
+      hoverMap.set(g.label, `**${g.label}**\n\n\`${g.detail}\`\n\n${g.doc}`);
+    }
+    for (const f of CONTEXT_FIELDS) {
+      hoverMap.set(`context.${f.label}`, `**context.${f.label}**\n\n\`${f.detail}\`\n\n${f.doc}`);
+    }
+
+    const hoverProvider = monaco.languages.registerHoverProvider(POLICY_LANGUAGE_ID, {
+      provideHover(model: editor.ITextModel, position: { lineNumber: number; column: number }) {
+        const lineText = model.getValueInRange({
+          startLineNumber: position.lineNumber,
+          startColumn: 1,
+          endLineNumber: position.lineNumber,
+          endColumn: position.column,
+        });
+        const pathMatch = lineText.match(/(\w+(?:\.\w+)*)$/);
+        const path = pathMatch ? pathMatch[1] : null;
+        const doc = path ? hoverMap.get(path) : undefined;
+        if (!doc) return undefined;
+        const startColumn = path ? position.column - path.length : position.column;
+        const range: IRange = {
+          startLineNumber: position.lineNumber,
+          endLineNumber: position.lineNumber,
+          startColumn,
+          endColumn: position.column,
+        };
+        return { contents: [{ value: doc }], range };
+      },
+    });
+    disposablesRef.push(hoverProvider);
+
+    const completionProvider = monaco.languages.registerCompletionItemProvider(POLICY_LANGUAGE_ID, {
       triggerCharacters: ['.'],
       provideCompletionItems: (model: editor.ITextModel, position: { lineNumber: number; column: number }) => {
         const textUntilPosition = model.getValueInRange({
@@ -328,18 +456,7 @@ export function PolicyCodeEditor({
         const suggestions: languages.CompletionItem[] = [];
 
         if (/context\.\s*$/.test(textUntilPosition)) {
-          const ctxFields = [
-            { label: 'project', detail: 'Project', doc: 'Project metadata (name, asset_tier).' },
-            { label: 'dependencies', detail: 'Dependency[]', doc: 'All project dependencies (projectCompliance / projectStatus).' },
-            { label: 'added', detail: 'Dependency[]', doc: 'Newly added dependencies (pullRequestCheck).' },
-            { label: 'updated', detail: 'UpdatedDependency[]', doc: 'Updated dependencies (pullRequestCheck).' },
-            { label: 'removed', detail: 'RemovedDependency[]', doc: 'Removed dependencies (pullRequestCheck).' },
-            { label: 'dependency', detail: 'PackageDependency', doc: 'Package data (packagePolicy).' },
-            { label: 'tier', detail: 'Tier', doc: 'Asset tier: { name, rank, multiplier } (packagePolicy / projectStatus).' },
-            { label: 'statuses', detail: 'string[]', doc: 'Available status names (projectStatus / pullRequestCheck).' },
-            { label: 'fetch', detail: 'function', doc: 'Controlled fetch() for external API calls.' },
-          ];
-          for (const f of ctxFields) {
+          for (const f of CONTEXT_FIELDS) {
             suggestions.push({
               label: f.label,
               kind: monaco.languages.CompletionItemKind.Field,
@@ -485,21 +602,20 @@ export function PolicyCodeEditor({
         }
 
         if (word.word.length > 0) {
-          const topLevel = [
-            { label: 'pullRequestCheck', detail: '(context) => PullRequestCheckResult', doc: 'Define the PR/merge gate policy function.', snippet: 'function pullRequestCheck(context) {\n\tconst violations = [];\n\t$0\n\treturn { passed: violations.length === 0, violations };\n}' },
-            { label: 'projectCompliance', detail: '(context) => ComplianceResult', doc: 'Define the project compliance policy function.', snippet: 'function projectCompliance(context) {\n\tconst violations = [];\n\t$0\n\treturn { compliant: violations.length === 0, violations };\n}' },
-          ];
-          for (const f of topLevel) {
+          const prefix = word.word;
+          const matchingGlobals = POLICY_GLOBALS.filter((g) => g.label.startsWith(prefix));
+          for (const g of matchingGlobals) {
             suggestions.push({
-              label: f.label,
-              kind: monaco.languages.CompletionItemKind.Function,
-              detail: f.detail,
-              documentation: f.doc,
-              insertText: f.snippet,
-              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              label: g.label,
+              kind: g.kind === 'function' ? monaco.languages.CompletionItemKind.Function : monaco.languages.CompletionItemKind.Variable,
+              detail: g.detail,
+              documentation: g.doc,
+              insertText: g.snippet ?? g.label,
+              insertTextRules: g.snippet ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
               range,
             });
           }
+          if (matchingGlobals.length > 0) return { suggestions };
         }
 
         return { suggestions };
@@ -524,7 +640,7 @@ export function PolicyCodeEditor({
       <MonacoEditor
         width="100%"
         height={height}
-        language="javascript"
+        language={POLICY_LANGUAGE_ID}
         theme="deptex"
         loading={
           <div
