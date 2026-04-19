@@ -8079,61 +8079,6 @@ router.get('/:id/projects/:projectId/import-status', async (req: AuthRequest, re
   }
 });
 
-// POST /api/organizations/:id/projects/:projectId/requeue-ast - Requeue AST parsing for import analysis
-router.post('/:id/projects/:projectId/requeue-ast', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const { id, projectId } = req.params;
-
-    const accessCheck = await checkProjectAccess(userId, id, projectId);
-    if (!accessCheck.hasAccess) {
-      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
-    }
-
-    const isOrgOwner = accessCheck.orgMembership?.role === 'owner';
-    const hasOrgPermission = accessCheck.orgRole?.permissions?.manage_teams_and_projects === true;
-    if (!isOrgOwner && !hasOrgPermission) {
-      return res.status(403).json({ error: 'You do not have permission to requeue import analysis' });
-    }
-
-    const { data: repoRecord, error: repoError } = await supabase
-      .from('project_repositories')
-      .select('repo_full_name, installation_id, default_branch, package_json_path')
-      .eq('project_id', projectId)
-      .single();
-
-    if (repoError || !repoRecord) {
-      return res.status(400).json({ error: 'Project has no connected repository' });
-    }
-
-    const { queueASTParsingJob } = await import('../lib/redis');
-    const queueResult = await queueASTParsingJob(projectId, {
-      repo_full_name: repoRecord.repo_full_name,
-      installation_id: repoRecord.installation_id,
-      default_branch: repoRecord.default_branch,
-      package_json_path: (repoRecord as { package_json_path?: string }).package_json_path ?? '',
-    });
-
-    if (!queueResult.success) {
-      return res.status(502).json({ error: queueResult.error || 'Failed to queue AST parsing job' });
-    }
-
-    // Clear ast_parsed_at so status becomes finalizing until worker completes
-    await supabase
-      .from('project_repositories')
-      .update({
-        ast_parsed_at: null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('project_id', projectId);
-
-    res.json({ success: true, message: 'AST parsing job queued' });
-  } catch (error: any) {
-    console.error('Error requeueing AST parsing:', error);
-    res.status(500).json({ error: error.message || 'Failed to requeue AST parsing' });
-  }
-});
-
 // ==================== Dependency Notes ====================
 
 // Helper: resolve author profiles with auth.users fallback + org role info
