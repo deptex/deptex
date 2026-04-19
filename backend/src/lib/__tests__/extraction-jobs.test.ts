@@ -6,7 +6,7 @@ const mockRpc = jest.fn();
 const mockFrom = jest.fn();
 const mockStartExtractionMachine = jest.fn().mockResolvedValue('fly-id');
 
-jest.mock('../../lib/supabase', () => ({
+jest.mock('../supabase', () => ({
   supabase: {
     from: (...args: unknown[]) => mockFrom(...args),
   },
@@ -16,7 +16,7 @@ jest.mock('../fly-machines', () => ({
   startExtractionMachine: (...args: unknown[]) => mockStartExtractionMachine(...args),
 }));
 
-import { queueExtractionJob, cancelExtractionJob } from '../redis';
+import { queueExtractionJob, cancelExtractionJob } from '../extraction-jobs';
 
 function createChain(resolved: { data?: unknown; error?: unknown } = { data: null, error: null }) {
   const chain: Record<string, jest.Mock> = {
