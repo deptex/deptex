@@ -76,7 +76,7 @@ export default function IntegrationsContent() {
           <p className="text-foreground/90 leading-relaxed">
             When a PR or merge request changes dependencies, Deptex runs your{" "}
             <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">pullRequestCheck</code> policy function.
-            The returned status is mapped to pass/fail: if <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">is_passing</code> is true, the check passes.
+            Return <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">&#123; passed: true, violations: [] &#125;</code> to pass the check, or <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">passed: false</code> to block the merge.
             The summary shows the status name and violations so developers know what to fix.
           </p>
         </div>

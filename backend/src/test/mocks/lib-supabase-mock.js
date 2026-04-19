@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Shared Supabase mock so backend and ee/backend routes (different import paths)
+ * Shared Supabase mock for backend route tests
  * resolve to the same instance. Used via Jest moduleNameMapper.
  */
 const { supabase, queryBuilder } = require('./supabaseSingleton');

@@ -2,10 +2,16 @@ import { useMemo } from 'react';
 import { type Node, type Edge, MarkerType } from '@xyflow/react';
 import { buildDepAndVulnNodesAndEdges, getWorstSeverity } from './useVulnerabilitiesGraphLayout';
 import type { VulnGraphDepNode, WorstSeverity } from './useVulnerabilitiesGraphLayout';
-import { VULN_CENTER_NODE_WIDTH, VULN_CENTER_NODE_HEIGHT, getSlaBreachCount } from './useVulnerabilitiesGraphLayout';
-import { VULN_PROJECT_NODE_WIDTH, VULN_PROJECT_NODE_HEIGHT } from './VulnProjectNode';
+import { getSlaBreachCount } from './useVulnerabilitiesGraphLayout';
+import { OVERVIEW_PROJECT_NODE_WIDTH, OVERVIEW_PROJECT_NODE_HEIGHT, VULN_PROJECT_NODE_WIDTH, VULN_PROJECT_NODE_HEIGHT } from './VulnProjectNode';
 
 export const TEAM_CENTER_ID = 'team-center';
+
+export interface TeamCenterOptions {
+  memberCount?: number;
+  roleBadge?: string | null;
+  roleBadgeColor?: string | null;
+}
 
 export interface ProjectWithGraphData {
   projectId: string;
@@ -15,6 +21,14 @@ export interface ProjectWithGraphData {
   worstSeverity?: WorstSeverity;
   /** When true, show only project node with extracting spinner (no dependencies/vulnerabilities). */
   isExtracting?: boolean;
+  /** Org-overview-style card: status badge. */
+  statusName?: string | null;
+  statusColor?: string | null;
+  /** Org-overview-style card: asset tier. */
+  assetTierName?: string | null;
+  assetTierColor?: string | null;
+  /** Org-overview-style card: dependency count in bottom bar. */
+  dependenciesCount?: number | null;
 }
 
 function getHandlePair(angle: number): { sourceHandle: string; targetHandle: string } {
@@ -28,11 +42,13 @@ function getHandlePair(angle: number): { sourceHandle: string; targetHandle: str
 /**
  * Builds nodes and edges for team vulnerabilities graph:
  * Team (center) --gray--> Projects (ring) --per-project--> deps/vulns (namespaced, translated).
+ * Center and project nodes use org-overview-style cards (VulnProjectNode with neutralStyle) when possible.
  */
 export function useTeamVulnerabilitiesGraphLayout(
   teamName: string,
   projectsWithGraphData: ProjectWithGraphData[],
-  showOnlyReachable = false
+  showOnlyReachable = false,
+  teamCenterOptions?: TeamCenterOptions
 ): { nodes: Node[]; edges: Edge[] } {
   return useMemo(() => {
     const nodes: Node[] = [];
@@ -40,22 +56,24 @@ export function useTeamVulnerabilitiesGraphLayout(
     const centerX = 0;
     const centerY = 0;
 
-    const allDepNodes = projectsWithGraphData.flatMap((p) => p.graphDepNodes);
-    const teamIsHealthy = allDepNodes.length === 0 || getWorstSeverity(allDepNodes) === 'none';
-
-    // Team center at (0, 0)
+    // Team center: styled like org overview team cards (VulnProjectNode with isTeamNode + neutralStyle)
     nodes.push({
       id: TEAM_CENTER_ID,
-      type: 'groupCenterNode',
+      type: 'vulnProjectNode',
       position: {
-        x: centerX - VULN_CENTER_NODE_WIDTH / 2,
-        y: centerY - VULN_CENTER_NODE_HEIGHT / 2,
+        x: centerX - OVERVIEW_PROJECT_NODE_WIDTH / 2,
+        y: centerY - OVERVIEW_PROJECT_NODE_HEIGHT / 2,
       },
       data: {
-        title: teamName,
-        subtitle: `${projectsWithGraphData.length} project${projectsWithGraphData.length === 1 ? '' : 's'}`,
-        isHealthy: teamIsHealthy,
-        kind: 'team',
+        projectName: teamName,
+        projectId: '', // avoid navigate on click
+        isTeamNode: true,
+        neutralStyle: true,
+        roleBadge: teamCenterOptions?.roleBadge ?? undefined,
+        roleBadgeColor: teamCenterOptions?.roleBadgeColor ?? undefined,
+        riskGrade: 'A+',
+        projectsCount: projectsWithGraphData.length,
+        membersCount: teamCenterOptions?.memberCount ?? undefined,
       },
       draggable: true,
       selectable: false,
@@ -74,8 +92,9 @@ export function useTeamVulnerabilitiesGraphLayout(
       const angle = i * goldenAngle;
       const projectNodeId = `project-${proj.projectId}`;
 
-      const px = centerX + Math.cos(angle) * projectRingRadius - VULN_PROJECT_NODE_WIDTH / 2;
-      const py = centerY + Math.sin(angle) * projectRingRadius - VULN_PROJECT_NODE_HEIGHT / 2;
+      // Use overview card dimensions so project nodes match org overview style
+      const px = centerX + Math.cos(angle) * projectRingRadius - OVERVIEW_PROJECT_NODE_WIDTH / 2;
+      const py = centerY + Math.sin(angle) * projectRingRadius - OVERVIEW_PROJECT_NODE_HEIGHT / 2;
 
       const worstSeverity = proj.worstSeverity ?? getWorstSeverity(proj.graphDepNodes);
       const slaBreachCount = getSlaBreachCount(proj.graphDepNodes);
@@ -92,19 +111,25 @@ export function useTeamVulnerabilitiesGraphLayout(
           worstSeverity,
           slaBreachCount,
           isExtracting,
+          neutralStyle: true,
+          statusBadge: proj.statusName ?? undefined,
+          statusBadgeColor: proj.statusColor ?? undefined,
+          assetTierName: proj.assetTierName ?? undefined,
+          assetTierColor: proj.assetTierColor ?? undefined,
+          riskGrade: 'A+',
+          dependenciesCount: proj.dependenciesCount ?? undefined,
         },
         draggable: true,
         selectable: false,
       });
 
-      // Use the same angle for both the team (source) and project (target) handles
-      // so the edge always connects on the side of each node that faces the other.
+      // Team center is VulnProjectNode: source handles are "source-right", "source-left", etc.
       const { sourceHandle, targetHandle } = getHandlePair(angle);
       edges.push({
         id: `edge-team-${projectNodeId}`,
         source: TEAM_CENTER_ID,
         target: projectNodeId,
-        sourceHandle,
+        sourceHandle: 'source-' + sourceHandle,
         targetHandle,
         type: 'default',
         style: { stroke: grayStroke, strokeWidth: 1.2 },
@@ -137,9 +162,10 @@ export function useTeamVulnerabilitiesGraphLayout(
         } as Node);
       });
 
+      // buildDepAndVulnNodesAndEdges already uses sourceHandle like "source-right"; do not double-prefix
       sub.edges.forEach((e) => {
         const edge: Edge = { ...e, id: prefix + e.id } as Edge;
-        if (e.source === projectNodeId && e.sourceHandle) {
+        if (e.source === projectNodeId && e.sourceHandle && !e.sourceHandle.startsWith('source-')) {
           edge.sourceHandle = 'source-' + e.sourceHandle;
         }
         edges.push(edge);
@@ -147,5 +173,5 @@ export function useTeamVulnerabilitiesGraphLayout(
     });
 
     return { nodes, edges };
-  }, [teamName, projectsWithGraphData, showOnlyReachable]);
+  }, [teamName, projectsWithGraphData, showOnlyReachable, teamCenterOptions]);
 }

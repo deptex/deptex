@@ -75,7 +75,7 @@ export function PolicyDiffViewer({
 
   return (
     <div
-      className={`policy-diff-viewer rounded-none border-0 bg-[#1d1f21] overflow-auto font-mono text-sm ${className}`}
+      className={`policy-diff-viewer rounded-none border-0 bg-background-card overflow-auto font-mono text-sm ${className}`}
       style={{ minHeight }}
     >
       <pre className="p-4 m-0">

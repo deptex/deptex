@@ -54,6 +54,15 @@ interface ProjectContextType {
   userPermissions: ProjectPermissions | null;
 }
 
+/** Props for standalone use (e.g. org overview project sidebar). */
+export interface ProjectComplianceContentProps {
+  project: ProjectWithRole | null;
+  organizationId: string;
+  userPermissions: ProjectPermissions | null;
+  reloadProject: () => Promise<void>;
+  embedInSidebar?: boolean;
+}
+
 const VALID_SECTIONS: ComplianceSection[] = ['project', 'export-notice', 'export-sbom'];
 function isValidSection(s: string | undefined): s is ComplianceSection {
   return !!s && VALID_SECTIONS.includes(s as ComplianceSection);
@@ -490,13 +499,27 @@ function ExceptionDiffDialog({
 
 // ─── Main Page ───
 
-export default function ProjectCompliancePage() {
-  const { project, organizationId, userPermissions, reloadProject } = useOutletContext<ProjectContextType>();
-  const { projectId, section: urlSection } = useParams<{ projectId: string; section?: string }>();
+export function ProjectComplianceContent(props: ProjectComplianceContentProps) {
+  const { project, organizationId, userPermissions, reloadProject, embedInSidebar } = props;
+  /** Match ProjectDependencies embed: cancel org project drawer px-5; tighter inner padding. */
+  const mainEmbedClass = embedInSidebar
+    ? '-mx-5 min-h-[28rem] h-full w-[calc(100%+2.5rem)] max-w-none'
+    : undefined;
+  /** Same darker shell as project drawer + deps embed (not lighter bg-background-content). */
+  const embedShellBg = 'bg-background-card-header';
+  const pagePadding = embedInSidebar ? 'px-3 py-4' : 'px-6 py-6';
+  const contentShellClass = cn(pagePadding, embedInSidebar ? 'max-w-none' : 'mx-auto max-w-5xl');
+  const placeholderInnerClass = cn(!embedInSidebar && 'mx-auto max-w-7xl');
+
+  const params = useParams<{ projectId: string; section?: string }>();
   const navigate = useNavigate();
   const { toast } = useToast();
-
-  const activeSection: ComplianceSection = isValidSection(urlSection) ? urlSection : 'project';
+  const projectId = project?.id ?? params.projectId ?? '';
+  const urlSection = params.section;
+  const [sidebarSection, setSidebarSection] = useState<ComplianceSection>('project');
+  const activeSection: ComplianceSection = embedInSidebar
+    ? sidebarSection
+    : (isValidSection(urlSection) ? urlSection : 'project');
   const [policyResultsTab, setPolicyResultsTab] = useState<'issues' | 'all'>('issues');
   const [directFilter, setDirectFilter] = useState<'all' | 'direct' | 'transitive'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -567,16 +590,17 @@ export default function ProjectCompliancePage() {
   }, [project, organizationId, projectId, loadData]);
 
   useEffect(() => {
-    if (!organizationId || !projectId) return;
+    if (!organizationId || !projectId || embedInSidebar) return;
     // Only 'project' is a tab; export-notice and export-sbom are download buttons, so redirect to project
     if (!urlSection || urlSection !== 'project') {
       navigate(`/organizations/${organizationId}/projects/${projectId}/compliance/project`, { replace: true });
     }
-  }, [urlSection, navigate, organizationId, projectId]);
+  }, [urlSection, navigate, organizationId, projectId, embedInSidebar]);
 
   const handleSectionSelect = useCallback((section: ComplianceSection) => {
-    navigate(`/organizations/${organizationId}/projects/${projectId}/compliance/${section}`, { replace: true });
-  }, [navigate, organizationId, projectId]);
+    if (embedInSidebar) setSidebarSection(section);
+    else navigate(`/organizations/${organizationId}/projects/${projectId}/compliance/${section}`, { replace: true });
+  }, [navigate, organizationId, projectId, embedInSidebar]);
 
   // Derived data
   const violatedDeps = useMemo(() =>
@@ -775,7 +799,7 @@ export default function ProjectCompliancePage() {
 
   // Content-area skeleton matching project compliance layout: score, filters, table
   const contentSkeleton = (
-    <div className="px-6 py-6 mx-auto max-w-5xl space-y-8">
+    <div className={cn(contentShellClass, 'space-y-8')}>
       {/* Score + last scanned row */}
       <div className="flex flex-wrap items-center gap-8">
         <div className="flex items-baseline gap-3">
@@ -818,19 +842,28 @@ export default function ProjectCompliancePage() {
   // Full-page placeholder only when project not loaded yet
   if (!project) {
     return (
-      <div className="min-h-[calc(100vh-3rem)] px-6 py-6">
-        <div className="mx-auto max-w-7xl">
-          <div className="h-8 w-48 bg-muted rounded animate-pulse mb-6" />
-          <div className="h-64 bg-muted rounded-lg animate-pulse" />
+      <div className={cn(mainEmbedClass, embedInSidebar && embedShellBg)}>
+        <div className={cn('min-h-[calc(100vh-3rem)]', pagePadding)}>
+          <div className={placeholderInnerClass}>
+            <div className="h-8 w-48 bg-muted rounded animate-pulse mb-6" />
+            <div className="h-64 bg-muted rounded-lg animate-pulse" />
+          </div>
+          <Toaster position="bottom-right" />
         </div>
-        <Toaster position="bottom-right" />
       </div>
     );
   }
 
   return (
     <>
-      <div className="flex min-h-[calc(100vh-3rem)] overflow-hidden">
+      <div
+        className={cn(
+          'flex min-h-[calc(100vh-3rem)] overflow-hidden',
+          embedInSidebar && 'min-h-0 h-full',
+          embedInSidebar && embedShellBg,
+          mainEmbedClass
+        )}
+      >
         {/* Sticky compliance sidebar */}
         <ComplianceSidepanel
           mode="project"
@@ -841,18 +874,24 @@ export default function ProjectCompliancePage() {
           onExportNotice={canManageSettings ? handleExportNotice : undefined}
           onExportSBOM={canManageSettings ? handleExportSBOM : undefined}
           exporting={exporting}
+          embedSurface={!!embedInSidebar}
         />
 
-        <div className="flex-1 min-w-0 overflow-auto">
+        <div
+          className={cn(
+            'flex-1 min-w-0 overflow-auto',
+            embedInSidebar ? embedShellBg : 'bg-background-content'
+          )}
+        >
           {loading ? (
             contentSkeleton
           ) : error ? (
-            <div className="px-6 py-6 mx-auto max-w-5xl">
+            <div className={contentShellClass}>
               <h1 className="text-2xl font-bold text-foreground mb-4">Compliance</h1>
               <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4 text-sm text-destructive">{error}</div>
             </div>
           ) : (
-          <div className="px-6 py-6 mx-auto max-w-5xl">
+          <div className={contentShellClass}>
             {/* ─── PROJECT SECTION ─── */}
             {activeSection === 'project' && (
             <div className="space-y-8">
@@ -1209,5 +1248,17 @@ export default function ProjectCompliancePage() {
 
       <Toaster position="bottom-right" />
     </>
+  );
+}
+
+export default function ProjectCompliancePage() {
+  const { project, organizationId, userPermissions, reloadProject } = useOutletContext<ProjectContextType>();
+  return (
+    <ProjectComplianceContent
+      project={project}
+      organizationId={organizationId}
+      userPermissions={userPermissions}
+      reloadProject={reloadProject}
+    />
   );
 }

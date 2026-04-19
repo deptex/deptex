@@ -135,7 +135,14 @@ async function executeTriggerFunction(opts: ExecuteOptions): Promise<unknown> {
     return rawFetch(urlStr);
   };
 
-  const wrappedCode = `
+  // AI assistant and docs use a function *body* with `context` in scope (no wrapper).
+  // Legacy code may define `function notificationTrigger(context) { ... }` — support both.
+  const hasLegacyNotificationTrigger =
+    /\bfunction\s+notificationTrigger\s*\(/.test(code) ||
+    /\bnotificationTrigger\s*=\s*(?:async\s*)?function\s*\(/.test(code);
+
+  const wrappedCode = hasLegacyNotificationTrigger
+    ? `
     ${code}
 
     if (typeof notificationTrigger !== 'function') {
@@ -143,6 +150,12 @@ async function executeTriggerFunction(opts: ExecuteOptions): Promise<unknown> {
     }
 
     return (async () => notificationTrigger(__context))();
+  `
+    : `
+    // Body-style trigger: context is the first parameter (same object the dispatcher passes).
+    return (async function(context) {
+      ${code}
+    })(__context);
   `;
 
   const asyncFn = new Function(

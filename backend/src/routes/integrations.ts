@@ -25,6 +25,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { emitEvent } from '../lib/event-bus';
+import { runPRCheck } from '../lib/policy-engine';
 
 const DEPTEX_COMMENT_MARKER = '<!-- deptex-pr-check -->';
 const MAX_COMMENT_LENGTH = 60000;
@@ -2272,6 +2273,73 @@ async function handlePullRequestEvent(payload: any): Promise<void> {
                 lines.push(`- **${pkgName}@${newVersion}** — blocked by Watchtower: ${failedChecks} check(s) failed`);
               }
             }
+          }
+        }
+
+        // Run org/project pullRequestCheck policy when code is present
+        if (prCheckCode?.trim() && (directAddedPkgs.length > 0 || directBumpedPkgs.length > 0)) {
+          let projectAssetTier: string | null = null;
+          try {
+            const { data: projRow } = await supabase.from('projects').select('asset_tier_id').eq('id', projectId).single();
+            if (projRow?.asset_tier_id) {
+              const { data: tierRow } = await supabase.from('organization_asset_tiers').select('name').eq('id', projRow.asset_tier_id).single();
+              if (tierRow?.name) projectAssetTier = tierRow.name;
+            }
+          } catch {}
+
+          const added = await Promise.all(
+            directAddedPkgs.map(async ({ name, version }) => {
+              const { policyViolation, vulnCounts, license } = await checkPackage(name, version);
+              return {
+                name,
+                version,
+                license: license ?? null,
+                is_direct: true,
+                policyResult: { allowed: !policyViolation, reasons: policyViolation ? ['Does not comply with project policy'] : [] },
+                vulnerability_counts: vulnCounts ? { critical: vulnCounts.critical_vulns, high: vulnCounts.high_vulns, medium: vulnCounts.medium_vulns, low: vulnCounts.low_vulns } : undefined,
+              };
+            }),
+          );
+          const updated = await Promise.all(
+            directBumpedPkgs.map(async ({ name, oldVersion, newVersion }) => {
+              const { policyViolation, vulnCounts, license } = await checkPackage(name, newVersion);
+              return {
+                name,
+                version: newVersion,
+                oldVersion,
+                license: license ?? null,
+                is_direct: true,
+                policyResult: { allowed: !policyViolation, reasons: policyViolation ? ['Does not comply with project policy'] : [] },
+                vulnerability_counts: vulnCounts ? { critical: vulnCounts.critical_vulns, high: vulnCounts.high_vulns, medium: vulnCounts.medium_vulns, low: vulnCounts.low_vulns } : undefined,
+              };
+            }),
+          );
+          const w = workspace ? workspace + '/' : '';
+          const projectChangedFiles = changedFiles.filter((f) => w === '' || f.startsWith(w) || f === workspace);
+          const prContext: Record<string, unknown> = {
+            project: { name: projectName, id: projectId, asset_tier: projectAssetTier ?? undefined },
+            ecosystem: 'npm',
+            changed_files: projectChangedFiles,
+            added,
+            updated,
+            removed: [],
+            statuses: ['Compliant', 'Non-Compliant'],
+          };
+          try {
+            const prResult = await runPRCheck(prCheckCode, prContext, organizationId);
+            if (!prResult.passed) {
+              blocked = true;
+              blockedBy.policy_violations = (blockedBy.policy_violations ?? 0) + 1;
+              if (prResult.violations?.length) {
+                lines.push('**Policy check:**');
+                prResult.violations.forEach((v) => lines.push(`- ${v}`));
+                lines.push('');
+              }
+            }
+          } catch (err: any) {
+            console.error('[PR check] runPRCheck failed:', err?.message);
+            blocked = true;
+            blockedBy.policy_violations = (blockedBy.policy_violations ?? 0) + 1;
           }
         }
 

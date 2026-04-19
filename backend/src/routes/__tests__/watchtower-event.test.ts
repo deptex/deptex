@@ -1,10 +1,6 @@
 /**
- * Phase 10B: Watchtower event endpoint unit tests
+ * Watchtower event endpoint unit tests
  */
-
-jest.mock('../../lib/features', () => ({
-  isEeEdition: jest.fn().mockReturnValue(false),
-}));
 
 const mockEmitEvent = jest.fn().mockResolvedValue(undefined);
 jest.mock('../../lib/event-bus', () => ({
@@ -26,8 +22,6 @@ const originalEnv = process.env.INTERNAL_API_KEY;
 beforeEach(() => {
   jest.clearAllMocks();
   process.env.INTERNAL_API_KEY = 'test-internal-key';
-  const { isEeEdition } = require('../../lib/features');
-  (isEeEdition as jest.Mock).mockReturnValue(false);
 });
 
 afterAll(() => {
@@ -58,27 +52,7 @@ describe('POST /api/internal/watchtower-event', () => {
     expect(res.body.error).toMatch(/event_type|organization_id|package_name/);
   });
 
-  it('returns 200 with valid body and does not call emitEvent in CE mode', async () => {
-    const res = await request(app)
-      .post('/api/internal/watchtower-event')
-      .set('X-Internal-Api-Key', 'test-internal-key')
-      .send({
-        event_type: 'security_analysis_failure',
-        organization_id: 'org-1',
-        package_name: 'lodash',
-        payload: { registry: 'fail' },
-        priority: 'high',
-      });
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true });
-    expect(mockEmitEvent).not.toHaveBeenCalled();
-  });
-
-  it('in EE mode calls emitEvent with watchtower source', async () => {
-    const { isEeEdition } = require('../../lib/features');
-    (isEeEdition as jest.Mock).mockReturnValue(true);
-
+  it('returns 200 and calls emitEvent with watchtower source', async () => {
     const res = await request(app)
       .post('/api/internal/watchtower-event')
       .set('X-Internal-Api-Key', 'test-internal-key')
@@ -121,12 +95,14 @@ describe('POST /api/internal/watchtower-event', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
+    expect(mockEmitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project_id: null,
+      })
+    );
   });
 
-  it('in EE mode defaults priority to normal when missing', async () => {
-    const { isEeEdition } = require('../../lib/features');
-    (isEeEdition as jest.Mock).mockReturnValue(true);
-
+  it('defaults priority to normal when missing', async () => {
     await request(app)
       .post('/api/internal/watchtower-event')
       .set('X-Internal-Api-Key', 'test-internal-key')
@@ -143,9 +119,7 @@ describe('POST /api/internal/watchtower-event', () => {
     );
   });
 
-  it('in EE mode returns 200 when emitEvent throws (fire-and-forget)', async () => {
-    const { isEeEdition } = require('../../lib/features');
-    (isEeEdition as jest.Mock).mockReturnValue(true);
+  it('returns 200 when emitEvent throws (fire-and-forget)', async () => {
     mockEmitEvent.mockRejectedValueOnce(new Error('Event bus unavailable'));
 
     const res = await request(app)

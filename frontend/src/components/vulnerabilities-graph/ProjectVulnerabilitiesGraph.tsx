@@ -69,6 +69,12 @@ export interface ProjectVulnerabilitiesGraphProps {
   /** Project status from policy (e.g. Compliant, Under Review). Shown as badge on center node. */
   statusName?: string | null;
   statusColor?: string | null;
+  /** When true, center node uses org-overview-style card (border, bottom bar with risk + deps). */
+  overviewStyle?: boolean;
+  /** For overview style: asset tier name (e.g. Crown Jewels). */
+  assetTierName?: string | null;
+  /** For overview style: asset tier badge color. */
+  assetTierColor?: string | null;
 }
 
 export function ProjectVulnerabilitiesGraph({
@@ -85,6 +91,9 @@ export function ProjectVulnerabilitiesGraph({
   onNodeClick,
   statusName,
   statusColor,
+  overviewStyle = true,
+  assetTierName,
+  assetTierColor,
 }: ProjectVulnerabilitiesGraphProps) {
   const loading = graphLoading || vulnerabilitiesLoading;
   const waitForExtractionStatus = !extractionStatusKnown;
@@ -96,7 +105,10 @@ export function ProjectVulnerabilitiesGraph({
     centerExtras,
     showOnlyReachable,
     statusName,
-    statusColor
+    statusColor,
+    overviewStyle,
+    assetTierName,
+    assetTierColor
   );
   const [graphNodes, setGraphNodes, onNodesChange] = useNodesState<Node>(skeletonNodes);
   const [graphEdges, setGraphEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -120,10 +132,22 @@ export function ProjectVulnerabilitiesGraph({
     ) {
       lastAppliedLayoutRef.current = layoutSignature;
       const hasCenter = layoutNodes.some((n) => n.id === VULN_CENTER_ID);
+      const directCount = graphDepNodes.filter((d) => d.parentId === VULN_CENTER_ID).length;
       const nodesToSet = hasCenter
         ? layoutNodes
         : [
-            createVulnerabilitiesCenterNode(projectName, graphDepNodes, framework, undefined, statusName, statusColor),
+            createVulnerabilitiesCenterNode(
+              projectName,
+              graphDepNodes,
+              framework,
+              undefined,
+              statusName,
+              statusColor,
+              overviewStyle,
+              directCount,
+              assetTierName ?? null,
+              assetTierColor ?? null
+            ),
             ...layoutNodes.filter((n) => n.id !== VULN_CENTER_ID),
           ];
       setGraphNodes(nodesToSet);
@@ -142,6 +166,9 @@ export function ProjectVulnerabilitiesGraph({
     framework,
     statusName,
     statusColor,
+    overviewStyle,
+    assetTierName,
+    assetTierColor,
   ]);
 
   const stillShowingSkeleton =

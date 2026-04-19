@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import React from 'react';
 import { DEFAULT_ROLE_PERMISSIONS } from '../lib/api';
@@ -118,9 +118,11 @@ describe('Phase 7B: Aegis frontend', () => {
           userPermissions={{ ...DEFAULT_ROLE_PERMISSIONS, manage_aegis: true }}
         />
       );
-      expect(screen.getByRole('button', { name: 'Read-Only' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Propose' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Autopilot' })).toBeInTheDocument();
+      // Configuration tab content includes a Select for operating mode (combobox role)
+      await waitFor(() => {
+        const comboboxes = screen.queryAllByRole('combobox');
+        expect(comboboxes.length).toBeGreaterThanOrEqual(1);
+      });
     });
 
     it('99: Automations tab label is present', async () => {

@@ -9,19 +9,19 @@ todos:
     content: "17A: Write phase17_incident_response.sql (incident_playbooks, security_incidents, incident_timeline, incident_notes, RLS, indexes, org column)"
     status: completed
   - id: 17b-triggers
-    content: "17B: Build trigger system (ee/backend/lib/incident-triggers.ts) + hook into notification dispatcher + add secret_exposure_verified event type"
+    content: "17B: Build trigger system (backend/src/lib/incident-triggers.ts) + hook into notification dispatcher + add secret_exposure_verified event type"
     status: completed
   - id: 17c-engine
-    content: "17C: Build execution engine (ee/backend/lib/incident-engine.ts) with async QStash-driven phase execution, variable resolution, condition evaluation, escalation scheduling"
+    content: "17C: Build execution engine (backend/src/lib/incident-engine.ts) with async QStash-driven phase execution, variable resolution, condition evaluation, escalation scheduling"
     status: completed
   - id: 17d-templates
-    content: "17D: Build 4 pre-built playbook templates (ee/backend/lib/incident-templates.ts) with correct tool names and parameters"
+    content: "17D: Build 4 pre-built playbook templates (backend/src/lib/incident-templates.ts) with correct tool names and parameters"
     status: completed
   - id: 17e-postmortem
-    content: "17E: Build post-mortem generator (ee/backend/lib/incident-postmortem.ts) with template-based fallback + optional AI enhancement"
+    content: "17E: Build post-mortem generator (backend/src/lib/incident-postmortem.ts) with template-based fallback + optional AI enhancement"
     status: completed
   - id: 17f-api
-    content: "17F: Build API endpoints (ee/backend/routes/incidents.ts) for incident CRUD, playbook CRUD, stats, notes, post-mortem, dry-run + CE escalation route"
+    content: "17F: Build API endpoints (backend/src/routes/incidents.ts) for incident CRUD, playbook CRUD, stats, notes, post-mortem, dry-run + CE escalation route"
     status: completed
   - id: 17g-aegis-tools
     content: "17G: Register new Aegis tools (declareIncident, getIncidentStatus, listActiveIncidents) in tools registry"
@@ -255,11 +255,11 @@ interface PlaybookStep {
 
 ### 17B: Trigger System
 
-**File:** `ee/backend/lib/incident-triggers.ts` (new)
+**File:** `backend/src/lib/incident-triggers.ts` (new)
 
 The trigger system bridges Phase 9 events to incident creation. It runs inside the notification dispatcher pipeline -- when an event is dispatched, also check if it matches any active playbook triggers.
 
-**Hook point:** In `ee/backend/lib/notification-dispatcher.ts`, after `resolveMatchingRules()`, add a call to `checkIncidentTriggers(event)`.
+**Hook point:** In `backend/src/lib/notification-dispatcher.ts`, after `resolveMatchingRules()`, add a call to `checkIncidentTriggers(event)`.
 
 #### Triggerable event types
 
@@ -415,7 +415,7 @@ These integrate with existing Phase 9 notification rules -- orgs can configure S
 
 ### 17C: Playbook Execution Engine
 
-**File:** `ee/backend/lib/incident-engine.ts` (new)
+**File:** `backend/src/lib/incident-engine.ts` (new)
 
 The execution engine is **async and event-driven via QStash**, matching the existing Aegis task step pattern. No synchronous for-loops.
 
@@ -743,7 +743,7 @@ When multiple incidents are active simultaneously:
 
 ### 17D: Pre-Built Playbook Templates
 
-**File:** `ee/backend/lib/incident-templates.ts` (new)
+**File:** `backend/src/lib/incident-templates.ts` (new)
 
 Four templates seeded as `is_template = true` playbooks that orgs can clone and customize. Defined as TypeScript objects; seeded when org enables incident response or on first Aegis setup.
 
@@ -806,7 +806,7 @@ Auto-trigger: policy evaluation changes project status from passing to non-passi
 
 ### 17E: Post-Mortem Generation
 
-**File:** `ee/backend/lib/incident-postmortem.ts` (new)
+**File:** `backend/src/lib/incident-postmortem.ts` (new)
 
 **Strategy: Markdown-first, client-side PDF export.**
 
@@ -898,7 +898,7 @@ Users can create custom playbooks via:
 
 ### 17G: API Endpoints
 
-#### EE Routes (`ee/backend/routes/incidents.ts`, new file, registered in isEeEdition block)
+#### EE Routes (`backend/src/routes/incidents.ts`, new file, registered in backend/src/index.ts)
 
 | Method | Path | Purpose | Permission |
 |--------|------|---------|------------|
@@ -917,7 +917,7 @@ Users can create custom playbooks via:
 | `DELETE` | `/api/organizations/:id/playbooks/:playbookId` | Delete custom playbook (blocks template deletion) | `manage_incidents` |
 | `POST` | `/api/organizations/:id/playbooks/:playbookId/dry-run` | Simulate playbook (no real actions) | `manage_incidents` |
 
-#### CE Routes (`backend/src/routes/incident-cron.ts`, new file, mounted in index.ts outside isEeEdition)
+#### CE Routes (`backend/src/routes/incident-cron.ts`, new file, mounted in index.ts in index.ts)
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
@@ -971,7 +971,7 @@ The trigger checking does NOT need its own cron -- it piggybacks on the Phase 9 
 
 ### 17H: Aegis Tool Registration
 
-**File:** `ee/backend/lib/aegis/tools/incidents.ts` (new, imported in `ee/backend/lib/aegis/tools/index.ts`)
+**File:** `backend/src/lib/aegis/tools/incidents.ts` (new, imported in `backend/src/lib/aegis/tools/index.ts`)
 
 Register 3 new tools so Aegis can interact with incidents via chat:
 
@@ -1128,7 +1128,7 @@ Replace the placeholder in `frontend/src/components/settings/AegisManagementCons
 
 **1. approveTask() must queue first step:**
 
-In `ee/backend/lib/aegis/tasks.ts`, `approveTask()` sets `status = 'running'` but never queues the first step via QStash. Add:
+In `backend/src/lib/aegis/tasks.ts`, `approveTask()` sets `status = 'running'` but never queues the first step via QStash. Add:
 
 ```typescript
 async function approveTask(taskId: string): Promise<void> {
@@ -1148,7 +1148,7 @@ async function approveTask(taskId: string): Promise<void> {
 
 **2. Sprint tool name mismatch:**
 
-In `ee/backend/lib/aegis/sprint-orchestrator.ts`, `buildSprintPlan()` uses `toolName: 'triggerAiFix'` but the tool is registered as `triggerFix` in `security-ops.ts`. Fix:
+In `backend/src/lib/aegis/sprint-orchestrator.ts`, `buildSprintPlan()` uses `toolName: 'triggerAiFix'` but the tool is registered as `triggerFix` in `security-ops.ts`. Fix:
 
 ```typescript
 // sprint-orchestrator.ts ~line 316
@@ -1176,7 +1176,7 @@ Data retention: `incident_timeline` ~1KB per event. A 50-event incident ~50KB. 1
 
 ### 17L: Phase 17 Test Suite (44 tests)
 
-#### Backend Tests (`ee/backend/routes/__tests__/incident-response.test.ts`)
+#### Backend Tests (`backend/src/routes/__tests__/incident-response.test.ts`)
 
 **Trigger System (1-6):**
 1. `vulnerability_discovered` with CISA KEV + critical severity triggers zero-day playbook

@@ -14,7 +14,7 @@ import { storeAstAnalysisResults } from './ast-storage';
 import { ExtractionLogger } from './logger';
 import { parsePurl, resolvePurlToDependencyId } from './purl';
 import { parseReachableFlows, parseUsageSlices, parseLlmPrompts, updateReachabilityLevels } from './reachability';
-import { updateJobPayloadCommit } from './job-db';
+import { updateJobPayloadCommit, updateJobStatus } from './job-db';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
@@ -1083,6 +1083,9 @@ export async function runPipeline(
     await log.info('uploading', 'Updating project status...');
 
     const status = newDepsToPopulate.length > 0 ? 'analyzing' : 'ready';
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'df7584' }, body: JSON.stringify({ sessionId: 'df7584', location: 'pipeline.ts:before-repo-update', message: 'setting repo status', data: { projectId, status, jobId: job.jobId ?? null }, timestamp: Date.now(), hypothesisId: 'H1' }) }).catch(() => {});
+    // #endregion
     await supabase
       .from('project_repositories')
       .update({
@@ -1093,6 +1096,15 @@ export async function runPipeline(
         updated_at: new Date().toISOString(),
       })
       .eq('project_id', projectId);
+
+    // Mark job completed in sync with repo status so Overview and Repository/Recent Activity never disagree.
+    const didUpdateJob = status === 'ready' && !!job.jobId;
+    if (didUpdateJob) {
+      await updateJobStatus(supabase, job.jobId!, 'completed');
+    }
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'df7584' }, body: JSON.stringify({ sessionId: 'df7584', location: 'pipeline.ts:after-repo-update', message: 'repo updated, job update', data: { projectId, status, didUpdateJob }, timestamp: Date.now(), hypothesisId: 'H5' }) }).catch(() => {});
+    // #endregion
 
     await supabase
       .from('projects')

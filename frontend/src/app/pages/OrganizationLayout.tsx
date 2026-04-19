@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { useParams, Outlet, useNavigate, Link } from 'react-router-dom';
-import { User, HelpCircle, Settings, LogOut, BookOpen, Mail, ChevronRight } from 'lucide-react';
+import { useParams, Outlet, useNavigate } from 'react-router-dom';
+import { History, ArrowUp, Settings, FileText, Wrench, Clock, Server, BarChart3, Code2, Database } from 'lucide-react';
 import OrganizationHeader from '../../components/OrganizationHeader';
 import OrganizationSidebar from '../../components/OrganizationSidebar';
 import { CreateProjectSidebar } from '../../components/CreateProjectSidebar';
@@ -11,14 +11,33 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useUserProfile } from '../../hooks/useUserProfile';
 import { Toaster } from '../../components/ui/toaster';
 import { PlanProvider } from '../../contexts/PlanContext';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '../../components/ui/dropdown-menu';
+import { Button } from '../../components/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip';
+import { cn } from '../../lib/utils';
+
+const AEGIS_SIDEBAR_WIDTH = 420;
+
+/** Three rows of suggested prompts; each row scrolls horizontally and pauses on hover */
+const AEGIS_SAMPLE_ROWS: { label: string; icon: React.ComponentType<{ className?: string }> }[][] = [
+  [
+    { label: 'How can I configure my service?', icon: Settings },
+    { label: 'Deploy Postgres', icon: FileText },
+    { label: 'Why is my build failing?', icon: Wrench },
+    { label: 'Set up a cron job', icon: Clock },
+  ],
+  [
+    { label: 'Check deployment status', icon: Server },
+    { label: 'View logs', icon: BarChart3 },
+    { label: 'Scale my app', icon: Settings },
+    { label: 'Add environment variable', icon: Code2 },
+  ],
+  [
+    { label: 'Run tests', icon: Wrench },
+    { label: 'Fix lint errors', icon: Code2 },
+    { label: 'Generate migration', icon: Database },
+    { label: 'Explain this code', icon: FileText },
+  ],
+];
 
 export default function OrganizationLayout() {
   const { id } = useParams<{ id: string }>();
@@ -63,6 +82,9 @@ export default function OrganizationLayout() {
   const [projectsLoading, setProjectsLoading] = useState(true);
   const [showCreateProjectSidebar, setShowCreateProjectSidebar] = useState(false);
   const [showInviteMemberDialog, setShowInviteMemberDialog] = useState(false);
+  const [aegisSidebarOpen, setAegisSidebarOpen] = useState(false);
+  const [aegisInput, setAegisInput] = useState('');
+  const [aegisSuggestionsHovered, setAegisSuggestionsHovered] = useState(false);
   // Prefetched for Invite Member dialog so it opens instantly
   const [inviteMembers, setInviteMembers] = useState<OrganizationMember[]>([]);
   const [inviteInvitations, setInviteInvitations] = useState<OrganizationInvitation[]>([]);
@@ -347,122 +369,31 @@ export default function OrganizationLayout() {
   return (
     <>
       <div className="min-h-screen bg-background">
-        {loading && !organization ? (
+        {loading && !organization && id ? (
           <>
-            {/* Loading Header */}
+            {/* Loading Header — skeleton only; sidebar below stays visible so layout doesn’t jump on refresh */}
             <div className="fixed top-0 left-0 right-0 z-50 bg-background border-b border-border">
               <header className="bg-background">
                 <div className="mx-auto w-full">
                   <div className="flex h-12 items-center justify-between px-6">
-                    {/* Left side: Logo + Loading placeholders matching OrganizationHeader */}
                     <nav className="flex items-center gap-2 text-sm">
-                      <Link to="/organizations" className="flex items-center">
-                        <img
-                          src="/images/logo.png"
-                          alt="Deptex"
-                          className="h-8 w-8"
-                        />
-                      </Link>
-                      <ChevronRight className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                      <img
+                        src="/images/logo.png"
+                        alt="Deptex"
+                        className="h-8 w-8 flex-shrink-0"
+                      />
+                      <div className="h-4 w-px bg-border flex-shrink-0 ml-1.5 mr-3" aria-hidden />
                       <div className="flex items-center gap-2">
                         <div className="h-4 w-24 bg-muted rounded animate-pulse" />
                         <div className="h-5 w-14 bg-muted rounded animate-pulse" />
                       </div>
                     </nav>
-
-                    {/* Right side: Help and Profile */}
-                    <div className="flex items-center gap-4">
-                      {/* Help dropdown */}
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <button className="flex items-center justify-center rounded-md p-2 text-foreground-secondary hover:bg-background-subtle hover:text-foreground transition-colors">
-                            <HelpCircle className="h-5 w-5" />
-                          </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-48">
-                          <DropdownMenuLabel>Help & Support</DropdownMenuLabel>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem asChild>
-                            <a href="/docs" target="_blank" rel="noopener noreferrer" className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary transition-colors">
-                              <BookOpen className="h-4 w-4" />
-                              Docs
-                            </a>
-                          </DropdownMenuItem>
-                          <DropdownMenuItem asChild>
-                            <a href="/docs/help" target="_blank" rel="noopener noreferrer" className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary transition-colors">
-                              <Mail className="h-4 w-4" />
-                              Contact Support
-                            </a>
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-
-                      {/* Profile dropdown */}
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <button className="flex items-center justify-center rounded-full border border-border bg-background-subtle overflow-hidden hover:bg-background-card transition-colors">
-                            <img
-                              src={avatarUrl}
-                              alt={user?.email || 'User'}
-                              className="h-8 w-8 rounded-full object-cover"
-                              onError={(e) => {
-                                e.currentTarget.src = '/images/blank_profile_image.png';
-                              }}
-                            />
-                          </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-72">
-                          <DropdownMenuLabel className="p-0">
-                            <div className="flex items-center gap-3 px-2 py-3">
-                              <div className="flex-shrink-0">
-                                <img
-                                  src={avatarUrl}
-                                  alt={user?.email || 'User'}
-                                  className="h-10 w-10 rounded-full object-cover border border-border"
-                                  onError={(e) => {
-                                    e.currentTarget.src = '/images/blank_profile_image.png';
-                                  }}
-                                />
-                              </div>
-                              <div className="flex flex-col gap-0.5 min-w-0 flex-1">
-                                {user?.user_metadata?.full_name && (
-                                  <span className="text-sm font-medium text-foreground truncate">{user.user_metadata.full_name}</span>
-                                )}
-                                <span className="text-xs text-foreground-secondary truncate">{user?.email}</span>
-                              </div>
-                            </div>
-                          </DropdownMenuLabel>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem asChild>
-                            <Link to="/settings" className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary transition-colors">
-                              <Settings className="h-4 w-4" />
-                              Settings
-                            </Link>
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            onClick={async () => {
-                              await signOut();
-                              navigate('/');
-                            }}
-                            className="cursor-pointer text-foreground-secondary hover:text-foreground focus:bg-transparent focus:text-foreground flex items-center gap-2 transition-colors"
-                          >
-                            <LogOut className="h-4 w-4" />
-                            Sign out
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
+                    <div />
                   </div>
                 </div>
               </header>
-              {/* Loading Tabs - show with default permissions if we have org, otherwise no permissions */}
             </div>
-            <div className="h-12"></div>
-          </>
-        ) : organization && id ? (
-          <>
-            <OrganizationHeader organization={organization} />
+            {/* Same sidebar as loaded state — nav items are permission-null; profile uses auth user */}
             <OrganizationSidebar
               organizationId={id}
               userPermissions={userPermissions}
@@ -475,6 +406,36 @@ export default function OrganizationLayout() {
               onRefetchProjects={refetchProjects}
               canCreateProject={userPermissions?.manage_teams_and_projects === true}
               onOpenCreateProject={() => setShowCreateProjectSidebar(true)}
+              user={user}
+              avatarUrl={avatarUrl}
+              onSignOut={signOut}
+              currentOrganization={null}
+            />
+            <div className="h-12"></div>
+          </>
+        ) : organization && id ? (
+          <>
+            <OrganizationHeader
+              organization={organization}
+              aegisSidebarOpen={aegisSidebarOpen}
+              onToggleAegis={() => setAegisSidebarOpen((prev) => !prev)}
+            />
+            <OrganizationSidebar
+              organizationId={id}
+              userPermissions={userPermissions}
+              teams={teams}
+              teamsLoading={teamsLoading}
+              onRefetchTeams={refetchTeamsAndNotify}
+              canCreateTeam={userPermissions?.manage_teams_and_projects === true}
+              projects={projects}
+              projectsLoading={projectsLoading}
+              onRefetchProjects={refetchProjects}
+              canCreateProject={userPermissions?.manage_teams_and_projects === true}
+              onOpenCreateProject={() => setShowCreateProjectSidebar(true)}
+              user={user}
+              avatarUrl={avatarUrl}
+              onSignOut={signOut}
+              currentOrganization={organization ? { id: organization.id, name: organization.name, role: organization.role, plan: organization.plan, avatar_url: organization.avatar_url } : null}
             />
             {showCreateProjectSidebar && id && (
               <CreateProjectSidebar
@@ -500,11 +461,154 @@ export default function OrganizationLayout() {
             )}
             <div className="h-12"></div>
           </>
+        ) : id && !organization && !loading ? (
+          /* Brief moment before loadOrganization runs, or cache miss: still show sidebar shell */
+          <>
+            <div className="fixed top-0 left-0 right-0 z-50 bg-background border-b border-border">
+              <header className="bg-background">
+                <div className="mx-auto w-full">
+                  <div className="flex h-12 items-center justify-between px-6">
+                    <nav className="flex items-center gap-2 text-sm">
+                      <img src="/images/logo.png" alt="Deptex" className="h-8 w-8 flex-shrink-0" />
+                      <div className="h-4 w-px bg-border flex-shrink-0 ml-1.5 mr-3" aria-hidden />
+                      <div className="h-4 w-24 bg-muted rounded animate-pulse" />
+                    </nav>
+                    <div />
+                  </div>
+                </div>
+              </header>
+            </div>
+            <OrganizationSidebar
+              organizationId={id}
+              userPermissions={userPermissions}
+              teams={teams}
+              teamsLoading={teamsLoading}
+              onRefetchTeams={refetchTeamsAndNotify}
+              canCreateTeam={userPermissions?.manage_teams_and_projects === true}
+              projects={projects}
+              projectsLoading={projectsLoading}
+              onRefetchProjects={refetchProjects}
+              canCreateProject={userPermissions?.manage_teams_and_projects === true}
+              onOpenCreateProject={() => setShowCreateProjectSidebar(true)}
+              user={user}
+              avatarUrl={avatarUrl}
+              onSignOut={signOut}
+              currentOrganization={null}
+            />
+            <div className="h-12"></div>
+          </>
         ) : null}
         <PlanProvider organizationId={id || ''}>
-          <main className={organization ? 'pl-12' : ''}>
-            <Outlet context={{ organization, reloadOrganization }} />
-          </main>
+          <div className="flex min-h-[calc(100vh-3rem)]">
+            <main
+              className={cn(
+                'flex-1 min-w-0 min-h-0',
+                /* pl-12 whenever org route has sidebar (loading or loaded) */
+                id ? 'pl-12' : 'px-6',
+              )}
+              style={organization && aegisSidebarOpen ? { marginRight: AEGIS_SIDEBAR_WIDTH } : undefined}
+            >
+              <Outlet context={{ organization, reloadOrganization }} />
+            </main>
+            {organization && (
+              <aside
+                className={cn(
+                  'fixed top-12 right-0 bottom-0 z-40 flex flex-col overflow-hidden bg-background border-l border-border shadow-none transition-transform duration-300 ease-out',
+                  // When closed, slide fully past the viewport so border/shadow never peek (width-only collapse left a visible sliver)
+                  aegisSidebarOpen ? 'translate-x-0' : 'translate-x-[calc(100%+24px)]',
+                )}
+                style={{ width: AEGIS_SIDEBAR_WIDTH }}
+                aria-label="New Agent"
+                aria-hidden={!aegisSidebarOpen}
+              >
+                <div className="flex flex-col h-full min-h-0 w-full">
+                  {/* Header: no top border, no X button */}
+                  <div className="p-4 flex items-center justify-between flex-shrink-0">
+                    <span className="font-semibold text-foreground">New Agent</span>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Chat history">
+                          <History className="h-4 w-4 text-muted-foreground" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Chat history</TooltipContent>
+                    </Tooltip>
+                  </div>
+                  {/* Chat area - empty for now */}
+                  <div className="flex-1 overflow-auto min-h-0" />
+                  {/* Three rows of rotating suggestions; hover locks animation */}
+                  <div
+                    className="flex-shrink-0 p-4 pt-0 flex flex-col gap-3"
+                    onMouseEnter={() => setAegisSuggestionsHovered(true)}
+                    onMouseLeave={() => setAegisSuggestionsHovered(false)}
+                  >
+                    <div className="flex flex-col gap-3 overflow-hidden">
+                      {AEGIS_SAMPLE_ROWS.map((rowItems, rowIndex) => {
+                        const isReverse = rowIndex % 2 === 1;
+                        /* Closest to text bar (bottom) = most opaque; top = most faded */
+                        const opacityClass =
+                          rowIndex === 0 ? 'opacity-50' : rowIndex === 1 ? 'opacity-[0.65]' : 'opacity-80';
+                        return (
+                          <div
+                            key={rowIndex}
+                            className={cn(
+                              'overflow-hidden flex-shrink-0 h-10',
+                              opacityClass,
+                            )}
+                          >
+                            <div
+                              className={cn(
+                                'flex gap-2 flex-shrink-0 h-full items-center',
+                                isReverse ? 'aegis-scroll-animate-reverse' : 'aegis-scroll-animate',
+                                aegisSuggestionsHovered && 'aegis-scroll-paused',
+                              )}
+                            >
+                              {[1, 2].map((copy) => (
+                                <div
+                                  key={copy}
+                                  className="flex gap-2 flex-shrink-0 h-full items-center"
+                                >
+                                  {rowItems.map(({ label, icon: Icon }) => (
+                                    <button
+                                      key={`${copy}-${label}`}
+                                      type="button"
+                                      className="inline-flex items-center gap-2.5 rounded-lg border border-border bg-background-card px-3.5 py-2 text-sm text-foreground-secondary hover:text-foreground hover:bg-muted/40 hover:border-border transition-colors text-left flex-shrink-0 whitespace-nowrap min-w-0"
+                                      onClick={() => setAegisInput(label)}
+                                    >
+                                      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                                      <span className="truncate max-w-[160px]">{label}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="relative rounded-lg border border-border bg-background-card overflow-hidden">
+                      <textarea
+                        value={aegisInput}
+                        onChange={(e) => setAegisInput(e.target.value)}
+                        placeholder="Develop, debug, deploy, anything..."
+                        rows={3}
+                        className="w-full min-h-[88px] px-4 py-3 pr-12 text-sm text-foreground placeholder:text-muted-foreground bg-transparent focus:outline-none focus:ring-0 border-0 resize-none"
+                      />
+                      <Button
+                        type="button"
+                        size="icon"
+                        className="absolute right-1.5 bottom-1.5 h-8 w-8 rounded-full shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 disabled:opacity-50"
+                        disabled={!aegisInput.trim()}
+                        aria-label="Send"
+                      >
+                        <ArrowUp className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </aside>
+            )}
+          </div>
         </PlanProvider>
       </div>
       <Toaster position="bottom-right" />

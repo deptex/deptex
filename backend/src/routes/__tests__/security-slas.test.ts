@@ -151,7 +151,8 @@ describe('Phase 15: sla_warning_at pre-compute', () => {
     const warningPct = 75;
     const warningOffsetMs = (maxHours * (warningPct / 100)) * 60 * 60 * 1000;
     const warningAt = new Date(detectedAt + warningOffsetMs);
-    expect(warningAt.toISOString()).toBe('2025-01-03T00:00:00.000Z');
+    // 48h * 75% = 36h after detected_at → Jan 2 12:00 UTC (not 48h = Jan 3)
+    expect(warningAt.toISOString()).toBe('2025-01-02T12:00:00.000Z');
   });
 });
 

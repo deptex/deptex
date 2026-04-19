@@ -56,6 +56,12 @@ export interface ProjectStatusResult {
   violations: string[];
 }
 
+/** Result from pullRequestCheck: pass or block the PR. */
+export interface PRCheckResult {
+  passed: boolean;
+  violations: string[];
+}
+
 export interface PolicyValidationResult {
   syntaxPass: boolean;
   syntaxError?: string;
@@ -366,12 +372,13 @@ export async function runProjectStatus(
 
 /**
  * Run pullRequestCheck() against PR diff data.
+ * Policy must return { passed: boolean, violations: string[] }. passed: true allows the merge, passed: false blocks it.
  */
 export async function runPRCheck(
   code: string,
   prContext: Record<string, unknown>,
   organizationId?: string,
-): Promise<ProjectStatusResult> {
+): Promise<PRCheckResult> {
   try {
     const result = await executePolicyFunction({
       code,
@@ -381,10 +388,11 @@ export async function runPRCheck(
       codeType: 'pr_check',
     });
 
-    return validateProjectStatusResult(result);
+    const { passed, violations } = validatePRCheckResult(result);
+    return { passed, violations };
   } catch (err: any) {
     return {
-      status: 'Non-Compliant',
+      passed: false,
       violations: [`Policy execution error: ${err.message}`],
     };
   }
@@ -430,6 +438,29 @@ function validateProjectStatusResult(result: unknown): ProjectStatusResult {
   }
 
   return { status: r.status, violations: r.violations as string[] };
+}
+
+/** Validates pullRequestCheck return: must be { passed: boolean, violations: string[] }. */
+function validatePRCheckResult(result: unknown): { passed: boolean; violations: string[] } {
+  if (!result || typeof result !== 'object') {
+    throw new Error('pullRequestCheck must return an object');
+  }
+  const r = result as Record<string, unknown>;
+
+  if (typeof r.passed !== 'boolean') {
+    throw new Error('pullRequestCheck must return { passed: boolean, violations: string[] }. `passed` must be a boolean.');
+  }
+
+  if (!Array.isArray(r.violations)) {
+    throw new Error('pullRequestCheck must return { passed: boolean, violations: string[] }. `violations` must be a string array.');
+  }
+  for (const v of r.violations) {
+    if (typeof v !== 'string') {
+      throw new Error('Expected all items in `violations` to be strings');
+    }
+  }
+
+  return { passed: r.passed, violations: r.violations as string[] };
 }
 
 /**
@@ -482,12 +513,18 @@ export async function validatePolicyCode(
 
     if (codeType === 'package_policy') {
       validatePackagePolicyResult(testResult);
+    } else if (codeType === 'pr_check') {
+      validatePRCheckResult(testResult);
     } else {
       validateProjectStatusResult(testResult);
     }
     result.shapePass = true;
   } catch (err: any) {
-    result.shapeError = err.message;
+    let shapeError = err.message;
+    if (codeType === 'package_policy' && /dependencies.*not iterable|not iterable.*dependencies/i.test(shapeError)) {
+      shapeError += ' Hint: packagePolicy receives context.dependency (one object) per call, not context.dependencies.';
+    }
+    result.shapeError = shapeError;
     return result;
   }
 
@@ -518,6 +555,8 @@ export async function validatePolicyCode(
 
       if (codeType === 'package_policy') {
         validatePackagePolicyResult(failResult);
+      } else if (codeType === 'pr_check') {
+        validatePRCheckResult(failResult);
       } else {
         validateProjectStatusResult(failResult);
       }
@@ -606,10 +645,19 @@ function buildSampleContext(
     };
   }
 
-  // pr_check
+  // pr_check (richer context: ecosystem, changed_files, per-dep license, vulnerability_counts, is_direct)
   return {
-    project: { name: 'test-project', tier: { name: 'Internal', rank: 3, multiplier: 1.0 } },
-    added: [sampleDeps[0]],
+    project: { name: 'test-project', id: 'test-project-id', asset_tier: 'Internal', tier: { name: 'Internal', rank: 3, multiplier: 1.0 } },
+    ecosystem: 'npm',
+    changed_files: ['package.json', 'package-lock.json'],
+    added: [
+      {
+        ...sampleDeps[0],
+        license: 'MIT',
+        is_direct: true,
+        vulnerability_counts: { critical: 0, high: 0, medium: 0, low: 0 },
+      },
+    ],
     updated: [],
     removed: [],
     statuses: ['Compliant', 'Non-Compliant'],
@@ -675,31 +723,40 @@ export async function evaluateProjectPolicies(
 
   const projectDeps = deps ?? [];
 
-  // Run packagePolicy on each dep (if code exists)
-  if (packagePolicyCode && projectDeps.length > 0) {
+  // Run packagePolicy on each dep when org/project has policy code; otherwise set default "allowed"
+  // so the UI has an explicit policy_result and doesn't fall back to empty accepted_licenses.
+  if (projectDeps.length > 0) {
+    const defaultResult = { allowed: true as const, reasons: [] as string[] };
     for (const dep of projectDeps) {
-      const depData = (dep as any).dependencies;
-      const versionData = (dep as any).dependency_versions;
+      if (packagePolicyCode) {
+        const depData = (dep as any).dependencies;
+        const versionData = (dep as any).dependency_versions;
 
-      const depContext: PolicyDependencyContext = {
-        name: depData?.name ?? '',
-        version: depData?.version ?? '',
-        license: depData?.license ?? null,
-        openSsfScore: depData?.openssf_score ?? null,
-        weeklyDownloads: depData?.weekly_downloads ?? null,
-        lastPublishedAt: depData?.last_published_at ?? null,
-        releasesLast12Months: depData?.releases_last_12_months ?? null,
-        dependencyScore: depData?.score ?? null,
-        maliciousIndicator: versionData?.malicious_indicator ?? null,
-        slsaLevel: versionData?.slsa_level ?? null,
-      };
+        const depContext: PolicyDependencyContext = {
+          name: depData?.name ?? '',
+          version: depData?.version ?? '',
+          license: depData?.license ?? null,
+          openSsfScore: depData?.openssf_score ?? null,
+          weeklyDownloads: depData?.weekly_downloads ?? null,
+          lastPublishedAt: depData?.last_published_at ?? null,
+          releasesLast12Months: depData?.releases_last_12_months ?? null,
+          dependencyScore: depData?.score ?? null,
+          maliciousIndicator: versionData?.malicious_indicator ?? null,
+          slsaLevel: versionData?.slsa_level ?? null,
+        };
 
-      const policyResult = await runPackagePolicy(packagePolicyCode, depContext, tier, organizationId);
+        const policyResult = await runPackagePolicy(packagePolicyCode, depContext, tier, organizationId);
 
-      await supabase
-        .from('project_dependencies')
-        .update({ policy_result: policyResult })
-        .eq('id', dep.id);
+        await supabase
+          .from('project_dependencies')
+          .update({ policy_result: policyResult })
+          .eq('id', dep.id);
+      } else {
+        await supabase
+          .from('project_dependencies')
+          .update({ policy_result: defaultResult })
+          .eq('id', dep.id);
+      }
     }
   }
 

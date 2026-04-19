@@ -195,7 +195,7 @@ Key flags:
 - `--no-stream`: disable streaming output (we capture stdout for logging)
 - `--file <path>`: files to edit (ecosystem-specific, see 7C)
 
-**Generalized Fly Machine utility (`ee/backend/lib/fly-machines.ts`):**
+**Generalized Fly Machine utility (`backend/src/lib/fly-machines.ts`):**
 
 Refactor `startExtractionMachine()` into a generic `startFlyMachine()` that both extraction and aider workers use:
 
@@ -247,7 +247,7 @@ New env vars: `FLY_AIDER_APP` (default: `deptex-aider-worker`), `FLY_AIDER_MAX_B
 
 ### 7B: Fix Orchestrator
 
-Create `ee/backend/lib/ai-fix-engine.ts`:
+Create `backend/src/lib/ai-fix-engine.ts`:
 
 ```typescript
 interface FixRequest {
@@ -1642,7 +1642,7 @@ Tests 100-121 (Edge Cases -- 7K):
 
 1. **Database migration**: `project_security_fixes` table + `claim_fix_job` + `queue_fix_job` + recovery RPCs
 2. **Generalized Fly Machine utility**: refactor `startExtractionMachine()` → `startFlyMachine(config)`
-3. **Fix orchestrator** (`ee/backend/lib/ai-fix-engine.ts`): queue logic, budget check, context gathering, cancellation
+3. **Fix orchestrator** (`backend/src/lib/ai-fix-engine.ts`): queue logic, budget check, context gathering, cancellation
 4. **Aider worker**: `backend/aider-worker/` (index.ts poll loop, job-db, logger, executor, strategies, validation, git-ops)
 5. **Aider worker Docker image + fly.toml**: build and deploy to Fly.io
 6. **Recovery endpoint**: `POST /api/internal/recovery/fix-jobs`

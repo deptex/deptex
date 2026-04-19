@@ -1,16 +1,11 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Folder, Loader2, ChevronRight, Package, PanelLeftClose, ShieldAlert, Ban, Clock, Users } from 'lucide-react';
+import { Folder, Loader2, Users } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '../ui/dropdown-menu';
 import { FrameworkIcon } from '../framework-icon';
 import { TeamIcon } from '../TeamIcon';
-import type { WorstSeverity } from './useVulnerabilitiesGraphLayout';
+import { type WorstSeverity, VULN_CENTER_NODE_HEIGHT } from './useVulnerabilitiesGraphLayout';
+import { GraphScopePill } from './GraphScopePill';
 
 export interface VulnProjectNodeData {
   projectName: string;
@@ -43,25 +38,25 @@ export interface VulnProjectNodeData {
   projectsCount?: number | null;
   /** Team nodes (org overview): number of members for bottom bar. */
   membersCount?: number | null;
-  /** Project nodes (org overview): asset tier name shown as subtext (e.g. Crown Jewels, External). */
+  /** Project nodes (org overview): asset tier name shown in badge (e.g. Crown Jewels, External). */
   assetTierName?: string | null;
+  /** Project nodes (org overview): hex color for asset tier badge (from organization_asset_tiers). */
+  assetTierColor?: string | null;
   /** Org overview: number of dependencies to show in bottom bar. */
   dependenciesCount?: number | null;
-  /** Org overview: organization id for expand navigation. */
-  organizationId?: string | null;
-  /** Org overview: when true, show spinner in bottom bar (loading direct deps). */
-  isExpanding?: boolean;
-  /** Org overview: called when user clicks expand; projectId and optional filter. */
-  onExpandProject?: (projectId: string, filter?: 'all' | 'vulnerable' | 'not_allowed' | 'outdated') => void;
-  /** Org overview: when set, this project is expanded; show collapse control instead of expand menu. */
-  expandedProjectId?: string | null;
+  /**
+   * Org overview: target handle side for org→project edge so the connector stays horizontal
+   * (aligned to org layout midline). See TeamGroupNodeData.overviewOrgEdgeOnTargetSide.
+   */
+  overviewOrgEdgeOnTargetSide?: 'left' | 'right';
 }
 
 const NODE_WIDTH = 220;
 const NODE_HEIGHT = 64;
-/** Larger project card for org overview (border, bottom bar, deps count, expand). */
+/** Larger project card for org overview (border, single row: icon, name, status). */
 export const OVERVIEW_PROJECT_NODE_WIDTH = 268;
-export const OVERVIEW_PROJECT_NODE_HEIGHT = 100;
+/** Org overview project cards: single-row height (no footer). */
+export const OVERVIEW_PROJECT_NODE_HEIGHT = 68;
 
 function getColorScheme(worstSeverity: WorstSeverity | undefined) {
   const s = worstSeverity ?? 'none';
@@ -153,7 +148,7 @@ function statusBadgeColorFallback(label: string | null | undefined): string | nu
 }
 
 function VulnProjectNodeComponent({ data }: NodeProps) {
-  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, hasExtractingProjects, neutralStyle, roleBadge, roleBadgeColor, statusBadge, statusBadgeColor, riskGrade, projectsCount, membersCount, assetTierName, dependenciesCount, organizationId, isExpanding, onExpandProject, expandedProjectId } =
+  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, hasExtractingProjects, neutralStyle, roleBadge, roleBadgeColor, statusBadge, statusBadgeColor, riskGrade, projectsCount, membersCount, assetTierName, overviewOrgEdgeOnTargetSide } =
     (data as unknown as VulnProjectNodeData) ?? {};
   const hasKnownFramework = framework && framework.toLowerCase() !== 'unknown';
   const frameworkIdForIcon = hasKnownFramework ? framework : undefined;
@@ -169,62 +164,57 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
   const rawStatusColor = statusBadgeColor?.trim() ? statusBadgeColor : (showStatusBadge ? statusBadgeColorFallback(statusBadge) : null);
   const effectiveStatusColor = rawStatusColor && !rawStatusColor.startsWith('#') ? `#${rawStatusColor}` : rawStatusColor;
 
-  /** Org overview: larger project card with border, bottom bar (risk, deps, asset), expand button. */
+  /** Org overview: larger project card with border, single row (no dependency footer). */
   const isOverviewProjectCard = Boolean(neutralStyle && !isTeamNode && !isExtracting);
   /** Org overview: larger team card with border, risk badge, bottom bar (x projects, x members), no arrow. */
   const isOverviewTeamCard = Boolean(neutralStyle && isTeamNode && !isExtracting);
   const nodeWidth = (isOverviewProjectCard || isOverviewTeamCard) ? OVERVIEW_PROJECT_NODE_WIDTH : NODE_WIDTH;
   const nodeHeight = (isOverviewProjectCard || isOverviewTeamCard) ? OVERVIEW_PROJECT_NODE_HEIGHT : NODE_HEIGHT;
-
-  const isExpanded = Boolean(projectId && expandedProjectId === projectId);
-
-  const expandWithFilter = (filter: 'all' | 'vulnerable' | 'not_allowed' | 'outdated' = 'all') => {
-    if (onExpandProject && projectId) {
-      onExpandProject(projectId, filter);
-    }
-  };
-
-  const onExpand = (e: React.MouseEvent, filter?: 'all' | 'vulnerable' | 'not_allowed' | 'outdated') => {
-    e.stopPropagation();
-    expandWithFilter(filter ?? 'all');
-  };
-
-  const onCollapse = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (onExpandProject && projectId) {
-      onExpandProject(projectId);
-    }
-  };
+  const overviewFlatY = VULN_CENTER_NODE_HEIGHT / 2;
+  const overviewSideHandleStyle = { top: overviewFlatY, transform: 'translateY(-50%)' } as const;
 
   return (
     <div className="relative" style={{ minWidth: nodeWidth, minHeight: nodeHeight }}>
       <Handle id="top" type="target" position={Position.Top} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
-      <Handle id="right" type="target" position={Position.Right} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
+      <Handle
+        id="right"
+        type="target"
+        position={Position.Right}
+        className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0"
+        style={overviewOrgEdgeOnTargetSide === 'right' ? overviewSideHandleStyle : undefined}
+      />
       <Handle id="bottom" type="target" position={Position.Bottom} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
-      <Handle id="left" type="target" position={Position.Left} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
+      <Handle
+        id="left"
+        type="target"
+        position={Position.Left}
+        className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0"
+        style={overviewOrgEdgeOnTargetSide === 'left' ? overviewSideHandleStyle : undefined}
+      />
       <Handle id="source-top" type="source" position={Position.Top} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
       <Handle id="source-right" type="source" position={Position.Right} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
       <Handle id="source-bottom" type="source" position={Position.Bottom} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
       <Handle id="source-left" type="source" position={Position.Left} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
 
       {isOverviewTeamCard ? (
-        <div className="relative rounded-lg border border-border bg-background-card shadow-md h-full flex flex-col overflow-hidden cursor-pointer hover:shadow-lg hover:border-border/80 transition-all">
-          {/* Top: Team icon, name (no badge here) */}
-          <div className="px-3.5 py-3 flex items-center gap-2.5 min-w-0 flex-1">
+        <div className="relative rounded-xl border border-border bg-background-card-header shadow-lg shadow-slate-500/5 h-full flex flex-col overflow-hidden cursor-pointer hover:border-border/80 transition-all">
+          {/* Top: Team icon, name, scope pill */}
+          <div className="px-4 py-3 flex items-center gap-3 min-w-0 flex-1">
             <div className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 bg-[#1a1c1e] text-muted-foreground">
               <TeamIcon />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-foreground truncate" title={projectName}>
+              <p className="text-base font-semibold text-foreground truncate leading-tight" title={projectName}>
                 {projectName}
               </p>
             </div>
+            <GraphScopePill type="team" className="shrink-0" />
           </div>
           {/* Bottom bar: risk badge + project count (icon) + member count (icon) */}
-          <div className="border-t border-border px-3 py-2 flex items-center gap-3 flex-wrap w-full text-left rounded-b-lg">
+          <div className="border-t border-border px-4 py-2.5 flex items-center gap-3 flex-wrap w-full text-left rounded-b-xl">
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-400 cursor-default">
+                <span className="flex-shrink-0 rounded-md border border-green-500/35 bg-green-500/15 px-2 py-0.5 text-xs font-semibold text-green-500 cursor-default">
                   {riskGrade ?? 'A+'}
                 </span>
               </TooltipTrigger>
@@ -255,118 +245,35 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
           </div>
         </div>
       ) : isOverviewProjectCard ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div className="relative rounded-lg border border-border bg-background-card shadow-md h-full flex flex-col overflow-hidden cursor-pointer hover:shadow-lg hover:border-border/80 transition-all">
-              {/* Second layer / inner border */}
-              <div className="absolute inset-[1px] rounded-[7px] border border-border/60 pointer-events-none" aria-hidden />
-              {/* Top: icon, name, status (click opens sidebar) */}
-              <div className="px-3.5 py-3 flex items-center gap-2.5 min-w-0 flex-1">
-                {frameworkIdForIcon ? (
-                  <div className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 bg-[#1a1c1e] text-muted-foreground">
-                    <FrameworkIcon frameworkId={frameworkIdForIcon} size={18} className="text-current" />
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 bg-[#1a1c1e] text-muted-foreground">
-                    <Folder className="w-4 h-4" />
-                  </div>
-                )}
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-foreground truncate" title={projectName}>
-                    {projectName}
-                  </p>
-                </div>
-                {showStatusBadge && (
-                  <span
-                    className="flex-shrink-0 inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium"
-                    style={effectiveStatusColor
-                      ? { backgroundColor: `${effectiveStatusColor}20`, color: effectiveStatusColor, borderColor: `${effectiveStatusColor}40` }
-                      : { backgroundColor: 'transparent', color: 'var(--muted-foreground)', borderColor: 'rgba(255,255,255,0.2)' }
-                    }
-                  >
-                    {statusBadge}
-                  </span>
-                )}
-              </div>
-              {/* Bottom bar: expand options (dropdown) or collapse (when expanded) */}
-              <div className="border-t border-border px-3 py-2 flex items-center gap-2 flex-wrap w-full text-left rounded-b-lg">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-400 cursor-default">
-                      {riskGrade ?? 'A+'}
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">Calculated risk score based on vulnerabilities, secrets, and code findings.</TooltipContent>
-                </Tooltip>
-                {typeof dependenciesCount === 'number' && (
-                  <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                    <Package className="h-3 w-3 flex-shrink-0" />
-                    {dependenciesCount} direct dep{dependenciesCount === 1 ? '' : 's'}
-                  </span>
-                )}
-                {assetTierName && (
-                  <span className="text-[11px] text-muted-foreground truncate max-w-[100px]" title={assetTierName}>
-                    {assetTierName}
-                  </span>
-                )}
-                <div className="flex-1 min-w-0" />
-                {onExpandProject && projectId && (
-                  isExpanding ? (
-                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground flex-shrink-0" aria-hidden />
-                  ) : isExpanded ? (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          onClick={onCollapse}
-                          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
-                          aria-label="Collapse packages"
-                        >
-                          <PanelLeftClose className="h-4 w-4" />
-                          Collapse
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top">Collapse packages</TooltipContent>
-                    </Tooltip>
-                  ) : (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button
-                          type="button"
-                          onClick={(e) => e.stopPropagation()}
-                          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
-                          aria-label="Expand project options"
-                        >
-                          <ChevronRight className="h-4 w-4" />
-                          Expand
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" side="top" className="min-w-[200px]">
-                        <DropdownMenuItem onSelect={() => expandWithFilter('all')}>
-                          <Package className="h-3.5 w-3.5 mr-2" />
-                          Expand all packages
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => expandWithFilter('vulnerable')}>
-                          <ShieldAlert className="h-3.5 w-3.5 mr-2" />
-                          Expand vulnerable packages
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => expandWithFilter('not_allowed')}>
-                          <Ban className="h-3.5 w-3.5 mr-2" />
-                          Expand not allowed packages
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => expandWithFilter('outdated')}>
-                          <Clock className="h-3.5 w-3.5 mr-2" />
-                          Expand outdated packages
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  )
-                )}
-              </div>
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="top">Expand project</TooltipContent>
-        </Tooltip>
+        <div className="relative rounded-xl border border-border bg-background-card-header shadow-lg shadow-slate-500/5 h-full flex items-center gap-3 min-w-0 overflow-hidden cursor-pointer hover:border-border/80 transition-all px-4 py-3">
+          {frameworkIdForIcon ? (
+            <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center [&_svg]:text-white">
+              <FrameworkIcon frameworkId={frameworkIdForIcon} size={22} className="text-white" />
+            </span>
+          ) : (
+            <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center text-white">
+              <Folder className="h-5 w-5" strokeWidth={1.75} />
+            </span>
+          )}
+          <div className="min-w-0 flex-1">
+            <p className="text-base font-semibold text-foreground truncate leading-tight" title={projectName}>
+              {projectName}
+            </p>
+          </div>
+          <div className="flex items-center justify-end shrink-0">
+            {showStatusBadge && (
+              <span
+                className="inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium"
+                style={effectiveStatusColor
+                  ? { backgroundColor: `${effectiveStatusColor}20`, color: effectiveStatusColor, borderColor: `${effectiveStatusColor}40` }
+                  : { backgroundColor: 'transparent', color: 'var(--muted-foreground)', borderColor: 'rgba(255,255,255,0.2)' }
+                }
+              >
+                {statusBadge}
+              </span>
+            )}
+          </div>
+        </div>
       ) : showCardTooltip ? (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -414,7 +321,7 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
                   ) : null}
                 </div>
                 {(showTeamRiskGrade || showProjectRiskGrade) && (
-                  <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-sm font-semibold text-emerald-400">
+                  <span className="flex-shrink-0 rounded-md border border-green-500/35 bg-green-500/15 px-2 py-0.5 text-sm font-semibold text-green-500">
                     {riskGrade ?? 'A+'}
                   </span>
                 )}
@@ -489,7 +396,7 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
               ) : null}
             </div>
             {(showTeamRiskGrade || showProjectRiskGrade) && (
-              <span className="flex-shrink-0 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-sm font-semibold text-emerald-400">
+              <span className="flex-shrink-0 rounded-md border border-green-500/35 bg-green-500/15 px-2 py-0.5 text-sm font-semibold text-green-500">
                 {riskGrade ?? 'A+'}
               </span>
             )}

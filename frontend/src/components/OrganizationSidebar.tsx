@@ -1,11 +1,27 @@
 import { memo, useState, useMemo, useEffect } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, FolderKanban, Users, Scale, TowerControl, Settings, Plus, Loader2 } from 'lucide-react';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { LayoutDashboard, Scale, ShieldAlert, Settings, Plus, Loader2, User, BookOpen, Mail, LogOut } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { RolePermissions, Team, Project, api } from '../lib/api';
 import { useToast } from '../hooks/use-toast';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu';
+
+/** Current org for profile card display (name, role, plan). */
+export interface SidebarCurrentOrganization {
+  id: string;
+  name: string;
+  role?: string;
+  plan?: string;
+  avatar_url?: string | null;
+}
 
 interface OrganizationSidebarProps {
   organizationId: string;
@@ -19,6 +35,12 @@ interface OrganizationSidebarProps {
   onRefetchProjects?: () => void | Promise<void>;
   canCreateProject?: boolean;
   onOpenCreateProject?: () => void;
+  /** User info for profile card at bottom of sidebar */
+  user?: { email?: string | null; user_metadata?: { full_name?: string } } | null;
+  avatarUrl?: string;
+  onSignOut?: () => Promise<void>;
+  /** Current organization for role/plan display in profile card */
+  currentOrganization?: SidebarCurrentOrganization | null;
 }
 
 type NavItemDef = {
@@ -31,15 +53,15 @@ type NavItemDef = {
 
 const allNavItems: NavItemDef[] = [
   { id: 'overview', label: 'Overview', path: 'overview', icon: LayoutDashboard, requiredPermission: null },
+  { id: 'vulnerabilities', label: 'Vulnerabilities', path: 'vulnerabilities', icon: ShieldAlert, requiredPermission: null },
   { id: 'compliance', label: 'Compliance', path: 'compliance', icon: Scale, requiredPermission: null },
-  { id: 'watchtower', label: 'Watchtower', path: 'watchtower', icon: TowerControl, requiredPermission: null },
-  { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: 'view_settings' as const },
+  // Settings visible to all org members; each tab inside is gated by its own permission
+  { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: null },
 ];
 
-/** Section label and item ids. Projects & Teams section renders custom dropdowns (no nav items). */
+/** Section label and item ids. */
 const SIDEBAR_SECTIONS: { label: string; itemIds: string[] }[] = [
-  { label: 'Workspace', itemIds: ['overview', 'compliance', 'watchtower'] },
-  { label: 'Projects & Teams', itemIds: [] },
+  { label: 'Workspace', itemIds: ['overview', 'vulnerabilities', 'compliance'] },
   { label: 'Organization', itemIds: ['settings'] },
 ];
 
@@ -55,38 +77,22 @@ function OrganizationSidebar({
   onRefetchProjects,
   canCreateProject = false,
   onOpenCreateProject,
+  user = null,
+  avatarUrl = '/images/blank_profile_image.png',
+  onSignOut,
+  currentOrganization = null,
 }: OrganizationSidebarProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const { toast } = useToast();
   const [isHovered, setIsHovered] = useState(false);
   const pathParts = location.pathname.split('/');
-  const teamsIndex = pathParts.indexOf('teams');
-  const activeTeamId = teamsIndex >= 0 && pathParts[teamsIndex + 1] ? pathParts[teamsIndex + 1] : null;
-  const projectsIndex = pathParts.indexOf('projects');
-  const activeProjectId = projectsIndex >= 0 && pathParts[projectsIndex + 1] ? pathParts[projectsIndex + 1] : null;
-  const [teamsExpanded, setTeamsExpanded] = useState(() => pathParts.includes('teams'));
-  const [projectsExpanded, setProjectsExpanded] = useState(() => pathParts.includes('projects'));
   const [showCreateTeamModal, setShowCreateTeamModal] = useState(false);
   const [createTeamName, setCreateTeamName] = useState('');
   const [creating, setCreating] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
 
-  useEffect(() => {
-    if (activeTeamId) setTeamsExpanded(true);
-  }, [activeTeamId]);
-
-  useEffect(() => {
-    if (activeProjectId) setProjectsExpanded(true);
-  }, [activeProjectId]);
-
-  useEffect(() => {
-    if (!isHovered) {
-      setTeamsExpanded(false);
-      setProjectsExpanded(false);
-    }
-  }, [isHovered]);
-
-  // Listen for overview-page "Create team" so Plus dropdown can open the modal
+  // Listen for overview-page "Create team" so modal can open from elsewhere
   useEffect(() => {
     const handler = () => setShowCreateTeamModal(true);
     window.addEventListener('organization:openCreateTeam', handler);
@@ -120,14 +126,14 @@ function OrganizationSidebar({
     });
   }, [userPermissions]);
 
-  /** Per-section visible items for rendering sections with headers. Keep "Projects & Teams" even with 0 items. */
+  /** Per-section visible items for rendering sections with headers. */
   const sectionsWithItems = useMemo(() => {
     return SIDEBAR_SECTIONS.map((section) => ({
       ...section,
       items: section.itemIds
         .map((id) => visibleNavItems.find((item) => item.id === id))
         .filter((item): item is NavItemDef => item != null),
-    })).filter((s) => s.items.length > 0 || s.label === 'Projects & Teams');
+    })).filter((s) => s.items.length > 0);
   }, [visibleNavItems]);
 
   const currentTab = pathParts[pathParts.length - 1];
@@ -146,7 +152,7 @@ function OrganizationSidebar({
       const settingsTab = visibleNavItems.find((tab) => tab.id === 'settings');
       if (settingsTab) return 'settings';
     }
-    if (pathParts.includes('watchtower')) return 'watchtower';
+    if (pathParts.includes('vulnerabilities')) return 'vulnerabilities';
     if (currentTab === organizationId) {
       const overviewTab = visibleNavItems.find((tab) => tab.id === 'overview');
       return overviewTab ? 'overview' : 'overview';
@@ -162,6 +168,9 @@ function OrganizationSidebar({
     }
   };
 
+  // Keep sidebar expanded when profile dropdown is open so it doesn't collapse/shift while using the menu
+  const expanded = isHovered || profileOpen;
+
   return (
     <>
     <aside
@@ -169,7 +178,7 @@ function OrganizationSidebar({
       onMouseLeave={() => setIsHovered(false)}
       className={cn(
         'fixed left-0 top-12 bottom-0 bg-background border-r border-border z-40 flex flex-col transition-[width] duration-200 overflow-hidden',
-        isHovered ? 'w-48' : 'w-12'
+        expanded ? 'w-48' : 'w-12'
       )}
     >
       <nav className="flex-1 py-2 overflow-y-auto" aria-label="Organization navigation">
@@ -192,7 +201,7 @@ function OrganizationSidebar({
                       aria-current={isActive ? 'page' : undefined}
                       className={cn(
                         'w-full flex items-center h-9 px-1.5 text-sm font-medium rounded-md transition-colors whitespace-nowrap',
-                        isHovered ? 'gap-2.5' : 'gap-0',
+                        expanded ? 'gap-2.5' : 'gap-0',
                         isActive
                           ? 'text-foreground bg-background-card'
                           : 'text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50'
@@ -202,7 +211,7 @@ function OrganizationSidebar({
                       <span
                         className={cn(
                           'truncate transition-opacity duration-200 min-w-0',
-                          isHovered ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                          expanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
                         )}
                       >
                         {item.label}
@@ -210,181 +219,123 @@ function OrganizationSidebar({
                     </button>
                   );
                 })}
-                {section.label === 'Projects & Teams' && (
-                  <>
-                    {/* Projects dropdown */}
-                    <div
-                      className={cn(
-                        'w-full flex items-center h-9 px-1.5 text-sm font-medium rounded-md transition-colors whitespace-nowrap',
-                        isHovered ? 'gap-2.5' : 'gap-0',
-                        'text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50'
-                      )}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => setProjectsExpanded((e) => !e)}
-                        aria-expanded={projectsExpanded}
-                        className="flex items-center min-w-0 flex-1 gap-2.5 text-left"
-                      >
-                        <FolderKanban className="h-[1.3125rem] w-[1.3125rem] flex-shrink-0 tab-icon-shake" />
-                        <span
-                          className={cn(
-                            'truncate transition-opacity duration-200 min-w-0',
-                            isHovered ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                          )}
-                        >
-                          Projects
-                        </span>
-                      </button>
-                      {isHovered && canCreateProject && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onOpenCreateProject?.();
-                          }}
-                          className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-background-subtle transition-colors"
-                          aria-label="Create project"
-                        >
-                          <Plus className="h-4 w-4" />
-                        </button>
-                      )}
-                    </div>
-                    <div
-                      className={cn(
-                        'grid transition-[grid-template-rows] duration-200 ease-out',
-                        projectsExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
-                      )}
-                    >
-                      <div className="min-h-0 overflow-hidden">
-                        <div className={cn('space-y-0.5', isHovered ? 'ml-6 pl-0' : 'ml-0')}>
-                          {projectsLoading ? (
-                            [1, 2, 3].map((i) => (
-                              <div key={i} className="flex items-center h-9 px-1.5">
-                                <div className={cn('h-3 rounded bg-muted/40 animate-pulse', isHovered ? 'w-24' : 'w-4')} />
-                              </div>
-                            ))
-                          ) : (
-                            projects.map((project) => {
-                              const isProjectActive = activeProjectId === project.id;
-                              return (
-                                <button
-                                  key={project.id}
-                                  onClick={() => navigate(`/organizations/${organizationId}/projects/${project.id}/overview`)}
-                                  aria-current={isProjectActive ? 'page' : undefined}
-                                  className={cn(
-                                    'w-full flex items-center h-9 px-1.5 text-sm font-medium rounded-md transition-colors whitespace-nowrap',
-                                    isHovered ? 'gap-2.5' : 'gap-0',
-                                    isProjectActive
-                                      ? 'text-foreground bg-background-card'
-                                      : 'text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50'
-                                  )}
-                                >
-                                  <span
-                                    className={cn(
-                                      'truncate transition-opacity duration-200 min-w-0',
-                                      isHovered ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                                    )}
-                                  >
-                                    {project.name}
-                                  </span>
-                                </button>
-                              );
-                            })
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    {/* Teams dropdown */}
-                    <div
-                      className={cn(
-                        'w-full flex items-center h-9 px-1.5 text-sm font-medium rounded-md transition-colors whitespace-nowrap',
-                        isHovered ? 'gap-2.5' : 'gap-0',
-                        'text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50'
-                      )}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => setTeamsExpanded((e) => !e)}
-                        aria-expanded={teamsExpanded}
-                        className="flex items-center min-w-0 flex-1 gap-2.5 text-left"
-                      >
-                        <Users className="h-[1.3125rem] w-[1.3125rem] flex-shrink-0 tab-icon-shake" />
-                        <span
-                          className={cn(
-                            'truncate transition-opacity duration-200 min-w-0',
-                            isHovered ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                          )}
-                        >
-                          Teams
-                        </span>
-                      </button>
-                      {isHovered && canCreateTeam && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setShowCreateTeamModal(true);
-                          }}
-                          className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-background-subtle transition-colors"
-                          aria-label="Create team"
-                        >
-                          <Plus className="h-4 w-4" />
-                        </button>
-                      )}
-                    </div>
-                    <div
-                      className={cn(
-                        'grid transition-[grid-template-rows] duration-200 ease-out',
-                        teamsExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
-                      )}
-                    >
-                      <div className="min-h-0 overflow-hidden">
-                        <div className={cn('space-y-0.5', isHovered ? 'ml-6 pl-0' : 'ml-0')}>
-                          {teamsLoading ? (
-                            [1, 2, 3].map((i) => (
-                              <div key={i} className="flex items-center h-9 px-1.5">
-                                <div className={cn('h-3 rounded bg-muted/40 animate-pulse', isHovered ? 'w-24' : 'w-4')} />
-                              </div>
-                            ))
-                          ) : (
-                            teams.map((team) => {
-                              const isTeamActive = activeTeamId === team.id;
-                              return (
-                                <button
-                                  key={team.id}
-                                  onClick={() => navigate(`/organizations/${organizationId}/teams/${team.id}`)}
-                                  aria-current={isTeamActive ? 'page' : undefined}
-                                  className={cn(
-                                    'w-full flex items-center h-9 px-1.5 text-sm font-medium rounded-md transition-colors whitespace-nowrap',
-                                    isHovered ? 'gap-2.5' : 'gap-0',
-                                    isTeamActive
-                                      ? 'text-foreground bg-background-card'
-                                      : 'text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50'
-                                  )}
-                                >
-                                  <span
-                                    className={cn(
-                                      'truncate transition-opacity duration-200 min-w-0',
-                                      isHovered ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
-                                    )}
-                                  >
-                                    {team.name}
-                                  </span>
-                                </button>
-                              );
-                            })
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                )}
               </div>
             </div>
           ))}
         </div>
       </nav>
+
+      {/* Profile at bottom — same structure as nav sections (separator + row like other tabs) */}
+      {user != null && (
+        <>
+          <div className="py-3 flex-shrink-0" aria-hidden>
+            <div className="border-t border-border" />
+          </div>
+          <div className="pl-1 pr-2 pb-3 flex-shrink-0">
+            <div className="space-y-0.5">
+              <DropdownMenu open={profileOpen} onOpenChange={setProfileOpen}>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Open account menu"
+                    className={cn(
+                      'w-full flex items-center h-9 pl-0.5 pr-1 text-sm font-medium rounded-md transition-colors whitespace-nowrap',
+                      expanded ? 'gap-2.5' : 'gap-0',
+                      'text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50'
+                    )}
+                  >
+                    <img
+                      src={avatarUrl}
+                      alt=""
+                      className="h-8 w-8 min-h-8 min-w-8 rounded-full object-cover border border-border flex-shrink-0"
+                      onError={(e) => {
+                        e.currentTarget.src = '/images/blank_profile_image.png';
+                      }}
+                    />
+                    <span
+                      className={cn(
+                        'truncate transition-opacity duration-200 min-w-0 text-foreground',
+                        expanded ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'
+                      )}
+                    >
+                      {user?.user_metadata?.full_name || user?.email || 'Account'}
+                    </span>
+                  </button>
+                </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" side="right" className="w-72 p-0 px-3 pt-3 pb-3" alignOffset={8}>
+              {/* User info */}
+              <div className="flex items-center gap-3 px-0 py-3">
+                <img
+                  src={avatarUrl}
+                  alt=""
+                  className="h-10 w-10 rounded-full object-cover border border-border flex-shrink-0"
+                  onError={(e) => {
+                    e.currentTarget.src = '/images/blank_profile_image.png';
+                  }}
+                />
+                <div className="min-w-0 flex-1">
+                  {user?.user_metadata?.full_name && (
+                    <p className="text-sm font-medium text-foreground truncate">{user.user_metadata.full_name}</p>
+                  )}
+                  <p className="text-xs text-foreground-secondary truncate">{user?.email}</p>
+                </div>
+              </div>
+              <DropdownMenuSeparator />
+              {/* Account Settings, Documentation, Support — no borders between */}
+              <DropdownMenuItem asChild>
+                <Link
+                  to="/settings"
+                  className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary"
+                  onClick={() => setProfileOpen(false)}
+                >
+                  <User className="h-4 w-4" />
+                  Account Settings
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <a
+                  href="/docs"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary"
+                  onClick={() => setProfileOpen(false)}
+                >
+                  <BookOpen className="h-4 w-4" />
+                  Documentation
+                </a>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <a
+                  href="/docs/help"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary"
+                  onClick={() => setProfileOpen(false)}
+                >
+                  <Mail className="h-4 w-4" />
+                  Support
+                </a>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <div className="pt-2">
+                <DropdownMenuItem
+                  onClick={async () => {
+                    setProfileOpen(false);
+                    await onSignOut?.();
+                    navigate('/');
+                  }}
+                  className="cursor-pointer text-destructive focus:text-destructive focus:bg-destructive/10 flex items-center gap-2 rounded-md"
+                >
+                  <LogOut className="h-4 w-4" />
+                  Log out
+                </DropdownMenuItem>
+              </div>
+            </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
+        </>
+      )}
     </aside>
 
     <Dialog open={showCreateTeamModal} onOpenChange={(open) => { if (!open) { setShowCreateTeamModal(false); setCreateTeamName(''); } }}>
@@ -437,6 +388,11 @@ export default memo(OrganizationSidebar, (prevProps, nextProps) => {
   const prevProjectIds = prevProps.projects?.map((p) => p.id).join(',') ?? '';
   const nextProjectIds = nextProps.projects?.map((p) => p.id).join(',') ?? '';
   if (prevProjectIds !== nextProjectIds) return false;
+  if (prevProps.user !== nextProps.user) return false;
+  if (prevProps.avatarUrl !== nextProps.avatarUrl) return false;
+  const prevOrg = prevProps.currentOrganization;
+  const nextOrg = nextProps.currentOrganization;
+  if (prevOrg?.id !== nextOrg?.id || prevOrg?.name !== nextOrg?.name || prevOrg?.role !== nextOrg?.role || prevOrg?.plan !== nextOrg?.plan) return false;
 
   const prevPerms = prevProps.userPermissions;
   const nextPerms = nextProps.userPermissions;

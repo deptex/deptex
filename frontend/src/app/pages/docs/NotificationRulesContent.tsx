@@ -1,3 +1,5 @@
+import { DocsCodeBlock } from "../../../components/DocsCodeBlock";
+
 export default function NotificationRulesContent() {
   return (
     <div className="space-y-12">
@@ -94,18 +96,93 @@ export default function NotificationRulesContent() {
         </p>
       </div>
 
-      {/* Example */}
+      {/* Examples */}
       <div>
-        <h2 className="text-lg font-semibold text-foreground mb-3">Example: High Depscore Alert</h2>
-        <pre className="rounded-lg border border-border bg-background-card p-4 text-sm text-foreground overflow-x-auto font-mono">
-{`// Alert when a vulnerability with depscore above 75 is discovered
-if (context.event.type !== 'vulnerability_discovered') return false;
+        <h2 className="text-lg font-semibold text-foreground mb-3">Examples</h2>
+        <p className="text-foreground/90 leading-relaxed mb-4 text-sm">
+          Trigger code is a <strong className="text-foreground">function body</strong>: <code className="rounded bg-background-subtle px-1 py-0.5 text-xs font-mono">context</code> is always in scope.
+          Return <code className="rounded bg-background-subtle px-1 py-0.5 text-xs font-mono">true</code> to send, <code className="rounded bg-background-subtle px-1 py-0.5 text-xs font-mono">false</code> to skip.
+          Create rules from Settings → Notification Rules.
+        </p>
+
+        <div className="space-y-8">
+          <div>
+            <h3 className="text-sm font-semibold text-foreground mb-3">Critical vulnerabilities only</h3>
+            <DocsCodeBlock
+              title="Trigger"
+              value={`if (context.event.type !== 'vulnerability_discovered') return false;
+if (!context.vulnerability) return false;
+return context.vulnerability.severity === 'critical';`}
+            />
+          </div>
+
+          <div>
+            <h3 className="text-sm font-semibold text-foreground mb-3">High Depscore alert</h3>
+            <DocsCodeBlock
+              title="Trigger"
+              value={`if (context.event.type !== 'vulnerability_discovered') return false;
 if (!context.vulnerability) return false;
 return context.vulnerability.depscore > 75;`}
-        </pre>
-        <p className="text-foreground/90 leading-relaxed mt-3 text-sm">
-          Copy and adapt when creating notification rules. Create rules from Settings → Notification Rules.
-        </p>
+            />
+          </div>
+
+          <div>
+            <h3 className="text-sm font-semibold text-foreground mb-3">New project created</h3>
+            <DocsCodeBlock
+              title="Trigger"
+              value={`return context.event.type === 'project_created';`}
+            />
+          </div>
+
+          <div>
+            <h3 className="text-sm font-semibold text-foreground mb-3">Extraction completed with vulnerabilities</h3>
+            <DocsCodeBlock
+              title="Trigger"
+              value={`if (context.event.type !== 'extraction_completed') return false;
+if (!context.batch) return false;
+return (context.batch.totalVulnerabilities || 0) > 0;`}
+            />
+          </div>
+
+          <div>
+            <h3 className="text-sm font-semibold text-foreground mb-3">Crown Jewels — any vulnerability</h3>
+            <DocsCodeBlock
+              title="Trigger"
+              value={`if (context.event.type !== 'vulnerability_discovered') return false;
+if (!context.project) return false;
+return context.project.tier === 'Crown Jewels'
+    || context.project.asset_tier === 'CROWN_JEWELS';`}
+            />
+            <p className="text-foreground-secondary text-xs mt-2">
+              Tier may appear as <code className="rounded bg-background-subtle px-1 py-0.5 font-mono">tier</code> or <code className="rounded bg-background-subtle px-1 py-0.5 font-mono">asset_tier</code> depending on event payload; check both if needed.
+            </p>
+          </div>
+
+          <div>
+            <h3 className="text-sm font-semibold text-foreground mb-3">PR check failed</h3>
+            <DocsCodeBlock
+              title="Trigger"
+              value={`if (context.event.type !== 'pr_check_completed') return false;
+if (!context.pr) return false;
+return context.pr.checkResult === 'fail';`}
+            />
+          </div>
+
+          <div>
+            <h3 className="text-sm font-semibold text-foreground mb-3">Rich return (custom title / priority)</h3>
+            <DocsCodeBlock
+              title="Trigger"
+              value={`if (context.event.type !== 'vulnerability_discovered') return false;
+if (!context.vulnerability) return false;
+if (context.vulnerability.severity !== 'critical') return false;
+return {
+  notify: true,
+  title: 'Critical vuln: ' + (context.dependency && context.dependency.name),
+  priority: 'high'
+};`}
+            />
+          </div>
+        </div>
       </div>
     </div>
   );

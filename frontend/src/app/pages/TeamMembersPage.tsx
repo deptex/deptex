@@ -416,13 +416,16 @@ export default function TeamMembersPage({ isSettingsSubpage = false }: TeamMembe
           </div>
         </div>
       ) : filteredMembers.length === 0 ? (
-        <div className="py-8 text-center">
+        <div className="py-8 text-center flex flex-col items-center">
           {members.length === 0 ? (
             // No members in team at all - show actionable empty state
             <>
-              <h3 className="text-lg font-semibold text-foreground mb-2">This team is empty</h3>
-              <p className="text-foreground-secondary mb-6 max-w-sm mx-auto">
-                Get started by adding members to collaborate on projects together.
+              <div className="h-12 w-12 rounded-lg border border-border bg-background-subtle/50 flex items-center justify-center mb-4">
+                <Users className="h-6 w-6 text-foreground-secondary" />
+              </div>
+              <h3 className="text-base font-medium text-foreground mb-1">This team is empty</h3>
+              <p className="text-sm text-foreground-secondary mb-6 max-w-sm mx-auto">
+                You don't have any members in this team yet.
               </p>
               <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
                 {/* Show "Add Yourself" button if user is in org but not in team */}
@@ -482,8 +485,11 @@ export default function TeamMembersPage({ isSettingsSubpage = false }: TeamMembe
           ) : (
             // Has members but search returned no results
             <>
-              <h3 className="text-lg font-semibold text-foreground mb-2">No members found</h3>
-              <p className="text-foreground-secondary">No members match your search criteria. Press Esc to clear.</p>
+              <div className="h-12 w-12 rounded-lg border border-border bg-background-subtle/50 flex items-center justify-center mb-4">
+                <Search className="h-6 w-6 text-foreground-secondary" />
+              </div>
+              <h3 className="text-base font-medium text-foreground mb-1">No members found</h3>
+              <p className="text-sm text-foreground-secondary">No members match your search criteria. Press Esc to clear.</p>
             </>
           )}
         </div>

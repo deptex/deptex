@@ -31,6 +31,7 @@ const mockRedisExpire = jest.fn();
 const mockRedisDecr = jest.fn();
 const mockRedisDel = jest.fn();
 const mockRedisGet = jest.fn();
+const mockRedisTtl = jest.fn();
 
 jest.mock('@upstash/redis', () => ({
   Redis: jest.fn().mockImplementation(() => ({
@@ -41,6 +42,7 @@ jest.mock('@upstash/redis', () => ({
     decr: mockRedisDecr,
     del: mockRedisDel,
     get: mockRedisGet,
+    ttl: mockRedisTtl,
   })),
 }));
 
@@ -69,6 +71,10 @@ jest.mock('@anthropic-ai/sdk', () => {
     },
   }));
 });
+
+// Allow lib/supabase lazy init if any test path loads it without full mock
+if (!process.env.SUPABASE_URL) process.env.SUPABASE_URL = 'https://test.supabase.co';
+if (!process.env.SUPABASE_SERVICE_ROLE_KEY) process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role';
 
 jest.mock('@google/generative-ai', () => ({
   GoogleGenerativeAI: jest.fn().mockImplementation(() => ({
@@ -506,6 +512,7 @@ describe('Background Monitoring', () => {
 describe('Rate Limits and Logging', () => {
   it('16: tier 1 analyze-usage blocked after 5 calls per package per day', async () => {
     jest.resetModules();
+    mockRedisTtl.mockResolvedValue(3600);
 
     // First 5 calls succeed
     mockRedisIncr.mockResolvedValueOnce(1);
@@ -516,9 +523,10 @@ describe('Rate Limits and Logging', () => {
     const firstResult = await checkRateLimit(`ai:usage-analysis:${ORG_ID}:lodash`, 5, 86_400);
     expect(firstResult.allowed).toBe(true);
 
-    // 6th call blocked
+    // 6th call blocked (count > max triggers ttl)
     mockRedisIncr.mockResolvedValueOnce(6);
     jest.resetModules();
+    mockRedisTtl.mockResolvedValue(3600);
     const mod2 = await import('../../lib/rate-limit');
     const sixthResult = await mod2.checkRateLimit(`ai:usage-analysis:${ORG_ID}:lodash`, 5, 86_400);
     expect(sixthResult.allowed).toBe(false);

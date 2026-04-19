@@ -18,13 +18,13 @@ todos:
     content: "16A: Write phase16_aegis_learning.sql migration (fix_outcomes, strategy_patterns, RLS, RPCs, indexes)"
     status: completed
   - id: 16-b-outcomes
-    content: "16B: Build outcome recording engine (ee/backend/lib/learning/outcome-recorder.ts) + hook into webhook handlers"
+    content: "16B: Build outcome recording engine (backend/src/lib/learning/outcome-recorder.ts) + hook into webhook handlers"
     status: completed
   - id: 16-c-patterns
-    content: "16C: Build pattern extraction engine (ee/backend/lib/learning/pattern-engine.ts) + compute_strategy_patterns RPC"
+    content: "16C: Build pattern extraction engine (backend/src/lib/learning/pattern-engine.ts) + compute_strategy_patterns RPC"
     status: completed
   - id: 16-d-recommendations
-    content: "16D: Build recommendation engine (ee/backend/lib/learning/recommendation-engine.ts) with Redis cache + global defaults"
+    content: "16D: Build recommendation engine (backend/src/lib/learning/recommendation-engine.ts) with Redis cache + global defaults"
     status: completed
   - id: 16-e-feedback
     content: "16E: Human feedback loop -- QStash cron, user_notification cards, POST feedback API"
@@ -180,7 +180,7 @@ ALTER TABLE dependency_vulnerabilities ADD COLUMN IF NOT EXISTS cwe_ids TEXT[] D
 
 #### 16-Pre-C: Strategy Name Normalization
 
-**Problem:** The sprint orchestrator (`ee/backend/lib/aegis/sprint-orchestrator.ts`) uses different strategy names than the fix engine expects. If outcomes record inconsistent names, pattern matching breaks.
+**Problem:** The sprint orchestrator (`backend/src/lib/aegis/sprint-orchestrator.ts`) uses different strategy names than the fix engine expects. If outcomes record inconsistent names, pattern matching breaks.
 
 
 | Canonical (fix engine) | Sprint Orchestrator (current) |
@@ -192,12 +192,12 @@ ALTER TABLE dependency_vulnerabilities ADD COLUMN IF NOT EXISTS cwe_ids TEXT[] D
 | `remediate_secret`     | `secret_rotation`             |
 
 
-Additionally, the sprint orchestrator uses `toolName: 'triggerAiFix'` but the tool is registered as `triggerFix` in `ee/backend/lib/aegis/tools/security-ops.ts`.
+Additionally, the sprint orchestrator uses `toolName: 'triggerAiFix'` but the tool is registered as `triggerFix` in `backend/src/lib/aegis/tools/security-ops.ts`.
 
 **Files to modify:**
 
-- `ee/backend/lib/aegis/sprint-orchestrator.ts` -- Update `determineFixStrategy()` (~~line 288) to return canonical names. Fix tool name to `triggerFix` (~~line 316).
-- Create a shared constants file `ee/backend/lib/learning/strategy-constants.ts` with the canonical strategy list and display name mapping.
+- `backend/src/lib/aegis/sprint-orchestrator.ts` -- Update `determineFixStrategy()` (~~line 288) to return canonical names. Fix tool name to `triggerFix` (~~line 316).
+- Create a shared constants file `backend/src/lib/learning/strategy-constants.ts` with the canonical strategy list and display name mapping.
 
 ```typescript
 export const CANONICAL_STRATEGIES = [
@@ -218,7 +218,7 @@ export const STRATEGY_DISPLAY_NAMES: Record<string, string> = {
 
 #### 16-Pre-D: match_aegis_memories RPC
 
-**Problem:** `ee/backend/lib/aegis/executor-v2.ts` calls `supabase.rpc('match_aegis_memories', ...)` for vector similarity search, but this RPC is not defined in any migration file. Memory vector search silently falls back to text search.
+**Problem:** `backend/src/lib/aegis/executor-v2.ts` calls `supabase.rpc('match_aegis_memories', ...)` for vector similarity search, but this RPC is not defined in any migration file. Memory vector search silently falls back to text search.
 
 **Migration (include in phase16_aegis_learning.sql):**
 
@@ -530,7 +530,7 @@ $$;
 
 ### 16B: Outcome Recording Engine
 
-**File:** `ee/backend/lib/learning/outcome-recorder.ts` (new)
+**File:** `backend/src/lib/learning/outcome-recorder.ts` (new)
 
 Every fix job completion (success or failure) creates a structured outcome record.
 
@@ -594,10 +594,10 @@ function categorizeFailure(errorCategory: string | null, errorMessage: string | 
 
 **Hook points:**
 
-1. In `ee/backend/routes/integrations.ts` `handlePullRequestClosedEvent()` (~line 1854): After updating `project_security_fixes` status to `merged` or `pr_closed`, also update the corresponding `fix_outcomes` record:
+1. In `backend/src/routes/integrations.ts` `handlePullRequestClosedEvent()` (~line 1854): After updating `project_security_fixes` status to `merged` or `pr_closed`, also update the corresponding `fix_outcomes` record:
   - If merged: set `pr_merged = true`, `pr_merged_at`
   - If closed without merge: leave `pr_merged = false`
-2. Add same logic to `ee/backend/routes/gitlab-webhooks.ts` MR merge handler and `ee/backend/routes/bitbucket-webhooks.ts` PR merge handler.
+2. Add same logic to `backend/src/routes/gitlab-webhooks.ts` MR merge handler and `backend/src/routes/bitbucket-webhooks.ts` PR merge handler.
 3. Outcome creation itself: add a Supabase Realtime subscription on `project_security_fixes` status changes in a new CE route, OR (simpler) create outcomes in the daily cron and also from the webhook merge handler. **Recommended approach:** Create the outcome record from the daily QStash cron (`recompute-patterns`), which scans for `project_security_fixes` rows that don't yet have a corresponding `fix_outcomes` record. This avoids tight coupling and handles edge cases (machine crashes, missed webhooks).
 
 **PR revert detection:**
@@ -626,7 +626,7 @@ Also: in the extraction populate callback, compare dependency versions -- if a p
 
 ### 16C: Pattern Extraction Engine
 
-**File:** `ee/backend/lib/learning/pattern-engine.ts` (new)
+**File:** `backend/src/lib/learning/pattern-engine.ts` (new)
 
 The pattern engine aggregates outcomes to compute strategy success rates across multiple dimensions. Runs after each new outcome (incremental) and daily (full batch recomputation).
 
@@ -672,7 +672,7 @@ Logic:
 
 ### 16D: Strategy Recommendation Engine
 
-**File:** `ee/backend/lib/learning/recommendation-engine.ts` (new)
+**File:** `backend/src/lib/learning/recommendation-engine.ts` (new)
 
 When a user clicks "Fix with AI" or Aegis plans a fix, the strategy selector queries `strategy_patterns` to rank strategies by predicted success rate:
 
@@ -738,7 +738,7 @@ const GLOBAL_DEFAULTS: Record<string, number> = {
 
 **Integration with ai-fix-engine.ts:**
 
-In `requestFix()` (~line 280 of `ee/backend/lib/ai-fix-engine.ts`), if no strategy is specified in the request, call `recommendStrategies()` to auto-select the top recommendation.
+In `requestFix()` (~line 280 of `backend/src/lib/ai-fix-engine.ts`), if no strategy is specified in the request, call `recommendStrategies()` to auto-select the top recommendation.
 
 ---
 
@@ -784,7 +784,7 @@ Side effect: Updates `fix_outcomes.human_quality_rating`, triggers incremental p
 
 ### 16F: API Endpoints
 
-#### EE Routes (in `ee/backend/routes/organizations.ts` or new `ee/backend/routes/learning.ts`)
+#### EE Routes (in `backend/src/routes/organizations.ts` or new `backend/src/routes/learning.ts`)
 
 
 | Method | Path                                              | Purpose                                                                                         | Permission               |
@@ -812,7 +812,7 @@ CE routes use the same `verifyInternalAuth` pattern as `scheduled-extraction.ts`
 
 #### New Aegis Tool
 
-**File:** `ee/backend/lib/aegis/tools/learning.ts` (new, register in `ee/backend/lib/aegis/tools/index.ts`)
+**File:** `backend/src/lib/aegis/tools/learning.ts` (new, register in `backend/src/lib/aegis/tools/index.ts`)
 
 ```typescript
 registerAegisTool({
@@ -842,7 +842,7 @@ registerAegisTool({
 
 #### Sprint Orchestrator Upgrade
 
-**File:** `ee/backend/lib/aegis/sprint-orchestrator.ts`
+**File:** `backend/src/lib/aegis/sprint-orchestrator.ts`
 
 Replace `determineFixStrategy()` with recommendation-aware version:
 
@@ -876,7 +876,7 @@ async function determineFixStrategy(vuln: any, dep: any, orgId: string): Promise
 
 #### System Prompt Update
 
-In `ee/backend/lib/aegis/system-prompt-v2.ts`, add instruction to the system prompt:
+In `backend/src/lib/aegis/system-prompt-v2.ts`, add instruction to the system prompt:
 
 "When planning security fixes, always call getStrategyRecommendation first to check historical success rates for this organization. Mention the predicted success rate and confidence level to the user. If the top strategy has less than 60% predicted success, warn the user and mention the best follow-up strategy."
 
@@ -973,7 +973,7 @@ All charts use `recharts` (already installed, v2.15.0, proven pattern in `SLAAdh
 
 **Files to modify:**
 
-- `ee/backend/routes/gitlab-webhooks.ts` -- In the MR merge/close handler, add the same fix job status update:
+- `backend/src/routes/gitlab-webhooks.ts` -- In the MR merge/close handler, add the same fix job status update:
 
 ```typescript
 const fixStatus = isMerged ? 'merged' : 'pr_closed';
@@ -985,7 +985,7 @@ await supabase.from('project_security_fixes')
   .in('status', ['completed']);
 ```
 
-- `ee/backend/routes/bitbucket-webhooks.ts` -- Same for Bitbucket PR events.
+- `backend/src/routes/bitbucket-webhooks.ts` -- Same for Bitbucket PR events.
 
 ---
 
@@ -1010,7 +1010,7 @@ No new environment variables needed. No new external service dependencies. All c
 
 ### 16K: Phase 16 Test Suite (50 tests)
 
-#### Backend Tests (`ee/backend/routes/__tests__/aegis-learning.test.ts`)
+#### Backend Tests (`backend/src/routes/__tests__/aegis-learning.test.ts`)
 
 **Outcome Recording (1-10):**
 

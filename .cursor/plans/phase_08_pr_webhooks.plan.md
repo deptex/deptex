@@ -69,15 +69,15 @@ The lightweight `extractDependencies()` in `workers.ts` is **deprecated** for pu
 
 **Current state (what exists):**
 
-- GitHub webhook endpoint `POST /api/webhook/github` in [ee/backend/routes/integrations.ts](ee/backend/routes/integrations.ts)
+- GitHub webhook endpoint `POST /api/webhook/github` in [backend/src/routes/integrations.ts](backend/src/routes/integrations.ts)
 - Events handled: `installation`, `installation_repositories`, `push`, `pull_request`, `repository`
 - `handlePushEvent`: extracts ALL projects on every push (no manifest change detection, no sync_frequency check)
 - `handlePullRequestEvent`: only detects `package.json`/`package-lock.json` (npm only), posts NEW comment every push (spam), one combined check run for all projects, ignores `pull_request_comments_enabled` toggle, no "in_progress" state
 - `verifyGitHubWebhookSignature`: skips verification if `GITHUB_WEBHOOK_SECRET` not set
 - `project_pr_guardrails` table: block_critical/high/medium/low_vulns, block_policy_violations, block_transitive_vulns
 - `pull_request_comments_enabled` column on `project_repositories` (stored but never checked in handler)
-- GitHub API helpers in [ee/backend/lib/github.ts](ee/backend/lib/github.ts): `createCheckRun`, `updateCheckRun`, `listCheckRunsForRef`, `createIssueComment`, `getCompareChangedFiles`
-- Git provider abstraction in [ee/backend/lib/git-provider.ts](ee/backend/lib/git-provider.ts): `GitProvider` interface with `GitHubProvider`, `GitLabProvider`, `BitbucketProvider` (basic API calls only, no webhook/PR support)
+- GitHub API helpers in [backend/src/lib/github.ts](backend/src/lib/github.ts): `createCheckRun`, `updateCheckRun`, `listCheckRunsForRef`, `createIssueComment`, `getCompareChangedFiles`
+- Git provider abstraction in [backend/src/lib/git-provider.ts](backend/src/lib/git-provider.ts): `GitProvider` interface with `GitHubProvider`, `GitLabProvider`, `BitbucketProvider` (basic API calls only, no webhook/PR support)
 - No GitLab or Bitbucket webhook handlers
 - No PR tracking in our database
 - No commit tracking in our database
@@ -87,7 +87,7 @@ The lightweight `extractDependencies()` in `workers.ts` is **deprecated** for pu
 
 Create a shared manifest file registry used by both the push handler (change detection) and the PR handler (workspace detection). This replaces the current hardcoded `package.json`/`package-lock.json` matching.
 
-**File:** `ee/backend/lib/manifest-registry.ts`
+**File:** `backend/src/lib/manifest-registry.ts`
 
 ```typescript
 export type EcosystemId = 'npm' | 'python' | 'go' | 'java' | 'rust' | 'ruby' | 'dotnet' | 'php';
@@ -181,7 +181,7 @@ export function detectAffectedWorkspaces(
 
 ### 8B: Sync Frequency and Push Event Intelligence
 
-Rewrite [handlePushEvent](ee/backend/routes/integrations.ts) to be intelligent about WHEN and WHAT to extract.
+Rewrite [handlePushEvent](backend/src/routes/integrations.ts) to be intelligent about WHEN and WHAT to extract.
 
 **8B.1: Database migration -- sync_frequency column**
 
@@ -320,7 +320,7 @@ Query params: `status` (COMPLIANT/NON_COMPLIANT/UNKNOWN/ALL), `timeframe` (24H/7
 
 ### 8D: Multi-Ecosystem PR Analysis
 
-Extend [handlePullRequestEvent](ee/backend/routes/integrations.ts) to detect manifest changes across all ecosystems, not just npm.
+Extend [handlePullRequestEvent](backend/src/routes/integrations.ts) to detect manifest changes across all ecosystems, not just npm.
 
 **8D.1: Workspace detection rewrite**
 
@@ -734,7 +734,7 @@ Add full webhook support for GitLab-connected repositories.
 
 **8I.1: Webhook registration**
 
-When a GitLab repo is connected to a project (in the connect-repo flow in [projects.ts](ee/backend/routes/projects.ts)):
+When a GitLab repo is connected to a project (in the connect-repo flow in [projects.ts](backend/src/routes/projects.ts)):
 
 ```
 1. Call GitLab API: POST /projects/:id/hooks
@@ -1040,12 +1040,12 @@ Phase 8B introduces `sync_frequency` with `daily` and `weekly` values, but nothi
 
 - **Schedule:** `0 */6` * * * (every 6 hours) -- catches daily projects at ~6h granularity, weekly at same
 - **Target:** `POST /api/workers/scheduled-extraction`
-- **Auth:** QStash signature verification (reuses existing `verifyQStashSignature` from [ee/backend/lib/qstash.ts](ee/backend/lib/qstash.ts)) OR `X-Internal-Api-Key`
+- **Auth:** QStash signature verification (reuses existing `verifyQStashSignature` from [backend/src/lib/qstash.ts](backend/src/lib/qstash.ts)) OR `X-Internal-Api-Key`
 - **Why every 6 hours?** Daily extraction doesn't need to-the-minute precision. Running every 6 hours means a project set to "daily" gets extracted within 6 hours of its 24-hour mark. More frequent (e.g. hourly) wastes QStash invocations; less frequent (e.g. every 12 hours) means daily projects could wait up to 36 hours.
 
 **8N.2: Endpoint implementation**
 
-Route: `backend/src/routes/scheduled-extraction.ts` (CE route, mounted outside `isEeEdition()` block)
+Route: `backend/src/routes/scheduled-extraction.ts` (mounted in `backend/src/index.ts`)
 
 ```
 POST /api/workers/scheduled-extraction:
@@ -1211,7 +1211,7 @@ Currently, the GitHub webhook handler logs `repository` and `installation_reposi
 
 **8P.1: Events to handle**
 
-Add to the `switch` in `githubWebhookHandler` in [ee/backend/routes/integrations.ts](ee/backend/routes/integrations.ts):
+Add to the `switch` in `githubWebhookHandler` in [backend/src/routes/integrations.ts](backend/src/routes/integrations.ts):
 
 
 | GitHub Event                | Action        | Handler                               | DB Update                                                                                                          |
@@ -1371,7 +1371,7 @@ In production, missing webhook secrets cause rejection. In development, warn but
 Add rate limiting to prevent abuse on webhook endpoints:
 
 - **Per-IP rate limit:** 100 requests per minute per IP (generous enough for legitimate webhook bursts from GitHub/GitLab/Bitbucket)
-- **Implementation:** Reuse the existing `checkRateLimit` from [ee/backend/lib/rate-limit.ts](ee/backend/lib/rate-limit.ts) (Redis-backed, fail-open)
+- **Implementation:** Reuse the existing `checkRateLimit` from [backend/src/lib/rate-limit.ts](backend/src/lib/rate-limit.ts) (Redis-backed, fail-open)
 - **Apply to:** `/api/webhook/github`, `/api/integrations/webhooks/gitlab`, `/api/integrations/webhooks/bitbucket`
 - **GitHub IP allowlist:** Optionally, only accept webhooks from GitHub's published IP ranges (`GET https://api.github.com/meta` -> `hooks` array). This is a Phase 14 hardening -- for Phase 8, rate limiting is sufficient.
 
@@ -1627,9 +1627,9 @@ New valid `project_repositories.status` values (no schema change -- TEXT column)
 
 ### Phase 8 New Files Summary
 
-- `ee/backend/lib/manifest-registry.ts` -- manifest file pattern matching (8A)
-- `ee/backend/routes/gitlab-webhooks.ts` -- GitLab webhook handler (8I)
-- `ee/backend/routes/bitbucket-webhooks.ts` -- Bitbucket webhook handler (8J)
+- `backend/src/lib/manifest-registry.ts` -- manifest file pattern matching (8A)
+- `backend/src/routes/gitlab-webhooks.ts` -- GitLab webhook handler (8I)
+- `backend/src/routes/bitbucket-webhooks.ts` -- Bitbucket webhook handler (8J)
 - `backend/src/routes/scheduled-extraction.ts` -- QStash cron endpoint for daily/weekly extraction (8N, CE route)
 - `backend/src/routes/watchtower-daily-poll.ts` -- QStash cron endpoint for watchtower daily job (8O, CE route)
 - `backend/src/lib/watchtower-poll.ts` -- extracted poller logic from watchtower-poller (8O, CE shared lib)
@@ -1640,16 +1640,16 @@ New valid `project_repositories.status` values (no schema change -- TEXT column)
 
 ### Phase 8 Modified Files Summary
 
-- `ee/backend/routes/integrations.ts` -- rewrite handlePushEvent (8B), rewrite handlePullRequestEvent (8D/8E/8F), add handlePullRequestClosedEvent (8G), add smart comment system (8F), add per-project check runs (8E), add repository lifecycle handlers (8P: handleRepositoryDeletedEvent, handleRepositoryRenamedEvent, handleRepositoryEditedEvent, handleInstallationReposRemovedEvent), extend handleInstallationDeleted (8P), add webhook delivery deduplication (8F.7), add payload size guard, add strict production verification (8Q)
-- `ee/backend/lib/github.ts` -- add listIssueComments, updateIssueComment functions
-- `ee/backend/lib/git-provider.ts` -- extend GitLabProvider and BitbucketProvider with webhook registration, commit status, MR/PR comments, token refresh with Redis lock
-- `ee/backend/routes/projects.ts` -- add commits API, pull-requests API, update repo settings API for sync_frequency
-- `ee/backend/routes/organizations.ts` -- add webhook-deliveries API and webhook-deliveries/stats API (8K.4)
+- `backend/src/routes/integrations.ts` -- rewrite handlePushEvent (8B), rewrite handlePullRequestEvent (8D/8E/8F), add handlePullRequestClosedEvent (8G), add smart comment system (8F), add per-project check runs (8E), add repository lifecycle handlers (8P: handleRepositoryDeletedEvent, handleRepositoryRenamedEvent, handleRepositoryEditedEvent, handleInstallationReposRemovedEvent), extend handleInstallationDeleted (8P), add webhook delivery deduplication (8F.7), add payload size guard, add strict production verification (8Q)
+- `backend/src/lib/github.ts` -- add listIssueComments, updateIssueComment functions
+- `backend/src/lib/git-provider.ts` -- extend GitLabProvider and BitbucketProvider with webhook registration, commit status, MR/PR comments, token refresh with Redis lock
+- `backend/src/routes/projects.ts` -- add commits API, pull-requests API, update repo settings API for sync_frequency
+- `backend/src/routes/organizations.ts` -- add webhook-deliveries API and webhook-deliveries/stats API (8K.4)
 - `frontend/src/app/pages/ProjectCompliancePage.tsx` -- replace placeholder with real API calls for PRs and commits
 - `frontend/src/app/pages/ProjectSettingsPage.tsx` -- add sync frequency dropdown, webhook health display, disconnected repo banner (8P.6)
 - `frontend/src/app/pages/OrganizationSettingsPage.tsx` -- add Webhooks section with deliveries table, summary cards, filters (8K.4)
 - `backend/src/index.ts` -- mount scheduled-extraction and watchtower-daily-poll CE routes, add payload size limit for webhook routes
-- `backend/load-ee-routes.js` -- mount GitLab and Bitbucket webhook routes
+- `backend/src/index.ts` -- mount GitLab and Bitbucket webhook routes
 
 ### Phase 8 QStash Schedules Summary
 

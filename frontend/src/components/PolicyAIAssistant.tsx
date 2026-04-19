@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowUp, X, User, ChevronDown, Brain, Eraser } from 'lucide-react';
 import { api } from '../lib/api';
@@ -6,7 +6,9 @@ import { useUserProfile } from '../hooks/useUserProfile';
 import { Avatar, AvatarImage, AvatarFallback } from './ui/avatar';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { cn } from '../lib/utils';
-import { PolicyDiffViewer, getDiffLineCounts } from './PolicyDiffViewer';
+import { getDiffLineCounts } from './PolicyDiffViewer';
+import { PolicyDiffCodeEditor } from './PolicyDiffCodeEditor';
+import { JsLangBadge } from './JsLangBadge';
 
 const CONTEXT_WINDOW = 1_000_000; // Gemini 2.5 Flash
 
@@ -14,7 +16,7 @@ const SLASH_COMMANDS: Array<{ id: string; label: string; description: string; ic
   { id: 'clear', label: 'Clear conversation', description: 'Remove all messages', icon: <Eraser className="h-3.5 w-3.5" /> },
 ];
 
-type TargetEditor = 'compliance' | 'pullRequest';
+type TargetEditor = 'compliance' | 'pullRequest' | 'projectStatus';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -27,10 +29,15 @@ interface ChatMessage {
 
 interface PolicyAIAssistantProps {
   organizationId: string;
-  complianceBody: string;
-  pullRequestBody: string;
-  onUpdateCompliance: (code: string) => void;
-  onUpdatePullRequest: (code: string) => void;
+  /** Package policy body (packagePolicy). Optional when statusCodeOnly. */
+  complianceBody?: string;
+  /** PR check body (pullRequestCheck). Optional when statusCodeOnly. */
+  pullRequestBody?: string;
+  onUpdateCompliance?: (code: string) => void;
+  onUpdatePullRequest?: (code: string) => void;
+  /** Status code body (projectStatus) only — when set with onUpdateStatusCode, assistant is status-code only (no target dropdown). */
+  statusCodeBody?: string;
+  onUpdateStatusCode?: (code: string) => void;
   onClose: () => void;
   /** When 'edge', renders flush to container with dark theme, no X button. Use when fixed overlay sidebar. */
   variant?: 'inline' | 'edge';
@@ -39,12 +46,56 @@ interface PolicyAIAssistantProps {
 }
 
 const TARGET_LABELS: Record<TargetEditor, string> = {
-  compliance: 'Project Compliance',
+  compliance: 'Package policy',
   pullRequest: 'Pull Request Check',
+  projectStatus: 'Status Code',
 };
 
+/** Textarea grows with content up to this height, then scrolls inside */
+const INPUT_MAX_HEIGHT_PX = 280;
+const INPUT_MIN_HEIGHT_PX = 88;
+
+/**
+ * Module-level component so React keeps a stable type — inline DiffBlock inside
+ * PolicyAIAssistant was recreated every render, remounting Monaco and causing flash.
+ */
+function PolicyAssistantDiffBlock({
+  targetEditor,
+  baseCode,
+  requestedCode,
+}: {
+  targetEditor: TargetEditor;
+  baseCode: string;
+  requestedCode: string;
+}) {
+  const { added, removed } = getDiffLineCounts(baseCode, requestedCode);
+  return (
+    <div className="rounded-lg overflow-hidden border border-border bg-background-card">
+      <div className="px-3 py-2 border-b border-border flex items-center justify-between gap-2 bg-background-card">
+        <div className="flex items-center gap-2 min-w-0">
+          <JsLangBadge className="text-xs" />
+          <span className="text-xs font-medium text-foreground">
+            {TARGET_LABELS[targetEditor]}
+          </span>
+          {added > 0 && <span className="text-xs text-green-500">+{added}</span>}
+          {removed > 0 && <span className="text-xs text-red-500">-{removed}</span>}
+        </div>
+      </div>
+      <MemoPolicyDiffCodeEditor original={baseCode} modified={requestedCode} />
+    </div>
+  );
+}
+
+/** Memoized so typing in the chat input doesn't re-run Monaco layout when code strings are unchanged */
+const MemoPolicyDiffCodeEditor = memo(PolicyDiffCodeEditor, (prev, next) => {
+  return prev.original === next.original && prev.modified === next.modified;
+});
+
 const SUGGESTIONS: Array<{ label: string; target: TargetEditor; prompt: string }> = [
-  { label: 'Only allow MIT & Apache licenses', target: 'compliance', prompt: 'Make compliance pass only if every dependency uses MIT or Apache-2.0 license.' },
+  { label: 'Non-Compliant if any dependency blocked by package policy', target: 'projectStatus', prompt: 'Set project status to Non-Compliant with violation messages when any dependency has policyResult.allowed === false; otherwise Compliant.' },
+  { label: 'Compliant only when no reachable critical vulns', target: 'projectStatus', prompt: 'Return Non-Compliant if any dependency has a critical severity vulnerability with isReachable true; otherwise Compliant.' },
+  { label: 'Use Action Required when deps blocked (if that status exists)', target: 'projectStatus', prompt: 'If any dependency is disallowed by package policy, return status Action Required with violations listing package names and reasons; otherwise Compliant.' },
+  { label: 'Only allow MIT and Apache-2.0 licenses (package policy)', target: 'compliance', prompt: 'Only allow MIT and Apache-2.0 licenses in the package policy — block any dependency whose license is not in that allowlist.' },
   { label: 'Require all deps to have known maintenance status', target: 'compliance', prompt: 'Make compliance fail if any dependency has unknown or unmaintained status.' },
   { label: 'Block projects with critical vulnerabilities', target: 'compliance', prompt: 'Make compliance fail when the project has any critical severity vulnerability that is reachable.' },
   { label: 'Block critical reachable vulns in PRs', target: 'pullRequest', prompt: 'Block PRs that add or update a dependency with any critical severity vulnerability that is reachable.' },
@@ -158,24 +209,39 @@ function parseAIResponse(raw: string): { message: string; code: string | null } 
 
 export function PolicyAIAssistant({
   organizationId,
-  complianceBody,
-  pullRequestBody,
+  complianceBody = '',
+  pullRequestBody = '',
   onUpdateCompliance,
   onUpdatePullRequest,
+  statusCodeBody,
+  onUpdateStatusCode,
   onClose,
   variant = 'inline',
   innerCloseRef,
 }: PolicyAIAssistantProps) {
+  const statusCodeOnly = typeof statusCodeBody === 'string' && typeof onUpdateStatusCode === 'function';
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
-  const [targetEditor, setTargetEditor] = useState<TargetEditor>('compliance');
+  const [targetEditor, setTargetEditor] = useState<TargetEditor>(statusCodeOnly ? 'projectStatus' : 'compliance');
   const [isStreaming, setIsStreaming] = useState(false);
   const [showTargetDropdown, setShowTargetDropdown] = useState(false);
   const [contextUsage, setContextUsage] = useState<{ inputTokens: number; outputTokens: number } | null>(null);
   const { avatarUrl, fullName } = useUserProfile();
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Grow textarea with content so multi-line prompts stay visible without squishing
+  useLayoutEffect(() => {
+    const ta = inputRef.current;
+    if (!ta || isStreaming) return;
+    ta.style.height = 'auto';
+    const next = Math.min(Math.max(ta.scrollHeight, INPUT_MIN_HEIGHT_PX), INPUT_MAX_HEIGHT_PX);
+    ta.style.height = `${next}px`;
+    ta.style.overflowY = ta.scrollHeight > INPUT_MAX_HEIGHT_PX ? 'auto' : 'hidden';
+  }, [input, isStreaming]);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const targetDropdownMenuRef = useRef<HTMLDivElement>(null);
+  const [targetDropdownRect, setTargetDropdownRect] = useState<{ left: number; top: number; width: number } | null>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const [slashPopOpen, setSlashPopOpen] = useState(false);
   const [slashMenuRect, setSlashMenuRect] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -210,13 +276,16 @@ export function PolicyAIAssistant({
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setShowTargetDropdown(false);
-      }
+      const t = e.target as Node;
+      if (dropdownRef.current?.contains(t)) return;
+      if (targetDropdownMenuRef.current?.contains(t)) return;
+      setShowTargetDropdown(false);
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    if (showTargetDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showTargetDropdown]);
 
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
@@ -228,7 +297,7 @@ export function PolicyAIAssistant({
 
   const handleSend = async (overrideMessage?: string, overrideTarget?: TargetEditor) => {
     const msg = overrideMessage ?? input.trim();
-    const target = overrideTarget ?? targetEditor;
+    const target = statusCodeOnly ? 'projectStatus' : (overrideTarget ?? targetEditor);
     if (!msg || isStreaming) return;
 
     setInput('');
@@ -243,13 +312,15 @@ export function PolicyAIAssistant({
 
     const baseCompliance = workingProposalCompliance ?? complianceBody;
     const basePullRequest = workingProposalPullRequest ?? pullRequestBody;
+    const baseProjectStatus = workingProposalProjectStatus ?? (statusCodeBody ?? '');
 
     try {
       const response = await api.policyAIAssistStream(organizationId, {
         message: msg,
-        targetEditor: target,
+        targetEditor: statusCodeOnly ? 'projectStatus' : target,
         currentComplianceCode: baseCompliance,
         currentPullRequestCode: basePullRequest,
+        currentProjectStatusCode: baseProjectStatus,
         conversationHistory,
       });
 
@@ -281,7 +352,9 @@ export function PolicyAIAssistant({
             } else if (event.type === 'done') {
               const fullContent = event.fullContent ?? accumulated;
               const parsed = parseAIResponse(fullContent);
-              const baseAtSuggestion = parsed.code ? (target === 'compliance' ? baseCompliance : basePullRequest) : undefined;
+              const baseAtSuggestion = parsed.code
+                ? (target === 'compliance' ? baseCompliance : target === 'pullRequest' ? basePullRequest : baseProjectStatus)
+                : undefined;
               if (event.usage) setContextUsage(event.usage);
               setMessages(prev => {
                 const updated = [...prev];
@@ -320,10 +393,12 @@ export function PolicyAIAssistant({
 
   const handleAccept = () => {
     if (!pendingSuggestion?.suggestedCode || !pendingSuggestion.targetEditor || pendingSuggestionIdx < 0) return;
-    if (pendingSuggestion.targetEditor === 'compliance') {
+    if (pendingSuggestion.targetEditor === 'compliance' && onUpdateCompliance) {
       onUpdateCompliance(pendingSuggestion.suggestedCode);
-    } else {
+    } else if (pendingSuggestion.targetEditor === 'pullRequest' && onUpdatePullRequest) {
       onUpdatePullRequest(pendingSuggestion.suggestedCode);
+    } else if (pendingSuggestion.targetEditor === 'projectStatus' && onUpdateStatusCode) {
+      onUpdateStatusCode(pendingSuggestion.suggestedCode);
     }
     setMessages(prev =>
       prev.map(m =>
@@ -333,7 +408,7 @@ export function PolicyAIAssistant({
   };
 
   const getCurrentCode = (target: TargetEditor) =>
-    target === 'compliance' ? complianceBody : pullRequestBody;
+    target === 'compliance' ? complianceBody : target === 'pullRequest' ? pullRequestBody : (statusCodeBody ?? '');
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -402,31 +477,15 @@ export function PolicyAIAssistant({
     }
     return null;
   })();
+  const workingProposalProjectStatus = (() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === 'assistant' && m.suggestedCode && m.targetEditor === 'projectStatus') return m.suggestedCode;
+    }
+    return null;
+  })();
 
   const isEdge = variant === 'edge';
-
-  function DiffBlock({ targetEditor, baseCode, requestedCode }: { targetEditor: TargetEditor; baseCode: string; requestedCode: string }) {
-    const { added, removed } = getDiffLineCounts(baseCode, requestedCode);
-    return (
-      <div className="rounded-lg overflow-hidden border border-border bg-background-card">
-        <div className="px-3 py-2 border-b border-border flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-xs font-medium text-foreground">
-              {TARGET_LABELS[targetEditor]}
-            </span>
-            {added > 0 && <span className="text-xs text-green-500">+{added}</span>}
-            {removed > 0 && <span className="text-xs text-red-500">-{removed}</span>}
-          </div>
-        </div>
-        <PolicyDiffViewer
-          baseCode={baseCode}
-          requestedCode={requestedCode}
-          minHeight="80px"
-          className="text-[11px]"
-        />
-      </div>
-    );
-  }
 
   return (
     <div
@@ -441,7 +500,9 @@ export function PolicyAIAssistant({
         'px-4 py-2 flex items-center flex-shrink-0 border-b border-border',
         'justify-between'
       )}>
-        <span className="text-[13px] font-medium text-foreground">Policy assistant</span>
+        <span className="text-[13px] font-medium text-foreground">
+          {statusCodeOnly ? 'Status code assistant' : 'Policy assistant'}
+        </span>
         {!isEdge && (
           <button
             onClick={handleClose}
@@ -457,10 +518,12 @@ export function PolicyAIAssistant({
         {!hasMessages ? (
           <div className="px-5 pt-10 pb-6">
             <h3 className="text-lg font-semibold mb-1 text-foreground">
-              Policy assistant
+              {statusCodeOnly ? 'Status code assistant' : 'Policy assistant'}
             </h3>
             <p className="text-sm leading-relaxed mb-6 text-foreground-secondary">
-              Describe your policy in plain English. I'll generate the code for your {TARGET_LABELS[targetEditor]} function.
+              {statusCodeOnly
+                ? 'Describe how projects should get their status. I generate projectStatus body code only — return { status, violations } using your org status names.'
+                : `Describe your policy in plain English. I'll generate code for your ${TARGET_LABELS[targetEditor].toLowerCase()}.`}
             </p>
             <p className="text-xs font-medium uppercase tracking-wider mb-3 text-foreground-secondary">
               Suggestions
@@ -505,7 +568,7 @@ export function PolicyAIAssistant({
                       </p>
                     )}
                       {msg.suggestedCode && msg.targetEditor && (
-                        <DiffBlock
+                        <PolicyAssistantDiffBlock
                           targetEditor={msg.targetEditor}
                           baseCode={msg.baseCodeAtSuggestion ?? getCurrentCode(msg.targetEditor)}
                           requestedCode={msg.suggestedCode}
@@ -580,28 +643,51 @@ export function PolicyAIAssistant({
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Describe what your policy should do... (type / for commands)"
-            rows={3}
+            rows={1}
             disabled={isStreaming}
-            className="w-full resize-none px-4 pt-4 pb-12 text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-0 focus:border-0 disabled:opacity-50 min-h-[88px] max-h-32 overflow-y-auto border-0 bg-transparent"
+            className="w-full resize-none px-4 pt-4 pb-24 text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-0 focus:border-0 disabled:opacity-50 min-h-[88px] border-0 bg-transparent overflow-hidden"
+            style={{ minHeight: INPUT_MIN_HEIGHT_PX }}
           />
-          {/* Dropdown, context circle, and send inside the input area */}
-          <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 py-2 gap-2 border-t border-border bg-background-card">
+          {/* Dropdown, context circle, and send inside the input area — extra pt so text doesn’t sit flush above the bar */}
+          <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 pt-4 pb-2.5 gap-2 border-t border-border bg-background-card">
+            {!statusCodeOnly && (
             <div className="relative" ref={dropdownRef}>
               <button
-                onClick={() => setShowTargetDropdown(prev => !prev)}
-                className="flex items-center gap-1.5 h-8 px-3 rounded-md text-sm text-foreground-secondary hover:text-foreground hover:bg-background-card border border-border bg-background-card transition-colors"
+                type="button"
+                onClick={() => {
+                  if (!showTargetDropdown && dropdownRef.current) {
+                    const r = dropdownRef.current.getBoundingClientRect();
+                    setTargetDropdownRect({ left: r.left, top: r.top, width: r.width });
+                  }
+                  setShowTargetDropdown((prev) => !prev);
+                }}
+                className="flex items-center gap-1.5 min-h-9 px-3 py-1.5 rounded-md text-sm text-foreground-secondary hover:text-foreground hover:bg-background-card border border-border bg-background-card transition-colors"
               >
-                {TARGET_LABELS[targetEditor]}
-                <ChevronDown className="h-3.5 w-3.5 opacity-70" />
+                <span className="truncate">{TARGET_LABELS[targetEditor]}</span>
+                <ChevronDown className="h-3.5 w-3.5 opacity-70 shrink-0" />
               </button>
-              {showTargetDropdown && (
-                <div className="absolute bottom-full left-0 mb-1 w-48 rounded-lg border border-border bg-background-card shadow-lg py-1 z-10">
-                  {(Object.keys(TARGET_LABELS) as TargetEditor[]).map(key => (
+              {/* Portaled so overflow-hidden on input container doesn’t clip the menu */}
+              {showTargetDropdown && targetDropdownRect != null && createPortal(
+                <div
+                  ref={targetDropdownMenuRef}
+                  className="fixed z-[9998] min-w-[12rem] rounded-lg border border-border bg-background-card shadow-lg py-1"
+                  style={{
+                    left: targetDropdownRect.left,
+                    bottom: typeof window !== 'undefined' ? window.innerHeight - targetDropdownRect.top + 8 : undefined,
+                    width: Math.max(targetDropdownRect.width, 192),
+                  }}
+                >
+                  {(Object.keys(TARGET_LABELS) as TargetEditor[]).map((key) => (
                     <button
                       key={key}
-                      onClick={() => { setTargetEditor(key); setShowTargetDropdown(false); }}
+                      type="button"
+                      onClick={() => {
+                        setTargetEditor(key);
+                        setShowTargetDropdown(false);
+                        setTargetDropdownRect(null);
+                      }}
                       className={cn(
-                        'w-full text-left px-3 py-2 text-sm transition-colors',
+                        'w-full text-left px-3 py-2.5 text-sm transition-colors whitespace-normal',
                         targetEditor === key
                           ? 'text-foreground bg-table-hover'
                           : 'text-foreground-secondary hover:text-foreground hover:bg-table-hover'
@@ -610,10 +696,20 @@ export function PolicyAIAssistant({
                       {TARGET_LABELS[key]}
                     </button>
                   ))}
-                </div>
+                </div>,
+                document.body,
               )}
             </div>
-            <div className="flex items-center gap-1.5">
+            )}
+            {statusCodeOnly && (
+              <span
+                className="inline-flex items-center min-h-9 px-3 py-1.5 rounded-md text-xs font-medium text-foreground-secondary bg-background-card border border-border shadow-sm cursor-default select-none shrink-0"
+                aria-hidden
+              >
+                Project Status
+              </span>
+            )}
+            <div className="flex items-center gap-1.5 ml-auto">
               <Tooltip>
                 <TooltipTrigger asChild>
                   <div className="flex items-center justify-center shrink-0 h-6 w-6" aria-label="Context usage">

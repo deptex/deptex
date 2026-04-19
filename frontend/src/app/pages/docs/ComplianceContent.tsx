@@ -25,9 +25,7 @@ export default function ComplianceContent() {
         <div className="space-y-3 text-foreground/90 leading-relaxed">
           <p>
             Organizations define compliance statuses in <strong className="text-foreground">Settings &rarr; Statuses</strong>.
-            Each status has a name, color, rank (for ordering), and an <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">is_passing</code> flag
-            that determines whether it counts as compliant. When policy evaluation runs, the result maps to one of these
-            statuses. Projects receive the corresponding badge on the dashboard and in the Compliance tab.
+            Each status has a name, color, and rank (for ordering). When policy evaluation runs, <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">projectStatus</code> returns a status name string that must match one of those labels. Projects receive the corresponding badge on the dashboard and in the Compliance tab.
           </p>
         </div>
       </div>

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useParams, useOutletContext } from 'react-router-dom';
-import { Plus, Lock, Trash2, Loader2, Check, X, Info, Eye } from 'lucide-react';
+import { useParams, useOutletContext, Link } from 'react-router-dom';
+import { Plus, Lock, Trash2, Loader2, Check, X, Info, Eye, BookOpen } from 'lucide-react';
 import { api, OrganizationStatus, OrganizationAssetTier, OrganizationPolicyChange, ProjectPolicyChangeRequest } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,11 +10,14 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useToast } from '@/hooks/use-toast';
 import { PolicyCodeEditor } from '@/components/PolicyCodeEditor';
-import { PolicyDiffViewer, getDiffLineCounts } from '@/components/PolicyDiffViewer';
+import { getDiffLineCounts } from '@/components/PolicyDiffViewer';
+import { PolicyDiffCodeEditor } from '@/components/PolicyDiffCodeEditor';
+import { JsLangBadge } from '@/components/JsLangBadge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '@/components/ui/dialog';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { RoleBadge } from '@/components/RoleBadge';
 import { cn } from '@/lib/utils';
+import { PolicyAIAssistant } from '@/components/PolicyAIAssistant';
 
 /** Extract the body of a named function from full code. */
 function extractFunctionBody(code: string, fnName: string): string | null {
@@ -38,7 +41,20 @@ function wrapProjectStatusBody(body: string): string {
   return `function projectStatus(context) {\n${lines.join('\n')}\n}`;
 }
 
-const DEFAULT_PROJECT_STATUS_BODY = 'return { status: "Compliant", violations: [] };';
+/** Body-only default: any dependency blocked by packagePolicy → Non-Compliant, else Compliant. */
+const DEFAULT_PROJECT_STATUS_BODY = `var deps = context.dependencies || [];
+var blocked = deps.filter(function(d) {
+  return d.policyResult && d.policyResult.allowed === false;
+});
+if (blocked.length > 0) {
+  return {
+    status: 'Non-Compliant',
+    violations: blocked.map(function(d) {
+      return d.name + ': ' + (d.policyResult.reasons || []).join(', ');
+    })
+  };
+}
+return { status: 'Compliant', violations: [] };`;
 
 function formatRelativeTime(dateStr: string): string {
   const d = new Date(dateStr);
@@ -88,6 +104,31 @@ export default function StatusesSection() {
   const [committing, setCommitting] = useState(false);
   const commitSidebarCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const validationCardRef = useRef<HTMLDivElement>(null);
+
+  // AI sidebar (status code only) — same pattern as PoliciesPage
+  const [showAI, setShowAI] = useState(false);
+  const [everOpenedAI, setEverOpenedAI] = useState(false);
+  const [aiPanelVisible, setAiPanelVisible] = useState(false);
+  const aiCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aiAssistantCloseRef = useRef<(() => void) | null>(null);
+
+  const closeAIPanel = useCallback(() => {
+    setAiPanelVisible(false);
+    if (aiCloseTimeoutRef.current) clearTimeout(aiCloseTimeoutRef.current);
+    aiCloseTimeoutRef.current = setTimeout(() => setShowAI(false), 200);
+  }, []);
+
+  useEffect(() => {
+    if (showAI) {
+      setEverOpenedAI(true);
+      setAiPanelVisible(false);
+      const t = requestAnimationFrame(() => {
+        requestAnimationFrame(() => setAiPanelVisible(true));
+      });
+      return () => cancelAnimationFrame(t);
+    }
+    setAiPanelVisible(false);
+  }, [showAI]);
 
   // Add Status dialog
   const [addStatusOpen, setAddStatusOpen] = useState(false);
@@ -431,7 +472,18 @@ export default function StatusesSection() {
   return (
     <div className="space-y-6 pt-8">
       <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold text-foreground">Statuses</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-2xl font-bold text-foreground">Statuses</h2>
+          <Link
+            to="/docs/policies"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 text-foreground-secondary hover:text-foreground"
+            aria-label="Policies and status code docs"
+          >
+            <BookOpen className="h-4 w-4" />
+          </Link>
+        </div>
         {!loading && subTab === 'statuses' && (
           <Button
             onClick={() => setAddStatusOpen(true)}
@@ -448,6 +500,16 @@ export default function StatusesSection() {
             className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
           >
             Add Tier
+          </Button>
+        )}
+        {!loading && subTab === 'status_code' && hasManageCompliance && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-sm"
+            onClick={() => { setEverOpenedAI(true); setShowAI(true); }}
+          >
+            AI Assistant
           </Button>
         )}
       </div>
@@ -817,10 +879,13 @@ export default function StatusesSection() {
       {subTab === 'status_code' && (
         <div className="space-y-4">
           <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-            <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
-              <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project Status</span>
+            <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <JsLangBadge className="text-xs" />
+                <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">projectStatus</span>
+              </div>
               {!loading && statusCodeDirty && (
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 flex-shrink-0">
                   <Button
                     variant="outline"
                     size="sm"
@@ -889,14 +954,23 @@ export default function StatusesSection() {
               </div>
             </div>
           )}
-          <Card className="rounded-lg border border-border bg-background-card/80 mt-4">
-            <CardContent className="p-4 flex gap-3">
-              <div className="flex-shrink-0 mt-0.5">
-                <Info className="h-5 w-5 text-foreground-muted" />
+          <Card className="rounded-lg border border-border bg-background-card/80 mt-6">
+            <CardContent className="p-5 flex gap-3">
+              <Info className="h-4 w-4 text-foreground-muted flex-shrink-0 mt-0.5" />
+              <div className="min-w-0 space-y-2 text-sm text-foreground-secondary leading-relaxed">
+                <p>
+                  This code runs after dependency and package policy evaluation — once per project when extraction completes or when policies are re-evaluated. You implement <code className="font-mono text-foreground/90">projectStatus(context)</code>; the editor shows only the function body, which is wrapped automatically.
+                </p>
+                <p>
+                  Return <code className="font-mono text-foreground/90">&#123; status: string, violations: string[] &#125;</code>. <code className="font-mono text-foreground/90">status</code> must match one of your org status names (e.g. &quot;Compliant&quot;, &quot;Action Required&quot;) so the project gets the correct badge and ordering. Use <code className="font-mono text-foreground/90">violations</code> for human-readable reasons shown in the UI.
+                </p>
+                <p>
+                  <strong className="text-foreground">What <code className="font-mono text-foreground/90">context</code> contains:</strong>{' '}
+                  <code className="font-mono text-foreground/90">context.project</code> — <code className="font-mono text-foreground/90">name</code>, <code className="font-mono text-foreground/90">tier</code> (name, rank, multiplier for the project&apos;s asset tier), <code className="font-mono text-foreground/90">teamName</code>.{' '}
+                  <code className="font-mono text-foreground/90">context.dependencies</code> — array; each item has <code className="font-mono text-foreground/90">name</code>, <code className="font-mono text-foreground/90">version</code>, <code className="font-mono text-foreground/90">license</code>, <code className="font-mono text-foreground/90">dependencyScore</code>, <code className="font-mono text-foreground/90">policyResult.allowed</code> / <code className="font-mono text-foreground/90">reasons</code> (from package policy), <code className="font-mono text-foreground/90">isDirect</code>, <code className="font-mono text-foreground/90">isDevDependency</code>, <code className="font-mono text-foreground/90">filesImportingCount</code>, <code className="font-mono text-foreground/90">isOutdated</code>, <code className="font-mono text-foreground/90">versionsBehind</code>, and <code className="font-mono text-foreground/90">vulnerabilities</code> (severity, depscore, isReachable, etc.).{' '}
+                  <code className="font-mono text-foreground/90">context.statuses</code> — org status names you may return. Validation runs the body against a sample context before commit. See <Link to="/docs/policies" target="_blank" rel="noopener noreferrer" className="text-foreground underline-offset-2 hover:underline">Policies</Link> for examples.
+                </p>
               </div>
-              <p className="text-sm text-foreground-secondary min-w-0">
-                This code runs when evaluating each project. It receives <code className="px-1 py-0.5 rounded bg-muted text-foreground text-xs font-mono">context</code> with project metadata, dependencies, vulnerabilities, licenses, and policy results. Return one of your status names (e.g. &quot;Compliant&quot;, &quot;Action Required&quot;) so projects get the right badge and health classification.
-              </p>
             </CardContent>
           </Card>
         </div>
@@ -1113,17 +1187,33 @@ export default function StatusesSection() {
                 </div>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto min-h-0 px-4 pb-4">
-              <div className="rounded-lg overflow-hidden border border-border">
-                <PolicyDiffViewer
-                  baseCode={selectedChange.previous_code}
-                  requestedCode={selectedChange.new_code}
-                  minHeight="200px"
-                  className="text-[11px]"
+            <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4">
+              <div className="rounded-lg overflow-hidden border border-border bg-background-card">
+                <div className="px-3 py-2 border-b border-border flex items-center justify-between gap-2 bg-background-card">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <JsLangBadge className="text-xs" />
+                    <span className="text-xs font-medium text-foreground">Project Status</span>
+                    {(() => {
+                      const { added, removed } = getDiffLineCounts(
+                        selectedChange.previous_code ?? '',
+                        selectedChange.new_code ?? ''
+                      );
+                      return (
+                        <>
+                          {added > 0 && <span className="text-xs text-green-500">+{added}</span>}
+                          {removed > 0 && <span className="text-xs text-red-500">-{removed}</span>}
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+                <PolicyDiffCodeEditor
+                  original={selectedChange.previous_code ?? ''}
+                  modified={selectedChange.new_code ?? ''}
                 />
               </div>
             </div>
-            <div className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header flex items-center justify-end">
+            <div className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header flex items-center justify-end gap-3">
               <Button variant="outline" size="sm" onClick={closeChangeDetail}>
                 Close
               </Button>
@@ -1170,17 +1260,33 @@ export default function StatusesSection() {
                 <span className="text-sm text-muted-foreground">Requested by {selectedRequest.author_display_name || 'Unknown'}</span>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto min-h-0 px-4 pb-4">
-              <div className="rounded-lg overflow-hidden border border-border">
-                <PolicyDiffViewer
-                  baseCode={selectedRequest.base_code ?? ''}
-                  requestedCode={selectedRequest.proposed_code ?? ''}
-                  minHeight="200px"
-                  className="text-[11px]"
+            <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4">
+              <div className="rounded-lg overflow-hidden border border-border bg-background-card">
+                <div className="px-3 py-2 border-b border-border flex items-center justify-between gap-2 bg-background-card">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <JsLangBadge className="text-xs" />
+                    <span className="text-xs font-medium text-foreground">Project Status</span>
+                    {(() => {
+                      const { added, removed } = getDiffLineCounts(
+                        selectedRequest.base_code ?? '',
+                        selectedRequest.proposed_code ?? ''
+                      );
+                      return (
+                        <>
+                          {added > 0 && <span className="text-xs text-green-500">+{added}</span>}
+                          {removed > 0 && <span className="text-xs text-red-500">-{removed}</span>}
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+                <PolicyDiffCodeEditor
+                  original={selectedRequest.base_code ?? ''}
+                  modified={selectedRequest.proposed_code ?? ''}
                 />
               </div>
             </div>
-            <div className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header flex items-center justify-between">
+            <div className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header flex items-center justify-between gap-3">
               <Button variant="outline" size="sm" onClick={closeRequestDetail}>
                 Close
               </Button>
@@ -1246,16 +1352,17 @@ export default function StatusesSection() {
                     disabled={committing}
                   />
                 </div>
-                <div className="space-y-2">
-                  <span className="text-sm font-medium text-foreground">Changes</span>
-                  <div className="rounded-lg overflow-hidden border border-border bg-[#1a1c1e] shadow-inner">
-                    <PolicyDiffViewer
-                      baseCode={wrapProjectStatusBody(statusCodeOriginal)}
-                      requestedCode={wrapProjectStatusBody(statusCodeValue)}
-                      minHeight="200px"
-                      className="text-[11px]"
-                    />
+                <div className="rounded-lg overflow-hidden border border-border bg-background-card">
+                  <div className="px-3 py-2 border-b border-border flex items-center justify-between gap-2 bg-background-card">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <JsLangBadge className="text-xs" />
+                      <span className="text-xs font-medium text-foreground">Project Status</span>
+                    </div>
                   </div>
+                  <PolicyDiffCodeEditor
+                    original={wrapProjectStatusBody(statusCodeOriginal)}
+                    modified={wrapProjectStatusBody(statusCodeValue)}
+                  />
                 </div>
               </div>
             </div>
@@ -1273,6 +1380,39 @@ export default function StatusesSection() {
                 Commit
               </Button>
             </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* AI Assistant — status code only; mounted once opened */}
+      {everOpenedAI && orgId && createPortal(
+        <div className={cn('fixed inset-0 z-50', !showAI && 'pointer-events-none')}>
+          <div
+            className={cn(
+              'fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150',
+              !showAI ? 'opacity-0' : (aiPanelVisible ? 'opacity-100' : 'opacity-0')
+            )}
+            onClick={() => { aiAssistantCloseRef.current ? aiAssistantCloseRef.current() : closeAIPanel(); }}
+          />
+          <div
+            className={cn(
+              'fixed right-4 top-4 bottom-4 w-full max-w-[680px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
+              !showAI ? 'translate-x-[calc(100%+32px)]' : (aiPanelVisible ? 'translate-x-0' : 'translate-x-[calc(100%+32px)]')
+            )}
+          >
+            <PolicyAIAssistant
+              variant="edge"
+              organizationId={orgId}
+              statusCodeBody={statusCodeValue}
+              onUpdateStatusCode={(code) => {
+                setStatusCodeValue(code);
+                setStatusCodeDirty(code !== statusCodeOriginal);
+                setValidationResult(null);
+              }}
+              onClose={closeAIPanel}
+              innerCloseRef={aiAssistantCloseRef}
+            />
           </div>
         </div>,
         document.body,
