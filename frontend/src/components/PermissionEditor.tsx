@@ -117,13 +117,12 @@ export function PermissionEditor({
     } else {
       toSave.view_ai_spending = false;
     }
-    // Manage Policies: keep both flags aligned; manage_watchtower removed — clear if present
+    // Manage Policies: keep both flags aligned
     if (toSave.manage_compliance) {
       toSave.manage_statuses = true;
     } else {
       toSave.manage_statuses = false;
     }
-    (toSave as unknown as Record<string, boolean>).manage_watchtower = false;
     // Org settings entry no longer gated by view_settings — keep true so team/project code still works
     toSave.view_settings = true;
     await onSave(toSave);

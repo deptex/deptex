@@ -5698,9 +5698,7 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/versions'
 
     const { data: allVersions, error: listError } = await supabase
       .from('dependency_versions')
-      .select(
-        'id, version, registry_integrity_status, registry_integrity_reason, install_scripts_status, install_scripts_reason, entropy_analysis_status, entropy_analysis_reason'
-      )
+      .select('id, version')
       .eq('dependency_id', dependencyId)
       .order('version', { ascending: false });
 
@@ -5915,12 +5913,6 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/versions'
         transitiveVulnCount,
         transitiveVulnerabilities,
         totalVulnCount,
-        registry_integrity_status: v.registry_integrity_status ?? null,
-        registry_integrity_reason: v.registry_integrity_reason ?? null,
-        install_scripts_status: v.install_scripts_status ?? null,
-        install_scripts_reason: v.install_scripts_reason ?? null,
-        entropy_analysis_status: v.entropy_analysis_status ?? null,
-        entropy_analysis_reason: v.entropy_analysis_reason ?? null,
       };
     });
 

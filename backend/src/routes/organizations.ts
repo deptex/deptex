@@ -4750,9 +4750,6 @@ interface Dependency {
   score: number;            // Deptex reputation 0-100
   openssf_score: number;    // OpenSSF Scorecard 0.0-10.0
   weekly_downloads: number;
-  registry_integrity_status: AnalysisStatus;
-  install_scripts_status: AnalysisStatus;
-  entropy_analysis_status: AnalysisStatus;
   vulnerabilities: Vulnerability[];
 }
 
@@ -4799,23 +4796,13 @@ if (!context.dependency) return false;
 return context.dependency.is_direct && context.dependency.openssf_score < 3;
 \`\`\`
 
-EXAMPLE 4 - Supply chain security failures:
-\`\`\`
-if (!context.dependency) return false;
-var types = ['dependency_added', 'dependency_updated', 'security_analysis_failure'];
-if (types.indexOf(context.event.type) === -1) return false;
-return context.dependency.registry_integrity_status === 'fail'
-    || context.dependency.install_scripts_status === 'fail'
-    || context.dependency.entropy_analysis_status === 'fail';
-\`\`\`
-
-EXAMPLE 5 - Crown Jewel projects — any vulnerability:
+EXAMPLE 4 - Crown Jewel projects — any vulnerability:
 \`\`\`
 if (context.event.type !== 'vulnerability_discovered') return false;
 return context.project.asset_tier === 'CROWN_JEWELS';
 \`\`\`
 
-EXAMPLE 6 - License violation for banned licenses:
+EXAMPLE 5 - License violation for banned licenses:
 \`\`\`
 if (context.event.type !== 'license_violation') return false;
 if (!context.dependency) return false;
@@ -5099,9 +5086,6 @@ interface Dependency {
   last_published_at: string;
   releases_last_12_months: number;
   files_importing_count: number;
-  registry_integrity_status: AnalysisStatus;
-  install_scripts_status: AnalysisStatus;
-  entropy_analysis_status: AnalysisStatus;
   vulnerabilities: Vulnerability[];
 }
 
@@ -5211,21 +5195,7 @@ for (const pkg of context.added) {
 return { passed: violations.length === 0, violations };
 \`\`\`
 
-EXAMPLE 4 - Supply chain integrity (pullRequestCheck body):
-\`\`\`
-const violations = [];
-for (const pkg of [...context.added, ...context.updated]) {
-  if (pkg.registry_integrity_status === "fail")
-    violations.push(\`Registry integrity failure: \${pkg.name}@\${pkg.version}\`);
-  if (pkg.install_scripts_status === "fail")
-    violations.push(\`Suspicious install scripts: \${pkg.name}@\${pkg.version}\`);
-  if (pkg.entropy_analysis_status === "fail")
-    violations.push(\`High entropy (obfuscation): \${pkg.name}@\${pkg.version}\`);
-}
-return { passed: violations.length === 0, violations };
-\`\`\`
-
-EXAMPLE 5 - Non-Compliant if any dependency blocked by packagePolicy (projectStatus body):
+EXAMPLE 4 - Non-Compliant if any dependency blocked by packagePolicy (projectStatus body):
 \`\`\`
 var deps = context.dependencies || [];
 var blocked = deps.filter(function(d) {

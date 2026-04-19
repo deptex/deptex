@@ -3,12 +3,7 @@ import {
   CheckCircle,
   AlertCircle,
   Tag,
-  Loader2,
-  CheckCircle2,
-  AlertTriangle,
-  XCircle,
   ExternalLink,
-  GitPullRequest,
   Eye,
 } from 'lucide-react';
 import { Button } from './ui/button';
@@ -23,26 +18,16 @@ import {
   DependencyVersionsResponse,
   DependencyVersionItem,
   DependencyVersionVulnerability,
-  WatchtowerPRItem,
 } from '../lib/api';
-import { useToast } from '../hooks/use-toast';
 import { cn } from '../lib/utils';
 
 interface VersionSidebarProps {
-  packageName: string;
-  currentVersion: string;
   organizationId: string;
   projectId: string;
   dependencyId: string;
-  /** Version strings that are currently in quarantine (for "In quarantine" badge). */
-  versionsInQuarantine?: string[];
   onClose: () => void;
-  /** When 'supply-chain', card footer shows only Preview (no Create/View PR). */
-  variant?: 'watchtower' | 'supply-chain';
-  /** Called when user clicks Preview in supply-chain variant. */
+  /** Called when user clicks Preview. */
   onPreviewVersion?: (version: string) => void;
-  /** When true, show Watchtower checks (Registry, Install scripts, Entropy). Only set when package is on org's watchtower. */
-  onWatchtower?: boolean;
 }
 
 const OSV_BASE = 'https://osv.dev/vulnerability/';
@@ -105,44 +90,6 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-function WatchtowerStatusIcon({
-  status,
-  reason,
-  label,
-}: {
-  status: string | null;
-  reason: string | null;
-  label: string;
-}) {
-  const content = reason ? `${label}: ${reason}` : label;
-  const icon =
-    status === 'pass' ? (
-      <span className="text-success">
-        <CheckCircle2 className="h-3.5 w-3.5" />
-      </span>
-    ) : status === 'warning' ? (
-      <span className="text-warning">
-        <AlertTriangle className="h-3.5 w-3.5" />
-      </span>
-    ) : status === 'fail' ? (
-      <span className="text-destructive">
-        <XCircle className="h-3.5 w-3.5" />
-      </span>
-    ) : (
-      <span className="text-foreground-secondary">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-      </span>
-    );
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="inline-flex cursor-default">{icon}</span>
-      </TooltipTrigger>
-      <TooltipContent>{content}</TooltipContent>
-    </Tooltip>
-  );
-}
-
 function VersionCardSkeleton() {
   return (
     <li className="rounded-lg border border-border bg-background-card px-4 pt-3 pb-0 text-sm space-y-3 animate-pulse">
@@ -175,25 +122,21 @@ function VersionCardSkeleton() {
 }
 
 export function VersionSidebar({
-  packageName,
-  currentVersion,
   organizationId,
   projectId,
   dependencyId,
-  versionsInQuarantine = [],
   onClose,
-  variant = 'watchtower',
   onPreviewVersion,
-  onWatchtower = false,
 }: VersionSidebarProps) {
   const [data, setData] = useState<DependencyVersionsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [creatingForVersion, setCreatingForVersion] = useState<string | null>(null);
-  const { toast } = useToast();
 
-  const fetchVersions = () => {
-    if (!organizationId || !projectId || !dependencyId) return;
+  useEffect(() => {
+    if (!organizationId || !projectId || !dependencyId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     api
@@ -201,46 +144,7 @@ export function VersionSidebar({
       .then((res) => setData(res))
       .catch((err) => setError(err.message ?? 'Failed to load versions'))
       .finally(() => setLoading(false));
-  };
-
-  useEffect(() => {
-    if (!organizationId || !projectId || !dependencyId) {
-      setLoading(false);
-      return;
-    }
-    fetchVersions();
   }, [organizationId, projectId, dependencyId]);
-
-  const prForVersion = (version: string, prs: WatchtowerPRItem[]) =>
-    prs.find((p) => p.target_version === version);
-
-  const handleCreatePR = async (version: string) => {
-    setCreatingForVersion(version);
-    try {
-      const result = await api.createWatchtowerBumpPR(
-        organizationId,
-        projectId,
-        dependencyId,
-        version
-      );
-      toast({
-        title: result.already_exists ? 'PR already exists' : 'Pull request created',
-        description: result.already_exists
-          ? 'Opening existing bump PR.'
-          : 'Open the PR to review and merge the version bump.',
-      });
-      window.open(result.pr_url, '_blank');
-      fetchVersions();
-    } catch (err: unknown) {
-      toast({
-        title: 'Failed to create PR',
-        description: err instanceof Error ? err.message : 'Unknown error',
-        variant: 'destructive',
-      });
-    } finally {
-      setCreatingForVersion(null);
-    }
-  };
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -269,12 +173,6 @@ export function VersionSidebar({
                 const totalVulnCount =
                   (item.totalVulnCount ?? (item.vulnCount ?? 0) + (item.transitiveVulnCount ?? 0));
                 const noVulns = totalVulnCount === 0;
-                const checksAllPass =
-                  (item.registry_integrity_status === 'pass' || item.registry_integrity_status == null) &&
-                  (item.install_scripts_status === 'pass' || item.install_scripts_status == null) &&
-                  (item.entropy_analysis_status === 'pass' || item.entropy_analysis_status == null);
-                const noSecurityIssues = noVulns && checksAllPass;
-                const pr = prForVersion(item.version, data.prs ?? []);
                 const isBanned = (data.bannedVersions ?? []).includes(item.version);
 
                 return (
@@ -296,11 +194,6 @@ export function VersionSidebar({
                             Latest
                           </span>
                         )}
-                        {versionsInQuarantine.includes(item.version) && (
-                          <span className="shrink-0 text-xs px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30">
-                            In quarantine
-                          </span>
-                        )}
                         {(data.bannedVersions ?? []).includes(item.version) && (
                           <span className="shrink-0 text-xs px-1.5 py-0.5 rounded bg-destructive/10 text-destructive border border-destructive/30">
                             Banned
@@ -309,14 +202,14 @@ export function VersionSidebar({
                       </div>
                     </div>
 
-                    {/* Vulnerabilities & security summary */}
+                    {/* Vulnerabilities summary */}
                     <div>
-                      {noSecurityIssues ? (
+                      {noVulns ? (
                         <div className="flex items-center gap-1.5">
                           <CheckCircle className="h-4 w-4 text-success shrink-0" />
-                          <span className="text-xs text-success">No security issues</span>
+                          <span className="text-xs text-success">No known vulnerabilities</span>
                         </div>
-                      ) : !noVulns ? (
+                      ) : (
                         <div className="space-y-1.5">
                           <div className="flex items-center gap-1.5">
                             <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
@@ -451,88 +344,26 @@ export function VersionSidebar({
                             </>
                           )}
                         </div>
-                      ) : null}
+                      )}
                     </div>
 
-                    {/* Watchtower checks — only when package is on org's watchtower */}
-                    {onWatchtower && (
-                      <div className="flex items-center gap-3 text-foreground-secondary">
-                        <span className="text-xs font-medium text-foreground-secondary">Checks:</span>
-                        <div className="flex items-center gap-2">
-                          <WatchtowerStatusIcon
-                            status={item.registry_integrity_status}
-                            reason={item.registry_integrity_reason}
-                            label="Registry"
-                          />
-                          <span className="text-xs sr-only">Registry</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <WatchtowerStatusIcon
-                            status={item.install_scripts_status}
-                            reason={item.install_scripts_reason}
-                            label="Install scripts"
-                          />
-                          <span className="text-xs sr-only">Install</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <WatchtowerStatusIcon
-                            status={item.entropy_analysis_status}
-                            reason={item.entropy_analysis_reason}
-                            label="Entropy"
-                          />
-                          <span className="text-xs sr-only">Entropy</span>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* PR action (watchtower) or Preview (supply-chain) — full-width bottom strip */}
+                    {/* Preview action — full-width bottom strip */}
                     <div className="mt-3 -mx-4 px-4 py-2 border-t border-border bg-background-card rounded-b-lg">
-                      {variant === 'supply-chain' ? (
-                        isCurrent ? (
-                          <span className="text-xs text-foreground-secondary">Current version</span>
-                        ) : isBanned ? (
-                          <span className="text-xs text-foreground-secondary">Banned</span>
-                        ) : onPreviewVersion ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-7 text-xs gap-1"
-                            onClick={() => onPreviewVersion(item.version)}
-                          >
-                            <Eye className="h-3.5 w-3.5" />
-                            Preview
-                          </Button>
-                        ) : null
-                      ) : isCurrent ? (
-                        <span className="text-xs text-foreground-secondary">Current version — no PR</span>
+                      {isCurrent ? (
+                        <span className="text-xs text-foreground-secondary">Current version</span>
                       ) : isBanned ? (
-                        <span className="text-xs text-foreground-secondary">Banned — no PR</span>
-                      ) : pr ? (
-                        <a
-                          href={pr.pr_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-xs text-foreground-secondary hover:text-foreground hover:underline"
-                        >
-                          <ExternalLink className="h-3.5 w-3.5" />
-                          View PR #{pr.pr_number}
-                        </a>
-                      ) : (
+                        <span className="text-xs text-foreground-secondary">Banned</span>
+                      ) : onPreviewVersion ? (
                         <Button
                           variant="outline"
                           size="sm"
                           className="h-7 text-xs gap-1"
-                          disabled={!!creatingForVersion}
-                          onClick={() => handleCreatePR(item.version)}
+                          onClick={() => onPreviewVersion(item.version)}
                         >
-                          {creatingForVersion === item.version ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <GitPullRequest className="h-3.5 w-3.5" />
-                          )}
-                          Create PR
+                          <Eye className="h-3.5 w-3.5" />
+                          Preview
                         </Button>
-                      )}
+                      ) : null}
                     </div>
                   </li>
                 );

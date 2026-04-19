@@ -6,19 +6,18 @@ import { supabase } from '../lib/supabase';
 export type PlanTier = 'free' | 'pro' | 'team' | 'enterprise';
 
 export type GatableFeature =
-  | 'aegis_chat' | 'ai_fixes' | 'background_monitoring' | 'watchtower_forensics'
+  | 'aegis_chat' | 'ai_fixes' | 'background_monitoring'
   | 'sso' | 'mfa_enforcement' | 'ip_allowlist' | 'legal_docs' | 'aegis_management' | 'audit_logs'
   | 'custom_sla' | 'security_slas' | 'sync_frequency';
 
 export type LimitableResource =
-  | 'projects' | 'members' | 'syncs' | 'watchtower' | 'teams'
+  | 'projects' | 'members' | 'syncs' | 'teams'
   | 'notification_rules' | 'integrations' | 'automations';
 
 interface TierLimits {
   projects: number;
   members: number;
   syncs: number;
-  watchtower: number;
   teams: number;
   notification_rules: number;
   integrations: number;
@@ -30,7 +29,6 @@ interface TierFeatures {
   aegis_chat: boolean;
   ai_fixes: boolean;
   background_monitoring: boolean;
-  watchtower_forensics: boolean;
   sso: boolean;
   mfa_enforcement: boolean;
   ip_allowlist: boolean;
@@ -46,7 +44,6 @@ interface UsageData {
   projects: number;
   members: number;
   syncs: number;
-  watchtower: number;
   teams: number;
   notification_rules: number;
   integrations: number;
@@ -101,7 +98,6 @@ const FEATURE_REQUIRED_TIER: Record<GatableFeature, PlanTier> = {
   aegis_chat: 'pro',
   ai_fixes: 'pro',
   background_monitoring: 'pro',
-  watchtower_forensics: 'pro',
   sync_frequency: 'pro',
   sso: 'team',
   mfa_enforcement: 'team',
@@ -197,7 +193,7 @@ export function PlanProvider({ organizationId, children }: { organizationId: str
 
   const highestUsagePercent = useMemo(() => {
     if (!plan) return 0;
-    const resources: LimitableResource[] = ['projects', 'members', 'syncs', 'watchtower', 'teams'];
+    const resources: LimitableResource[] = ['projects', 'members', 'syncs', 'teams'];
     let max = 0;
     for (const r of resources) {
       const limit = plan.limits[r];

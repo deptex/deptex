@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useOutletContext, useNavigate, useParams, useLocation } from 'react-router-dom';
-import { Search, SlidersHorizontal, TowerControl, Loader2, PanelLeftClose, PanelLeftOpen, Package, LayoutDashboard, GitBranch, MessageSquareText, RefreshCw } from 'lucide-react';
+import { Search, SlidersHorizontal, Loader2, PanelLeftClose, PanelLeftOpen, Package, LayoutDashboard, GitBranch, MessageSquareText, RefreshCw } from 'lucide-react';
 import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
 import { isExtractionOngoing as checkExtractionOngoing, isInitialExtraction as checkInitialExtraction } from '../../lib/extractionStatus';
 import { ExtractionProgressCard } from '../../components/ExtractionProgressCard';
@@ -245,7 +245,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
   const depsBase = organizationId && projectId ? `/organizations/${organizationId}/projects/${projectId}/dependencies` : '';
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterWatchtower, setFilterWatchtower] = useState(false);
   const [filterVulnerability, setFilterVulnerability] = useState(false);
   const [filterLicenseIssue, setFilterLicenseIssue] = useState(false);
   const [filterDeprecated, setFilterDeprecated] = useState(false);
@@ -701,7 +700,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
       return true;
     })
     .filter(dep => {
-      if (filterWatchtower && !dep.is_watching) return false;
       if (filterVulnerability && !getVulnSeverityInfo(dep)) return false;
       // Only treat as license issue when policy was actually run and returned allowed: false.
       // When policy_result is null (policy not evaluated yet), don't show/filter as license issue.
@@ -777,31 +775,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                   <div className="px-2 space-y-0">
                     <div
                       className="group flex items-center gap-2 py-1 px-0 rounded-md cursor-pointer"
-                      onClick={() => setFilterWatchtower((v) => !v)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFilterWatchtower((v) => !v); } }}
-                      role="option"
-                      aria-selected={filterWatchtower}
-                      tabIndex={0}
-                    >
-                      <Checkbox
-                        id="filter-watchtower"
-                        checked={filterWatchtower}
-                        onCheckedChange={(checked) => setFilterWatchtower(checked === true)}
-                        className="data-[state=checked]:bg-foreground data-[state=checked]:text-background data-[state=checked]:border-foreground"
-                      />
-                      <label htmlFor="filter-watchtower" className="text-sm font-normal cursor-pointer flex-1 text-foreground">
-                        Watchtower
-                      </label>
-                      <button
-                        type="button"
-                        className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-xs font-medium px-2 py-1 rounded-md border border-foreground/40 bg-transparent text-foreground hover:bg-foreground/10 focus:opacity-100 focus:outline-none"
-                        onClick={(e) => { e.stopPropagation(); setFilterWatchtower(true); setFilterVulnerability(false); setFilterLicenseIssue(false); setFilterDeprecated(false); }}
-                      >
-                        Select only
-                      </button>
-                    </div>
-                    <div
-                      className="group flex items-center gap-2 py-1 px-0 rounded-md cursor-pointer"
                       onClick={() => setFilterVulnerability((v) => !v)}
                       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFilterVulnerability((v) => !v); } }}
                       role="option"
@@ -820,7 +793,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                       <button
                         type="button"
                         className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-xs font-medium px-2 py-1 rounded-md border border-foreground/40 bg-transparent text-foreground hover:bg-foreground/10 focus:opacity-100 focus:outline-none"
-                        onClick={(e) => { e.stopPropagation(); setFilterVulnerability(true); setFilterWatchtower(false); setFilterLicenseIssue(false); setFilterDeprecated(false); }}
+                        onClick={(e) => { e.stopPropagation(); setFilterVulnerability(true); setFilterLicenseIssue(false); setFilterDeprecated(false); }}
                       >
                         Select only
                       </button>
@@ -845,7 +818,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                       <button
                         type="button"
                         className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-xs font-medium px-2 py-1 rounded-md border border-foreground/40 bg-transparent text-foreground hover:bg-foreground/10 focus:opacity-100 focus:outline-none"
-                        onClick={(e) => { e.stopPropagation(); setFilterLicenseIssue(true); setFilterWatchtower(false); setFilterVulnerability(false); setFilterDeprecated(false); }}
+                        onClick={(e) => { e.stopPropagation(); setFilterLicenseIssue(true); setFilterVulnerability(false); setFilterDeprecated(false); }}
                       >
                         Select only
                       </button>
@@ -870,7 +843,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                       <button
                         type="button"
                         className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-xs font-medium px-2 py-1 rounded-md border border-foreground/40 bg-transparent text-foreground hover:bg-foreground/10 focus:opacity-100 focus:outline-none"
-                        onClick={(e) => { e.stopPropagation(); setFilterDeprecated(true); setFilterWatchtower(false); setFilterVulnerability(false); setFilterLicenseIssue(false); }}
+                        onClick={(e) => { e.stopPropagation(); setFilterDeprecated(true); setFilterVulnerability(false); setFilterLicenseIssue(false); }}
                       >
                         Select only
                       </button>
@@ -952,7 +925,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
               <p className="text-sm text-foreground-secondary mt-1">
                 {searchQuery.trim()
                   ? `Your search for "${searchQuery.trim()}" did not return any results`
-                  : filterWatchtower || filterVulnerability || filterLicenseIssue || filterDeprecated
+                  : filterVulnerability || filterLicenseIssue || filterDeprecated
                     ? 'Your filters did not return any results'
                     : 'No dependencies found yet.'}
               </p>
@@ -1009,16 +982,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                           {dep.name}@{dep.version}
                         </TooltipContent>
                       </Tooltip>
-                      {dep.is_watching && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="shrink-0 text-foreground-secondary cursor-default" aria-hidden>
-                              <TowerControl className="h-3.5 w-3.5" />
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent side="right">On org watchtower</TooltipContent>
-                        </Tooltip>
-                      )}
                       {hasLicenseIssue && (
                         <Tooltip>
                           <TooltipTrigger asChild>
@@ -1084,7 +1047,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                         </Tooltip>
                       )}
                     </div>
-                    {/* Expandable sub-nav: Overview, Supply chain, Watchtower (tab selection only) */}
+                    {/* Expandable sub-nav: Overview, Supply chain, Notes (tab selection only) */}
                     <div
                       className="grid transition-[grid-template-rows] duration-200 ease-out"
                       style={{ gridTemplateRows: isSelected ? '1fr' : '0fr' }}

@@ -199,12 +199,6 @@ describe('Project Routes', () => {
             transitiveVulnCount: 1,
             transitiveVulnerabilities: [{ osv_id: 'GHSA-xxx', severity: 'high', summary: null, aliases: [], from_package: 'some-dep' }],
             totalVulnCount: 1,
-            registry_integrity_status: 'pass',
-            registry_integrity_reason: null,
-            install_scripts_status: 'pass',
-            install_scripts_reason: null,
-            entropy_analysis_status: 'pass',
-            entropy_analysis_reason: null,
           },
         ],
         currentVersion: '1.0.0',
@@ -223,9 +217,6 @@ describe('Project Routes', () => {
       expect(res.body.versions[0].transitiveVulnCount).toBe(1);
       expect(res.body.versions[0].transitiveVulnerabilities).toHaveLength(1);
       expect(res.body.versions[0].transitiveVulnerabilities[0].from_package).toBe('some-dep');
-      expect(res.body.versions[0].registry_integrity_status).toBe('pass');
-      expect(res.body.versions[0].install_scripts_status).toBe('pass');
-      expect(res.body.versions[0].entropy_analysis_status).toBe('pass');
       expect(mockGetCached).toHaveBeenCalled();
     });
   });

@@ -72,7 +72,7 @@ export function RemoveBanSidebar({
         className="fixed right-0 top-0 h-full w-full max-w-md bg-background border-l border-border shadow-2xl flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header — distinct darker strip like watchtower table header */}
+        {/* Header — distinct darker strip */}
         <div className="px-6 py-5 border-b border-border flex-shrink-0 flex items-center justify-between bg-[#141618]">
           <div className="flex items-center gap-2.5">
             <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-destructive/10">
@@ -126,7 +126,7 @@ export function RemoveBanSidebar({
           </div>
         </div>
 
-        {/* Footer — darker strip like watchtower table footer */}
+        {/* Footer — darker strip */}
         <div className="px-6 py-4 border-t border-border flex-shrink-0 flex items-center gap-3 bg-[#141618]">
           <Button
             variant="outline"

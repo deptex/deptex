@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom';
 
-// jsdom does not provide IntersectionObserver (e.g. used by DependencyWatchtowerPage for infinite scroll)
+// jsdom does not provide IntersectionObserver (used by components that rely on infinite scroll or viewport detection).
 class MockIntersectionObserver implements IntersectionObserver {
   readonly root: Element | null = null;
   readonly rootMargin: string = '';

@@ -92,7 +92,6 @@ const planTiers: PlanTier[] = [
       { name: 'Aegis AI Security Copilot' },
       { name: 'AI-powered fixes & sprints' },
       { name: 'Background monitoring' },
-      { name: 'Watchtower forensics' },
       { name: 'Configurable sync frequency' },
       { name: 'All integrations' },
     ],
@@ -5996,7 +5995,6 @@ function UsageSectionContent({ organizationId }: { organizationId: string }) {
     { label: 'Projects', current: plan.usage.projects, limit: plan.limits.projects, tooltip: 'Connected repositories. Resets each billing period.', description: 'Connected repositories' },
     { label: 'Members', current: plan.usage.members, limit: plan.limits.members, tooltip: 'Organization members. Resets each billing period.', description: 'Active seat allocation' },
     { label: 'Data syncs', current: plan.usage.syncs, limit: plan.limits.syncs, tooltip: 'Dependency extraction runs this period. Resets each billing period.', description: 'Extraction runs this period' },
-    { label: 'Watched packages', current: plan.usage.watchtower, limit: plan.limits.watchtower ?? -1, tooltip: 'Packages on organization watchlist. Resets each billing period.', description: 'Dependency monitoring' },
     { label: 'Teams', current: plan.usage.teams, limit: plan.limits.teams ?? -1, tooltip: 'Teams in this organization. Resets each billing period.', description: 'Organizational groups' },
   ];
 
