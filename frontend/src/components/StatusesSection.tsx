@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useOutletContext, Link } from 'react-router-dom';
-import { Plus, Lock, Trash2, Loader2, Check, X, Info, Eye, BookOpen } from 'lucide-react';
+import { Plus, Lock, Trash2, Loader2, Check, X, Info, Eye, BookOpen, GripVertical } from 'lucide-react';
 import { api, OrganizationStatus, OrganizationAssetTier, OrganizationPolicyChange, ProjectPolicyChangeRequest } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -91,6 +91,9 @@ export default function StatusesSection() {
   const { organization } = useOutletContext<OrganizationContextType>();
   const [subTab, setSubTab] = useState<SubTab>('statuses');
   const [statuses, setStatuses] = useState<OrganizationStatus[]>([]);
+  // Drag and drop state for reordering org statuses.
+  const [draggedStatusId, setDraggedStatusId] = useState<string | null>(null);
+  const [dragPreviewStatuses, setDragPreviewStatuses] = useState<OrganizationStatus[] | null>(null);
   const [assetTiers, setAssetTiers] = useState<OrganizationAssetTier[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusCodeValue, setStatusCodeValue] = useState('');
@@ -236,6 +239,8 @@ export default function StatusesSection() {
   }, [subTab, orgId, toast]);
 
   const hasManageCompliance = !!(organization?.permissions?.manage_compliance) || organization?.role === 'owner' || organization?.role === 'admin';
+  const hasManageStatuses = !!(organization?.permissions?.manage_statuses) || hasManageCompliance;
+  const canReorderStatuses = hasManageStatuses && statuses.length > 1;
 
   const closeRequestDetail = useCallback(() => {
     setRequestDetailVisible(false);
@@ -297,6 +302,64 @@ export default function StatusesSection() {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
     } finally {
       setDeletingStatusId(null);
+    }
+  };
+
+  // Live reorder preview during drag.
+  const handleDragStatusPreview = (draggedId: string, targetId: string) => {
+    const sourceStatuses = dragPreviewStatuses || statuses;
+    const draggedIndex = sourceStatuses.findIndex((s) => s.id === draggedId);
+    const targetIndex = sourceStatuses.findIndex((s) => s.id === targetId);
+
+    if (draggedIndex === -1 || targetIndex === -1 || draggedIndex === targetIndex) return;
+
+    const dragged = sourceStatuses[draggedIndex];
+    const target = sourceStatuses[targetIndex];
+
+    const newStatuses = [...sourceStatuses];
+    const [moved] = newStatuses.splice(draggedIndex, 1);
+    newStatuses.splice(targetIndex, 0, moved);
+
+    setDragPreviewStatuses(newStatuses);
+  };
+
+  // Commit the reorder on drop.
+  const handleDragStatusReorder = async () => {
+    if (!orgId || !dragPreviewStatuses) return;
+
+    const originalOrder = statuses.map((s) => s.id).join(',');
+    const previewOrder = dragPreviewStatuses.map((s) => s.id).join(',');
+    if (originalOrder === previewOrder) {
+      setDragPreviewStatuses(null);
+      setDraggedStatusId(null);
+      return;
+    }
+
+    // We use the array index as the new rank to guarantee stable ordering and uniqueness.
+    const finalStatuses = dragPreviewStatuses.map((s, index) => ({
+      ...s,
+      rank: index,
+    }));
+
+    setStatuses(finalStatuses);
+    setDragPreviewStatuses(null);
+    setDraggedStatusId(null);
+
+    try {
+      const reordered = await api.reorderOrganizationStatuses(
+        orgId,
+        finalStatuses.map((s) => ({ id: s.id, rank: s.rank }))
+      );
+      if (Array.isArray(reordered) && reordered.length > 0) {
+        setStatuses(reordered);
+      }
+    } catch (err: any) {
+      toast({
+        title: 'Failed to reorder statuses',
+        description: err?.message || 'Please try again.',
+        variant: 'destructive',
+      });
+      load().catch((e) => console.error('Failed to reload statuses after reorder error:', e));
     }
   };
 
@@ -543,10 +606,22 @@ export default function StatusesSection() {
               Statuses
             </div>
             <div className="divide-y divide-border">
-              {statuses.map((status) => (
+              {(dragPreviewStatuses || statuses).map((status) => (
                 <div
                   key={status.id}
-                  className="px-4 py-3 flex items-center justify-between group hover:bg-table-hover transition-colors"
+                  className={`px-4 py-3 flex items-center justify-between group transition-colors ${
+                    draggedStatusId === status.id ? 'opacity-50 bg-primary/10 scale-[0.98]' : 'hover:bg-table-hover'
+                  }`}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    if (!draggedStatusId || draggedStatusId === status.id) return;
+                    handleDragStatusPreview(draggedStatusId, status.id);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (!draggedStatusId) return;
+                    handleDragStatusReorder();
+                  }}
                 >
                   <div className="flex items-center gap-2 min-w-0 flex-1">
                     <span className="text-sm font-medium text-foreground truncate">
@@ -555,7 +630,11 @@ export default function StatusesSection() {
                     {status.is_system && <Lock className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />}
                   </div>
                   <div className="flex items-center justify-end flex-shrink-0 w-36 relative">
-                    <div className={`flex justify-end transition-opacity ${!status.is_system ? 'group-hover:opacity-0' : ''}`}>
+                    <div
+                      className={`flex justify-end transition-opacity ${
+                        !status.is_system || canReorderStatuses ? 'group-hover:opacity-0' : ''
+                      }`}
+                    >
                       <RoleBadge
                         role={status.name}
                         roleDisplayName={status.name}
@@ -564,9 +643,28 @@ export default function StatusesSection() {
                     </div>
                     {!status.is_system && (
                       <div className="absolute inset-0 flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                        <span
+                          className={`mr-1.5 cursor-grab transition-opacity ${
+                            hasManageStatuses && statuses.length > 1 ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                          }`}
+                          draggable={hasManageStatuses && statuses.length > 1}
+                          onDragStart={(e) => {
+                            if (!hasManageStatuses || statuses.length <= 1) return;
+                            setDraggedStatusId(status.id);
+                            setDragPreviewStatuses([...statuses]);
+                            e.dataTransfer.effectAllowed = 'move';
+                          }}
+                          onDragEnd={() => {
+                            setDragPreviewStatuses(null);
+                            setDraggedStatusId(null);
+                          }}
+                          title="Drag to reorder"
+                        >
+                          <GripVertical className="h-4 w-4 text-muted-foreground" />
+                        </span>
                         <button
                           onClick={() => handleDeleteStatus(status.id)}
-                          disabled={deletingStatusId === status.id}
+                          disabled={!hasManageStatuses || deletingStatusId === status.id}
                           className="h-7 w-7 flex items-center justify-center rounded text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
                           title="Delete"
                         >
@@ -577,6 +675,29 @@ export default function StatusesSection() {
                           )}
                         </button>
                       </div>
+                    )}
+                    {status.is_system && (
+                      <span
+                        className={`absolute right-3 cursor-grab opacity-0 group-hover:opacity-100 transition-opacity ${
+                          hasManageStatuses && statuses.length > 1
+                            ? 'pointer-events-none group-hover:pointer-events-auto'
+                            : 'pointer-events-none'
+                        }`}
+                        draggable={hasManageStatuses && statuses.length > 1}
+                        onDragStart={(e) => {
+                          if (!hasManageStatuses || statuses.length <= 1) return;
+                          setDraggedStatusId(status.id);
+                          setDragPreviewStatuses([...statuses]);
+                          e.dataTransfer.effectAllowed = 'move';
+                        }}
+                        onDragEnd={() => {
+                          setDragPreviewStatuses(null);
+                          setDraggedStatusId(null);
+                        }}
+                        title="Drag to reorder"
+                      >
+                        <GripVertical className="h-4 w-4 text-muted-foreground" />
+                      </span>
                     )}
                   </div>
                 </div>
