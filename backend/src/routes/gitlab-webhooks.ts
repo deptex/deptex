@@ -6,7 +6,7 @@
 // @ts-nocheck
 import express from 'express';
 import { supabase } from '../lib/supabase';
-import { queueExtractionJob } from '../lib/redis';
+import { queueExtractionJob } from '../lib/extraction-jobs';
 import { invalidateProjectCaches } from '../lib/cache';
 import { detectAffectedWorkspaces, isFileInWorkspace } from '../lib/manifest-registry';
 import { checkRateLimit } from '../lib/rate-limit';

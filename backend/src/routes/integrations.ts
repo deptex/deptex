@@ -15,7 +15,7 @@ import {
   updateIssueComment,
   type CheckRunOutput,
 } from '../lib/github';
-import { queueExtractionJob } from '../lib/redis';
+import { queueExtractionJob } from '../lib/extraction-jobs';
 import { invalidateProjectCaches } from '../lib/cache';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
 import { getVulnCountsForPackageVersion, exceedsThreshold, type VulnCounts } from '../lib/vuln-counts';

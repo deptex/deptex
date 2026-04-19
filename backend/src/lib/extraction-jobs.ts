@@ -1,4 +1,4 @@
-import { supabase } from '../lib/supabase';
+import { supabase } from './supabase';
 import { startExtractionMachine } from './fly-machines';
 
 // Extraction job queue — Supabase-based job persistence.
