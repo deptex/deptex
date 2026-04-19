@@ -29,9 +29,7 @@ Deptex is an AI-powered open-core dependency security platform. It combines depe
 | Frontend | React 18 + Vite 5 + Tailwind CSS 3 + Radix UI primitives (shadcn pattern) |
 | Routing | React Router v6 (`createBrowserRouter`) |
 | Graphs | @xyflow/react (dependency + vulnerability graphs) |
-| Tables | @tanstack/react-table |
 | Code editor | Monaco Editor (policy code) |
-| Forms | react-hook-form + zod validation |
 | Workers | 3 workers on Fly.io: extraction-worker, watchtower-worker, aider-worker (Python) |
 | SBOM | cdxgen (CycloneDX). dep-scan (VDR, reachability). Semgrep, TruffleHog |
 | AST parsing | oxc-parser (JS/TS import extraction) |
