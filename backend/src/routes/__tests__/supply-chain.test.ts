@@ -3,11 +3,11 @@ import app from '../../index';
 import { supabase, queryBuilder, setTableResponse, clearTableRegistry } from '../../test/mocks/supabaseSingleton';
 
 jest.mock('../../lib/supabase', () => ({ ...require('../../test/mocks/supabaseSingleton'), createUserClient: jest.fn() }));
-jest.mock('../../../../ee/backend/lib/activities', () => ({
+jest.mock('../../lib/activities', () => ({
   createActivity: jest.fn(),
 }));
 
-jest.mock('../../../../ee/backend/lib/create-bump-pr', () => ({
+jest.mock('../../lib/create-bump-pr', () => ({
   createBumpPrForProject: jest.fn().mockResolvedValue({
     pr_url: 'https://github.com/org/repo/pull/99',
     pr_number: 99,
@@ -19,8 +19,8 @@ jest.mock('../../lib/ghsa', () => ({
   filterGhsaVulnsByVersion: jest.fn().mockReturnValue([]),
 }));
 
-jest.mock('../../../../ee/backend/lib/cache', () => {
-  const actual = jest.requireActual('../../../../ee/backend/lib/cache') as typeof import('../../../../ee/backend/lib/cache');
+jest.mock('../../lib/cache', () => {
+  const actual = jest.requireActual('../../lib/cache') as typeof import('../../lib/cache');
   return {
     ...actual,
     invalidateWatchtowerSummaryCache: jest.fn().mockResolvedValue(undefined),
@@ -243,7 +243,7 @@ describe('Supply Chain Routes', () => {
 
     it('should create bump PRs for projects with existing PRs targeting the banned version', async () => {
       mockOrgOwnerAccess();
-      const createBumpPrMock = require('../../../../ee/backend/lib/create-bump-pr').createBumpPrForProject;
+      const createBumpPrMock = require('../../lib/create-bump-pr').createBumpPrForProject;
       // absorb orphaned org-role single (checkOrgManagePermission returns early for owner)
       queryBuilder.single.mockResolvedValueOnce({ data: {}, error: null });
       queryBuilder.single.mockResolvedValueOnce({

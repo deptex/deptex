@@ -819,7 +819,7 @@ Repo lifecycle (GitHub): repository.deleted/renamed/transferred/edited, installa
 | **Google AI (Gemini)** | Docs assistant, policy AI, notification AI, usage analysis, Apply for Exception (Phase 5) (Tier 1). getPlatformProvider() when GOOGLE_AI_API_KEY set. | `GOOGLE_AI_API_KEY` |
 | **OpenAI / Anthropic / Google** | Aegis Security Copilot (Tier 2 BYOK). Org configures in Organization Settings > AI Configuration. Keys stored encrypted. | Org BYOK via organization_ai_providers. Requires `AI_ENCRYPTION_KEY` (32-byte hex). |
 | **Nodemailer/Gmail** | Email notifications and invitations | `GMAIL_USER`, `GMAIL_APP_PASSWORD` |
-| **PagerDuty** | Phase 9: Incident alerts via Events API v2. Routing key stored in organization_integrations. PagerDuty costs $21/user/month on their side. | User provides routing key (no OAuth) |
+| **PagerDuty** | Phase 9: Incident alerts via Events API v2. Routing key stored in organization_integrations. | User provides routing key (no OAuth) |
 
 **Internal API:** `INTERNAL_API_KEY` — protects recovery endpoint (`/api/internal/recovery/extraction-jobs`), fix-recovery (`/api/internal/recovery/fix-jobs`), create-bump-pr, vuln-check (`/api/internal/vuln-check`), Phase 8 QStash cron endpoints (scheduled-extraction, watchtower-daily-poll), Phase 9 notification worker endpoints (dispatch-notification, digest-check, reconcile-stuck-notifications, notification-cleanup), **Phase 7B:** `POST /api/internal/aegis/execute-task-step`, `check-due-automations`, `run-automation/:id`, `snapshot-debt`. **Phase 16:** `POST /api/internal/learning/recompute-patterns`, `check-feedback-prompts`.
 
@@ -939,7 +939,7 @@ After deploying Phase 9 (Notifications & Integrations):
    - **Retention cleanup:** `0 3 * * *` → `POST https://<your-backend>/api/workers/notification-cleanup`
    - Auth: QStash signs requests; or use `X-Internal-Api-Key: $INTERNAL_API_KEY` header.
 
-3. **PagerDuty:** User-provided routing key (no OAuth). Document that PagerDuty costs $21/user/month on their side.
+3. **PagerDuty:** User-provided routing key (no OAuth).
 
 4. **CE routes:** `notification-unsubscribe` and `user-notifications` are mounted in backend/src/index.ts (always available).
 
@@ -1019,7 +1019,7 @@ After deploying Phase 14 (Enterprise Security):
 
 4. **CE routes mounted:** SSO (`/api/sso/*`), user sessions (`/api/user/sessions`), user API tokens (`/api/user/api-tokens`), SCIM (`/api/scim/v2/*`) in `backend/src/index.ts`.
 
-5. **Frontend routes:** `/sso-callback` (public, handles SAML token verification), `/settings/security` (user MFA + sessions + API tokens). Org Settings sidebar adds Session Policy, IP Allowlist, API Tokens, SCIM Provisioning under Security.
+5. **Frontend routes:** `/sso-callback` (public, handles SAML token verification), `/settings/security` (user MFA + sessions + API tokens). Org Settings sidebar adds IP Allowlist, API Tokens, SCIM Provisioning under Security.
 
 6. **MFA:** Supabase Auth TOTP via AAL system. Users enroll from Settings > Security. Org enforcement toggle in Org Settings > Security > MFA (manage_security). MFAGate component wraps ProtectedRoute.
 

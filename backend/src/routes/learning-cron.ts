@@ -6,8 +6,6 @@
 
 import express from 'express';
 import { supabase } from '../lib/supabase';
-import { getEeModulePath } from '../lib/ee-loader';
-
 const router = express.Router();
 
 async function verifyInternalAuth(req: express.Request): Promise<boolean> {
@@ -42,18 +40,14 @@ router.post('/recompute-patterns', async (req, res) => {
     let recomputedOrgs = 0;
 
     try {
-      const { backfillMissingOutcomes } = await import(
-        getEeModulePath('learning/outcome-recorder')
-      );
+      const { backfillMissingOutcomes } = await import('../lib/learning/outcome-recorder');
       backfilledCount = await backfillMissingOutcomes();
     } catch (e) {
       console.warn('[learning-cron] Backfill failed (non-fatal):', (e as Error).message);
     }
 
     try {
-      const { recomputeAllStaleOrgs } = await import(
-        getEeModulePath('learning/pattern-engine')
-      );
+      const { recomputeAllStaleOrgs } = await import('../lib/learning/pattern-engine');
       recomputedOrgs = await recomputeAllStaleOrgs();
     } catch (e) {
       console.warn('[learning-cron] Pattern recompute failed (non-fatal):', (e as Error).message);

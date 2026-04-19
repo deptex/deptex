@@ -12,9 +12,9 @@ export default function CTASection() {
           <Button
             asChild
             size="lg"
-            className="bg-primary text-primary-foreground hover:bg-primary/90 text-base px-8 py-6"
+            className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary/50 font-semibold text-base px-8 py-6 rounded-lg"
           >
-            <Link to="/signup">
+            <Link to="/login">
               Start your first project for free
             </Link>
           </Button>
@@ -22,13 +22,12 @@ export default function CTASection() {
             asChild
             size="lg"
             variant="outline"
-            className="text-base px-8 py-6 border-border hover:bg-background-subtle"
+            className="text-base px-8 py-6 rounded-lg border-2 border-primary text-primary bg-transparent hover:bg-primary/10"
           >
-            <Link to="/demo">View demo</Link>
+            <Link to="/get-demo">Get a demo</Link>
           </Button>
         </div>
       </div>
     </section>
   );
 }
-

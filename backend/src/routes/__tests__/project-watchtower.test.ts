@@ -10,7 +10,7 @@ import { supabase, queryBuilder, setTableResponse, clearTableRegistry } from '..
 jest.mock('../../lib/supabase', () => ({ ...require('../../test/mocks/supabaseSingleton'), createUserClient: jest.fn() }));
 const mockGetCached = jest.fn().mockResolvedValue(null);
 const mockInvalidateCache = jest.fn().mockResolvedValue(undefined);
-jest.mock('../../../../ee/backend/lib/cache', () => ({
+jest.mock('../../lib/cache', () => ({
   getCached: (...args: unknown[]) => mockGetCached(...args),
   setCached: jest.fn().mockResolvedValue(undefined),
   invalidateCache: (...args: unknown[]) => mockInvalidateCache(...args),
@@ -18,7 +18,7 @@ jest.mock('../../../../ee/backend/lib/cache', () => ({
 }));
 
 const mockQueueWatchtowerJobs = jest.fn().mockResolvedValue({ success: true, count: 0 });
-jest.mock('../../../../ee/backend/lib/watchtower-queue', () => ({
+jest.mock('../../lib/watchtower-queue', () => ({
   queueWatchtowerJob: jest.fn().mockResolvedValue({ success: true }),
   queueWatchtowerJobs: (...args: unknown[]) => mockQueueWatchtowerJobs(...args),
 }));

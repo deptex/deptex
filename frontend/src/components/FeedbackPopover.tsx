@@ -1,8 +1,7 @@
 import { useState } from 'react';
-import { MessageSquarePlus, AlertTriangle, Lightbulb, Send, HelpCircle } from 'lucide-react';
+import { AlertTriangle, Lightbulb, HelpCircle } from 'lucide-react';
 import { Popover, PopoverTrigger, PopoverContent } from './ui/popover';
 import { Button } from './ui/button';
-import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import { useToast } from '../hooks/use-toast';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -22,12 +21,6 @@ export default function FeedbackPopover() {
   const handleChoose = (t: 'issue' | 'idea') => {
     setType(t);
     setStep('form');
-    setBody('');
-  };
-
-  const handleBack = () => {
-    setStep('choose');
-    setType(null);
     setBody('');
   };
 
@@ -63,21 +56,19 @@ export default function FeedbackPopover() {
     }
   };
 
+  const newOrgButtonClass =
+    'bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40';
+
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className="flex items-center justify-center rounded-md p-2 text-foreground-secondary hover:bg-background-subtle hover:text-foreground transition-colors"
-            >
-              <MessageSquarePlus className="h-5 w-5" />
-            </button>
-          </PopoverTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Feedback</TooltipContent>
-      </Tooltip>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="rounded-md px-2 py-1.5 text-sm text-foreground-secondary hover:bg-background-subtle hover:text-foreground transition-colors"
+        >
+          Feedback
+        </button>
+      </PopoverTrigger>
 
       <PopoverContent align="end" className="w-[380px] p-0">
         {step === 'choose' ? (
@@ -112,17 +103,10 @@ export default function FeedbackPopover() {
           </>
         ) : (
           <>
-            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+            <div className="border-b border-border px-4 py-3">
               <h3 className="text-sm font-medium text-foreground">
                 {type === 'issue' ? 'Describe the issue' : 'Share your idea'}
               </h3>
-              <button
-                type="button"
-                onClick={handleBack}
-                className="text-xs text-foreground-secondary hover:text-foreground"
-              >
-                Back
-              </button>
             </div>
             <div className="p-4 space-y-3">
               <textarea
@@ -130,7 +114,7 @@ export default function FeedbackPopover() {
                 onChange={(e) => setBody(e.target.value)}
                 placeholder={type === 'issue' ? 'What went wrong?' : 'My idea for improving Deptex is...'}
                 rows={4}
-                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent resize-none"
+                className="demo-page-input w-full rounded-md px-3 py-2.5 text-sm text-foreground shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary resize-none min-h-[100px]"
               />
               <div className="flex items-center justify-between gap-2">
                 <a
@@ -146,17 +130,15 @@ export default function FeedbackPopover() {
                   size="sm"
                   onClick={handleSend}
                   disabled={!body.trim() || sending}
+                  className={`h-8 px-3.5 py-2 ${newOrgButtonClass}`}
                 >
                   {sending ? (
                     <span className="inline-flex items-center gap-2">
                       <span className="h-3 w-3 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
-                      Sending...
+                      Send
                     </span>
                   ) : (
-                    <>
-                      <Send className="h-3.5 w-3.5 mr-1.5" />
-                      Send
-                    </>
+                    'Send'
                   )}
                 </Button>
               </div>

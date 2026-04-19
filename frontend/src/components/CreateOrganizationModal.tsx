@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AlertCircle, Plus } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 import { Button } from './ui/button';
 import { api } from '../lib/api';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from './ui/dialog';
@@ -91,10 +91,8 @@ export default function CreateOrganizationModal({
             className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
             disabled={loading || !name.trim()}
           >
-            {loading ? (
+            {loading && (
               <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent flex-shrink-0" />
-            ) : (
-              <Plus className="h-4 w-4 mr-2 flex-shrink-0" />
             )}
             Create
           </Button>

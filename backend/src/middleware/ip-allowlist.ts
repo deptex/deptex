@@ -68,7 +68,7 @@ export function createIPAllowlistMiddleware() {
       if (allowed) return next();
 
       try {
-        const { logSecurityEvent } = require('../../../ee/backend/lib/security-audit');
+        const { logSecurityEvent } = require('../lib/security-audit');
         await logSecurityEvent({
           organizationId: orgId,
           actorId: req.user?.id,

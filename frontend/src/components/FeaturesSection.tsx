@@ -35,7 +35,7 @@ const features: Feature[] = [
     highlights: [],
     showLottie: true,
     spanColumns: 2,
-    route: "/autonomous-agent",
+    route: "/platform-features/ai-security-agent",
   },
   {
     icon: <FolderGit2 className="h-6 w-6" />,
@@ -43,7 +43,7 @@ const features: Feature[] = [
     description: "Link your codebase for automatic security updates.",
     highlights: [],
     showPipeline: true,
-    route: "/repository-tracking",
+    route: "/docs/quick-start",
   },
   {
     icon: <Eye className="h-6 w-6" />,
@@ -52,7 +52,7 @@ const features: Feature[] = [
       "Detection of suspicious package behavior.",
     highlights: [],
     showAnomalyDetection: true,
-    route: "/anomaly-detection",
+    route: "/platform-features/advanced-upstream-insights",
   },
   // Row 2: single, single, double
   {
@@ -63,7 +63,7 @@ const features: Feature[] = [
     highlights: [],
     showImage: true,
     imagePath: "/images/vulnerability_intelligence.png",
-    route: "/vulnerability-intelligence",
+    route: "/platform-features/vulnerability-intelligence",
   },
   {
     icon: <FileCheck className="h-6 w-6" />,
@@ -73,7 +73,7 @@ const features: Feature[] = [
     highlights: [],
     showImage: true,
     imagePath: "/images/sbom_compliance.png",
-    route: "/sbom-compliance",
+    route: "/platform-features/customizable-compliance",
   },
   {
     icon: <HeartPulse className="h-6 w-6" />,

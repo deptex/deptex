@@ -1,173 +1,183 @@
 ---
 name: Phase 11 Landing Page
-overview: Repurpose Phase 11 as "Landing Page & Marketing Site Finalization" -- fix broken links/CTAs, update feature descriptions and showcase content to accurately reflect what Deptex actually does, expand framework support visuals, clean up Footer/NavBar dead links, and polish the overall marketing experience.
+overview: Landing page and marketing site overhaul — header aligned with app styling, remove fake content, add Get Demo page, replace feature cards with video-driven key features, fix all NavBar and Footer links, and make Open Source and GitHub accurate.
 todos:
-  - id: fix-hero-ctas
-    content: Fix hero section CTAs in HomePage.tsx and CTASection.tsx -- /signup -> /login, /demo -> /docs/quick-start
-    status: pending
-  - id: update-features
-    content: Update FeaturesSection.tsx with accurate descriptions and highlights for all 6 feature cards
-    status: pending
-  - id: expand-frameworks
-    content: Add Dart, Elixir, Swift, NuGet to FrameworkSupportSection.tsx (4 missing ecosystems)
-    status: pending
-  - id: fix-showcase
-    content: Replace placeholder Supabase video in ProductShowcaseSection.tsx with real product screenshots, update slide copy
-    status: pending
-  - id: fix-footer
-    content: Remap ~15 dead links in Footer.tsx to actual routes, update social links
-    status: pending
-  - id: fix-navbar-pricing
-    content: Handle /pricing link in NavBar.tsx (remove or add tooltip until Phase 13)
-    status: pending
-  - id: update-company-banner
-    content: Replace fake company logos in CompanyBanner.tsx with open-source tooling logos or remove
-    status: pending
-  - id: responsive-polish
-    content: Responsive check and animation polish across all landing page sections
-    status: pending
+  - id: header-app-style
+    content: Make NavBar a normal header — same background as app (e.g. bg-background border-b), remove scroll-to-pill animation, consistent padding
+    status: completed
+  - id: header-typography
+    content: Reduce gray text in NavBar — use text-foreground for nav items where appropriate, keep primary/green for hover and key CTAs (Sign in)
+    status: completed
+  - id: remove-company-banner
+    content: Remove CompanyBanner (animating fake company names) from HomePage, or replace with "Built with cdxgen, dep-scan…" style strip
+    status: completed
+  - id: hero-ctas
+    content: Hero and CTA section — "Start your project" -> /login, replace "View demo" with "Get a demo" / "Book a demo" linking to new /get-demo page
+    status: completed
+  - id: demo-page
+    content: Add route /get-demo and GetDemoPage — simple page with "Request a demo" (form or contact CTA / Calendly placeholder)
+    status: completed
+  - id: replace-feature-cards
+    content: Remove current 6-card FeaturesSection grid; rely on ProductShowcaseSection (real video/screenshots) to convey key features; optional later add Key Features section per user screenshot
+    status: completed
+  - id: fix-showcase-video
+    content: Replace Supabase placeholder video in ProductShowcaseSection with real product screenshots or one short product video loop; update slide copy to match
+    status: completed
+  - id: footer-links
+    content: Remap all Footer links to real routes; fix Product, Solutions, Developers, Company columns and bottom bar; GitHub/Twitter to real URLs
+    status: completed
+  - id: navbar-links
+    content: NavBar — ensure Product/Resources/Solutions link to existing pages only; Resources Open Source accurate to one repo; remove or gate Pricing until Phase 13 if needed
+    status: completed
+  - id: navbar-github
+    content: NavBar top-right — GitHub link to actual Deptex repo URL; replace hardcoded "12.5K" with real star count (env or GitHub API) or remove number and show "GitHub" only
+    status: completed
+  - id: open-source-accurate
+    content: Open Source page and/or NavBar copy — reflect that Deptex has one main repo (link and description accurate)
+    status: completed
   - id: update-roadmap-index
-    content: Update roadmap index to reflect new Phase 11 (replace cancelled entry)
-    status: pending
+    content: Update roadmap index Phase 11 entry and any references
+    status: completed
 isProject: false
 ---
 
-# Phase 11: Landing Page & Marketing Site Finalization
+# Phase 11: Landing Page & Marketing Site Overhaul
 
-## Problem
+## Goals
 
-The landing page and marketing site have several accuracy and completeness issues:
-
-- **Broken CTAs**: Hero buttons link to `/signup` and `/demo` -- neither route exists
-- **Placeholder video**: [ProductShowcaseSection.tsx](frontend/src/components/ProductShowcaseSection.tsx) uses a Supabase table editor video (not Deptex content) for all 5 carousel slides
-- **Sparse feature descriptions**: [FeaturesSection.tsx](frontend/src/components/FeaturesSection.tsx) has empty `highlights` arrays and terse descriptions
-- **Incomplete ecosystem list**: [FrameworkSupportSection.tsx](frontend/src/components/FrameworkSupportSection.tsx) shows 7 ecosystems but Deptex supports 11 (missing Dart/Pub, Elixir/Hex, Swift, NuGet)
-- **~15 dead footer links**: [Footer.tsx](frontend/src/components/Footer.tsx) links to `/product/tracking`, `/product/policy`, `/developers/cli`, `/about`, `/blog`, `/careers`, `/status`, etc. -- none exist
-- **Fake company banner**: [CompanyBanner.tsx](frontend/src/components/CompanyBanner.tsx) shows placeholder logos (Microsoft, GitHub, etc.)
-- **Generic social links**: Footer Twitter/GitHub links go to `twitter.com` / `github.com` root
-- **NavBar `/pricing`**: Links to a page that won't exist until Phase 13
+- **Header**: Normal app-style header (same color as app), no scroll animation, less gray text, green for Sign in / primary actions.
+- **No fake content**: Remove animating company banner; fix or remove any placeholder stats (e.g. GitHub number).
+- **Demo**: "Get a demo" / "Book a demo" that goes somewhere — add a simple Get Demo page.
+- **Features**: Drop the 6 ugly feature cards; key features conveyed via the product showcase (video/slides). Optional: add a new Key Features section later from user screenshot.
+- **Accuracy**: All NavBar and Footer links point to real routes; Open Source reflects one repo; GitHub link and stat accurate.
 
 ---
 
-## Scope
+## 1. Header (NavBar) — app style and copy
 
-This phase focuses on making the existing landing page accurate and polished -- not adding net-new marketing pages. The feature pages (`/autonomous-agent`, `/repository-tracking`, etc.) and solution pages already exist and just need minor copy alignment.
+**File:** `frontend/src/components/NavBar/NavBar.tsx`
 
----
-
-## Changes
-
-### 1. Fix Hero Section CTAs
-
-**File:** [HomePage.tsx](frontend/src/app/pages/HomePage.tsx)
-
-- Change "Start your project" link from `/signup` to `/login` (which handles OAuth signup)
-- Change "View demo" link from `/demo` to `/docs/quick-start` (or `/docs/introduction`)
-- Review hero copy -- "Security you can trust." and subtext are good but subtext should match actual current capabilities
-
-### 2. Update Feature Cards
-
-**File:** [FeaturesSection.tsx](frontend/src/components/FeaturesSection.tsx)
-
-- Expand the 6 feature card descriptions to be more specific and accurate:
-  - **Autonomous Security Agent**: mention Aegis, tool execution, automations, chat interface
-  - **Repository Tracking**: mention GitHub/GitLab/Bitbucket support, cdxgen SBOM, extraction pipeline
-  - **Anomaly Detection**: mention Watchtower, registry integrity, contributor analysis, commit forensics
-  - **Vulnerability Intelligence**: mention OSV/GHSA, EPSS scoring, CISA KEV, Depscore, reachability
-  - **SBOM & Compliance**: mention CycloneDX generation, license checking, policy-as-code, export
-  - **Project Health**: mention health score, OpenSSF scorecard, reputation scoring, dep freshness
-- Add 2-3 meaningful `highlights` per card that describe real capabilities
-
-### 3. Expand Framework Support
-
-**File:** [FrameworkSupportSection.tsx](frontend/src/components/FrameworkSupportSection.tsx)
-
-- Add the 4 missing ecosystems to match actual backend support in [ecosystems.ts](backend/src/lib/ecosystems.ts): Dart (Pub), Elixir (Hex), Swift, .NET (NuGet)
-- Total: 11 ecosystem logos (npm, Python, Go, Rust, Java, Ruby, PHP, Dart, Elixir, Swift, NuGet)
-- Add corresponding logo images to `public/images/frameworks/`
-
-### 4. Replace Placeholder Product Showcase Video
-
-**File:** [ProductShowcaseSection.tsx](frontend/src/components/ProductShowcaseSection.tsx)
-
-Currently all 5 slides show the same Supabase video. Two options:
-
-- **Option A (screenshots)**: Replace the video element with static product screenshots per slide (org dashboard, Aegis panel, project overview, dependency graph, compliance page). Simpler and ships faster.
-- **Option B (keep video structure)**: Record 5 short screen recordings of actual Deptex features. More polished but requires asset creation.
-
-Either way, update the 5 slide descriptions to accurately reflect current features:
-
-- Slide 1 (Organization): accurate -- mention roles, teams, integrations
-- Slide 2 (AI Employee): update to reference Aegis by name, mention chat + automations + tool execution
-- Slide 3 (Project Health): accurate -- mention extraction, health score, vuln summary
-- Slide 4 (Dependencies): mention supply chain graph, Watchtower monitoring, version tracking
-- Slide 5 (Compliance): mention policy-as-code, SBOM export, license governance
-
-### 5. Fix Footer Links
-
-**File:** [Footer.tsx](frontend/src/components/Footer.tsx)
-
-Remap all dead links to actual routes:
-
-- **Product column**: `/product/tracking` -> `/repository-tracking`, `/product/policy` -> `/docs/policies`, `/product/ai` -> `/autonomous-agent`, `/product/sbom` -> `/sbom-compliance`. Remove or comment out `/pricing` until Phase 13.
-- **Solutions column**: `/solutions/enterprise` -> `/solutions/cto-leadership`, `/solutions/startups` -> `/solutions/startups-scaleups`, `/solutions/compliance` -> `/sbom-compliance`
-- **Developers column**: `/developers/github` -> `/integrations`, `/developers/cli` -> remove (Phase 18), `/developers/webhooks` -> remove (Phase 18). Keep `/docs` link.
-- **Company column**: Remove `/about`, `/blog`, `/careers` (don't exist). Keep `/privacy` -> `/docs/privacy`, `/terms` -> `/docs/terms`.
-- **Bottom bar**: `/security` -> `/docs/security`, `/status` -> remove (no status page)
-- **Social links**: Update GitHub href to actual Deptex repo URL (or leave as placeholder with a TODO comment), update Twitter similarly
-
-### 6. Fix CTA Section Links
-
-**File:** [CTASection.tsx](frontend/src/components/CTASection.tsx)
-
-- Change `/signup` to `/login`, `/demo` to `/docs/quick-start`
-
-### 7. Handle NavBar Pricing Link
-
-**File:** [NavBar.tsx](frontend/src/components/NavBar/NavBar.tsx)
-
-- Remove the `/pricing` nav link until Phase 13 (Billing) is implemented, or redirect to a simple "Coming soon" anchor/tooltip
-
-### 8. Update CompanyBanner
-
-**File:** [CompanyBanner.tsx](frontend/src/components/CompanyBanner.tsx)
-
-- Either replace fake company logos with a generic "Trusted by developers worldwide" text treatment, or remove the section entirely until real customers/partners exist
-- Alternative: replace with an open-source community banner ("Built on open-source. Powered by cdxgen, dep-scan, Semgrep, TruffleHog, OSV.dev") showing tool/project logos that Deptex actually integrates with
-
-### 9. Responsive & Polish Pass
-
-- Verify all sections render well on mobile (the NavBar already has a hamburger menu)
-- Ensure feature card animations (intersection observer fade-in) work smoothly
-- Check that framework logos display correctly with the invert filter in dark mode
-- Verify the ProductShowcaseSection auto-advance timer and progress bars work properly
+- **Style**: Make header match the rest of the app.
+  - Use same background as app shell (e.g. `bg-background border-b border-border`), no floating pill on scroll.
+  - Remove the scroll-based transition that changes layout (e.g. `isScrolled ? "top-5" : "top-0"` and the rounded-full pill when scrolled). Keep a single, consistent header bar.
+- **Typography**: Reduce reliance on gray for nav items. Use `text-foreground` for main nav labels where it fits the design; keep `text-primary` (green) for hover and for the Sign in button.
+- **Links**:
+  - Product: Keep links to existing feature pages (`/autonomous-agent`, `/repository-tracking`, etc.).
+  - Resources: Open Source → `/open-source` (and ensure Open Source copy reflects one repo). Integrations → `/integrations`. Support → `/support` (redirects to `/docs/help`); keep or rename as "Help" if clearer.
+  - Solutions: Leave as-is (user said Solutions is alright).
+  - Pricing: Remove from nav until Phase 13, or link to `/pricing` with a "Coming soon" tooltip if PricingPage is minimal.
+  - Docs: Keep.
+- **GitHub (top right)**:
+  - Link: Point to actual Deptex GitHub repo (e.g. `https://github.com/deptex/deptex` or the real org/repo).
+  - Number: Replace hardcoded "12.5K" with real data — either (a) show actual GitHub star count (env var or small fetch), or (b) remove the number and show only "GitHub" / icon so it’s accurate until you have a real metric.
 
 ---
 
-## Files Modified
+## 2. Remove company banner
 
+**File:** `frontend/src/components/CompanyBanner.tsx`  
+**File:** `frontend/src/app/pages/HomePage.tsx`
 
-| File                                                  | Change                                       |
-| ----------------------------------------------------- | -------------------------------------------- |
-| `frontend/src/app/pages/HomePage.tsx`                 | Fix hero CTAs, review copy                   |
-| `frontend/src/components/FeaturesSection.tsx`         | Update descriptions and highlights           |
-| `frontend/src/components/FrameworkSupportSection.tsx` | Add 4 missing ecosystems                     |
-| `frontend/src/components/ProductShowcaseSection.tsx`  | Replace placeholder video, update slide copy |
-| `frontend/src/components/CTASection.tsx`              | Fix CTA links                                |
-| `frontend/src/components/Footer.tsx`                  | Remap ~15 dead links                         |
-| `frontend/src/components/NavBar/NavBar.tsx`           | Handle /pricing link                         |
-| `frontend/src/components/CompanyBanner.tsx`           | Replace fake logos                           |
-| `public/images/frameworks/`                           | Add dart, elixir, swift, nuget logos         |
-
+- Remove `<CompanyBanner />` from the homepage (the animating strip of fake company names is not true).
+- Optional: Add a thin strip such as "Built with cdxgen, dep-scan, Semgrep, TruffleHog, OSV.dev" (no fake customer logos) in a separate component if desired; otherwise leave removed.
 
 ---
 
-## Roadmap Index Updates
+## 3. Hero and CTA sections — demo and links
 
-Update [deptex_projects_roadmap_index.plan.md](.cursor/plans/deptex_projects_roadmap_index.plan.md):
+**Files:** `frontend/src/app/pages/HomePage.tsx`, `frontend/src/components/CTASection.tsx`
 
-- Replace the cancelled Phase 11 entry with: "Phase 11: Landing Page & Marketing Site Finalization"
-- Update the todo item `phase-11-merged` to reflect the new phase
-- Add Phase 11 to the dependency graph (no hard dependencies, can be done anytime)
-- Update the Phase Index links section
+- **Primary CTA**: "Start your project" → link to `/login`.
+- **Secondary CTA**: Replace "View demo" with "Get a demo" or "Book a demo" → link to `/get-demo`.
+- Optionally refresh hero tagline (e.g. "Security is complicated. We made it simple.") and one short subline; keep CTAs as above.
+- In CTASection, same changes: primary → `/login`, secondary → "Get a demo" → `/get-demo`.
 
+---
+
+## 4. Get Demo page
+
+**New:** `frontend/src/app/pages/GetDemoPage.tsx`  
+**File:** `frontend/src/app/routes.tsx`
+
+- Add route `path: "get-demo"` (or `"demo"`) with a public route, rendering `GetDemoPage`.
+- Page content: Simple "Request a demo" or "Book a demo" — either a short form (name, email, company, message) or a CTA that links out (e.g. Calendly, typeform, or mailto). No complex flow; goal is that "Get a demo" goes to a real page.
+
+---
+
+## 5. Feature cards — remove; features via showcase
+
+**File:** `frontend/src/app/pages/HomePage.tsx`  
+**File:** `frontend/src/components/FeaturesSection.tsx`
+
+- Remove the current 6-card FeaturesSection from the homepage (cards are ugly and redundant).
+- Do not render `<FeaturesSection />` on the landing page. Key features are conveyed by the ProductShowcaseSection (video or slides with real product content).
+- Optional follow-up: If the user provides a screenshot of a preferred "Key features" design, add a new section (new component) that matches it; keep the plan flexible for that.
+
+---
+
+## 6. Product showcase — real content
+
+**File:** `frontend/src/components/ProductShowcaseSection.tsx`
+
+- Replace the Supabase placeholder video with either:
+  - Real product screenshots per slide (org dashboard, Aegis, project overview, dependencies, compliance), or
+  - One short looped product video.
+- Update each slide’s headline and subtext to match actual Deptex features (Aegis, Watchtower, Depscore, policy-as-code, SBOM, etc.).
+
+---
+
+## 7. Footer — all links accurate
+
+**File:** `frontend/src/components/Footer.tsx`
+
+Remap every link to a real destination:
+
+- **Product**: Dependency Tracking → `/repository-tracking`, Policy Enforcement → `/docs/policies` or `/policies` (if under org), AI Remediation → `/autonomous-agent`, SBOM Generation → `/sbom-compliance`. Pricing → `/pricing` or remove until Phase 13.
+- **Solutions**: Enterprise → `/solutions/cto-leadership`, Startups → `/solutions/startups-scaleups`, Compliance → `/sbom-compliance` or `/docs/compliance`.
+- **Developers**: Documentation → `/docs`. GitHub Integration → `/integrations`. Remove CLI Tools and Webhooks if those pages don’t exist (Phase 18), or link to docs sections if they exist.
+- **Company**: Remove About, Blog, Careers if no pages. Privacy → `/docs/privacy` or `/privacy` (if routed). Terms → `/docs/terms` or `/terms`.
+- **Bottom bar**: Security → `/docs/security`. Remove Status if no status page.
+- **Social**: GitHub → actual Deptex repo URL. Twitter → real handle or remove.
+
+---
+
+## 8. Open Source — one repo
+
+**File:** `frontend/src/app/pages/OpenSourcePage.tsx` (and optionally NavBar copy)
+
+- Ensure the Open Source page and any NavBar dropdown description say that Deptex has one main repository (or clearly list the single repo). Link to the real repo. Remove any implication of multiple repos if there’s only one.
+
+---
+
+## 9. Roadmap index
+
+**File:** `.cursor/plans/deptex_projects_roadmap_index.plan.md`
+
+- Update Phase 11 entry to "Landing Page & Marketing Site Overhaul" (or equivalent) and adjust any cancelled/merged references so the index is accurate.
+
+---
+
+## Files to touch (summary)
+
+| File | Change |
+|------|--------|
+| `frontend/src/components/NavBar/NavBar.tsx` | Normal header style, no scroll pill, less gray, GitHub link + real stat or no stat, Pricing handled |
+| `frontend/src/app/pages/HomePage.tsx` | Remove CompanyBanner, remove FeaturesSection, hero CTA "Get a demo" → /get-demo, "Start your project" → /login |
+| `frontend/src/components/CompanyBanner.tsx` | Remove from homepage; optionally repurpose or delete component |
+| `frontend/src/components/CTASection.tsx` | Primary → /login, secondary "Get a demo" → /get-demo |
+| `frontend/src/app/pages/GetDemoPage.tsx` | **New** — simple Request/Book demo page |
+| `frontend/src/app/routes.tsx` | Add route for /get-demo |
+| `frontend/src/components/FeaturesSection.tsx` | No longer used on homepage (optional: delete or keep for later Key Features redesign) |
+| `frontend/src/components/ProductShowcaseSection.tsx` | Real video/screenshots, accurate slide copy |
+| `frontend/src/components/Footer.tsx` | Remap all links; real social URLs |
+| `frontend/src/app/pages/OpenSourcePage.tsx` | Copy accurate to one repo |
+| `.cursor/plans/deptex_projects_roadmap_index.plan.md` | Phase 11 description and references |
+
+---
+
+## Out of scope for this phase
+
+- Fancy scroll-driven hero animation (keeping header and hero simple).
+- New marketing pages other than Get Demo.
+- Framework support section changes (can be a separate small task).
+- Pricing page content (Phase 13); only link handling is in scope.

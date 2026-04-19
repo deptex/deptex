@@ -7,7 +7,7 @@ jest.mock('../../lib/features', () => ({
 }));
 
 const mockEmitEvent = jest.fn().mockResolvedValue(undefined);
-jest.mock('../../../../ee/backend/lib/event-bus', () => ({
+jest.mock('../../lib/event-bus', () => ({
   emitEvent: (...args: unknown[]) => mockEmitEvent(...args),
 }));
 

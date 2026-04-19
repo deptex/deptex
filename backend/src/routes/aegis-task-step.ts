@@ -1,5 +1,4 @@
 import express from 'express';
-import { getEeModulePath } from '../lib/ee-loader';
 
 const router = express.Router();
 
@@ -24,9 +23,7 @@ router.post('/execute-task-step', async (req, res) => {
       return res.status(400).json({ error: 'taskId and stepId are required' });
     }
 
-    const { executeTaskStep, getNextPendingStep } = await import(
-      getEeModulePath('aegis/tasks')
-    );
+    const { executeTaskStep, getNextPendingStep } = await import('../lib/aegis/tasks');
 
     const result = await executeTaskStep(taskId, stepId);
 
@@ -40,9 +37,7 @@ router.post('/execute-task-step', async (req, res) => {
     let incidentHandled = false;
     if (completedStep?.tool_params?.__incident_id) {
       try {
-        const { handleIncidentStepCompletion } = await import(
-          getEeModulePath('incident-engine')
-        );
+        const { handleIncidentStepCompletion } = await import('../lib/incident-engine');
         incidentHandled = await handleIncidentStepCompletion(taskId, completedStep, result);
       } catch (err) {
         console.error('[Aegis Task] Incident step handling failed:', err);
@@ -94,9 +89,7 @@ router.post('/check-due-automations', async (req, res) => {
       return res.status(401).json({ error: 'Invalid API key' });
     }
 
-    const { checkDueAutomations } = await import(
-      getEeModulePath('aegis/automations-engine')
-    );
+    const { checkDueAutomations } = await import('../lib/aegis/automations-engine');
 
     await checkDueAutomations();
     res.json({ success: true });
@@ -120,9 +113,7 @@ router.post('/run-automation/:id', async (req, res) => {
       return res.status(401).json({ error: 'Invalid API key' });
     }
 
-    const { runAutomation } = await import(
-      getEeModulePath('aegis/automations-engine')
-    );
+    const { runAutomation } = await import('../lib/aegis/automations-engine');
 
     await runAutomation(req.params.id);
     res.json({ success: true });
@@ -151,9 +142,7 @@ router.post('/snapshot-debt', async (req, res) => {
     const { data: orgs } = await supabase.from('organizations').select('id');
 
     if (orgs?.length) {
-      const { snapshotDebt } = await import(
-        getEeModulePath('aegis/security-debt')
-      );
+      const { snapshotDebt } = await import('../lib/aegis/security-debt');
       for (const org of orgs) {
         try {
           await snapshotDebt(org.id);

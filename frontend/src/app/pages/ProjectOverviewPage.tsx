@@ -182,7 +182,11 @@ export default function ProjectOverviewPage() {
       label: 'Status',
       value: stats.status?.name ?? 'Not evaluated',
       badge: stats.status ? (
-        <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: stats.status.color }} />
+        stats.status.color ? (
+          <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: stats.status.color }} />
+        ) : (
+          <span className="inline-block h-2 w-2 rounded-full bg-foreground/30" />
+        )
       ) : undefined,
     },
     {
@@ -226,10 +230,16 @@ export default function ProjectOverviewPage() {
             <h1 className="text-2xl font-bold text-foreground">{project.name}</h1>
             {stats && <HealthBadge score={stats.health_score} />}
             {stats?.status && (
-              <span className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium"
-                style={{ borderColor: stats.status.color + '60', color: stats.status.color, backgroundColor: stats.status.color + '15' }}>
-                {stats.status.name}
-              </span>
+              stats.status.color ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium"
+                  style={{ borderColor: stats.status.color + '60', color: stats.status.color, backgroundColor: stats.status.color + '15' }}>
+                  {stats.status.name}
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-foreground/20 px-2.5 py-0.5 text-xs font-medium bg-transparent text-foreground-secondary">
+                  {stats.status.name}
+                </span>
+              )
             )}
             {stats?.asset_tier && (
               <span className="inline-flex items-center rounded-full border border-border px-2 py-0.5 text-xs text-foreground-secondary">
