@@ -79,14 +79,9 @@ flowchart TB
 
 ---
 
-## Open core
+## License model
 
-Deptex uses an open-core model: the core engine (extraction, ingestion, vulnerability processing) is open source; org/team/integrations/Aegis/Watchtower live in the same `backend/` tree—licensing for those surfaces follows project policy.
-
-| Layer | What | License |
-|-------|------|---------|
-| **Core** | backend/, frontend/, extraction-worker | Apache 2.0 |
-| **Platform** | orgs, teams, integrations, Aegis, Watchtower (in `backend/src/`) | See project LICENSE / commercial terms |
+Deptex is source-available under the [Functional Source License 1.1 (FSL-1.1-ALv2)](./LICENSE). You may use, modify, and self-host the code for any purpose other than providing it to others as a hosted/managed service that competes with Deptex. Each version converts to Apache License 2.0 on its second anniversary.
 
 ---
 
@@ -100,5 +95,5 @@ Deptex uses an open-core model: the core engine (extraction, ingestion, vulnerab
 
 ## License
 
-- **License**: See [LICENSE](./LICENSE) and any commercial terms applicable to your deployment.
+Licensed under the [Functional Source License 1.1, ALv2 Future License](./LICENSE). Copyright 2026 Henry Ruckman-Utting.
 
