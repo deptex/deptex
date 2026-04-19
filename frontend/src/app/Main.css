@@ -419,3 +419,59 @@
   background-color: #1A1C1E !important;
 }
 
+/* Policy diff viewer: same colors as policy code editor (Monaco vs-dark) */
+.policy-diff-viewer .policy-diff-line-syntax {
+  color: #d4d4d4;
+}
+.policy-diff-viewer .policy-diff-line-syntax .token.comment,
+.policy-diff-viewer .policy-diff-line-syntax .token.prolog,
+.policy-diff-viewer .policy-diff-line-syntax .token.doctype {
+  color: #6a9955;
+}
+.policy-diff-viewer .policy-diff-line-syntax .token.punctuation {
+  color: #808080;
+}
+.policy-diff-viewer .policy-diff-line-syntax .token.property,
+.policy-diff-viewer .policy-diff-line-syntax .token.tag,
+.policy-diff-viewer .policy-diff-line-syntax .token.boolean,
+.policy-diff-viewer .policy-diff-line-syntax .token.constant {
+  color: #9cdcfe;
+}
+.policy-diff-viewer .policy-diff-line-syntax .token.number,
+.policy-diff-viewer .policy-diff-line-syntax .token.symbol {
+  color: #b5cea8;
+}
+.policy-diff-viewer .policy-diff-line-syntax .token.selector,
+.policy-diff-viewer .policy-diff-line-syntax .token.attr-name,
+.policy-diff-viewer .policy-diff-line-syntax .token.string,
+.policy-diff-viewer .policy-diff-line-syntax .token.char,
+.policy-diff-viewer .policy-diff-line-syntax .token.builtin {
+  color: #ce9178;
+}
+.policy-diff-viewer .policy-diff-line-syntax .token.keyword {
+  color: #569cd6;
+}
+.policy-diff-viewer .policy-diff-line-syntax .token.operator {
+  color: #d4d4d4;
+}
+.policy-diff-viewer .policy-diff-line-syntax .token.function {
+  color: #dcdcaa;
+}
+.policy-diff-viewer .policy-diff-line-syntax .token.class-name {
+  color: #4ec9b0;
+}
+.policy-diff-viewer .policy-diff-line-syntax .token.atrule,
+.policy-diff-viewer .policy-diff-line-syntax .token.attr-value {
+  color: #ce9178;
+}
+.policy-diff-viewer .policy-diff-line-syntax .token.regex {
+  color: #d16969;
+}
+.policy-diff-viewer .policy-diff-line-syntax .token.variable {
+  color: #9cdcfe;
+}
+.policy-diff-viewer .policy-diff-line-syntax .token.important {
+  color: #d4d4d4;
+  font-weight: bold;
+}
+
