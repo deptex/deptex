@@ -475,6 +475,21 @@
   z-index: 1;
 }
 
+/* Org center node: subtle "Active" dot breathing */
+@keyframes org-active-ping {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+/* Flowing dashed edges on org overview hub graph */
+@keyframes org-edge-flow {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: -20; }
+}
+.org-overview-hub-flow .react-flow__edge path[style*="stroke-dasharray"] {
+  animation: org-edge-flow 1.2s linear infinite;
+}
+
 /* Monaco editor: force dark background to match app theme (#1A1C1E) */
 .monaco-editor,
 .monaco-editor .overflowingContentWidgets,
@@ -571,7 +586,7 @@ table tbody tr {
   background-color: #0a0a0a;
   transition: background-color 0.15s ease;
 }
-table tbody tr:hover {
+table tbody tr:hover:not([aria-expanded="true"]):not([data-expanded-content]) {
   background-color: #111111 !important;
 }
 

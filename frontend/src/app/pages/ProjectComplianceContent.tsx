@@ -42,7 +42,7 @@ import {
 import { downloadFile } from '../../lib/compliance-utils';
 import { useToast } from '../../hooks/use-toast';
 import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
-import { isExtractionOngoing as checkExtractionOngoing } from '../../lib/extractionStatus';
+import { isExtractionOngoing as checkExtractionOngoing, isInitialExtraction as checkInitialExtraction } from '../../lib/extractionStatus';
 import { Toaster } from '../../components/ui/toaster';
 import { cn } from '../../lib/utils';
 import { ComplianceSidepanel, type ComplianceSection } from '../../components/ComplianceSidepanel';
@@ -554,6 +554,7 @@ export function ProjectComplianceContent(props: ProjectComplianceContentProps) {
   const canManageSettings = userPermissions?.edit_settings === true || userPermissions?.view_settings === true;
   const realtime = useRealtimeStatus(organizationId, projectId);
   const isExtracting = checkExtractionOngoing(realtime.status, realtime.extractionStep);
+  const isInitialExtracting = checkInitialExtraction(realtime.status, realtime.extractionStep, realtime.lastExtractedAt);
 
   const loadData = useCallback(async () => {
     if (!organizationId || !projectId) return;
@@ -896,7 +897,7 @@ export function ProjectComplianceContent(props: ProjectComplianceContentProps) {
             {/* ─── PROJECT SECTION ─── */}
             {activeSection === 'project' && (
             <div className="space-y-8">
-              {isExtracting ? (
+              {isInitialExtracting ? (
                 <ExtractionProgressCard
                   title="Extraction in progress"
                   description="Compliance status will appear here once the scan completes."

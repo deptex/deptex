@@ -8,12 +8,36 @@ RUN apt-get update && apt-get install -y \
   python3-venv \
   && rm -rf /var/lib/apt/lists/*
 
-# Install dep-scan and Semgrep; fail build if either fails (no silent ignore)
+# Install Eclipse Temurin JDK 21 (full JDK for Maven + atom)
+RUN curl -sL https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.6%2B7/OpenJDK21U-jdk_x64_linux_hotspot_21.0.6_7.tar.gz \
+  | tar xz -C /opt \
+  && ln -s /opt/jdk-21.0.6+7/bin/java /usr/local/bin/java \
+  && ln -s /opt/jdk-21.0.6+7/bin/javac /usr/local/bin/javac
+ENV JAVA_HOME=/opt/jdk-21.0.6+7
+
+# Install Maven 3.9
+RUN curl -sL https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz \
+  | tar xz -C /opt \
+  && ln -s /opt/apache-maven-3.9.9/bin/mvn /usr/local/bin/mvn
+
+# Install Go 1.22
+RUN curl -sL https://go.dev/dl/go1.22.10.linux-amd64.tar.gz \
+  | tar xz -C /usr/local
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+# Install dep-scan and Semgrep
 RUN pip3 install --no-cache-dir --break-system-packages \
   owasp-depscan==6.* \
   semgrep \
   && depscan --help >/dev/null \
   && semgrep --version
+
+# Install cdxgen globally (dep-scan invokes it for SBOM generation + atom reachability)
+# and atom (reachability engine used by dep-scan --profile research)
+RUN npm install -g @cyclonedx/cdxgen @appthreat/atom \
+  && java -version \
+  && cdxgen --version \
+  && atom --help >/dev/null 2>&1 || true
 
 # Install TruffleHog binary; fail build if install or verify fails
 RUN curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \

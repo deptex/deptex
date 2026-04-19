@@ -894,8 +894,21 @@ router.put('/:id/teams/:teamId/roles/:roleId', async (req: AuthRequest, res) => 
     const isOrgAdmin = orgMembership!.role === 'owner' || orgMembership!.role === 'admin';
     let userRank = 0; // Org admins have rank 0 (highest)
     let userPermissions: any = null; // For checking permission granting
+    let hasOrgManagePermission = isOrgAdmin;
 
     if (!isOrgAdmin) {
+      // Check if user's org role has manage_teams_and_projects permission
+      const { data: orgRoleData } = await supabase
+        .from('organization_roles')
+        .select('permissions')
+        .eq('organization_id', id)
+        .eq('name', orgMembership!.role)
+        .single();
+
+      hasOrgManagePermission = orgRoleData?.permissions?.manage_teams_and_projects === true;
+    }
+
+    if (!isOrgAdmin && !hasOrgManagePermission) {
       if (teamMembership?.role_id) {
         const { data: userRole } = await supabase
           .from('team_roles')
@@ -938,12 +951,12 @@ router.put('/:id/teams/:teamId/roles/:roleId', async (req: AuthRequest, res) => 
     // This allows the top role to edit their own name/color without needing org-level permissions
     const isEditingOwnTopRole = userRank === 0 && targetRole.display_order === 0 && !permissions;
 
-    if (!isOrgAdmin && !isReorderOnly && !isEditingOwnTopRole && targetRole.display_order <= userRank) {
+    if (!isOrgAdmin && !hasOrgManagePermission && !isReorderOnly && !isEditingOwnTopRole && targetRole.display_order <= userRank) {
       return res.status(403).json({ error: 'You cannot edit roles at or above your rank' });
     }
 
     // For reorder operations, check that the new position isn't above user's rank
-    if (!isOrgAdmin && isReorderOnly && display_order !== undefined) {
+    if (!isOrgAdmin && !hasOrgManagePermission && isReorderOnly && display_order !== undefined) {
       // Can't move a role to a position above user's rank (lower number)
       if (display_order < userRank) {
         return res.status(403).json({ error: 'You cannot reorder a role to be above your rank' });
@@ -2264,12 +2277,14 @@ router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) =
     const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page as string, 10) || 50));
     const severityFilter = (req.query.severity as string) || '';
     const allowedSeverity = ['critical', 'high', 'medium', 'low'].includes(severityFilter) ? severityFilter : '';
+    const showIgnored = req.query.show_ignored === 'true';
 
     let countQuery = supabase
       .from('project_dependency_vulnerabilities')
       .select('*', { count: 'exact', head: true })
       .in('project_id', projectIds)
       .eq('suppressed', false);
+    if (!showIgnored) countQuery = countQuery.eq('status', 'open');
     if (allowedSeverity) countQuery = countQuery.eq('severity', allowedSeverity);
 
     const { count: totalCount, error: countError } = await countQuery;
@@ -2281,10 +2296,11 @@ router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) =
     let dataQuery = supabase
       .from('project_dependency_vulnerabilities')
       .select(
-        'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, sla_status, sla_deadline_at, reachability_level'
+        'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, sla_status, sla_deadline_at, reachability_level, status'
       )
       .in('project_id', projectIds)
       .eq('suppressed', false);
+    if (!showIgnored) dataQuery = dataQuery.eq('status', 'open');
     if (allowedSeverity) dataQuery = dataQuery.eq('severity', allowedSeverity);
 
     const { data: rows, error: dataError } = await dataQuery
@@ -2299,7 +2315,7 @@ router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) =
     const projIds = [...new Set(list.map((r: any) => r.project_id).filter(Boolean))];
 
     const depMap = new Map<string, { name: string; version: string; dependency_id: string }>();
-    const projMap = new Map<string, { name: string }>();
+    const projMap = new Map<string, { name: string; framework: string | null }>();
 
     if (pdIds.length > 0) {
       const { data: deps, error: depErr } = await supabase
@@ -2319,11 +2335,11 @@ router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) =
     if (projIds.length > 0) {
       const { data: projs, error: projErr } = await supabase
         .from('projects')
-        .select('id, name')
+        .select('id, name, framework')
         .in('id', projIds);
       if (projErr) throw projErr;
       for (const p of projs || []) {
-        projMap.set((p as any).id, { name: (p as any).name ?? 'Unknown' });
+        projMap.set((p as any).id, { name: (p as any).name ?? 'Unknown', framework: (p as any).framework ?? null });
       }
     }
 
@@ -2354,6 +2370,7 @@ router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) =
         reachability_level: r.reachability_level ?? null,
         project_id: r.project_id,
         project_name: proj?.name ?? 'Unknown',
+        project_framework: proj?.framework ?? null,
       };
     });
 
@@ -2366,6 +2383,201 @@ router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) =
   } catch (error: any) {
     console.error('Error fetching team vulnerabilities:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch team vulnerabilities' });
+  }
+});
+
+// GET /api/organizations/:id/teams/:teamId/secret-findings — paginated secret findings for a team's projects
+router.get('/:id/teams/:teamId/secret-findings', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, teamId } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const { data: projectTeams } = await supabase
+      .from('project_teams')
+      .select('project_id')
+      .eq('team_id', teamId);
+
+    const projectIds = (projectTeams || []).map((pt: any) => pt.project_id);
+    if (projectIds.length === 0) {
+      return res.json({ data: [], total: 0, page: 1, per_page: 50 });
+    }
+
+    const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+    const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page as string, 10) || 50));
+    const showIgnored = req.query.show_ignored === 'true';
+
+    let countQ = supabase
+      .from('project_secret_findings')
+      .select('*', { count: 'exact', head: true })
+      .in('project_id', projectIds);
+    if (!showIgnored) countQ = countQ.eq('status', 'open');
+    const { count: totalCount, error: countError } = await countQ;
+    if (countError) throw countError;
+
+    const from = (page - 1) * perPage;
+    const to = from + perPage - 1;
+
+    let dataQ = supabase
+      .from('project_secret_findings')
+      .select('id, project_id, detector_type, file_path, start_line, is_verified, is_current, description, redacted_value, code_snippet, depscore, status, created_at')
+      .in('project_id', projectIds);
+    if (!showIgnored) dataQ = dataQ.eq('status', 'open');
+    const { data: rows, error: dataError } = await dataQ
+      .order('depscore', { ascending: false, nullsFirst: false })
+      .order('is_verified', { ascending: false })
+      .order('created_at', { ascending: false })
+      .range(from, to);
+    if (dataError) throw dataError;
+
+    const projIds = [...new Set((rows || []).map((r: any) => r.project_id).filter(Boolean))];
+    const projMap = new Map<string, { name: string; framework: string | null }>();
+    if (projIds.length > 0) {
+      const { data: projs } = await supabase.from('projects').select('id, name, framework').in('id', projIds);
+      for (const p of projs || []) projMap.set((p as any).id, { name: (p as any).name ?? 'Unknown', framework: (p as any).framework ?? null });
+    }
+
+    const data = (rows || []).map((r: any) => ({
+      ...r,
+      project_name: projMap.get(r.project_id)?.name ?? 'Unknown',
+      project_framework: projMap.get(r.project_id)?.framework ?? null,
+    }));
+
+    res.json({ data, total: totalCount ?? 0, page, per_page: perPage });
+  } catch (error: any) {
+    console.error('Error fetching team secret findings:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch team secret findings' });
+  }
+});
+
+// GET /api/organizations/:id/teams/:teamId/semgrep-findings — paginated semgrep findings for a team's projects
+router.get('/:id/teams/:teamId/semgrep-findings', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, teamId } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const { data: projectTeams } = await supabase
+      .from('project_teams')
+      .select('project_id')
+      .eq('team_id', teamId);
+
+    const projectIds = (projectTeams || []).map((pt: any) => pt.project_id);
+    if (projectIds.length === 0) {
+      return res.json({ data: [], total: 0, page: 1, per_page: 50 });
+    }
+
+    const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+    const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page as string, 10) || 50));
+    const showIgnored = req.query.show_ignored === 'true';
+
+    let countQ2 = supabase
+      .from('project_semgrep_findings')
+      .select('*', { count: 'exact', head: true })
+      .in('project_id', projectIds);
+    if (!showIgnored) countQ2 = countQ2.eq('status', 'open');
+    const { count: totalCount, error: countError } = await countQ2;
+    if (countError) throw countError;
+
+    const from = (page - 1) * perPage;
+    const to = from + perPage - 1;
+
+    let dataQ2 = supabase
+      .from('project_semgrep_findings')
+      .select('id, project_id, rule_id, file_path, start_line, end_line, severity, message, cwe_ids, owasp_ids, category, code_snippet, depscore, status, created_at')
+      .in('project_id', projectIds);
+    if (!showIgnored) dataQ2 = dataQ2.eq('status', 'open');
+    const { data: rows, error: dataError } = await dataQ2
+      .order('depscore', { ascending: false, nullsFirst: false })
+      .order('severity', { ascending: true })
+      .order('created_at', { ascending: false })
+      .range(from, to);
+    if (dataError) throw dataError;
+
+    const projIds = [...new Set((rows || []).map((r: any) => r.project_id).filter(Boolean))];
+    const projMap = new Map<string, { name: string; framework: string | null }>();
+    if (projIds.length > 0) {
+      const { data: projs } = await supabase.from('projects').select('id, name, framework').in('id', projIds);
+      for (const p of projs || []) projMap.set((p as any).id, { name: (p as any).name ?? 'Unknown', framework: (p as any).framework ?? null });
+    }
+
+    const data = (rows || []).map((r: any) => ({
+      ...r,
+      project_name: projMap.get(r.project_id)?.name ?? 'Unknown',
+      project_framework: projMap.get(r.project_id)?.framework ?? null,
+    }));
+
+    res.json({ data, total: totalCount ?? 0, page, per_page: perPage });
+  } catch (error: any) {
+    console.error('Error fetching team semgrep findings:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch team semgrep findings' });
+  }
+});
+
+// PATCH /api/organizations/:id/findings/:findingType/:findingId/status — toggle finding status
+const FINDING_TABLES: Record<string, string> = {
+  vulnerability: 'project_dependency_vulnerabilities',
+  secret: 'project_secret_findings',
+  semgrep: 'project_semgrep_findings',
+};
+
+router.patch('/:id/findings/:findingType/:findingId/status', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, findingType, findingId } = req.params;
+    const { status } = req.body;
+
+    if (!['open', 'ignored'].includes(status)) {
+      return res.status(400).json({ error: 'Status must be "open" or "ignored"' });
+    }
+
+    const table = FINDING_TABLES[findingType];
+    if (!table) {
+      return res.status(400).json({ error: 'Finding type must be "vulnerability", "secret", or "semgrep"' });
+    }
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const { error } = await supabase
+      .from(table)
+      .update({ status })
+      .eq('id', findingId);
+
+    if (error) throw error;
+
+    res.json({ success: true, status });
+  } catch (error: any) {
+    console.error('Error updating finding status:', error);
+    res.status(500).json({ error: error.message || 'Failed to update finding status' });
   }
 });
 

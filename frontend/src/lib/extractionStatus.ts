@@ -18,3 +18,16 @@ export function isExtractionOngoing(status: string, extractionStep: string | nul
   if (status === 'analyzing' && extractionStep === 'completed') return false;
   return EXTRACTING_STATUSES.includes(status as ExtractingStatus);
 }
+
+/**
+ * True when extraction is ongoing AND the project has never completed one before.
+ * Use this to gate blocking UI (ExtractionProgressCard, grey nodes). Re-syncs of
+ * projects that already have data should NOT block the UI.
+ */
+export function isInitialExtraction(
+  status: string,
+  extractionStep: string | null | undefined,
+  lastExtractedAt: string | null | undefined,
+): boolean {
+  return isExtractionOngoing(status, extractionStep) && !lastExtractedAt;
+}

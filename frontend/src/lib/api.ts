@@ -1339,6 +1339,8 @@ export const api = {
           linkedByProjectId?: string;
           linkedByProjectName?: string;
         }>;
+        framework?: string;
+        ecosystem?: string;
       };
       fetchedAt: number;
     }
@@ -1360,6 +1362,8 @@ export const api = {
       linkedByProjectId?: string;
       linkedByProjectName?: string;
     }>;
+    framework?: string;
+    ecosystem?: string;
   }> {
     const key = `${organizationId}:${repoFullName}:${defaultBranch}:${integrationId}`;
     const cached = this._organizationRepositoryScanCache.get(key);
@@ -1409,6 +1413,8 @@ export const api = {
       linkedByProjectId?: string;
       linkedByProjectName?: string;
     }>;
+    framework?: string;
+    ecosystem?: string;
   }> {
     const params = new URLSearchParams({ repo_full_name: repoFullName, default_branch: defaultBranch, integration_id: integrationId });
     return fetchWithAuth(
@@ -1829,15 +1835,58 @@ export const api = {
   async getTeamVulnerabilities(
     organizationId: string,
     teamId: string,
-    params?: { page?: number; per_page?: number; severity?: string }
+    params?: { page?: number; per_page?: number; severity?: string; show_ignored?: boolean }
   ): Promise<{ data: ProjectVulnerability[]; total: number; page: number; per_page: number }> {
     const p = new URLSearchParams();
     if (params?.page != null) p.set('page', String(params.page));
     if (params?.per_page != null) p.set('per_page', String(params.per_page));
+    if (params?.show_ignored) p.set('show_ignored', 'true');
     if (params?.severity) p.set('severity', params.severity);
     const q = p.toString();
     return fetchWithAuth(
       `/api/organizations/${organizationId}/teams/${teamId}/vulnerabilities${q ? `?${q}` : ''}`
+    );
+  },
+
+  async getTeamSecretFindings(
+    organizationId: string,
+    teamId: string,
+    params?: { page?: number; per_page?: number; show_ignored?: boolean }
+  ): Promise<{ data: (SecretFinding & { project_name: string })[]; total: number; page: number; per_page: number }> {
+    const p = new URLSearchParams();
+    if (params?.page != null) p.set('page', String(params.page));
+    if (params?.per_page != null) p.set('per_page', String(params.per_page));
+    if (params?.show_ignored) p.set('show_ignored', 'true');
+    const q = p.toString();
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/teams/${teamId}/secret-findings${q ? `?${q}` : ''}`
+    );
+  },
+
+  async getTeamSemgrepFindings(
+    organizationId: string,
+    teamId: string,
+    params?: { page?: number; per_page?: number; show_ignored?: boolean }
+  ): Promise<{ data: (SemgrepFinding & { project_name: string })[]; total: number; page: number; per_page: number }> {
+    const p = new URLSearchParams();
+    if (params?.page != null) p.set('page', String(params.page));
+    if (params?.per_page != null) p.set('per_page', String(params.per_page));
+    if (params?.show_ignored) p.set('show_ignored', 'true');
+    const q = p.toString();
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/teams/${teamId}/semgrep-findings${q ? `?${q}` : ''}`
+    );
+  },
+
+  async updateFindingStatus(
+    organizationId: string,
+    findingType: 'vulnerability' | 'secret' | 'semgrep',
+    findingId: string,
+    status: 'open' | 'ignored'
+  ): Promise<{ success: boolean; status: string }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/findings/${findingType}/${findingId}/status`,
+      { method: 'PATCH', body: JSON.stringify({ status }) }
     );
   },
 
@@ -2840,6 +2889,7 @@ export interface Project {
   repo_status?: string | null;
   extraction_step?: string | null;
   extraction_error?: string | null;
+  last_extracted_at?: string | null;
   role?: string;
   asset_tier?: AssetTier;
   notifications_paused_until?: string | null;
@@ -3179,8 +3229,8 @@ export interface ExtractionRun {
   created_at: string;
   completed_at: string | null;
   error: string | null;
-  /** How the run was triggered: initial connect, webhook push, or manual sync */
-  trigger_type?: 'initial' | 'webhook' | 'manual';
+  /** How the run was triggered: initial connect, webhook push, manual sync, or scheduled cron */
+  trigger_type?: 'initial' | 'webhook' | 'manual' | 'scheduled';
   /** Deptex user who started the run (manual or initial); resolved for display */
   started_by_user_id?: string;
   started_by?: { avatar_url?: string; full_name?: string };
@@ -3767,6 +3817,9 @@ export interface SemgrepFinding {
   owasp_ids: string[];
   category: string;
   metadata: Record<string, any> | null;
+  code_snippet: string | null;
+  depscore: number | null;
+  status?: string;
   created_at: string;
 }
 
@@ -3781,6 +3834,9 @@ export interface SecretFinding {
   is_current: boolean;
   description: string | null;
   redacted_value: string | null;
+  code_snippet: string | null;
+  depscore: number | null;
+  status?: string;
   created_at: string;
 }
 
@@ -3830,6 +3886,16 @@ export interface VulnerabilityDetail {
       entry_points?: string[];
       sink_methods?: string[];
       tags?: string[];
+      impacted_paths?: number;
+      files?: string[];
+      methods_called?: string[];
+      locations?: Array<{
+        file: string;
+        line: number;
+        method?: string | null;
+        code_snippet?: string | null;
+      }>;
+      usage_count?: number;
     };
     sla_status?: string | null;
     sla_deadline_at?: string | null;

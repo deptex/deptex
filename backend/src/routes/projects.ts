@@ -263,6 +263,21 @@ async function detectRepoFramework(
   return { framework: 'unknown', ecosystem: 'unknown' };
 }
 
+const REPO_FRAMEWORK_CACHE_TTL = 24 * 60 * 60; // 24 hours — framework almost never changes
+
+async function detectRepoFrameworkCached(
+  provider: GitProvider,
+  repoFullName: string,
+  defaultBranch: string
+): Promise<{ framework: string; ecosystem: string }> {
+  const cacheKey = `repo-framework:${repoFullName}:${defaultBranch}`;
+  const cached = await getCached<{ framework: string; ecosystem: string }>(cacheKey);
+  if (cached) return cached;
+  const result = await detectRepoFramework(provider, repoFullName, defaultBranch);
+  await setCached(cacheKey, result, REPO_FRAMEWORK_CACHE_TTL);
+  return result;
+}
+
 async function getOrgIntegrations(orgId: string): Promise<OrgIntegration[]> {
   const { data } = await supabase
     .from('organization_integrations')
@@ -849,11 +864,11 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
     }
 
     // Fetch repository statuses for all projects in one query
-    const repoStatusByProject: Record<string, { status: string; extraction_step: string | null; extraction_error: string | null }> = {};
+    const repoStatusByProject: Record<string, { status: string; extraction_step: string | null; extraction_error: string | null; last_extracted_at: string | null }> = {};
     if (projectIds.length > 0) {
       const { data: repoStatuses } = await supabase
         .from('project_repositories')
-        .select('project_id, status, extraction_step, extraction_error')
+        .select('project_id, status, extraction_step, extraction_error, last_extracted_at')
         .in('project_id', projectIds);
       if (repoStatuses) {
         for (const rs of repoStatuses) {
@@ -861,6 +876,7 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
             status: rs.status,
             extraction_step: (rs as any).extraction_step ?? null,
             extraction_error: (rs as any).extraction_error ?? null,
+            last_extracted_at: (rs as any).last_extracted_at ?? null,
           };
         }
       }
@@ -1008,6 +1024,7 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
         repo_status: repoStatus?.status ?? null,
         extraction_step: repoStatus?.extraction_step ?? null,
         extraction_error: repoStatus?.extraction_error ?? null,
+        last_extracted_at: repoStatus?.last_extracted_at ?? null,
         role,
         permissions,
         status_id: project.status_id ?? null,
@@ -1057,7 +1074,10 @@ router.get('/:id/repositories/scan', async (req: AuthRequest, res) => {
     }
 
     const provider = createProvider(integ);
-    const result = await detectMonorepo(provider, repo_full_name, default_branch);
+    const [result, frameworkResult] = await Promise.all([
+      detectMonorepo(provider, repo_full_name, default_branch),
+      detectRepoFrameworkCached(provider, repo_full_name, default_branch),
+    ]);
 
     const withLinkStatus = await Promise.all(
       result.potentialProjects.map(async (p) => {
@@ -1095,6 +1115,8 @@ router.get('/:id/repositories/scan', async (req: AuthRequest, res) => {
       isMonorepo: result.isMonorepo,
       confidence: result.confidence ?? undefined,
       potentialProjects: withLinkStatusAndNames,
+      framework: frameworkResult.framework,
+      ecosystem: frameworkResult.ecosystem,
     });
   } catch (error: any) {
     console.error('Error scanning repository (org-level):', error);
@@ -1149,23 +1171,19 @@ router.get('/:id/repositories', async (req: AuthRequest, res) => {
       try {
         const provider = createProvider(integ);
         const repos = await provider.listRepositories();
-        const reposWithFrameworks = await Promise.all(
-          repos.map(async (repo) => {
-            const detected = await detectRepoFramework(provider, repo.full_name, repo.default_branch);
-            return {
-              id: repo.id,
-              full_name: repo.full_name,
-              default_branch: repo.default_branch,
-              private: repo.private,
-              framework: detected.framework,
-              ecosystem: detected.ecosystem,
-              provider: integ.provider,
-              integration_id: integ.id,
-              display_name: (integ as any).display_name || integ.provider,
-            };
-          })
-        );
-        allRepos.push(...reposWithFrameworks);
+        for (const repo of repos) {
+          allRepos.push({
+            id: repo.id,
+            full_name: repo.full_name,
+            default_branch: repo.default_branch,
+            private: repo.private,
+            framework: 'unknown',
+            ecosystem: 'unknown',
+            provider: integ.provider,
+            integration_id: integ.id,
+            display_name: (integ as any).display_name || integ.provider,
+          });
+        }
       } catch (err: any) {
         console.warn(`Failed to list repos from ${integ.provider} integration ${integ.id}:`, err.message);
       }
@@ -4144,23 +4162,19 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
       try {
         const provider = createProvider(integ);
         const repos = await provider.listRepositories();
-        const reposWithFrameworks = await Promise.all(
-          repos.map(async (repo) => {
-            const detected = await detectRepoFramework(provider, repo.full_name, repo.default_branch);
-            return {
-              id: repo.id,
-              full_name: repo.full_name,
-              default_branch: repo.default_branch,
-              private: repo.private,
-              framework: detected.framework,
-              ecosystem: detected.ecosystem,
-              provider: integ.provider,
-              integration_id: integ.id,
-              display_name: (integ as any).display_name || integ.provider,
-            };
-          })
-        );
-        allRepos.push(...reposWithFrameworks);
+        for (const repo of repos) {
+          allRepos.push({
+            id: repo.id,
+            full_name: repo.full_name,
+            default_branch: repo.default_branch,
+            private: repo.private,
+            framework: 'unknown',
+            ecosystem: 'unknown',
+            provider: integ.provider,
+            integration_id: integ.id,
+            display_name: (integ as any).display_name || integ.provider,
+          });
+        }
       } catch (err: any) {
         console.warn(`Failed to list repos from ${integ.provider} integration ${integ.id}:`, err.message);
       }
@@ -4216,7 +4230,10 @@ router.get('/:id/projects/:projectId/repositories/scan', async (req: AuthRequest
     }
 
     const provider = createProvider(integ);
-    const result = await detectMonorepo(provider, repo_full_name, default_branch);
+    const [result, frameworkResult] = await Promise.all([
+      detectMonorepo(provider, repo_full_name, default_branch),
+      detectRepoFrameworkCached(provider, repo_full_name, default_branch),
+    ]);
 
     const withLinkStatus = await Promise.all(
       result.potentialProjects.map(async (p) => {
@@ -4254,6 +4271,8 @@ router.get('/:id/projects/:projectId/repositories/scan', async (req: AuthRequest
       isMonorepo: result.isMonorepo,
       confidence: result.confidence ?? undefined,
       potentialProjects: withLinkStatusAndNames,
+      framework: frameworkResult.framework,
+      ecosystem: frameworkResult.ecosystem,
     });
   } catch (error: any) {
     console.error('Error scanning repository:', error);
@@ -4371,7 +4390,7 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
       ecosystem: resolvedEcosystem,
       provider: resolvedProvider,
       integration_id: integrationId ?? undefined,
-    }, { trigger_type: 'initial' });
+    }, { trigger_type: 'initial', started_by_user_id: userId });
 
     if (!queueResult.success) {
       await supabase

@@ -20,8 +20,10 @@ export interface VulnProjectNodeData {
   isTeamNode?: boolean;
   /** Phase 15: Number of vulnerabilities with SLA breached. Shown as "SLA: X breached" when > 0. */
   slaBreachCount?: number;
-  /** When true, show extracting spinner and no dependency/vulnerability data (like Project Security tab). */
+  /** When true, extraction pipeline is running (sync button spins). */
   isExtracting?: boolean;
+  /** When true, this is the first-ever extraction — grey out node, show spinner badge. Re-syncs keep normal appearance. */
+  isInitialExtracting?: boolean;
   /** When true (team node only), team has projects still extracting — show grey so color reflects known risk only. */
   hasExtractingProjects?: boolean;
   /** When true, use neutral grey styling only (no severity colors). Used for org overview graph. */
@@ -153,26 +155,27 @@ function statusBadgeColorFallback(label: string | null | undefined): string | nu
 }
 
 function VulnProjectNodeComponent({ data }: NodeProps) {
-  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, hasExtractingProjects, neutralStyle, roleBadge, roleBadgeColor, statusBadge, statusBadgeColor, riskGrade, projectsCount, membersCount, dependenciesCount, assetTierName, overviewOrgEdgeTargetHandle } =
+  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, isInitialExtracting, hasExtractingProjects, neutralStyle, roleBadge, roleBadgeColor, statusBadge, statusBadgeColor, riskGrade, projectsCount, membersCount, dependenciesCount, assetTierName, overviewOrgEdgeTargetHandle } =
     (data as unknown as VulnProjectNodeData) ?? {};
   const hasKnownFramework = framework && framework.toLowerCase() !== 'unknown';
   const frameworkIdForIcon = hasKnownFramework ? framework : undefined;
-  const useGrey = neutralStyle || isExtracting || (isTeamNode && hasExtractingProjects);
+  // Only grey out for initial extraction (first-ever scan); re-syncs keep normal colors
+  const useGrey = neutralStyle || isInitialExtracting || (isTeamNode && hasExtractingProjects);
   const colorScheme = useGrey ? (neutralStyle ? neutralScheme : greyExtractingScheme) : getColorScheme(worstSeverity);
-  const showSlaBreach = !isExtracting && typeof slaBreachCount === 'number' && slaBreachCount > 0;
-  const showTeamRoleBadge = !isExtracting && roleBadge != null && roleBadge !== '' && isTeamNode;
-  const showStatusBadge = !isExtracting && statusBadge != null && statusBadge !== '' && !isTeamNode;
-  const showTeamRiskGrade = !isExtracting && isTeamNode && (riskGrade ?? 'A+');
-  const showProjectRiskGrade = !isExtracting && !isTeamNode && neutralStyle && (riskGrade ?? 'A+');
-  const showAssetTierSubtext = !isExtracting && !isTeamNode && assetTierName != null && assetTierName !== '';
-  const showCardTooltip = !isTeamNode && neutralStyle && !isExtracting;
+  const showSlaBreach = !isInitialExtracting && typeof slaBreachCount === 'number' && slaBreachCount > 0;
+  const showTeamRoleBadge = !isInitialExtracting && roleBadge != null && roleBadge !== '' && isTeamNode;
+  const showStatusBadge = !isInitialExtracting && statusBadge != null && statusBadge !== '' && !isTeamNode;
+  const showTeamRiskGrade = !isInitialExtracting && isTeamNode && (riskGrade ?? 'A+');
+  const showProjectRiskGrade = !isInitialExtracting && !isTeamNode && neutralStyle && (riskGrade ?? 'A+');
+  const showAssetTierSubtext = !isInitialExtracting && !isTeamNode && assetTierName != null && assetTierName !== '';
+  const showCardTooltip = !isTeamNode && neutralStyle && !isInitialExtracting;
   const rawStatusColor = statusBadgeColor?.trim() ? statusBadgeColor : (showStatusBadge ? statusBadgeColorFallback(statusBadge) : null);
   const effectiveStatusColor = rawStatusColor && !rawStatusColor.startsWith('#') ? `#${rawStatusColor}` : rawStatusColor;
 
   /** Org overview: project card with header + status footer — same shell for ready and extracting. */
   const isOverviewProjectCard = Boolean(neutralStyle && !isTeamNode);
   /** Org overview: team satellite card with border, risk badge, bottom bar (x projects, x members). */
-  const isOverviewTeamCard = Boolean(neutralStyle && isTeamNode && !isExtracting);
+  const isOverviewTeamCard = Boolean(neutralStyle && isTeamNode && !isInitialExtracting);
   const nodeWidth = isOverviewTeamCard
     ? OVERVIEW_TEAM_RING_CARD_WIDTH
     : isOverviewProjectCard
@@ -311,7 +314,7 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
           </div>
           {/* Bottom: status strip (team card parity) */}
           <div className="mt-auto flex shrink-0 items-center bg-background-card-header/95 px-3 pt-2 pb-3">
-            {isExtracting ? (
+            {isInitialExtracting ? (
               <span className="inline-flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
                 <Loader2 className="h-3 w-3 shrink-0 animate-spin" aria-hidden />
                 Extracting
@@ -337,9 +340,9 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
             <div
               className={`relative rounded-xl border-2 bg-background-card px-3 py-2.5 shadow-sm h-full flex flex-col justify-center gap-0.5 min-w-0 overflow-hidden ${colorScheme.border} ${colorScheme.shadow}`}
             >
-              {!isExtracting && <div className={`absolute inset-0 rounded-xl blur-xl opacity-15 -z-10 ${colorScheme.glow}`} />}
+              {!isInitialExtracting && <div className={`absolute inset-0 rounded-xl blur-xl opacity-15 -z-10 ${colorScheme.glow}`} />}
               <div className="flex items-center gap-2 min-w-0">
-                {isTeamNode && !isExtracting ? (
+                {isTeamNode && !isInitialExtracting ? (
                   <TeamIcon />
                 ) : frameworkIdForIcon ? (
                   <div
@@ -369,7 +372,7 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
                       {roleBadge}
                     </span>
                   ) : null}
-                  {!showTeamRoleBadge && isExtracting ? (
+                  {!showTeamRoleBadge && isInitialExtracting ? (
                     <p className="text-[10px] text-foreground-secondary">Project still extracting</p>
                   ) : !isTeamNode && showAssetTierSubtext ? (
                     <p className="text-[10px] text-muted-foreground truncate" title={assetTierName ?? undefined}>
@@ -393,7 +396,7 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
                     {statusBadge}
                   </span>
                 )}
-                {!showTeamRiskGrade && !showProjectRiskGrade && !showStatusBadge && isExtracting && (
+                {!showTeamRiskGrade && !showProjectRiskGrade && !showStatusBadge && isInitialExtracting && (
                   <div className="flex-shrink-0" aria-hidden>
                     <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
                   </div>

@@ -699,21 +699,30 @@ ${sourceContext || 'none'}`;
     });
   }
 
-  for (let i = 0; i < updates.length; i += 100) {
-    const chunk = updates.slice(i, i + 100);
+  let updateFailures = 0;
+  for (const update of updates) {
+    const { id, ...fields } = update;
     const { error: upErr } = await supabase
       .from('project_dependency_vulnerabilities')
-      .upsert(chunk, { onConflict: 'id' });
+      .update(fields)
+      .eq('id', id);
 
     if (upErr) {
-      await logger.warn('epd', `Failed to upsert EPD updates: ${upErr.message}`, {
-        epd_phase: 'upsert',
-        project_id: projectId,
-        chunk_index: Math.floor(i / 100),
-        error_message: upErr.message,
-      });
-      return;
+      updateFailures++;
+      if (updateFailures === 1) {
+        await logger.warn('epd', `Failed to update EPD row ${id}: ${upErr.message}`, {
+          epd_phase: 'update',
+          project_id: projectId,
+          error_message: upErr.message,
+        });
+      }
     }
+  }
+  if (updateFailures > 1) {
+    await logger.warn('epd', `${updateFailures} EPD updates failed total`, {
+      epd_phase: 'update',
+      project_id: projectId,
+    });
   }
 
   const epdStatusCounts = countByField(updates, 'epd_status');
@@ -725,7 +734,7 @@ ${sourceContext || 'none'}`;
   const aiErrorFallbackCount = updates.filter((u) => u.epd_status === 'ai_error_fallback').length;
   const budgetExceededCount = updates.filter((u) => u.epd_status === 'budget_exceeded').length;
 
-  await logger.info('epd', `Applied EPD scoring to ${updates.length} vulnerabilities (run AI spend: $${runSpendUsd.toFixed(4)} / $${runBudgetCap.toFixed(2)})`, {
+  await logger.info('epd', `Applied EPD scoring to ${updates.length} vulnerabilities`, {
     epd_phase: 'summary',
     project_id: projectId,
     organization_id: organizationId ?? null,

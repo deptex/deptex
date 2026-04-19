@@ -7,6 +7,7 @@ interface RealtimeStatus {
   extractionStep: string | null;
   lastSynced: string | null;
   lastError: string | null;
+  lastExtractedAt: string | null;
   isLoading: boolean;
 }
 
@@ -19,6 +20,7 @@ export function useRealtimeStatus(
     extractionStep: null,
     lastSynced: null,
     lastError: null,
+    lastExtractedAt: null,
     isLoading: true,
   });
 
@@ -38,10 +40,11 @@ export function useRealtimeStatus(
           extractionStep: repo.extraction_step ?? null,
           lastSynced: repo.status === 'ready' ? repo.updated_at ?? null : null,
           lastError: null,
+          lastExtractedAt: repo.last_extracted_at ?? null,
           isLoading: false,
         });
       } else {
-        setState(prev => ({ ...prev, status: 'not_connected', isLoading: false }));
+        setState(prev => ({ ...prev, status: 'not_connected', lastExtractedAt: null, isLoading: false }));
       }
     } catch {
       setState(prev => ({ ...prev, isLoading: false }));
@@ -89,6 +92,7 @@ export function useRealtimeStatus(
             extractionStep: row.extraction_step ?? null,
             lastSynced: row.status === 'ready' ? row.updated_at : null,
             lastError: null,
+            lastExtractedAt: row.last_extracted_at ?? null,
             isLoading: false,
           });
         },

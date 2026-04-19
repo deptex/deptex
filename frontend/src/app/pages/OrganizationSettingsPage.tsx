@@ -28,7 +28,7 @@ import { Badge } from '../../components/ui/badge';
 import { Switch } from '../../components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { UserCircle, FileText, Globe, Network } from 'lucide-react';
-import MembersPage from './MembersPage';
+import MembersPage from './MembersSection';
 import AuditLogsSection from './AuditLogsSection';
 import PoliciesPage from './PoliciesPage';
 import StatusesSection from '@/components/StatusesSection';

@@ -81,6 +81,7 @@ export default function OrganizationLayout() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(true);
   const [showCreateProjectSidebar, setShowCreateProjectSidebar] = useState(false);
+  const [createProjectLockedTeam, setCreateProjectLockedTeam] = useState<Team | null>(null);
   const [showInviteMemberDialog, setShowInviteMemberDialog] = useState(false);
   const [aegisSidebarOpen, setAegisSidebarOpen] = useState(false);
   const [aegisInput, setAegisInput] = useState('');
@@ -301,7 +302,15 @@ export default function OrganizationLayout() {
 
   // Listen for overview-page "Create project" so Plus dropdown can open the sidebar
   useEffect(() => {
-    const handler = () => setShowCreateProjectSidebar(true);
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.lockedTeam) {
+        setCreateProjectLockedTeam(detail.lockedTeam);
+      } else {
+        setCreateProjectLockedTeam(null);
+      }
+      setShowCreateProjectSidebar(true);
+    };
     window.addEventListener('organization:openCreateProject', handler);
     return () => window.removeEventListener('organization:openCreateProject', handler);
   }, []);
@@ -440,13 +449,14 @@ export default function OrganizationLayout() {
             {showCreateProjectSidebar && id && (
               <CreateProjectSidebar
                 open={showCreateProjectSidebar}
-                onClose={() => setShowCreateProjectSidebar(false)}
+                onClose={() => { setShowCreateProjectSidebar(false); setCreateProjectLockedTeam(null); }}
                 organizationId={id}
                 teams={teams}
+                lockedTeam={createProjectLockedTeam}
                 onProjectsReload={refetchProjectsAndNotify}
                 onProjectCreated={(project) => {
                   window.dispatchEvent(new CustomEvent('organization:projectCreated', {
-                    detail: { id: project.id, name: project.name, owner_team_id: project.owner_team_id ?? null, team_ids: project.team_ids ?? [] }
+                    detail: { id: project.id, name: project.name, owner_team_id: project.owner_team_id ?? null, team_ids: project.team_ids ?? [], framework: project.framework ?? null }
                   }));
                 }}
               />

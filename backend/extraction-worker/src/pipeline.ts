@@ -8,7 +8,7 @@ import { execSync, spawn } from 'child_process';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { cloneRepository, cleanupRepository, cloneByProvider } from './clone';
 import { parseSbom, getBomRefToNameVersion, patchDevDependencies, type ParsedSbomDep, type ParsedSbomRelationship } from './sbom';
-import { calculateBaseDepscoreNoReachability, calculateDepscore, SEVERITY_TO_CVSS, type AssetTier } from './depscore';
+import { calculateBaseDepscoreNoReachability, calculateDepscore, calculateSecretDepscore, calculateSemgrepDepscore, SEVERITY_TO_CVSS, type AssetTier } from './depscore';
 import { analyzeRepository } from './ast-parser';
 import { storeAstAnalysisResults } from './ast-storage';
 import { ExtractionLogger } from './logger';
@@ -75,6 +75,75 @@ async function setError(
       updated_at: new Date().toISOString(),
     })
     .eq('project_id', projectId);
+}
+
+/**
+ * Resolve dependencies before SBOM generation. Different ecosystems need
+ * different install commands for cdxgen to accurately resolve the dependency tree.
+ */
+async function resolveDependencies(
+  workspacePath: string,
+  ecosystem: string,
+  log: { info: (step: string, msg: string) => Promise<void>; warn: (step: string, msg: string) => Promise<void>; success: (step: string, msg: string, durationMs?: number) => Promise<void> },
+): Promise<void> {
+  const resolveCommands: Record<string, { check: string; cmd: string; timeout: number }> = {
+    npm: {
+      check: 'package.json',
+      cmd: 'npm install --ignore-scripts --no-audit --no-fund 2>&1',
+      timeout: 300_000,
+    },
+    maven: {
+      check: 'pom.xml',
+      cmd: 'mvn dependency:resolve -B -q 2>&1',
+      timeout: 600_000,
+    },
+    golang: {
+      check: 'go.mod',
+      cmd: 'go mod download 2>&1',
+      timeout: 300_000,
+    },
+    pypi: {
+      check: 'requirements.txt',
+      cmd: 'pip3 install --no-cache-dir --break-system-packages -r requirements.txt 2>&1 || true',
+      timeout: 300_000,
+    },
+    cargo: {
+      check: 'Cargo.toml',
+      cmd: 'cargo fetch 2>&1',
+      timeout: 300_000,
+    },
+    gem: {
+      check: 'Gemfile',
+      cmd: 'bundle install --jobs 4 2>&1',
+      timeout: 300_000,
+    },
+    composer: {
+      check: 'composer.json',
+      cmd: 'composer install --no-scripts --no-interaction 2>&1',
+      timeout: 300_000,
+    },
+  };
+
+  const config = resolveCommands[ecosystem];
+  if (!config) return;
+
+  const manifestPath = path.join(workspacePath, config.check);
+  if (!fs.existsSync(manifestPath)) return;
+
+  const resolveStart = Date.now();
+  await log.info('resolve', 'Installing dependencies...');
+  try {
+    const output = execSync(config.cmd, {
+      cwd: workspacePath,
+      encoding: 'utf8',
+      timeout: config.timeout,
+      maxBuffer: 20 * 1024 * 1024,
+    });
+    await log.success('resolve', 'Dependencies installed successfully', Date.now() - resolveStart);
+  } catch (err: any) {
+    const stderr = err.stderr ? stripAnsi(err.stderr).slice(-1000) : err.message?.slice(0, 1000);
+    throw new Error(`${ecosystem} dependency resolution failed: ${stderr}`);
+  }
 }
 
 function runCdxgen(workspacePath: string, ecosystem?: string): string {
@@ -337,6 +406,13 @@ export async function runPipeline(
 
     const jobEcosystem = job.ecosystem || 'npm';
 
+    // === STEP: Dependency resolution (ecosystem-specific install before SBOM) ===
+    try {
+      await resolveDependencies(workspaceRoot, jobEcosystem, log);
+    } catch (resolveErr: any) {
+      await log.warn('resolve', `Dependency resolution failed (non-fatal): ${resolveErr.message}`);
+    }
+
     // === STEP: SBOM (CRITICAL) ===
     if (checkCancelled && await checkCancelled()) return;
     await updateStep(supabase, projectId, 'sbom');
@@ -388,7 +464,7 @@ export async function runPipeline(
       throw new Error(msg);
     }
 
-    await log.success('sbom', `SBOM generated — found ${dependencies.length} dependencies`, Date.now() - sbomStart, {
+    await log.success('sbom', 'SBOM generated', Date.now() - sbomStart, {
       components: dependencies.length,
       relationships: relationships.length,
     });
@@ -396,7 +472,7 @@ export async function runPipeline(
     // === STEP: Dependency sync (CRITICAL) ===
     if (checkCancelled && await checkCancelled()) return;
     await updateStep(supabase, projectId, 'deps_synced');
-    await log.info('deps_sync', 'Syncing dependencies to database...');
+    // deps sync — no user-facing log
 
     const syncStart = Date.now();
 
@@ -552,31 +628,38 @@ export async function runPipeline(
 
     const directCount = projectDepsToInsert.filter((d) => d.is_direct).length;
     const transitiveCount = projectDepsToInsert.length - directCount;
-    await log.success('deps_sync', `Dependencies synced (${directCount} direct, ${transitiveCount} transitive)`, Date.now() - syncStart);
+    // deps sync complete (no user-facing log — internal step)
 
-    // === STEP: AST import analysis (OPTIONAL) ===
+    // === AST import analysis (internal, no user-facing log) ===
     if (checkCancelled && await checkCancelled()) return;
     let astParsedSuccessfully = false;
     await updateStep(supabase, projectId, 'ast_parsing');
-    await log.info('ast_parsing', 'Analyzing code imports...');
-
-    const astStart = Date.now();
     try {
       const analysisResults = analyzeRepository(workspaceRoot);
       if (analysisResults.length > 0) {
         const storeResult = await storeAstAnalysisResults(supabase, projectId, organizationId, analysisResults);
-        if (storeResult.success) {
-          astParsedSuccessfully = true;
-          await log.success('ast_parsing', `Import analysis complete — ${analysisResults.length} files analyzed`, Date.now() - astStart);
-        } else {
-          await log.warn('ast_parsing', `Import analysis storage failed (non-fatal): ${storeResult.error}`);
-        }
+        if (storeResult.success) astParsedSuccessfully = true;
       } else {
         astParsedSuccessfully = true;
-        await log.success('ast_parsing', 'No JS/TS imports found (repo may use a different ecosystem)', Date.now() - astStart);
       }
-    } catch (e: any) {
-      await log.warn('ast_parsing', `Import analysis failed (non-fatal): ${e.message}`);
+    } catch { /* non-fatal */ }
+
+    // Fetch asset tier for depscore calculations (used by vuln scan, semgrep, and trufflehog)
+    const VALID_ASSET_TIERS: AssetTier[] = ['CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION'];
+    let assetTier: AssetTier = 'EXTERNAL';
+    let tierMultiplier: number | undefined;
+    {
+      const { data: projRow } = await supabase.from('projects').select('asset_tier, asset_tier_id').eq('id', projectId).single();
+      const raw = (projRow as { asset_tier?: string; asset_tier_id?: string } | null)?.asset_tier;
+      if (raw && VALID_ASSET_TIERS.includes(raw as AssetTier)) assetTier = raw as AssetTier;
+
+      const tierIdVal = (projRow as { asset_tier_id?: string } | null)?.asset_tier_id;
+      if (tierIdVal) {
+        const { data: tierData } = await supabase.from('organization_asset_tiers').select('environmental_multiplier').eq('id', tierIdVal).single();
+        if (tierData?.environmental_multiplier != null) {
+          tierMultiplier = Number(tierData.environmental_multiplier);
+        }
+      }
     }
 
     // === STEP: Vulnerability scan (OPTIONAL) ===
@@ -615,14 +698,17 @@ export async function runPipeline(
 
       const depScanArgs = [
         '--profile', 'research',
-        '--bom', bomArg,
+        '-i', workspaceRoot,
         '--reports-dir', outArg,
         '-t', jobEcosystem,
         '--no-banner',
-        '--vulnerability-analyzer', 'VDRAnalyzer',
+        '--deep',
+        '--reachability-analyzer', 'SemanticReachability',
         '--explain',
-        '--explanation-mode', 'LLMPrompts',
       ];
+
+      // dep-scan command logged at debug level only
+      console.log(`[depscan] ${depScanExe} ${depScanArgs.join(' ')}`);
 
       const heartbeatFn = heartbeat ?? (async () => {});
       try {
@@ -649,6 +735,16 @@ export async function runPipeline(
         } else {
           depScanSucceeded = true;
         }
+
+        // Log stderr only on failure (exit code > 0)
+        if (res.exitCode !== 0) {
+          const stderrLines = stripAnsi((res.stderr ?? '').trim()).split(/\r?\n/).filter(Boolean);
+          if (stderrLines.length > 0) {
+            const stderrExcerpt = stderrLines.slice(-20).join('\n').slice(-2000);
+            await log.warn('vuln_scan', `dep-scan stderr:\n${stderrExcerpt}`);
+          }
+        }
+
       } catch (spawnErr: any) {
         if (spawnErr.code === 'ENOENT') {
           await log.warn('vuln_scan', 'Vulnerability scanning unavailable (dep-scan not installed)');
@@ -791,23 +887,6 @@ export async function runPipeline(
           }
         } catch { /* non-fatal */ }
 
-        const VALID_ASSET_TIERS: AssetTier[] = ['CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION'];
-        let assetTier: AssetTier = 'EXTERNAL';
-        let tierMultiplier: number | undefined;
-        {
-          const { data: projRow } = await supabase.from('projects').select('asset_tier, asset_tier_id').eq('id', projectId).single();
-          const raw = (projRow as { asset_tier?: string; asset_tier_id?: string } | null)?.asset_tier;
-          if (raw && VALID_ASSET_TIERS.includes(raw as AssetTier)) assetTier = raw as AssetTier;
-
-          const tierIdVal = (projRow as { asset_tier_id?: string } | null)?.asset_tier_id;
-          if (tierIdVal) {
-            const { data: tierData } = await supabase.from('organization_asset_tiers').select('environmental_multiplier').eq('id', tierIdVal).single();
-            if (tierData?.environmental_multiplier != null) {
-              tierMultiplier = Number(tierData.environmental_multiplier);
-            }
-          }
-        }
-
         const vulnRows: Array<{
           project_id: string; project_dependency_id: string; osv_id: string;
           severity: string | null; summary: string | null; aliases: string[] | null;
@@ -842,7 +921,17 @@ export async function runPipeline(
             for (const a of v.affects || []) {
               const parsed = parsePurl(a.ref ?? '');
               if (!parsed) continue;
-              const pdId = pdByNameVersion.get(`${parsed.name}@${parsed.version}`);
+              // For Maven/Go PURLs, the name includes group/artifact with '/'.
+              // Try: full name, colon separator, and artifact-only (after last '/').
+              let pdId = pdByNameVersion.get(`${parsed.name}@${parsed.version}`);
+              if (!pdId && parsed.name.includes('/')) {
+                const colonName = parsed.name.replace(/\//g, ':');
+                pdId = pdByNameVersion.get(`${colonName}@${parsed.version}`);
+              }
+              if (!pdId && parsed.name.includes('/')) {
+                const artifactOnly = parsed.name.split('/').pop()!;
+                pdId = pdByNameVersion.get(`${artifactOnly}@${parsed.version}`);
+              }
               if (!pdId) continue;
               vulnRows.push({
                 project_id: projectId, project_dependency_id: pdId, osv_id: osvId,
@@ -948,17 +1037,6 @@ export async function runPipeline(
           }
         }
 
-        const critCount = vulnRows.filter((r) => r.severity === 'critical').length;
-        const highCount = vulnRows.filter((r) => r.severity === 'high').length;
-        const reachableCount = vulnRows.filter((r) => r.is_reachable).length;
-        const severitySummary = vulnRows.length > 0
-          ? `, ${critCount} critical, ${highCount} high`
-          : '';
-        const summaryMsg =
-          vulnRows.length === 0
-            ? 'Vulnerability scan complete — no issues reported for tracked dependencies'
-            : `Vulnerability scan complete — ${vulnRows.length} found, ${reachableCount} reachable${severitySummary}`;
-        await log.success('vuln_scan', summaryMsg, Date.now() - scanStart);
       } catch (e: any) {
         await log.warn('vuln_scan', `Vulnerability processing failed: ${e.message}`);
       }
@@ -966,45 +1044,92 @@ export async function runPipeline(
       await log.warn('vuln_scan', 'No vulnerability scan results available');
     }
 
-    // === STEP: Deep reachability analysis (OPTIONAL) ===
-    if (checkCancelled && await checkCancelled()) return;
-    await log.info('reachability', 'Analyzing code-level reachability...');
-    const reachStart = Date.now();
+    // --- Sub-step: Atom reachability analysis (internal, no user-facing log) ---
     try {
-      const hasReachableSlices = fs.readdirSync(reportsDir)
+      let hasReachableSlices = fs.readdirSync(reportsDir)
         .some(f => f.endsWith('-reachables.slices.json'));
+
+      if (!hasReachableSlices) {
+        const atomSlicesOut = path.join(reportsDir, 'app-reachables.slices.json');
+        const atomUsagesOut = path.join(reportsDir, 'app-usages.slices.json');
+        try {
+          const atomLangMap: Record<string, string> = {
+            npm: 'javascript', maven: 'java', golang: 'go', pypi: 'python',
+            cargo: 'rust', gem: 'ruby', composer: 'php', nuget: 'csharp',
+          };
+          const atomLang = atomLangMap[jobEcosystem] || 'javascript';
+          const srcDir = fs.existsSync(path.join(workspaceRoot, 'src'))
+            ? path.join(workspaceRoot, 'src')
+            : workspaceRoot;
+
+          try { execSync(`atom reachables -l ${atomLang} -s "${atomSlicesOut}" "${srcDir}" 2>&1`, { encoding: 'utf8', timeout: 600_000, maxBuffer: 50 * 1024 * 1024 }); } catch { /* non-fatal */ }
+          try { execSync(`atom usages -l ${atomLang} -s "${atomUsagesOut}" "${srcDir}" 2>&1`, { encoding: 'utf8', timeout: 600_000, maxBuffer: 50 * 1024 * 1024 }); } catch { /* non-fatal */ }
+
+          hasReachableSlices = fs.existsSync(atomSlicesOut) && fs.statSync(atomSlicesOut).size > 10;
+        } catch { /* non-fatal */ }
+      }
 
       if (hasReachableSlices) {
         await parseReachableFlows(reportsDir, projectId, runId, supabase, log);
-        await parseUsageSlices(reportsDir, projectId, runId, jobEcosystem, supabase, log);
         await parseLlmPrompts(reportsDir, projectId, runId, supabase, log);
-        await updateReachabilityLevels(projectId, supabase, log);
-        await log.success('reachability', 'Deep reachability analysis complete', Date.now() - reachStart);
-      } else {
-        await log.info('reachability', 'Atom analysis produced no output; preserving reachability data from previous run');
       }
-    } catch (reachErr: any) {
-      await log.warn('reachability', `Reachability analysis failed (non-fatal): ${reachErr.message}`);
-    }
+      const hasUsageSlices = fs.readdirSync(reportsDir).some(f => f.endsWith('-usages.slices.json'));
+      if (hasUsageSlices) {
+        await parseUsageSlices(reportsDir, projectId, runId, jobEcosystem, supabase, log);
+      }
+      await updateReachabilityLevels(projectId, supabase, log, workspaceRoot);
+    } catch { /* non-fatal */ }
 
-    // === STEP: EPD contextual scoring ===
-    if (checkCancelled && await checkCancelled()) return;
-    await log.info('epd', 'Computing contextual EPD scores...');
-    const epdStart = Date.now();
+    // --- Sub-step: Recalculate depscores with updated reachability ---
     try {
-      await applyEpdScoringFallback(supabase, projectId, workspaceRoot, log);
-      await log.success('epd', 'EPD contextual scoring complete', Date.now() - epdStart, {
-        epd_phase: 'pipeline_complete',
-      });
-    } catch (epdErr: any) {
-      if (epdErr instanceof EpdBudgetExceededError) {
-        throw epdErr;
+      const { data: pdvsForRescore } = await supabase
+        .from('project_dependency_vulnerabilities')
+        .select('id, cvss_score, epss_score, cisa_kev, is_reachable, reachability_level, severity')
+        .eq('project_id', projectId);
+
+      if (pdvsForRescore && pdvsForRescore.length > 0) {
+        const { data: projForTier } = await supabase.from('projects').select('asset_tier, asset_tier_id').eq('id', projectId).single();
+        const VALID_TIERS: AssetTier[] = ['CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION'];
+        let rscoreTier: AssetTier = 'EXTERNAL';
+        let rscoreTierMult: number | undefined;
+        const rawTier = (projForTier as any)?.asset_tier;
+        if (rawTier && VALID_TIERS.includes(rawTier)) rscoreTier = rawTier;
+        if ((projForTier as any)?.asset_tier_id) {
+          const { data: td } = await supabase.from('organization_asset_tiers').select('environmental_multiplier').eq('id', (projForTier as any).asset_tier_id).single();
+          if (td?.environmental_multiplier != null) rscoreTierMult = Number(td.environmental_multiplier);
+        }
+        for (const row of pdvsForRescore) {
+          const cvss = row.cvss_score ?? (row.severity ? (SEVERITY_TO_CVSS[row.severity] ?? 4.0) : 4.0);
+          const newScore = calculateDepscore({
+            cvss, epss: row.epss_score ?? 0, cisaKev: row.cisa_kev ?? false,
+            isReachable: row.is_reachable ?? false,
+            reachabilityLevel: row.reachability_level ?? undefined,
+            assetTier: rscoreTier, tierMultiplier: rscoreTierMult,
+          });
+          const newBase = calculateBaseDepscoreNoReachability({
+            cvss, epss: row.epss_score ?? 0, cisaKev: row.cisa_kev ?? false,
+            assetTier: rscoreTier, tierMultiplier: rscoreTierMult,
+          });
+          await supabase.from('project_dependency_vulnerabilities')
+            .update({ depscore: newScore, base_depscore_no_reachability: newBase })
+            .eq('id', row.id);
+        }
       }
-      await log.warn('epd', `EPD scoring failed (non-fatal): ${epdErr.message}`, {
-        epd_phase: 'pipeline_error',
-        error_message: epdErr?.message ?? String(epdErr),
-      });
-    }
+    } catch { /* non-fatal */ }
+
+    // --- EPD contextual scoring: DISABLED ---
+    // EPD requires real data-flow paths from atom reachable flows to be meaningful.
+    // Without actual path depth and entry point data, it just applies arbitrary decay
+    // factors. Re-enable when we have real call path analysis (atom web framework
+    // support, CodeQL integration, or custom call path tracing).
+    // try {
+    //   await applyEpdScoringFallback(supabase, projectId, workspaceRoot, log);
+    // } catch (epdErr: any) {
+    //   if (epdErr instanceof EpdBudgetExceededError) throw epdErr;
+    // }
+
+    // --- Final vuln scan summary ---
+    await log.success('vuln_scan', 'Vulnerability scan complete', Date.now() - scanStart);
 
     // === STEP: Semgrep (OPTIONAL) ===
     if (checkCancelled && await checkCancelled()) return;
@@ -1039,20 +1164,53 @@ export async function runPipeline(
               delete safe.fix;
               return safe;
             };
-            const findings = semgrepParsed.results.map((r: any) => ({
-              project_id: projectId,
-              extraction_run_id: runId,
-              rule_id: r.check_id ?? 'unknown',
-              file_path: r.path ?? 'unknown',
-              start_line: r.start?.line ?? null,
-              end_line: r.end?.line ?? null,
-              severity: r.extra?.severity ?? 'INFO',
-              message: r.extra?.message ?? null,
-              cwe_ids: r.extra?.metadata?.cwe ?? [],
-              owasp_ids: r.extra?.metadata?.owasp ?? [],
-              category: r.extra?.metadata?.category ?? 'security',
-              metadata: sanitizeMetadata(r.extra?.metadata),
-            }));
+            const findings = semgrepParsed.results
+              // Filter out secret-detection rules (TruffleHog handles these better)
+              .filter((r: any) => !(r.check_id ?? '').startsWith('generic.secrets.'))
+              // Filter out generated/report files
+              .filter((r: any) => {
+                const p = r.path ?? '';
+                return !p.includes('depscan-reports/') && !p.includes('node_modules/');
+              })
+              .map((r: any) => {
+                const severity = r.extra?.severity ?? 'INFO';
+                const cweIds = r.extra?.metadata?.cwe ?? [];
+                const category = r.extra?.metadata?.category ?? 'security';
+                const filePath = r.path ?? 'unknown';
+                const startLine = r.start?.line ?? null;
+
+                // Extract code snippet around the affected line
+                let codeSnippet: string | null = null;
+                if (startLine != null && filePath !== 'unknown') {
+                  try {
+                    const absPath = filePath.startsWith('/') ? filePath : path.join(workspaceRoot, filePath);
+                    if (fs.existsSync(absPath)) {
+                      const fileLines = fs.readFileSync(absPath, 'utf8').split('\n');
+                      const contextLines = 3;
+                      const from = Math.max(0, startLine - 1 - contextLines);
+                      const to = Math.min(fileLines.length, startLine + contextLines);
+                      codeSnippet = fileLines.slice(from, to).join('\n');
+                    }
+                  } catch { /* non-fatal */ }
+                }
+
+                return {
+                  project_id: projectId,
+                  extraction_run_id: runId,
+                  rule_id: r.check_id ?? 'unknown',
+                  file_path: filePath,
+                  start_line: startLine,
+                  end_line: r.end?.line ?? null,
+                  severity,
+                  message: r.extra?.message ?? null,
+                  cwe_ids: cweIds,
+                  owasp_ids: r.extra?.metadata?.owasp ?? [],
+                  category,
+                  metadata: sanitizeMetadata(r.extra?.metadata),
+                  code_snippet: codeSnippet,
+                  depscore: calculateSemgrepDepscore({ severity, cweIds, category, assetTier, tierMultiplier }),
+                };
+              });
             for (let i = 0; i < findings.length; i += 100) {
               await supabase.from('project_semgrep_findings').upsert(findings.slice(i, i + 100), {
                 onConflict: 'project_id,rule_id,file_path,start_line',
@@ -1063,7 +1221,7 @@ export async function runPipeline(
           }
         }
 
-        await log.success('semgrep', `Static analysis complete — ${semgrepFindings} findings`, Date.now() - semgrepStart);
+        await log.success('semgrep', 'Static analysis complete', Date.now() - semgrepStart);
       } else {
         await log.warn('semgrep', 'Static analysis skipped (Semgrep not installed)');
       }
@@ -1081,14 +1239,32 @@ export async function runPipeline(
     const thStart = Date.now();
     try {
       const trufflehogOut = path.join(workspaceRoot, 'trufflehog.json');
-      const result = execSync(`trufflehog filesystem "${workspaceRoot}" --json 2>/dev/null || echo "[]"`, {
-        encoding: 'utf8',
-        timeout: 60000,
-        maxBuffer: 10 * 1024 * 1024,
-      });
-      if (result && typeof result === 'string') {
-        fs.writeFileSync(trufflehogOut, result, 'utf8');
+      const wsPrefix = workspaceRoot.endsWith('/') ? workspaceRoot : workspaceRoot + '/';
+
+      // Run TruffleHog with spawnSync to capture stdout/stderr separately
+      const thResult = require('child_process').spawnSync(
+        'trufflehog',
+        ['filesystem', workspaceRoot, '--json', '--no-update'],
+        { encoding: 'utf8', timeout: 120000, maxBuffer: 10 * 1024 * 1024 }
+      );
+      const stdout = thResult.stdout ?? '';
+      const stderr = thResult.stderr ?? '';
+      const exitCode = thResult.status ?? -1;
+
+      if (exitCode !== 0) {
+        await log.warn('trufflehog', `TruffleHog exited with code ${exitCode}`);
+        if (stderr.trim()) {
+          const stderrLines = stderr.trim().split('\n').slice(0, 10);
+          for (const line of stderrLines) {
+            await log.warn('trufflehog', `[stderr] ${line.trim()}`);
+          }
+        }
       }
+
+      if (stdout.trim()) {
+        fs.writeFileSync(trufflehogOut, stdout, 'utf8');
+      }
+
       if (fs.existsSync(trufflehogOut)) {
         const content = fs.readFileSync(trufflehogOut, 'utf8');
         const lines = content.trim().split('\n').filter(Boolean);
@@ -1100,25 +1276,59 @@ export async function runPipeline(
               const f = JSON.parse(line);
               const raw = f.Raw ?? '';
               const redacted = raw.length >= 20 ? `${raw.slice(0, 4)}...${raw.slice(-4)}` : '****';
+              let filePath = f.SourceMetadata?.Data?.Filesystem?.file ?? f.SourceMetadata?.Data?.Git?.file ?? 'unknown';
+              // Strip workspace temp prefix to store relative paths
+              if (filePath.startsWith(wsPrefix)) {
+                filePath = filePath.slice(wsPrefix.length);
+              }
+              const detectorType = f.DetectorName ?? 'Unknown';
+              const isVerified = f.Verified ?? false;
+              const isCurrent = !!(f.SourceMetadata?.Data?.Filesystem);
+              const startLine = f.SourceMetadata?.Data?.Filesystem?.line ?? f.SourceMetadata?.Data?.Git?.line ?? null;
+
+              // Extract code snippet around the affected line
+              let codeSnippet: string | null = null;
+              if (startLine != null && filePath !== 'unknown') {
+                try {
+                  const absPath = path.join(workspaceRoot, filePath);
+                  if (fs.existsSync(absPath)) {
+                    const fileLines = fs.readFileSync(absPath, 'utf8').split('\n');
+                    const contextLines = 3;
+                    const from = Math.max(0, startLine - 1 - contextLines);
+                    const to = Math.min(fileLines.length, startLine + contextLines);
+                    codeSnippet = fileLines.slice(from, to).join('\n');
+                  }
+                } catch { /* non-fatal */ }
+              }
+
               return {
                 project_id: projectId,
                 extraction_run_id: runId,
-                detector_type: f.DetectorName ?? 'Unknown',
-                file_path: f.SourceMetadata?.Data?.Filesystem?.file ?? f.SourceMetadata?.Data?.Git?.file ?? 'unknown',
-                start_line: f.SourceMetadata?.Data?.Filesystem?.line ?? f.SourceMetadata?.Data?.Git?.line ?? null,
-                is_verified: f.Verified ?? false,
-                is_current: !!(f.SourceMetadata?.Data?.Filesystem),
-                description: `${f.DetectorName ?? 'Secret'} detected`,
+                detector_type: detectorType,
+                file_path: filePath,
+                start_line: startLine,
+                is_verified: isVerified,
+                is_current: isCurrent,
+                description: `${detectorType} detected`,
                 redacted_value: redacted,
+                code_snippet: codeSnippet,
+                depscore: calculateSecretDepscore({ detectorType, isVerified, isCurrent, assetTier, tierMultiplier }),
               };
-            }).filter((f: any) => f.detector_type !== 'Unknown' || f.file_path !== 'unknown');
+            })
+            .filter((f: any) => f.detector_type !== 'Unknown' || f.file_path !== 'unknown')
+            // Filter out .git/ internals — these are clone credentials, not user code secrets
+            .filter((f: any) => !f.file_path.startsWith('.git/') && !f.file_path.startsWith('.git\\'));
 
             secretCount = findings.length;
+
             if (findings.length > 0) {
               for (let i = 0; i < findings.length; i += 100) {
-                await supabase.from('project_secret_findings').upsert(findings.slice(i, i + 100), {
+                const { error: upsertErr } = await supabase.from('project_secret_findings').upsert(findings.slice(i, i + 100), {
                   onConflict: 'project_id,detector_type,file_path,start_line',
                 });
+                if (upsertErr) {
+                  await log.warn('trufflehog', `DB upsert error: ${upsertErr.message}`);
+                }
               }
             }
 
@@ -1131,7 +1341,7 @@ export async function runPipeline(
             }).join('\n');
             fs.writeFileSync(trufflehogOut, sanitized, 'utf8');
           } catch (parseErr: any) {
-            await log.warn('trufflehog', `Failed to parse findings into DB: ${parseErr.message}`);
+            await log.warn('trufflehog', `Failed to parse findings: ${parseErr.message}`);
           }
         }
 
@@ -1141,12 +1351,12 @@ export async function runPipeline(
             .from('project-imports')
             .upload(`${projectId}/${runId}/trufflehog.json`, sanitizedContent, { contentType: 'application/json', upsert: true });
         } catch { /* upload failure non-fatal */ }
-        await log.success('trufflehog', `Secret scan complete — ${secretCount} secrets found`, Date.now() - thStart);
+        await log.success('trufflehog', 'Secret scan complete', Date.now() - thStart);
       } else {
-        await log.warn('trufflehog', 'Secret scanning unavailable (TruffleHog not installed)');
+        await log.warn('trufflehog', 'Secret scanning skipped (TruffleHog not installed or no output)');
       }
-    } catch {
-      await log.warn('trufflehog', 'Secret scanning skipped (TruffleHog not installed or failed)');
+    } catch (thErr: any) {
+      await log.warn('trufflehog', `Secret scanning failed: ${thErr.message}`);
     }
 
     // === STEP: Finalize ===
@@ -1203,7 +1413,7 @@ export async function runPipeline(
         .eq('project_id', projectId)
         .neq('extraction_run_id', runId);
 
-      await log.info('finalize', 'Cleaned up stale findings from previous extraction runs');
+      // Stale cleanup complete (no user-facing log needed)
     } catch (cleanupErr: any) {
       await log.warn('finalize', `Stale findings cleanup failed: ${cleanupErr.message}`);
     }

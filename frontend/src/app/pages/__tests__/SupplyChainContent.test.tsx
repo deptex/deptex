@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '../../../test/utils';
-import DependencySupplyChainPage from '../DependencySupplyChainPage';
+import DependencySupplyChainPage from '../SupplyChainContent';
 import { api, type ProjectEffectivePolicies } from '../../../lib/api';
 
 vi.mock('react-router-dom', async (importOriginal) => {

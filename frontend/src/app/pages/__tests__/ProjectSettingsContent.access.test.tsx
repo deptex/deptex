@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '../../../test/utils';
 import userEvent from '@testing-library/user-event';
-import ProjectSettingsPage from '../ProjectSettingsPage';
+import ProjectSettingsPage from '../ProjectSettingsContent';
 
 const mockGetProjectRepositories = vi.fn();
 const mockGetCachedProjectRepositories = vi.fn();

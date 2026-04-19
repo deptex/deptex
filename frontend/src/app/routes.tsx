@@ -13,7 +13,7 @@ import OrganizationSettingsPage from "./pages/OrganizationSettingsPage";
 
 import PoliciesPage from "./pages/PoliciesPage";
 import CompliancePage from "./pages/CompliancePage";
-import OrganizationVulnerabilitiesPage from "./pages/OrganizationVulnerabilitiesPage";
+import OrganizationOverviewPage from "./pages/OrganizationOverviewPage";
 
 import InvitePage from "./pages/InvitePage";
 import JoinPage from "./pages/JoinPage";
@@ -31,7 +31,7 @@ import CookiePolicyPage from "./pages/legal/CookiePolicyPage";
 import ProtectedRoute from "../components/ProtectedRoute";
 import PublicRoute from "../components/PublicRoute";
 import NotFoundRedirect from "../components/NotFoundRedirect";
-import OrganizationVulnerabilitiesTabPage from "./pages/OrganizationVulnerabilitiesTabPage";
+import OrganizationVulnerabilitiesPage from "./pages/OrganizationVulnerabilitiesPage";
 import AegisPage from "./pages/AegisPage";
 // Redirect /settings to /settings/general while preserving search params (for OAuth callbacks)
 function SettingsRedirect() {
@@ -81,11 +81,11 @@ export const router = createBrowserRouter([
     children: [
       {
         index: true,
-        element: <OrganizationVulnerabilitiesPage />,
+        element: <OrganizationOverviewPage />,
       },
       {
         path: "overview",
-        element: <OrganizationVulnerabilitiesPage />,
+        element: <OrganizationOverviewPage />,
       },
       {
         path: "teams",
@@ -97,7 +97,7 @@ export const router = createBrowserRouter([
       },
       {
         path: "vulnerabilities",
-        element: <OrganizationVulnerabilitiesTabPage />,
+        element: <OrganizationVulnerabilitiesPage />,
       },
       {
         path: "projects",

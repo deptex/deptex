@@ -142,7 +142,7 @@ function GroupCenterNodeComponent({ data }: NodeProps) {
                 )}
               </div>
             </div>
-            <div className="flex items-center gap-1.5 pl-[4px]">
+            <div className="flex items-center gap-1.5 pl-[4px] animate-[org-active-ping_3s_ease-in-out_infinite]">
               <span className="w-2 h-2 rounded-full flex-shrink-0 bg-green-500" />
               <span className="text-xs font-medium text-green-500">Active</span>
             </div>
