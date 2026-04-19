@@ -826,7 +826,7 @@ export function SupplyChainContent({ orgId, projectId, dependencyId, dependencyN
           setSafeVersionLoading(false);
         }
       });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [orgId, projectId, dependencyId, data, safeVersionSeverity, banRefreshCounter]);
 
   // Severity change handler for safe version card

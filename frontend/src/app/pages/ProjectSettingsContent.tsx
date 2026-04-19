@@ -1130,7 +1130,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
     }).finally(() => {
       setExtractionRunsLoading(false);
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [activeSection, organizationId, projectId]);
 
   // Poll extraction runs when on Repository tab so status and "X ago" stay live
@@ -1140,7 +1140,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
       api.getExtractionRuns(organizationId, projectId).then(setExtractionRuns).catch(() => {});
     }, 6000);
     return () => clearInterval(interval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [activeSection, organizationId, projectId]);
 
   // Load teams for transfer dropdown
