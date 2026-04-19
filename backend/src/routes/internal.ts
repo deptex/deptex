@@ -1,5 +1,4 @@
 import express from 'express';
-import { createBumpPrForProject } from '../lib/create-bump-pr';
 import { supabase } from '../lib/supabase';
 import { emitEvent } from '../lib/event-bus';
 import { invalidateCache } from '../lib/cache';
@@ -21,36 +20,6 @@ function requireInternalKey(req: express.Request, res: express.Response, next: e
 }
 
 router.use(requireInternalKey);
-
-/**
- * POST /api/internal/watchtower/create-bump-pr
- * Body: { organization_id, project_id, name, target_version [, current_version ] }
- * Used by the auto-bump worker to create bump PRs.
- */
-router.post('/watchtower/create-bump-pr', async (req, res) => {
-  try {
-    const { organization_id, project_id, name, target_version, current_version } = req.body;
-    if (!organization_id || !project_id || !name || !target_version) {
-      res.status(400).json({ error: 'Missing organization_id, project_id, name, or target_version' });
-      return;
-    }
-    const result = await createBumpPrForProject(
-      organization_id,
-      project_id,
-      name,
-      target_version,
-      current_version
-    );
-    if ('error' in result) {
-      res.status(400).json({ error: result.error });
-      return;
-    }
-    res.json({ pr_url: result.pr_url, pr_number: result.pr_number });
-  } catch (error: any) {
-    console.error('Error creating bump PR (internal):', error);
-    res.status(500).json({ error: error.message || 'Failed to create bump PR' });
-  }
-});
 
 /**
  * POST /api/internal/sla-check

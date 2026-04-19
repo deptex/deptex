@@ -18,15 +18,10 @@ jest.mock('../../lib/cache', () => ({
   getDependencyVersionsCacheKey: (...args: unknown[]) => mockGetDependencyVersionsCacheKey(...args),
   CACHE_TTL_SECONDS: { VERSIONS: 300, DEPENDENCIES: 43200 },
   invalidateDependenciesCache: jest.fn().mockResolvedValue(undefined),
-  invalidateWatchtowerSummaryCache: jest.fn().mockResolvedValue(undefined),
   invalidateLatestSafeVersionCacheByDependencyId: jest.fn().mockResolvedValue(undefined),
   invalidateDependencyVersionsCacheByDependencyId: (...args: unknown[]) => mockInvalidateDependencyVersionsCacheByDependencyId(...args),
   invalidateAllProjectCachesInOrg: jest.fn().mockResolvedValue(undefined),
   invalidateProjectCachesForTeam: jest.fn().mockResolvedValue(undefined),
-}));
-
-jest.mock('../../lib/watchtower-queue', () => ({
-  queueWatchtowerJob: jest.fn().mockResolvedValue({ success: true }),
 }));
 
 describe('Project Routes', () => {
@@ -189,93 +184,6 @@ describe('Project Routes', () => {
     });
   });
 
-  describe('PATCH /api/organizations/:id/projects/:projectId/dependencies/:dependencyId/watching', () => {
-    const projectId = 'proj-1';
-    const projectDependencyId = 'pd-1';
-    const packageDependencyId = 'dep-1';
-
-    it('returns 400 when is_watching is not a boolean', async () => {
-      setTableResponse('project_dependencies', 'single', {
-        data: { id: projectDependencyId, name: 'lodash', version: '4.17.21', dependency_version_id: 'dv-1' },
-        error: null,
-      });
-      setTableResponse('dependencies', 'single', { data: { dependency_id: packageDependencyId }, error: null });
-
-      const res = await request(app)
-        .patch(
-          `/api/organizations/${orgId}/projects/${projectId}/dependencies/${projectDependencyId}/watching`
-        )
-        .set('Authorization', `Bearer ${mockToken}`)
-        .send({ is_watching: 'true' });
-
-      expect(res.status).toBe(400);
-      expect(res.body.error).toMatch(/boolean/);
-    });
-
-    it('returns 404 when user has no org membership', async () => {
-      setTableResponse('organization_members', 'single', { data: null, error: { message: 'Not found' } });
-
-      const res = await request(app)
-        .patch(
-          `/api/organizations/${orgId}/projects/${projectId}/dependencies/${projectDependencyId}/watching`
-        )
-        .set('Authorization', `Bearer ${mockToken}`)
-        .send({ is_watching: false });
-
-      expect(res.status).toBe(404);
-      expect(res.body.error).toMatch(/Organization not found|access denied/i);
-    });
-
-    it('returns 200 and disables watching when is_watching is false', async () => {
-      setTableResponse('project_dependencies', 'single', {
-        data: { id: projectDependencyId, name: 'lodash', version: '4.17.21', dependency_version_id: 'dv-1' },
-        error: null,
-      });
-      setTableResponse('dependencies', 'single', { data: { dependency_id: packageDependencyId }, error: null });
-      setTableResponse('organization_watchlist', 'then', { data: [], error: null });
-
-      const res = await request(app)
-        .patch(
-          `/api/organizations/${orgId}/projects/${projectId}/dependencies/${projectDependencyId}/watching`
-        )
-        .set('Authorization', `Bearer ${mockToken}`)
-        .send({ is_watching: false });
-
-      expect(res.status).toBe(200);
-      expect(res.body.is_watching).toBe(false);
-    });
-
-    it('returns 200 and enables watching when is_watching is true', async () => {
-      const originalFetch = globalThis.fetch;
-      globalThis.fetch = jest.fn().mockResolvedValue({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            'dist-tags': { latest: '4.18.0' },
-            time: { '4.18.0': '2025-01-01T00:00:00.000Z' },
-          }),
-      }) as any;
-
-      setTableResponse('project_dependencies', 'single', {
-        data: { id: projectDependencyId, name: 'lodash', version: '4.17.21', dependency_version_id: 'dv-1' },
-        error: null,
-      });
-      setTableResponse('dependencies', 'single', { data: { dependency_id: packageDependencyId, id: packageDependencyId }, error: null });
-      setTableResponse('watched_packages', 'single', { data: { id: 'wp-1' }, error: null });
-
-      const res = await request(app)
-        .patch(
-          `/api/organizations/${orgId}/projects/${projectId}/dependencies/${projectDependencyId}/watching`
-        )
-        .set('Authorization', `Bearer ${mockToken}`)
-        .send({ is_watching: true });
-
-      globalThis.fetch = originalFetch;
-
-      expect([200, 403]).toContain(res.status);
-      if (res.status === 200) expect(res.body.is_watching).toBe(true);
-    });
-  });
 
   describe('GET /api/organizations/:id/projects/:projectId/dependencies/:projectDependencyId/versions', () => {
     const projectId = 'proj-1';

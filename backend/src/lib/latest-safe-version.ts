@@ -248,38 +248,6 @@ export async function calculateLatestSafeVersion(
   const versionStrs = sortedVersions.map((v: any) => v.version);
   const vulnCountsByVersion = await getVulnCountsForVersionsBatch(supabase, dependencyId, versionStrs);
 
-  // Watchtower integration: check if this org has the package on watchtower (for quarantine rules)
-  let watchlistRow: { quarantine_until: string | null; is_current_version_quarantined: boolean; latest_allowed_version: string | null } | null = null;
-
-  const { data: wlRow } = await supabase
-    .from('organization_watchlist')
-    .select('quarantine_until, is_current_version_quarantined, latest_allowed_version')
-    .eq('organization_id', organizationId)
-    .eq('dependency_id', dependencyId)
-    .maybeSingle();
-
-  if (wlRow) {
-    watchlistRow = wlRow as any;
-  }
-
-  // Always load security check statuses for this dependency so we skip versions with any check === 'fail'
-  // (even when the org doesn't have the package in Watchtower — e.g. manual DB edits or worker-populated data)
-  let securityChecksByVersion: Map<string, { registry_integrity_status: string | null; install_scripts_status: string | null; entropy_analysis_status: string | null }> | null = null;
-  const { data: secRows } = await supabase
-    .from('dependency_versions')
-    .select('version, registry_integrity_status, install_scripts_status, entropy_analysis_status')
-    .eq('dependency_id', dependencyId);
-  if (secRows && secRows.length > 0) {
-    securityChecksByVersion = new Map();
-    for (const row of secRows as any[]) {
-      securityChecksByVersion.set(row.version, {
-        registry_integrity_status: row.registry_integrity_status ?? null,
-        install_scripts_status: row.install_scripts_status ?? null,
-        entropy_analysis_status: row.entropy_analysis_status ?? null,
-      });
-    }
-  }
-
   const MAX_VERSIONS_TO_CHECK = 25;
   let versionsChecked = 0;
 
@@ -292,38 +260,6 @@ export async function calculateLatestSafeVersion(
     // 4a-pre. Skip banned versions when exclude_banned is set
     if (bannedVersionSet && bannedVersionSet.has(vStr)) {
       continue;
-    }
-
-    // 4a-pre2. Watchtower: skip quarantined versions (org-scoped, only when package is in watchlist)
-    if (watchlistRow) {
-      // If the latest version is currently quarantined, skip it
-      if (watchlistRow.is_current_version_quarantined && watchlistRow.quarantine_until) {
-        const quarantineExpired = new Date(watchlistRow.quarantine_until) <= new Date();
-        if (!quarantineExpired && watchlistRow.latest_allowed_version !== vStr) {
-          // This version is newer than the allowed version and quarantine hasn't expired — skip
-          if (watchlistRow.latest_allowed_version) {
-            const allowed = semver.coerce(watchlistRow.latest_allowed_version);
-            const candidate = semver.coerce(vStr);
-            if (allowed && candidate && semver.gt(candidate, allowed)) {
-              continue;
-            }
-          }
-        }
-      }
-    }
-
-    // Skip versions with failed critical security checks (always apply when we have check data)
-    if (securityChecksByVersion) {
-      const checks = securityChecksByVersion.get(vStr);
-      if (checks) {
-        const hasCriticalFailure =
-          checks.registry_integrity_status === 'fail' ||
-          checks.install_scripts_status === 'fail' ||
-          checks.entropy_analysis_status === 'fail';
-        if (hasCriticalFailure) {
-          continue;
-        }
-      }
     }
 
     // 4a. Check center node vuln counts (from dependency_vulnerabilities)
