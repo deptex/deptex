@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useOutletContext, useNavigate, useParams, useLocation } from 'react-router-dom';
 import { Search, SlidersHorizontal, TowerControl, Loader2, PanelLeftClose, PanelLeftOpen, Package, LayoutDashboard, GitBranch, MessageSquareText, RefreshCw, ShieldAlert } from 'lucide-react';
 import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
-import { isExtractionOngoing as checkExtractionOngoing } from '../../lib/extractionStatus';
+import { isExtractionOngoing as checkExtractionOngoing, isInitialExtraction as checkInitialExtraction } from '../../lib/extractionStatus';
 import { ExtractionProgressCard } from '../../components/ExtractionProgressCard';
 import { api, ProjectWithRole, ProjectPermissions, ProjectDependency, ProjectEffectivePolicies, ProjectImportStatus } from '../../lib/api';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
@@ -16,7 +16,7 @@ import { Checkbox } from '../../components/ui/checkbox';
 import { cn } from '../../lib/utils';
 import PackageOverview from '../../components/PackageOverview';
 import { PackageOverviewSkeleton } from '../../components/PackageOverviewSkeleton';
-import { SupplyChainContent } from './DependencySupplyChainPage';
+import { SupplyChainContent } from './SupplyChainContent';
 import DependencyNotesSidebar from '../../components/DependencyNotesSidebar';
 
 interface ProjectContextType {
@@ -220,6 +220,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
       };
   const realtime = useRealtimeStatus(organizationId, projectId);
   const isExtractionOngoing = checkExtractionOngoing(realtime.status, realtime.extractionStep);
+  const isInitialExtracting = checkInitialExtraction(realtime.status, realtime.extractionStep, realtime.lastExtractedAt);
 
   const urlTab = tabFromPathname(location.pathname);
   const [sidebarSubTab, setSidebarSubTab] = useState<'overview' | 'supply-chain' | 'notes'>('overview');
@@ -235,7 +236,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
   const [permissionsChecked, setPermissionsChecked] = useState(false);
   const [dependencies, setDependencies] = useState<ProjectDependency[]>([]);
   const [dependenciesLoading, setDependenciesLoading] = useState(false);
-  const showListLoading = (realtime.isLoading || dependenciesLoading) && !isExtractionOngoing;
+  const showListLoading = (realtime.isLoading || dependenciesLoading) && !isInitialExtracting;
   const [dependenciesError, setDependenciesError] = useState<string | null>(null);
   const [refreshingDependencies, setRefreshingDependencies] = useState(false);
   const [policies, setPolicies] = useState<ProjectEffectivePolicies | null>(null);
@@ -885,7 +886,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
           </div>
         </div>
         <div className={cn('flex-1 min-h-0 overflow-y-auto custom-scrollbar pt-0.5 pb-4', listPad)}>
-          {isExtractionOngoing ? (
+          {isInitialExtracting ? (
             <ExtractionProgressCard
               description={
                 !realtime.isLoading && realtime.status === 'not_connected'

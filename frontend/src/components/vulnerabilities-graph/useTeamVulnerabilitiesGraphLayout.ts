@@ -26,8 +26,10 @@ export interface ProjectWithGraphData {
   graphDepNodes: VulnGraphDepNode[];
   framework?: string | null;
   worstSeverity?: WorstSeverity;
-  /** When true, show only project node with extracting spinner (no dependencies/vulnerabilities). */
+  /** When true, extraction pipeline is running. */
   isExtracting?: boolean;
+  /** When true, this is the first-ever extraction — block UI, grey node. */
+  isInitialExtracting?: boolean;
   /** Org-overview-style card: status badge. */
   statusName?: string | null;
   statusColor?: string | null;

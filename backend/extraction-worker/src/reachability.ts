@@ -251,7 +251,7 @@ export async function parseUsageSlices(
     }
   }
 
-  await logger.info('reachability', `Parsed ${totalUsages} usage slices`);
+  // parsed usage slices (no user-facing log)
 }
 
 // ---------------------------------------------------------------------------
@@ -343,10 +343,49 @@ async function matchPromptsToFlows(
 // Update reachability levels on project_dependency_vulnerabilities
 // ---------------------------------------------------------------------------
 
+/**
+ * Read a snippet of source code around a given line number.
+ * Returns ~5 lines before and ~5 lines after for context.
+ */
+function readCodeSnippet(workspaceRoot: string, filePath: string, lineNumber: number, contextLines: number = 5): string | null {
+  if (!workspaceRoot || !filePath || !lineNumber) return null;
+  // Try multiple path resolutions (atom may return paths relative to src/ or workspace root)
+  const candidates = [
+    path.join(workspaceRoot, filePath),
+    path.join(workspaceRoot, 'src', filePath),
+  ];
+  let fullPath: string | null = null;
+  for (const c of candidates) {
+    if (fs.existsSync(c) && fs.statSync(c).isFile()) {
+      fullPath = c;
+      break;
+    }
+  }
+  if (!fullPath) return null;
+
+  try {
+    const content = fs.readFileSync(fullPath, 'utf8');
+    const lines = content.split(/\r?\n/);
+    const startLine = Math.max(0, lineNumber - contextLines - 1);
+    const endLine = Math.min(lines.length, lineNumber + contextLines);
+    const snippet = lines.slice(startLine, endLine)
+      .map((line, i) => {
+        const num = startLine + i + 1;
+        const marker = num === lineNumber ? '→' : ' ';
+        return `${marker} ${num.toString().padStart(4)} │ ${line}`;
+      })
+      .join('\n');
+    return snippet;
+  } catch {
+    return null;
+  }
+}
+
 export async function updateReachabilityLevels(
   projectId: string,
   supabase: SupabaseClient,
   logger: LogLike,
+  workspaceRoot?: string,
 ): Promise<void> {
   const { data: pdvs } = await supabase
     .from('project_dependency_vulnerabilities')
@@ -377,13 +416,36 @@ export async function updateReachabilityLevels(
 
   const { data: usages } = await supabase
     .from('project_usage_slices')
-    .select('target_type, resolved_method')
+    .select('target_type, resolved_method, file_path, line_number')
     .eq('project_id', projectId);
 
-  const usedTypes = new Set(usages?.map((u: any) => u.target_type).filter(Boolean) ?? []);
+  // Collect all type/method strings from usage slices for fuzzy matching
+  const allUsageStrings: string[] = [];
+  for (const u of usages ?? []) {
+    if (u.target_type) allUsageStrings.push(u.target_type.toLowerCase());
+    if (u.resolved_method) allUsageStrings.push(u.resolved_method.toLowerCase());
+  }
+
+  // Check if a dependency name appears in any usage slice (fuzzy)
+  // e.g. "jackson-databind" matches "com.fasterxml.jackson.databind.ObjectMapper"
+  // e.g. "log4j-core" matches "org.apache.logging.log4j.Logger"
+  function isDepUsed(depName: string): boolean {
+    if (!depName || allUsageStrings.length === 0) return false;
+    const lower = depName.toLowerCase();
+    // Direct match
+    if (allUsageStrings.some(s => s.includes(lower))) return true;
+    // Convert hyphens to dots for Java package matching: "jackson-databind" → "jackson.databind"
+    const dotted = lower.replace(/-/g, '.');
+    if (dotted !== lower && allUsageStrings.some(s => s.includes(dotted))) return true;
+    // Also try just the last segment for short names: "log4j-core" → check for "log4j"
+    const parts = lower.split('-');
+    if (parts.length > 1 && allUsageStrings.some(s => s.includes(parts[0]))) return true;
+    return false;
+  }
 
   const depNameCache = new Map<string, string>();
   let updatedCount = 0;
+  let detailsSetCount = 0;
 
   for (const pdv of pdvs) {
     const dependencyId = depIdMap.get(pdv.project_dependency_id);
@@ -414,8 +476,41 @@ export async function updateReachabilityLevels(
         depNameCache.set(dependencyId, depName as string);
       }
 
-      if (depName && usedTypes.has(depName)) {
+      if (depName && isDepUsed(depName)) {
         level = 'function';
+        // Populate details with matching usage data (file, line, methods called)
+        const lower = depName.toLowerCase();
+        const dotted = lower.replace(/-/g, '.');
+        const firstPart = lower.split('-')[0];
+        const matchingUsages = (usages ?? []).filter((u: any) => {
+          const t = (u.target_type ?? '').toLowerCase();
+          const m = (u.resolved_method ?? '').toLowerCase();
+          return t.includes(lower) || t.includes(dotted) || m.includes(lower) || m.includes(dotted)
+            || (firstPart.length > 3 && (t.includes(firstPart) || m.includes(firstPart)));
+        });
+        if (matchingUsages.length > 0) {
+          const files = [...new Set(matchingUsages.map((u: any) => u.file_path).filter(Boolean))];
+          const methods = [...new Set(matchingUsages.map((u: any) => u.resolved_method).filter(Boolean))];
+          const locations = matchingUsages
+            .filter((u: any) => u.file_path && u.line_number)
+            .slice(0, 10)
+            .map((u: any) => {
+              const loc: any = { file: u.file_path, line: u.line_number, method: u.resolved_method ?? null };
+              // Read actual source code around this line
+              if (workspaceRoot) {
+                const snippet = readCodeSnippet(workspaceRoot, u.file_path, u.line_number);
+                if (snippet) loc.code_snippet = snippet;
+              }
+              return loc;
+            });
+          details = {
+            usage_count: matchingUsages.length,
+            impacted_paths: locations.length,
+            files,
+            methods_called: methods.slice(0, 20),
+            locations,
+          };
+        }
       } else {
         level = 'module';
       }
@@ -423,12 +518,17 @@ export async function updateReachabilityLevels(
 
     const isReachable = level !== 'unreachable';
 
-    await supabase
+    const { error: updateErr } = await supabase
       .from('project_dependency_vulnerabilities')
       .update({ reachability_level: level, reachability_details: details, is_reachable: isReachable })
       .eq('id', pdv.id);
+
+    if (updateErr) {
+      console.error(`[REACHABILITY] Failed to update vuln ${pdv.id}: ${updateErr.message}`);
+    }
+    if (details) detailsSetCount++;
     updatedCount++;
   }
 
-  await logger.info('reachability', `Updated reachability levels for ${updatedCount} vulnerabilities`);
+  console.log(`[REACHABILITY] Updated ${updatedCount} vulns, ${detailsSetCount} with details, ${allUsageStrings.length} usage strings available`);
 }

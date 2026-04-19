@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '../../../test/utils';
 import userEvent from '@testing-library/user-event';
 import { useOutletContext } from 'react-router-dom';
-import MembersPage from '../MembersPage';
+import MembersPage from '../MembersSection';
 
 const mockGetOrganizationMembers = vi.fn();
 const mockGetOrganizationInvitations = vi.fn();

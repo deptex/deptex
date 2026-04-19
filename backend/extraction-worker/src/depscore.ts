@@ -109,3 +109,91 @@ export function calculateDepscore(ctx: DepscoreContext): number {
   const score = baseImpact * threatMultiplier * tierWeight * reachabilityWeight * dependencyContextMultiplier;
   return Math.min(100, Math.round(score));
 }
+
+// --- Secret finding depscore ---
+
+/** Detector type weights — higher-impact credential types score higher. */
+const DETECTOR_TYPE_WEIGHT: Record<string, number> = {
+  AWS: 1.0,
+  GCP: 1.0,
+  Azure: 1.0,
+  PrivateKey: 1.0,
+  Stripe: 0.95,
+  GitHub: 0.9,
+  GitLab: 0.9,
+  Postgres: 0.85,
+  MySQL: 0.85,
+  MongoDB: 0.85,
+  Redis: 0.8,
+  SendGrid: 0.8,
+  Twilio: 0.8,
+  Mailgun: 0.8,
+  SlackWebhook: 0.7,
+  Slack: 0.7,
+  URI: 0.5,
+};
+
+export interface SecretDepscoreContext {
+  detectorType: string;
+  isVerified: boolean;
+  isCurrent: boolean;
+  assetTier: AssetTier;
+  tierMultiplier?: number;
+}
+
+export function calculateSecretDepscore(ctx: SecretDepscoreContext): number {
+  const base = ctx.isVerified ? 90 : 60;
+  const detectorWeight = DETECTOR_TYPE_WEIGHT[ctx.detectorType] ?? 0.6;
+  const currentWeight = ctx.isCurrent ? 1.0 : 0.8;
+  const tierWeight = ctx.tierMultiplier ?? TIER_WEIGHT[ctx.assetTier];
+
+  const score = base * detectorWeight * currentWeight * tierWeight;
+  return Math.min(100, Math.round(score));
+}
+
+// --- Semgrep finding depscore ---
+
+/** CWE prefixes that indicate high-impact vulnerability classes. */
+const HIGH_IMPACT_CWE_PREFIXES = [
+  'CWE-79',   // XSS
+  'CWE-89',   // SQL injection
+  'CWE-78',   // OS command injection
+  'CWE-94',   // Code injection
+  'CWE-502',  // Deserialization
+  'CWE-918',  // SSRF
+  'CWE-22',   // Path traversal
+  'CWE-611',  // XXE
+  'CWE-77',   // Command injection
+  'CWE-74',   // Injection
+];
+
+export interface SemgrepDepscoreContext {
+  severity: string;
+  cweIds: string[];
+  category: string;
+  assetTier: AssetTier;
+  tierMultiplier?: number;
+}
+
+export function calculateSemgrepDepscore(ctx: SemgrepDepscoreContext): number {
+  let base: number;
+  switch (ctx.severity?.toUpperCase()) {
+    case 'ERROR': base = 70; break;
+    case 'WARNING': base = 45; break;
+    case 'INFO': base = 20; break;
+    default: base = 30; break;
+  }
+
+  // Boost for high-impact CWE classes
+  const hasHighImpactCwe = (ctx.cweIds ?? []).some(cwe =>
+    HIGH_IMPACT_CWE_PREFIXES.some(prefix => cwe.startsWith(prefix))
+  );
+  if (hasHighImpactCwe) base += 15;
+
+  // Security category boost
+  if (ctx.category === 'security') base += 5;
+
+  const tierWeight = ctx.tierMultiplier ?? TIER_WEIGHT[ctx.assetTier];
+  const score = base * tierWeight;
+  return Math.min(100, Math.round(score));
+}

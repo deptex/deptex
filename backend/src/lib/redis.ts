@@ -119,7 +119,7 @@ export interface ExtractionJob {
 
 /** Optional metadata for extraction run display (trigger, commit, who started it). */
 export type ExtractionJobMeta = {
-  trigger_type?: 'initial' | 'webhook' | 'manual';
+  trigger_type?: 'initial' | 'webhook' | 'manual' | 'scheduled';
   started_by_user_id?: string;
   commit_sha?: string;
   commit_message?: string;

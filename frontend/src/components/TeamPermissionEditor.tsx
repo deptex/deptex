@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Button } from './ui/button';
 import { TeamPermissions } from '../lib/api';
-import { Save, Settings, FolderKanban } from 'lucide-react';
+import { Save, Check } from 'lucide-react';
 
 interface TeamPermissionEditorProps {
     permissions: TeamPermissions;
@@ -30,9 +30,7 @@ function AnimatedPermissionRow({
                 }`}
         >
             <div className="overflow-hidden">
-                <div className={`${!isLast ? 'border-b border-border' : ''}`}>
-                    {children}
-                </div>
+                <div>{children}</div>
             </div>
         </div>
     );
@@ -99,7 +97,6 @@ export function TeamPermissionEditor({
     const permissionGroups = [
         {
             title: 'Admin',
-            icon: <Settings className="h-3.5 w-3.5" />,
             permissions: [
                 { key: 'view_settings' as const, label: 'View Settings' },
                 { key: 'manage_notification_settings' as const, label: 'Manage Notification Settings', dependsOn: 'view_settings' as const },
@@ -109,7 +106,6 @@ export function TeamPermissionEditor({
         },
         {
             title: 'Projects',
-            icon: <FolderKanban className="h-3.5 w-3.5" />,
             permissions: [
                 { key: 'manage_projects' as const, label: 'Manage Projects' },
             ],
@@ -133,19 +129,18 @@ export function TeamPermissionEditor({
     };
 
     return (
-        <div className="space-y-4">
+        <div className="space-y-2">
             {permissionGroups.map((group) => {
                 const visiblePerms = getVisiblePermissions(group.permissions);
 
                 return (
                     <div key={group.title} className="space-y-2">
                         <div className="flex items-center gap-1.5 px-1">
-                            <span className="text-foreground-secondary">{group.icon}</span>
                             <h4 className="text-xs font-semibold text-foreground-secondary tracking-wide uppercase">
                                 {group.title}
                             </h4>
                         </div>
-                        <div className="rounded-lg border border-border bg-background overflow-hidden men-box-shadow">
+                        <div className="flex flex-col">
                             {group.permissions.map((perm) => {
                                 const dependsOn = 'dependsOn' in perm ? perm.dependsOn : undefined;
                                 const dependsOnAll = 'dependsOnAll' in perm ? perm.dependsOnAll : undefined;
@@ -168,53 +163,58 @@ export function TeamPermissionEditor({
                                 // Calculate if this is the last visible permission
                                 const visibleIndex = visiblePerms.findIndex(p => p.key === perm.key);
                                 const isLastVisible = visibleIndex === visiblePerms.length - 1;
+                                const spacerBelow = isVisible
+                                    ? isLastVisible ? 'mb-4' : 'mb-2'
+                                    : '';
 
-                                // No indentation - all permissions use same padding
-                                const paddingLeft = 'px-4';
-                                const translation = 'translate-x-0.5';
-                                const checkedTranslation = 'translate-x-4';
-
-                                const renderRow = (
-                                    <div
-                                        key={perm.key}
-                                        className={`w-full ${paddingLeft} py-3 flex items-center justify-between ${isDisabled ? 'opacity-40' : ''}`}
+                                const rowContent = (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            if (isDisabled) return;
+                                            handlePermissionChange(perm.key as keyof TeamPermissions, !isChecked);
+                                        }}
+                                        disabled={isDisabled}
+                                        className={`w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all outline-none focus:outline-none focus-visible:ring-2 focus-visible:ring-border focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 ${
+                                            isDisabled ? 'opacity-60' : ''
+                                        } ${
+                                            isChecked
+                                                ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20'
+                                                : 'bg-background-card border-border hover:border-foreground-secondary/30'
+                                        }`}
                                     >
-                                        <div className="flex flex-col">
-                                            <span className={`text-sm font-medium ${isDisabled ? 'text-foreground-secondary' : 'text-foreground'}`}>
-                                                {perm.label}
-                                            </span>
-                                        </div>
-                                        <button
-                                            onClick={() => !isDisabled && handlePermissionChange(perm.key as keyof TeamPermissions, !isChecked)}
-                                            disabled={isDisabled}
-                                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-border focus:ring-offset-2 focus:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 ${isChecked ? 'bg-primary' : 'bg-background-subtle'
-                                                }`}
+                                        <div
+                                            className={`h-4 w-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors ${
+                                                isChecked ? 'border-foreground bg-foreground text-background' : 'border-foreground-secondary/50 bg-transparent'
+                                            }`}
+                                            aria-hidden
                                         >
-                                            <span
-                                                className={`inline-block h-3.5 w-3.5 transform rounded-full bg-background transition-transform ${isChecked ? checkedTranslation : translation
-                                                    }`}
-                                            />
-                                        </button>
-                                    </div>
+                                            {isChecked && <Check className="h-2.5 w-2.5" />}
+                                        </div>
+                                        <span className={`text-sm font-medium flex-1 ${isDisabled ? 'text-foreground-secondary' : 'text-foreground'}`}>
+                                            {perm.label}
+                                        </span>
+                                    </button>
                                 );
 
                                 const hasDependency = dependsOn || dependsOnAll;
                                 if (!hasDependency) {
                                     return (
-                                        <div key={perm.key} className={`${!isLastVisible ? 'border-b border-border' : ''}`}>
-                                            {renderRow}
+                                        <div key={perm.key} className={`min-h-0 ${spacerBelow}`}>
+                                            {rowContent}
                                         </div>
                                     );
                                 }
 
                                 return (
-                                    <AnimatedPermissionRow
-                                        key={perm.key}
-                                        isVisible={isVisible}
-                                        isLast={isLastVisible}
-                                    >
-                                        {renderRow}
-                                    </AnimatedPermissionRow>
+                                    <div key={perm.key} className={`min-h-0 ${spacerBelow}`}>
+                                        <AnimatedPermissionRow
+                                            isVisible={isVisible}
+                                            isLast={isLastVisible}
+                                        >
+                                            {rowContent}
+                                        </AnimatedPermissionRow>
+                                    </div>
                                 );
                             })}
                         </div>

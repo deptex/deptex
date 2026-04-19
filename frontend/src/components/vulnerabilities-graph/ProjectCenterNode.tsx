@@ -16,7 +16,7 @@ export interface ProjectCenterNodeData {
   vulnCount?: number;
   semgrepCount?: number;
   secretCount?: number;
-  /** When true, show spinner and "Project still extracting" instead of framework/vuln counts */
+  /** When true, show spinner and "Creating" instead of framework/vuln counts */
   isExtracting?: boolean;
   /** Project status from policy (e.g. Compliant, Under Review). Shown as badge. */
   statusName?: string | null;
@@ -219,9 +219,9 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
             </div>
             <GraphScopePill type="project" className="shrink-0" />
           </div>
-          {/* Bottom bar: "Project still extracting" + spinner (like team card's bottom bar) */}
+          {/* Bottom bar: "Creating" + spinner (like team card's bottom bar) */}
           <div className="border-t border-border px-3 py-2 flex items-center gap-3 flex-wrap w-full text-left rounded-b-lg">
-            <span className="text-[11px] text-muted-foreground">Project still extracting</span>
+            <span className="text-[11px] text-muted-foreground">Creating</span>
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground flex-shrink-0" aria-hidden />
           </div>
         </div>
@@ -251,7 +251,7 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
                     )}
                   </div>
                   {isExtracting ? (
-                    <p className="text-[10px] text-foreground-secondary mt-0.5">Project still extracting</p>
+                    <p className="text-[10px] text-foreground-secondary mt-0.5">Creating</p>
                   ) : hasCounts ? (
                     <p className="text-[10px] text-foreground-secondary mt-0.5">
                       {[

@@ -227,19 +227,51 @@ export function computeOrgOverviewEdgeRouting(
   }
 
   const out = new Map<string, OrgOverviewEdgeRouting>();
-  /** Center of each side on org and on team/project (width- or height-mid for that edge). */
-  const edgeCenterSlot = Math.floor((ORG_OVERVIEW_EDGE_SLOTS - 1) / 2);
+  const tgtCenterSlot = Math.floor((ORG_OVERVIEW_EDGE_SLOTS - 1) / 2);
 
-  for (const [, group] of bySide) {
+  /** Keep edges away from the corners of the org card. */
+  const SLOT_MARGIN = 4;
+  const minSlot = SLOT_MARGIN;
+  const maxSlot = ORG_OVERVIEW_EDGE_SLOTS - 1 - SLOT_MARGIN;
+  const slotRange = maxSlot - minSlot;
+
+  for (const [side, group] of bySide) {
     group.sort((a, b) => a.sortKey - b.sortKey);
     const n = group.length;
+
+    // Reference extent for mapping satellite position → slot along the org edge.
+    // Top/bottom: horizontal cross-axis (cx); left/right: vertical (cy).
+    const refRange = side === 'top' || side === 'bottom'
+      ? ORG_HALF_W * 3   // ±450 px
+      : ORG_HALF_H * 4;  // ±280 px
+
+    // Compute ideal source slot from each satellite's cross-axis position.
+    const slots = group.map(item => {
+      const cross = side === 'top' || side === 'bottom' ? item.cx : item.cy;
+      const t = Math.max(0, Math.min(1, (cross + refRange) / (2 * refRange)));
+      return Math.round(minSlot + t * slotRange);
+    });
+
+    // Resolve collisions: maintain sort order with minimum 1-slot gap.
+    for (let i = 1; i < slots.length; i++) {
+      if (slots[i] <= slots[i - 1]) slots[i] = slots[i - 1] + 1;
+    }
+    // Compress back if we overflowed the max.
+    if (slots.length > 0 && slots[slots.length - 1] > maxSlot) {
+      slots[slots.length - 1] = maxSlot;
+      for (let i = slots.length - 2; i >= 0; i--) {
+        if (slots[i] >= slots[i + 1]) slots[i] = slots[i + 1] - 1;
+      }
+    }
+
     group.forEach((item, idx) => {
-      const t = n <= 1 ? 0.5 : idx / (n - 1);
-      const curvature = 0.2 + t * 0.12;
+      const srcSlot = Math.max(0, Math.min(ORG_OVERVIEW_EDGE_SLOTS - 1, slots[idx]));
+      const ct = n <= 1 ? 0.5 : idx / (n - 1);
+      const curvature = 0.2 + ct * 0.12;
 
       out.set(item.targetId, {
-        sourceHandle: `ov-src-${item.orgSide}-${edgeCenterSlot}`,
-        targetHandle: `ov-tgt-${item.targetSide}-${edgeCenterSlot}`,
+        sourceHandle: `ov-src-${item.orgSide}-${srcSlot}`,
+        targetHandle: `ov-tgt-${item.targetSide}-${tgtCenterSlot}`,
         pathOptions: { curvature },
       });
     });

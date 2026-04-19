@@ -10,15 +10,24 @@ import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import { SlideInSidebar } from './SlideInSidebar';
 import { usePlanLimit, TIER_DISPLAY } from '../contexts/PlanContext';
 
+function toProjectName(name: string): string {
+  return name
+    .split(/[-_]/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
 function repoNameOnly(fullName: string): string {
   const parts = fullName.split('/');
-  return parts.length > 1 ? parts[parts.length - 1] : fullName;
+  return toProjectName(parts.length > 1 ? parts[parts.length - 1] : fullName);
 }
 
 type SidebarScanResult = {
   full_name: string;
   isMonorepo: boolean;
   potentialProjects: Array<{ name: string; path: string; ecosystem?: string; isLinked: boolean; linkedByProjectId?: string; linkedByProjectName?: string }>;
+  framework?: string;
+  ecosystem?: string;
 };
 
 export interface CreateProjectSidebarProps {
@@ -207,13 +216,15 @@ export function CreateProjectSidebar({
           full_name: repo.full_name,
           isMonorepo: scanData.isMonorepo,
           potentialProjects: scanData.potentialProjects,
+          framework: scanData.framework,
+          ecosystem: scanData.ecosystem,
         };
         setSidebarRepoScanResult(result);
         setSidebarRepoScanResultsByRepo((prev) => ({ ...prev, [repo.full_name]: result }));
         const firstUnlinked = scanData.potentialProjects.find((p) => !p.isLinked);
         if (firstUnlinked) {
           setSidebarSelectedPath(firstUnlinked.path);
-          setProjectName(firstUnlinked.path === '' ? repoNameOnly(repo.full_name) : firstUnlinked.name);
+          setProjectName(firstUnlinked.path === '' ? repoNameOnly(repo.full_name) : toProjectName(firstUnlinked.name));
         }
       }
     } catch (err: any) {
@@ -276,9 +287,9 @@ export function CreateProjectSidebar({
                 repo_id: sidebarRepoToConnect.id,
                 repo_full_name: sidebarRepoToConnect.full_name,
                 default_branch: sidebarRepoToConnect.default_branch,
-                framework: sidebarRepoToConnect.framework,
+                framework: cachedScan?.framework || sidebarRepoToConnect.framework,
                 package_json_path: pathToConnect || undefined,
-                ecosystem: selectedProject?.ecosystem || sidebarRepoToConnect.ecosystem,
+                ecosystem: selectedProject?.ecosystem || cachedScan?.ecosystem || sidebarRepoToConnect.ecosystem,
                 provider: sidebarRepoToConnect.provider,
                 integration_id: sidebarRepoToConnect.integration_id,
               });
@@ -303,9 +314,9 @@ export function CreateProjectSidebar({
                   repo_id: sidebarRepoToConnect.id,
                   repo_full_name: sidebarRepoToConnect.full_name,
                   default_branch: sidebarRepoToConnect.default_branch,
-                  framework: sidebarRepoToConnect.framework,
+                  framework: scanData.framework || sidebarRepoToConnect.framework,
                   package_json_path: (unlinked[0]?.path) || undefined,
-                  ecosystem: unlinked[0]?.ecosystem || sidebarRepoToConnect.ecosystem,
+                  ecosystem: unlinked[0]?.ecosystem || scanData.ecosystem || sidebarRepoToConnect.ecosystem,
                   provider: sidebarRepoToConnect.provider,
                   integration_id: sidebarRepoToConnect.integration_id,
                 });
@@ -342,13 +353,14 @@ export function CreateProjectSidebar({
     const matchedProject = sidebarScanResult?.potentialProjects?.find((p) => p.path === packagePath);
     setSidebarConnecting(true);
     try {
+      const scanFw = sidebarRepoScanResultsByRepo[sidebarRepoToConnect.full_name];
       await api.connectProjectRepository(organizationId, createdProjectId, {
         repo_id: sidebarRepoToConnect.id,
         repo_full_name: sidebarRepoToConnect.full_name,
         default_branch: sidebarRepoToConnect.default_branch,
-        framework: sidebarRepoToConnect.framework,
+        framework: scanFw?.framework || sidebarRepoToConnect.framework,
         package_json_path: packagePath || undefined,
-        ecosystem: matchedProject?.ecosystem || sidebarRepoToConnect.ecosystem,
+        ecosystem: matchedProject?.ecosystem || scanFw?.ecosystem || sidebarRepoToConnect.ecosystem,
         provider: sidebarRepoToConnect.provider,
         integration_id: sidebarRepoToConnect.integration_id,
       });
@@ -687,7 +699,7 @@ export function CreateProjectSidebar({
                                               e.stopPropagation();
                                               if (isDisabled) return;
                                               setSidebarSelectedPath(p.path);
-                                              const name = p.path === '' ? repoNameOnly(repo.full_name) : p.name;
+                                              const name = p.path === '' ? repoNameOnly(repo.full_name) : toProjectName(p.name);
                                               setProjectName(name);
                                             }}
                                             className={`w-full rounded-lg border px-4 py-3 flex items-center justify-between gap-3 text-left transition-colors ${
@@ -698,9 +710,9 @@ export function CreateProjectSidebar({
                                               <div className={`h-4 w-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors ${isChosen ? 'border-foreground bg-foreground text-background' : 'border-foreground-secondary bg-transparent'}`}>
                                                 {isChosen && <Check className="h-2.5 w-2.5" />}
                                               </div>
-                                              <FrameworkIcon frameworkId={repo.framework} />
+                                              <FrameworkIcon frameworkId={scanResult?.framework || repo.framework} />
                                               <div className="min-w-0">
-                                                <div className="text-sm font-medium text-foreground truncate">{p.path === '' ? repoNameOnly(repo.full_name) : p.name}</div>
+                                                <div className="text-sm font-medium text-foreground truncate">{p.path === '' ? repoNameOnly(repo.full_name) : toProjectName(p.name)}</div>
                                                 <div className="text-xs text-foreground-secondary font-mono">{p.path === '' ? 'Root' : p.path}</div>
                                               </div>
                                             </div>
@@ -885,7 +897,7 @@ export function CreateProjectSidebar({
                   <div className="flex items-center gap-2.5 min-w-0">
                     <div className={`h-2 w-2 rounded-full flex-shrink-0 ${isChosen ? 'bg-primary' : 'bg-border'}`} />
                     <div className="min-w-0">
-                      <div className="text-sm font-medium text-foreground truncate">{p.path === '' ? (sidebarRepoToConnect ? repoNameOnly(sidebarRepoToConnect.full_name) : 'Root') : p.name}</div>
+                      <div className="text-sm font-medium text-foreground truncate">{p.path === '' ? (sidebarRepoToConnect ? repoNameOnly(sidebarRepoToConnect.full_name) : 'Root') : toProjectName(p.name)}</div>
                       <div className="text-xs text-foreground-secondary font-mono">{p.path === '' ? 'Root' : p.path}</div>
                     </div>
                   </div>

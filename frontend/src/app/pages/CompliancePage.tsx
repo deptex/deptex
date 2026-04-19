@@ -22,7 +22,7 @@ import { Toaster } from '../../components/ui/toaster';
 import { ComplianceSidepanel } from '../../components/ComplianceSidepanel';
 import { FrameworkIcon } from '../../components/framework-icon';
 import { ProjectStatusBadge } from '../../components/ProjectStatusBadge';
-import { isExtractionOngoing } from '../../lib/extractionStatus';
+import { isInitialExtraction } from '../../lib/extractionStatus';
 
 function formatDisplayDate(iso: string | null | undefined): string {
   if (!iso) return '—';
@@ -99,7 +99,7 @@ export default function CompliancePage() {
   const compliantPct = projects.length ? Math.round((compliantCount / projects.length) * 100) : 100;
 
   const isProjectExtracting = (p: Project) =>
-    isExtractionOngoing(p.repo_status ?? '', p.extraction_step ?? null);
+    isInitialExtraction(p.repo_status ?? '', p.extraction_step ?? null, p.last_extracted_at ?? null);
 
   useEffect(() => {
     if (!organizationId || !expandedProjectId) return;

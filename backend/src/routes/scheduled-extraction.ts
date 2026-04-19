@@ -92,7 +92,7 @@ router.post('/scheduled-extraction', async (req, res) => {
 
           if (!repo) continue;
 
-          const result = await queueExtractionJob(projectId, orgId, repo);
+          const result = await queueExtractionJob(projectId, orgId, repo, { trigger_type: 'scheduled' });
           if (result.success) {
             queued++;
             console.log(`[scheduled-extraction] Queued extraction for project ${projectId}`);

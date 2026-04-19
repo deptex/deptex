@@ -135,6 +135,7 @@ function TeamGroupNodeComponent({ data }: NodeProps) {
         {overviewCollapsedSummary && overviewProjectsTotal != null && (
           <p className="text-xs text-muted-foreground tabular-nums">
             {overviewProjectsTotal} {overviewProjectsTotal === 1 ? 'project' : 'projects'}
+            {typeof overviewMemberCount === 'number' && ` · ${overviewMemberCount} ${overviewMemberCount === 1 ? 'member' : 'members'}`}
           </p>
         )}
       </div>

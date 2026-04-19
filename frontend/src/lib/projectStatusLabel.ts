@@ -1,5 +1,5 @@
 import type { Project } from './api';
-import { isExtractionOngoing } from './extractionStatus';
+import { isInitialExtraction } from './extractionStatus';
 
 /** Policy-as-code project status + extraction state for badges (Projects list, Org Compliance). */
 export function projectStatusLabel(project: Project): {
@@ -9,7 +9,8 @@ export function projectStatusLabel(project: Project): {
   statusColor?: string;
 } {
   const status = project.repo_status;
-  if (isExtractionOngoing(status || '', project.extraction_step ?? null)) {
+  // Only show "Creating" for initial extraction; re-syncs fall through to real status
+  if (isInitialExtraction(status || '', project.extraction_step ?? null, project.last_extracted_at ?? null)) {
     const step = project.extraction_step;
     const labels: Record<string, string> = {
       queued: 'Creating',

@@ -39,27 +39,26 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Switch } from '../../components/ui/switch';
 import { Avatar, AvatarFallback, AvatarImage } from '../../components/ui/avatar';
 
-/** Animated expansion row for extraction log display in the recent activity table. */
-function ExpandableLogRow({
-  isExpanded,
+/** Single table row that expands in-place to show extraction logs. */
+function RunRow({
+  run,
   organizationId,
   projectId,
-  runId,
-  isActive,
   onCancelled,
 }: {
-  isExpanded: boolean;
+  run: import('../../lib/api').ExtractionRun;
   organizationId: string;
   projectId: string;
-  runId: string;
-  isActive: boolean;
   onCancelled: () => void;
 }) {
+  const isActive = run.status === 'queued' || run.status === 'processing';
+  const duration = formatRunDuration(run.created_at, run.completed_at ?? null, run.status);
+  const [expanded, setExpanded] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [animateOpen, setAnimateOpen] = useState(false);
 
   useEffect(() => {
-    if (isExpanded) {
+    if (expanded) {
       setMounted(true);
       requestAnimationFrame(() => {
         requestAnimationFrame(() => setAnimateOpen(true));
@@ -67,31 +66,153 @@ function ExpandableLogRow({
     } else {
       setAnimateOpen(false);
     }
-  }, [isExpanded]);
-
-  if (!mounted) return null;
+  }, [expanded]);
 
   return (
-    <tr className="border-t-0">
-      <td colSpan={3} className="p-0 border-t border-border/40">
-        <div
-          className="grid transition-[grid-template-rows] duration-300 ease-out"
-          style={{ gridTemplateRows: animateOpen ? '1fr' : '0fr' }}
-          onTransitionEnd={() => { if (!isExpanded) setMounted(false); }}
-        >
-          <div className="overflow-hidden">
-            <div className="px-4 pb-4">
-              <InlineExtractionLogs
-                organizationId={organizationId}
-                projectId={projectId}
-                runId={runId}
-                maxHeightClass="max-h-72"
-                showCancelButton={isActive}
-                onCancelled={onCancelled}
-              />
+    <tr
+      onClick={() => setExpanded((v) => !v)}
+      className="hover:bg-table-hover transition-colors cursor-pointer align-top"
+    >
+      <td colSpan={3} className="p-0">
+        {/* Row content — flex mimics the 3 columns */}
+        <div className="flex items-center px-4 py-3 gap-4">
+          {/* Source */}
+          <div className="flex-[4] flex flex-col gap-1 min-w-0">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <GitBranch className="h-3.5 w-3.5 text-foreground-secondary shrink-0" />
+              <span className="text-sm text-foreground truncate">{run.branch || 'main'}</span>
+            </div>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <GitCommit className="h-3.5 w-3.5 text-foreground-secondary shrink-0" />
+              {run.commit_sha ? (
+                <span className="text-sm text-foreground truncate">
+                  {(run.commit_sha as string).slice(0, 7)}
+                  {run.commit_message ? ` ${(run.commit_message as string).split('\n')[0]}` : ''}
+                </span>
+              ) : (
+                <span className="text-sm text-foreground truncate">
+                  {run.trigger_type === 'initial' ? 'Initial extraction' : 'Manual sync'}
+                </span>
+              )}
             </div>
           </div>
+
+          {/* Status */}
+          <div className="flex-[1] flex flex-col gap-0.5 pt-0.5">
+            <div className="flex items-center gap-2">
+              {isActive ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-foreground-secondary" aria-hidden />
+                  <span className="text-sm text-foreground-secondary">Extracting</span>
+                </>
+              ) : run.status === 'completed' ? (
+                <>
+                  <span className="h-2 w-2 rounded-full shrink-0 bg-emerald-500" />
+                  <span className="text-sm text-foreground-secondary">Ready</span>
+                </>
+              ) : run.status === 'cancelled' ? (
+                <>
+                  <span className="h-2 w-2 rounded-full shrink-0 bg-amber-500" />
+                  <span className="text-sm text-foreground-secondary">Cancelled</span>
+                </>
+              ) : (
+                <>
+                  <span className="h-2 w-2 rounded-full shrink-0 bg-destructive" />
+                  <span className="text-sm text-foreground-secondary">Error</span>
+                </>
+              )}
+            </div>
+            <span className="text-sm text-muted-foreground">{duration}</span>
+          </div>
+
+          {/* Time + trigger source */}
+          <div className="flex-[1] flex items-center justify-end gap-1.5">
+            <span className="text-sm text-foreground-secondary tabular-nums">
+              {formatConnectedAgo(run.created_at)}
+            </span>
+            {(() => {
+              const tt = run.trigger_type;
+              if (tt === 'manual' || tt === 'initial') {
+                if (run.started_by?.avatar_url) {
+                  return (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <img src={run.started_by.avatar_url} alt="" className="h-4 w-4 rounded-full flex-shrink-0" />
+                      </TooltipTrigger>
+                      <TooltipContent>{run.started_by.full_name || (tt === 'initial' ? 'Initial connect' : 'Manual sync')}</TooltipContent>
+                    </Tooltip>
+                  );
+                }
+                return (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="h-4 w-4 rounded-full bg-foreground-secondary/20 flex items-center justify-center flex-shrink-0">
+                        <Users className="h-2.5 w-2.5 text-foreground-secondary" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>{tt === 'initial' ? 'Initial connect' : 'Manual sync'}</TooltipContent>
+                  </Tooltip>
+                );
+              }
+              if (tt === 'scheduled') {
+                return (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <img src="/images/logo.png" alt="" className="h-4 w-4 rounded-full flex-shrink-0" />
+                    </TooltipTrigger>
+                    <TooltipContent>Scheduled sync</TooltipContent>
+                  </Tooltip>
+                );
+              }
+              if (tt === 'webhook') {
+                if (run.commit_author?.avatar_url) {
+                  return (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <img src={run.commit_author.avatar_url} alt="" className="h-4 w-4 rounded-full flex-shrink-0" />
+                      </TooltipTrigger>
+                      <TooltipContent>{run.commit_author.username ? `Push by ${run.commit_author.username}` : 'Commit push'}</TooltipContent>
+                    </Tooltip>
+                  );
+                }
+                return (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="h-4 w-4 rounded-full bg-foreground-secondary/20 flex items-center justify-center flex-shrink-0">
+                        <GitCommit className="h-2.5 w-2.5 text-foreground-secondary" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>Commit push</TooltipContent>
+                  </Tooltip>
+                );
+              }
+              return null;
+            })()}
+          </div>
         </div>
+
+        {/* Animated in-place expansion */}
+        {mounted && (
+          <div
+            className="grid transition-[grid-template-rows] duration-300 ease-out"
+            style={{ gridTemplateRows: animateOpen ? '1fr' : '0fr' }}
+            onTransitionEnd={() => { if (!expanded) setMounted(false); }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="overflow-hidden">
+              <div className="px-4 pb-4">
+                <InlineExtractionLogs
+                  organizationId={organizationId}
+                  projectId={projectId}
+                  runId={run.run_id}
+                  maxHeightClass="max-h-72"
+                  showCancelButton={isActive}
+                  onCancelled={onCancelled}
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </td>
     </tr>
   );
@@ -491,6 +612,8 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
     isMonorepo: boolean;
     confidence?: 'high' | 'medium';
     potentialProjects: Array<{ name: string; path: string; isLinked: boolean; linkedByProjectId?: string; linkedByProjectName?: string; ecosystem?: string }>;
+    framework?: string;
+    ecosystem?: string;
   } | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
   const [selectedPackagePath, setSelectedPackagePath] = useState<string>('');
@@ -505,7 +628,6 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
   const [syncFrequencySaving, setSyncFrequencySaving] = useState(false);
   const [extractionRuns, setExtractionRuns] = useState<ExtractionRun[]>([]);
   const [extractionRunsLoading, setExtractionRunsLoading] = useState(false);
-  const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
   // Transfer project state
   const [teams, setTeams] = useState<Team[]>([]);
   const [loadingTeams, setLoadingTeams] = useState(false);
@@ -1592,6 +1714,9 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
     try {
       const data = await api.getRepositoryScan(organizationId, projectId, repo.full_name, repo.default_branch, repo.integration_id ?? '');
       setScanResult(data);
+      if (data.framework && data.framework !== 'unknown') {
+        setDetectedFramework(data.framework);
+      }
       if (data.potentialProjects.length === 0) {
         toast({ title: 'No package.json found', description: 'This repository has no detectable package.json (root or workspaces).', variant: 'destructive' });
         setRepoToConnect(null);
@@ -1617,18 +1742,20 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
       status: 'extracting',
       package_json_path: packagePath || undefined,
     });
-    if (repo.framework) setDetectedFramework(repo.framework);
+    const resolvedFramework = scanResult?.framework || repo.framework || 'unknown';
+    const matchedProject = scanResult?.potentialProjects?.find((p: any) => p.path === packagePath);
+    const resolvedEcosystem = matchedProject?.ecosystem || scanResult?.ecosystem || repo.ecosystem;
+    if (resolvedFramework !== 'unknown') setDetectedFramework(resolvedFramework);
     setRepoToConnect(null);
     setScanResult(null);
     try {
-      const matchedProject = scanResult?.potentialProjects?.find((p: any) => p.path === packagePath);
       const connected = await api.connectProjectRepository(organizationId, projectId, {
         repo_id: repo.id,
         repo_full_name: repo.full_name,
         default_branch: repo.default_branch,
-        framework: repo.framework,
+        framework: resolvedFramework,
         package_json_path: packagePath || undefined,
-        ecosystem: matchedProject?.ecosystem || repo.ecosystem,
+        ecosystem: resolvedEcosystem,
         provider: repo.provider,
         integration_id: repo.integration_id,
       });
@@ -1800,7 +1927,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                       else if (organizationId && projectId) navigate(`/organizations/${organizationId}/projects/${projectId}/settings/${section.id}`);
                     }}
                     className={cn(
-                      'w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md transition-colors',
+                      'group w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md transition-colors',
                       activeSection === section.id
                         ? 'text-foreground'
                         : 'text-foreground-secondary hover:text-foreground'
@@ -2262,14 +2389,17 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                 {/* Recent Activity — Vercel-style deployments table */}
                 {connectedRepository && (
                   <div>
-                    <h3 className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider pb-3 border-b border-border/60">Recent Activity</h3>
-                    <div className="mt-4 rounded-lg border border-border bg-background-card overflow-hidden">
+                    <div className="rounded-lg border border-border bg-background-card overflow-hidden">
                       <table className="w-full">
                         <thead className="bg-background-card-header border-b border-border">
                           <tr>
-                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Source</th>
-                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</th>
-                            <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Time</th>
+                            <th colSpan={3} className="p-0">
+                              <div className="flex items-center px-4 py-2.5 gap-4">
+                                <span className="flex-[4] text-left text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Source</span>
+                                <span className="flex-[1] text-left text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</span>
+                                <span className="flex-[1] text-right text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Time</span>
+                              </div>
+                            </th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
@@ -2310,97 +2440,18 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                               </td>
                             </tr>
                           ) : (
-                            extractionRuns.map((run) => {
-                              const isActive = run.status === 'queued' || run.status === 'processing';
-                              const duration = formatRunDuration(run.created_at, run.completed_at ?? null, run.status);
-                              const isExpanded = expandedRunId === run.run_id;
-                              return (
-                                <Fragment key={run.run_id}>
-                                  <tr
-                                    onClick={() => setExpandedRunId(prev => prev === run.run_id ? null : run.run_id)}
-                                    className={cn(
-                                      'group hover:bg-table-hover transition-colors cursor-pointer',
-                                      isExpanded && 'bg-table-hover'
-                                    )}
-                                  >
-                                    {/* Source — Vercel style: branch row + commit row */}
-                                    <td className="px-4 py-3">
-                                      <div className="flex flex-col gap-1 min-w-0">
-                                        <div className="flex items-center gap-1.5 min-w-0">
-                                          <GitBranch className="h-3.5 w-3.5 text-foreground-secondary shrink-0" />
-                                          <span className="text-xs text-foreground-secondary truncate">{run.branch || 'main'}</span>
-                                        </div>
-                                        <div className="flex items-center gap-1.5 min-w-0">
-                                          <GitCommit className="h-3.5 w-3.5 text-foreground-secondary shrink-0" />
-                                          {run.commit_sha ? (
-                                            <span className="text-sm text-foreground font-mono truncate">
-                                              {(run.commit_sha as string).slice(0, 7)}
-                                              {run.commit_message ? (
-                                                <span className="font-sans font-normal"> {(run.commit_message as string).split('\n')[0].slice(0, 48)}</span>
-                                              ) : null}
-                                            </span>
-                                          ) : (
-                                            <span className="text-sm text-foreground">
-                                              {run.trigger_type === 'initial' ? 'Initial extraction' : 'Manual sync'}
-                                            </span>
-                                          )}
-                                        </div>
-                                      </div>
-                                    </td>
-
-                                    {/* Status */}
-                                    <td className="px-4 py-3">
-                                      <div className="flex flex-col gap-0.5">
-                                        <div className="flex items-center gap-2">
-                                          {isActive ? (
-                                            <>
-                                              <span className="h-2 w-2 rounded-full shrink-0 bg-amber-400" aria-hidden />
-                                              <span className="text-sm text-foreground-secondary">Extracting</span>
-                                            </>
-                                          ) : run.status === 'completed' ? (
-                                            <>
-                                              <span className="h-2 w-2 rounded-full shrink-0 bg-emerald-500" />
-                                              <span className="text-sm text-foreground-secondary">Ready</span>
-                                            </>
-                                          ) : run.status === 'cancelled' ? (
-                                            <>
-                                              <span className="h-2 w-2 rounded-full shrink-0 bg-amber-500" />
-                                              <span className="text-sm text-foreground-secondary">Cancelled</span>
-                                            </>
-                                          ) : (
-                                            <>
-                                              <span className="h-2 w-2 rounded-full shrink-0 bg-destructive" />
-                                              <span className="text-sm text-foreground-secondary">Error</span>
-                                            </>
-                                          )}
-                                        </div>
-                                        <span className="text-xs text-muted-foreground">{duration}</span>
-                                      </div>
-                                    </td>
-
-                                    {/* Time — just "X minutes ago" */}
-                                    <td className="px-4 py-3 text-right">
-                                      <span className="text-sm text-foreground-secondary tabular-nums">
-                                        {formatConnectedAgo(run.created_at)}
-                                      </span>
-                                    </td>
-                                  </tr>
-
-                                  {/* Animated expansion row */}
-                                  <ExpandableLogRow
-                                    isExpanded={isExpanded}
-                                    organizationId={organizationId}
-                                    projectId={projectId!}
-                                    runId={run.run_id}
-                                    isActive={isActive}
-                                    onCancelled={() => {
-                                      reloadProject?.();
-                                      api.getExtractionRuns(organizationId, projectId!).then(setExtractionRuns).catch(() => {});
-                                    }}
-                                  />
-                                </Fragment>
-                              );
-                            })
+                            extractionRuns.map((run) => (
+                              <RunRow
+                                key={run.run_id}
+                                run={run}
+                                organizationId={organizationId}
+                                projectId={projectId!}
+                                onCancelled={() => {
+                                  reloadProject?.();
+                                  api.getExtractionRuns(organizationId, projectId!).then(setExtractionRuns).catch(() => {});
+                                }}
+                              />
+                            ))
                           )}
                         </tbody>
                       </table>
