@@ -1,5 +1,5 @@
 /**
- * Phase 17: Post-mortem generation.
+ * Post-mortem generation.
  *
  * Strategy: Markdown-first with optional AI enhancement.
  * Server generates structured markdown from incident data + timeline.

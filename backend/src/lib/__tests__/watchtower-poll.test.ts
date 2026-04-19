@@ -1,5 +1,5 @@
 /**
- * Phase 10B: Tests for watchtower-poll.ts (runDependencyRefresh, runPollSweep).
+ * Tests for watchtower-poll.ts (runDependencyRefresh, runPollSweep).
  * Ensures BUG 2+3 fixes: version change enqueues new_version jobs + startWatchtowerMachine;
  * poll sweep enqueues poll_sweep jobs + startWatchtowerMachine.
  */
@@ -85,7 +85,7 @@ jest.mock('../ghsa', () => ({
 
 import { runDependencyRefresh, runPollSweep } from '../watchtower-poll';
 
-describe('watchtower-poll (Phase 10B)', () => {
+describe('watchtower-poll', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockFrom.mockImplementation((table: string) => {

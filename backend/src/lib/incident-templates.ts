@@ -1,5 +1,5 @@
 /**
- * Phase 17: Pre-built incident response playbook templates.
+ * Pre-built incident response playbook templates.
  *
  * Four templates seeded as is_template=true when org enables incident response.
  * Orgs can clone and customize these.

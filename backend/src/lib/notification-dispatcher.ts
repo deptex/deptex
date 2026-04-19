@@ -1,5 +1,5 @@
 /**
- * Phase 9: Core notification dispatch engine.
+ * Core notification dispatch engine.
  *
  * When QStash delivers a dispatch job, this engine:
  * 1. Loads the event from notification_events
@@ -131,7 +131,7 @@ export async function dispatchNotification(eventId: string): Promise<void> {
     .eq('id', eventId);
 
   try {
-    // Phase 17: Check incident triggers inline during dispatch
+    // Check incident triggers inline during dispatch
     try {
       const { checkIncidentTriggers } = require('./incident-triggers');
       await checkIncidentTriggers(event);

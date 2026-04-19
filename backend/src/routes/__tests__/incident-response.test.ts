@@ -1,5 +1,5 @@
 /**
- * Phase 17: Incident Response Orchestration test suite (34 tests).
+ * Incident Response Orchestration test suite (34 tests).
  *
  * Covers trigger system, playbook execution, autonomous containment,
  * escalation, post-mortem, API endpoints, and concurrent/edge cases.

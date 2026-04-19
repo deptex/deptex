@@ -1,5 +1,5 @@
 /**
- * Phase 16: Learning Cron Endpoints (CE route)
+ * Learning Cron Endpoints (CE route)
  * - POST /recompute-patterns: Daily pattern recomputation + outcome backfill
  * - POST /check-feedback-prompts: Deliver feedback prompt notifications for merged fixes
  */

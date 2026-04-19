@@ -2058,7 +2058,7 @@ router.get('/:id/teams/:teamId/security-summary', async (req: AuthRequest, res) 
 });
 
 // ============================================================================
-// Phase 10: Team Stats endpoint
+// Team Stats endpoint
 // ============================================================================
 
 // GET /api/organizations/:id/teams/:teamId/stats
@@ -2205,7 +2205,7 @@ router.get('/:id/teams/:teamId/stats', async (req: AuthRequest, res) => {
       depsTotalCount = count ?? 0;
     }
 
-    // Phase 15: SLA aggregates (team's projects)
+    // SLA aggregates (team's projects)
     let slaAgg = { compliance_percent: 100, on_track: 0, warning: 0, breached: 0, exempt: 0, met: 0, resolved_late: 0 };
     if (projectIds.length > 0) {
       const { data: pdvSla } = await supabase

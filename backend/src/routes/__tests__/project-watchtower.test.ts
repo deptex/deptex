@@ -1,5 +1,5 @@
 /**
- * Phase 10B: Project Watchtower API tests (toggle, stats).
+ * Project Watchtower API tests (toggle, stats).
  * Project Watchtower API tests (backend/src/routes/projects.ts).
  */
 
@@ -23,7 +23,7 @@ jest.mock('../../lib/watchtower-queue', () => ({
   queueWatchtowerJobs: (...args: unknown[]) => mockQueueWatchtowerJobs(...args),
 }));
 
-describe('Project Watchtower (Phase 10B)', () => {
+describe('Project Watchtower', () => {
   const mockUser = { id: 'user-1', email: 'u@example.com' };
   const orgId = 'org-1';
   const projectId = 'proj-1';

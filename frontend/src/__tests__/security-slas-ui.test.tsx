@@ -1,12 +1,12 @@
 /**
- * Phase 15: Security SLA Management — frontend UI tests.
+ * Security SLA Management — frontend UI tests.
  * Covers SLA filter (SecurityFilterBar), SLAStatusCard variants, graph filtering by sla_status.
  */
 
 import { describe, test, expect } from 'vitest';
 import type { SlaStatusFilter } from '../components/security/SecurityFilterBar';
 
-describe('Phase 15: SLA filter URL param', () => {
+describe('SLA filter URL param', () => {
   test('sla param maps to slaStatus filter', () => {
     const param = 'breached' as SlaStatusFilter;
     expect(['all', 'on_track', 'warning', 'breached', 'exempt']).toContain(param);
@@ -18,7 +18,7 @@ describe('Phase 15: SLA filter URL param', () => {
   });
 });
 
-describe('Phase 15: graphDepNodesForLayout SLA filter', () => {
+describe('graphDepNodesForLayout SLA filter', () => {
   type Vuln = { id: string; osv_id: string; sla_status?: string | null };
   type DepNode = { id: string; vulnerabilities: Vuln[] };
 
@@ -59,7 +59,7 @@ describe('Phase 15: graphDepNodesForLayout SLA filter', () => {
   });
 });
 
-describe('Phase 15: SLAStatusCard status labels', () => {
+describe('SLAStatusCard status labels', () => {
   const statusLabels: Record<string, string> = {
     on_track: 'On track',
     warning: 'Approaching deadline',
@@ -78,7 +78,7 @@ describe('Phase 15: SLAStatusCard status labels', () => {
   });
 });
 
-describe('Phase 15: getSlaBreachCount', () => {
+describe('getSlaBreachCount', () => {
   type Vuln = { sla_status?: string | null };
   type DepNode = { vulnerabilities: Vuln[] };
 
@@ -115,7 +115,7 @@ describe('Phase 15: getSlaBreachCount', () => {
   });
 });
 
-describe('Phase 15: SLA filter on_track and exempt', () => {
+describe('SLA filter on_track and exempt', () => {
   type Vuln = { id: string; sla_status?: string | null };
   type DepNode = { id: string; vulnerabilities: Vuln[] };
   function applySlaFilter(nodes: DepNode[], slaStatus: string): DepNode[] {
@@ -145,7 +145,7 @@ describe('Phase 15: SLA filter on_track and exempt', () => {
   });
 });
 
-describe('Phase 15: SLA dashboard metric cards', () => {
+describe('SLA dashboard metric cards', () => {
   test('compliance percent is 0-100', () => {
     const percent = 85;
     expect(percent).toBeGreaterThanOrEqual(0);
@@ -163,7 +163,7 @@ describe('Phase 15: SLA dashboard metric cards', () => {
   });
 });
 
-describe('Phase 15: SLA violations table assignee', () => {
+describe('SLA violations table assignee', () => {
   test('assignee is last fix created_by or Unassigned', () => {
     const assignee = 'Unassigned';
     expect(assignee).toBe('Unassigned');

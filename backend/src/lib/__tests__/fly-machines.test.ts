@@ -1,5 +1,5 @@
 /**
- * Phase 2M: Fly machines orchestrator unit tests
+ * Fly machines orchestrator unit tests
  */
 
 const originalFetch = globalThis.fetch;

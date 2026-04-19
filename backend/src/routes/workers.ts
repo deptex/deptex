@@ -1483,7 +1483,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
       }
     }
 
-    // Phase 6: Log vulnerability timeline events (detected/resolved) with dedup guard
+    // Log vulnerability timeline events (detected/resolved) with dedup guard
     if (projectId && successful > 0) {
       try {
         const { data: currentVulns } = await supabase
@@ -1543,7 +1543,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
                 metadata: {},
               });
 
-              // Phase 15: If PDV row still exists (e.g. not yet removed by extraction), set sla_status = met | resolved_late
+              // If PDV row still exists (e.g. not yet removed by extraction), set sla_status = met | resolved_late
               const now = new Date().toISOString();
               const { data: stillOpen } = await supabase
                 .from('project_dependency_vulnerabilities')
@@ -1570,7 +1570,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
         console.error(`[Phase6] Failed to log timeline events:`, timelineErr?.message);
       }
 
-      // Phase 15: Set SLA deadlines for open vulns that have no SLA yet (newly detected or backfill)
+      // Set SLA deadlines for open vulns that have no SLA yet (newly detected or backfill)
       if (organizationId) {
         try {
           const { data: project } = await supabase
@@ -1635,7 +1635,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
       }
     }
 
-    // Phase 6: Compute version candidates for vulnerable packages
+    // Compute version candidates for vulnerable packages
     if (projectId && organizationId && successful > 0) {
       try {
         const { data: projVulns } = await supabase
@@ -1772,7 +1772,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
       }
     }
 
-    // Run policy evaluation after populate completes (Phase 4)
+    // Run policy evaluation after populate completes
     if (projectId && organizationId && successful > 0) {
       try {
         const { evaluateProjectPolicies } = await import('../lib/policy-engine');
@@ -1794,7 +1794,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
           .update({ status: 'ready', extraction_step: 'completed', last_extracted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
           .eq('project_id', projectId);
 
-        // Phase 10: compute health score and invalidate stats caches
+        // compute health score and invalidate stats caches
         try {
           const { computeHealthScore } = await import('../lib/health-score');
           const score = await computeHealthScore(projectId);
@@ -1807,7 +1807,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
         await invalidateCache(`project-stats:${projectId}`).catch(() => {});
         await invalidateCache(`org-stats:${organizationId}`).catch(() => {});
 
-        // Phase 10B: auto-sync watchtower watchlist when project has watchtower enabled
+        // auto-sync watchtower watchlist when project has watchtower enabled
         try {
           const { data: proj } = await supabase
             .from('projects')
@@ -2008,7 +2008,7 @@ router.post('/extract-deps', async (req: express.Request, res: express.Response)
 });
 
 // ============================================================================
-// NOTIFICATION DISPATCH ENDPOINTS (Phase 9)
+// NOTIFICATION DISPATCH ENDPOINTS
 // ============================================================================
 
 const verifyQStashOrInternal = async (req: express.Request, res: express.Response, next: express.NextFunction) => {

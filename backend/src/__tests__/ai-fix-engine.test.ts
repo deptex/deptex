@@ -36,7 +36,7 @@ jest.mock('@upstash/redis', () => ({
   Redis: jest.fn().mockImplementation(() => mockRedis),
 }));
 
-describe('Phase 7: AI Fix Engine', () => {
+describe('AI Fix Engine', () => {
   const origRedisUrl = process.env.UPSTASH_REDIS_URL;
   const origRedisToken = process.env.UPSTASH_REDIS_TOKEN;
 

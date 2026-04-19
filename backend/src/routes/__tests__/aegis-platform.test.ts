@@ -1,9 +1,7 @@
 /**
- * Phase 7B — Aegis Autonomous Security Platform test suite.
+ * Aegis Autonomous Security Platform test suite.
  *
- * Implements tests from .cursor/plans/phase_07b_aegis.plan.md § 7B-Q.
- * Backend: permissions (61–66), tool registry (9–16), task system (17–24),
- * security debt (7B-M), sprint orchestration (7B-N).
+ * Backend: permissions, tool registry, task system, security debt, sprint orchestration.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -93,7 +91,7 @@ beforeEach(() => {
   setupSupabaseForOrgMember();
 });
 
-describe('Phase 7B: Aegis Autonomous Security Platform', () => {
+describe('Aegis Autonomous Security Platform', () => {
   describe('Permissions (7B-P) — plan tests 61–66', () => {
     it('61: returns 401 when no user (missing X-Test-User-Id)', async () => {
       const res = await request(app)

@@ -1,5 +1,5 @@
 /**
- * Phase 10B: watchtower-queue unit tests (queueWatchtowerJob, queueWatchtowerJobs).
+ * watchtower-queue unit tests (queueWatchtowerJob, queueWatchtowerJobs).
  */
 
 const mockSingle = jest.fn().mockResolvedValue({ data: { id: 'job-uuid-1' }, error: null });
@@ -22,7 +22,7 @@ jest.mock('../fly-machines', () => ({
 
 import { queueWatchtowerJob, queueWatchtowerJobs } from '../watchtower-queue';
 
-describe('watchtower-queue (Phase 10B)', () => {
+describe('watchtower-queue', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockSingle.mockResolvedValue({ data: { id: 'job-uuid-1' }, error: null });

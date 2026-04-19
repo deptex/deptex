@@ -1,5 +1,5 @@
 /**
- * Phase 2M: queueExtractionJob and cancelExtractionJob unit tests
+ * queueExtractionJob and cancelExtractionJob unit tests
  */
 
 const mockRpc = jest.fn();

@@ -73,7 +73,7 @@ beforeEach(() => {
 // PLAN LIMITS ENGINE
 // ═══════════════════════════════════════════════════════════════
 
-describe('Phase 13: Plan Limits Engine', () => {
+describe('Plan Limits Engine', () => {
   it('1. PLAN_LIMITS defines correct limits for all tiers', async () => {
     const { PLAN_LIMITS } = await import('../../lib/plan-limits');
 
@@ -210,7 +210,7 @@ describe('Phase 13: Plan Limits Engine', () => {
 // DOWNGRADE VALIDATION
 // ═══════════════════════════════════════════════════════════════
 
-describe('Phase 13: Downgrade Validation', () => {
+describe('Downgrade Validation', () => {
   it('11. checkDowngradeAllowed blocks when over project limit', async () => {
     const { checkDowngradeAllowed } = await import('../../lib/plan-limits');
 
@@ -245,7 +245,7 @@ describe('Phase 13: Downgrade Validation', () => {
 // STRIPE INTEGRATION
 // ═══════════════════════════════════════════════════════════════
 
-describe('Phase 13: Stripe Integration', () => {
+describe('Stripe Integration', () => {
   it('13. constructWebhookEvent verifies signature', async () => {
     const { constructWebhookEvent } = await import('../../lib/stripe');
 
@@ -367,7 +367,7 @@ describe('Phase 13: Stripe Integration', () => {
 // SYNC COUNTER
 // ═══════════════════════════════════════════════════════════════
 
-describe('Phase 13: Sync Counter', () => {
+describe('Sync Counter', () => {
   it('22. resetDueSyncCounters resets orgs past period end', async () => {
     const { resetDueSyncCounters } = await import('../../lib/stripe');
 
@@ -406,7 +406,7 @@ describe('Phase 13: Sync Counter', () => {
 // USAGE SUMMARY
 // ═══════════════════════════════════════════════════════════════
 
-describe('Phase 13: Usage Summary', () => {
+describe('Usage Summary', () => {
   it('23. getUsageSummary returns all resource counts', async () => {
     const { getUsageSummary, invalidatePlanCache } = await import('../../lib/plan-limits');
     invalidatePlanCache('org-usage');
@@ -434,7 +434,7 @@ describe('Phase 13: Usage Summary', () => {
 // PLAN FEATURES
 // ═══════════════════════════════════════════════════════════════
 
-describe('Phase 13: Feature Gates', () => {
+describe('Feature Gates', () => {
   it('24. Free tier cannot use ai_fixes', async () => {
     const { PLAN_FEATURES } = await import('../../lib/plan-limits');
     expect(PLAN_FEATURES.free.ai_fixes).toBe(false);
@@ -477,7 +477,7 @@ describe('Phase 13: Feature Gates', () => {
 // TIER DISPLAY NAMES
 // ═══════════════════════════════════════════════════════════════
 
-describe('Phase 13: Tier Display', () => {
+describe('Tier Display', () => {
   it('31. TIER_DISPLAY_NAMES maps correctly', async () => {
     const { TIER_DISPLAY_NAMES } = await import('../../lib/plan-limits');
     expect(TIER_DISPLAY_NAMES.free).toBe('Free');
@@ -491,7 +491,7 @@ describe('Phase 13: Tier Display', () => {
 // MIDDLEWARE
 // ═══════════════════════════════════════════════════════════════
 
-describe('Phase 13: Middleware', () => {
+describe('Middleware', () => {
   it('32. requirePlanLimit returns 403 with PLAN_LIMIT error', async () => {
     const { requirePlanLimit, invalidatePlanCache } = await import('../../lib/plan-limits');
     invalidatePlanCache('org-limit-test');
@@ -573,7 +573,7 @@ describe('Phase 13: Middleware', () => {
 // BILLING LIFECYCLE
 // ═══════════════════════════════════════════════════════════════
 
-describe('Phase 13: Billing Lifecycle', () => {
+describe('Billing Lifecycle', () => {
   it('36. handleSubscriptionUpdated syncs tier', async () => {
     const { handleSubscriptionUpdated } = await import('../../lib/stripe');
 
@@ -623,7 +623,7 @@ describe('Phase 13: Billing Lifecycle', () => {
 // PLAN TIER API RATES
 // ═══════════════════════════════════════════════════════════════
 
-describe('Phase 13: API Rate Limits', () => {
+describe('API Rate Limits', () => {
   it('39. Free tier has 60 rpm', async () => {
     const { PLAN_LIMITS } = await import('../../lib/plan-limits');
     expect(PLAN_LIMITS.free.api_rpm).toBe(60);
@@ -649,7 +649,7 @@ describe('Phase 13: API Rate Limits', () => {
 // CACHE BEHAVIOR
 // ═══════════════════════════════════════════════════════════════
 
-describe('Phase 13: Plan Cache', () => {
+describe('Plan Cache', () => {
   it('43. invalidatePlanCache clears cached data', async () => {
     const { getOrgPlan, invalidatePlanCache } = await import('../../lib/plan-limits');
 
@@ -678,7 +678,7 @@ describe('Phase 13: Plan Cache', () => {
 // INVOICE RETRIEVAL
 // ═══════════════════════════════════════════════════════════════
 
-describe('Phase 13: Invoices', () => {
+describe('Invoices', () => {
   it('44. getInvoices returns empty when no customer', async () => {
     const { getInvoices } = await import('../../lib/stripe');
 

@@ -6,7 +6,7 @@ import { cn } from '../../lib/utils';
 
 export type ReachabilityFilterLevel = 'all' | 'data_flow' | 'function' | 'module' | 'unreachable';
 
-/** Phase 15: SLA status filter for vulnerability list/graph. */
+/** SLA status filter for vulnerability list/graph. */
 export type SlaStatusFilter = 'all' | 'on_track' | 'warning' | 'breached' | 'exempt';
 
 export interface SecurityFilters {
@@ -18,7 +18,7 @@ export interface SecurityFilters {
   reachableOnly: boolean;
   reachabilityLevel: ReachabilityFilterLevel;
   depType: 'all' | 'direct' | 'transitive';
-  /** Phase 15: Filter by SLA status. */
+  /** Filter by SLA status. */
   slaStatus: SlaStatusFilter;
 }
 
@@ -176,7 +176,7 @@ function SecurityFilterBar({ filters, onFiltersChange }: SecurityFilterBarProps)
         />
       </div>
 
-      {/* Reachability Level (Phase 6B) */}
+      {/* Reachability Level */}
       <div>
         <div className="text-xs font-medium text-zinc-400 mb-2">Reachability Level</div>
         <div className="flex gap-2 flex-wrap">
@@ -228,7 +228,7 @@ function SecurityFilterBar({ filters, onFiltersChange }: SecurityFilterBarProps)
         </div>
       </div>
 
-      {/* Phase 15: SLA Status */}
+      {/* SLA Status */}
       <div>
         <div className="text-xs font-medium text-zinc-400 mb-2">SLA Status</div>
         <div className="flex gap-2 flex-wrap">
