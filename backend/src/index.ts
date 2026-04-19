@@ -38,6 +38,7 @@ import internalRouter from './routes/internal';
 import adminRouter from './routes/admin';
 import gitlabWebhooksRouter from './routes/gitlab-webhooks';
 import bitbucketWebhooksRouter from './routes/bitbucket-webhooks';
+import aegisRouter from './routes/aegis';
 
 const app = express();
 app.set('trust proxy', true);
@@ -127,6 +128,7 @@ app.use('/api/admin', adminRouter);
 app.post('/api/webhook/github', githubWebhookHandler);
 app.use('/api/integrations', gitlabWebhooksRouter);
 app.use('/api/integrations', bitbucketWebhooksRouter);
+app.use('/api/aegis', aegisRouter);
 
 // Error handling middleware
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
