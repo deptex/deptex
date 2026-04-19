@@ -8,7 +8,6 @@ import {
   Webhook,
   Clock,
   AlertCircle,
-  Inbox,
   Check,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
@@ -402,15 +401,8 @@ export default function NotificationHistorySection({ organizationId }: Notificat
 
               {!loading && deliveries.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center">
-                    <div className="flex flex-col items-center gap-4 text-center max-w-md mx-auto">
-                      <div className="rounded-full bg-background-card/80 border border-border p-5 shadow-sm ring-1 ring-foreground/[0.04]">
-                        <Inbox className="h-10 w-10 text-foreground-secondary" aria-hidden />
-                      </div>
-                      <div className="space-y-1">
-                        <p className="text-base font-medium text-foreground-secondary">No delivery history found</p>
-                      </div>
-                    </div>
+                  <td colSpan={7} className="px-4 py-3 text-center text-sm text-foreground-secondary">
+                    No delivery history found
                   </td>
                 </tr>
               )}

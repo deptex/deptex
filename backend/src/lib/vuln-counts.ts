@@ -102,9 +102,74 @@ export async function getVulnCountsForVersionsBatch(
   return result;
 }
 
+const DEPENDENCY_ID_BATCH = 80;
+
+/**
+ * Fetch vuln counts for many (dependency_id, version) pairs in fewer round-trips:
+ * one query per batch of dependency_ids (instead of one per dependency_id).
+ */
+async function getVulnCountsBatchBulk(
+  supabase: SupabaseClient,
+  pairs: Array<{ dependencyId: string; version: string }>
+): Promise<Map<string, VulnCounts>> {
+  const result = new Map<string, VulnCounts>();
+  if (pairs.length === 0) return result;
+
+  const byDepId = new Map<string, Set<string>>();
+  for (const { dependencyId, version } of pairs) {
+    const key = `${dependencyId}\t${version}`;
+    result.set(key, { ...ZERO });
+    if (!byDepId.has(dependencyId)) byDepId.set(dependencyId, new Set());
+    byDepId.get(dependencyId)!.add(version);
+  }
+
+  const depIds = Array.from(byDepId.keys());
+  const rowsByDepId = new Map<string, Array<{ severity: string | null; affected_versions: unknown }>>();
+
+  for (let i = 0; i < depIds.length; i += DEPENDENCY_ID_BATCH) {
+    const batch = depIds.slice(i, i + DEPENDENCY_ID_BATCH);
+    const { data: rows, error } = await supabase
+      .from('dependency_vulnerabilities')
+      .select('dependency_id, severity, affected_versions')
+      .in('dependency_id', batch);
+
+    if (error) {
+      for (const { dependencyId, version } of pairs) {
+        result.set(`${dependencyId}\t${version}`, { ...ZERO });
+      }
+      return result;
+    }
+
+    if (rows && rows.length > 0) {
+      for (const row of rows as Array<{ dependency_id: string; severity: string | null; affected_versions: unknown }>) {
+        const did = row.dependency_id;
+        if (!rowsByDepId.has(did)) rowsByDepId.set(did, []);
+        rowsByDepId.get(did)!.push({ severity: row.severity, affected_versions: row.affected_versions });
+      }
+    }
+  }
+
+  for (const [dependencyId, versions] of byDepId) {
+    const vulnRows = rowsByDepId.get(dependencyId) ?? [];
+    for (const version of versions) {
+      const counts = { ...ZERO };
+      for (const row of vulnRows) {
+        if (!isVersionAffected(version, row.affected_versions)) continue;
+        const level = normalizeSeverity(row.severity);
+        if (level === 'critical') counts.critical_vulns++;
+        else if (level === 'high') counts.high_vulns++;
+        else if (level === 'medium') counts.medium_vulns++;
+        else counts.low_vulns++;
+      }
+      result.set(`${dependencyId}\t${version}`, counts);
+    }
+  }
+  return result;
+}
+
 /**
  * Get vuln counts for multiple (dependency_id, version) pairs.
- * Key format: `${dependencyId}\t${version}`. Groups by dependency_id to minimize DB round-trips.
+ * Key format: `${dependencyId}\t${version}`. Uses bulk fetch when many dependency_ids to reduce round-trips.
  */
 export async function getVulnCountsBatch(
   supabase: SupabaseClient,
@@ -120,6 +185,11 @@ export async function getVulnCountsBatch(
     const list = byDepId.get(dependencyId) || [];
     if (!list.includes(version)) list.push(version);
     byDepId.set(dependencyId, list);
+  }
+
+  const depIdCount = byDepId.size;
+  if (depIdCount >= 5) {
+    return getVulnCountsBatchBulk(supabase, pairs);
   }
 
   const promises = Array.from(byDepId.entries()).map(([dependencyId, versions]) =>

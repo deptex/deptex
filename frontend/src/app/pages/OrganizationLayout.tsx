@@ -1,9 +1,11 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, Outlet, useNavigate, Link } from 'react-router-dom';
 import { User, HelpCircle, Settings, LogOut, BookOpen, Mail, ChevronRight } from 'lucide-react';
 import OrganizationHeader from '../../components/OrganizationHeader';
 import OrganizationSidebar from '../../components/OrganizationSidebar';
-import { api, Organization, RolePermissions } from '../../lib/api';
+import { CreateProjectSidebar } from '../../components/CreateProjectSidebar';
+import { InviteMemberDialog } from '../../components/InviteMemberDialog';
+import { api, Organization, RolePermissions, Team, Project, OrganizationMember, OrganizationInvitation, OrganizationRole } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { useUserProfile } from '../../hooks/useUserProfile';
@@ -55,6 +57,16 @@ export default function OrganizationLayout() {
 
   const [dbPermissions, setDbPermissions] = useState<RolePermissions | null>(null);
   const [permissionsLoading, setPermissionsLoading] = useState(false);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [teamsLoading, setTeamsLoading] = useState(true);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [showCreateProjectSidebar, setShowCreateProjectSidebar] = useState(false);
+  const [showInviteMemberDialog, setShowInviteMemberDialog] = useState(false);
+  // Prefetched for Invite Member dialog so it opens instantly
+  const [inviteMembers, setInviteMembers] = useState<OrganizationMember[]>([]);
+  const [inviteInvitations, setInviteInvitations] = useState<OrganizationInvitation[]>([]);
+  const [inviteRoles, setInviteRoles] = useState<OrganizationRole[]>([]);
 
   // Compute permissions - prefer database permissions, then cached permissions
   // No hardcoded role-based fallbacks - always use actual permissions from DB
@@ -111,6 +123,134 @@ export default function OrganizationLayout() {
     loadDbPermissions();
   }, [organization?.id, organization?.role, organization?.permissions]);
 
+  // Load teams for sidebar Teams dropdown
+  const refetchTeams = useMemo(() => {
+    if (!id) return async () => {};
+    return async () => {
+      try {
+        const data = await api.getTeams(id);
+        setTeams(data);
+      } catch {
+        setTeams([]);
+      }
+    };
+  }, [id]);
+
+  const refetchTeamsAndNotify = useCallback(async () => {
+    await refetchTeams();
+    window.dispatchEvent(new CustomEvent('organization:teamsUpdated'));
+  }, [refetchTeams]);
+
+  useEffect(() => {
+    if (!id) {
+      setTeams([]);
+      setTeamsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setTeamsLoading(true);
+    api.getTeams(id)
+      .then((data) => {
+        if (!cancelled) setTeams(data);
+      })
+      .catch(() => {
+        if (!cancelled) setTeams([]);
+      })
+      .finally(() => {
+        if (!cancelled) setTeamsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [id]);
+
+  const refetchProjects = useMemo(() => {
+    if (!id) return async () => {};
+    return async () => {
+      try {
+        const data = await api.getProjects(id);
+        setProjects(data);
+      } catch {
+        setProjects([]);
+      }
+    };
+  }, [id]);
+
+  const refetchProjectsAndNotify = useCallback(async () => {
+    await refetchProjects();
+    window.dispatchEvent(new CustomEvent('organization:projectsUpdated'));
+  }, [refetchProjects]);
+
+  useEffect(() => {
+    if (!id) {
+      setProjects([]);
+      setProjectsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setProjectsLoading(true);
+    api.getProjects(id)
+      .then((data) => {
+        if (!cancelled) setProjects(data);
+      })
+      .catch(() => {
+        if (!cancelled) setProjects([]);
+      })
+      .finally(() => {
+        if (!cancelled) setProjectsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [id]);
+
+  // Prefetch members, invitations, roles (and we already have teams) for Invite Member dialog
+  const refetchInviteData = useMemo(() => {
+    if (!id) return async () => {};
+    return async () => {
+      try {
+        const [membersData, invitationsData, rolesData] = await Promise.all([
+          api.getOrganizationMembers(id),
+          api.getOrganizationInvitations(id),
+          api.getOrganizationRoles(id).catch(() => []),
+        ]);
+        setInviteMembers(membersData);
+        setInviteInvitations(invitationsData);
+        setInviteRoles(rolesData);
+      } catch {
+        setInviteMembers([]);
+        setInviteInvitations([]);
+        setInviteRoles([]);
+      }
+    };
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) {
+      setInviteMembers([]);
+      setInviteInvitations([]);
+      setInviteRoles([]);
+      return;
+    }
+    let cancelled = false;
+    Promise.all([
+      api.getOrganizationMembers(id),
+      api.getOrganizationInvitations(id),
+      api.getOrganizationRoles(id).catch(() => []),
+    ])
+      .then(([membersData, invitationsData, rolesData]) => {
+        if (!cancelled) {
+          setInviteMembers(membersData);
+          setInviteInvitations(invitationsData);
+          setInviteRoles(rolesData);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setInviteMembers([]);
+          setInviteInvitations([]);
+          setInviteRoles([]);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [id]);
+
   // Tab title: "Organization name | Deptex" when viewing an org
   useEffect(() => {
     if (!organization?.name) return;
@@ -136,6 +276,20 @@ export default function OrganizationLayout() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]); // Only depend on id, not organization.id to avoid infinite loops
+
+  // Listen for overview-page "Create project" so Plus dropdown can open the sidebar
+  useEffect(() => {
+    const handler = () => setShowCreateProjectSidebar(true);
+    window.addEventListener('organization:openCreateProject', handler);
+    return () => window.removeEventListener('organization:openCreateProject', handler);
+  }, []);
+
+  // Listen for overview-page "Invite member" so Plus dropdown can open the same dialog as Members tab
+  useEffect(() => {
+    const handler = () => setShowInviteMemberDialog(true);
+    window.addEventListener('organization:openInvite', handler);
+    return () => window.removeEventListener('organization:openInvite', handler);
+  }, []);
 
   const loadOrganization = async (forceReload = false) => {
     if (!id) return;
@@ -309,7 +463,41 @@ export default function OrganizationLayout() {
         ) : organization && id ? (
           <>
             <OrganizationHeader organization={organization} />
-            <OrganizationSidebar organizationId={id} userPermissions={userPermissions} />
+            <OrganizationSidebar
+              organizationId={id}
+              userPermissions={userPermissions}
+              teams={teams}
+              teamsLoading={teamsLoading}
+              onRefetchTeams={refetchTeamsAndNotify}
+              canCreateTeam={userPermissions?.manage_teams_and_projects === true}
+              projects={projects}
+              projectsLoading={projectsLoading}
+              onRefetchProjects={refetchProjects}
+              canCreateProject={userPermissions?.manage_teams_and_projects === true}
+              onOpenCreateProject={() => setShowCreateProjectSidebar(true)}
+            />
+            {showCreateProjectSidebar && id && (
+              <CreateProjectSidebar
+                open={showCreateProjectSidebar}
+                onClose={() => setShowCreateProjectSidebar(false)}
+                organizationId={id}
+                teams={teams}
+                onProjectsReload={refetchProjectsAndNotify}
+              />
+            )}
+            {organization && id && (
+              <InviteMemberDialog
+                open={showInviteMemberDialog}
+                onOpenChange={setShowInviteMemberDialog}
+                organizationId={id}
+                organization={organization}
+                sharedMembers={inviteMembers}
+                sharedInvitations={inviteInvitations}
+                sharedTeams={teams}
+                sharedRoles={inviteRoles}
+                onSuccess={refetchInviteData}
+              />
+            )}
             <div className="h-12"></div>
           </>
         ) : null}

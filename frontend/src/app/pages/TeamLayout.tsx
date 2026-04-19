@@ -1,8 +1,9 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, Outlet, useNavigate, useLocation, Link } from 'react-router-dom';
 import { HelpCircle, Settings, LogOut, BookOpen, Mail, ChevronRight } from 'lucide-react';
 import TeamHeader from '../../components/TeamHeader';
 import TeamSidebar from '../../components/TeamSidebar';
+import { CreateProjectSidebar } from '../../components/CreateProjectSidebar';
 import { api, TeamWithRole, TeamPermissions, Organization } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { useAuth } from '../../contexts/AuthContext';
@@ -73,6 +74,9 @@ export default function TeamLayout() {
     return api.getCachedOrganization(orgId);
   });
   const [loading, setLoading] = useState(false);
+  const [projects, setProjects] = useState<Awaited<ReturnType<typeof api.getProjects>>>([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [showCreateProjectSidebar, setShowCreateProjectSidebar] = useState(false);
   const { toast } = useToast();
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
@@ -333,6 +337,39 @@ export default function TeamLayout() {
     }
   };
 
+  const refetchProjects = useCallback(async () => {
+    if (!orgId) return;
+    try {
+      const data = await api.getProjects(orgId);
+      setProjects(data);
+    } catch {
+      setProjects([]);
+    }
+  }, [orgId]);
+
+  useEffect(() => {
+    if (!orgId) {
+      setProjects([]);
+      setProjectsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setProjectsLoading(true);
+    api.getProjects(orgId)
+      .then((data) => {
+        if (!cancelled) setProjects(data);
+      })
+      .catch(() => {
+        if (!cancelled) setProjects([]);
+      })
+      .finally(() => {
+        if (!cancelled) setProjectsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [orgId]);
+
+  const canCreateProject = userPermissions?.manage_projects === true || organization?.permissions?.manage_teams_and_projects === true;
+
   return (
     <>
       <div className="min-h-screen bg-background">
@@ -464,7 +501,21 @@ export default function TeamLayout() {
               organizationId={orgId}
               teamId={teamId}
               userPermissions={userPermissions}
+              projects={projects}
+              projectsLoading={projectsLoading}
+              canCreateProject={canCreateProject}
+              onOpenCreateProject={() => setShowCreateProjectSidebar(true)}
             />
+            {showCreateProjectSidebar && orgId && (
+              <CreateProjectSidebar
+                open={showCreateProjectSidebar}
+                onClose={() => setShowCreateProjectSidebar(false)}
+                organizationId={orgId}
+                teams={team ? [team] : []}
+                lockedTeam={team}
+                onProjectsReload={refetchProjects}
+              />
+            )}
             <div className="h-12"></div>
           </>
         ) : null}

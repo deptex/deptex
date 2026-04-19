@@ -1294,6 +1294,94 @@ async function populateSingleDependency(
   }
 }
 
+/** Result of enriching a package for preflight (registry + OpenSSF + SLSA + score). Used so preflight check can show and use real scores. */
+export interface PreflightEnrichedData {
+  license: string | null;
+  openSsfScore: number | null;
+  dependencyScore: number | null;
+  slsaLevel: number | null;
+  weeklyDownloads: number | null;
+  releasesLast12Months: number;
+  lastPublishedAt: string | null;
+}
+
+/**
+ * Enrich a single package for preflight check: fetch registry metadata, OpenSSF scorecard, SLSA (npm), and compute reputation score.
+ * Can take several seconds. Used so preflight can show and evaluate with real license/score/SLSA data.
+ */
+export async function enrichPackageForPreflight(
+  ecosystem: string,
+  packageName: string,
+  packageVersion: string,
+): Promise<PreflightEnrichedData> {
+  const eco = (ecosystem || 'npm').toLowerCase();
+  const out: PreflightEnrichedData = {
+    license: null,
+    openSsfScore: null,
+    dependencyScore: null,
+    slsaLevel: null,
+    weeklyDownloads: null,
+    releasesLast12Months: 0,
+    lastPublishedAt: null,
+  };
+
+  if (eco !== 'npm') {
+    try {
+      const { fetchRegistryInfo } = await import('../lib/registry-fetchers');
+      const regInfo = await fetchRegistryInfo(eco, packageName);
+      if (regInfo) {
+        out.weeklyDownloads = regInfo.weeklyDownloads;
+        out.releasesLast12Months = regInfo.releasesLast12Months;
+        out.lastPublishedAt = regInfo.lastPublishedAt?.toISOString() ?? null;
+        const openssfResult = await fetchOpenssfScorecardForRepo(regInfo.github_url);
+        out.openSsfScore = openssfResult.score;
+        const scoreBreakdown = calculateDependencyScore({
+          openssfScore: openssfResult.score,
+          weeklyDownloads: regInfo.weeklyDownloads,
+          releasesLast12Months: regInfo.releasesLast12Months,
+          slsaLevel: null,
+          isMalicious: false,
+        });
+        out.dependencyScore = scoreBreakdown.score;
+      }
+    } catch (e: any) {
+      console.warn('[preflight-enrich] non-npm', eco, packageName, e?.message);
+    }
+    return out;
+  }
+
+  try {
+    const [npmInfo, license] = await Promise.all([
+      fetchNpmPackageInfo(packageName),
+      fetchNpmLicense(packageName, packageVersion),
+    ]);
+    out.license = license;
+    out.weeklyDownloads = npmInfo.weeklyDownloads;
+    out.releasesLast12Months = npmInfo.releasesLast12Months;
+    out.lastPublishedAt = npmInfo.lastPublishedAt?.toISOString() ?? null;
+
+    const openssfResult = await fetchOpenssfScorecardForRepo(npmInfo.github_url);
+    out.openSsfScore = openssfResult.score;
+
+    const versionToUse = packageVersion && packageVersion !== 'latest' ? packageVersion : npmInfo.latest_version;
+    if (versionToUse) {
+      out.slsaLevel = await fetchSlsaLevel(packageName, versionToUse);
+    }
+
+    const scoreBreakdown = calculateDependencyScore({
+      openssfScore: out.openSsfScore,
+      weeklyDownloads: out.weeklyDownloads,
+      releasesLast12Months: out.releasesLast12Months,
+      slsaLevel: out.slsaLevel,
+      isMalicious: false,
+    });
+    out.dependencyScore = scoreBreakdown.score;
+  } catch (e: any) {
+    console.warn('[preflight-enrich]', packageName, packageVersion, e?.message);
+  }
+  return out;
+}
+
 // Only one populate-dependencies run at a time to avoid npm/GitHub 429s when multiple projects queue together.
 let populateDependenciesInFlight = false;
 

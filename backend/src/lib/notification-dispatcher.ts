@@ -668,29 +668,47 @@ async function resolveMatchingRules(event: any): Promise<MatchedRule[]> {
   }
 
   if (event.team_id) {
-    const { data: teamRules } = await supabase
-      .from('team_notification_rules')
-      .select('*')
-      .eq('team_id', event.team_id)
-      .eq('active', true);
+    const { data: teamRow } = await supabase
+      .from('teams')
+      .select('notifications_paused_until')
+      .eq('id', event.team_id)
+      .maybeSingle();
+    const teamPausedUntil = teamRow?.notifications_paused_until ? new Date(teamRow.notifications_paused_until) : null;
+    const teamIsPaused = teamPausedUntil && teamPausedUntil > new Date();
+    if (!teamIsPaused) {
+      const { data: teamRules } = await supabase
+        .from('team_notification_rules')
+        .select('*')
+        .eq('team_id', event.team_id)
+        .eq('active', true);
 
-    for (const r of teamRules || []) {
-      if (r.trigger_type !== 'weekly_digest') {
-        rules.push(mapRule(r, 'team', event.team_id));
+      for (const r of teamRules || []) {
+        if (r.trigger_type !== 'weekly_digest') {
+          rules.push(mapRule(r, 'team', event.team_id));
+        }
       }
     }
   }
 
   if (event.project_id) {
-    const { data: projectRules } = await supabase
-      .from('project_notification_rules')
-      .select('*')
-      .eq('project_id', event.project_id)
-      .eq('active', true);
+    const { data: projectRow } = await supabase
+      .from('projects')
+      .select('notifications_paused_until')
+      .eq('id', event.project_id)
+      .maybeSingle();
+    const projectPausedUntil = projectRow?.notifications_paused_until ? new Date(projectRow.notifications_paused_until) : null;
+    const projectIsPaused = projectPausedUntil && projectPausedUntil > new Date();
+    if (!projectIsPaused) {
+      const { data: projectRules } = await supabase
+        .from('project_notification_rules')
+        .select('*')
+        .eq('project_id', event.project_id)
+        .eq('active', true);
 
-    for (const r of projectRules || []) {
-      if (r.trigger_type !== 'weekly_digest') {
-        rules.push(mapRule(r, 'project', event.project_id));
+      for (const r of projectRules || []) {
+        if (r.trigger_type !== 'weekly_digest') {
+          rules.push(mapRule(r, 'project', event.project_id));
+        }
       }
     }
   }

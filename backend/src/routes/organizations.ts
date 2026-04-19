@@ -7,6 +7,7 @@ import { supabase } from '../lib/supabase';
 import { sendInvitationEmail } from '../lib/email';
 import { createActivity } from '../lib/activities';
 import { getOpenAIClient } from '../lib/openai';
+import { getPlatformProvider } from '../lib/ai/provider';
 import { updateAllProjectsCompliance } from './projects';
 import { invalidateAllProjectCachesInOrg, invalidateProjectCachesForTeam, getCached, setCached } from '../lib/cache';
 import { seedOrganizationPolicyDefaults } from '../lib/policy-seed';
@@ -5181,7 +5182,14 @@ return { passed: violations.length === 0, violations };
       : '{ passed: boolean, violations: string[] }';
     const targetContextType = targetEditor === 'compliance' ? 'ProjectComplianceContext' : 'PullRequestCheckContext';
 
-    const systemPrompt = `You are an expert AI assistant that helps users write Deptex policy-as-code. You write JavaScript function bodies for dependency security policies.
+    const systemPrompt = `You are an expert AI assistant that helps users write Deptex policy-as-code. You can chat normally or suggest JavaScript function bodies for dependency security policies.
+
+## When to respond with code vs chat only
+
+- **Chat only (code must be null):** Greetings ("hello", "hi"), small talk, "what can you do?", "explain X", any question that is not explicitly asking you to change or write policy code. Reply briefly and helpfully in "message"; set "code" to null.
+- **Provide code only when:** The user clearly asks you to implement, change, or add a policy rule (e.g. "only allow MIT license", "block critical vulns in PRs", "require OpenSSF score >= 3"). Then set both "message" (short explanation) and "code" (the full function body).
+
+Do NOT suggest or rewrite code when the user is just saying hello, asking what you do, or having a general conversation. When in doubt, respond with chat only and set "code" to null.
 
 ## Type Definitions
 ${POLICY_TYPEDEFS}
@@ -5189,7 +5197,7 @@ ${POLICY_TYPEDEFS}
 ## Example Policies
 ${EXAMPLE_POLICIES}
 
-## Your Task
+## Your Task (when the user asks for a code change)
 The user is editing the body of \`function ${targetFnName}(context: ${targetContextType})\`. You write ONLY the function body — do NOT include the function declaration or wrapping braces. The variable \`context\` is available.
 
 The function must return ${targetReturnType}.
@@ -5206,12 +5214,17 @@ ${targetEditor === 'pullRequest' && currentComplianceCode ? `Current Project Com
 ## Response Format
 Respond with a JSON object. ONLY output valid JSON, nothing else:
 {
+  "message": "Brief reply or explanation",
+  "code": null
+}
+or when the user explicitly asked for a code change:
+{
   "message": "Brief explanation of what the code does",
-  "code": "the complete function body as a string, or null if just answering a question"
+  "code": "the complete function body as a string"
 }
 
-If the user is asking a question (not requesting code), set "code" to null and answer in "message".
-When providing code, always provide the COMPLETE function body, not a partial diff. Use plain JavaScript (no TypeScript syntax).`;
+- For greetings, questions, or non-code requests: always use "code": null and answer in "message" only.
+- When providing code, always provide the COMPLETE function body, not a partial diff. Use plain JavaScript (no TypeScript syntax).`;
 
     const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
       { role: 'system', content: systemPrompt },
@@ -5227,14 +5240,7 @@ When providing code, always provide the COMPLETE function body, not a partial di
 
     messages.push({ role: 'user', content: message });
 
-    const openai = getOpenAIClient();
-    const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-
-    const stream = await openai.chat.completions.create({
-      model,
-      messages,
-      stream: true,
-    });
+    const provider = getPlatformProvider();
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -5242,16 +5248,19 @@ When providing code, always provide the COMPLETE function body, not a partial di
     res.flushHeaders();
 
     let fullContent = '';
+    let usage: { inputTokens: number; outputTokens: number } | undefined;
 
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content;
-      if (delta) {
-        fullContent += delta;
-        res.write(`data: ${JSON.stringify({ type: 'chunk', content: delta })}\n\n`);
+    for await (const chunk of provider.streamChat(messages, { model: 'gemini-2.5-flash' })) {
+      if (chunk.type === 'text' && chunk.content) {
+        fullContent += chunk.content;
+        res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk.content })}\n\n`);
+      } else if (chunk.type === 'done') {
+        if (chunk.usage) usage = chunk.usage;
+        break;
       }
     }
 
-    res.write(`data: ${JSON.stringify({ type: 'done', fullContent })}\n\n`);
+    res.write(`data: ${JSON.stringify({ type: 'done', fullContent, usage })}\n\n`);
     res.end();
   } catch (error: any) {
     console.error('Error in policy AI assist:', error);
@@ -5615,7 +5624,7 @@ router.get('/:id/teams/:teamId/connections', async (req: AuthRequest, res) => {
       .single();
     if (!membership) return res.status(403).json({ error: 'Access denied' });
 
-    const NOTIFICATION_PROVIDERS = ['slack', 'discord', 'jira', 'linear', 'asana', 'custom_notification', 'custom_ticketing', 'email'];
+    const NOTIFICATION_PROVIDERS = ['slack', 'discord', 'jira', 'linear', 'asana', 'pagerduty', 'custom_notification', 'custom_ticketing', 'email'];
 
     const [{ data: orgConns }, { data: teamConns }] = await Promise.all([
       supabase
@@ -5672,6 +5681,66 @@ router.delete('/:id/teams/:teamId/connections/:connectionId', async (req: AuthRe
   } catch (error: any) {
     console.error('Error deleting team connection:', error);
     res.status(500).json({ error: error.message || 'Failed to delete connection' });
+  }
+});
+
+// POST /api/organizations/:id/teams/:teamId/pagerduty/connect - PagerDuty connect at team level
+router.post('/:id/teams/:teamId/pagerduty/connect', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: orgId, teamId } = req.params;
+    const { routingKey, serviceName } = req.body;
+
+    if (!(await canManageTeamNotifications(orgId, teamId, userId))) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    if (!routingKey || routingKey.length < 20) {
+      return res.status(400).json({ error: 'Invalid PagerDuty routing key' });
+    }
+
+    const testResponse = await fetch('https://events.pagerduty.com/v2/enqueue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        routing_key: routingKey,
+        event_action: 'trigger',
+        dedup_key: `deptex-test-${Date.now()}`,
+        payload: { summary: 'Deptex connection test - you can resolve this incident', source: 'Deptex', severity: 'info' },
+      }),
+    });
+
+    if (!testResponse.ok) {
+      return res.status(400).json({ error: 'PagerDuty rejected the routing key' });
+    }
+
+    await fetch('https://events.pagerduty.com/v2/enqueue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ routing_key: routingKey, event_action: 'resolve', dedup_key: `deptex-test-${Date.now()}` }),
+    }).catch(() => {});
+
+    const { data: team } = await supabase
+      .from('teams')
+      .select('id')
+      .eq('id', teamId)
+      .eq('organization_id', orgId)
+      .single();
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+
+    await supabase.from('team_integrations').insert({
+      team_id: teamId,
+      provider: 'pagerduty',
+      access_token: routingKey,
+      display_name: serviceName || 'PagerDuty',
+      metadata: { service_name: serviceName },
+      status: 'connected',
+    });
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Team PagerDuty connect error:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -6395,6 +6464,9 @@ router.get('/:id/webhook-deliveries', async (req: AuthRequest, res) => {
       .in('repo_full_name', repoNames)
       .gte('created_at', cutoff);
 
+    // Exclude check_suite and check_run (recorded for audit but not actionable in UI)
+    query = query.not('event_type', 'in', '("check_suite","check_run")');
+
     if (provider !== 'ALL') query = query.eq('provider', provider);
     if (status !== 'ALL') query = query.eq('processing_status', status);
     if (eventType !== 'ALL') query = query.eq('event_type', eventType);
@@ -6458,7 +6530,8 @@ router.get('/:id/webhook-deliveries/stats', async (req: AuthRequest, res) => {
       .from('webhook_deliveries')
       .select('processing_status')
       .in('repo_full_name', repoNames)
-      .gte('created_at', cutoff);
+      .gte('created_at', cutoff)
+      .not('event_type', 'in', '("check_suite","check_run")');
 
     if (error) throw error;
 

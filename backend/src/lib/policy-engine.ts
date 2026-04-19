@@ -27,9 +27,6 @@ export interface PolicyDependencyContext {
   dependencyScore: number | null;
   maliciousIndicator: { source?: string; confidence?: number; reason?: string } | null;
   slsaLevel: number | null;
-  registryIntegrityStatus: string | null;
-  installScriptsStatus: string | null;
-  entropyAnalysisStatus: string | null;
 }
 
 export interface PolicyTierContext {
@@ -41,6 +38,17 @@ export interface PolicyTierContext {
 export interface PackagePolicyResult {
   allowed: boolean;
   reasons: string[];
+}
+
+/** Optional enrichment for preflight (registry + OpenSSF + SLSA + score). When provided, used instead of DB lookup. */
+export interface PreflightEnrichedInput {
+  license: string | null;
+  openSsfScore: number | null;
+  dependencyScore: number | null;
+  slsaLevel: number | null;
+  weeklyDownloads: number | null;
+  releasesLast12Months: number;
+  lastPublishedAt: string | null;
 }
 
 export interface ProjectStatusResult {
@@ -544,9 +552,6 @@ function buildSampleContext(
         dependencyScore: 75,
         maliciousIndicator: null,
         slsaLevel: 0,
-        registryIntegrityStatus: 'pass',
-        installScriptsStatus: 'pass',
-        entropyAnalysisStatus: 'pass',
       },
       tier: { name: 'Internal', rank: 3, multiplier: 1.0 },
     };
@@ -664,8 +669,7 @@ export async function evaluateProjectPolicies(
       is_outdated, versions_behind,
       dependencies!inner(name, version, license, openssf_score, weekly_downloads,
         last_published_at, releases_last_12_months, score, ecosystem),
-      dependency_versions!inner(malicious_indicator, slsa_level,
-        registry_integrity_status, install_scripts_status, entropy_analysis_status)
+      dependency_versions!inner(malicious_indicator, slsa_level)
     `)
     .eq('project_id', projectId);
 
@@ -688,9 +692,6 @@ export async function evaluateProjectPolicies(
         dependencyScore: depData?.score ?? null,
         maliciousIndicator: versionData?.malicious_indicator ?? null,
         slsaLevel: versionData?.slsa_level ?? null,
-        registryIntegrityStatus: versionData?.registry_integrity_status ?? null,
-        installScriptsStatus: versionData?.install_scripts_status ?? null,
-        entropyAnalysisStatus: versionData?.entropy_analysis_status ?? null,
       };
 
       const policyResult = await runPackagePolicy(packagePolicyCode, depContext, tier, organizationId);
@@ -821,13 +822,24 @@ export async function evaluateProjectPolicies(
 
 /**
  * Run preflight check on a single hypothetical dependency.
+ * Uses the project's (or org's) package policy code in the same sandbox as evaluateProjectPolicies.
+ * When enriched is provided (e.g. from enrichPackageForPreflight), uses it for context and return values; otherwise uses DB lookup.
  */
 export async function preflightCheck(
   organizationId: string,
   projectId: string,
   packageName: string,
   packageVersion: string,
-): Promise<PackagePolicyResult & { tierName: string }> {
+  enriched?: PreflightEnrichedInput | null,
+): Promise<
+  PackagePolicyResult & {
+    tierName: string;
+    license: string | null;
+    dependencyScore: number | null;
+    openSsfScore: number | null;
+    slsaLevel: number | null;
+  }
+> {
   const { data: project } = await supabase
     .from('projects')
     .select('asset_tier_id, effective_package_policy_code')
@@ -857,32 +869,70 @@ export async function preflightCheck(
   }
 
   if (!packagePolicyCode) {
-    return { allowed: true, reasons: [], tierName: tier.name };
+    return { allowed: true, reasons: [], tierName: tier.name, license: null, dependencyScore: null, openSsfScore: null, slsaLevel: null };
   }
 
-  // Check if package exists in DB
-  const { data: existingDep } = await supabase
-    .from('dependencies')
-    .select('name, license, openssf_score, weekly_downloads, last_published_at, releases_last_12_months, score')
-    .eq('name', packageName)
-    .single();
+  let license: string | null = null;
+  let openSsfScore: number | null = null;
+  let dependencyScore: number | null = null;
+  let slsaLevel: number | null = null;
+  let weeklyDownloads: number | null = null;
+  let lastPublishedAt: string | null = null;
+  let releasesLast12Months: number = 0;
+
+  if (enriched) {
+    license = enriched.license;
+    openSsfScore = enriched.openSsfScore;
+    dependencyScore = enriched.dependencyScore;
+    slsaLevel = enriched.slsaLevel;
+    weeklyDownloads = enriched.weeklyDownloads;
+    lastPublishedAt = enriched.lastPublishedAt;
+    releasesLast12Months = enriched.releasesLast12Months;
+  } else {
+    const { data: existingDep } = await supabase
+      .from('dependencies')
+      .select('id, name, license, openssf_score, weekly_downloads, last_published_at, releases_last_12_months, score')
+      .eq('name', packageName)
+      .single();
+    if (existingDep) {
+      license = existingDep.license ?? null;
+      openSsfScore = existingDep.openssf_score ?? null;
+      dependencyScore = existingDep.score ?? null;
+      weeklyDownloads = existingDep.weekly_downloads ?? null;
+      lastPublishedAt = existingDep.last_published_at ?? null;
+      releasesLast12Months = existingDep.releases_last_12_months ?? 0;
+      if (existingDep.id) {
+        const { data: versionRow } = await supabase
+          .from('dependency_versions')
+          .select('slsa_level')
+          .eq('dependency_id', existingDep.id)
+          .eq('version', packageVersion)
+          .maybeSingle();
+        if (versionRow?.slsa_level != null) slsaLevel = versionRow.slsa_level;
+      }
+    }
+  }
 
   const depContext: PolicyDependencyContext = {
     name: packageName,
     version: packageVersion,
-    license: existingDep?.license ?? null,
-    openSsfScore: existingDep?.openssf_score ?? null,
-    weeklyDownloads: existingDep?.weekly_downloads ?? null,
-    lastPublishedAt: existingDep?.last_published_at ?? null,
-    releasesLast12Months: existingDep?.releases_last_12_months ?? null,
-    dependencyScore: existingDep?.score ?? null,
+    license,
+    openSsfScore,
+    weeklyDownloads,
+    lastPublishedAt,
+    releasesLast12Months,
+    dependencyScore,
     maliciousIndicator: null,
-    slsaLevel: null,
-    registryIntegrityStatus: null,
-    installScriptsStatus: null,
-    entropyAnalysisStatus: null,
+    slsaLevel,
   };
 
   const result = await runPackagePolicy(packagePolicyCode, depContext, tier, organizationId);
-  return { ...result, tierName: tier.name };
+  return {
+    ...result,
+    tierName: tier.name,
+    license,
+    dependencyScore,
+    openSsfScore,
+    slsaLevel,
+  };
 }

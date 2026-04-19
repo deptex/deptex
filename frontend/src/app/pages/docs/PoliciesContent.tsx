@@ -95,7 +95,10 @@ export default function PoliciesContent() {
           </table>
         </div>
         <p className="text-foreground/90 leading-relaxed mt-3 text-sm">
-          Dependencies include license, score, vulnerabilities, reachability, and supply-chain signals (registry_integrity_status, install_scripts_status, entropy_analysis_status).
+          Dependencies include license, score, vulnerabilities, reachability, and supply-chain signals (e.g. SLSA level, malicious indicator). Supply-chain checks (registry integrity, install scripts, entropy) are available on the Watchtower and Supply Chain pages, not in package policy.
+        </p>
+        <p className="text-foreground/90 leading-relaxed mt-2 text-sm">
+          <strong>How packages are flagged as malicious:</strong> The platform sets a malicious flag when external signals (e.g. Socket.dev or other supply-chain checks) indicate risk. That state is stored per dependency/version and passed into <code className="rounded bg-background-subtle px-1 py-0.5 text-xs font-mono">packagePolicy(context)</code> as <code className="rounded bg-background-subtle px-1 py-0.5 text-xs font-mono">context.dependency.maliciousIndicator</code> (an object with <code className="rounded bg-background-subtle px-1 py-0.5 text-xs font-mono">source</code>, <code className="rounded bg-background-subtle px-1 py-0.5 text-xs font-mono">confidence</code>, <code className="rounded bg-background-subtle px-1 py-0.5 text-xs font-mono">reason</code>, or null if not flagged). You can block with e.g. <code className="rounded bg-background-subtle px-1 py-0.5 text-xs font-mono">if (context.dependency.maliciousIndicator) return &#123; allowed: false, reasons: [&#39;Package flagged as malicious&#39;] &#125;;</code>
         </p>
       </div>
 

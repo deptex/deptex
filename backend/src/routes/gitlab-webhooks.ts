@@ -245,7 +245,7 @@ async function handleGitLabPushEvent(payload: any): Promise<void> {
 
   const { data: rows } = await supabase
     .from('project_repositories')
-    .select('project_id, default_branch, package_json_path, sync_frequency, status, projects(organization_id)')
+    .select('project_id, repo_full_name, default_branch, package_json_path, sync_frequency, status, integration_id, ecosystem, projects(organization_id)')
     .eq('repo_full_name', repoFullName)
     .eq('provider', 'gitlab');
 
@@ -280,7 +280,31 @@ async function handleGitLabPushEvent(payload: any): Promise<void> {
 
     if (isAffected && row.sync_frequency === 'on_commit' && extractionCount < MAX_EXTRACTION_PER_PUSH) {
       try {
-        const result = await queueExtractionJob(row.project_id, orgId, row);
+        const branchName = ref.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length) : ref;
+        const commits = payload.commits ?? [];
+        const commitForAfter = commits.find((c: any) => (c.id || c.sha) === after);
+        const meta = {
+          trigger_type: 'webhook' as const,
+          commit_sha: after,
+          branch: branchName,
+          commit_message: commitForAfter ? (commitForAfter.message || '').slice(0, 500) : undefined,
+          commit_author: commitForAfter?.author
+            ? {
+                username: commitForAfter.author.username ?? commitForAfter.author.name,
+                avatar_url: commitForAfter.author.avatar_url,
+              }
+            : undefined,
+        };
+        const repoRecord = {
+          repo_full_name: row.repo_full_name ?? repoFullName,
+          installation_id: '',
+          default_branch: row.default_branch,
+          package_json_path: row.package_json_path ?? '',
+          ecosystem: row.ecosystem ?? 'npm',
+          provider: 'gitlab',
+          integration_id: row.integration_id ?? undefined,
+        };
+        const result = await queueExtractionJob(row.project_id, orgId, repoRecord, meta);
         if (result.success) extractionCount++;
       } catch (err: any) {
         console.error(`[gitlab-webhook] Extraction queue failed for ${row.project_id}:`, err?.message);

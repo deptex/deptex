@@ -58,6 +58,7 @@ async function processJob(supabase: SupabaseClient, job: ExtractionJobRow): Prom
         ecosystem: payload.ecosystem,
         provider: payload.provider,
         integration_id: payload.integration_id,
+        jobId: job.id,
       },
       logger,
       async () => isJobCancelled(supabase, job.id),

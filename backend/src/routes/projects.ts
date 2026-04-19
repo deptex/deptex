@@ -29,6 +29,11 @@ import { fetchGhsaVulnerabilitiesBatch, filterGhsaVulnsByVersion, ghsaSeverityTo
 import { getVulnCountsBatch, getVulnCountsForVersion, getVulnCountsForVersionsBatch, VulnCounts } from '../lib/vuln-counts';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
 import { emitEvent } from '../lib/event-bus';
+import {
+  registerGitLabWebhook,
+  registerBitbucketWebhook,
+  generateWebhookSecret,
+} from '../lib/webhook-registration';
 import pacote from 'pacote';
 import { calculateLatestSafeVersion, type LatestSafeVersionResponse } from '../lib/latest-safe-version';
 import {
@@ -714,6 +719,32 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
       }
     }
 
+    // Fetch status and asset tier display names/colors for list (org overview cards)
+    const statusById: Record<string, { name: string; color: string | null }> = {};
+    const tierById: Record<string, { name: string; color: string | null }> = {};
+    // Direct dependency counts per project (for org overview cards: "X direct deps")
+    let directDepsByProject: Record<string, number> = {};
+    const [[statusRes, tierRes], directDepsResult] = await Promise.all([
+      Promise.all([
+        supabase.from('organization_statuses').select('id, name, color').eq('organization_id', id),
+        supabase.from('organization_asset_tiers').select('id, name, color').eq('organization_id', id),
+      ]),
+      projectIds.length > 0
+        ? supabase
+            .from('project_dependencies')
+            .select('project_id')
+            .in('project_id', projectIds)
+            .eq('is_direct', true)
+        : Promise.resolve({ data: [] }),
+    ]);
+    const statusRows = (statusRes as any)?.data ?? [];
+    const tierRows = (tierRes as any)?.data ?? [];
+    (statusRows || []).forEach((s: any) => { statusById[s.id] = { name: s.name, color: s.color ?? null }; });
+    (tierRows || []).forEach((t: any) => { tierById[t.id] = { name: t.name, color: t.color ?? null }; });
+    (directDepsResult.data || []).forEach((row: any) => {
+      directDepsByProject[row.project_id] = (directDepsByProject[row.project_id] ?? 0) + 1;
+    });
+
     // Format projects with team_ids, team_names, owner_team, role, and permissions
     const formattedProjects = (projects || []).map((project: any) => {
       const role = projectRoles[project.id] || 'viewer';
@@ -766,6 +797,8 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
       }
 
       const repoStatus = repoStatusByProject[project.id] ?? null;
+      const statusInfo = project.status_id ? statusById[project.status_id] : null;
+      const tierInfo = project.asset_tier_id ? tierById[project.asset_tier_id] : null;
       return {
         id: project.id,
         organization_id: project.organization_id,
@@ -780,6 +813,7 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
         owner_team_id: ownerTeamId,
         owner_team_name: ownerTeamByProject[project.id]?.name || null,
         dependencies_count: project.dependencies_count || 0,
+        direct_dependencies_count: directDepsByProject[project.id] ?? 0,
         framework: project.framework || null,
         alerts_count: project.alerts_count || 0,
         repo_status: repoStatus?.status ?? null,
@@ -787,6 +821,12 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
         extraction_error: repoStatus?.extraction_error ?? null,
         role,
         permissions,
+        status_id: project.status_id ?? null,
+        status_name: statusInfo?.name ?? null,
+        status_color: statusInfo?.color ?? null,
+        asset_tier_id: project.asset_tier_id ?? null,
+        asset_tier_name: tierInfo?.name ?? null,
+        asset_tier_color: tierInfo?.color ?? null,
       };
     });
 
@@ -951,7 +991,7 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id } = req.params;
-    const { name, team_ids, asset_tier: assetTierRaw } = req.body;
+    const { name, team_ids, asset_tier: assetTierRaw, asset_tier_id: assetTierIdRaw } = req.body;
 
     if (!name || typeof name !== 'string') {
       return res.status(400).json({ error: 'Project name is required' });
@@ -1020,16 +1060,36 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
         ? assetTierRaw
         : 'EXTERNAL';
 
+    let insertAssetTierId: string | null = null;
+    if (assetTierIdRaw !== undefined && assetTierIdRaw !== null && assetTierIdRaw !== '') {
+      const tierId = typeof assetTierIdRaw === 'string' ? assetTierIdRaw.trim() : null;
+      if (tierId) {
+        const { data: tier, error: tierError } = await supabase
+          .from('organization_asset_tiers')
+          .select('id')
+          .eq('id', tierId)
+          .eq('organization_id', id)
+          .single();
+        if (tierError || !tier) {
+          return res.status(400).json({ error: 'asset_tier_id must be a valid asset tier for this organization' });
+        }
+        insertAssetTierId = tier.id;
+      }
+    }
+
+    const insertPayload: Record<string, any> = {
+      organization_id: id,
+      name: name.trim(),
+      health_score: 0,
+      status: 'compliant',
+      asset_tier: insertAssetTierId ? 'EXTERNAL' : assetTier,
+    };
+    if (insertAssetTierId) insertPayload.asset_tier_id = insertAssetTierId;
+
     // Create project
     const { data: project, error: projectError } = await supabase
       .from('projects')
-      .insert({
-        organization_id: id,
-        name: name.trim(),
-        health_score: 0,
-        status: 'compliant',
-        asset_tier: assetTier,
-      })
+      .insert(insertPayload)
       .select('*')
       .single();
 
@@ -1118,7 +1178,7 @@ router.put('/:id/projects/:projectId', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id, projectId } = req.params;
-    const { name, team_ids, auto_bump: autoBump, asset_tier: assetTierRaw } = req.body;
+    const { name, team_ids, auto_bump: autoBump, asset_tier: assetTierRaw, asset_tier_id: assetTierIdRaw, notifications_paused_until } = req.body;
 
     // Check if user has access to this project
     const accessCheck = await checkProjectAccess(userId, id, projectId);
@@ -1130,9 +1190,10 @@ router.put('/:id/projects/:projectId', async (req: AuthRequest, res) => {
     // When updating only auto_bump, also allow users with project-level edit_settings.
     const isOrgOwner = accessCheck.orgMembership?.role === 'owner';
     const hasOrgPermission = accessCheck.orgRole?.permissions?.manage_teams_and_projects === true;
-    const onlyAutoBump = name === undefined && team_ids === undefined && assetTierRaw === undefined && autoBump !== undefined;
-    const onlyAssetTier = name === undefined && team_ids === undefined && autoBump === undefined && assetTierRaw !== undefined;
-    const onlyNonStructuralUpdate = onlyAutoBump || onlyAssetTier;
+    const onlyAutoBump = name === undefined && team_ids === undefined && assetTierRaw === undefined && assetTierIdRaw === undefined && autoBump !== undefined && notifications_paused_until === undefined;
+    const onlyAssetTier = name === undefined && team_ids === undefined && autoBump === undefined && (assetTierRaw !== undefined || assetTierIdRaw !== undefined) && notifications_paused_until === undefined;
+    const onlyNotificationsPause = name === undefined && team_ids === undefined && assetTierRaw === undefined && assetTierIdRaw === undefined && autoBump === undefined && notifications_paused_until !== undefined;
+    const onlyNonStructuralUpdate = onlyAutoBump || onlyAssetTier || onlyNotificationsPause;
 
     if (!isOrgOwner && !hasOrgPermission) {
       if (!onlyNonStructuralUpdate) {
@@ -1202,11 +1263,37 @@ router.put('/:id/projects/:projectId', async (req: AuthRequest, res) => {
     }
 
     const VALID_ASSET_TIERS = ['CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION'];
-    if (assetTierRaw !== undefined) {
+    if (assetTierIdRaw !== undefined) {
+      if (assetTierIdRaw === null || assetTierIdRaw === '') {
+        updateData.asset_tier_id = null;
+        updateData.asset_tier = assetTierRaw ?? 'EXTERNAL';
+      } else {
+        const tierId = typeof assetTierIdRaw === 'string' ? assetTierIdRaw.trim() : null;
+        if (!tierId) {
+          return res.status(400).json({ error: 'asset_tier_id must be a valid UUID' });
+        }
+        const { data: tier, error: tierError } = await supabase
+          .from('organization_asset_tiers')
+          .select('id')
+          .eq('id', tierId)
+          .eq('organization_id', id)
+          .single();
+        if (tierError || !tier) {
+          return res.status(400).json({ error: 'asset_tier_id must be a valid asset tier for this organization' });
+        }
+        updateData.asset_tier_id = tier.id;
+        updateData.asset_tier = 'EXTERNAL';
+      }
+    } else if (assetTierRaw !== undefined) {
       if (typeof assetTierRaw !== 'string' || !VALID_ASSET_TIERS.includes(assetTierRaw)) {
         return res.status(400).json({ error: 'asset_tier must be one of: CROWN_JEWELS, EXTERNAL, INTERNAL, NON_PRODUCTION' });
       }
       updateData.asset_tier = assetTierRaw;
+      updateData.asset_tier_id = null;
+    }
+
+    if (notifications_paused_until !== undefined) {
+      updateData.notifications_paused_until = notifications_paused_until;
     }
 
     const { data: project, error: projectError } = await supabase
@@ -1574,6 +1661,8 @@ router.get('/:id/projects/:projectId', async (req: AuthRequest, res) => {
       asset_tier: project.asset_tier ?? null,
       asset_tier_id: project.asset_tier_id ?? null,
       status_id: project.status_id ?? null,
+      policy_evaluated_at: project.policy_evaluated_at ?? null,
+      status_violations: project.status_violations ?? [],
     };
 
     res.json(formattedProject);
@@ -2516,10 +2605,16 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
-    // Verify project exists and belongs to org
+    // Whether a policy change request from this user would be auto-accepted (owner/admin or manage_compliance)
+    const requestWillAutoAccept =
+      accessCheck.orgMembership?.role === 'owner' ||
+      accessCheck.orgMembership?.role === 'admin' ||
+      accessCheck.orgRole?.permissions?.manage_compliance === true;
+
+    // Verify project exists and belongs to org; include Phase 4 effective code columns
     const { data: project, error: projectError } = await supabase
       .from('projects')
-      .select('id, name')
+      .select('id, name, effective_package_policy_code, effective_project_status_code, effective_pr_check_code')
       .eq('id', projectId)
       .eq('organization_id', id)
       .single();
@@ -2528,7 +2623,7 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    // Get organization policy (policy as code)
+    // Get organization policy (legacy policy as code)
     const { data: orgPolicies } = await supabase
       .from('organization_policies')
       .select('policy_code')
@@ -2536,6 +2631,23 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
       .single();
 
     const inheritedPolicyCode = (orgPolicies?.policy_code ?? '').trim() || '';
+
+    // Phase 4: Get org split policy code (inherited per type)
+    const [
+      { data: orgPackagePolicy },
+      { data: orgStatusCode },
+      { data: orgPrCheck },
+    ] = await Promise.all([
+      supabase.from('organization_package_policies').select('package_policy_code').eq('organization_id', id).single(),
+      supabase.from('organization_status_codes').select('project_status_code').eq('organization_id', id).single(),
+      supabase.from('organization_pr_checks').select('pr_check_code').eq('organization_id', id).single(),
+    ]);
+    const inheritedPackagePolicyCode = (orgPackagePolicy?.package_policy_code ?? '').trim() || '';
+    const inheritedProjectStatusCode = (orgStatusCode?.project_status_code ?? '').trim() || '';
+    const inheritedPrCheckCode = (orgPrCheck?.pr_check_code ?? '').trim() || '';
+    const effectivePackagePolicyCode = (project as any).effective_package_policy_code?.trim() || inheritedPackagePolicyCode;
+    const effectiveProjectStatusCode = (project as any).effective_project_status_code?.trim() || inheritedProjectStatusCode;
+    const effectivePrCheckCode = (project as any).effective_pr_check_code?.trim() || inheritedPrCheckCode;
 
     // Get all exceptions for this project (accepted and pending)
     const { data: exceptions } = await supabase
@@ -2628,6 +2740,14 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
       effective,
       pending_exceptions: pendingExceptionsLegacy,
       revoked_exceptions: revokedExceptionsLegacy,
+      // Phase 4: split policy code (inherited from org, effective = project override or inherited)
+      inherited_package_policy_code: inheritedPackagePolicyCode,
+      inherited_project_status_code: inheritedProjectStatusCode,
+      inherited_pr_check_code: inheritedPrCheckCode,
+      effective_package_policy_code: effectivePackagePolicyCode,
+      effective_project_status_code: effectiveProjectStatusCode,
+      effective_pr_check_code: effectivePrCheckCode,
+      request_will_auto_accept: requestWillAutoAccept,
     });
   } catch (error: any) {
     console.error('Error fetching project policies:', error);
@@ -3811,6 +3931,9 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
           auto_fix_vulnerabilities_enabled: (repoRecord as { auto_fix_vulnerabilities_enabled?: boolean }).auto_fix_vulnerabilities_enabled === true,
           connected_at: (repoRecord as { created_at?: string }).created_at ?? null,
           sync_frequency: (repoRecord as { sync_frequency?: string }).sync_frequency ?? 'daily',
+          webhook_status: (repoRecord as { webhook_status?: string }).webhook_status ?? null,
+          last_webhook_at: (repoRecord as { last_webhook_at?: string }).last_webhook_at ?? null,
+          last_webhook_event: (repoRecord as { last_webhook_event?: string }).last_webhook_event ?? null,
         }
         : null,
       repositories: allRepos,
@@ -4020,6 +4143,62 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
         .update({ framework, updated_at: new Date().toISOString() })
         .eq('id', projectId)
         .eq('organization_id', id);
+    }
+
+    // Register per-repo webhook for GitLab/Bitbucket so push/PR events are received
+    if (
+      (resolvedProvider === 'gitlab' || resolvedProvider === 'bitbucket') &&
+      integrationId
+    ) {
+      const integ = await getIntegrationById(id, integrationId);
+      const token = integ?.access_token;
+      if (token) {
+        const backendUrl = (process.env.BACKEND_URL || process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/$/, '');
+        const secret = generateWebhookSecret();
+        try {
+          if (resolvedProvider === 'gitlab') {
+            const baseUrl = (integ.metadata as any)?.base_url || 'https://gitlab.com';
+            const { id: hookId } = await registerGitLabWebhook(
+              baseUrl,
+              token,
+              Number(repo_id),
+              `${backendUrl}/api/integrations/webhooks/gitlab`,
+              secret
+            );
+            await supabase
+              .from('project_repositories')
+              .update({
+                webhook_id: String(hookId),
+                webhook_secret: secret,
+                webhook_status: 'active',
+                updated_at: new Date().toISOString(),
+              })
+              .eq('project_id', projectId);
+          } else if (resolvedProvider === 'bitbucket') {
+            const [workspace, repoSlug] = String(repo_full_name).split('/');
+            if (workspace && repoSlug) {
+              const { uuid } = await registerBitbucketWebhook(
+                token,
+                workspace,
+                repoSlug,
+                `${backendUrl}/api/integrations/webhooks/bitbucket`,
+                secret
+              );
+              await supabase
+                .from('project_repositories')
+                .update({
+                  webhook_id: uuid,
+                  webhook_secret: secret,
+                  webhook_status: 'active',
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('project_id', projectId);
+            }
+          }
+        } catch (webhookErr: any) {
+          console.warn('[EXTRACT] Webhook registration failed (repo still connected):', webhookErr?.message || webhookErr);
+        }
+      }
     }
 
     res.json({
@@ -4335,7 +4514,13 @@ router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthR
 });
 
 /** Fetches and enriches project dependencies from the DB. Used for cache refresh and when cache misses. */
-async function fetchEnrichedDependenciesForProject(organizationId: string, projectId: string): Promise<any[]> {
+async function fetchEnrichedDependenciesForProject(
+  organizationId: string,
+  projectId: string,
+  options?: { debugTiming?: boolean }
+): Promise<any[]> {
+  const debugTiming = options?.debugTiming === true;
+  const t0 = debugTiming ? Date.now() : 0;
   // Get project dependencies with joined dependency analysis data
     // Note: license column was removed from project_dependencies - it now comes from dependencies table
     // is_watching and watchtower_cleared_at come from organization_watchlist (org-level)
@@ -4393,7 +4578,7 @@ async function fetchEnrichedDependenciesForProject(organizationId: string, proje
             Array.from({ length: Math.ceil(dependencyIds.length / BATCH_SIZE) }, (_, i) => {
               const batch = dependencyIds.slice(i * BATCH_SIZE, (i + 1) * BATCH_SIZE);
               return supabase.from('dependencies').select(`
-                id, license, github_url, status, score, openssf_penalty, popularity_penalty, maintenance_penalty,
+                id, license, github_url, status, score, ecosystem, openssf_penalty, popularity_penalty, maintenance_penalty,
                 openssf_score, openssf_data, weekly_downloads, last_published_at, releases_last_12_months, analyzed_at
               `).in('id', batch);
             })
@@ -4403,7 +4588,7 @@ async function fetchEnrichedDependenciesForProject(organizationId: string, proje
         ? Promise.all(
             Array.from({ length: Math.ceil(dependencyVersionIds.length / BATCH_SIZE) }, (_, i) => {
               const batch = dependencyVersionIds.slice(i * BATCH_SIZE, (i + 1) * BATCH_SIZE);
-              return supabase.from('dependency_versions').select('id, dependency_id, version, analyzed_at, dependencies(license)').in('id', batch);
+              return supabase.from('dependency_versions').select('id, dependency_id, version, analyzed_at, slsa_level, dependencies(license)').in('id', batch);
             })
           )
         : Promise.resolve([]),
@@ -4422,10 +4607,12 @@ async function fetchEnrichedDependenciesForProject(organizationId: string, proje
         ? supabase.from('project_dependency_files').select('project_dependency_id, file_path').in('project_dependency_id', projectDepIds).order('file_path')
         : Promise.resolve({ data: null }),
       namesNeedingFallback.length > 0
-        ? supabase.from('dependencies').select('name, github_url, openssf_score, openssf_data, license, weekly_downloads, last_published_at, openssf_penalty, popularity_penalty, maintenance_penalty, releases_last_12_months, status, score, analyzed_at').in('name', namesNeedingFallback)
+        ? supabase.from('dependencies').select('name, github_url, openssf_score, openssf_data, license, weekly_downloads, last_published_at, openssf_penalty, popularity_penalty, maintenance_penalty, releases_last_12_months, status, score, ecosystem, analyzed_at').in('name', namesNeedingFallback)
         : Promise.resolve({ data: null }),
       supabase.from('project_teams').select('team_id').eq('project_id', projectId),
     ]);
+    const t1 = debugTiming ? Date.now() : 0;
+    if (debugTiming) console.log('[fetchEnrichedDependencies] project_deps + wave1', t1 - t0, 'ms');
 
     const watchlistByDependencyId = new Map<string, { watchtower_cleared_at: string | null }>();
     if (watchlistResult.data) {
@@ -4463,6 +4650,8 @@ async function fetchEnrichedDependenciesForProject(organizationId: string, proje
     if (allPairs.length > 0) {
       vulnCountsByKey = await getVulnCountsBatch(supabase, allPairs);
     }
+    const t2 = debugTiming ? Date.now() : 0;
+    if (debugTiming) console.log('[fetchEnrichedDependencies] getVulnCountsBatch', t2 - t1, 'ms (pairs:', allPairs.length, ')');
 
     const projectVersionIdSet = new Set(dependencyVersionIds);
     const childToParentVersionId = new Map<string, string>();
@@ -4539,7 +4728,7 @@ async function fetchEnrichedDependenciesForProject(organizationId: string, proje
               const batch = allNamesForScore.slice(i * NAME_BATCH_SIZE, (i + 1) * NAME_BATCH_SIZE);
               if (batch.length === 0) return Promise.resolve({ data: null });
               const orFilter = batch.map((n: string) => `name.ilike.${n.replace(/,/g, '\\,')}`).join(',');
-              return supabase.from('dependencies').select('name, openssf_score, openssf_data, weekly_downloads, last_published_at, openssf_penalty, popularity_penalty, maintenance_penalty, releases_last_12_months, status, score, analyzed_at').or(orFilter);
+              return supabase.from('dependencies').select('name, openssf_score, openssf_data, weekly_downloads, last_published_at, openssf_penalty, popularity_penalty, maintenance_penalty, releases_last_12_months, status, score, ecosystem, analyzed_at').or(orFilter);
             })
           )
         : Promise.resolve([]),
@@ -4548,7 +4737,7 @@ async function fetchEnrichedDependenciesForProject(organizationId: string, proje
             Array.from({ length: Math.ceil(versionDependencyIds.length / BATCH_SIZE) }, (_, i) => {
               const batch = versionDependencyIds.slice(i * BATCH_SIZE, (i + 1) * BATCH_SIZE);
               return supabase.from('dependencies').select(`
-                id, license, github_url, status, score, openssf_penalty, popularity_penalty, maintenance_penalty,
+                id, license, github_url, status, score, ecosystem, openssf_penalty, popularity_penalty, maintenance_penalty,
                 openssf_score, openssf_data, weekly_downloads, last_published_at, releases_last_12_months, analyzed_at
               `).in('id', batch);
             })
@@ -4559,6 +4748,8 @@ async function fetchEnrichedDependenciesForProject(organizationId: string, proje
       depIds.length > 0 ? supabase.from('banned_versions').select('dependency_id, banned_version').eq('organization_id', organizationId).in('dependency_id', depIds) : Promise.resolve({ data: null }),
       depIds.length > 0 && teamIds.length > 0 ? supabase.from('team_banned_versions').select('dependency_id, banned_version').in('team_id', teamIds).in('dependency_id', depIds) : Promise.resolve({ data: null }),
     ]);
+    const t3 = debugTiming ? Date.now() : 0;
+    if (debugTiming) console.log('[fetchEnrichedDependencies] wave2', t3 - t2, 'ms');
 
     const scoreFallbackByName = new Map<string, { openssf_score: number | null; openssf_data: any; weekly_downloads: number | null; last_published_at: string | null; openssf_penalty?: number; popularity_penalty?: number; maintenance_penalty?: number; releases_last_12_months?: number | null; status?: string; score?: number | null; analyzed_at?: string | null }>();
     for (const resp of scoreFallbackBatches as Array<{ data: any[] | null }>) {
@@ -4706,8 +4897,12 @@ async function fetchEnrichedDependenciesForProject(organizationId: string, proje
       const effectiveDepIdForBan = pd.dependency_id || depIdFromVersion;
       const isBannedComputed = !!(effectiveDepIdForBan && pd.version && bannedKeySet.has(`${effectiveDepIdForBan}|${pd.version}`));
 
+      const ecosystemVal = effectivePackageAnalysis?.ecosystem ?? byNameRow?.ecosystem ?? null;
+      const slsaLevelVal = versionAnalysis?.slsa_level ?? null;
       const out = {
         ...pd,
+        ecosystem: ecosystemVal,
+        slsa_level: slsaLevelVal,
         is_watching: !!watchlistRow,
         watchtower_cleared_at: watchlistRow?.watchtower_cleared_at ?? null,
         license: licenseFromJoin ?? null,
@@ -4722,6 +4917,7 @@ async function fetchEnrichedDependenciesForProject(organizationId: string, proje
       return out;
     });
 
+  if (debugTiming) console.log('[fetchEnrichedDependencies] total', Date.now() - t0, 'ms');
   return enrichedDeps;
 }
 
@@ -4750,7 +4946,8 @@ router.get('/:id/projects/:projectId/dependencies', async (req: AuthRequest, res
       await invalidateDependenciesCache(id, projectId);
     }
 
-    const enrichedDeps = await fetchEnrichedDependenciesForProject(id, projectId);
+    const debugTiming = req.query.debug_timing === '1';
+    const enrichedDeps = await fetchEnrichedDependenciesForProject(id, projectId, { debugTiming });
     await setCached(depsCacheKey, enrichedDeps, CACHE_TTL_SECONDS.DEPENDENCIES).catch((err: any) => {
       console.warn('[Cache] Failed to set dependencies cache:', err?.message);
     });
@@ -5115,7 +5312,7 @@ router.post('/:id/projects/:projectId/dependencies/:projectDependencyId/analyze-
       console.warn('Failed to fetch code from GitHub for AI analysis, proceeding with metadata only:', githubError);
     }
 
-    // 6. Build the OpenAI prompt
+    // 6. Build the prompt (Tier-1: Gemini Flash via platform provider)
     const systemPrompt = `You are a senior software architect reviewing how a dependency is used in a codebase. Provide:
 (1) A 2-3 sentence summary of the dependency's role and criticality in this project.
 (2) One representative code example from the provided files showing how it's used, formatted as a markdown code block with the file path as a comment above it.
@@ -5137,21 +5334,18 @@ ${allFilePaths.length > 0 ? allFilePaths.map((fp: string) => `- ${fp}`).join('\n
       }
     }
 
-    // 7. Call OpenAI
-    const { getOpenAIClient } = await import('../lib/openai');
-    const openai = getOpenAIClient();
-
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
+    // 7. Call platform provider (Gemini Flash)
+    const { getPlatformProvider } = await import('../lib/ai/provider');
+    const provider = getPlatformProvider();
+    const chatResult = await provider.chat(
+      [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
-      temperature: 0.3,
-      max_tokens: 500,
-    });
+      { temperature: 0.3, maxTokens: 500 }
+    );
 
-    const aiSummary = completion.choices[0]?.message?.content || 'Analysis could not be generated.';
+    const aiSummary = chatResult.content?.trim() || 'Analysis could not be generated.';
     const analyzedAt = new Date().toISOString();
 
     // 8. Store the result
@@ -8966,6 +9160,7 @@ router.post('/:id/bump-all', async (req: AuthRequest, res) => {
 
 import { evaluateProjectPolicies, validatePolicyCode, preflightCheck } from '../lib/policy-engine';
 import { checkRateLimit } from '../lib/rate-limit';
+import { enrichPackageForPreflight } from './workers';
 
 // POST /api/organizations/:id/projects/:projectId/evaluate-policy
 router.post('/:id/projects/:projectId/evaluate-policy', async (req: AuthRequest, res) => {
@@ -9075,14 +9270,25 @@ router.post('/:id/projects/:projectId/preflight-check', async (req: AuthRequest,
       return res.status(400).json({ error: 'packageName is required' });
     }
 
-    const result = await preflightCheck(organizationId, projectId, packageName, packageVersion || 'latest');
+    const eco = (ecosystem && typeof ecosystem === 'string' ? ecosystem : 'npm').toLowerCase();
+    const version = packageVersion || 'latest';
+    let enriched: Awaited<ReturnType<typeof enrichPackageForPreflight>> | null = null;
+    try {
+      enriched = await enrichPackageForPreflight(eco, packageName, version);
+    } catch (e: any) {
+      console.warn('Preflight enrich failed, continuing with DB-only:', e?.message);
+    }
+    const result = await preflightCheck(organizationId, projectId, packageName, version, enriched ?? undefined);
 
     res.json({
       allowed: result.allowed,
       reasons: result.reasons,
       tierName: result.tierName,
       ecosystem: ecosystem || 'npm',
-      disclaimer: 'Some fields (reachability, filesImportingCount, isOutdated) are unavailable in preflight mode.',
+      license: result.license ?? undefined,
+      dependencyScore: result.dependencyScore ?? undefined,
+      openSsfScore: result.openSsfScore ?? undefined,
+      slsaLevel: result.slsaLevel ?? undefined,
     });
   } catch (error: any) {
     console.error('Error running preflight check:', error);
@@ -9400,12 +9606,33 @@ router.get('/:id/projects/:projectId/sbom', async (req: AuthRequest, res) => {
       .eq('id', projectId)
       .single();
 
-    const storagePath = `project-imports/${projectId}/${latestJob.id}/sbom.json`;
-    const { data: fileData, error: storageError } = await supabase.storage
+    // Prefer path by extraction_job id (matches worker after fix). Fallback: list run folders and try each
+    // (older extractions may have uploaded to projectId/{timestamp}/sbom.json).
+    let fileData: Blob | null = null;
+    const { data: byId, error: byIdError } = await supabase.storage
       .from('project-imports')
       .download(`${projectId}/${latestJob.id}/sbom.json`);
-
-    if (storageError || !fileData) {
+    if (!byIdError && byId) {
+      fileData = byId;
+    }
+    if (!fileData) {
+      const { data: runFolders, error: listError } = await supabase.storage
+        .from('project-imports')
+        .list(projectId, { limit: 50 });
+      if (!listError && runFolders?.length) {
+        for (const entry of runFolders) {
+          if (!entry.name || entry.name === '.emptyFolderPlaceholder') continue;
+          const { data: blob } = await supabase.storage
+            .from('project-imports')
+            .download(`${projectId}/${entry.name}/sbom.json`);
+          if (blob) {
+            fileData = blob;
+            break;
+          }
+        }
+      }
+    }
+    if (!fileData) {
       return res.status(404).json({ error: 'SBOM file not found in storage. The extraction may not have completed successfully.' });
     }
 
@@ -9716,19 +9943,16 @@ router.post('/:id/projects/:projectId/apply-exception', async (req: AuthRequest,
       return res.status(503).json({ error: 'AI service temporarily unavailable - please request the exception manually.' });
     }
 
-    const prompt = `You are modifying a JavaScript policy function called packagePolicy() used in a dependency security platform.
+    const prompt = `You are modifying the packagePolicy() function for a dependency security platform. The engine runs ONLY packagePolicy(context) once per dependency. Context has context.dependency (one package: name, version, license, dependencyScore, maliciousIndicator, etc.) and context.tier (name, rank, multiplier). You MUST return { allowed: boolean, reasons: string[] } — nothing else (no projectCompliance, no compliant/violations).
 
 Current policy code:
 \`\`\`javascript
 ${currentPolicyCode}
 \`\`\`
 
-The package "${packageName}"${version ? ` at version "${version}"` : ''} is currently blocked by this policy.
-${reason ? `Reason for exception: ${reason}` : ''}
+The package "${packageName}"${version ? ` at version "${version}"` : ''} is currently blocked. Add a single exception at the top of the function (early return) that allows this package${version ? ` at this version` : ''}. Keep every other rule exactly as-is; do not rewrite the rest of the function.
 
-Modify the policy function to add a specific exception that allows this package${version ? ` at this version` : ''} while keeping all other policy rules intact. Add the exception at the beginning of the function as an early return.
-
-Return ONLY the complete modified function code (the full packagePolicy function), no explanation, no markdown fences.`;
+Return ONLY the full packagePolicy function code, no explanation, no markdown.`;
 
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
     const geminiController = new AbortController();
@@ -10662,7 +10886,7 @@ router.get('/:id/projects/:projectId/commits', async (req: AuthRequest, res) => 
   try {
     const userId = req.user!.id;
     const { id, projectId } = req.params;
-    const status = (req.query.status as string) || 'ALL';
+    const status = (req.query.compliance_status || req.query.status) as string || 'ALL';
     const timeframe = (req.query.timeframe as string) || 'ALL';
     const search = (req.query.search as string) || '';
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
@@ -10706,7 +10930,7 @@ router.get('/:id/projects/:projectId/commits', async (req: AuthRequest, res) => 
     const { data, error, count } = await query;
     if (error) throw error;
 
-    res.json({ commits: data ?? [], total: count ?? 0, page, per_page: perPage });
+    res.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage });
   } catch (error: any) {
     console.error('Error fetching project commits:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch project commits' });
@@ -10814,7 +11038,7 @@ router.get('/:id/projects/:projectId/pull-requests', async (req: AuthRequest, re
     const { data, error, count } = await query;
     if (error) throw error;
 
-    res.json({ pullRequests: data ?? [], total: count ?? 0, page, per_page: perPage });
+    res.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage });
   } catch (error: any) {
     console.error('Error fetching project pull requests:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch project pull requests' });
@@ -10889,6 +11113,9 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
     const directDeps = depsRows.filter((d: any) => d.is_direct === true);
     const transitiveDeps = depsRows.filter((d: any) => d.is_direct === false);
     const outdated = depsRows.filter((d: any) => d.is_outdated === true).length;
+    const vulnerableDepIds = new Set(vulnRows.map((v: any) => v.project_dependency_id));
+    const vulnerable = vulnerableDepIds.size;
+    const healthy = depsRows.length - vulnerable;
 
     // Action items
     const actionItems: any[] = [];
@@ -10969,7 +11196,7 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       compliance: { percent: compliancePercent, compliant, failing, not_evaluated: notEvaluated, total: depsRows.length },
       vulnerabilities: { total: vulnRows.length, critical: vulnCritical, high: vulnHigh, medium: vulnMedium, low: vulnLow, reachable_count: reachableCount },
       code_findings: { semgrep_count: semgrepCount, secret_count: secretCount, verified_secret_count: verifiedSecretCount },
-      dependencies: { total: depsRows.length, direct: directDeps.length, transitive: transitiveDeps.length, outdated },
+      dependencies: { total: depsRows.length, direct: directDeps.length, transitive: transitiveDeps.length, outdated, healthy, vulnerable },
       sync: {
         status: repoRow?.status ?? 'not_connected',
         extraction_step: repoRow?.extraction_step ?? null,
@@ -10995,6 +11222,56 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
   } catch (error: any) {
     console.error('Error fetching project stats:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch project stats' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/vulnerability-timeline?days=30
+router.get('/:id/projects/:projectId/vulnerability-timeline', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: organizationId, projectId } = req.params;
+    const days = Math.min(90, Math.max(7, parseInt(String(req.query.days), 10) || 30));
+
+    const accessCheck = await checkProjectAccess(userId, organizationId, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    const sinceIso = since.toISOString();
+
+    const { data: events } = await supabase
+      .from('project_vulnerability_events')
+      .select('event_type, created_at')
+      .eq('project_id', projectId)
+      .gte('created_at', sinceIso)
+      .order('created_at', { ascending: true });
+
+    const byDate = new Map<string, { detected: number; resolved: number }>();
+    for (const e of events ?? []) {
+      const date = (e.created_at || '').slice(0, 10);
+      if (!date) continue;
+      let row = byDate.get(date);
+      if (!row) {
+        row = { detected: 0, resolved: 0 };
+        byDate.set(date, row);
+      }
+      if (e.event_type === 'detected') row.detected += 1;
+      else if (e.event_type === 'resolved') row.resolved += 1;
+    }
+
+    const sortedDates = Array.from(byDate.keys()).sort();
+    const timeline = sortedDates.map((date) => ({
+      date,
+      detected: byDate.get(date)!.detected,
+      resolved: byDate.get(date)!.resolved,
+    }));
+
+    res.json({ timeline });
+  } catch (error: any) {
+    console.error('Error fetching vulnerability timeline:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch vulnerability timeline' });
   }
 });
 
@@ -11607,7 +11884,7 @@ router.get('/:orgId/projects/:projectId/watchtower/packages', async (req: AuthRe
 
     const { data: directDeps } = await supabase
       .from('project_dependencies')
-      .select('dependency_id, name, version, files_importing_count, ecosystem')
+      .select('dependency_id, name, version, files_importing_count')
       .eq('project_id', projectId)
       .eq('is_direct', true);
 
@@ -11683,7 +11960,7 @@ router.get('/:orgId/projects/:projectId/watchtower/packages', async (req: AuthRe
         import_count: dep.files_importing_count || 0,
         analysis_status: watched?.status || 'pending',
         analysis_error: watched?.error_message || null,
-        ecosystem: latest?.ecosystem || dep.ecosystem || 'npm',
+        ecosystem: latest?.ecosystem || 'npm',
       };
     });
 
