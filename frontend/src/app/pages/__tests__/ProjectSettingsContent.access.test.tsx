@@ -209,6 +209,62 @@ describe('ProjectSettingsPage – Access', () => {
     });
   });
 
+  it('selecting a team in the modal and clicking Add calls api.addProjectContributingTeam', async () => {
+    mockGetTeams.mockResolvedValue([
+      { id: 'team-3', name: 'Other Team', description: '', avatar_url: null },
+    ]);
+    render(<ProjectSettingsPage />);
+    await waitFor(() => expect(screen.getByRole('button', { name: /Add Team/ })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /Add Team/ }));
+    await waitFor(() => expect(screen.getByText('Other Team')).toBeInTheDocument());
+    await userEvent.click(screen.getByText('Other Team'));
+    const addBtn = screen.getByRole('button', { name: /Add/ });
+    await userEvent.click(addBtn);
+    await waitFor(() => {
+      expect(mockAddProjectContributingTeam).toHaveBeenCalledWith('org-1', 'proj-1', 'team-3');
+    });
+  });
+
+  it('selecting a member in the modal and clicking Add calls api.addProjectMember', async () => {
+    mockGetOrganizationMembers.mockResolvedValue([
+      { user_id: 'user-2', full_name: 'New User', email: 'new@test.com', avatar_url: null },
+    ]);
+    render(<ProjectSettingsPage />);
+    await waitFor(() => expect(screen.getByRole('button', { name: /Add Member/ })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /Add Member/ }));
+    await waitFor(() => expect(screen.getByText('New User')).toBeInTheDocument());
+    await userEvent.click(screen.getByText('New User'));
+    const addBtn = screen.getByRole('button', { name: /Add/ });
+    await userEvent.click(addBtn);
+    await waitFor(() => {
+      expect(mockAddProjectMember).toHaveBeenCalledWith('org-1', 'proj-1', 'user-2');
+    });
+  });
+
+  it('team stays in list when remove API fails', async () => {
+    mockRemoveProjectContributingTeam.mockRejectedValue(new Error('Failed'));
+    render(<ProjectSettingsPage />);
+    await waitFor(() => expect(screen.getByText('Contrib Team')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /Remove team Contrib Team/i }));
+    await waitFor(() => {
+      expect(mockRemoveProjectContributingTeam).toHaveBeenCalled();
+    });
+    // Team should still be visible — state not updated on failure
+    expect(screen.getByText('Contrib Team')).toBeInTheDocument();
+  });
+
+  it('member stays in list when remove API fails', async () => {
+    mockRemoveProjectMember.mockRejectedValue(new Error('Failed'));
+    render(<ProjectSettingsPage />);
+    await waitFor(() => expect(screen.getByText('Direct Member')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /Remove member Direct Member/i }));
+    await waitFor(() => {
+      expect(mockRemoveProjectMember).toHaveBeenCalled();
+    });
+    // Member should still be visible — state not updated on failure
+    expect(screen.getByText('Direct Member')).toBeInTheDocument();
+  });
+
   it('remove contributing team calls api and refreshes list', async () => {
     render(<ProjectSettingsPage />);
     await waitFor(() => {

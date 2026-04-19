@@ -37,7 +37,7 @@ export interface CreateProjectSidebarProps {
   teams: Team[];
   lockedTeam?: Team | null;
   onProjectsReload?: () => void;
-  onProjectCreated?: (project: Project) => void;
+  onProjectCreated?: (project: Project, framework?: string | null) => void;
 }
 
 export function CreateProjectSidebar({
@@ -252,9 +252,12 @@ export function CreateProjectSidebar({
     }
 
     const teamIds = teamLocked && lockedTeam ? [lockedTeam.id] : effectiveTeamId ? [effectiveTeamId] : undefined;
-    const createPayload: { name: string; team_ids?: string[]; asset_tier?: AssetTier; asset_tier_id?: string | null } = {
+    const cachedScan = sidebarRepoToConnect ? sidebarRepoScanResultsByRepo[sidebarRepoToConnect.full_name] : null;
+    const effectiveFramework = cachedScan?.framework || sidebarRepoToConnect?.framework || null;
+    const createPayload: { name: string; team_ids?: string[]; asset_tier?: AssetTier; asset_tier_id?: string | null; framework?: string | null } = {
       name: projectName.trim(),
       team_ids: teamIds,
+      framework: effectiveFramework || undefined,
     };
     if (orgAssetTiers.length > 0 && selectedAssetTierId) {
       createPayload.asset_tier_id = selectedAssetTierId;
@@ -266,8 +269,12 @@ export function CreateProjectSidebar({
     try {
       const newProject = await api.createProject(organizationId, createPayload);
 
-      onProjectCreated?.(newProject);
-      onProjectsReload?.();
+      onProjectCreated?.(newProject, effectiveFramework);
+      // Skip the first reload when a repo is being connected — connectProjectRepository
+      // will trigger its own reload with complete data (framework, repo status, etc.)
+      if (!sidebarRepoToConnect) {
+        onProjectsReload?.();
+      }
 
       if (sidebarRepoToConnect) {
         const cachedScan = sidebarRepoScanResultsByRepo[sidebarRepoToConnect.full_name];
@@ -293,6 +300,7 @@ export function CreateProjectSidebar({
                 provider: sidebarRepoToConnect.provider,
                 integration_id: sidebarRepoToConnect.integration_id,
               });
+              onProjectsReload?.();
               toast({ title: 'Repository connected', description: 'Extraction has started.' });
               closeModal();
             } catch (err: any) {
@@ -320,6 +328,7 @@ export function CreateProjectSidebar({
                   provider: sidebarRepoToConnect.provider,
                   integration_id: sidebarRepoToConnect.integration_id,
                 });
+                onProjectsReload?.();
                 toast({ title: 'Repository connected', description: 'Extraction has started.' });
                 closeModal();
               } else {
@@ -364,6 +373,7 @@ export function CreateProjectSidebar({
         provider: sidebarRepoToConnect.provider,
         integration_id: sidebarRepoToConnect.integration_id,
       });
+      onProjectsReload?.();
       closeModal();
       toast({ title: 'Repository connected', description: 'Extraction has started. This may take a few minutes.' });
     } catch (err: any) {

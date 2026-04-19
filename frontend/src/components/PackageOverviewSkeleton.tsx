@@ -32,7 +32,7 @@ export function PackageOverviewSkeleton() {
 
       {/* Usage Card – mirrors real layout: darker header, border, icon + title, then status row (text left, buttons right) */}
       <Card className="border-border">
-        <CardHeader className="p-4 pt-3 pb-3 rounded-t-lg bg-[#141618] border-b border-border">
+        <CardHeader className="p-4 pt-3 pb-3 rounded-t-lg bg-background-card-header border-b border-border">
           <div className="flex items-center gap-2">
             <div className="h-5 w-5 rounded bg-muted animate-pulse shrink-0" />
             <CardTitle className="text-base">

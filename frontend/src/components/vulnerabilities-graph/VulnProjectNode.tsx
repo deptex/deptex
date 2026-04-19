@@ -24,6 +24,8 @@ export interface VulnProjectNodeData {
   isExtracting?: boolean;
   /** When true, this is the first-ever extraction — grey out node, show spinner badge. Re-syncs keep normal appearance. */
   isInitialExtracting?: boolean;
+  /** When true, the first-ever extraction failed — show "Extraction failed" in status strip instead of "No status". */
+  isInitialExtractionFailed?: boolean;
   /** When true (team node only), team has projects still extracting — show grey so color reflects known risk only. */
   hasExtractingProjects?: boolean;
   /** When true, use neutral grey styling only (no severity colors). Used for org overview graph. */
@@ -155,7 +157,7 @@ function statusBadgeColorFallback(label: string | null | undefined): string | nu
 }
 
 function VulnProjectNodeComponent({ data }: NodeProps) {
-  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, isInitialExtracting, hasExtractingProjects, neutralStyle, roleBadge, roleBadgeColor, statusBadge, statusBadgeColor, riskGrade, projectsCount, membersCount, dependenciesCount, assetTierName, overviewOrgEdgeTargetHandle } =
+  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, isInitialExtracting, isInitialExtractionFailed, hasExtractingProjects, neutralStyle, roleBadge, roleBadgeColor, statusBadge, statusBadgeColor, riskGrade, projectsCount, membersCount, dependenciesCount, assetTierName, overviewOrgEdgeTargetHandle } =
     (data as unknown as VulnProjectNodeData) ?? {};
   const hasKnownFramework = framework && framework.toLowerCase() !== 'unknown';
   const frameworkIdForIcon = hasKnownFramework ? framework : undefined;
@@ -164,11 +166,11 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
   const colorScheme = useGrey ? (neutralStyle ? neutralScheme : greyExtractingScheme) : getColorScheme(worstSeverity);
   const showSlaBreach = !isInitialExtracting && typeof slaBreachCount === 'number' && slaBreachCount > 0;
   const showTeamRoleBadge = !isInitialExtracting && roleBadge != null && roleBadge !== '' && isTeamNode;
-  const showStatusBadge = !isInitialExtracting && statusBadge != null && statusBadge !== '' && !isTeamNode;
+  const showStatusBadge = !isInitialExtracting && !isInitialExtractionFailed && statusBadge != null && statusBadge !== '' && !isTeamNode;
   const showTeamRiskGrade = !isInitialExtracting && isTeamNode && (riskGrade ?? 'A+');
   const showProjectRiskGrade = !isInitialExtracting && !isTeamNode && neutralStyle && (riskGrade ?? 'A+');
-  const showAssetTierSubtext = !isInitialExtracting && !isTeamNode && assetTierName != null && assetTierName !== '';
-  const showCardTooltip = !isTeamNode && neutralStyle && !isInitialExtracting;
+  const showAssetTierSubtext = !isInitialExtracting && !isInitialExtractionFailed && !isTeamNode && assetTierName != null && assetTierName !== '';
+  const showCardTooltip = !isTeamNode && neutralStyle && !isInitialExtracting && !isInitialExtractionFailed;
   const rawStatusColor = statusBadgeColor?.trim() ? statusBadgeColor : (showStatusBadge ? statusBadgeColorFallback(statusBadge) : null);
   const effectiveStatusColor = rawStatusColor && !rawStatusColor.startsWith('#') ? `#${rawStatusColor}` : rawStatusColor;
 
@@ -315,9 +317,13 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
           {/* Bottom: status strip (team card parity) */}
           <div className="mt-auto flex shrink-0 items-center bg-background-card-header/95 px-3 pt-2 pb-3">
             {isInitialExtracting ? (
-              <span className="inline-flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
-                <Loader2 className="h-3 w-3 shrink-0 animate-spin" aria-hidden />
-                Extracting
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border bg-foreground-secondary/20 text-foreground-secondary border-foreground-secondary/40 text-[10px] font-medium">
+                <Loader2 className="h-2.5 w-2.5 shrink-0 animate-spin" aria-hidden />
+                Creating
+              </span>
+            ) : isInitialExtractionFailed ? (
+              <span className="inline-flex items-center rounded-md border border-destructive/40 bg-destructive/15 px-2 py-0.5 text-[10px] font-medium text-destructive/80">
+                Failed
               </span>
             ) : showStatusBadge ? (
               <span

@@ -454,9 +454,9 @@ export default function OrganizationLayout() {
                 teams={teams}
                 lockedTeam={createProjectLockedTeam}
                 onProjectsReload={refetchProjectsAndNotify}
-                onProjectCreated={(project) => {
+                onProjectCreated={(project, framework) => {
                   window.dispatchEvent(new CustomEvent('organization:projectCreated', {
-                    detail: { id: project.id, name: project.name, owner_team_id: project.owner_team_id ?? null, team_ids: project.team_ids ?? [], framework: project.framework ?? null }
+                    detail: { id: project.id, name: project.name, owner_team_id: project.owner_team_id ?? null, team_ids: project.team_ids ?? [], framework: framework ?? project.framework ?? null }
                   }));
                 }}
               />

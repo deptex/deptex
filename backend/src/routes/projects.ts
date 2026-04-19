@@ -1201,7 +1201,7 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id } = req.params;
-    const { name, team_ids, asset_tier: assetTierRaw, asset_tier_id: assetTierIdRaw } = req.body;
+    const { name, team_ids, asset_tier: assetTierRaw, asset_tier_id: assetTierIdRaw, framework: frameworkRaw } = req.body;
 
     if (!name || typeof name !== 'string') {
       return res.status(400).json({ error: 'Project name is required' });
@@ -1304,6 +1304,7 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
     };
     if (defaultOrgStatus?.id) insertPayload.status_id = defaultOrgStatus.id;
     if (insertAssetTierId) insertPayload.asset_tier_id = insertAssetTierId;
+    if (frameworkRaw && typeof frameworkRaw === 'string') insertPayload.framework = frameworkRaw;
 
     // Create project
     const { data: project, error: projectError } = await supabase
@@ -4922,6 +4923,23 @@ async function fetchEnrichedDependenciesForProject(
     const t2 = debugTiming ? Date.now() : 0;
     if (debugTiming) console.log('[fetchEnrichedDependencies] getVulnCountsBatch', t2 - t1, 'ms (pairs:', allPairs.length, ')');
 
+    // Max depscore per project_dependency_id — from project_dependency_vulnerabilities (project-specific, includes reachability/tier)
+    const maxDepscoreByPdId = new Map<string, number>();
+    {
+      const { data: pdvRows } = await supabase
+        .from('project_dependency_vulnerabilities')
+        .select('project_dependency_id, depscore')
+        .eq('project_id', projectId)
+        .eq('suppressed', false);
+      if (pdvRows) {
+        for (const row of pdvRows as Array<{ project_dependency_id: string; depscore: number | null }>) {
+          if (row.depscore == null) continue;
+          const cur = maxDepscoreByPdId.get(row.project_dependency_id) ?? 0;
+          if (row.depscore > cur) maxDepscoreByPdId.set(row.project_dependency_id, row.depscore);
+        }
+      }
+    }
+
     const projectVersionIdSet = new Set(dependencyVersionIds);
     const childToParentVersionId = new Map<string, string>();
     for (const resp of edgesBatches as Array<{ data: any[] | null; error: any }>) {
@@ -5150,6 +5168,7 @@ async function fetchEnrichedDependenciesForProject(
         high_vulns,
         medium_vulns,
         low_vulns,
+        max_depscore: maxDepscoreByPdId.get(pd.id) ?? null,
         openssf_score: (sourceForScore?.openssf_score ?? effectivePackageAnalysis?.openssf_score ?? byNameRow?.openssf_score) ?? null,
         openssf_data: sourceForScore?.openssf_data ?? effectivePackageAnalysis?.openssf_data ?? byNameRow?.openssf_data ?? null,
         weekly_downloads: (sourceForScore?.weekly_downloads ?? effectivePackageAnalysis?.weekly_downloads ?? byNameRow?.weekly_downloads) ?? null,
@@ -5250,7 +5269,6 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/overview'
     }
 
     const dependencyVersionId = (pd as any).dependency_version_id;
-    const filesImportingCount = (pd as any).files_importing_count ?? 0;
     const aiUsageSummary = (pd as any).ai_usage_summary ?? null;
     const aiUsageAnalyzedAt = (pd as any).ai_usage_analyzed_at ?? null;
 
@@ -5285,7 +5303,7 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/overview'
     // Score now comes from dependencies (package-level reputation score)
     const { data: dep, error: depError } = await supabase
       .from('dependencies')
-      .select('name, github_url, license, weekly_downloads, latest_release_date, latest_version, last_published_at, score, releases_last_12_months, description, openssf_score, openssf_penalty, popularity_penalty, maintenance_penalty')
+      .select('name, github_url, license, weekly_downloads, latest_release_date, latest_version, last_published_at, score, releases_last_12_months, description, openssf_score, openssf_penalty, popularity_penalty, maintenance_penalty, ecosystem')
       .eq('id', dependencyId)
       .single();
 
@@ -5294,6 +5312,8 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/overview'
     }
 
     const d = dep as any;
+    // Import analysis runs for all ecosystems via atom usage slices
+    const filesImportingCount = (pd as any).files_importing_count ?? null;
 
     // Run independent queries in parallel
     const [
@@ -5418,6 +5438,7 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/overview'
       other_projects_using_count: otherProjectsUsingCount,
       other_projects_using_names: otherProjectsUsingNames,
       description: d.description ?? null,
+      ecosystem: d.ecosystem ?? null,
       deprecation,
       remove_pr_url,
       remove_pr_number,
@@ -5582,10 +5603,10 @@ router.post('/:id/projects/:projectId/dependencies/:projectDependencyId/analyze-
     }
 
     // 6. Build the prompt (Tier-1: Gemini Flash via platform provider)
-    const systemPrompt = `You are a senior software architect reviewing how a dependency is used in a codebase. Provide:
-(1) A 2-3 sentence summary of the dependency's role and criticality in this project.
-(2) One representative code example from the provided files showing how it's used, formatted as a markdown code block with the file path as a comment above it.
-Be concise, specific, and direct. Do not repeat the metadata back.`;
+    const systemPrompt = `You are a senior software architect reviewing how a dependency is used in a codebase.
+Write 2-3 sentences summarising the dependency's role and criticality in this project.
+If code snippets are provided, follow the summary with one representative code block (markdown triple-backtick, file path as the language hint) showing how it is used. If no code is available, omit the code block entirely.
+Do not use numbered sections, bold headers, or labels. Do not repeat the metadata.`;
 
     let userPrompt = `Package: ${depName}@${depVersion}
 Type: ${isDirect ? 'Direct dependency' : 'Transitive dependency'}

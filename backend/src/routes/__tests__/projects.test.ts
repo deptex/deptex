@@ -1,6 +1,6 @@
 import request from 'supertest';
 import app from '../../index';
-import { supabase, queryBuilder, setTableResponse, clearTableRegistry } from '../../test/mocks/supabaseSingleton';
+import { supabase, queryBuilder, setTableResponse, pushTableResponse, clearTableRegistry } from '../../test/mocks/supabaseSingleton';
 
 jest.mock('../../lib/supabase', () => ({ ...require('../../test/mocks/supabaseSingleton'), createUserClient: jest.fn() }));
 jest.mock('../../lib/activities', () => ({
@@ -404,6 +404,368 @@ describe('Project Routes', () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error).toMatch(/new_owner_team_id|required/i);
+    });
+  });
+
+  // ─── General: update project ──────────────────────────────────────────────
+
+  describe('PUT /api/organizations/:id/projects/:projectId', () => {
+    const projectId = 'proj-1';
+
+    it('returns 200 and updates project name when user is org owner', async () => {
+      setTableResponse('projects', 'single', { data: { id: projectId, name: 'Renamed', organization_id: orgId }, error: null });
+
+      const res = await request(app)
+        .put(`/api/organizations/${orgId}/projects/${projectId}`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ name: 'Renamed' });
+
+      expect(res.status).toBe(200);
+      expect(queryBuilder.update).toHaveBeenCalledWith(expect.objectContaining({ name: 'Renamed' }));
+    });
+
+    it('returns 403 when non-owner tries to rename', async () => {
+      setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
+      setTableResponse('organization_roles', 'single', { data: { permissions: { manage_teams_and_projects: false } }, error: null });
+      setTableResponse('project_members', 'single', { data: null, error: null });
+      setTableResponse('team_members', 'then', { data: [], error: null });
+      setTableResponse('project_teams', 'then', { data: [], error: null });
+
+      const res = await request(app)
+        .put(`/api/organizations/${orgId}/projects/${projectId}`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ name: 'Hacked Name' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/permission|access/i);
+    });
+  });
+
+  // ─── Repository settings ──────────────────────────────────────────────────
+
+  describe('PATCH /api/organizations/:id/projects/:projectId/repositories/settings', () => {
+    const projectId = 'proj-1';
+
+    it('returns 200 and updates sync_frequency when user is org owner', async () => {
+      setTableResponse('project_repositories', 'single', { data: { id: 'repo-1' }, error: null });
+      setTableResponse('project_repositories', 'then', { data: { id: 'repo-1', sync_frequency: 'weekly' }, error: null });
+
+      const res = await request(app)
+        .patch(`/api/organizations/${orgId}/projects/${projectId}/repositories/settings`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ sync_frequency: 'weekly' });
+
+      expect(res.status).toBe(200);
+      expect(queryBuilder.update).toHaveBeenCalled();
+    });
+
+    it('returns 400 for invalid sync_frequency value', async () => {
+      setTableResponse('project_repositories', 'single', { data: { id: 'repo-1' }, error: null });
+
+      const res = await request(app)
+        .patch(`/api/organizations/${orgId}/projects/${projectId}/repositories/settings`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ sync_frequency: 'every_hour' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/Invalid sync_frequency/i);
+    });
+
+    it('returns 404 when no repository is connected', async () => {
+      setTableResponse('project_repositories', 'single', { data: null, error: { message: 'Not found' } });
+
+      const res = await request(app)
+        .patch(`/api/organizations/${orgId}/projects/${projectId}/repositories/settings`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ sync_frequency: 'daily' });
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toMatch(/No repository connected/i);
+    });
+
+    it('returns 403 when user lacks permission', async () => {
+      setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
+      setTableResponse('organization_roles', 'single', { data: { permissions: { manage_teams_and_projects: false } }, error: null });
+      setTableResponse('project_members', 'single', { data: null, error: null });
+      setTableResponse('team_members', 'then', { data: [], error: null });
+      setTableResponse('project_teams', 'then', { data: [], error: null });
+
+      const res = await request(app)
+        .patch(`/api/organizations/${orgId}/projects/${projectId}/repositories/settings`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ sync_frequency: 'daily' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/permission|access/i);
+    });
+
+    it('returns 200 and updates pull_request_comments_enabled', async () => {
+      setTableResponse('project_repositories', 'single', { data: { id: 'repo-1' }, error: null });
+      setTableResponse('project_repositories', 'then', { data: { id: 'repo-1', pull_request_comments_enabled: false }, error: null });
+
+      const res = await request(app)
+        .patch(`/api/organizations/${orgId}/projects/${projectId}/repositories/settings`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ pull_request_comments_enabled: false });
+
+      expect(res.status).toBe(200);
+    });
+  });
+
+  // ─── Access: members ──────────────────────────────────────────────────────
+
+  describe('GET /api/organizations/:id/projects/:projectId/members', () => {
+    const projectId = 'proj-1';
+
+    it('returns 200 with direct and team members', async () => {
+      setTableResponse('project_members', 'then', {
+        data: [{ id: 'pm-1', user_id: 'user-2', role_id: 'role-1', created_at: new Date().toISOString(), project_roles: { name: 'viewer', display_name: 'Viewer', permissions: {} } }],
+        error: null,
+      });
+      setTableResponse('user_profiles', 'then', {
+        data: [{ user_id: 'user-2', full_name: 'Jane Doe', avatar_url: null }],
+        error: null,
+      });
+      (supabase.auth.admin.listUsers as jest.Mock).mockResolvedValue({
+        data: { users: [{ id: 'user-2', email: 'jane@test.com', user_metadata: {} }] },
+        error: null,
+      });
+      setTableResponse('project_teams', 'then', { data: [], error: null });
+
+      const res = await request(app)
+        .get(`/api/organizations/${orgId}/projects/${projectId}/members`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('direct_members');
+      expect(res.body).toHaveProperty('team_members');
+    });
+
+    it('returns 403 when user has no project access', async () => {
+      setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
+      setTableResponse('organization_roles', 'single', { data: { permissions: { manage_teams_and_projects: false } }, error: null });
+      setTableResponse('project_members', 'single', { data: null, error: null });
+      setTableResponse('team_members', 'then', { data: [], error: null });
+      setTableResponse('project_teams', 'then', { data: [], error: null });
+
+      const res = await request(app)
+        .get(`/api/organizations/${orgId}/projects/${projectId}/members`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(403);
+    });
+  });
+
+  describe('POST /api/organizations/:id/projects/:projectId/members', () => {
+    const projectId = 'proj-1';
+
+    it('returns 400 when user_id is missing', async () => {
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects/${projectId}/members`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({});
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/user_id/i);
+    });
+
+    it('returns 400 when target user is not an org member', async () => {
+      // second call to organization_members (target user lookup) returns null
+      setTableResponse('organization_members', 'single', { data: null, error: { message: 'Not found' } });
+
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects/${projectId}/members`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ user_id: 'outsider-99' });
+
+      expect([400, 403, 404]).toContain(res.status);
+    });
+
+    it('returns 200 and adds member when user is org owner', async () => {
+      setTableResponse('organization_members', 'single', { data: { user_id: 'user-2' }, error: null });
+      setTableResponse('project_roles', 'single', { data: { id: 'role-viewer' }, error: null });
+      setTableResponse('project_members', 'single', {
+        data: { id: 'pm-new', user_id: 'user-2', role_id: 'role-viewer', created_at: new Date().toISOString(), project_roles: { name: 'viewer', display_name: 'Viewer', permissions: {} } },
+        error: null,
+      });
+      setTableResponse('user_profiles', 'single', { data: { user_id: 'user-2', full_name: 'New Member', avatar_url: null }, error: null });
+      (supabase.auth.admin.listUsers as jest.Mock).mockResolvedValue({
+        data: { users: [{ id: 'user-2', email: 'new@test.com', user_metadata: {} }] },
+        error: null,
+      });
+
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects/${projectId}/members`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ user_id: 'user-2' });
+
+      expect([200, 201]).toContain(res.status);
+    });
+
+    it('returns 403 when user lacks manage permission', async () => {
+      setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
+      setTableResponse('organization_roles', 'single', { data: { permissions: { manage_teams_and_projects: false } }, error: null });
+      setTableResponse('project_members', 'single', { data: null, error: null });
+      setTableResponse('team_members', 'then', { data: [], error: null });
+      setTableResponse('project_teams', 'then', { data: [], error: null });
+
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects/${projectId}/members`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ user_id: 'user-2' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/permission|access/i);
+    });
+  });
+
+  describe('DELETE /api/organizations/:id/projects/:projectId/members/:memberId', () => {
+    const projectId = 'proj-1';
+    const memberId = 'user-2';
+
+    it('returns 200 and removes member when user is org owner', async () => {
+      setTableResponse('project_roles', 'single', { data: { id: 'role-owner' }, error: null });
+      setTableResponse('project_members', 'then', { data: [{ user_id: 'user-3' }, { user_id: memberId }], error: null });
+      setTableResponse('project_members', 'then', { data: null, error: null });
+
+      const res = await request(app)
+        .delete(`/api/organizations/${orgId}/projects/${projectId}/members/${memberId}`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.message).toMatch(/removed/i);
+    });
+
+    it('returns 403 when user lacks permission', async () => {
+      setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
+      setTableResponse('organization_roles', 'single', { data: { permissions: { manage_teams_and_projects: false } }, error: null });
+      setTableResponse('project_members', 'single', { data: null, error: null });
+      setTableResponse('team_members', 'then', { data: [], error: null });
+      setTableResponse('project_teams', 'then', { data: [], error: null });
+
+      const res = await request(app)
+        .delete(`/api/organizations/${orgId}/projects/${projectId}/members/${memberId}`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(403);
+    });
+  });
+
+  // ─── Access: contributing teams ───────────────────────────────────────────
+
+  describe('POST /api/organizations/:id/projects/:projectId/contributing-teams', () => {
+    const projectId = 'proj-1';
+    const teamId = 'team-2';
+
+    it('returns 400 when team_id is missing', async () => {
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects/${projectId}/contributing-teams`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({});
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/team_id/i);
+    });
+
+    it('returns 200 and adds contributing team when user is org owner', async () => {
+      setTableResponse('projects', 'single', { data: { id: projectId, name: 'Test Project' }, error: null });
+      setTableResponse('teams', 'single', { data: { id: teamId, name: 'Team B', description: null, avatar_url: null }, error: null });
+      // Queue: first call checks for existing assoc (null = not found), second call is insert result
+      pushTableResponse('project_teams', { data: null, error: null });
+      pushTableResponse('project_teams', { data: { id: 'pt-new', project_id: projectId, team_id: teamId, is_owner: false, created_at: new Date().toISOString() }, error: null });
+
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects/${projectId}/contributing-teams`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ team_id: teamId });
+
+      expect([200, 201]).toContain(res.status);
+    });
+
+    it('returns 403 when user lacks manage_teams_and_projects permission', async () => {
+      setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
+      setTableResponse('organization_roles', 'single', { data: { permissions: { manage_teams_and_projects: false } }, error: null });
+      setTableResponse('project_members', 'single', { data: null, error: null });
+      setTableResponse('team_members', 'then', { data: [], error: null });
+      setTableResponse('project_teams', 'then', { data: [], error: null });
+
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects/${projectId}/contributing-teams`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ team_id: teamId });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/permission|access/i);
+    });
+
+    it('returns 404 when team is not in the org', async () => {
+      setTableResponse('projects', 'single', { data: { id: projectId, name: 'Test Project' }, error: null });
+      setTableResponse('teams', 'single', { data: null, error: { message: 'Not found' } });
+
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects/${projectId}/contributing-teams`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ team_id: 'foreign-team' });
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toMatch(/Team not found/i);
+    });
+  });
+
+  describe('DELETE /api/organizations/:id/projects/:projectId/contributing-teams/:teamId', () => {
+    const projectId = 'proj-1';
+    const teamId = 'team-2';
+
+    it('returns 200 and removes contributing team', async () => {
+      setTableResponse('projects', 'single', { data: { id: projectId, name: 'Test Project' }, error: null });
+      setTableResponse('project_teams', 'single', { data: { id: 'pt-1', is_owner: false }, error: null });
+      setTableResponse('teams', 'single', { data: { name: 'Team B' }, error: null });
+      setTableResponse('project_teams', 'then', { data: null, error: null });
+
+      const res = await request(app)
+        .delete(`/api/organizations/${orgId}/projects/${projectId}/contributing-teams/${teamId}`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.message).toMatch(/removed/i);
+    });
+
+    it('returns 400 when trying to remove the owner team', async () => {
+      setTableResponse('projects', 'single', { data: { id: projectId, name: 'Test Project' }, error: null });
+      setTableResponse('project_teams', 'single', { data: { id: 'pt-1', is_owner: true }, error: null });
+
+      const res = await request(app)
+        .delete(`/api/organizations/${orgId}/projects/${projectId}/contributing-teams/${teamId}`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/owner/i);
+    });
+
+    it('returns 404 when team is not associated with the project', async () => {
+      setTableResponse('projects', 'single', { data: { id: projectId, name: 'Test Project' }, error: null });
+      setTableResponse('project_teams', 'single', { data: null, error: { message: 'Not found' } });
+
+      const res = await request(app)
+        .delete(`/api/organizations/${orgId}/projects/${projectId}/contributing-teams/${teamId}`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toMatch(/not associated/i);
+    });
+
+    it('returns 403 when user lacks permission', async () => {
+      setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
+      setTableResponse('organization_roles', 'single', { data: { permissions: { manage_teams_and_projects: false } }, error: null });
+      setTableResponse('project_members', 'single', { data: null, error: null });
+      setTableResponse('team_members', 'then', { data: [], error: null });
+      setTableResponse('project_teams', 'then', { data: [], error: null });
+
+      const res = await request(app)
+        .delete(`/api/organizations/${orgId}/projects/${projectId}/contributing-teams/${teamId}`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(403);
     });
   });
 });

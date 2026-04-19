@@ -2534,6 +2534,137 @@ router.get('/:id/teams/:teamId/semgrep-findings', async (req: AuthRequest, res) 
   }
 });
 
+// GET /api/organizations/:id/teams/:teamId/license-violations — policy-blocked deps for a team's projects
+router.get('/:id/teams/:teamId/license-violations', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, teamId } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const { data: projectTeams } = await supabase
+      .from('project_teams')
+      .select('project_id')
+      .eq('team_id', teamId);
+
+    const projectIds = (projectTeams || []).map((pt: any) => pt.project_id);
+    if (projectIds.length === 0) {
+      return res.json({ data: [], total: 0, page: 1, per_page: 50 });
+    }
+
+    const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+    const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page as string, 10) || 50));
+
+    // Count blocked deps
+    const { count: totalCount, error: countError } = await supabase
+      .from('project_dependencies')
+      .select('*', { count: 'exact', head: true })
+      .in('project_id', projectIds)
+      .eq('policy_result->>allowed', 'false');
+    if (countError) throw countError;
+
+    // Fetch blocked deps
+    const from = (page - 1) * perPage;
+    const to = from + perPage - 1;
+    const { data: rows, error: dataError } = await supabase
+      .from('project_dependencies')
+      .select('id, project_id, name, version, is_direct, source, environment, policy_result, dependency_id')
+      .in('project_id', projectIds)
+      .eq('policy_result->>allowed', 'false')
+      .order('is_direct', { ascending: false })
+      .order('name', { ascending: true })
+      .range(from, to);
+    if (dataError) throw dataError;
+
+    // Hydrate with project details + asset tier
+    const projIds = [...new Set((rows || []).map((r: any) => r.project_id).filter(Boolean))];
+    const projMap = new Map<string, { name: string; framework: string | null; asset_tier: string | null; asset_tier_id: string | null }>();
+    if (projIds.length > 0) {
+      const { data: projs } = await supabase
+        .from('projects')
+        .select('id, name, framework, asset_tier, asset_tier_id')
+        .in('id', projIds);
+      for (const p of projs || []) {
+        projMap.set((p as any).id, {
+          name: (p as any).name ?? 'Unknown',
+          framework: (p as any).framework ?? null,
+          asset_tier: (p as any).asset_tier ?? null,
+          asset_tier_id: (p as any).asset_tier_id ?? null,
+        });
+      }
+    }
+
+    // Fetch custom tier multipliers
+    const tierIds = [...new Set([...projMap.values()].map(p => p.asset_tier_id).filter(Boolean))] as string[];
+    const tierMap = new Map<string, number>();
+    if (tierIds.length > 0) {
+      const { data: tiers } = await supabase
+        .from('organization_asset_tiers')
+        .select('id, environmental_multiplier')
+        .in('id', tierIds);
+      for (const t of tiers || []) tierMap.set((t as any).id, Number((t as any).environmental_multiplier) || 1.0);
+    }
+
+    // Default tier weights
+    const DEFAULT_TIER_WEIGHT: Record<string, number> = {
+      CROWN_JEWELS: 1.3, EXTERNAL: 1.1, INTERNAL: 0.9, NON_PRODUCTION: 0.6,
+    };
+
+    // Compute depscore inline
+    const data = (rows || []).map((r: any) => {
+      const proj = projMap.get(r.project_id);
+      const reasons: string[] = r.policy_result?.reasons ?? [];
+      const lower = reasons.join(' ').toLowerCase();
+
+      let base: number;
+      if (lower.includes('malicious') || lower.includes('malware')) base = 95;
+      else if (lower.includes('agpl')) base = 80;
+      else if (lower.includes('copyleft') || lower.includes('gpl')) base = 70;
+      else if (lower.includes('banned') || lower.includes('blocked')) base = 75;
+      else if (lower.includes('unknown') || lower.includes('no license')) base = 50;
+      else base = 55;
+
+      const directWeight = r.is_direct ? 1.0 : 0.75;
+      const envWeight = r.environment === 'dev' ? 0.4 : 1.0;
+      const tierMul = (proj?.asset_tier_id && tierMap.get(proj.asset_tier_id)) ?? DEFAULT_TIER_WEIGHT[proj?.asset_tier ?? 'EXTERNAL'] ?? 1.0;
+      const depscore = Math.min(100, Math.round(base * directWeight * envWeight * tierMul));
+
+      return {
+        id: r.id,
+        project_id: r.project_id,
+        project_name: proj?.name ?? 'Unknown',
+        project_framework: proj?.framework ?? null,
+        name: r.name,
+        version: r.version,
+        license: null,
+        is_direct: r.is_direct,
+        source: r.source,
+        environment: r.environment,
+        reasons,
+        dependency_id: r.dependency_id,
+        depscore,
+      };
+    });
+
+    // Sort by depscore descending
+    data.sort((a: any, b: any) => (b.depscore ?? 0) - (a.depscore ?? 0));
+
+    res.json({ data, total: totalCount ?? 0, page, per_page: perPage });
+  } catch (error: any) {
+    console.error('Error fetching team license violations:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch team license violations' });
+  }
+});
+
 // PATCH /api/organizations/:id/findings/:findingType/:findingId/status — toggle finding status
 const FINDING_TABLES: Record<string, string> = {
   vulnerability: 'project_dependency_vulnerabilities',

@@ -10,7 +10,7 @@ import {
   type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, CircleCheck, Bell, Grid3x3, List, MoreVertical, Trash2, Save, Mail, Webhook, ChevronDown, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, RefreshCw } from 'lucide-react';
+import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, CircleCheck, Bell, Grid3x3, List, MoreVertical, Trash2, Save, Mail, Webhook, ChevronDown, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, RotateCw } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import {
   DropdownMenu,
@@ -22,7 +22,7 @@ import {
 import { Checkbox } from '../../components/ui/checkbox';
 import { Badge } from '../../components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip';
-import { api, Organization, Team, Project, TeamWithRole, type ProjectStats, type ProjectVulnerability, type OrganizationStatus, type TeamStats, type TeamMember, type ProjectDependency, type OrganizationMember, type TeamRole, type TeamPermissions, type CiCdConnection, type ProjectSecuritySummary, type ProjectWithRole, type VulnerabilityDetail, type SecretFinding, type SemgrepFinding } from '../../lib/api';
+import { api, Organization, Team, Project, TeamWithRole, type ProjectStats, type ProjectVulnerability, type OrganizationStatus, type TeamStats, type TeamMember, type ProjectDependency, type OrganizationMember, type TeamRole, type TeamPermissions, type CiCdConnection, type ProjectSecuritySummary, type ProjectWithRole, type VulnerabilityDetail, type SecretFinding, type SemgrepFinding, type LicenseViolation } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { computeOverviewStatusRollup, type OverviewStatusRollup } from '../../lib/overviewStatusRollup';
 import { isExtractionOngoing, isInitialExtraction } from '../../lib/extractionStatus';
@@ -64,6 +64,7 @@ import {
 } from '../../components/security/VulnerabilityOrgSidebarExpandedContent';
 import VulnerabilityExpandableTable, { type SecurityTableRow } from '../../components/security/VulnerabilityExpandableTable';
 import OrganizationVulnerabilitiesTableSkeleton from '../../components/security/OrganizationVulnerabilitiesTableSkeleton';
+import { supabase } from '../../lib/supabase';
 
 interface OrganizationContextType {
   organization: Organization | null;
@@ -284,6 +285,8 @@ export default function OrganizationVulnerabilitiesPage() {
   const [teamSidebarSecretsTotal, setTeamSidebarSecretsTotal] = useState(0);
   const [teamSidebarSemgrep, setTeamSidebarSemgrep] = useState<(SemgrepFinding & { project_name: string })[]>([]);
   const [teamSidebarSemgrepTotal, setTeamSidebarSemgrepTotal] = useState(0);
+  const [teamSidebarLicenseViolations, setTeamSidebarLicenseViolations] = useState<LicenseViolation[]>([]);
+  const [teamSidebarLicenseTotal, setTeamSidebarLicenseTotal] = useState(0);
   const [teamSidebarOrgMembers, setTeamSidebarOrgMembers] = useState<OrganizationMember[]>([]);
   const [teamSidebarRoles, setTeamSidebarRoles] = useState<TeamRole[]>([]);
   const [teamSidebarDataLoading, setTeamSidebarDataLoading] = useState(false);
@@ -295,7 +298,7 @@ export default function OrganizationVulnerabilitiesPage() {
   const [addMemberSelectedRoleId, setAddMemberSelectedRoleId] = useState<string>('member');
   const [addMemberAdding, setAddMemberAdding] = useState(false);
   const [syncDetailProjectId, setSyncDetailProjectId] = useState<string | null>(null);
-  const [teamSidebarTab, setTeamSidebarTab] = useState<'projects' | 'security' | 'members' | 'settings'>('security');
+  const [teamSidebarTab, setTeamSidebarTab] = useState<'projects' | 'issues' | 'members' | 'settings'>('issues');
   const [teamSidebarProjectsSearch, setTeamSidebarProjectsSearch] = useState('');
   const [teamSidebarProjectsViewMode, setTeamSidebarProjectsViewMode] = useState<'grid' | 'list'>('grid');
   const [teamSidebarMembersSearch, setTeamSidebarMembersSearch] = useState('');
@@ -368,6 +371,56 @@ export default function OrganizationVulnerabilitiesPage() {
   const selectedProjectEffectiveIsInitialExtracting =
     isInitialExtraction(selectedProjectRealtime.status, selectedProjectRealtime.extractionStep, selectedProjectRealtime.lastExtractedAt)
     || (selectedProjectRealtime.isLoading && selectedProjectIsInitialExtracting);
+  // Show error card when extraction failed and there's no prior successful extraction to fall back on
+  const selectedProjectExtractionFailed =
+    selectedProjectRealtime.status === 'error' &&
+    !selectedProjectRealtime.isLoading &&
+    !selectedProjectRealtime.lastExtractedAt;
+
+  // Sync the graph node for the selected project directly from selectedProjectRealtime.
+  // This guarantees the node updates in lockstep with the sidebar without relying on a
+  // separate Realtime subscription (which has timing/setup race conditions).
+  useEffect(() => {
+    if (!selectedProjectId || selectedProjectRealtime.isLoading) return;
+    const pid = selectedProjectId;
+    const repoStatus = selectedProjectRealtime.status;
+    const extractionStep = selectedProjectRealtime.extractionStep;
+    const lastExtractedAt = selectedProjectRealtime.lastExtractedAt;
+    const isExtract = isExtractionOngoing(repoStatus || '', extractionStep);
+    const isInitialExtract = isInitialExtraction(repoStatus || '', extractionStep, lastExtractedAt);
+    const isFailed = repoStatus === 'error' && !lastExtractedAt;
+    setRawTeamsWithProjects((prev) =>
+      prev.map((t) => ({
+        ...t,
+        projects: t.projects.map((p) =>
+          p.projectId === pid
+            ? { ...p, isExtracting: isExtract, isInitialExtracting: isInitialExtract, isInitialExtractionFailed: isFailed }
+            : p,
+        ),
+      })),
+    );
+  }, [selectedProjectId, selectedProjectRealtime.status, selectedProjectRealtime.extractionStep, selectedProjectRealtime.lastExtractedAt, selectedProjectRealtime.isLoading]);
+
+  // Reset the "syncing" spinner flags once Realtime confirms extraction is no longer in progress.
+  // This handles both: (a) initial node click sets isExtracting=true from stale node data,
+  // and (b) manual sync button click that was never cleared.
+  useEffect(() => {
+    if (selectedProjectRealtime.isLoading) return;
+    if (!isExtractionOngoing(selectedProjectRealtime.status, selectedProjectRealtime.extractionStep)) {
+      setSelectedProjectIsExtracting(false);
+      setSelectedProjectIsInitialExtracting(false);
+    }
+  }, [selectedProjectRealtime.status, selectedProjectRealtime.extractionStep, selectedProjectRealtime.isLoading]);
+
+  // Reload project (status badge etc.) when extraction finishes
+  const prevExtractingRef = useRef(false);
+  useEffect(() => {
+    const nowExtracting = selectedProjectEffectiveIsExtracting;
+    if (prevExtractingRef.current && !nowExtracting && orgId && selectedProjectId) {
+      api.getProject(orgId, selectedProjectId).then(setProjectSidebarProject).catch(() => {});
+    }
+    prevExtractingRef.current = nowExtracting;
+  }, [selectedProjectEffectiveIsExtracting, orgId, selectedProjectId]);
 
   /** Update URL search params in-place (replace, no new history entry). Pass null to delete a key. */
   const setSidebarParams = useCallback((updates: Record<string, string | null>) => {
@@ -393,8 +446,8 @@ export default function OrganizationVulnerabilitiesPage() {
     } else if (sidebarParam === 'team') {
       const tid = searchParams.get('teamId');
       const tabRaw = searchParams.get('tab');
-      const validTeamTabs = new Set(['projects', 'security', 'members', 'settings']);
-      const tab = (tabRaw && validTeamTabs.has(tabRaw) ? tabRaw : 'security') as 'projects' | 'security' | 'members' | 'settings';
+      const validTeamTabs = new Set(['projects', 'issues', 'members', 'settings']);
+      const tab = (tabRaw && validTeamTabs.has(tabRaw) ? tabRaw : 'issues') as 'projects' | 'issues' | 'members' | 'settings';
       const subtabRaw = searchParams.get('subtab');
       const validTeamSubtabs = new Set(['general', 'notifications', 'roles']);
       const subtab = (subtabRaw && validTeamSubtabs.has(subtabRaw) ? subtabRaw : 'general') as 'general' | 'notifications' | 'roles';
@@ -624,14 +677,14 @@ export default function OrganizationVulnerabilitiesPage() {
         if (targetExists) {
           return prev.map((t) =>
             t.teamId === targetTeamId
-              ? { ...t, projects: [...t.projects, newProj], projectCount: t.projectCount + 1 }
+              ? { ...t, projects: [...t.projects, newProj], projectCount: (t.projectCount ?? 0) + 1 }
               : t
           );
         }
         // If team not yet in graph, add to ungrouped
         return prev.map((t) =>
           t.teamId === UNGROUPED_TEAM_ID
-            ? { ...t, projects: [...t.projects, newProj], projectCount: t.projectCount + 1 }
+            ? { ...t, projects: [...t.projects, newProj], projectCount: (t.projectCount ?? 0) + 1 }
             : t
         );
       });
@@ -648,6 +701,57 @@ export default function OrganizationVulnerabilitiesPage() {
       window.removeEventListener('organization:projectCreated', onProjectCreated);
     };
   }, []);
+
+  // Subscribe to project_repositories changes via Supabase Realtime for each extracting project.
+  // Triggers a silent graph refresh when any extraction finishes — picks up framework icons and status.
+  const hasExtractingProjects = useMemo(
+    () => rawTeamsWithProjects.some((t) => t.projects.some((p) => p.isExtracting || p.isInitialExtracting)),
+    [rawTeamsWithProjects],
+  );
+  useEffect(() => {
+    if (!hasExtractingProjects || !organization?.id) return;
+    const extractingIds = rawTeamsWithProjects
+      .flatMap((t) => t.projects)
+      .filter((p) => p.isExtracting || p.isInitialExtracting)
+      .map((p) => p.projectId);
+    if (extractingIds.length === 0) return;
+    const channels = extractingIds.map((pid) =>
+      supabase
+        .channel(`graph-extract-${pid}`)
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'project_repositories', filter: `project_id=eq.${pid}` },
+          (payload) => {
+            const row = payload.new as any;
+            const repoStatus = row.status ?? null;
+            const extractionStep = row.extraction_step ?? null;
+            const lastExtractedAt = row.last_extracted_at ?? null;
+            const isExtract = isExtractionOngoing(repoStatus || '', extractionStep);
+            const isInitialExtract = isInitialExtraction(repoStatus || '', extractionStep, lastExtractedAt);
+            const isFailed = repoStatus === 'error' && !lastExtractedAt;
+            // Directly patch the project state — no API call, instant like useRealtimeStatus
+            setRawTeamsWithProjects((prev) =>
+              prev.map((t) => ({
+                ...t,
+                projects: t.projects.map((p) =>
+                  p.projectId === pid
+                    ? { ...p, isExtracting: isExtract, isInitialExtracting: isInitialExtract, isInitialExtractionFailed: isFailed }
+                    : p,
+                ),
+              })),
+            );
+            // For terminal states, also do a full refresh to pick up health score, status badge, etc.
+            if (repoStatus === 'ready' || repoStatus === 'error') {
+              setSilentRefreshTrigger((t) => t + 1);
+            }
+          },
+        )
+        .subscribe(),
+    );
+    return () => { channels.forEach((c) => supabase.removeChannel(c)); };
+    // rawTeamsWithProjects intentionally excluded — subscribe once when extraction starts, clean up when done
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasExtractingProjects, organization?.id]);
 
   useEffect(() => {
     if (!organization?.id) return;
@@ -712,6 +816,7 @@ export default function OrganizationVulnerabilitiesPage() {
               assetTierColor: p.asset_tier_color ?? null,
               isExtracting,
               isInitialExtracting: isInitialExtraction(repoStatus || '', extractionStep, lastExtractedAt),
+              isInitialExtractionFailed: repoStatus === 'error' && !lastExtractedAt,
               healthScore: typeof (p as Project).health_score === 'number' ? (p as Project).health_score : null,
               dependenciesCount: (p as Project).direct_dependencies_count ?? null,
             });
@@ -799,6 +904,7 @@ export default function OrganizationVulnerabilitiesPage() {
               statusName: p.status_name ?? null, statusColor: p.status_color ?? null, statusId: p.status_id ?? null,
               assetTierName: p.asset_tier_name ?? null, assetTierColor: p.asset_tier_color ?? null,
               isExtracting, isInitialExtracting: isInitialExtraction(repoStatus || '', extractionStep, lastExtractedAt),
+              isInitialExtractionFailed: repoStatus === 'error' && !lastExtractedAt,
               healthScore: typeof p.health_score === 'number' ? p.health_score : null,
               dependenciesCount: p.direct_dependencies_count ?? null,
             });
@@ -818,7 +924,24 @@ export default function OrganizationVulnerabilitiesPage() {
             projects: teamProjects, projectCount: teamProjects.length, memberCount: teamMeta?.member_count ?? undefined,
           };
         });
-        setRawTeamsWithProjects(result);
+        // Preserve the existing project order within each team to avoid nodes jumping around.
+        // Updated data is applied in-place; new projects (from API but not in graph yet) are appended.
+        setRawTeamsWithProjects((prev) => {
+          const prevTeamMap = new Map(prev.map((t) => [t.teamId, t]));
+          return result.map((newTeam) => {
+            const prevTeam = prevTeamMap.get(newTeam.teamId);
+            if (!prevTeam) return newTeam;
+            const newProjectMap = new Map(newTeam.projects.map((p) => [p.projectId, p]));
+            const prevIds = new Set(prevTeam.projects.map((p) => p.projectId));
+            const ordered = [
+              // Existing projects in their original order, with fresh data applied
+              ...prevTeam.projects.filter((p) => newProjectMap.has(p.projectId)).map((p) => newProjectMap.get(p.projectId)!),
+              // New projects from API not yet in the graph
+              ...newTeam.projects.filter((p) => !prevIds.has(p.projectId)),
+            ];
+            return { ...newTeam, projects: ordered };
+          });
+        });
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -897,7 +1020,7 @@ export default function OrganizationVulnerabilitiesPage() {
       setSelectedTeamName(null);
       setTeamSidebarAddMemberOpen(false);
       setTeamSidebarAddMemberVisible(false);
-      setTeamSidebarTab('security');
+      setTeamSidebarTab('issues');
       setTeamSidebarProjectsSearch('');
       setTeamSidebarProjectsViewMode('grid');
       setTeamSidebarMembersSearch('');
@@ -1085,7 +1208,7 @@ export default function OrganizationVulnerabilitiesPage() {
     setSelectedTeamName(null);
     setTeamSidebarAddMemberOpen(false);
     setTeamSidebarAddMemberVisible(false);
-    setTeamSidebarTab('security');
+    setTeamSidebarTab('issues');
     setTeamSidebarProjectsSearch('');
     setTeamSidebarProjectsViewMode('grid');
     setTeamSidebarMembersSearch('');
@@ -1182,7 +1305,7 @@ export default function OrganizationVulnerabilitiesPage() {
           const openNewTeam = () => {
             setSelectedTeamId(teamData.teamId!);
             setSelectedTeamName(teamData.teamName ?? null);
-            setSidebarParams({ sidebar: 'team', teamId: teamData.teamId!, tab: 'security', subtab: null, projectId: null });
+            setSidebarParams({ sidebar: 'team', teamId: teamData.teamId!, tab: 'issues', subtab: null, projectId: null });
             setTeamSidebarOpen(true);
             requestAnimationFrame(() => setTeamSidebarVisible(true));
           };
@@ -1228,7 +1351,7 @@ export default function OrganizationVulnerabilitiesPage() {
         const openNewTeam = () => {
           setSelectedTeamId(d.projectId!);
           setSelectedTeamName((d.projectName as string) ?? null);
-          setSidebarParams({ sidebar: 'team', teamId: d.projectId!, tab: 'security', subtab: null, projectId: null });
+          setSidebarParams({ sidebar: 'team', teamId: d.projectId!, tab: 'issues', subtab: null, projectId: null });
           setTeamSidebarOpen(true);
           requestAnimationFrame(() => setTeamSidebarVisible(true));
         };
@@ -1286,6 +1409,9 @@ export default function OrganizationVulnerabilitiesPage() {
             setSelectedTeamName(null);
             openNewProject();
           }, 150);
+        } else if (projectSidebarVisible && selectedProjectId === d.projectId) {
+          // Already showing this project — do nothing
+          return;
         } else if (projectSidebarVisible && selectedProjectId !== d.projectId) {
           sidebarSwitchingRef.current = true;
           setProjectSidebarVisible(false);
@@ -1475,18 +1601,20 @@ export default function OrganizationVulnerabilitiesPage() {
     return () => { cancelled = true; };
   }, [orgId, selectedTeamId, teamSidebarOpen]);
 
-  // Load team security findings (vulns + secrets + semgrep) for the security tab
+  // Load team security findings (vulns + secrets + semgrep + license) for the issues tab
   const loadTeamVulns = useCallback(async (p: number) => {
     if (!orgId || !selectedTeamId || selectedTeamId === UNGROUPED_TEAM_ID) return;
     setTeamSidebarVulnsLoading(true);
     setTeamSidebarVulns([]);
     setTeamSidebarSecrets([]);
     setTeamSidebarSemgrep([]);
+    setTeamSidebarLicenseViolations([]);
     try {
-      const [vulnRes, secretRes, semgrepRes] = await Promise.all([
+      const [vulnRes, secretRes, semgrepRes, licenseRes] = await Promise.all([
         api.getTeamVulnerabilities(orgId, selectedTeamId, { page: p, per_page: 50, show_ignored: true }),
         api.getTeamSecretFindings(orgId, selectedTeamId, { page: 1, per_page: 50, show_ignored: true }),
         api.getTeamSemgrepFindings(orgId, selectedTeamId, { page: 1, per_page: 50, show_ignored: true }),
+        api.getTeamLicenseViolations(orgId, selectedTeamId, { page: 1, per_page: 50 }),
       ]);
       setTeamSidebarVulns(vulnRes.data);
       setTeamSidebarVulnsTotal(vulnRes.total);
@@ -1495,6 +1623,8 @@ export default function OrganizationVulnerabilitiesPage() {
       setTeamSidebarSecretsTotal(secretRes.total);
       setTeamSidebarSemgrep(semgrepRes.data);
       setTeamSidebarSemgrepTotal(semgrepRes.total);
+      setTeamSidebarLicenseViolations(licenseRes.data);
+      setTeamSidebarLicenseTotal(licenseRes.total);
     } catch {
       setTeamSidebarVulns([]);
       setTeamSidebarVulnsTotal(0);
@@ -1502,13 +1632,15 @@ export default function OrganizationVulnerabilitiesPage() {
       setTeamSidebarSecretsTotal(0);
       setTeamSidebarSemgrep([]);
       setTeamSidebarSemgrepTotal(0);
+      setTeamSidebarLicenseViolations([]);
+      setTeamSidebarLicenseTotal(0);
     } finally {
       setTeamSidebarVulnsLoading(false);
     }
   }, [orgId, selectedTeamId]);
 
   useEffect(() => {
-    if (teamSidebarTab === 'security' && teamSidebarOpen && selectedTeamId && selectedTeamId !== UNGROUPED_TEAM_ID) {
+    if (teamSidebarTab === 'issues' && teamSidebarOpen && selectedTeamId && selectedTeamId !== UNGROUPED_TEAM_ID) {
       void loadTeamVulns(1);
     }
   }, [teamSidebarTab, teamSidebarOpen, selectedTeamId, loadTeamVulns]);
@@ -2052,11 +2184,14 @@ export default function OrganizationVulnerabilitiesPage() {
                 proOptions={{ hideAttribution: true }}
                 nodesDraggable={false}
                 nodesConnectable={false}
-                defaultEdgeOptions={{
-                  type: 'smoothstep',
-                  style: { stroke: ORG_OVERVIEW_EDGE_STROKE, strokeWidth: 1 },
-                  pathOptions: { borderRadius: 20 },
-                }}
+                defaultEdgeOptions={
+                  {
+                    type: 'smoothstep',
+                    style: { stroke: ORG_OVERVIEW_EDGE_STROKE, strokeWidth: 1 },
+                    pathOptions: { borderRadius: 20 },
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  } as any
+                }
               >
                 <Background
                   variant={BackgroundVariant.Dots}
@@ -2145,7 +2280,7 @@ export default function OrganizationVulnerabilitiesPage() {
             {/* Tabs */}
             <div className="flex-shrink-0 px-5 border-b border-border">
               <div className="flex items-center gap-6">
-                {(['security', 'projects', 'members', 'settings'] as const).map((tab) => (
+                {(['issues', 'projects', 'members', 'settings'] as const).map((tab) => (
                   <button
                     key={tab}
                     type="button"
@@ -2395,14 +2530,15 @@ export default function OrganizationVulnerabilitiesPage() {
                 </div>
               )}
 
-              {/* Security Tab */}
-              {teamSidebarTab === 'security' && (() => {
+              {/* Issues Tab */}
+              {teamSidebarTab === 'issues' && (() => {
                 const securityRows: SecurityTableRow[] = [
                   ...teamSidebarVulns.map(v => ({ type: 'vulnerability' as const, data: v })),
                   ...teamSidebarSecrets.map(s => ({ type: 'secret' as const, data: s })),
                   ...teamSidebarSemgrep.map(s => ({ type: 'semgrep' as const, data: s })),
+                  ...teamSidebarLicenseViolations.map(l => ({ type: 'license' as const, data: l })),
                 ];
-                const totalFindings = teamSidebarVulnsTotal + teamSidebarSecretsTotal + teamSidebarSemgrepTotal;
+                const totalFindings = teamSidebarVulnsTotal + teamSidebarSecretsTotal + teamSidebarSemgrepTotal + teamSidebarLicenseTotal;
                 return (
                   <div className="space-y-4">
                     {teamSidebarVulnsLoading && securityRows.length === 0 ? (
@@ -2412,11 +2548,11 @@ export default function OrganizationVulnerabilitiesPage() {
                         <div className="h-12 w-12 rounded-lg border border-border bg-background-subtle/50 flex items-center justify-center mb-4">
                           <Shield className="h-6 w-6 text-foreground-secondary" />
                         </div>
-                        <h3 className="text-base font-medium text-foreground mb-1">No security issues</h3>
+                        <h3 className="text-base font-medium text-foreground mb-1">No issues</h3>
                         <p className="text-sm text-foreground-secondary max-w-[240px]">
                           {teamSidebarProjects.length === 0
                             ? "This team doesn't have any projects yet."
-                            : "All projects in this team are secure with no open vulnerabilities, exposed secrets, or code issues."}
+                            : "All projects in this team are clean — no vulnerabilities, secrets, code issues, or license violations."}
                         </p>
                       </div>
                     ) : (
@@ -3234,37 +3370,56 @@ export default function OrganizationVulnerabilitiesPage() {
                 <div className="flex items-center gap-3 min-w-0">
                   <FrameworkIcon frameworkId={selectedProjectFramework ?? undefined} size={20} className="flex-shrink-0 text-muted-foreground" />
                   <h2 className="text-lg font-semibold text-foreground truncate">{selectedProjectName ?? 'Project'}</h2>
-                  {(projectSidebarProject?.permissions?.edit_settings || organization?.permissions?.manage_teams_and_projects) && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          disabled={selectedProjectIsExtracting}
-                          onClick={async () => {
-                            if (!orgId || !selectedProjectId) return;
-                            setSelectedProjectIsExtracting(true);
-                            try {
-                              await api.triggerProjectSync(orgId, selectedProjectId);
-                            } catch (err: any) {
-                              toast({ title: 'Sync failed', description: err?.message || 'Could not trigger sync', variant: 'destructive' });
-                            }
-                          }}
-                          className={cn(
-                            'p-1 transition-colors flex-shrink-0',
-                            selectedProjectIsExtracting
-                              ? 'text-foreground-secondary/50 cursor-not-allowed'
-                              : 'text-foreground-secondary hover:text-foreground'
-                          )}
-                          aria-label="Trigger sync"
-                        >
-                          <RefreshCw className={cn('h-4 w-4', selectedProjectIsExtracting && 'animate-spin')} />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent>{selectedProjectIsExtracting ? 'Sync in progress' : 'Trigger sync'}</TooltipContent>
-                    </Tooltip>
-                  )}
+                  {selectedProjectEffectiveIsInitialExtracting ? (
+                    <span className="px-2 py-0.5 rounded text-xs font-medium border bg-foreground-secondary/20 text-foreground-secondary border-foreground-secondary/40 flex-shrink-0 flex items-center gap-1">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Creating
+                    </span>
+                  ) : selectedProjectEffectiveIsExtracting ? (
+                    <span className="px-2 py-0.5 rounded text-xs font-medium border bg-foreground-secondary/20 text-foreground-secondary border-foreground-secondary/40 flex-shrink-0 flex items-center gap-1">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Syncing
+                    </span>
+                  ) : selectedProjectExtractionFailed ? (
+                    <span className="px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40 flex-shrink-0">
+                      Failed
+                    </span>
+                  ) : selectedProjectRealtime.isLoading || projectSidebarProjectLoading ? (
+                    <span className="h-5 w-20 rounded bg-foreground/10 animate-pulse flex-shrink-0 inline-block" />
+                  ) : projectSidebarProject?.status_name ? (
+                    <span
+                      className="px-2 py-0.5 rounded text-xs font-medium border flex-shrink-0"
+                      style={{
+                        backgroundColor: `${projectSidebarProject.status_color ?? '#6b7280'}20`,
+                        color: projectSidebarProject.status_color ?? '#6b7280',
+                        borderColor: `${projectSidebarProject.status_color ?? '#6b7280'}40`,
+                      }}
+                    >
+                      {projectSidebarProject.status_name}
+                    </span>
+                  ) : null}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
+                  {!selectedProjectEffectiveIsInitialExtracting && !selectedProjectExtractionFailed && projectSidebarProject?.permissions?.edit_settings && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-xs gap-1"
+                      disabled={selectedProjectEffectiveIsExtracting}
+                      onClick={async () => {
+                        if (!orgId || !selectedProjectId) return;
+                        try {
+                          await api.triggerProjectSync(orgId, selectedProjectId);
+                          setSelectedProjectIsExtracting(true);
+                        } catch (err: any) {
+                          toast({ title: 'Sync failed', description: err?.message || 'Could not trigger sync', variant: 'destructive' });
+                        }
+                      }}
+                    >
+                      <RotateCw className={cn('h-3 w-3', selectedProjectEffectiveIsExtracting && 'animate-spin')} />
+                      Sync
+                    </Button>
+                  )}
                   <button
                     type="button"
                     onClick={closeProjectSidebar}
@@ -3301,11 +3456,8 @@ export default function OrganizationVulnerabilitiesPage() {
                   projectSidebarTab === 'vulnerabilities' ? 'py-5' : 'pb-5 pt-0'
                 )}
               >
-                {projectSidebarTab === 'vulnerabilities' && (
+{projectSidebarTab === 'vulnerabilities' && (
                   <div className="space-y-4">
-                    {!selectedProjectEffectiveIsInitialExtracting && (
-                      <h3 className="text-sm font-medium text-foreground">Vulnerabilities</h3>
-                    )}
                     {selectedProjectEffectiveIsInitialExtracting ? (
                       <ExtractionProgressCard
                         title="Project extraction still in progress"
@@ -3314,7 +3466,23 @@ export default function OrganizationVulnerabilitiesPage() {
                         organizationId={orgId}
                         projectId={selectedProjectId ?? ''}
                       />
-                    ) : projectStatsLoading && !projectVulnerabilities ? (
+                    ) : selectedProjectExtractionFailed ? (
+                      <ExtractionProgressCard
+                        isError
+                        description="Check the logs for details on what went wrong."
+                        showLogsToggle
+                        organizationId={orgId}
+                        projectId={selectedProjectId ?? ''}
+                        onRetry={async () => {
+                          if (!orgId || !selectedProjectId) return;
+                          try {
+                            await api.triggerProjectSync(orgId, selectedProjectId);
+                          } catch (err: any) {
+                            toast({ title: 'Retry failed', description: err?.message || 'Could not retry extraction', variant: 'destructive' });
+                          }
+                        }}
+                      />
+                    ) : (projectStatsLoading && !projectVulnerabilities) || selectedProjectRealtime.isLoading ? (
                       <OrgProjectVulnerabilitiesTableSkeleton rowCount={8} />
                     ) : !dedupedProjectVulnerabilities.length ? (
                       <div className="py-8 text-center text-sm text-muted-foreground border border-border rounded-lg bg-background-subtle/50">

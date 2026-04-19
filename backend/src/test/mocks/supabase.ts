@@ -1,10 +1,28 @@
 
 // Table-aware registry: responses keyed by table name so route call order doesn't matter
 export type TableRegistry = Record<string, {
-  single?: { data: any; error: any };
+  single?: { data: any; error: any } | Array<{ data: any; error: any }>;
   then?: { data: any; error: any };
   maybeSingle?: { data: any; error: any };
 }>;
+
+function consumeSingle(registry: TableRegistry, table: string): { data: any; error: any } | undefined {
+  const entry = registry[table]?.single;
+  if (entry === undefined) return undefined;
+  if (Array.isArray(entry)) {
+    // Queue mode: consume first, keep last for subsequent calls
+    const val = entry[0];
+    if (entry.length > 1) {
+      registry[table].single = entry.slice(1);
+    } else {
+      // Exhausted — keep the last value so subsequent calls still return something
+      registry[table].single = val;
+    }
+    return val;
+  }
+  // Plain replacement mode: return as-is (don't consume)
+  return entry as { data: any; error: any };
+}
 
 export const createMockSupabase = (registry: TableRegistry = {}) => {
   const queryBuilder: any = {
@@ -19,12 +37,12 @@ export const createMockSupabase = (registry: TableRegistry = {}) => {
     is: jest.fn().mockReturnThis(),
     gt: jest.fn().mockReturnThis(),
     single: jest.fn().mockImplementation(function (this: any) {
-      const r = registry[this._table]?.single;
+      const r = consumeSingle(registry, this._table);
       if (r !== undefined) return Promise.resolve(r);
       return Promise.resolve({ data: null, error: null });
     }),
     maybeSingle: jest.fn().mockImplementation(function (this: any) {
-      const r = registry[this._table]?.maybeSingle ?? registry[this._table]?.single;
+      const r = registry[this._table]?.maybeSingle ?? consumeSingle(registry, this._table);
       if (r !== undefined) return Promise.resolve(r);
       return Promise.resolve({ data: null, error: null });
     }),

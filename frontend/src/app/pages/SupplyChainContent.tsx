@@ -1194,7 +1194,7 @@ export function SupplyChainContent({ orgId, projectId, dependencyId, dependencyN
   const displayData = effectiveData ?? null;
   const totalChildren = displayData?.children.length ?? 0;
   const isDirect = data?.parent?.is_direct ?? false;
-  const isZombie = isDirect && (data?.parent?.files_importing_count ?? 0) === 0;
+  const isZombie = isDirect && data?.parent?.files_importing_count === 0;
   const hasAncestors = (data?.ancestors?.length ?? 0) > 0;
   const displayedPaths = showAllPaths ? (data?.ancestors ?? []) : (data?.ancestors ?? []).slice(0, 1);
 

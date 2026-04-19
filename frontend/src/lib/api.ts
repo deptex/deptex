@@ -591,7 +591,7 @@ export const api = {
     return this._projectDataCache.get(cacheKey) || null;
   },
 
-  async createProject(organizationId: string, data: { name: string; team_ids?: string[]; asset_tier?: AssetTier; asset_tier_id?: string | null }): Promise<Project> {
+  async createProject(organizationId: string, data: { name: string; team_ids?: string[]; asset_tier?: AssetTier; asset_tier_id?: string | null; framework?: string | null }): Promise<Project> {
     const project = await fetchWithAuth(`/api/organizations/${organizationId}/projects`, {
       method: 'POST',
       body: JSON.stringify(data),
@@ -1523,6 +1523,7 @@ export const api = {
     other_projects_using_count: number;
     other_projects_using_names: string[];
     description: string | null;
+    ecosystem: string | null;
     deprecation: { recommended_alternative: string; deprecated_by: string | null; created_at: string; scope?: 'organization' | 'team'; team_id?: string } | null;
     remove_pr_url: string | null;
     remove_pr_number: number | null;
@@ -1875,6 +1876,20 @@ export const api = {
     const q = p.toString();
     return fetchWithAuth(
       `/api/organizations/${organizationId}/teams/${teamId}/semgrep-findings${q ? `?${q}` : ''}`
+    );
+  },
+
+  async getTeamLicenseViolations(
+    organizationId: string,
+    teamId: string,
+    params?: { page?: number; per_page?: number }
+  ): Promise<{ data: LicenseViolation[]; total: number; page: number; per_page: number }> {
+    const p = new URLSearchParams();
+    if (params?.page != null) p.set('page', String(params.page));
+    if (params?.per_page != null) p.set('per_page', String(params.per_page));
+    const q = p.toString();
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/teams/${teamId}/license-violations${q ? `?${q}` : ''}`
     );
   },
 
@@ -2949,6 +2964,7 @@ export interface ProjectDependencyAnalysis {
   high_vulns: number;
   medium_vulns: number;
   low_vulns: number;
+  max_depscore?: number | null;
   openssf_score: number | null;
   openssf_data?: { score?: number; checks?: OpenssfCheck[] } | null;
   weekly_downloads: number | null;
@@ -2974,7 +2990,7 @@ export interface ProjectDependency {
   environment?: 'prod' | 'dev' | null;
   is_watching: boolean;
   watchtower_cleared_at?: string | null;
-  files_importing_count?: number;
+  files_importing_count?: number | null;
   imported_functions?: string[];
   imported_file_paths?: string[];
   ai_usage_summary?: string | null;
@@ -3838,6 +3854,22 @@ export interface SecretFinding {
   depscore: number | null;
   status?: string;
   created_at: string;
+}
+
+export interface LicenseViolation {
+  id: string;
+  project_id: string;
+  project_name?: string;
+  project_framework?: string | null;
+  name: string;
+  version: string;
+  license: string | null;
+  is_direct: boolean;
+  source: string;
+  environment: string | null;
+  reasons: string[];
+  dependency_id: string | null;
+  depscore: number | null;
 }
 
 export interface VulnerabilityEvent {

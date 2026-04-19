@@ -197,16 +197,15 @@ describe('PackageOverview', () => {
     expect(githubLink).toHaveAttribute('href', 'https://github.com/lodash/lodash');
   });
 
-  it('shows Zombie Package and Create PR to Remove when direct with 0 files importing', () => {
+  it('shows Unused Package when direct with 0 files importing', () => {
     const dep = minimalDependency({
       is_direct: true,
       files_importing_count: 0,
     });
     render(<PackageOverview dependency={dep} {...defaultProps} />);
 
-    expect(screen.getByText('Zombie Package')).toBeInTheDocument();
+    expect(screen.getByText('Unused Package')).toBeInTheDocument();
     expect(screen.getByText('Not imported in any file')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Create PR to Remove/i })).toBeInTheDocument();
   });
 
   it('shows Unused Package label for direct dependency with zero imports', () => {
@@ -222,6 +221,19 @@ describe('PackageOverview', () => {
     );
 
     expect(screen.getByText('Unused Package')).toBeInTheDocument();
+  });
+
+  it('does not show Unused Package when files_importing_count is null (non-JS ecosystem, not analyzed)', () => {
+    const dep = minimalDependency({
+      is_direct: true,
+      files_importing_count: null,
+    });
+    render(<PackageOverview dependency={dep} {...defaultProps} />);
+
+    expect(screen.queryByText('Unused Package')).not.toBeInTheDocument();
+    expect(screen.queryByText('Not imported in any file')).not.toBeInTheDocument();
+    // Should not show "Imported in N files" either
+    expect(screen.queryByText(/Imported in/)).not.toBeInTheDocument();
   });
 
   it('shows imported files count when direct with files_importing_count > 0', () => {
