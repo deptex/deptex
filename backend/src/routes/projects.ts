@@ -53,12 +53,78 @@ import {
   invalidateProjectCachesForTeam,
   CACHE_TTL_SECONDS,
 } from '../lib/cache';
-import { getHealthScoreBreakdown } from '../lib/health-score';
 
 /** True if version is a stable release (no canary/experimental/alpha/beta/rc). */
 function isStableVersion(version: string): boolean {
   if (!semver.valid(version)) return false;
   return !semver.prerelease(version);
+}
+
+/** Project-scoped vuln scores for VersionSidebar (current lockfile version only). */
+async function fetchPdvScoresByOsvForDependency(
+  projectId: string,
+  projectDependencyId: string
+): Promise<
+  Map<
+    string,
+    {
+      osv_id: string;
+      depscore: number | null;
+      contextual_depscore: number | null;
+      epss_score: number | null;
+      cvss_score: number | null;
+      cisa_kev: boolean | null;
+      is_reachable: boolean | null;
+    }
+  >
+> {
+  const { data, error } = await supabase
+    .from('project_dependency_vulnerabilities')
+    .select('osv_id, depscore, contextual_depscore, epss_score, cvss_score, cisa_kev, is_reachable')
+    .eq('project_id', projectId)
+    .eq('project_dependency_id', projectDependencyId);
+  if (error || !data?.length) return new Map();
+  const m = new Map();
+  for (const r of data) {
+    if (r.osv_id) m.set(r.osv_id, r);
+  }
+  return m;
+}
+
+function mergePdvIntoVulnerabilities(
+  vulnerabilities: any[],
+  versionStr: string,
+  currentVersion: string | null,
+  pdvByOsv: Map<string, any>
+): any[] {
+  if (!currentVersion || versionStr !== currentVersion || pdvByOsv.size === 0) {
+    return vulnerabilities;
+  }
+  return vulnerabilities.map((v) => {
+    const p = pdvByOsv.get(v.osv_id);
+    if (!p) return v;
+    return {
+      ...v,
+      depscore: p.depscore ?? null,
+      contextual_depscore: p.contextual_depscore ?? null,
+      epss_score: p.epss_score ?? null,
+      cvss_score: p.cvss_score ?? null,
+      cisa_kev: p.cisa_kev ?? false,
+      is_reachable: p.is_reachable ?? undefined,
+    };
+  });
+}
+
+function enrichDependencyVersionsResponseWithPdv(cached: any, pdvByOsv: Map<string, any>): any {
+  const cur = cached?.currentVersion ?? null;
+  if (!cur || pdvByOsv.size === 0 || !Array.isArray(cached?.versions)) return cached;
+  return {
+    ...cached,
+    versions: cached.versions.map((item: any) => ({
+      ...item,
+      vulnerabilities: mergePdvIntoVulnerabilities(item.vulnerabilities ?? [], item.version, cur, pdvByOsv),
+    })),
+  };
 }
 
 /** Batched ancestor paths: one edge query for project subgraph, then BFS in memory. */
@@ -282,6 +348,16 @@ async function updateProjectCompliance(organizationId: string, projectId: string
   return isCompliant;
 }
 
+/** Legacy API `status` string; `projects.status` TEXT was dropped in favor of `status_id` → organization_statuses. */
+function legacyProjectComplianceLabel(
+  statusId: string | null | undefined,
+  isPassing: boolean | null | undefined
+): string {
+  if (!statusId) return 'compliant';
+  if (isPassing === false) return 'non-compliant';
+  return 'compliant';
+}
+
 // Update compliance for all projects in an organization
 async function updateAllProjectsCompliance(organizationId: string): Promise<void> {
   const { data: projects } = await supabase
@@ -407,6 +483,76 @@ async function checkProjectAccess(userId: string, organizationId: string, projec
     isInProjectTeam: false,
     error: { status: 403, message: 'You do not have access to this project' }
   };
+}
+
+/** Project IDs visible to the user within an org (same rules as GET /:id/projects). */
+async function getAccessibleProjectIdsInOrganization(
+  userId: string,
+  organizationId: string
+): Promise<{ projectIds: string[]; error?: { status: number; message: string } }> {
+  const { data: orgMembership, error: orgMembershipError } = await supabase
+    .from('organization_members')
+    .select('role')
+    .eq('organization_id', organizationId)
+    .eq('user_id', userId)
+    .single();
+
+  if (orgMembershipError || !orgMembership) {
+    return { projectIds: [], error: { status: 404, message: 'Organization not found or access denied' } };
+  }
+
+  const { data: orgRole } = await supabase
+    .from('organization_roles')
+    .select('permissions')
+    .eq('organization_id', organizationId)
+    .eq('name', orgMembership.role)
+    .single();
+
+  const canViewAllProjects =
+    orgMembership.role === 'owner' || orgRole?.permissions?.manage_teams_and_projects === true;
+
+  if (canViewAllProjects) {
+    const { data: projects, error } = await supabase
+      .from('projects')
+      .select('id')
+      .eq('organization_id', organizationId);
+    if (error) throw error;
+    return { projectIds: (projects || []).map((p: any) => p.id) };
+  }
+
+  const { data: directProjects } = await supabase
+    .from('project_members')
+    .select('project_id')
+    .eq('user_id', userId);
+  const directProjectIds = (directProjects || []).map((p: any) => p.project_id);
+
+  const { data: userTeams } = await supabase
+    .from('team_members')
+    .select('team_id')
+    .eq('user_id', userId);
+  const userTeamIds = (userTeams || []).map((t: any) => t.team_id);
+
+  let teamProjectIds: string[] = [];
+  if (userTeamIds.length > 0) {
+    const { data: teamProjects } = await supabase
+      .from('project_teams')
+      .select('project_id')
+      .in('team_id', userTeamIds);
+    teamProjectIds = (teamProjects || []).map((tp: any) => tp.project_id);
+  }
+
+  const merged = [...new Set([...directProjectIds, ...teamProjectIds])];
+  if (merged.length === 0) {
+    return { projectIds: [] };
+  }
+
+  const { data: scopedProjects, error: scopedError } = await supabase
+    .from('projects')
+    .select('id')
+    .eq('organization_id', organizationId)
+    .in('id', merged);
+  if (scopedError) throw scopedError;
+  return { projectIds: (scopedProjects || []).map((p: any) => p.id) };
 }
 
 /** Check if user can manage watchtower (enable/disable, clear commits, quarantine).
@@ -718,16 +864,37 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
           };
         }
       }
+      // Match GET .../projects/:id/repositories: when DB row says ready but a job is still
+      // queued/processing (or extraction_step is not completed), expose extracting so org
+      // overview / project lists stay consistent with extraction run history.
+      if (projectIds.length > 0) {
+        const { data: activeJobs } = await supabase
+          .from('extraction_jobs')
+          .select('project_id')
+          .in('project_id', projectIds)
+          .in('status', ['queued', 'processing']);
+        const activeJobProjectIds = new Set((activeJobs ?? []).map((j: { project_id: string }) => j.project_id));
+        for (const pid of projectIds) {
+          const rs = repoStatusByProject[pid];
+          if (!rs || rs.status !== 'ready') continue;
+          const step = rs.extraction_step;
+          if (step && step !== 'completed') {
+            rs.status = 'extracting';
+          } else if (activeJobProjectIds.has(pid)) {
+            rs.status = 'extracting';
+          }
+        }
+      }
     }
 
     // Fetch status and asset tier display names/colors for list (org overview cards)
-    const statusById: Record<string, { name: string; color: string | null }> = {};
+    const statusById: Record<string, { name: string; color: string | null; is_passing: boolean | null }> = {};
     const tierById: Record<string, { name: string; color: string | null }> = {};
     // Direct dependency counts per project (for org overview cards: "X direct deps")
     let directDepsByProject: Record<string, number> = {};
     const [[statusRes, tierRes], directDepsResult] = await Promise.all([
       Promise.all([
-        supabase.from('organization_statuses').select('id, name, color').eq('organization_id', id),
+        supabase.from('organization_statuses').select('id, name, color, is_passing').eq('organization_id', id),
         supabase.from('organization_asset_tiers').select('id, name, color').eq('organization_id', id),
       ]),
       projectIds.length > 0
@@ -740,7 +907,9 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
     ]);
     const statusRows = (statusRes as any)?.data ?? [];
     const tierRows = (tierRes as any)?.data ?? [];
-    (statusRows || []).forEach((s: any) => { statusById[s.id] = { name: s.name, color: s.color ?? null }; });
+    (statusRows || []).forEach((s: any) => {
+      statusById[s.id] = { name: s.name, color: s.color ?? null, is_passing: s.is_passing };
+    });
     (tierRows || []).forEach((t: any) => { tierById[t.id] = { name: t.name, color: t.color ?? null }; });
     (directDepsResult.data || []).forEach((row: any) => {
       directDepsByProject[row.project_id] = (directDepsByProject[row.project_id] ?? 0) + 1;
@@ -825,7 +994,7 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
         name: project.name,
         team_ids: teamsByProject[project.id]?.map((t: any) => t.id) || [],
         health_score: project.health_score || 0,
-        status: project.status || 'compliant',
+        status: legacyProjectComplianceLabel(project.status_id, statusInfo?.is_passing),
         is_compliant: project.is_compliant !== false,
         created_at: project.created_at,
         updated_at: project.updated_at,
@@ -848,19 +1017,10 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
         asset_tier_name: tierInfo?.name ?? null,
         asset_tier_color: tierInfo?.color ?? null,
         compliance_score_pct: compliancePctByProject[project.id] ?? null,
+        policy_evaluated_at: project.policy_evaluated_at ?? null,
+        status_violations: project.status_violations ?? [],
       };
     });
-
-    // #region agent log
-    const lowHealthProjects = (projects || []).filter((p: any) => p.health_score != null && p.health_score < 100);
-    for (const p of lowHealthProjects) {
-      try {
-        const breakdown = await getHealthScoreBreakdown(p.id);
-        const weighted = Math.round(breakdown.complianceScore * 0.4 + breakdown.vulnScore * 0.3 + breakdown.freshnessScore * 0.2 + breakdown.findingsScore * 0.1);
-        fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'df8aae' }, body: JSON.stringify({ sessionId: 'df8aae', location: 'projects.ts:GET/:id/projects', message: 'Health score breakdown for project with score < 100', data: { projectId: p.id, projectName: p.name, storedHealthScore: p.health_score, complianceScore: breakdown.complianceScore, vulnScore: breakdown.vulnScore, freshnessScore: breakdown.freshnessScore, findingsScore: breakdown.findingsScore, computedWeighted: weighted }, timestamp: Date.now(), hypothesisId: 'H1-H5' }) }).catch(() => {});
-      } catch (_) {}
-    }
-    // #endregion
 
     res.json(formattedProjects);
   } catch (error: any) {
@@ -1109,13 +1269,22 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
       }
     }
 
+    const { data: defaultOrgStatus } = await supabase
+      .from('organization_statuses')
+      .select('id, name, color, is_passing')
+      .eq('organization_id', id)
+      .eq('is_passing', true)
+      .order('rank', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
     const insertPayload: Record<string, any> = {
       organization_id: id,
       name: name.trim(),
       health_score: 0,
-      status: 'compliant',
       asset_tier: insertAssetTierId ? 'EXTERNAL' : assetTier,
     };
+    if (defaultOrgStatus?.id) insertPayload.status_id = defaultOrgStatus.id;
     if (insertAssetTierId) insertPayload.asset_tier_id = insertAssetTierId;
 
     // Create project
@@ -1170,7 +1339,7 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
       name: project.name,
       team_ids: teamIdsArray,
       health_score: project.health_score || 0,
-      status: project.status || 'compliant',
+      status: legacyProjectComplianceLabel(project.status_id ?? defaultOrgStatus?.id, defaultOrgStatus?.is_passing),
       is_compliant: project.is_compliant !== false,
       created_at: project.created_at,
       updated_at: project.updated_at,
@@ -1178,6 +1347,9 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
       dependencies_count: project.dependencies_count || 0,
       framework: project.framework || null,
       alerts_count: project.alerts_count || 0,
+      status_id: project.status_id ?? null,
+      status_name: defaultOrgStatus?.name ?? null,
+      status_color: defaultOrgStatus?.color ?? null,
     };
 
     // Create activity log
@@ -1430,13 +1602,23 @@ router.put('/:id/projects/:projectId', async (req: AuthRequest, res) => {
       }
     }
 
+    let updatedStatusPassing: boolean | null | undefined;
+    if (project.status_id) {
+      const { data: ost } = await supabase
+        .from('organization_statuses')
+        .select('is_passing')
+        .eq('id', project.status_id)
+        .maybeSingle();
+      updatedStatusPassing = ost?.is_passing ?? null;
+    }
+
     const formattedProject = {
       id: project.id,
       organization_id: project.organization_id,
       name: project.name,
       team_ids: teamIds,
       health_score: project.health_score || 0,
-      status: project.status || 'compliant',
+      status: legacyProjectComplianceLabel(project.status_id, updatedStatusPassing),
       is_compliant: project.is_compliant !== false,
       created_at: project.created_at,
       updated_at: project.updated_at,
@@ -1671,13 +1853,27 @@ router.get('/:id/projects/:projectId', async (req: AuthRequest, res) => {
       return res.status(403).json({ error: 'Access denied to this project' });
     }
 
+    let projectStatusPassing: boolean | null | undefined;
+    let projectStatusName: string | null = null;
+    let projectStatusColor: string | null = null;
+    if (project.status_id) {
+      const { data: ost } = await supabase
+        .from('organization_statuses')
+        .select('is_passing, name, color')
+        .eq('id', project.status_id)
+        .maybeSingle();
+      projectStatusPassing = ost?.is_passing ?? null;
+      projectStatusName = ost?.name ?? null;
+      projectStatusColor = ost?.color ?? null;
+    }
+
     const formattedProject = {
       id: project.id,
       organization_id: project.organization_id,
       name: project.name,
       team_ids: teamIds,
       health_score: project.health_score || 0,
-      status: project.status || 'compliant',
+      status: legacyProjectComplianceLabel(project.status_id, projectStatusPassing),
       is_compliant: project.is_compliant !== false,
       created_at: project.created_at,
       updated_at: project.updated_at,
@@ -1693,6 +1889,8 @@ router.get('/:id/projects/:projectId', async (req: AuthRequest, res) => {
       asset_tier: project.asset_tier ?? null,
       asset_tier_id: project.asset_tier_id ?? null,
       status_id: project.status_id ?? null,
+      status_name: projectStatusName,
+      status_color: projectStatusColor,
       policy_evaluated_at: project.policy_evaluated_at ?? null,
       status_violations: project.status_violations ?? [],
     };
@@ -3900,7 +4098,6 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
 
     // If repo says ready but an extraction job is still running, or extraction_step is not completed, report extracting so Overview and Repository stay in sync
     let effectiveStatus = repoRecord?.status ?? null;
-    let hasActiveJob = false;
     if (repoRecord?.status === 'ready') {
       const step = (repoRecord as { extraction_step?: string }).extraction_step;
       if (step && step !== 'completed') {
@@ -3914,13 +4111,9 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
           .in('status', ['queued', 'processing'])
           .limit(1)
           .maybeSingle();
-        hasActiveJob = !!activeJob;
         if (activeJob) effectiveStatus = 'extracting';
       }
     }
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'df7584' }, body: JSON.stringify({ sessionId: 'df7584', location: 'projects.ts:GET-repositories', message: 'repositories response', data: { projectId, repoStatus: repoRecord?.status ?? null, effectiveStatus, hasActiveJob }, timestamp: Date.now(), hypothesisId: 'H2' }) }).catch(() => {});
-    // #endregion
 
     const GIT_PROVIDERS = ['github', 'gitlab', 'bitbucket'] as const;
     let integrations: OrgIntegration[];
@@ -3990,6 +4183,7 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
           webhook_status: (repoRecord as { webhook_status?: string }).webhook_status ?? null,
           last_webhook_at: (repoRecord as { last_webhook_at?: string }).last_webhook_at ?? null,
           last_webhook_event: (repoRecord as { last_webhook_event?: string }).last_webhook_event ?? null,
+          last_extracted_at: (repoRecord as { last_extracted_at?: string }).last_extracted_at ?? null,
         }
         : null,
       repositories: allRepos,
@@ -4441,14 +4635,6 @@ router.get('/:id/projects/:projectId/extraction/runs', async (req: AuthRequest, 
         ...payloadToMeta(payload),
       };
     });
-
-    // #region agent log
-    const latest = out[0];
-    if (latest) {
-      const jobForLatest = jobByRunId.get(latest.run_id);
-      fetch('http://127.0.0.1:7243/ingest/53e74682-68cf-45a2-9b9e-de506b5f8b18', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'df7584' }, body: JSON.stringify({ sessionId: 'df7584', location: 'projects.ts:GET-extraction-runs', message: 'extraction runs latest', data: { projectId, run_id: latest.run_id, jobStatusFromDb: jobForLatest?.status ?? null, returnedStatus: latest.status }, timestamp: Date.now(), hypothesisId: 'H4' }) }).catch(() => {});
-    }
-    // #endregion
 
     res.json(out);
   } catch (error: any) {
@@ -5456,7 +5642,8 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/versions'
       const cacheKey = getDependencyVersionsCacheKey(id, projectId, projectDependencyId);
       const cached = await getCached<{ versions: any[]; currentVersion: string; latestVersion: string; prs: any[]; bannedVersions: string[] }>(cacheKey);
       if (cached) {
-        return res.json(cached);
+        const pdvByOsvCached = await fetchPdvScoresByOsvForDependency(projectId, projectDependencyId);
+        return res.json(enrichDependencyVersionsResponseWithPdv(cached, pdvByOsvCached));
       }
     }
 
@@ -5590,6 +5777,7 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/versions'
     if (paginate && limit != null && offset != null) {
       versionList = versionList.slice(offset, offset + limit);
     }
+    const pdvByOsv = await fetchPdvScoresByOsvForDependency(projectId, projectDependencyId);
     const versionStrs = versionList.map((v: any) => v.version ?? '');
     const vulnCountsMap = await getVulnCountsForVersionsBatch(supabase, dependencyId, versionStrs);
 
@@ -5683,15 +5871,20 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/versions'
       const versionStr = v.version ?? '';
       const counts = vulnCountsMap.get(versionStr) ?? { critical_vulns: 0, high_vulns: 0, medium_vulns: 0, low_vulns: 0 };
       const vulnCount = counts.critical_vulns + counts.high_vulns + counts.medium_vulns + counts.low_vulns;
-      const vulnerabilities = allVulns
-        .filter((uv) => isVersionAffected(versionStr, uv.affected_versions))
-        .map((uv) => ({
-          osv_id: uv.osv_id,
-          severity: uv.severity ?? 'unknown',
-          summary: uv.summary ?? null,
-          aliases: uv.aliases ?? [],
-          fixed_versions: uv.fixed_versions ?? [],
-        }));
+      const vulnerabilities = mergePdvIntoVulnerabilities(
+        allVulns
+          .filter((uv) => isVersionAffected(versionStr, uv.affected_versions))
+          .map((uv) => ({
+            osv_id: uv.osv_id,
+            severity: uv.severity ?? 'unknown',
+            summary: uv.summary ?? null,
+            aliases: uv.aliases ?? [],
+            fixed_versions: uv.fixed_versions ?? [],
+          })),
+        versionStr,
+        currentVersion,
+        pdvByOsv
+      );
       const transitiveVulnerabilities = transitiveByParentId.get(v.id) ?? [];
       const transitiveVulnCount = transitiveVulnerabilities.length;
       const totalVulnCount = vulnCount + transitiveVulnCount;
@@ -7685,13 +7878,21 @@ router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, 
         cvss_score: vuln.cvss_score ?? null,
         cisa_kev: vuln.cisa_kev ?? false,
         depscore: vuln.depscore ?? null,
+        contextual_depscore: vuln.contextual_depscore ?? null,
       }),
     }));
 
     const severityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
     enrichedVulnerabilities.sort((a: any, b: any) => {
-      const aScore = a.depscore ?? -1;
-      const bScore = b.depscore ?? -1;
+      const rank = (x: any) => {
+        const c = x.contextual_depscore;
+        const d = x.depscore;
+        if (c != null && Number.isFinite(Number(c))) return Number(c);
+        if (d != null && Number.isFinite(Number(d))) return Number(d);
+        return -1;
+      };
+      const aScore = rank(a);
+      const bScore = rank(b);
       if (aScore !== bScore) return bScore - aScore;
       const severityDiff = (severityOrder[a.severity] ?? 4) - (severityOrder[b.severity] ?? 4);
       if (severityDiff !== 0) return severityDiff;
@@ -10360,7 +10561,7 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
 
     const { data: globalVuln } = await supabase
       .from('dependency_vulnerabilities')
-      .select('summary, details, aliases, fixed_versions, published_at, modified_at')
+      .select('summary, details, aliases, affected_versions, fixed_versions, published_at, modified_at')
       .eq('osv_id', osvId)
       .limit(1)
       .single();
@@ -10385,6 +10586,7 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
         summary: globalVuln?.summary ?? vuln.summary ?? null,
         details: globalVuln?.details ?? vuln.details ?? null,
         aliases: globalVuln?.aliases ?? vuln.aliases ?? [],
+        affected_versions: globalVuln?.affected_versions ?? null,
         fixed_versions: globalVuln?.fixed_versions ?? vuln.fixed_versions ?? [],
         published_at: globalVuln?.published_at ?? vuln.published_at ?? null,
       },
@@ -10805,6 +11007,132 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
   } catch (error: any) {
     console.error('Error fetching org security summary:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch security summary' });
+  }
+});
+
+// GET /api/organizations/:id/vulnerabilities — paginated dependency vulns across accessible projects (PDV rows)
+router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: organizationId } = req.params;
+
+    const { projectIds: accessibleProjectIds, error: accessError } = await getAccessibleProjectIdsInOrganization(
+      userId,
+      organizationId
+    );
+    if (accessError) {
+      return res.status(accessError.status).json({ error: accessError.message });
+    }
+    if (accessibleProjectIds.length === 0) {
+      return res.json({ data: [], total: 0, page: 1, per_page: 50 });
+    }
+
+    const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+    const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page as string, 10) || 50));
+    const severityFilter = (req.query.severity as string) || '';
+    const allowedSeverity = ['critical', 'high', 'medium', 'low'].includes(severityFilter) ? severityFilter : '';
+
+    let countQuery = supabase
+      .from('project_dependency_vulnerabilities')
+      .select('*', { count: 'exact', head: true })
+      .in('project_id', accessibleProjectIds)
+      .eq('suppressed', false);
+    if (allowedSeverity) countQuery = countQuery.eq('severity', allowedSeverity);
+
+    const { count: totalCount, error: countError } = await countQuery;
+    if (countError) throw countError;
+
+    const from = (page - 1) * perPage;
+    const to = from + perPage - 1;
+
+    let dataQuery = supabase
+      .from('project_dependency_vulnerabilities')
+      .select(
+        'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, sla_status, sla_deadline_at, reachability_level'
+      )
+      .in('project_id', accessibleProjectIds)
+      .eq('suppressed', false);
+    if (allowedSeverity) dataQuery = dataQuery.eq('severity', allowedSeverity);
+
+    const { data: rows, error: dataError } = await dataQuery
+      .order('contextual_depscore', { ascending: false, nullsFirst: false })
+      .order('depscore', { ascending: false, nullsFirst: false })
+      .range(from, to);
+
+    if (dataError) throw dataError;
+
+    const list = rows || [];
+    const pdIds = [...new Set(list.map((r: any) => r.project_dependency_id).filter(Boolean))];
+    const projIds = [...new Set(list.map((r: any) => r.project_id).filter(Boolean))];
+
+    const depMap = new Map<string, { name: string; version: string; dependency_id: string }>();
+    const projMap = new Map<string, { name: string }>();
+
+    if (pdIds.length > 0) {
+      const { data: deps, error: depErr } = await supabase
+        .from('project_dependencies')
+        .select('id, name, version, dependency_id')
+        .in('id', pdIds);
+      if (depErr) throw depErr;
+      for (const d of deps || []) {
+        depMap.set((d as any).id, {
+          name: (d as any).name ?? 'Unknown',
+          version: (d as any).version ?? 'Unknown',
+          dependency_id: (d as any).dependency_id ?? '',
+        });
+      }
+    }
+
+    if (projIds.length > 0) {
+      const { data: projs, error: projErr } = await supabase
+        .from('projects')
+        .select('id, name')
+        .in('id', projIds);
+      if (projErr) throw projErr;
+      for (const p of projs || []) {
+        projMap.set((p as any).id, { name: (p as any).name ?? 'Unknown' });
+      }
+    }
+
+    const data = list.map((r: any) => {
+      const dep = r.project_dependency_id ? depMap.get(r.project_dependency_id) : undefined;
+      const proj = r.project_id ? projMap.get(r.project_id) : undefined;
+      return {
+        id: r.id,
+        osv_id: r.osv_id,
+        severity: r.severity,
+        summary: r.summary ?? null,
+        details: null,
+        aliases: r.aliases || [],
+        fixed_versions: r.fixed_versions || [],
+        published_at: r.published_at ?? null,
+        modified_at: null,
+        dependency_id: dep?.dependency_id ?? '',
+        dependency_name: dep?.name ?? 'Unknown',
+        dependency_version: dep?.version ?? 'Unknown',
+        is_reachable: r.is_reachable ?? undefined,
+        epss_score: r.epss_score,
+        cvss_score: r.cvss_score ?? null,
+        cisa_kev: r.cisa_kev ?? false,
+        depscore: r.depscore ?? null,
+        contextual_depscore: r.contextual_depscore ?? null,
+        sla_status: r.sla_status ?? null,
+        sla_deadline_at: r.sla_deadline_at ?? null,
+        reachability_level: r.reachability_level ?? null,
+        project_id: r.project_id,
+        project_name: proj?.name ?? 'Unknown',
+      };
+    });
+
+    res.json({
+      data,
+      total: totalCount ?? 0,
+      page,
+      per_page: perPage,
+    });
+  } catch (error: any) {
+    console.error('Error fetching organization vulnerabilities:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch organization vulnerabilities' });
   }
 });
 

@@ -11,6 +11,9 @@ import { queueExtractionJob, queueASTParsingJob } from '../lib/redis';
 import { invalidateProjectCaches } from '../lib/cache';
 import { detectAffectedWorkspaces, isFileInWorkspace } from '../lib/manifest-registry';
 import { checkRateLimit } from '../lib/rate-limit';
+import { runPRCheck } from '../lib/policy-engine';
+import { getVulnCountsForPackageVersion, exceedsThreshold, type VulnCounts } from '../lib/vuln-counts';
+import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
 
 const router = express.Router();
 
@@ -122,6 +125,59 @@ async function getBitbucketOAuthToken(repoFullName: string): Promise<string | nu
 
   return integration?.access_token ?? null;
 }
+
+async function getBitbucketFileContent(
+  accessToken: string,
+  workspace: string,
+  repoSlug: string,
+  filePath: string,
+  ref: string
+): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://api.bitbucket.org/2.0/repositories/${workspace}/${repoSlug}/src/${encodeURIComponent(ref)}/${encodeURIComponent(filePath)}`,
+      { headers: { Authorization: `Bearer ${accessToken}`, 'User-Agent': 'Deptex-App' } }
+    );
+    if (!res.ok) return null;
+    return await res.text();
+  } catch {
+    return null;
+  }
+}
+
+// ─── Shared helpers for PR check analysis ─────────────────────────────────────
+
+function getDirectDepsFromPackageJson(pkg: {
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+}): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, spec] of Object.entries(pkg.dependencies || {})) out[name] = spec;
+  for (const [name, spec] of Object.entries(pkg.devDependencies || {})) {
+    if (!(name in out)) out[name] = spec;
+  }
+  return out;
+}
+
+async function getLicenseForPackage(name: string): Promise<string | null> {
+  const { data } = await supabase.from('dependencies').select('license').eq('name', name).single() as { data: { license: string | null } | null };
+  if (data?.license) return data.license;
+  try {
+    const res = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}`, {
+      headers: { Accept: 'application/json', 'User-Agent': 'Deptex-App' },
+    });
+    if (!res.ok) return null;
+    const data2 = (await res.json()) as { license?: string | { type?: string } };
+    if (typeof data2?.license === 'string') return data2.license;
+    if (data2?.license?.type) return data2.license.type;
+    return null;
+  } catch { return null; }
+}
+
+const fmtVuln = (v: VulnCounts) =>
+  [v.critical_vulns, v.high_vulns, v.medium_vulns, v.low_vulns].some(n => n > 0)
+    ? `${v.critical_vulns} critical, ${v.high_vulns} high, ${v.medium_vulns} medium, ${v.low_vulns} low vulnerabilities`
+    : '0 vulnerabilities';
 
 async function getBitbucketChangedFiles(
   accessToken: string,
@@ -438,41 +494,222 @@ async function handleBitbucketPullRequestEvent(payload: any, action: string): Pr
   if (!accessToken) return;
 
   const [ws, slug] = repoFullName.split('/');
+  const baseSha = pr.destination?.commit?.hash;
+
+  let changedFiles: string[] = [];
+  try {
+    changedFiles = await getBitbucketChangedFiles(accessToken, ws, slug, `${baseSha}..${headSha}`);
+  } catch {}
+
+  const affectedWorkspaces = detectAffectedWorkspaces(changedFiles);
 
   for (const row of matchingProjects) {
     const orgId = Array.isArray(row.projects) ? row.projects[0]?.organization_id : row.projects?.organization_id;
+    const projectId = row.project_id;
     const projectName = row.projects?.name || 'Project';
     if (!orgId) continue;
+
+    const workspace = (row.package_json_path ?? '').trim();
+    const isAffected = affectedWorkspaces.has(workspace) || affectedWorkspaces.has('');
 
     const checkName = `Deptex - ${projectName}`;
     await createBitbucketBuildStatus(accessToken, ws, slug, headSha, 'INPROGRESS', checkName, 'Analyzing dependencies...');
 
-    let summary = 'No dependency changes detected.';
+    let blocked = false;
+    const blockedBy: Record<string, number> = {};
+    const lines: string[] = [`### ${projectName}`, ''];
+    let depsAdded = 0;
+    let depsUpdated = 0;
+    let depsRemoved = 0;
 
-    let changedFiles: string[] = [];
-    try {
-      changedFiles = await getBitbucketChangedFiles(accessToken, ws, slug, `${pr.destination?.commit?.hash}..${headSha}`);
-    } catch {}
+    if (!isAffected) {
+      lines.push('No dependency changes detected.');
+    } else {
+      const ecosystems = affectedWorkspaces.get(workspace) ?? affectedWorkspaces.get('');
 
-    const affectedWorkspaces = detectAffectedWorkspaces(changedFiles);
-    const workspace = (row.package_json_path ?? '').trim();
-    const isAffected = affectedWorkspaces.has(workspace) || affectedWorkspaces.has('');
+      if (ecosystems?.has('npm')) {
+        // Deep npm analysis: fetch package.json from base and head refs
+        const pkgPath = workspace ? `${workspace}/package.json` : 'package.json';
 
-    if (isAffected) {
-      summary = 'Dependency changes detected in this PR.';
+        let basePkg: Record<string, string> = {};
+        let headPkg: Record<string, string> = {};
+
+        try {
+          const headContent = await getBitbucketFileContent(accessToken, ws, slug, pkgPath, headSha);
+          if (headContent) headPkg = getDirectDepsFromPackageJson(JSON.parse(headContent));
+        } catch {}
+        if (baseSha) {
+          try {
+            const baseContent = await getBitbucketFileContent(accessToken, ws, slug, pkgPath, baseSha);
+            if (baseContent) basePkg = getDirectDepsFromPackageJson(JSON.parse(baseContent));
+          } catch {}
+        }
+
+        const directAddedPkgs: Array<{ name: string; version: string }> = [];
+        const directBumpedPkgs: Array<{ name: string; oldVersion: string; newVersion: string }> = [];
+
+        for (const [name, spec] of Object.entries(headPkg)) {
+          if (!(name in basePkg)) {
+            directAddedPkgs.push({ name, version: spec.replace(/[\^~>=<]/g, '') });
+          } else if (basePkg[name] !== spec) {
+            directBumpedPkgs.push({ name, oldVersion: basePkg[name].replace(/[\^~>=<]/g, ''), newVersion: spec.replace(/[\^~>=<]/g, '') });
+          }
+        }
+        for (const name of Object.keys(basePkg)) {
+          if (!(name in headPkg)) depsRemoved++;
+        }
+
+        const { acceptedLicenses } = await getEffectivePolicies(orgId, projectId);
+
+        // Load guardrails
+        const { data: guardrailsRow } = await supabase.from('project_pr_guardrails').select('*').eq('project_id', projectId).single();
+        const guardrails = guardrailsRow as any;
+        const hasVulnBlocking = guardrails?.block_critical_vulns || guardrails?.block_high_vulns || guardrails?.block_medium_vulns || guardrails?.block_low_vulns;
+
+        const checkPackage = async (name: string, version: string) => {
+          const vulnCounts = await getVulnCountsForPackageVersion(supabase, name, version);
+          const license = await getLicenseForPackage(name);
+          const policyViolation = Boolean(guardrails?.block_policy_violations && acceptedLicenses.length > 0 && isLicenseAllowed(license, acceptedLicenses) === false);
+
+          if (policyViolation) { blocked = true; blockedBy.policy_violations = (blockedBy.policy_violations ?? 0) + 1; }
+          if (hasVulnBlocking) {
+            if (guardrails?.block_critical_vulns && exceedsThreshold(vulnCounts, 'critical')) { blocked = true; blockedBy.critical_vulns = (blockedBy.critical_vulns ?? 0) + vulnCounts.critical_vulns; }
+            if (guardrails?.block_high_vulns && exceedsThreshold(vulnCounts, 'high')) { blocked = true; blockedBy.high_vulns = (blockedBy.high_vulns ?? 0) + vulnCounts.high_vulns; }
+            if (guardrails?.block_medium_vulns && exceedsThreshold(vulnCounts, 'medium')) { blocked = true; blockedBy.medium_vulns = (blockedBy.medium_vulns ?? 0) + vulnCounts.medium_vulns; }
+            if (guardrails?.block_low_vulns && exceedsThreshold(vulnCounts, 'low')) { blocked = true; blockedBy.low_vulns = (blockedBy.low_vulns ?? 0) + vulnCounts.low_vulns; }
+          }
+          return { vulnCounts, license, policyViolation };
+        };
+
+        // Load and run PR check code
+        let prCheckCode: string | null = null;
+        try {
+          const { data: proj } = await supabase.from('projects').select('effective_pr_check_code').eq('id', projectId).single();
+          prCheckCode = proj?.effective_pr_check_code;
+        } catch {}
+        if (!prCheckCode) {
+          try {
+            const { data: orgPrCheck } = await supabase.from('organization_pr_checks').select('pr_check_code').eq('organization_id', orgId).single();
+            prCheckCode = orgPrCheck?.pr_check_code;
+          } catch {}
+        }
+
+        if (prCheckCode?.trim() && (directAddedPkgs.length > 0 || directBumpedPkgs.length > 0)) {
+          let projectAssetTier: string | null = null;
+          try {
+            const { data: projRow } = await supabase.from('projects').select('asset_tier_id').eq('id', projectId).single();
+            if (projRow?.asset_tier_id) {
+              const { data: tierRow } = await supabase.from('organization_asset_tiers').select('name').eq('id', projRow.asset_tier_id).single();
+              if (tierRow?.name) projectAssetTier = tierRow.name;
+            }
+          } catch {}
+
+          const added = await Promise.all(
+            directAddedPkgs.map(async ({ name, version }) => {
+              const { policyViolation, vulnCounts, license } = await checkPackage(name, version);
+              return {
+                name, version, license: license ?? null, is_direct: true,
+                policyResult: { allowed: !policyViolation, reasons: policyViolation ? ['Does not comply with project policy'] : [] },
+                vulnerability_counts: vulnCounts ? { critical: vulnCounts.critical_vulns, high: vulnCounts.high_vulns, medium: vulnCounts.medium_vulns, low: vulnCounts.low_vulns } : undefined,
+              };
+            }),
+          );
+          const updated = await Promise.all(
+            directBumpedPkgs.map(async ({ name, oldVersion, newVersion }) => {
+              const { policyViolation, vulnCounts, license } = await checkPackage(name, newVersion);
+              return {
+                name, version: newVersion, oldVersion, license: license ?? null, is_direct: true,
+                policyResult: { allowed: !policyViolation, reasons: policyViolation ? ['Does not comply with project policy'] : [] },
+                vulnerability_counts: vulnCounts ? { critical: vulnCounts.critical_vulns, high: vulnCounts.high_vulns, medium: vulnCounts.medium_vulns, low: vulnCounts.low_vulns } : undefined,
+              };
+            }),
+          );
+
+          const prContext: Record<string, unknown> = {
+            project: { name: projectName, id: projectId, asset_tier: projectAssetTier ?? undefined },
+            ecosystem: 'npm',
+            changed_files: changedFiles,
+            added, updated, removed: [],
+            statuses: ['Compliant', 'Non-Compliant'],
+          };
+
+          try {
+            const prResult = await runPRCheck(prCheckCode, prContext, orgId);
+            if (!prResult.passed) {
+              blocked = true;
+              blockedBy.policy_violations = (blockedBy.policy_violations ?? 0) + 1;
+              if (prResult.violations?.length) {
+                lines.push('**Policy check:**');
+                prResult.violations.forEach((v) => lines.push(`- ${v}`));
+                lines.push('');
+              }
+            }
+          } catch (err: any) {
+            console.error('[bitbucket-pr-check] runPRCheck failed:', err?.message);
+            blocked = true;
+            blockedBy.policy_violations = (blockedBy.policy_violations ?? 0) + 1;
+          }
+        }
+
+        if (directBumpedPkgs.length > 0) {
+          depsUpdated = directBumpedPkgs.length;
+          lines.push('**Packages updated:**');
+          for (const { name, oldVersion, newVersion } of directBumpedPkgs.slice(0, 30)) {
+            const { vulnCounts } = await checkPackage(name, newVersion);
+            lines.push(`- **${name}** \`${oldVersion}\` -> \`${newVersion}\` — ${fmtVuln(vulnCounts)}`);
+          }
+          lines.push('');
+        }
+
+        if (directAddedPkgs.length > 0) {
+          depsAdded = directAddedPkgs.length;
+          lines.push('**Packages added:**');
+          for (const { name, version } of directAddedPkgs.slice(0, 30)) {
+            const { vulnCounts, license, policyViolation } = await checkPackage(name, version);
+            const policyStr = policyViolation ? ' **(does not comply with project policy)**' : '';
+            lines.push(`- **${name}** \`${version}\` — license: ${license ?? 'Unknown'}; ${fmtVuln(vulnCounts)}${policyStr}`);
+          }
+          lines.push('');
+        }
+
+        if (depsRemoved > 0) {
+          lines.push(`**${depsRemoved} package(s) removed.**`);
+          lines.push('');
+        }
+      } else {
+        lines.push('Dependency changes detected in this PR.');
+        lines.push('');
+      }
     }
 
-    await createBitbucketBuildStatus(accessToken, ws, slug, headSha, 'SUCCESSFUL', checkName, summary);
+    if (blocked) {
+      lines.push('---');
+      lines.push('');
+      lines.push('**This project cannot be merged until the above issues are resolved.**');
+      lines.push('');
+    }
+
+    const conclusion = blocked ? 'FAILED' : 'SUCCESSFUL';
+    const issueCount = Object.values(blockedBy).reduce((a, b) => a + b, 0);
+    const summary = blocked
+      ? Object.entries(blockedBy).map(([k, v]) => `${v} ${k.replace(/_/g, ' ')}`).join(', ')
+      : isAffected ? 'All checked dependencies meet guardrails.' : 'No dependency changes detected.';
+
+    await createBitbucketBuildStatus(accessToken, ws, slug, headSha, conclusion, checkName, summary);
 
     await supabase.from('project_pull_requests').upsert({
-      project_id: row.project_id,
+      project_id: projectId,
       pr_number: prId,
       title: pr.title,
       author_login: pr.author?.display_name || pr.author?.username,
       author_avatar_url: pr.author?.links?.avatar?.href,
       status: 'open',
-      check_result: 'passed',
+      check_result: blocked ? 'failed' : 'passed',
       check_summary: summary,
+      deps_added: depsAdded,
+      deps_updated: depsUpdated,
+      deps_removed: depsRemoved,
+      blocked_by: Object.keys(blockedBy).length > 0 ? blockedBy : null,
       provider: 'bitbucket',
       provider_url: pr.links?.html?.href,
       base_branch: targetBranch,
@@ -484,7 +721,7 @@ async function handleBitbucketPullRequestEvent(payload: any, action: string): Pr
     }, { onConflict: 'project_id,pr_number,provider' });
 
     if (row.pull_request_comments_enabled !== false) {
-      const commentBody = `${DEPTEX_COMMENT_MARKER}\n## Deptex Dependency Check\n\n### ${projectName}\n\n${summary}\n\n---\n\n*Last updated: ${new Date().toISOString()} UTC*`;
+      const commentBody = `${DEPTEX_COMMENT_MARKER}\n## Deptex Dependency Check\n\n${lines.join('\n')}\n\n---\n\n*Last updated: ${new Date().toISOString()} UTC*`;
       await findAndEditBitbucketPRComment(accessToken, ws, slug, prId, commentBody);
     }
 
@@ -492,7 +729,7 @@ async function handleBitbucketPullRequestEvent(payload: any, action: string): Pr
       last_webhook_at: new Date().toISOString(),
       last_webhook_event: 'pullrequest',
       webhook_status: 'active',
-    }).eq('project_id', row.project_id).eq('provider', 'bitbucket');
+    }).eq('project_id', projectId).eq('provider', 'bitbucket');
   }
 }
 

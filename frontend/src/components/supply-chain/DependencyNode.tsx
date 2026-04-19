@@ -2,7 +2,6 @@ import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { Package, Scale, Check, X } from 'lucide-react';
 import type { DependencyNodeData } from './useGraphLayout';
-import { isLicenseAllowed } from '../../lib/compliance-utils';
 
 const ECOSYSTEM_ICON: Record<string, string> = {
   npm: '/images/npm_icon.png',
@@ -24,14 +23,8 @@ function DependencyNodeComponent({ data }: NodeProps) {
 
   // License badge (hidden when showLicense is false, e.g. on vulnerabilities graph)
   const showLicense = nodeData.showLicense !== false;
-  const licenseAllowed = showLicense ? isLicenseAllowed(nodeData.license, nodeData.policies ?? null) : null;
   const licenseLabel = showLicense && nodeData.license && nodeData.license !== 'Unknown' ? nodeData.license : null;
-  let licenseBadgeClass = 'bg-foreground-secondary/10 text-foreground-secondary border-foreground-secondary/20';
-  if (licenseAllowed === true) {
-    licenseBadgeClass = 'bg-primary/15 text-green-600 border border-primary/30';
-  } else if (licenseAllowed === false) {
-    licenseBadgeClass = 'bg-destructive/10 text-destructive border-destructive/20';
-  }
+  const licenseBadgeClass = 'bg-foreground-secondary/10 text-foreground-secondary border-foreground-secondary/20';
   const showNotImported = nodeData.notImported === true;
   const ecosystemIcon = getEcosystemIcon(nodeData.ecosystem);
   const showPolicyBadge = nodeData.policyAllowed !== undefined && nodeData.policyAllowed !== null;

@@ -1023,7 +1023,7 @@ async function updateConnectionHealth(
 
 /**
  * Create in-app notifications for organization members, respecting per-user
- * notification preferences (muted events, muted projects, in-app toggle).
+ * notification preferences (muted events, muted projects, in-app toggle, DND).
  */
 async function createInAppNotifications(
   event: any,
@@ -1042,7 +1042,7 @@ async function createInAppNotifications(
 
     const { data: prefs } = await supabase
       .from('user_notification_preferences')
-      .select('user_id, muted_event_types, muted_project_ids, in_app_enabled')
+      .select('user_id, muted_event_types, muted_project_ids, in_app_enabled, dnd_start_hour, dnd_end_hour')
       .eq('organization_id', event.organization_id)
       .in('user_id', userIds);
 
@@ -1051,6 +1051,7 @@ async function createInAppNotifications(
       prefsMap.set(p.user_id, p);
     }
 
+    const nowHour = new Date().getUTCHours();
     const notifications: any[] = [];
 
     for (const userId of userIds) {
@@ -1059,6 +1060,16 @@ async function createInAppNotifications(
       if (pref?.in_app_enabled === false) continue;
       if (pref?.muted_event_types?.includes(event.event_type)) continue;
       if (event.project_id && pref?.muted_project_ids?.includes(event.project_id)) continue;
+
+      // DND window check (hours are in UTC)
+      if (pref?.dnd_start_hour != null && pref?.dnd_end_hour != null) {
+        const start = pref.dnd_start_hour;
+        const end = pref.dnd_end_hour;
+        const inDnd = start <= end
+          ? (nowHour >= start && nowHour < end)       // e.g., 22–6 doesn't wrap
+          : (nowHour >= start || nowHour < end);      // e.g., 22–6 wraps midnight
+        if (inDnd) continue;
+      }
 
       notifications.push({
         user_id: userId,

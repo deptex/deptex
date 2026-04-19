@@ -20,6 +20,7 @@ import { VulnProjectNode } from '../../components/vulnerabilities-graph/VulnProj
 import { DependencyNode } from '../../components/supply-chain/DependencyNode';
 import { VulnerabilityNode } from '../../components/supply-chain/VulnerabilityNode';
 import type { NodeTypes } from '@xyflow/react';
+import { isExtractionOngoing } from '../../lib/extractionStatus';
 
 interface TeamContextType {
   team: TeamWithRole | null;
@@ -90,7 +91,7 @@ export default function TeamOverviewPage() {
               projectName: p.name,
               graphDepNodes: result.graphDepNodes,
               framework: p.framework,
-              isExtracting: p.repo_status != null && p.repo_status !== 'ready',
+              isExtracting: isExtractionOngoing(p.repo_status ?? '', p.extraction_step ?? null),
               statusName: p.status_name ?? null,
               statusColor: p.status_color ?? null,
               assetTierName: p.asset_tier_name ?? null,

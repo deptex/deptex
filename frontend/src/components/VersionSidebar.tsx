@@ -14,12 +14,19 @@ import {
 import { Button } from './ui/button';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from './ui/dialog';
+import {
   api,
   DependencyVersionsResponse,
   DependencyVersionItem,
+  DependencyVersionVulnerability,
   WatchtowerPRItem,
 } from '../lib/api';
 import { useToast } from '../hooks/use-toast';
+import { cn } from '../lib/utils';
 
 interface VersionSidebarProps {
   packageName: string;
@@ -43,6 +50,40 @@ const GHSA_BASE = 'https://github.com/advisories/';
 /** Link to GitHub Advisory for GHSA ids, else OSV. */
 function getVulnUrl(id: string): string {
   return id.startsWith('GHSA-') ? `${GHSA_BASE}${id}` : `${OSV_BASE}${id}`;
+}
+
+/** Project-scoped depscore (current locked version only; API merges from project_dependency_vulnerabilities). */
+function VulnDepscoreBadge({ v }: { v: DependencyVersionVulnerability }) {
+  const raw = v.contextual_depscore ?? v.depscore;
+  if (raw == null || !Number.isFinite(Number(raw))) return null;
+  const n = Number(raw);
+  const tierClass =
+    n >= 75
+      ? 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/25'
+      : n >= 40
+        ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/25'
+        : 'bg-foreground-secondary/10 text-foreground-secondary border-border';
+  const title =
+    v.contextual_depscore != null
+      ? `Contextual depscore (EPD-weighted) for this project: ${n.toFixed(1)} / 100.`
+      : `Depscore for this project: ${n.toFixed(1)} / 100.`;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={cn(
+            'shrink-0 px-1.5 py-0.5 rounded border text-[10px] font-semibold tabular-nums cursor-default',
+            tierClass
+          )}
+        >
+          {n.toFixed(1)}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs">
+        {title} Only shown for your resolved version; bump rows list CVEs without project scores.
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 /** Compare semver-style versions: -1 if a < b, 0 if equal, 1 if a > b. Ensures 5.10.0 > 5.9.0. */
@@ -126,7 +167,7 @@ function VersionCardSkeleton() {
           <div className="h-3.5 w-3.5 rounded-full bg-muted" />
         </div>
       </div>
-      <div className="mt-3 -mx-4 px-4 py-2 border-t border-border bg-[#141618] rounded-b-lg">
+      <div className="mt-3 -mx-4 px-4 py-2 border-t border-border bg-background-card rounded-b-lg">
         <div className="h-7 w-24 bg-muted rounded" />
       </div>
     </li>
@@ -202,18 +243,10 @@ export function VersionSidebar({
   };
 
   return (
-    <div className="fixed inset-0 z-50">
-      <div
-        className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-        onClick={onClose}
-        aria-hidden
-      />
-      <div
-        className="fixed right-0 top-0 h-full w-full max-w-xl bg-background border-l border-border shadow-2xl flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="px-6 py-5 border-b border-border flex-shrink-0 bg-[#141618]">
-          <h2 className="text-lg font-semibold text-foreground">Versions</h2>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent hideClose className="sm:max-w-[700px] max-h-[80vh] bg-background flex flex-col p-0 gap-0 overflow-hidden">
+        <div className="px-6 pt-6 pb-4 border-b border-border flex-shrink-0">
+          <DialogTitle>Versions</DialogTitle>
         </div>
         <div className="flex-1 overflow-y-auto px-6 pt-4 pb-6">
           {loading && (
@@ -323,10 +356,13 @@ export function VersionSidebar({
                                         <span className="font-mono text-foreground font-medium truncate max-w-[200px]">
                                           {alias}
                                         </span>
-                                        <span
-                                          className={`shrink-0 px-1.5 py-0.5 rounded border text-[10px] font-medium capitalize ${severityClass}`}
-                                        >
-                                          {v.severity}
+                                        <span className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                                          <VulnDepscoreBadge v={v} />
+                                          <span
+                                            className={`px-1.5 py-0.5 rounded border text-[10px] font-medium capitalize ${severityClass}`}
+                                          >
+                                            {v.severity}
+                                          </span>
                                         </span>
                                       </div>
                                       {v.summary && (
@@ -380,10 +416,13 @@ export function VersionSidebar({
                                         <span className="font-mono text-foreground font-medium truncate max-w-[200px]">
                                           {alias}
                                         </span>
-                                        <span
-                                          className={`shrink-0 px-1.5 py-0.5 rounded border text-[10px] font-medium capitalize ${severityClass}`}
-                                        >
-                                          {v.severity}
+                                        <span className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                                          <VulnDepscoreBadge v={v} />
+                                          <span
+                                            className={`px-1.5 py-0.5 rounded border text-[10px] font-medium capitalize ${severityClass}`}
+                                          >
+                                            {v.severity}
+                                          </span>
                                         </span>
                                       </div>
                                       {v.summary && (
@@ -447,7 +486,7 @@ export function VersionSidebar({
                     )}
 
                     {/* PR action (watchtower) or Preview (supply-chain) — full-width bottom strip */}
-                    <div className="mt-3 -mx-4 px-4 py-2 border-t border-border bg-[#141618] rounded-b-lg">
+                    <div className="mt-3 -mx-4 px-4 py-2 border-t border-border bg-background-card rounded-b-lg">
                       {variant === 'supply-chain' ? (
                         isCurrent ? (
                           <span className="text-xs text-foreground-secondary">Current version</span>
@@ -501,7 +540,7 @@ export function VersionSidebar({
             </ul>
           )}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

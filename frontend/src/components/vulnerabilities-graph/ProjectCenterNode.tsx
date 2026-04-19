@@ -131,7 +131,7 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
   const effectiveStatusColor = rawStatusColor && !rawStatusColor.startsWith('#') ? `#${rawStatusColor}` : rawStatusColor;
 
   return (
-    <div className="relative cursor-pointer">
+    <div className="relative cursor-pointer h-full w-full min-w-0 min-h-0 box-border">
       {/* Target handles so edges from team/org can connect (same ids as VulnProjectNode) */}
       <Handle id="top" type="target" position={Position.Top} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
       <Handle
@@ -204,7 +204,7 @@ function ProjectCenterNodeComponent({ data }: NodeProps) {
         </div>
       ) : isOrgOverviewExtracting ? (
         <div
-          className="relative rounded-xl border border-border bg-background-card-header shadow-lg shadow-slate-500/5 h-full min-w-[268px] flex flex-col overflow-hidden cursor-pointer hover:border-border/80 transition-all"
+          className="relative rounded-xl border border-border bg-background-card-header shadow-lg shadow-slate-500/5 h-full w-full min-w-0 max-w-full flex flex-col overflow-hidden cursor-pointer hover:border-border/80 transition-all box-border"
           style={{ minHeight: OVERVIEW_PROJECT_NODE_HEIGHT }}
         >
           {/* Top: icon + name + scope (like overview project card) */}
