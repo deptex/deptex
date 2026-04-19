@@ -15,7 +15,7 @@ import {
   updateIssueComment,
   type CheckRunOutput,
 } from '../lib/github';
-import { queueExtractionJob, queueASTParsingJob } from '../lib/redis';
+import { queueExtractionJob } from '../lib/redis';
 import { invalidateProjectCaches } from '../lib/cache';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
 import { getVulnCountsForPackageVersion, exceedsThreshold, type VulnCounts } from '../lib/vuln-counts';
@@ -1571,20 +1571,6 @@ async function handlePushEvent(payload: any): Promise<void> {
         }
       } else {
         console.warn(`[webhook push] Per-org cap reached (${MAX_EXTRACTION_PER_PUSH}), skipping extraction for project`, row.project_id);
-      }
-    }
-
-    if (!extractionTriggered) {
-      const anyFileInWorkspace = changedFiles.some((f) => isFileInWorkspace(f, workspace));
-      if (anyFileInWorkspace) {
-        await queueASTParsingJob(row.project_id, {
-          repo_full_name: repoFullName,
-          installation_id: String(installationId),
-          default_branch: row.default_branch,
-          package_json_path: workspace,
-        }).catch((err: any) => {
-          console.warn('[webhook push] AST job not queued for project', row.project_id, err?.message);
-        });
       }
     }
 

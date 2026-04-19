@@ -37,8 +37,11 @@ lerna-debug.log*
 backend/src/**/*.js
 !backend/src/test/mocks/lib-supabase-mock.js
 backend/src/**/*.d.ts
-backend/watchtower-*/src/**/*.js
-backend/watchtower-*/src/**/*.d.ts
+backend/watchtower-worker/src/**/*.js
+backend/watchtower-worker/src/**/*.d.ts
+
+# Windows crash dumps
+*.stackdump
 
 # Keys / secrets
 *.pem

@@ -32,7 +32,7 @@ Deptex is an AI-powered open-core dependency security platform. It combines depe
 | Tables | @tanstack/react-table |
 | Code editor | Monaco Editor (policy code) |
 | Forms | react-hook-form + zod validation |
-| Workers | 4 Node.js workers: extraction, parser, watchtower-worker, watchtower-poller |
+| Workers | 3 workers on Fly.io: extraction-worker, watchtower-worker, aider-worker (Python) |
 | SBOM | cdxgen (CycloneDX). dep-scan (VDR, reachability). Semgrep, TruffleHog |
 | AST parsing | oxc-parser (JS/TS import extraction) |
 | Queues | Upstash QStash (async jobs, cron schedules) |
@@ -53,10 +53,8 @@ backend/
     routes/               API route handlers (orgs, teams, projects, aegis, workers, webhooks, etc.)
     lib/                  Shared libraries (ai/, aegis/, learning/, github, policy-engine, etc.)
     middleware/            auth.ts (JWT), ip-allowlist.ts
-  extraction-worker/      Clone + cdxgen + dep-scan + AST + Semgrep + TruffleHog (Fly.io scale-to-zero)
-  parser-worker/          Standalone AST import analysis (oxc-parser)
-  watchtower-worker/      Supply-chain forensic analysis
-  watchtower-poller/      Deprecated for prod; QStash cron replaces it
+  extraction-worker/      Clone + cdxgen + dep-scan + AST (oxc-parser) + Semgrep + TruffleHog (Fly.io scale-to-zero)
+  watchtower-worker/      Supply-chain forensic analysis (Fly.io scale-to-zero)
   aider-worker/           AI-powered fix worker (Aider/Python on Fly.io)
   database/               ~140 SQL migration files
 

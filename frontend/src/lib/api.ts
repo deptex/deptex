@@ -1784,12 +1784,6 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/import-status`);
   },
 
-  async requeueAstParsing(organizationId: string, projectId: string): Promise<{ success: boolean; message?: string }> {
-    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/requeue-ast`, {
-      method: 'POST',
-    });
-  },
-
   async cancelExtraction(organizationId: string, projectId: string): Promise<{ success: boolean }> {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/extraction/cancel`, {
       method: 'POST',
