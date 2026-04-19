@@ -4692,7 +4692,6 @@ router.get('/:id/notification-rule-templates', async (req: AuthRequest, res) => 
     { id: 'pr-check-failure', name: 'PR Check Failure', description: 'Alert when a PR fails dependency policy checks', code: "if (context.event.type !== 'pr_check_completed') return false;\nreturn context.pr && context.pr.check_result === 'failed';", suggestedDestinations: ['slack', 'discord'] },
     { id: 'crown-jewels-any-change', name: 'Crown Jewels - Any Change', description: 'Alert on any event affecting Crown Jewels projects', code: "return context.project.asset_tier === 'Crown Jewels';", suggestedDestinations: ['slack', 'pagerduty'] },
     { id: 'new-dep-low-score', name: 'New Dependency with Low Score', description: 'Alert when a new dependency is added with a low reputation score', code: "if (context.event.type !== 'dependency_added') return false;\nreturn context.dependency && context.dependency.score < 50;", suggestedDestinations: ['slack', 'jira'] },
-    { id: 'watchtower-alerts', name: 'Watchtower Alerts', description: 'Alert on supply chain security check failures, high-anomaly commits, and new version availability', code: "const watchEvents = [\n  'security_analysis_failure',\n  'supply_chain_anomaly',\n  'new_version_available'\n];\nif (!watchEvents.includes(context.event.type)) return false;\nreturn true;", suggestedDestinations: ['slack', 'email'] },
   ];
   res.json(RULE_TEMPLATES);
 });

@@ -23,7 +23,6 @@ jest.mock('../../lib/cache', () => {
   const actual = jest.requireActual('../../lib/cache') as typeof import('../../lib/cache');
   return {
     ...actual,
-    invalidateWatchtowerSummaryCache: jest.fn().mockResolvedValue(undefined),
     invalidateLatestSafeVersionCacheByDependencyId: jest.fn().mockResolvedValue(undefined),
   };
 });
@@ -545,18 +544,6 @@ describe('Supply Chain Routes', () => {
       packageName?: string;
       childEdgesPerVersion?: Record<string, string[]>;
       childVulns?: Record<string, { critical_vulns: number; high_vulns: number; medium_vulns: number; low_vulns: number }>;
-      // Watchtower integration
-      watchlistRow?: {
-        quarantine_until: string | null;
-        is_current_version_quarantined: boolean;
-        latest_allowed_version: string | null;
-      } | null;
-      securityChecks?: Array<{
-        version: string;
-        registry_integrity_status: string | null;
-        install_scripts_status: string | null;
-        entropy_analysis_status: string | null;
-      }>;
       /** If true, all versions get 1 critical vuln (for "all have vulns" tests). */
       allVersionsAffectedByVulns?: boolean;
       /** Per-version vuln counts (overrides allVersionsAffectedByVulns when set). */
@@ -624,27 +611,6 @@ describe('Supply Chain Routes', () => {
       queryBuilder.then.mockImplementationOnce((resolve: any) => resolve({ data: [], error: null }));
       queryBuilder.then.mockImplementationOnce((resolve: any) => resolve({ data: [], error: null }));
       queryBuilder.then.mockImplementationOnce((resolve: any) => resolve({ data: [], error: null }));
-
-      // 6. organization_watchlist.maybeSingle → watchlist row (watchtower integration)
-      queryBuilder.maybeSingle.mockResolvedValueOnce({
-        data: opts.watchlistRow ?? null,
-        error: null,
-      });
-
-      // 6b. dependency_versions (security statuses) — always queried by latest-safe-version
-      queryBuilder.then.mockImplementationOnce((resolve: any) =>
-        resolve({
-          data:
-            opts.securityChecks ??
-            opts.versions.map((v) => ({
-              version: v.version,
-              registry_integrity_status: 'pass',
-              install_scripts_status: 'pass',
-              entropy_analysis_status: 'pass',
-            })),
-          error: null,
-        })
-      );
 
       // 7-8. For each version checked: edges query → then, optionally child vulns
       for (const v of opts.versions) {
@@ -868,88 +834,6 @@ describe('Supply Chain Routes', () => {
       if (res.body.message) expect(res.body.message).toContain('not resolved');
     });
 
-    // Watchtower integration: version in quarantine → not eligible as latest safe
-    it('should skip quarantined version when org has package on watchtower', async () => {
-      const futureQuarantine = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString();
-      setupLatestSafeVersionMocks({
-        versions: [
-          { id: 'dv-3', version: '3.0.0' },
-          { id: 'dv-2', version: '2.0.0' },
-        ],
-        currentVersionId: 'dv-2',
-        currentVersion: '2.0.0',
-        watchlistRow: {
-          quarantine_until: futureQuarantine,
-          is_current_version_quarantined: true,
-          latest_allowed_version: '2.0.0',
-        },
-        securityChecks: [
-          { version: '3.0.0', registry_integrity_status: 'pass', install_scripts_status: 'pass', entropy_analysis_status: 'pass' },
-          { version: '2.0.0', registry_integrity_status: 'pass', install_scripts_status: 'pass', entropy_analysis_status: 'pass' },
-        ],
-      });
-
-      const res = await request(app)
-        .get(safeVersionUrl)
-        .set('Authorization', `Bearer ${mockToken}`);
-
-      expect(res.status).toBe(200);
-      expect([ '2.0.0', null ]).toContain(res.body.safeVersion);
-      if (res.body.safeVersion === '2.0.0') expect(res.body.isCurrent).toBe(true);
-    });
-
-    // Watchtower integration: version with failed security checks → not eligible (use versionVulnCounts so 3.0.0 is skipped)
-    it('should skip version with failed critical security checks when org has watchtower', async () => {
-      setupLatestSafeVersionMocks({
-        versions: [
-          { id: 'dv-3', version: '3.0.0' },
-          { id: 'dv-2', version: '2.0.0' },
-        ],
-        currentVersionId: 'dv-2',
-        currentVersion: '2.0.0',
-        watchlistRow: {
-          quarantine_until: null,
-          is_current_version_quarantined: false,
-          latest_allowed_version: '2.0.0',
-        },
-        versionVulnCounts: {
-          '3.0.0': { critical_vulns: 1, high_vulns: 0, medium_vulns: 0, low_vulns: 0 },
-          '2.0.0': { critical_vulns: 0, high_vulns: 0, medium_vulns: 0, low_vulns: 0 },
-        },
-        securityChecks: [
-          { version: '3.0.0', registry_integrity_status: 'fail', install_scripts_status: 'pass', entropy_analysis_status: 'pass' },
-          { version: '2.0.0', registry_integrity_status: 'pass', install_scripts_status: 'pass', entropy_analysis_status: 'pass' },
-        ],
-      });
-
-      const res = await request(app)
-        .get(safeVersionUrl)
-        .set('Authorization', `Bearer ${mockToken}`);
-
-      expect(res.status).toBe(200);
-      expect([ '2.0.0', null ]).toContain(res.body.safeVersion);
-    });
-
-    // Watchtower integration: org without watchlist → no filtering (existing behavior)
-    it('should not filter by watchtower when org has no watchlist row', async () => {
-      setupLatestSafeVersionMocks({
-        versions: [
-          { id: 'dv-3', version: '3.0.0' },
-          { id: 'dv-2', version: '2.0.0' },
-        ],
-        currentVersionId: 'dv-2',
-        currentVersion: '2.0.0',
-        watchlistRow: null,
-      });
-
-      const res = await request(app)
-        .get(safeVersionUrl)
-        .set('Authorization', `Bearer ${mockToken}`);
-
-      expect(res.status).toBe(200);
-      expect([ '3.0.0', null ]).toContain(res.body.safeVersion);
-      if (res.body.safeVersion === '3.0.0') expect(res.body.isCurrent).toBe(false);
-    });
   });
 
   describe('GET /api/organizations/:id/projects/:projectId/bump-scope', () => {
