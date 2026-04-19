@@ -21,6 +21,7 @@ import {
   invalidateProjectCaches,
 } from '../lib/cache';
 import { emitEvent } from '../lib/event-bus';
+import { getActiveExtractionId } from '../lib/active-extraction';
 
 const router = express.Router();
 
@@ -898,10 +899,12 @@ async function updateOutdatedStatus(
 ): Promise<void> {
   if (!latestVersion) return;
 
+  // Phase 19: skip soft-deleted project_dependencies rows.
   const { data: projDeps } = await supabase
     .from('project_dependencies')
     .select('id, version')
-    .eq('dependency_id', dependencyId);
+    .eq('dependency_id', dependencyId)
+    .is('removed_at', null);
   if (!projDeps || projDeps.length === 0) return;
 
   for (const pd of projDeps) {
@@ -1483,13 +1486,36 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
       }
     }
 
-    // Log vulnerability timeline events (detected/resolved) with dedup guard
+    // Phase 19: Resolve the extraction_run_id this populate batch belongs to.
+    // This handler runs DURING extraction (extraction-worker queues populate before
+    // calling finalize_extraction). So we cannot use getActiveExtractionId — that
+    // would point at the previous run until finalize flips the pointer. Instead
+    // look up the in-flight extraction_jobs row (status='processing') and use its
+    // id as runId (per pipeline.ts the runId stored on findings = extraction_jobs.id).
+    // Fall back to active_extraction_run_id if no in-flight job is found (e.g.
+    // populate fired after finalize completed).
+    let runId: string | null = null;
+    if (projectId) {
+      const { data: inflightJob } = await supabase
+        .from('extraction_jobs')
+        .select('id')
+        .eq('project_id', projectId)
+        .eq('status', 'processing')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      runId = (inflightJob?.id as string | undefined) ?? (await getActiveExtractionId(supabase, projectId));
+    }
+    const runIdFilter = runId ?? '__no_active_run__';
+
+    // Phase 6: Log vulnerability timeline events (detected/resolved) with dedup guard
     if (projectId && successful > 0) {
       try {
         const { data: currentVulns } = await supabase
           .from('project_dependency_vulnerabilities')
           .select('osv_id')
-          .eq('project_id', projectId);
+          .eq('project_id', projectId)
+          .eq('extraction_run_id', runIdFilter);
 
         const currentOsvIds = new Set((currentVulns ?? []).map((v: any) => v.osv_id));
 
@@ -1549,6 +1575,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
                 .from('project_dependency_vulnerabilities')
                 .select('id, sla_deadline_at')
                 .eq('project_id', projectId)
+                .eq('extraction_run_id', runIdFilter)
                 .eq('osv_id', prev.osv_id)
                 .in('sla_status', ['on_track', 'warning', 'breached']);
               for (const row of stillOpen ?? []) {
@@ -1559,7 +1586,8 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
                     sla_status: metInTime ? 'met' : 'resolved_late',
                     sla_met_at: now,
                   })
-                  .eq('id', row.id);
+                  .eq('id', row.id)
+                  .eq('extraction_run_id', runIdFilter);
               }
             }
           }
@@ -1596,6 +1624,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
             .from('project_dependency_vulnerabilities')
             .select('id, osv_id, severity, created_at')
             .eq('project_id', projectId)
+            .eq('extraction_run_id', runIdFilter)
             .is('sla_status', null)
             .or('suppressed.is.null,suppressed.eq.false')
             .or('risk_accepted.is.null,risk_accepted.eq.false');
@@ -1625,7 +1654,8 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
                   sla_warning_at: warningAt.toISOString(),
                   sla_status: 'on_track',
                 })
-                .eq('id', pdv.id);
+                .eq('id', pdv.id)
+                .eq('extraction_run_id', runIdFilter);
             }
             console.log(`[Phase15] SLA deadlines set for ${pdvRows.length} vulns in project ${projectId}`);
           }
@@ -1641,12 +1671,14 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
         const { data: projVulns } = await supabase
           .from('project_dependency_vulnerabilities')
           .select('osv_id, project_dependency_id, severity, fixed_versions')
-          .eq('project_id', projectId);
+          .eq('project_id', projectId)
+          .eq('extraction_run_id', runIdFilter);
 
         const { data: projDeps } = await supabase
           .from('project_dependencies')
           .select('id, name, version, dependency_id, ecosystem')
-          .eq('project_id', projectId);
+          .eq('project_id', projectId)
+          .is('removed_at', null);
 
         if (projVulns?.length && projDeps?.length) {
           const depById = new Map<string, any>();

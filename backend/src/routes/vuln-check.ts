@@ -1,5 +1,6 @@
 import express from 'express';
 import { supabase as getSupabaseClient } from '../lib/supabase';
+import { getActiveExtractionId } from '../lib/active-extraction';
 
 const router = express.Router();
 
@@ -89,11 +90,14 @@ async function checkProjectVulnerabilities(
   projectId: string,
   organizationId: string
 ): Promise<{ newVulns: number; resolvedVulns: number }> {
+  const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+
   const { data: deps } = await supabase
     .from('project_dependencies')
     .select('id, dependency_id, version, dependencies!inner(name, ecosystem)')
     .eq('project_id', projectId)
-    .eq('is_direct', true);
+    .eq('is_direct', true)
+    .is('removed_at', null);
 
   if (!deps?.length) return { newVulns: 0, resolvedVulns: 0 };
 
@@ -137,7 +141,8 @@ async function checkProjectVulnerabilities(
           .from('project_dependency_vulnerabilities')
           .select('id, dependency_vulnerabilities!inner(osv_id)')
           .eq('project_id', projectId)
-          .eq('project_dependency_id', dep.id);
+          .eq('project_dependency_id', dep.id)
+          .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
 
         const existingOsvIds = new Set((existingVulns || []).map((v: any) => v.dependency_vulnerabilities?.osv_id));
         const currentOsvIds = new Set(osvVulns.map((v: any) => v.id));
