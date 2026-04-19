@@ -197,3 +197,37 @@ export function calculateSemgrepDepscore(ctx: SemgrepDepscoreContext): number {
   const score = base * tierWeight;
   return Math.min(100, Math.round(score));
 }
+
+// --- License violation depscore ---
+
+export interface LicenseDepscoreContext {
+  reasons: string[];
+  isDirect: boolean;
+  isDevDependency: boolean;
+  assetTier: AssetTier;
+  tierMultiplier?: number;
+}
+
+export function calculateLicenseDepscore(ctx: LicenseDepscoreContext): number {
+  const lower = ctx.reasons.map(r => r.toLowerCase()).join(' ');
+  let base: number;
+  if (lower.includes('agpl')) {
+    base = 80;
+  } else if (lower.includes('copyleft') || lower.includes('gpl')) {
+    base = 70;
+  } else if (lower.includes('malicious') || lower.includes('malware')) {
+    base = 95;
+  } else if (lower.includes('banned') || lower.includes('blocked')) {
+    base = 75;
+  } else if (lower.includes('unknown') || lower.includes('no license')) {
+    base = 50;
+  } else {
+    base = 55;
+  }
+
+  const directWeight = ctx.isDirect ? 1.0 : 0.75;
+  const envWeight = ctx.isDevDependency ? 0.4 : 1.0;
+  const tierWeight = ctx.tierMultiplier ?? TIER_WEIGHT[ctx.assetTier];
+  const score = base * directWeight * envWeight * tierWeight;
+  return Math.min(100, Math.round(score));
+}

@@ -532,3 +532,297 @@ export async function updateReachabilityLevels(
 
   console.log(`[REACHABILITY] Updated ${updatedCount} vulns, ${detailsSetCount} with details, ${allUsageStrings.length} usage strings available`);
 }
+
+// ---------------------------------------------------------------------------
+// Compute files_importing_count from atom usage slices (all ecosystems)
+// ---------------------------------------------------------------------------
+
+// Python packages where pip name differs from import name
+const PYPI_IMPORT_ALIASES: Record<string, string[]> = {
+  pillow: ['pil'],
+  pyyaml: ['yaml'],
+  'beautifulsoup4': ['bs4'],
+  'scikit-learn': ['sklearn'],
+  'opencv-python': ['cv2'],
+  'opencv-python-headless': ['cv2'],
+  'python-dateutil': ['dateutil'],
+  'python-dotenv': ['dotenv'],
+  'python-jose': ['jose'],
+  'python-multipart': ['multipart'],
+  'pyjwt': ['jwt'],
+  'pycryptodome': ['crypto', 'cryptodome'],
+  'pymysql': ['pymysql'],
+  'psycopg2-binary': ['psycopg2'],
+  'protobuf': ['google.protobuf'],
+  'attrs': ['attr'],
+  'ruamel.yaml': ['ruamel'],
+};
+
+/**
+ * Check if a usage slice entry matches a dependency name.
+ * Returns true if the target_type or resolved_method contains the dep name
+ * using fuzzy matching (hyphen-to-dot, first-segment, aliases, etc.)
+ */
+function usageMatchesDep(
+  targetType: string,
+  resolvedMethod: string,
+  depNameLower: string,
+  depNameDotted: string,
+  depFirstPart: string,
+  importAliases?: string[],
+): boolean {
+  const t = targetType.toLowerCase();
+  const m = resolvedMethod.toLowerCase();
+  // Direct name match
+  if (t.includes(depNameLower) || m.includes(depNameLower)) return true;
+  // Dotted variant (Java: jackson-databind → jackson.databind)
+  if (depNameDotted !== depNameLower && (t.includes(depNameDotted) || m.includes(depNameDotted))) return true;
+  // First segment for compound names (log4j-core → log4j), only if segment is meaningful (>3 chars)
+  if (depFirstPart.length > 3 && (t.includes(depFirstPart) || m.includes(depFirstPart))) return true;
+  // Python import aliases (pillow → PIL, pyyaml → yaml, etc.)
+  if (importAliases) {
+    for (const alias of importAliases) {
+      if (t.includes(alias) || m.includes(alias)) return true;
+    }
+  }
+  // Strip common Python prefixes: py*, python-* → check remainder
+  if (depNameLower.startsWith('py') && depNameLower.length > 3) {
+    const stripped = depNameLower.slice(2);
+    if (t.includes(stripped) || m.includes(stripped)) return true;
+  }
+  return false;
+}
+
+/**
+ * Compute files_importing_count for all direct project dependencies using
+ * atom usage slices data. This works for ALL ecosystems (Java, Python, Go,
+ * Rust, Ruby, PHP) — not just npm/JS/TS like the oxc-parser AST analysis.
+ *
+ * For npm projects where the oxc-parser already ran, this supplements with
+ * any additional data from atom. For non-npm, this is the primary source.
+ */
+export async function computeImportCountsFromUsageSlices(
+  projectId: string,
+  ecosystem: string,
+  supabase: SupabaseClient,
+  logger: LogLike,
+): Promise<void> {
+  // For npm, the oxc-parser AST analysis is more precise — only supplement if it found nothing
+  const isNpm = ecosystem === 'npm';
+
+  // Fetch all direct project dependencies
+  const { data: projectDeps } = await supabase
+    .from('project_dependencies')
+    .select('id, name, dependency_id, files_importing_count')
+    .eq('project_id', projectId)
+    .eq('is_direct', true);
+
+  if (!projectDeps || projectDeps.length === 0) return;
+
+  // Fetch all usage slices for this project
+  const { data: usages } = await supabase
+    .from('project_usage_slices')
+    .select('target_type, resolved_method, file_path')
+    .eq('project_id', projectId);
+
+  if (!usages || usages.length === 0) {
+    // No usage data — for non-npm, explicitly set null to indicate "not analyzed"
+    // (For npm, the oxc-parser may have already set the count, so don't overwrite)
+    if (!isNpm) {
+      for (const pd of projectDeps) {
+        if (pd.files_importing_count === 0) {
+          await supabase
+            .from('project_dependencies')
+            .update({ files_importing_count: null })
+            .eq('id', pd.id);
+        }
+      }
+      await logger.info('import_analysis', 'No usage slices available — import counts not determined');
+    }
+    return;
+  }
+
+  // Pre-compute name variants for each dependency
+  const depVariants = projectDeps.map((pd: any) => {
+    const lower = (pd.name ?? '').toLowerCase();
+    const dotted = lower.replace(/-/g, '.');
+    const firstPart = lower.split('-')[0];
+    const aliases = PYPI_IMPORT_ALIASES[lower] ?? undefined;
+    return { id: pd.id, name: pd.name, lower, dotted, firstPart, aliases, existingCount: pd.files_importing_count ?? 0 };
+  });
+
+  // For each usage, find which dependency it belongs to, and track unique files
+  const depFileMap = new Map<string, Set<string>>(); // dep id → set of file paths
+
+  for (const usage of usages) {
+    const targetType = usage.target_type ?? '';
+    const resolvedMethod = usage.resolved_method ?? '';
+    const filePath = usage.file_path;
+    if (!filePath || (!targetType && !resolvedMethod)) continue;
+
+    for (const dep of depVariants) {
+      if (!dep.lower) continue;
+      if (usageMatchesDep(targetType, resolvedMethod, dep.lower, dep.dotted, dep.firstPart, dep.aliases)) {
+        if (!depFileMap.has(dep.id)) depFileMap.set(dep.id, new Set());
+        depFileMap.get(dep.id)!.add(filePath);
+      }
+    }
+  }
+
+  // Update files_importing_count and persist file paths into project_dependency_files
+  let updatedCount = 0;
+  for (const dep of depVariants) {
+    const fileSet = depFileMap.get(dep.id);
+    const newCount = fileSet ? fileSet.size : 0;
+
+    if (isNpm) {
+      // For npm: only update if atom found MORE files than oxc-parser (supplement, don't downgrade)
+      if (newCount > dep.existingCount) {
+        await supabase
+          .from('project_dependencies')
+          .update({ files_importing_count: newCount })
+          .eq('id', dep.id);
+        updatedCount++;
+      }
+    } else {
+      // For non-npm: atom is the primary source — set the count directly
+      await supabase
+        .from('project_dependencies')
+        .update({ files_importing_count: newCount > 0 ? newCount : null })
+        .eq('id', dep.id);
+      updatedCount++;
+    }
+
+    // Persist file paths into project_dependency_files so analyze-usage can fetch real code
+    if (fileSet && fileSet.size > 0) {
+      const rows = [...fileSet].map(fp => ({ project_dependency_id: dep.id, file_path: fp }));
+      await supabase
+        .from('project_dependency_files')
+        .upsert(rows, { onConflict: 'project_dependency_id,file_path' });
+    }
+  }
+
+  // Internal metric — not shown in user-facing logs
+}
+
+// ---------------------------------------------------------------------------
+// Go source import parser — fallback when atom produces no usage slices
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse Go import statements from .go source files in the workspace.
+ * Go imports are explicit module paths (e.g. "golang.org/x/text/language")
+ * that can be matched directly against go.mod dependency module paths.
+ *
+ * Writes results to project_usage_slices so the rest of the pipeline
+ * (updateReachabilityLevels, computeImportCountsFromUsageSlices) works normally.
+ */
+export async function parseGoImportsFromSource(
+  workspaceRoot: string,
+  projectId: string,
+  runId: string,
+  supabase: SupabaseClient,
+  logger: LogLike,
+): Promise<number> {
+  const goFiles = findGoFiles(workspaceRoot);
+  if (goFiles.length === 0) return 0;
+
+  const batch: any[] = [];
+
+  for (const filePath of goFiles) {
+    const relPath = path.relative(workspaceRoot, filePath).replace(/\\/g, '/');
+    let content: string;
+    try {
+      content = fs.readFileSync(filePath, 'utf8');
+    } catch { continue; }
+
+    const imports = extractGoImports(content);
+    for (const imp of imports) {
+      batch.push({
+        project_id: projectId,
+        extraction_run_id: runId,
+        file_path: relPath,
+        line_number: imp.line,
+        containing_method: null,
+        target_name: imp.alias || imp.path.split('/').pop() || imp.path,
+        target_type: imp.path,
+        resolved_method: imp.path,
+        usage_label: 'go_import',
+        ecosystem: 'golang',
+      });
+    }
+  }
+
+  if (batch.length === 0) return 0;
+
+  // Write to project_usage_slices in chunks
+  for (let i = 0; i < batch.length; i += 100) {
+    const chunk = batch.slice(i, i + 100);
+    await supabase.from('project_usage_slices').upsert(chunk, {
+      onConflict: 'project_id,file_path,line_number,target_name',
+    });
+  }
+
+  console.log(`[go-imports] Parsed ${batch.length} imports from ${goFiles.length} .go files`);
+  return batch.length;
+}
+
+/** Recursively find all .go files, skipping vendor/ and testdata/. */
+function findGoFiles(dir: string, results: string[] = []): string[] {
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return results; }
+
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === 'vendor' || entry.name === 'testdata' || entry.name === '.git' || entry.name === 'node_modules') continue;
+      findGoFiles(full, results);
+    } else if (entry.isFile() && entry.name.endsWith('.go')) {
+      results.push(full);
+    }
+  }
+  return results;
+}
+
+/** Extract import paths and line numbers from a Go source file. */
+function extractGoImports(source: string): Array<{ path: string; alias: string | null; line: number }> {
+  const imports: Array<{ path: string; alias: string | null; line: number }> = [];
+  const lines = source.split(/\r?\n/);
+
+  let inBlock = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // Single import: import "fmt" or import alias "path"
+    const single = trimmed.match(/^import\s+(?:(\w+)\s+)?"([^"]+)"/);
+    if (single) {
+      imports.push({ path: single[2], alias: single[1] || null, line: i + 1 });
+      continue;
+    }
+
+    // Start of import block: import (
+    if (trimmed.match(/^import\s*\(/)) {
+      inBlock = true;
+      continue;
+    }
+
+    // End of import block
+    if (inBlock && trimmed === ')') {
+      inBlock = false;
+      continue;
+    }
+
+    // Line inside import block: "path" or alias "path" or . "path"
+    if (inBlock) {
+      const blockLine = trimmed.match(/^(?:(\w+|\.)\s+)?"([^"]+)"/);
+      if (blockLine) {
+        imports.push({ path: blockLine[2], alias: blockLine[1] || null, line: i + 1 });
+      }
+    }
+  }
+
+  // Filter out stdlib imports (no dot in path = stdlib like "fmt", "os", "strings")
+  return imports.filter(imp => imp.path.includes('.'));
+}

@@ -73,6 +73,16 @@ export function useRealtimeStatus(
   useEffect(() => {
     if (!projectId) return;
 
+    // Reset to loading immediately so stale state from a previous project doesn't flash
+    setState({
+      status: 'loading',
+      extractionStep: null,
+      lastSynced: null,
+      lastError: null,
+      lastExtractedAt: null,
+      isLoading: true,
+    });
+
     fetchStatus();
 
     const channel = supabase

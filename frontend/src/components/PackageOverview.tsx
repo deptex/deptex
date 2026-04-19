@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import {
   Scale,
   Download,
-  ExternalLink,
+  Package,
   XCircle,
   Info,
   FileCode,
@@ -124,6 +124,48 @@ const formatRelativeTime = (dateString: string | null): string => {
   return `${Math.floor(diffInSeconds / 31536000)} years ago`;
 };
 
+const ECOSYSTEM_ICON_SRCS: Record<string, string> = {
+  npm: '/images/npm_icon.png',
+  pypi: '/images/pypi_icon.png',
+  maven: '/images/maven_icon.png',
+  nuget: '/images/nuget_icon.png',
+  golang: '/images/go_icon.png',
+  go: '/images/go_icon.png',
+  cargo: '/images/cargo_icon.png',
+};
+
+function ecosystemIconNode(ecosystem: string | null | undefined): React.ReactNode {
+  const src = ECOSYSTEM_ICON_SRCS[ecosystem ?? 'npm'];
+  if (src) return <img src={src} alt="" className="w-4 h-4 object-contain" aria-hidden />;
+  return <Package className="h-4 w-4" />;
+}
+
+// Registry link helper — returns URL and display label for the package's ecosystem
+const getRegistryLink = (name: string, ecosystem?: string | null): { url: string; label: string; icon: React.ReactNode } => {
+  switch (ecosystem) {
+    case 'pypi':
+      return { url: `https://pypi.org/project/${name}`, label: 'PyPI', icon: ecosystemIconNode(ecosystem) };
+    case 'maven': {
+      const parts = name.split(':');
+      const url = parts.length === 2
+        ? `https://central.sonatype.com/artifact/${parts[0]}/${parts[1]}`
+        : `https://search.maven.org/search?q=${encodeURIComponent(name)}`;
+      return { url, label: 'Maven', icon: ecosystemIconNode(ecosystem) };
+    }
+    case 'golang':
+    case 'go':
+      return { url: `https://pkg.go.dev/${name}`, label: 'Go', icon: ecosystemIconNode(ecosystem) };
+    case 'cargo':
+      return { url: `https://crates.io/crates/${name}`, label: 'crates.io', icon: ecosystemIconNode(ecosystem) };
+    case 'nuget':
+      return { url: `https://www.nuget.org/packages/${name}`, label: 'NuGet', icon: ecosystemIconNode(ecosystem) };
+    case 'rubygems':
+      return { url: `https://rubygems.org/gems/${name}`, label: 'RubyGems', icon: ecosystemIconNode(ecosystem) };
+    default:
+      return { url: `https://www.npmjs.com/package/${name}`, label: 'npm', icon: ecosystemIconNode('npm') };
+  }
+};
+
 // Format downloads
 const formatDownloads = (downloads: number | null): string => {
   if (downloads === null) return 'N/A';
@@ -173,6 +215,19 @@ function AiSummaryRenderer({ content }: { content: string }) {
         const trimmed = part.trim();
         if (!trimmed) return null;
 
+        // Render inline segments: **bold** and `code`
+        function renderInline(text: string) {
+          return text.split(/(\*\*[^*]+\*\*|`[^`]+`)/).map((seg, idx) => {
+            if (seg.startsWith('**') && seg.endsWith('**')) {
+              return <strong key={idx} className="font-semibold text-foreground">{seg.slice(2, -2)}</strong>;
+            }
+            if (seg.startsWith('`') && seg.endsWith('`')) {
+              return <code key={idx} className="px-1.5 py-0.5 rounded bg-background border border-border text-xs font-mono text-foreground-secondary">{seg.slice(1, -1)}</code>;
+            }
+            return <span key={idx}>{seg}</span>;
+          });
+        }
+
         return (
           <div key={i} className="text-sm text-foreground-secondary leading-relaxed">
             {trimmed.split('\n\n').map((paragraph, j) => (
@@ -180,19 +235,7 @@ function AiSummaryRenderer({ content }: { content: string }) {
                 {paragraph.split('\n').map((line, k) => (
                   <span key={k}>
                     {k > 0 && <br />}
-                    {/* Render inline code with backticks */}
-                    {line.split(/(`[^`]+`)/).map((segment, l) =>
-                      segment.startsWith('`') && segment.endsWith('`') ? (
-                        <code
-                          key={l}
-                          className="px-1.5 py-0.5 rounded bg-background border border-border text-xs font-mono text-foreground-secondary"
-                        >
-                          {segment.slice(1, -1)}
-                        </code>
-                      ) : (
-                        <span key={l}>{segment}</span>
-                      )
-                    )}
+                    {renderInline(line)}
                   </span>
                 ))}
               </p>
@@ -209,6 +252,12 @@ export default function PackageOverview({ dependency, organizationId, projectId,
   const [aiSummary, setAiSummary] = useState<string | null>(dependency.ai_usage_summary ?? null);
   const [aiAnalyzedAt, setAiAnalyzedAt] = useState<string | null>(dependency.ai_usage_analyzed_at ?? null);
   const [analyzing, setAnalyzing] = useState(false);
+
+  // Sync AI summary state when dependency changes (guards against prop updates without remount)
+  useEffect(() => {
+    setAiSummary(dependency.ai_usage_summary ?? null);
+    setAiAnalyzedAt(dependency.ai_usage_analyzed_at ?? null);
+  }, [dependency.id]);
   const [deprecateSidebarOpen, setDeprecateSidebarOpen] = useState(false);
   const [deprecating, setDeprecating] = useState(false);
   const [removingDeprecation, setRemovingDeprecation] = useState(false);
@@ -284,16 +333,20 @@ export default function PackageOverview({ dependency, organizationId, projectId,
               )}
             </h1>
             <div className="flex items-center gap-4 text-sm text-foreground-secondary flex-wrap">
-              <a
-                href={`https://www.npmjs.com/package/${dependency.name}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1.5 hover:text-foreground transition-colors"
-              >
-                <img src="/images/npm_icon.png" alt="NPM" className="w-4 h-4" />
-                <span>NPM</span>
-                <ExternalLink className="h-3 w-3" />
-              </a>
+              {(() => {
+                const reg = getRegistryLink(dependency.name, dependency.ecosystem);
+                return (
+                  <a
+                    href={reg.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 hover:text-foreground transition-colors"
+                  >
+                    {reg.icon}
+                    <span>{reg.label}</span>
+                  </a>
+                );
+              })()}
               {dependency.github_url && (
                 <a
                   href={dependency.github_url}
@@ -303,7 +356,6 @@ export default function PackageOverview({ dependency, organizationId, projectId,
                 >
                   <Github className="h-4 w-4" />
                   <span>GitHub</span>
-                  <ExternalLink className="h-3 w-3" />
                 </a>
               )}
               {dependency.license && (
@@ -431,7 +483,7 @@ export default function PackageOverview({ dependency, organizationId, projectId,
                         <p className="text-xs text-foreground-secondary mt-0.5">Not imported in any file</p>
                       </div>
                     </>
-                  ) : (() => {
+                  ) : dependency.files_importing_count == null ? null : (() => {
                     const filePaths = dependency.imported_file_paths ?? [];
                     const hasFileList = filePaths.length > 0;
                     const maxShow = 25;

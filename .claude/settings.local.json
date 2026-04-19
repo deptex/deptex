@@ -53,7 +53,25 @@
       "Bash(sed -i \"s|from '../DependencySupplyChainPage'|from '../SupplyChainContent'|g\" DependencySupplyChainPage.test.tsx)",
       "Bash(npx vitest:*)",
       "Bash(npm list:*)",
-      "Bash(grep -E \"\\\\.\\(sql|ts\\)$\")"
+      "Bash(grep -E \"\\\\.\\(sql|ts\\)$\")",
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(npx jest:*)",
+      "Bash(npm test:*)",
+      "Bash(./node_modules/.bin/jest --testPathPatterns=\"projects.test\" --no-coverage)",
+      "Bash(timeout 90 node ./node_modules/.bin/jest --testPathPatterns=\"projects.test\" --no-coverage --forceExit)",
+      "Bash(node ./node_modules/jest/bin/jest.js --testPathPatterns=\"projects.test\" --no-coverage --forceExit)",
+      "Bash(bash /c/Users/hruck/.claude/statusline-command.sh)",
+      "Read(//tmp/**)",
+      "Bash(gh repo:*)",
+      "Bash(where gh:*)",
+      "Bash(node_modules/.bin/tsc --noEmit)",
+      "Bash(flyctl deploy:*)",
+      "Bash(node ./node_modules/typescript/bin/tsc --noEmit)",
+      "Bash(node \"C:/Coding/Deptex/frontend/node_modules/typescript/bin/tsc\" --noEmit --project \"C:/Coding/Deptex/frontend/tsconfig.json\")",
+      "Bash(node \"C:/Coding/Deptex/frontend/node_modules/typescript/bin/tsc\" --version)",
+      "Bash(node \"C:/Coding/Deptex/frontend/node_modules/typescript/bin/tsc\" --noEmit -p \"C:/Coding/Deptex/frontend/tsconfig.json\")",
+      "Bash(node -e \"const ts = require\\('typescript'\\); const p = ts.createProgram\\(['src/components/security/VulnerabilityExpandableTable.tsx'], {noEmit: true, jsx: 'react-jsx', esModuleInterop: true, module: 'esnext', target: 'es2020', moduleResolution: 'node', baseUrl: '.', paths: {'*': ['node_modules/*']}}\\); const d = ts.getPreEmitDiagnostics\\(p\\); d.forEach\\(diag => { const msg = ts.flattenDiagnosticMessageText\\(diag.messageText, '\\\\n'\\); if \\(diag.file\\) { const {line} = diag.file.getLineAndCharacterOfPosition\\(diag.start\\); console.log\\(diag.file.fileName + ':' + \\(line+1\\) + ' - ' + msg\\); } else { console.log\\(msg\\); } }\\); console.log\\('Total errors:', d.length\\);\")"
     ]
   }
 }

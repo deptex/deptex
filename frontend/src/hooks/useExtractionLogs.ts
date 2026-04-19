@@ -103,7 +103,7 @@ export function useExtractionLogs({
         (payload) => {
           const newLog = payload.new as ExtractionLog;
           if (runId && newLog.run_id !== runId) return;
-          setLogs((prev) => [...prev, newLog]);
+          setLogs((prev) => prev.some((l) => l.id === newLog.id) ? prev : [...prev, newLog]);
         }
       )
       .subscribe();

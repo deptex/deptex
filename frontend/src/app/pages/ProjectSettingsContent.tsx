@@ -627,7 +627,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
   const [syncFrequency, setSyncFrequency] = useState<string>('on_commit');
   const [syncFrequencySaving, setSyncFrequencySaving] = useState(false);
   const [extractionRuns, setExtractionRuns] = useState<ExtractionRun[]>([]);
-  const [extractionRunsLoading, setExtractionRunsLoading] = useState(false);
+  const [extractionRunsLoading, setExtractionRunsLoading] = useState(true);
   // Transfer project state
   const [teams, setTeams] = useState<Team[]>([]);
   const [loadingTeams, setLoadingTeams] = useState(false);
@@ -1119,9 +1119,9 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
     return () => { if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current); pollingIntervalRef.current = null; };
   }, [connectedRepository?.status, importStatus?.status, checkImportStatus]);
 
-  // Fetch extraction runs when Repository tab is active and repo is connected
+  // Fetch extraction runs when Repository tab is active
   useEffect(() => {
-    if (activeSection !== 'repository' || !organizationId || !projectId || !connectedRepository) return;
+    if (activeSection !== 'repository' || !organizationId || !projectId) return;
     setExtractionRunsLoading(true);
     api.getExtractionRuns(organizationId, projectId).then((runs) => {
       setExtractionRuns(runs);
@@ -1130,16 +1130,18 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
     }).finally(() => {
       setExtractionRunsLoading(false);
     });
-  }, [activeSection, organizationId, projectId, connectedRepository]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection, organizationId, projectId]);
 
   // Poll extraction runs when on Repository tab so status and "X ago" stay live
   useEffect(() => {
-    if (activeSection !== 'repository' || !organizationId || !projectId || !connectedRepository) return;
+    if (activeSection !== 'repository' || !organizationId || !projectId) return;
     const interval = setInterval(() => {
       api.getExtractionRuns(organizationId, projectId).then(setExtractionRuns).catch(() => {});
     }, 6000);
     return () => clearInterval(interval);
-  }, [activeSection, organizationId, projectId, connectedRepository]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection, organizationId, projectId]);
 
   // Load teams for transfer dropdown
   const loadTeams = async () => {
@@ -3854,278 +3856,254 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
         document.body
       )}
 
-      {/* Add Team Sidepanel */}
-      {showAddTeamSidepanel && (
-        <div className="fixed inset-0 z-50">
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-            onClick={() => {
-              setShowAddTeamSidepanel(false);
-              setTeamSearchQuery('');
-              setSelectedTeamsToAdd([]);
-            }}
-          />
+      {/* Add Team Modal */}
+      <Dialog open={showAddTeamSidepanel} onOpenChange={(open) => {
+        if (!open) {
+          setShowAddTeamSidepanel(false);
+          setTeamSearchQuery('');
+          setSelectedTeamsToAdd([]);
+        }
+      }}>
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-hidden flex flex-col min-h-[480px] max-h-[80vh]">
+          {/* Header */}
+          <div className="px-6 py-5 border-b border-border flex items-center justify-between flex-shrink-0">
+            <DialogTitle className="text-xl font-semibold text-foreground">Add Contributing Teams</DialogTitle>
+            <button
+              onClick={() => {
+                setShowAddTeamSidepanel(false);
+                setTeamSearchQuery('');
+                setSelectedTeamsToAdd([]);
+              }}
+              className="text-foreground-secondary hover:text-foreground transition-colors"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
 
-          {/* Side Panel */}
-          <div
-            className="fixed right-0 top-0 h-full w-full max-w-lg bg-background border-l border-border shadow-2xl transform transition-transform duration-300 translate-x-0 flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="px-6 py-5 border-b border-border flex items-center justify-between flex-shrink-0">
-              <h2 className="text-xl font-semibold text-foreground">Add Contributing Teams</h2>
-              <button
-                onClick={() => {
-                  setShowAddTeamSidepanel(false);
-                  setTeamSearchQuery('');
-                  setSelectedTeamsToAdd([]);
-                }}
-                className="text-foreground-secondary hover:text-foreground transition-colors"
-              >
-                <X className="h-5 w-5" />
-              </button>
+          {/* Content */}
+          <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-6">
+            <p className="text-sm text-foreground-secondary mb-4">
+              Select teams to give them access to this project. Contributing teams can view the project but cannot manage settings.
+            </p>
+
+            {/* Search */}
+            <div className="relative mb-4">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-foreground-secondary" />
+              <input
+                type="text"
+                placeholder="Search teams..."
+                value={teamSearchQuery}
+                onChange={(e) => setTeamSearchQuery(e.target.value)}
+                className="w-full pl-10 pr-4 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+              />
             </div>
 
-            {/* Content */}
-            <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-6">
-              <p className="text-sm text-foreground-secondary mb-4">
-                Select teams to give them access to this project. Contributing teams can view the project but cannot manage settings.
-              </p>
-
-              {/* Search */}
-              <div className="relative mb-4">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-foreground-secondary" />
-                <input
-                  type="text"
-                  placeholder="Search teams..."
-                  value={teamSearchQuery}
-                  onChange={(e) => setTeamSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                />
-              </div>
-
-              {/* Teams List */}
-              {filteredTeamsForAdding.length > 0 ? (
-                <div className="space-y-2">
-                  {filteredTeamsForAdding.map((team) => {
-                    const isSelected = selectedTeamsToAdd.includes(team.id);
-                    return (
-                      <button
-                        key={team.id}
-                        onClick={() => toggleTeamSelection(team.id)}
-                        className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-all text-left ${isSelected
-                          ? 'bg-primary/10 border-primary'
-                          : 'bg-background-card border-border hover:border-primary/50'
-                          }`}
-                      >
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium text-foreground truncate">
-                            {team.name}
+            {/* Teams List */}
+            {filteredTeamsForAdding.length > 0 ? (
+              <div className="space-y-2">
+                {filteredTeamsForAdding.map((team) => {
+                  const isSelected = selectedTeamsToAdd.includes(team.id);
+                  return (
+                    <button
+                      key={team.id}
+                      onClick={() => toggleTeamSelection(team.id)}
+                      className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-all text-left ${isSelected
+                        ? 'bg-primary/10 border-primary'
+                        : 'bg-background-card border-border hover:border-primary/50'
+                        }`}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-foreground truncate">
+                          {team.name}
+                        </div>
+                        {team.description && (
+                          <div className="text-xs text-foreground-secondary truncate">
+                            {team.description}
                           </div>
-                          {team.description && (
-                            <div className="text-xs text-foreground-secondary truncate">
-                              {team.description}
-                            </div>
-                          )}
-                        </div>
-                        <div className={`h-5 w-5 rounded border flex items-center justify-center transition-colors ${isSelected
-                          ? 'bg-primary border-primary text-primary-foreground'
-                          : 'border-border'
-                          }`}>
-                          {isSelected && <Check className="h-3 w-3" />}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : availableTeamsForAdding.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 text-center">
-                  <Users className="h-12 w-12 text-foreground-secondary/50 mb-4" />
-                  <h3 className="text-base font-medium text-foreground mb-2">No Teams Available</h3>
-                  <p className="text-sm text-foreground-secondary">
-                    All teams in your organization are already associated with this project.
-                  </p>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center justify-center py-12 text-center">
-                  <Search className="h-12 w-12 text-foreground-secondary/50 mb-4" />
-                  <h3 className="text-base font-medium text-foreground mb-2">No Results</h3>
-                  <p className="text-sm text-foreground-secondary">
-                    No teams match your search query.
-                  </p>
-                </div>
-              )}
-            </div>
-
-            {/* Footer with Add Button */}
-            {filteredTeamsForAdding.length > 0 && (
-              <div className="px-6 py-4 border-t border-border flex items-center justify-between flex-shrink-0">
+                        )}
+                      </div>
+                      <div className={`h-5 w-5 rounded border flex items-center justify-center transition-colors ${isSelected
+                        ? 'bg-primary border-primary text-primary-foreground'
+                        : 'border-border'
+                        }`}>
+                        {isSelected && <Check className="h-3 w-3" />}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : availableTeamsForAdding.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <Users className="h-12 w-12 text-foreground-secondary/50 mb-4" />
+                <h3 className="text-base font-medium text-foreground mb-2">No Teams Available</h3>
                 <p className="text-sm text-foreground-secondary">
-                  {selectedTeamsToAdd.length} team{selectedTeamsToAdd.length !== 1 ? 's' : ''} selected
+                  All teams in your organization are already associated with this project.
                 </p>
-                <Button
-                  onClick={handleAddContributingTeams}
-                  disabled={selectedTeamsToAdd.length === 0 || addingTeam}
-                >
-                  {addingTeam ? (
-                    <>
-                      <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                      Adding
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="h-4 w-4 mr-2" />
-                      Add {selectedTeamsToAdd.length > 0 ? `(${selectedTeamsToAdd.length})` : ''}
-                    </>
-                  )}
-                </Button>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <Search className="h-12 w-12 text-foreground-secondary/50 mb-4" />
+                <h3 className="text-base font-medium text-foreground mb-2">No Results</h3>
+                <p className="text-sm text-foreground-secondary">
+                  No teams match your search query.
+                </p>
               </div>
             )}
           </div>
-        </div>
-      )}
 
-      {/* Add Member Sidepanel */}
-      {showAddMemberSidepanel && (
-        <div className="fixed inset-0 z-50">
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-            onClick={() => {
-              setShowAddMemberSidepanel(false);
-              setMemberSearchQuery('');
-              setSelectedMembersToAdd([]);
-            }}
-          />
-
-          {/* Side Panel */}
-          <div
-            className="fixed right-0 top-0 h-full w-full max-w-lg bg-background border-l border-border shadow-2xl transform transition-transform duration-300 translate-x-0 flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="px-6 py-5 border-b border-border flex items-center justify-between flex-shrink-0">
-              <h2 className="text-xl font-semibold text-foreground">Add Project Members</h2>
-              <button
-                onClick={() => {
-                  setShowAddMemberSidepanel(false);
-                  setMemberSearchQuery('');
-                  setSelectedMembersToAdd([]);
-                }}
-                className="text-foreground-secondary hover:text-foreground transition-colors"
+          {/* Footer with Add Button */}
+          {filteredTeamsForAdding.length > 0 && (
+            <div className="px-6 py-4 flex items-center justify-end flex-shrink-0">
+              <Button
+                onClick={handleAddContributingTeams}
+                disabled={selectedTeamsToAdd.length === 0 || addingTeam}
+                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
               >
-                <X className="h-5 w-5" />
-              </button>
+                {addingTeam ? (
+                  <>
+                    <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
+                    Adding
+                  </>
+                ) : (
+                  <>
+                    <Plus className="h-4 w-4 mr-2" />
+                    Add {selectedTeamsToAdd.length > 0 ? `(${selectedTeamsToAdd.length})` : ''}
+                  </>
+                )}
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Member Modal */}
+      <Dialog open={showAddMemberSidepanel} onOpenChange={(open) => {
+        if (!open) {
+          setShowAddMemberSidepanel(false);
+          setMemberSearchQuery('');
+          setSelectedMembersToAdd([]);
+        }
+      }}>
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-hidden flex flex-col min-h-[480px] max-h-[80vh]">
+          {/* Header */}
+          <div className="px-6 py-5 border-b border-border flex items-center justify-between flex-shrink-0">
+            <DialogTitle className="text-xl font-semibold text-foreground">Add Project Members</DialogTitle>
+            <button
+              onClick={() => {
+                setShowAddMemberSidepanel(false);
+                setMemberSearchQuery('');
+                setSelectedMembersToAdd([]);
+              }}
+              className="text-foreground-secondary hover:text-foreground transition-colors"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          {/* Content */}
+          <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-6">
+            <p className="text-sm text-foreground-secondary mb-4">
+              Select members to give them direct access to this project. Members already on teams with access are not shown.
+            </p>
+
+            {/* Search */}
+            <div className="relative mb-4">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-foreground-secondary" />
+              <input
+                type="text"
+                placeholder="Search members..."
+                value={memberSearchQuery}
+                onChange={(e) => setMemberSearchQuery(e.target.value)}
+                className="w-full pl-10 pr-4 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+              />
             </div>
 
-            {/* Content */}
-            <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-6">
-              <p className="text-sm text-foreground-secondary mb-4">
-                Select members to give them direct access to this project. Members already on teams with access are not shown.
-              </p>
-
-              {/* Search */}
-              <div className="relative mb-4">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-foreground-secondary" />
-                <input
-                  type="text"
-                  placeholder="Search members..."
-                  value={memberSearchQuery}
-                  onChange={(e) => setMemberSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                />
-              </div>
-
-              {/* Members List */}
-              {filteredMembersForAdding.length > 0 ? (
-                <div className="space-y-2">
-                  {filteredMembersForAdding.map((member) => {
-                    const isSelected = selectedMembersToAdd.includes(member.user_id);
-                    return (
-                      <button
-                        key={member.user_id}
-                        onClick={() => toggleMemberSelection(member.user_id)}
-                        className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-all text-left ${isSelected
-                          ? 'bg-primary/10 border-primary'
-                          : 'bg-background-card border-border hover:border-primary/50'
-                          }`}
-                      >
-                        <img
-                          src={member.avatar_url || '/images/blank_profile_image.png'}
-                          alt={member.full_name || member.email}
-                          className="h-10 w-10 rounded-full object-cover border border-border"
-                          referrerPolicy="no-referrer"
-                          onError={(e) => {
-                            e.currentTarget.src = '/images/blank_profile_image.png';
-                          }}
-                        />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium text-foreground truncate">
-                            {member.full_name || member.email}
+            {/* Members List */}
+            {filteredMembersForAdding.length > 0 ? (
+              <div className="space-y-2">
+                {filteredMembersForAdding.map((member) => {
+                  const isSelected = selectedMembersToAdd.includes(member.user_id);
+                  return (
+                    <button
+                      key={member.user_id}
+                      onClick={() => toggleMemberSelection(member.user_id)}
+                      className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-all text-left ${isSelected
+                        ? 'bg-primary/10 border-primary'
+                        : 'bg-background-card border-border hover:border-primary/50'
+                        }`}
+                    >
+                      <img
+                        src={member.avatar_url || '/images/blank_profile_image.png'}
+                        alt={member.full_name || member.email}
+                        className="h-10 w-10 rounded-full object-cover border border-border"
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          e.currentTarget.src = '/images/blank_profile_image.png';
+                        }}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-foreground truncate">
+                          {member.full_name || member.email}
+                        </div>
+                        {member.full_name && (
+                          <div className="text-xs text-foreground-secondary truncate">
+                            {member.email}
                           </div>
-                          {member.full_name && (
-                            <div className="text-xs text-foreground-secondary truncate">
-                              {member.email}
-                            </div>
-                          )}
-                        </div>
-                        <div className={`h-5 w-5 rounded border flex items-center justify-center transition-colors ${isSelected
-                          ? 'bg-primary border-primary text-primary-foreground'
-                          : 'border-border'
-                          }`}>
-                          {isSelected && <Check className="h-3 w-3" />}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : availableMembersForAdding.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 text-center">
-                  <UserPlus className="h-12 w-12 text-foreground-secondary/50 mb-4" />
-                  <h3 className="text-base font-medium text-foreground mb-2">No Members Available</h3>
-                  <p className="text-sm text-foreground-secondary">
-                    All organization members already have access through teams or direct membership.
-                  </p>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center justify-center py-12 text-center">
-                  <Search className="h-12 w-12 text-foreground-secondary/50 mb-4" />
-                  <h3 className="text-base font-medium text-foreground mb-2">No Results</h3>
-                  <p className="text-sm text-foreground-secondary">
-                    No members match your search query.
-                  </p>
-                </div>
-              )}
-            </div>
-
-            {/* Footer with Add Button */}
-            {filteredMembersForAdding.length > 0 && (
-              <div className="px-6 py-4 border-t border-border flex items-center justify-between flex-shrink-0">
+                        )}
+                      </div>
+                      <div className={`h-5 w-5 rounded border flex items-center justify-center transition-colors ${isSelected
+                        ? 'bg-primary border-primary text-primary-foreground'
+                        : 'border-border'
+                        }`}>
+                        {isSelected && <Check className="h-3 w-3" />}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : availableMembersForAdding.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <UserPlus className="h-12 w-12 text-foreground-secondary/50 mb-4" />
+                <h3 className="text-base font-medium text-foreground mb-2">No Members Available</h3>
                 <p className="text-sm text-foreground-secondary">
-                  {selectedMembersToAdd.length} member{selectedMembersToAdd.length !== 1 ? 's' : ''} selected
+                  All organization members already have access through teams or direct membership.
                 </p>
-                <Button
-                  onClick={handleAddDirectMembers}
-                  disabled={selectedMembersToAdd.length === 0 || addingMember}
-                >
-                  {addingMember ? (
-                    <>
-                      <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                      Adding
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="h-4 w-4 mr-2" />
-                      Add {selectedMembersToAdd.length > 0 ? `(${selectedMembersToAdd.length})` : ''}
-                    </>
-                  )}
-                </Button>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <Search className="h-12 w-12 text-foreground-secondary/50 mb-4" />
+                <h3 className="text-base font-medium text-foreground mb-2">No Results</h3>
+                <p className="text-sm text-foreground-secondary">
+                  No members match your search query.
+                </p>
               </div>
             )}
           </div>
-        </div>
-      )}
+
+          {/* Footer with Add Button */}
+          {filteredMembersForAdding.length > 0 && (
+            <div className="px-6 py-4 flex items-center justify-end flex-shrink-0">
+              <Button
+                onClick={handleAddDirectMembers}
+                disabled={selectedMembersToAdd.length === 0 || addingMember}
+                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+              >
+                {addingMember ? (
+                  <>
+                    <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
+                    Adding
+                  </>
+                ) : (
+                  <>
+                    <Plus className="h-4 w-4 mr-2" />
+                    Add {selectedMembersToAdd.length > 0 ? `(${selectedMembersToAdd.length})` : ''}
+                  </>
+                )}
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Project Email Notification Dialog */}
       <Dialog open={showProjectEmailDialog} onOpenChange={setShowProjectEmailDialog}>

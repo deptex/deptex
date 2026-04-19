@@ -306,6 +306,8 @@ export interface OverviewProjectItem {
   isExtracting?: boolean;
   /** When true, this is the first-ever extraction — block UI with ExtractionProgressCard / grey node. */
   isInitialExtracting?: boolean;
+  /** When true, the first-ever extraction failed — show "Extraction failed" in the node status strip. */
+  isInitialExtractionFailed?: boolean;
   /** Project health score 0–100 when available (for org center aggregate). */
   healthScore?: number | null;
   /** Number of direct dependencies shown as subtext on project card. */
@@ -680,12 +682,14 @@ export function useOrganizationOverviewGraphLayout(
               overviewOrgEdgeTargetHandle: handles.targetEdge,
               ...(proj.isInitialExtracting
                 ? { isExtracting: true, isInitialExtracting: true }
-                : {
-                    statusBadge: proj.statusName ?? undefined,
-                    statusBadgeColor: proj.statusColor ?? undefined,
-                    dependenciesCount: proj.dependenciesCount ?? undefined,
-                    ...(proj.isExtracting ? { isExtracting: true } : {}),
-                  }),
+                : proj.isInitialExtractionFailed
+                  ? { isInitialExtractionFailed: true }
+                  : {
+                      statusBadge: proj.statusName ?? undefined,
+                      statusBadgeColor: proj.statusColor ?? undefined,
+                      dependenciesCount: proj.dependenciesCount ?? undefined,
+                      ...(proj.isExtracting ? { isExtracting: true } : {}),
+                    }),
             },
             draggable: false,
             selectable: false,
@@ -730,11 +734,13 @@ export function useOrganizationOverviewGraphLayout(
           overviewOrgEdgeTargetHandle: targetEdge,
           ...(proj.isInitialExtracting
             ? { isExtracting: true, isInitialExtracting: true }
-            : {
-                statusBadge: proj.statusName ?? undefined,
-                statusBadgeColor: proj.statusColor ?? undefined,
-                ...(proj.isExtracting ? { isExtracting: true } : {}),
-              }),
+            : proj.isInitialExtractionFailed
+              ? { isInitialExtractionFailed: true }
+              : {
+                  statusBadge: proj.statusName ?? undefined,
+                  statusBadgeColor: proj.statusColor ?? undefined,
+                  ...(proj.isExtracting ? { isExtracting: true } : {}),
+                }),
         },
         draggable: false,
         selectable: false,

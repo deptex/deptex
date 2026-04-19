@@ -82,7 +82,7 @@ const PRESET_HEXES = COLOR_PRESETS.map((p) => p.color);
 type SubTab = 'statuses' | 'asset_tiers' | 'status_code' | 'change_history' | 'change_requests';
 
 interface OrganizationContextType {
-  organization: { permissions?: { manage_compliance?: boolean }; role?: string } | null;
+  organization: { permissions?: { manage_compliance?: boolean; manage_statuses?: boolean }; role?: string } | null;
 }
 
 export default function StatusesSection() {

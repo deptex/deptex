@@ -13,7 +13,7 @@ import { analyzeRepository } from './ast-parser';
 import { storeAstAnalysisResults } from './ast-storage';
 import { ExtractionLogger } from './logger';
 import { parsePurl, resolvePurlToDependencyId } from './purl';
-import { parseReachableFlows, parseUsageSlices, parseLlmPrompts, updateReachabilityLevels } from './reachability';
+import { parseReachableFlows, parseUsageSlices, parseLlmPrompts, updateReachabilityLevels, computeImportCountsFromUsageSlices, parseGoImportsFromSource } from './reachability';
 import { updateJobPayloadCommit, updateJobStatus } from './job-db';
 import { applyEpdScoringFallback, EpdBudgetExceededError } from './epd';
 
@@ -630,19 +630,23 @@ export async function runPipeline(
     const transitiveCount = projectDepsToInsert.length - directCount;
     // deps sync complete (no user-facing log — internal step)
 
-    // === AST import analysis (internal, no user-facing log) ===
+    // === AST import analysis (npm/JS/TS only — other ecosystems use different import mechanisms) ===
     if (checkCancelled && await checkCancelled()) return;
     let astParsedSuccessfully = false;
     await updateStep(supabase, projectId, 'ast_parsing');
-    try {
-      const analysisResults = analyzeRepository(workspaceRoot);
-      if (analysisResults.length > 0) {
-        const storeResult = await storeAstAnalysisResults(supabase, projectId, organizationId, analysisResults);
-        if (storeResult.success) astParsedSuccessfully = true;
-      } else {
-        astParsedSuccessfully = true;
-      }
-    } catch { /* non-fatal */ }
+    if (jobEcosystem === 'npm') {
+      try {
+        const analysisResults = analyzeRepository(workspaceRoot);
+        if (analysisResults.length > 0) {
+          const storeResult = await storeAstAnalysisResults(supabase, projectId, organizationId, analysisResults);
+          if (storeResult.success) astParsedSuccessfully = true;
+        } else {
+          astParsedSuccessfully = true;
+        }
+      } catch { /* non-fatal */ }
+    } else {
+      astParsedSuccessfully = true;
+    }
 
     // Fetch asset tier for depscore calculations (used by vuln scan, semgrep, and trufflehog)
     const VALID_ASSET_TIERS: AssetTier[] = ['CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION'];
@@ -1044,41 +1048,78 @@ export async function runPipeline(
       await log.warn('vuln_scan', 'No vulnerability scan results available');
     }
 
-    // --- Sub-step: Atom reachability analysis (internal, no user-facing log) ---
+    // --- Sub-step: Atom reachability analysis ---
     try {
-      let hasReachableSlices = fs.readdirSync(reportsDir)
-        .some(f => f.endsWith('-reachables.slices.json'));
+      const atomLangMap: Record<string, string> = {
+        npm: 'javascript', maven: 'java', golang: 'go', pypi: 'python',
+        cargo: 'rust', gem: 'ruby', composer: 'php', nuget: 'csharp',
+      };
+      const atomLang = atomLangMap[jobEcosystem] || 'javascript';
 
+      // For Go projects, atom must analyze the module root (where go.mod is), not src/
+      // For Java, source is typically in src/. For others, try src/ first then root.
+      let srcDir: string;
+      if (jobEcosystem === 'golang' || jobEcosystem === 'go') {
+        srcDir = workspaceRoot;
+      } else {
+        srcDir = fs.existsSync(path.join(workspaceRoot, 'src'))
+          ? path.join(workspaceRoot, 'src')
+          : workspaceRoot;
+      }
+
+      // Log what dep-scan produced so we can diagnose ecosystem-specific gaps
+      const depScanFiles = fs.readdirSync(reportsDir).filter(f => f.endsWith('.json'));
+      console.log(`[atom] dep-scan produced ${depScanFiles.length} JSON files in reports dir: ${depScanFiles.join(', ')}`);
+
+      let hasReachableSlices = depScanFiles.some(f => f.endsWith('-reachables.slices.json'));
+      let hasUsageSlices = depScanFiles.some(f => f.endsWith('-usages.slices.json'));
+
+      // Run atom reachables if dep-scan didn't produce them
       if (!hasReachableSlices) {
         const atomSlicesOut = path.join(reportsDir, 'app-reachables.slices.json');
+        try {
+          const out = execSync(`atom reachables -l ${atomLang} -s "${atomSlicesOut}" "${srcDir}" 2>&1`, { encoding: 'utf8', timeout: 600_000, maxBuffer: 50 * 1024 * 1024 });
+          hasReachableSlices = fs.existsSync(atomSlicesOut) && fs.statSync(atomSlicesOut).size > 10;
+          console.log(`[atom] reachables (${atomLang}): produced=${hasReachableSlices}, size=${hasReachableSlices ? fs.statSync(atomSlicesOut).size : 0}`);
+        } catch (atomErr: any) {
+          const msg = (atomErr.stderr || atomErr.message || '').slice(-500);
+          console.log(`[atom] reachables (${atomLang}) failed: ${msg}`);
+        }
+      }
+
+      // Run atom usages INDEPENDENTLY if dep-scan didn't produce them
+      if (!hasUsageSlices) {
         const atomUsagesOut = path.join(reportsDir, 'app-usages.slices.json');
         try {
-          const atomLangMap: Record<string, string> = {
-            npm: 'javascript', maven: 'java', golang: 'go', pypi: 'python',
-            cargo: 'rust', gem: 'ruby', composer: 'php', nuget: 'csharp',
-          };
-          const atomLang = atomLangMap[jobEcosystem] || 'javascript';
-          const srcDir = fs.existsSync(path.join(workspaceRoot, 'src'))
-            ? path.join(workspaceRoot, 'src')
-            : workspaceRoot;
-
-          try { execSync(`atom reachables -l ${atomLang} -s "${atomSlicesOut}" "${srcDir}" 2>&1`, { encoding: 'utf8', timeout: 600_000, maxBuffer: 50 * 1024 * 1024 }); } catch { /* non-fatal */ }
-          try { execSync(`atom usages -l ${atomLang} -s "${atomUsagesOut}" "${srcDir}" 2>&1`, { encoding: 'utf8', timeout: 600_000, maxBuffer: 50 * 1024 * 1024 }); } catch { /* non-fatal */ }
-
-          hasReachableSlices = fs.existsSync(atomSlicesOut) && fs.statSync(atomSlicesOut).size > 10;
-        } catch { /* non-fatal */ }
+          const out = execSync(`atom usages -l ${atomLang} -s "${atomUsagesOut}" "${srcDir}" 2>&1`, { encoding: 'utf8', timeout: 600_000, maxBuffer: 50 * 1024 * 1024 });
+          hasUsageSlices = fs.existsSync(atomUsagesOut) && fs.statSync(atomUsagesOut).size > 10;
+          console.log(`[atom] usages (${atomLang}): produced=${hasUsageSlices}, size=${hasUsageSlices ? fs.statSync(atomUsagesOut).size : 0}`);
+        } catch (atomErr: any) {
+          const msg = (atomErr.stderr || atomErr.message || '').slice(-500);
+          console.log(`[atom] usages (${atomLang}) failed: ${msg}`);
+        }
       }
 
       if (hasReachableSlices) {
         await parseReachableFlows(reportsDir, projectId, runId, supabase, log);
         await parseLlmPrompts(reportsDir, projectId, runId, supabase, log);
       }
-      const hasUsageSlices = fs.readdirSync(reportsDir).some(f => f.endsWith('-usages.slices.json'));
       if (hasUsageSlices) {
         await parseUsageSlices(reportsDir, projectId, runId, jobEcosystem, supabase, log);
       }
+
+      // Fallback: if atom produced no usage slices for Go, parse .go imports directly
+      if (!hasUsageSlices && (jobEcosystem === 'golang' || jobEcosystem === 'go')) {
+        const goImportCount = await parseGoImportsFromSource(workspaceRoot, projectId, runId, supabase, log);
+        if (goImportCount > 0) hasUsageSlices = true;
+      }
+
       await updateReachabilityLevels(projectId, supabase, log, workspaceRoot);
-    } catch { /* non-fatal */ }
+      // Compute files_importing_count from atom usage slices (all ecosystems)
+      await computeImportCountsFromUsageSlices(projectId, jobEcosystem, supabase, log);
+    } catch (atomStepErr: any) {
+      console.log(`[atom] reachability step failed: ${atomStepErr.message}`);
+    }
 
     // --- Sub-step: Recalculate depscores with updated reachability ---
     try {

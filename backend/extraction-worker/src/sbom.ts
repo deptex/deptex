@@ -127,6 +127,19 @@ export function parseSbom(sbom: CycloneDxSbom): {
     collectTransitive(ref);
   }
 
+  // Fallback: if the dependency graph traversal yielded nothing (e.g. pypi/maven SBOMs where
+  // cdxgen omits metadata.component or doesn't wire the root node), treat every component as a
+  // direct dependency so we don't drop valid packages.
+  if (allDeps.size === 0 && components.length > 0) {
+    for (const c of components) {
+      const ref = c['bom-ref'];
+      if (ref) {
+        allDeps.add(ref);
+        directRefs.add(ref);
+      }
+    }
+  }
+
   const relationships: ParsedSbomRelationship[] = [];
   for (const d of depGraph) {
     if (d.dependsOn) {

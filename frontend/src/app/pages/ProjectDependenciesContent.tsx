@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useOutletContext, useNavigate, useParams, useLocation } from 'react-router-dom';
-import { Search, SlidersHorizontal, TowerControl, Loader2, PanelLeftClose, PanelLeftOpen, Package, LayoutDashboard, GitBranch, MessageSquareText, RefreshCw, ShieldAlert } from 'lucide-react';
+import { Search, SlidersHorizontal, TowerControl, Loader2, PanelLeftClose, PanelLeftOpen, Package, LayoutDashboard, GitBranch, MessageSquareText, RefreshCw } from 'lucide-react';
 import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
 import { isExtractionOngoing as checkExtractionOngoing, isInitialExtraction as checkInitialExtraction } from '../../lib/extractionStatus';
 import { ExtractionProgressCard } from '../../components/ExtractionProgressCard';
@@ -36,7 +36,7 @@ export interface ProjectDependenciesContentProps {
   embedInSidebar?: boolean;
 }
 
-function getVulnSeverityInfo(dep: ProjectDependency): { maxSeverity: 'critical' | 'high' | 'medium' | 'low'; total: number; colorClass: string; label: string } | null {
+function getVulnSeverityInfo(dep: ProjectDependency): { tier: 'critical' | 'high' | 'medium' | 'low'; total: number; label: string } | null {
   const a = dep.analysis;
   if (!a) return null;
   const critical = a.critical_vulns ?? 0;
@@ -45,23 +45,19 @@ function getVulnSeverityInfo(dep: ProjectDependency): { maxSeverity: 'critical' 
   const low = a.low_vulns ?? 0;
   const total = critical + high + medium + low;
   if (total === 0) return null;
-  const maxSeverity: 'critical' | 'high' | 'medium' | 'low' =
-    critical > 0 ? 'critical' : high > 0 ? 'high' : medium > 0 ? 'medium' : 'low';
-  const colorClass =
-    maxSeverity === 'critical'
-      ? 'text-destructive'
-      : maxSeverity === 'high'
-        ? 'text-orange-600 dark:text-orange-400'
-        : maxSeverity === 'medium'
-          ? 'text-warning'
-          : 'text-foreground-secondary';
-  const parts: string[] = [];
-  if (critical) parts.push(`${critical} critical`);
-  if (high) parts.push(`${high} high`);
-  if (medium) parts.push(`${medium} medium`);
-  if (low) parts.push(`${low} low`);
-  const label = `${total} ${total === 1 ? 'vulnerability' : 'vulnerabilities'} (${parts.join(', ')})`;
-  return { maxSeverity, total, colorClass, label };
+
+  // Use max depscore (0–100) to determine badge tier if available, else fall back to severity
+  const maxDepscore = a.max_depscore ?? null;
+  let tier: 'critical' | 'high' | 'medium' | 'low';
+  if (maxDepscore !== null) {
+    tier = maxDepscore >= 75 ? 'critical' : maxDepscore >= 50 ? 'high' : maxDepscore >= 25 ? 'medium' : 'low';
+  } else {
+    tier = critical > 0 ? 'critical' : high > 0 ? 'high' : medium > 0 ? 'medium' : 'low';
+  }
+
+  const depscorePart = maxDepscore !== null ? ` · depscore ${maxDepscore.toFixed(0)}` : '';
+  const label = `${total} ${total === 1 ? 'vulnerability' : 'vulnerabilities'}${depscorePart}`;
+  return { tier, total, label };
 }
 
 function normalizeLicenseForComparison(license: string): string {
@@ -121,6 +117,24 @@ function isLicenseAllowed(license: string | null, policies: ProjectEffectivePoli
 
 type DependencyOverviewResponse = Awaited<ReturnType<typeof api.getDependencyOverview>>;
 
+const ECOSYSTEM_ICONS: Record<string, string> = {
+  npm: '/images/npm_icon.png',
+  pypi: '/images/pypi_icon.png',
+  maven: '/images/maven_icon.png',
+  nuget: '/images/nuget_icon.png',
+  golang: '/images/go_icon.png',
+  go: '/images/go_icon.png',
+  cargo: '/images/cargo_icon.png',
+};
+
+function EcosystemIcon({ ecosystem, className }: { ecosystem?: string | null; className?: string }) {
+  const src = ECOSYSTEM_ICONS[ecosystem ?? 'npm'] ?? null;
+  if (src) {
+    return <img src={src} alt="" className={className ?? 'h-4 w-4'} style={{ objectFit: 'contain' }} aria-hidden />;
+  }
+  return <Package className={className ?? 'h-4 w-4'} aria-hidden />;
+}
+
 function buildDependencyFromOverview(
   projectId: string,
   projectDependencyId: string,
@@ -138,7 +152,7 @@ function buildDependencyFromOverview(
     is_direct: true,
     source: listItem?.source ?? 'dependencies',
     is_watching: listItem?.is_watching ?? false,
-    files_importing_count: overview?.files_importing_count ?? 0,
+    files_importing_count: overview?.files_importing_count ?? null,
     imported_functions: overview?.imported_functions ?? [],
     imported_file_paths: overview?.imported_file_paths ?? [],
     ai_usage_summary: overview?.ai_usage_summary ?? null,
@@ -146,6 +160,7 @@ function buildDependencyFromOverview(
     other_projects_using_count: overview?.other_projects_using_count ?? 0,
     other_projects_using_names: overview?.other_projects_using_names ?? [],
     description: overview?.description ?? null,
+    ecosystem: overview?.ecosystem ?? null,
     created_at: new Date().toISOString(),
     policy_result: listItem?.policy_result ?? undefined,
     analysis: {
@@ -221,6 +236,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
   const realtime = useRealtimeStatus(organizationId, projectId);
   const isExtractionOngoing = checkExtractionOngoing(realtime.status, realtime.extractionStep);
   const isInitialExtracting = checkInitialExtraction(realtime.status, realtime.extractionStep, realtime.lastExtractedAt);
+  const isInitialExtractionFailed = realtime.status === 'error' && !realtime.isLoading && !realtime.lastExtractedAt;
 
   const urlTab = tabFromPathname(location.pathname);
   const [sidebarSubTab, setSidebarSubTab] = useState<'overview' | 'supply-chain' | 'notes'>('overview');
@@ -252,6 +268,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
 
   // Right panel overview (when a dependency is selected and sub-tab is Overview)
   const [panelOverview, setPanelOverview] = useState<DependencyOverviewResponse | null>(null);
+  const [panelOverviewDepId, setPanelOverviewDepId] = useState<string | null>(null);
   const [panelOverviewLoading, setPanelOverviewLoading] = useState(false);
   const [panelOverviewError, setPanelOverviewError] = useState<string | null>(null);
   const [panelDeprecation, setPanelDeprecation] = useState<{
@@ -348,6 +365,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
         api.clearDependencyOverviewPrefetch(organizationId, projectId, selectedDepId);
         const overview = await api.getDependencyOverview(organizationId, projectId, selectedDepId, { bypassCache: true });
         setPanelOverview(overview);
+        setPanelOverviewDepId(selectedDepId);
         setPanelDeprecation(overview.deprecation ?? null);
       }
     } catch (error: any) {
@@ -433,8 +451,11 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
       return;
     }
     let cancelled = false;
+    setPanelOverview(null);
+    setPanelOverviewDepId(null);
     setPanelOverviewLoading(true);
     setPanelOverviewError(null);
+    const depIdForFetch = selectedDepId;
     const prefetched = api.consumePrefetchedOverview(organizationId, projectId, selectedDepId);
     const overviewPromise = prefetched
       ? prefetched.then(([res]) => res).catch(() => null)
@@ -444,6 +465,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
         if (cancelled) return;
         if (res) {
           setPanelOverview(res);
+          setPanelOverviewDepId(depIdForFetch);
           setPanelDeprecation(res.deprecation ?? null);
         } else {
           setPanelOverviewError('Failed to load dependency');
@@ -543,9 +565,14 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
 
   const selectedDepFromList = selectedDepId ? dependencies.find((d) => d.id === selectedDepId) : null;
 
+  // Only use panelOverview if it was fetched for the current selectedDepId — prevents stale data flash
+  const safeOverview = panelOverviewDepId === selectedDepId ? panelOverview : null;
+  // Show skeleton immediately when dep changes (before the effect fires), not just when panelOverviewLoading
+  const effectiveOverviewLoading = panelOverviewLoading || (!!selectedDepId && panelOverviewDepId !== selectedDepId);
+
   const panelDependency = useMemo(
-    () => (projectId && selectedDepId ? buildDependencyFromOverview(projectId, selectedDepId, panelOverview, selectedDepFromList) : null),
-    [projectId, selectedDepId, panelOverview, selectedDepFromList]
+    () => (projectId && selectedDepId && safeOverview ? buildDependencyFromOverview(projectId, selectedDepId, safeOverview, selectedDepFromList) : null),
+    [projectId, selectedDepId, safeOverview, selectedDepFromList]
   );
 
   // Prefetch tab data on hover (100ms debounce)
@@ -896,6 +923,19 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
               organizationId={organizationId}
               projectId={projectId}
             />
+          ) : isInitialExtractionFailed ? (
+            <ExtractionProgressCard
+              isError
+              title="Extraction failed"
+              description="Dependencies will not be available until extraction succeeds."
+              showLogsToggle
+              organizationId={organizationId}
+              projectId={projectId}
+              onRetry={async () => {
+                if (!organizationId || !projectId) return;
+                await api.triggerProjectSync(organizationId, projectId);
+              }}
+            />
           ) : showListLoading ? (
             <div className="space-y-0.5 animate-pulse">
               {skeletonRows.map((row, i) => (
@@ -958,7 +998,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                         rowInset
                       )}
                     >
-                      <img src="/images/npm_icon.png" alt="" className="h-4 w-4 shrink-0 object-contain" aria-hidden />
+                      <EcosystemIcon ecosystem={dep.ecosystem} className="h-4 w-4 shrink-0 object-contain" />
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <span className="text-foreground truncate min-w-0">
@@ -995,22 +1035,14 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                         </span>
                       )}
                       {vulnInfo && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className={cn('shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium border cursor-default', vulnInfo.maxSeverity === 'critical' && 'bg-destructive/10 text-destructive border-destructive/30', vulnInfo.maxSeverity === 'high' && 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/30', vulnInfo.maxSeverity === 'medium' && 'bg-warning/15 text-warning border-warning/30', vulnInfo.maxSeverity === 'low' && 'bg-foreground/5 text-foreground-secondary border-foreground/10')}>
-                              <ShieldAlert className="h-2.5 w-2.5" />
-                              {vulnInfo.total}
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent side="right" className="max-w-[min(20rem,80vw)]">
-                            {vulnInfo.label}
-                          </TooltipContent>
-                        </Tooltip>
+                        <span className={cn('shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium border cursor-default', vulnInfo.tier === 'critical' && 'bg-destructive/10 text-destructive border-destructive/30', vulnInfo.tier === 'high' && 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/30', vulnInfo.tier === 'medium' && 'bg-warning/15 text-warning border-warning/30', vulnInfo.tier === 'low' && 'bg-foreground/5 text-foreground-secondary border-foreground/10')}>
+                          Vulnerable
+                        </span>
                       )}
-                      {(dep.files_importing_count ?? 0) === 0 && dep.is_direct && (
+                      {dep.files_importing_count === 0 && dep.is_direct && (
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <span className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-warning/15 text-warning border border-warning/30 cursor-default">
+                            <span className="shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-warning/15 text-warning border border-warning/30 cursor-default">
                               Unused
                             </span>
                           </TooltipTrigger>
@@ -1020,7 +1052,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                       {dep.deprecation && (
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <span className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-warning/15 text-warning border border-warning/30 cursor-default">
+                            <span className="shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-warning/15 text-warning border border-warning/30 cursor-default">
                               Deprecated
                             </span>
                           </TooltipTrigger>
@@ -1030,7 +1062,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                       {dep.is_current_version_banned && (
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <span className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-destructive/10 text-destructive border border-destructive/30 cursor-default">
+                            <span className="shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-destructive/10 text-destructive border border-destructive/30 cursor-default">
                               Banned
                             </span>
                           </TooltipTrigger>
@@ -1040,7 +1072,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                       {dep.is_outdated && (
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <span className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/30 cursor-default">
+                            <span className="shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-foreground/5 text-foreground-secondary border border-foreground/10 cursor-default">
                               {dep.versions_behind && dep.versions_behind > 0 ? `${dep.versions_behind} behind` : 'Outdated'}
                             </span>
                           </TooltipTrigger>
@@ -1170,7 +1202,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
           <div className="flex-1 flex items-center justify-center p-8">
             <p className="text-sm text-foreground-secondary">Select a dependency to view {selectedSubTab === 'supply-chain' ? 'supply chain' : 'details'}.</p>
           </div>
-        ) : panelOverviewLoading ? (
+        ) : effectiveOverviewLoading ? (
           <div className="flex-1 overflow-y-auto py-8">
             <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
               <PackageOverviewSkeleton />
@@ -1184,6 +1216,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
           <div className="flex-1 overflow-y-auto py-8">
             <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
               <PackageOverview
+              key={selectedDepId}
               dependency={panelDependency}
               organizationId={organizationId}
               projectId={projectId}

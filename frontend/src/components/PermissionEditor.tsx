@@ -123,7 +123,7 @@ export function PermissionEditor({
     } else {
       toSave.manage_statuses = false;
     }
-    (toSave as Record<string, boolean>).manage_watchtower = false;
+    (toSave as unknown as Record<string, boolean>).manage_watchtower = false;
     // Org settings entry no longer gated by view_settings — keep true so team/project code still works
     toSave.view_settings = true;
     await onSave(toSave);
