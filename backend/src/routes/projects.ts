@@ -19,7 +19,7 @@ import {
 } from '../lib/github';
 import { detectMonorepo } from '../lib/detect-monorepo';
 import { createProvider, GitHubProvider, type GitProvider, type OrgIntegration } from '../lib/git-provider';
-import { queueExtractionJob, cancelExtractionJob } from '../lib/redis';
+import { queueExtractionJob, cancelExtractionJob } from '../lib/extraction-jobs';
 import { MANIFEST_FILES, detectFrameworkForEcosystem, ECOSYSTEM_DEFAULTS } from '../lib/ecosystems';
 import { queueWatchtowerJob, queueWatchtowerJobs } from '../lib/watchtower-queue';
 import { createBumpPrForProject } from '../lib/create-bump-pr';
