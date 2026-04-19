@@ -25,7 +25,7 @@ Deptex is an AI-powered open-core dependency security platform. It combines depe
 | Tables | @tanstack/react-table |
 | Code editor | Monaco Editor (policy code) |
 | Forms | react-hook-form + zod validation |
-| Workers | 4 Node.js workers (extraction, parser, watchtower-worker, watchtower-poller) |
+| Workers | 3 workers on Fly.io: extraction-worker, watchtower-worker, aider-worker (Python) |
 | SBOM | cdxgen (CycloneDX generation) |
 | Vuln scanning | dep-scan (VDR analysis), Semgrep, TruffleHog |
 | AST parsing | oxc-parser (JS/TS import extraction) |
@@ -34,7 +34,7 @@ Deptex is an AI-powered open-core dependency security platform. It combines depe
 | AI - Tier 1 | Google Gemini Flash (platform features -- we pay, ~$0.0001/call) |
 | AI - Tier 2 | BYOK OpenAI/Anthropic/Google (Aegis + Aider -- org pays via their own API keys) |
 | Deployment | Fly.io (workers, scale-to-zero), Supabase (DB + auth), Vercel-style frontend |
-| Billing | Stripe (Phase 13, not yet built) |
+| Billing | Stripe (planned; not yet implemented) |
 
 ---
 
@@ -67,10 +67,9 @@ backend/
       detect-monorepo.ts        Monorepo detection (pnpm-workspace, package.json workspaces, tree scan). Provider-agnostic via MonorepoGitProvider interface
     middleware/
       auth.ts                   authenticateUser (required JWT), optionalAuth. Sets req.user = { id, email }
-  extraction-worker/            Clone + cdxgen SBOM + dep-scan + AST + Semgrep + TruffleHog pipeline
-  parser-worker/                Standalone AST import analysis (oxc-parser)
-  watchtower-worker/            Supply-chain forensic analysis (registry integrity, scripts, entropy, commits, contributors, anomalies)
-  watchtower-poller/            Daily cron: dependency refresh (npm latest, GHSA batch), new commit detection for watched packages
+  extraction-worker/            Clone + cdxgen SBOM + dep-scan + AST (oxc-parser) + Semgrep + TruffleHog pipeline (Fly.io scale-to-zero)
+  watchtower-worker/            Supply-chain forensic analysis (registry integrity, scripts, entropy, commits, contributors, anomalies) — Fly.io scale-to-zero
+  aider-worker/                 AI-powered fix worker (Aider / Python) — Fly.io, BYOK LLM
   database/                     ~140 SQL migration files (all tables; org/aegis/etc. live here too)
 
 frontend/src/
@@ -206,17 +205,10 @@ button, input, label, checkbox, switch, slider, progress, badge, avatar, card, d
 - Compute reputation score (OpenSSF + popularity + maintenance penalties)
 - Queue `backfill-dependency-trees` for transitive edge resolution
 
-### Parser Worker (parser-worker/)
-**Trigger:** `queueASTParsingJob()` pushes to Redis `ast-parsing-jobs` (standalone re-parse without full extraction).
-
-1. Clone repo via GitHub App
-2. oxc-parser on .js/.jsx/.ts/.tsx/.mjs/.cjs files, extract ESM imports
-3. Update `project_dependencies.files_importing_count`, upsert `project_dependency_functions`, `project_dependency_files`
-4. Set `project_repositories.ast_parsed_at`, `status: 'ready'`
-5. Invalidate Redis caches
+AST import analysis (oxc-parser on .js/.jsx/.ts/.tsx/.mjs/.cjs) runs inline in the extraction pipeline above. It updates `project_dependencies.files_importing_count` and upserts `project_dependency_functions` / `project_dependency_files`.
 
 ### Watchtower Worker (watchtower-worker/)
-**Trigger:** `queueWatchtowerJob()` pushes to Redis `watchtower-jobs` when a package is added to org watchlist, or `watchtower-new-version-jobs` when poller finds new version, or `watchtower-batch-version-jobs` for historical analysis.
+**Trigger:** `queueWatchtowerJob()` starts a Fly machine when a package is added to the org watchlist, when a new version is detected, or for historical batch analysis.
 
 **Full analysis pipeline:**
 1. Fetch npm metadata
@@ -231,12 +223,12 @@ button, input, label, checkbox, switch, slider, progress, badge, avatar, card, d
 
 **New-version job:** analyze new version, check vuln status, apply quarantine rules, create bump PRs for candidate projects.
 
-### Watchtower Poller (watchtower-poller/)
-**Trigger:** Daily cron via Redis sorted set `watchtower-daily-poll` (checks every 60s, runs every 24h).
+### Watchtower Daily Poll (QStash cron -> `backend/src/lib/watchtower-poll.ts`)
+**Trigger:** QStash cron schedule invokes `POST /api/workers/watchtower-daily-poll`, which delegates to `runDependencyRefresh()` and `runPollSweep()` in `backend/src/lib/watchtower-poll.ts`.
 
 **Job 1 - Dependency refresh:**
 - For each unique direct dependency: fetch npm latest version
-- If version changed: update `dependencies.latest_version`, enqueue `watchtower-new-version-jobs`
+- If version changed: update `dependencies.latest_version`, enqueue new-version jobs
 - GHSA batch fetch (up to 100 names) -> upsert `dependency_vulnerabilities`
 
 **Job 2 - Poll sweep:**
@@ -412,7 +404,7 @@ User adds package to watchlist (DependencyWatchtowerPage)
   -> Watchtower worker: full analysis (registry, scripts, entropy, commits, contributors, anomalies)
   -> Stored in watched_packages, package_commits, package_contributors, package_anomalies
 
-Daily (watchtower-poller):
+Daily (QStash cron -> watchtower-poll.ts):
   -> Check all direct deps for new npm versions -> enqueue watchtower-new-version-jobs
   -> Check watched packages for new commits -> incremental analysis
   -> GHSA batch vulnerability refresh
@@ -445,9 +437,9 @@ User views dependency supply chain (DependencySupplyChainPage)
 | Service | How It's Used | Config |
 |---------|--------------|--------|
 | **Supabase** | Postgres DB (all tables), Auth (JWT, OAuth), Realtime (extraction progress), Storage (SBOM/scan artifacts, avatars, icons) | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` |
-| **Fly.io** | Extraction worker, parser worker, watchtower workers (scale-to-zero machines) | `fly.toml` per worker |
+| **Fly.io** | Extraction worker, watchtower worker, aider worker (all scale-to-zero machines) | `fly.toml` per worker |
 | **Upstash QStash** | Async job dispatch: populate-dependencies, backfill-trees. Cron for automations | `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY` |
-| **Upstash Redis** | Job queues (extraction-jobs, ast-parsing-jobs, watchtower-jobs), caching (deps, versions, safe versions, watchtower summaries) | `UPSTASH_REDIS_URL`, `UPSTASH_REDIS_TOKEN` |
+| **Upstash Redis** | Caching (deps, versions, safe versions, watchtower summaries), rate limits, Aegis cost counters. Extraction/watchtower job state lives in Supabase tables, not Redis. | `UPSTASH_REDIS_URL`, `UPSTASH_REDIS_TOKEN` |
 | **GitHub App** | Repo access, file content, tree, branch/PR ops, commit diffs, webhook | `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` |
 | **GitLab** | OAuth repo access, file content, tree | `GITLAB_CLIENT_ID`, `GITLAB_CLIENT_SECRET` |
 | **Bitbucket** | OAuth repo access, file content | `BITBUCKET_CLIENT_ID`, `BITBUCKET_CLIENT_SECRET` |
@@ -456,7 +448,7 @@ User views dependency supply chain (DependencySupplyChainPage)
 | **Jira** | OAuth + PAT, ticket creation for notifications | `JIRA_CLIENT_ID`, `JIRA_CLIENT_SECRET` |
 | **Linear** | API key connect, issue creation | -- |
 | **Asana** | OAuth for org, task creation | `ASANA_CLIENT_ID`, `ASANA_CLIENT_SECRET` |
-| **Stripe** | OAuth (current: user integration). Full billing in Phase 13 | `STRIPE_CLIENT_ID`, `STRIPE_SECRET_KEY` |
+| **Stripe** | OAuth (current: user integration). Full billing planned but not yet implemented. | `STRIPE_CLIENT_ID`, `STRIPE_SECRET_KEY` |
 | **OSV.dev** | Vulnerability data (free, no key needed) | -- |
 | **Socket.dev** | Malicious package detection (free tier 250/mo) | `SOCKET_API_KEY` |
 | **GHSA (GitHub Advisory)** | Batch vulnerability fetch via GraphQL (up to 100 packages) | `GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_PAT` |
@@ -512,24 +504,17 @@ User views dependency supply chain (DependencySupplyChainPage)
 
 ---
 
-## Phase 14 Setup Checklist
+## Enterprise Security Notes
 
-After deploying Phase 14 (Enterprise Security):
+Enterprise-security features (MFA, SSO, IP allowlist, API tokens, SCIM) run off the enterprise-security migration in `backend/database/` and these surfaces:
 
-1. **Run database migration:** `phase14_enterprise_security.sql` (creates security_audit_logs, organization_mfa_exemptions, user_sessions, organization_sso_providers, organization_sso_bypass_tokens, organization_ip_allowlist, api_tokens, organization_scim_configs, scim_user_mappings; adds mfa/session/ip columns to organizations; fixes manage_security on member role).
-
-2. **Install npm packages:** `cd backend && npm install @node-saml/node-saml ipaddr.js`.
-
-3. **Trust proxy:** `app.set('trust proxy', true)` set in `backend/src/index.ts`.
-
-4. **CE routes:** SSO (`/api/sso/*`), user sessions (`/api/user/sessions`), API tokens (`/api/user/api-tokens`), SCIM (`/api/scim/v2/*`).
-
+1. **Tables:** `security_audit_logs`, `organization_mfa_exemptions`, `user_sessions`, `organization_sso_providers`, `organization_sso_bypass_tokens`, `organization_ip_allowlist`, `api_tokens`, `organization_scim_configs`, `scim_user_mappings` (+ mfa/session/ip columns on `organizations`, `manage_security` permission on member roles).
+2. **npm deps:** `@node-saml/node-saml`, `ipaddr.js`.
+3. **Trust proxy:** `app.set('trust proxy', true)` in `backend/src/index.ts`.
+4. **Routes:** SSO (`/api/sso/*`), user sessions (`/api/user/sessions`), API tokens (`/api/user/api-tokens`), SCIM (`/api/scim/v2/*`).
 5. **Frontend:** `/sso-callback` (public), `/settings/security` (user). Org Settings sidebar: IP Allowlist, API Tokens, SCIM under Security.
-
-6. **MFA:** Supabase Auth TOTP + AAL. MFAGate wraps ProtectedRoute.
-
-7. **SSO:** `@node-saml/node-saml` (free). Domain verification via DNS TXT. Emergency bypass 24h tokens.
-
+6. **MFA:** Supabase Auth TOTP + AAL. `MFAGate` wraps `ProtectedRoute`.
+7. **SSO:** `@node-saml/node-saml`. Domain verification via DNS TXT. Emergency bypass 24h tokens.
 8. **API tokens:** `dptx_` prefix, SHA-256 hashed, scopes (read/write/admin). Auth middleware auto-detects.
 
 ---
@@ -538,10 +523,9 @@ After deploying Phase 14 (Enterprise Security):
 
 - Use git bash, not PowerShell
 - Backend: `cd backend && npm run dev` (port 3001). Frontend: `cd frontend && npm run dev` (port 3000)
-- API route: add to `backend/src/routes/`, register in `backend/src/index.ts` (all routes merged; no separate EE loader)
+- API route: add to `backend/src/routes/`, register in `backend/src/index.ts`
 - DB migrations: `backend/database/` for all tables
 - UI components: Radix primitives + Tailwind (shadcn pattern). Use shadcn MCP to add new components
-- See `DEVELOPERS.md` for full setup, `CONTRIBUTING.md` for PR flow
-- See `.cursor/skills/add-new-features/SKILL.md` for CE vs EE placement decisions
+- See `DEVELOPERS.md` for full setup, `CONTRIBUTING.md` for PR flow (uses Conventional Commits), `fly.md` for worker deployment
+- See `.cursor/skills/add-new-features/SKILL.md` for route/lib placement
 - See `.cursor/skills/frontend-design/SKILL.md` and `.cursor/skills/ui-principles/SKILL.md` for UI standards
-- Phase 14 migrations: phase14_enterprise_security.sql (security_audit_logs, organization_mfa_exemptions, user_sessions, organization_sso_providers, organization_sso_bypass_tokens, organization_ip_allowlist, api_tokens, organization_scim_configs, scim_user_mappings).

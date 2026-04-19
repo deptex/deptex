@@ -23,10 +23,36 @@ See [DEVELOPERS.md](./DEVELOPERS.md) for setup and where to add new routes or li
 ## How to Contribute
 
 1. **Fork the repo** and clone your fork
-2. **Create a branch** — `git checkout -b fix/some-bug` or `feature/some-feature`
+2. **Create a branch** — use a `type/short-summary` naming, e.g. `fix/login-redirect`, `feat/policy-editor-autosave`, `chore/dep-bumps`
 3. **Make your changes** — See [DEVELOPERS.md](./DEVELOPERS.md) for setup
 4. **Run tests** — `cd backend && npm run test` and `cd frontend && npm run test:run` as needed
 5. **Open a pull request** — Describe your changes and link any related issues
+
+---
+
+## Commit Message Format
+
+Deptex uses [Conventional Commits](https://www.conventionalcommits.org/). Every commit subject must start with a lowercase type prefix followed by `: `.
+
+**Accepted types:**
+- `feat:` — new user-facing feature
+- `fix:` — bug fix
+- `chore:` — maintenance, tooling, dep bumps, cleanup with no user-facing behavior change
+- `refactor:` — code restructuring that doesn't change behavior
+- `docs:` — documentation only
+- `test:` — tests only
+- `perf:` — performance improvement
+- `ci:` / `build:` — CI or build-system changes
+- `style:` — formatting only
+
+Keep the subject ≤ 72 characters; put details in the body. Example:
+
+```
+feat: add SLA breach filter to vulnerability list
+
+Exposes ?sla=breached on /api/organizations/:id/vulnerabilities and adds
+a filter chip in the SecurityFilterBar. Closes #412.
+```
 
 ---
 
@@ -34,7 +60,7 @@ See [DEVELOPERS.md](./DEVELOPERS.md) for setup and where to add new routes or li
 
 - **API routes:** `backend/src/routes/` — register in `backend/src/index.ts`
 - **Shared logic:** `backend/src/lib/`
-- **Workers / extraction:** `backend/extraction-worker/` and related packages
+- **Workers / extraction:** `backend/extraction-worker/`, `backend/watchtower-worker/`, `backend/aider-worker/`
 
 See `.cursor/skills/add-new-features/SKILL.md` for placement and patterns.
 
