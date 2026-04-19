@@ -1,0 +1,25 @@
+Create schedule:
+
+
+
+
+
+Cron expression: 0 * * * * (hourly at minute 0).
+
+
+
+Destination URL:
+POST https://YOUR_BACKEND_HOST/api/workers/reset-sync-counters
+
+
+
+Headers:
+X-Internal-Api-Key: YOUR_INTERNAL_API_KEY
+(same value as INTERNAL_API_KEY in backend).
+
+
+and for https://api.deptex.dev/api/internal/sla-check
+
+
+Pattern recomputation	0 3 * * * (daily 3AM UTC)	POST https://<your-backend>/api/internal/learning/recompute-patterns	Aggregates fix outcomes into strategy patterns, backfills missing outcomes
+Feedback prompts	0 * * * * (hourly)	POST https://<your-backend>/api/internal/learning/check-feedback-prompts	Sends in-app notifications asking users to rate merged fix quality
