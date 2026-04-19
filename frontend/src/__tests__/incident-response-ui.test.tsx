@@ -488,7 +488,7 @@ describe('Incident Response UI', () => {
     });
 
     it('44: SLA deadlines shown in Assess phase output', () => {
-      const assessPhaseTools = ['assessBlastRadius', 'getSLAStatus', 'getWatchtowerSummary'];
+      const assessPhaseTools = ['assessBlastRadius', 'getSLAStatus'];
       const slaTool = 'getSLAStatus';
       expect(assessPhaseTools).toContain(slaTool);
       expect(slaTool).toBe('getSLAStatus');

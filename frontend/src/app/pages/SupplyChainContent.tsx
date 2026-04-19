@@ -26,7 +26,7 @@ import {
   ShieldCheck,
   XCircle,
 } from 'lucide-react';
-import { api, type SupplyChainResponse, type SupplyChainChild, type SupplyChainBumpPr, type ProjectEffectivePolicies, type LatestSafeVersionResponse, type BannedVersion, type SupplyChainVersionSecurityData, type DependencyVersionsResponse, type DependencyVersionItem, type DependencyVersionVulnerability, type AssetTier } from '../../lib/api';
+import { api, type SupplyChainResponse, type SupplyChainChild, type SupplyChainBumpPr, type ProjectEffectivePolicies, type LatestSafeVersionResponse, type BannedVersion, type DependencyVersionsResponse, type DependencyVersionItem, type DependencyVersionVulnerability, type AssetTier } from '../../lib/api';
 import { calculateDepscore, SEVERITY_TO_CVSS } from '../../lib/scoring/depscore';
 import { Button } from '../../components/ui/button';
 import { CenterNode } from '../../components/supply-chain/CenterNode';
@@ -149,35 +149,6 @@ function getDepscoreBadgeClass(score: number): string {
   return 'bg-foreground-secondary/10 text-foreground-secondary border-foreground-secondary/20';
 }
 
-function WatchtowerStatusIcon({
-  status,
-  reason,
-  label,
-}: {
-  status: string | null;
-  reason: string | null;
-  label: string;
-}) {
-  const content = reason ? `${label}: ${reason}` : label;
-  const icon =
-    status === 'pass' ? (
-      <CheckCircle2 className="h-3 w-3 text-success shrink-0" />
-    ) : status === 'warning' ? (
-      <AlertTriangle className="h-3 w-3 text-warning shrink-0" />
-    ) : status === 'fail' ? (
-      <XCircle className="h-3 w-3 text-destructive shrink-0" />
-    ) : null;
-  if (!icon) return null;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="inline-flex cursor-default">{icon}</span>
-      </TooltipTrigger>
-      <TooltipContent>{content}</TooltipContent>
-    </Tooltip>
-  );
-}
-
 function RecentVersionBlock({
   version,
   currentVersion,
@@ -187,13 +158,8 @@ function RecentVersionBlock({
   canManage,
   onBanClick,
   onUnbanClick,
-  versionSecurityData,
   safeVersion,
   bumpPrs,
-  onPrCreated,
-  orgId,
-  projectId,
-  dependencyId,
   assetTier,
 }: {
   version: DependencyVersionItem;
@@ -204,18 +170,10 @@ function RecentVersionBlock({
   canManage: boolean;
   onBanClick: (version: string) => void;
   onUnbanClick: (banId: string) => void;
-  versionSecurityData: SupplyChainVersionSecurityData | null | undefined;
   safeVersion: string | null;
   bumpPrs: SupplyChainBumpPr[];
-  onPrCreated: (pr: SupplyChainBumpPr) => void;
-  orgId: string;
-  projectId: string;
-  dependencyId: string;
   assetTier: AssetTier;
 }) {
-  const { toast } = useToast();
-  const [creatingPr, setCreatingPr] = useState(false);
-
   const direct = version.vulnerabilities ?? [];
   const transitive = version.transitiveVulnerabilities ?? [];
   const hasAny = direct.length > 0 || transitive.length > 0;
@@ -224,33 +182,6 @@ function RecentVersionBlock({
   const activeBan = bannedVersions.find((b) => b.banned_version === version.version);
   const existingPr = bumpPrs.find((pr) => pr.target_version === version.version);
   const isSafest = safeVersion != null && version.version === safeVersion;
-  const onWatchtower = versionSecurityData?.onWatchtower ?? false;
-
-  const handleCreatePr = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!orgId || !projectId || !dependencyId || creatingPr) return;
-    setCreatingPr(true);
-    try {
-      const result = await api.createWatchtowerBumpPR(orgId, projectId, dependencyId, version.version);
-      onPrCreated({
-        target_version: version.version,
-        pr_url: result.pr_url,
-        pr_number: result.pr_number,
-      });
-      toast({
-        title: 'PR created',
-        description: `Created PR to bump to v${version.version}.`,
-      });
-    } catch (err: any) {
-      toast({
-        title: 'Failed to create PR',
-        description: err.message ?? 'An unexpected error occurred',
-        variant: 'destructive',
-      });
-    } finally {
-      setCreatingPr(false);
-    }
-  };
 
   const fixedDisplay = (vuln: DependencyVersionVulnerability) => {
     const fixedVersions = vuln.fixed_versions ?? [];
@@ -337,13 +268,6 @@ function RecentVersionBlock({
     <div>
       <div className="flex flex-wrap items-center gap-2 mb-2">
         <h3 className="text-sm font-semibold text-foreground">v{version.version}</h3>
-        {onWatchtower && (
-          <span className="inline-flex items-center gap-1">
-            <WatchtowerStatusIcon status={version.registry_integrity_status ?? null} reason={version.registry_integrity_reason ?? null} label="Registry" />
-            <WatchtowerStatusIcon status={version.install_scripts_status ?? null} reason={version.install_scripts_reason ?? null} label="Install scripts" />
-            <WatchtowerStatusIcon status={version.entropy_analysis_status ?? null} reason={version.entropy_analysis_reason ?? null} label="Entropy" />
-          </span>
-        )}
         {isCurrent && (
           <span className="shrink-0 text-xs px-1.5 py-0.5 rounded bg-success/10 text-success border border-success/20">
             Current
@@ -355,7 +279,7 @@ function RecentVersionBlock({
             Safest version
           </span>
         )}
-        {!isCurrent && existingPr ? (
+        {!isCurrent && existingPr && (
           <a
             href={existingPr.pr_url}
             target="_blank"
@@ -366,16 +290,6 @@ function RecentVersionBlock({
             View PR #{existingPr.pr_number}
             <ExternalLink className="h-2.5 w-2.5" />
           </a>
-        ) : !isCurrent && !isBanned && (
-          <button
-            type="button"
-            onClick={handleCreatePr}
-            disabled={creatingPr}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-primary/15 text-green-600 border border-primary/30 hover:bg-primary/25 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            {creatingPr ? <Loader2 className="h-3 w-3 animate-spin" /> : <GitPullRequest className="h-3 w-3" />}
-            Create PR
-          </button>
         )}
         {bannedVersionsLoading ? (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-foreground-secondary/5 text-foreground-secondary border border-border">
@@ -858,47 +772,38 @@ export function SupplyChainContent({ orgId, projectId, dependencyId, dependencyN
       .catch((err) => console.error('Failed to fetch banned versions:', err));
   }, [orgId, data, projectId]);
 
-  // Bump handler — scoped by bumpScope
+  // Bump handler — only org/team scopes hit the bump-all endpoint; project-scope users can't bump.
   const handleBumpAll = useCallback(async () => {
     if (!orgId || !projectId || !dependencyId || !data || !safeVersionData?.safeVersion) return;
+    if (bumpScope === 'project') return;
     setBumpingAll(true);
     try {
-      if (bumpScope === 'project') {
-        // Single project bump
-        await api.createWatchtowerBumpPR(orgId, projectId, dependencyId, safeVersionData.safeVersion);
+      const result = await api.bumpAllProjects(orgId, data.parent.dependency_id!, safeVersionData.safeVersion, bumpScope === 'team' ? bumpTeamId : undefined);
+      const successCount = result.pr_results.filter((r) => r.pr_url).length;
+      const errorCount = result.pr_results.filter((r) => r.error).length;
+
+      if (result.affected_projects === 0) {
         toast({
-          title: 'PR created',
-          description: `Created PR to bump this project to v${safeVersionData.safeVersion}.`,
+          title: 'No projects to bump',
+          description: `All ${bumpScope === 'team' ? 'team' : 'organization'} projects are already on v${safeVersionData.safeVersion}.`,
+        });
+      } else if (successCount > 0 && errorCount === 0) {
+        toast({
+          title: 'PRs created',
+          description: `Created ${successCount} PR${successCount !== 1 ? 's' : ''} to bump projects to v${safeVersionData.safeVersion}.`,
+        });
+      } else if (successCount > 0 && errorCount > 0) {
+        toast({
+          title: 'Some PRs created',
+          description: `Created ${successCount} PR${successCount !== 1 ? 's' : ''}, but ${errorCount} failed.`,
+          variant: 'destructive',
         });
       } else {
-        // Org or team scope
-        const result = await api.bumpAllProjects(orgId, data.parent.dependency_id!, safeVersionData.safeVersion, bumpScope === 'team' ? bumpTeamId : undefined);
-        const successCount = result.pr_results.filter((r) => r.pr_url).length;
-        const errorCount = result.pr_results.filter((r) => r.error).length;
-
-        if (result.affected_projects === 0) {
-          toast({
-            title: 'No projects to bump',
-            description: `All ${bumpScope === 'team' ? 'team' : 'organization'} projects are already on v${safeVersionData.safeVersion}.`,
-          });
-        } else if (successCount > 0 && errorCount === 0) {
-          toast({
-            title: 'PRs created',
-            description: `Created ${successCount} PR${successCount !== 1 ? 's' : ''} to bump projects to v${safeVersionData.safeVersion}.`,
-          });
-        } else if (successCount > 0 && errorCount > 0) {
-          toast({
-            title: 'Some PRs created',
-            description: `Created ${successCount} PR${successCount !== 1 ? 's' : ''}, but ${errorCount} failed.`,
-            variant: 'destructive',
-          });
-        } else {
-          toast({
-            title: 'Failed to create PRs',
-            description: `All ${errorCount} PR creation${errorCount !== 1 ? 's' : ''} failed.`,
-            variant: 'destructive',
-          });
-        }
+        toast({
+          title: 'Failed to create PRs',
+          description: `All ${errorCount} PR creation${errorCount !== 1 ? 's' : ''} failed.`,
+          variant: 'destructive',
+        });
       }
     } catch (err: any) {
       toast({
@@ -1091,7 +996,6 @@ export function SupplyChainContent({ orgId, projectId, dependencyId, dependencyN
             onBanClick: stableHandleBanClick,
             onUnbanClick: stableHandleUnbanClick,
             currentVersion: data.parent.version,
-            versionSecurityData: data.versionSecurityData ?? null,
             safeVersion: safeVersionData?.safeVersion ?? null,
             versionSwitching: graphLoading && (versionLoadSource === 'dropdown' || versionLoadSource === 'sidebar'),
             onOpenVersionsSidebar: () => setVersionSidebarOpen(true),
@@ -1395,16 +1299,11 @@ export function SupplyChainContent({ orgId, projectId, dependencyId, dependencyN
       {/* Versions sidebar (supply chain: open from center node) */}
       {versionSidebarOpen && data && orgId && projectId && dependencyId && (
         <VersionSidebar
-          packageName={data.parent.name}
-          currentVersion={data.parent.version}
           organizationId={orgId}
           projectId={projectId}
           dependencyId={dependencyId}
-          versionsInQuarantine={data.versionSecurityData?.quarantinedVersions ?? []}
           onClose={() => setVersionSidebarOpen(false)}
-          variant="supply-chain"
           onPreviewVersion={handlePreviewVersionFromSidebar}
-          onWatchtower={data.versionSecurityData?.onWatchtower ?? false}
         />
       )}
 
