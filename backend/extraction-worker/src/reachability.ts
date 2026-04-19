@@ -246,7 +246,7 @@ export async function parseUsageSlices(
     for (let i = 0; i < batch.length; i += 100) {
       const chunk = batch.slice(i, i + 100);
       await supabase.from('project_usage_slices').upsert(chunk, {
-        onConflict: 'project_id,file_path,line_number,target_name',
+        onConflict: 'project_id,file_path,line_number,target_name,extraction_run_id',
       });
     }
   }
@@ -383,6 +383,7 @@ function readCodeSnippet(workspaceRoot: string, filePath: string, lineNumber: nu
 
 export async function updateReachabilityLevels(
   projectId: string,
+  runId: string,
   supabase: SupabaseClient,
   logger: LogLike,
   workspaceRoot?: string,
@@ -390,21 +391,24 @@ export async function updateReachabilityLevels(
   const { data: pdvs } = await supabase
     .from('project_dependency_vulnerabilities')
     .select('id, project_dependency_id, osv_id')
-    .eq('project_id', projectId);
+    .eq('project_id', projectId)
+    .eq('extraction_run_id', runId);
 
   if (!pdvs || pdvs.length === 0) return;
 
   const { data: pds } = await supabase
     .from('project_dependencies')
     .select('id, dependency_id')
-    .eq('project_id', projectId);
+    .eq('project_id', projectId)
+    .eq('last_seen_extraction_run_id', runId);
 
   const depIdMap = new Map(pds?.map((pd: any) => [pd.id, pd.dependency_id]) ?? []);
 
   const { data: flows } = await supabase
     .from('project_reachable_flows')
     .select('dependency_id, entry_point_file, entry_point_line, entry_point_tag, sink_method')
-    .eq('project_id', projectId);
+    .eq('project_id', projectId)
+    .eq('extraction_run_id', runId);
 
   const flowsByDep = new Map<string, any[]>();
   for (const flow of flows ?? []) {
@@ -417,7 +421,8 @@ export async function updateReachabilityLevels(
   const { data: usages } = await supabase
     .from('project_usage_slices')
     .select('target_type, resolved_method, file_path, line_number')
-    .eq('project_id', projectId);
+    .eq('project_id', projectId)
+    .eq('extraction_run_id', runId);
 
   // Collect all type/method strings from usage slices for fuzzy matching
   const allUsageStrings: string[] = [];
@@ -603,6 +608,7 @@ function usageMatchesDep(
  */
 export async function computeImportCountsFromUsageSlices(
   projectId: string,
+  runId: string,
   ecosystem: string,
   supabase: SupabaseClient,
   logger: LogLike,
@@ -610,20 +616,22 @@ export async function computeImportCountsFromUsageSlices(
   // For npm, the oxc-parser AST analysis is more precise — only supplement if it found nothing
   const isNpm = ecosystem === 'npm';
 
-  // Fetch all direct project dependencies
+  // Fetch all direct project dependencies for this run only
   const { data: projectDeps } = await supabase
     .from('project_dependencies')
     .select('id, name, dependency_id, files_importing_count')
     .eq('project_id', projectId)
-    .eq('is_direct', true);
+    .eq('is_direct', true)
+    .eq('last_seen_extraction_run_id', runId);
 
   if (!projectDeps || projectDeps.length === 0) return;
 
-  // Fetch all usage slices for this project
+  // Fetch usage slices for this run only
   const { data: usages } = await supabase
     .from('project_usage_slices')
     .select('target_type, resolved_method, file_path')
-    .eq('project_id', projectId);
+    .eq('project_id', projectId)
+    .eq('extraction_run_id', runId);
 
   if (!usages || usages.length === 0) {
     // No usage data — for non-npm, explicitly set null to indicate "not analyzed"
@@ -695,10 +703,10 @@ export async function computeImportCountsFromUsageSlices(
 
     // Persist file paths into project_dependency_files so analyze-usage can fetch real code
     if (fileSet && fileSet.size > 0) {
-      const rows = [...fileSet].map(fp => ({ project_dependency_id: dep.id, file_path: fp }));
+      const rows = [...fileSet].map(fp => ({ project_dependency_id: dep.id, file_path: fp, extraction_run_id: runId }));
       await supabase
         .from('project_dependency_files')
-        .upsert(rows, { onConflict: 'project_dependency_id,file_path' });
+        .upsert(rows, { onConflict: 'project_dependency_id,file_path,extraction_run_id' });
     }
   }
 
@@ -759,7 +767,7 @@ export async function parseGoImportsFromSource(
   for (let i = 0; i < batch.length; i += 100) {
     const chunk = batch.slice(i, i + 100);
     await supabase.from('project_usage_slices').upsert(chunk, {
-      onConflict: 'project_id,file_path,line_number,target_name',
+      onConflict: 'project_id,file_path,line_number,target_name,extraction_run_id',
     });
   }
 

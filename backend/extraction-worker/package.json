@@ -15,6 +15,7 @@
     "@cyclonedx/cdxgen": "^11.0.0",
     "@supabase/supabase-js": "^2.39.0",
     "@upstash/redis": "^1.25.0",
+    "deptex-backend": "file:..",
     "dotenv": "^16.3.1",
     "oxc-parser": "^0.15.0",
     "simple-git": "^3.22.0",

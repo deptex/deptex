@@ -12,6 +12,7 @@ import { updateAllProjectsCompliance } from './projects';
 import { invalidateAllProjectCachesInOrg, invalidateProjectCachesForTeam, getCached, setCached } from '../lib/cache';
 import { seedOrganizationPolicyDefaults } from '../lib/policy-seed';
 import { emitEvent } from '../lib/event-bus';
+import { getActiveExtractionId } from '../lib/active-extraction';
 
 const router = express.Router();
 
@@ -3409,7 +3410,7 @@ router.get('/:id/sla-compliance', async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    const { data: projects } = await supabase.from('projects').select('id, name, asset_tier_id, team_id').eq('organization_id', orgId);
+    const { data: projects } = await supabase.from('projects').select('id, name, asset_tier_id, team_id, active_extraction_run_id').eq('organization_id', orgId);
     const projectList = projects ?? [];
     const projectIds = projectList.map((p: any) => p.id);
     const projectNameMap = new Map(projectList.map((p: any) => [p.id, p.name]));
@@ -3425,11 +3426,19 @@ router.get('/:id/sla-compliance', async (req: AuthRequest, res) => {
       });
     }
 
+    // Phase 19: only include findings tagged with the project's currently active run
+    const activeRunIds = projectList
+      .map((p: any) => p.active_extraction_run_id)
+      .filter(Boolean) as string[];
+
     const pdvSelect = 'id, project_id, severity, sla_status, sla_deadline_at, sla_met_at, sla_breached_at, detected_at, osv_id, created_at';
-    const { data: allPdv } = await supabase
-      .from('project_dependency_vulnerabilities')
-      .select(pdvSelect)
-      .in('project_id', projectIds);
+    const { data: allPdv } = activeRunIds.length > 0
+      ? await supabase
+          .from('project_dependency_vulnerabilities')
+          .select(pdvSelect)
+          .in('project_id', projectIds)
+          .in('extraction_run_id', activeRunIds)
+      : { data: [] as any[] };
 
     const pdvList = allPdv ?? [];
     const met = pdvList.filter((p: any) => p.sla_status === 'met').length;
@@ -3568,7 +3577,7 @@ router.get('/:id/sla-compliance/export', async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    const { data: projects } = await supabase.from('projects').select('id, name').eq('organization_id', orgId);
+    const { data: projects } = await supabase.from('projects').select('id, name, active_extraction_run_id').eq('organization_id', orgId);
     const projectList = projects ?? [];
     const projectIds = projectList.map((p: any) => p.id);
     const projectNameMap = new Map(projectList.map((p: any) => [p.id, p.name]));
@@ -3577,10 +3586,18 @@ router.get('/:id/sla-compliance/export', async (req: AuthRequest, res) => {
       return res.json({ rows: [], summary: {} });
     }
 
-    const { data: allPdv } = await supabase
-      .from('project_dependency_vulnerabilities')
-      .select('id, project_id, osv_id, severity, sla_status, detected_at, sla_deadline_at, sla_met_at, sla_breached_at, created_at')
-      .in('project_id', projectIds);
+    // Phase 19: only include findings tagged with the project's currently active run
+    const activeRunIds = projectList
+      .map((p: any) => p.active_extraction_run_id)
+      .filter(Boolean) as string[];
+
+    const { data: allPdv } = activeRunIds.length > 0
+      ? await supabase
+          .from('project_dependency_vulnerabilities')
+          .select('id, project_id, osv_id, severity, sla_status, detected_at, sla_deadline_at, sla_met_at, sla_breached_at, created_at')
+          .in('project_id', projectIds)
+          .in('extraction_run_id', activeRunIds)
+      : { data: [] as any[] };
 
     const rows = (allPdv ?? []).map((p: any) => ({
       project_name: projectNameMap.get(p.project_id) ?? '',
@@ -6650,7 +6667,7 @@ router.get('/:id/stats', async (req: AuthRequest, res) => {
       membersResult,
       statusesResult,
     ] = await Promise.all([
-      supabase.from('projects').select('id, name, health_score, status_id').eq('organization_id', orgId),
+      supabase.from('projects').select('id, name, health_score, status_id, active_extraction_run_id').eq('organization_id', orgId),
       supabase.from('extraction_jobs').select('id', { count: 'exact', head: true }).eq('organization_id', orgId).in('status', ['queued', 'processing']),
       supabase.from('organization_members').select('id', { count: 'exact', head: true }).eq('organization_id', orgId),
       supabase.from('organization_statuses').select('id, name, color, is_passing').eq('organization_id', orgId),
@@ -6658,6 +6675,10 @@ router.get('/:id/stats', async (req: AuthRequest, res) => {
 
     const projects = projectsResult.data ?? [];
     const projectIds = projects.map((p: any) => p.id);
+    // Phase 19: only include findings tagged with the project's currently active run
+    const activeRunIds = projects
+      .map((p: any) => p.active_extraction_run_id)
+      .filter(Boolean) as string[];
 
     // Health bands
     const healthy = projects.filter((p: any) => (p.health_score ?? 0) >= 80).length;
@@ -6667,11 +6688,12 @@ router.get('/:id/stats', async (req: AuthRequest, res) => {
     // Vulns across all org projects
     let vulnTotals = { total: 0, critical: 0, high: 0, medium: 0, low: 0 };
     let topVulns: any[] = [];
-    if (projectIds.length > 0) {
+    if (projectIds.length > 0 && activeRunIds.length > 0) {
       const { data: vulns } = await supabase
         .from('project_dependency_vulnerabilities')
         .select('severity, depscore, project_id, project_dependency_id')
         .in('project_id', projectIds)
+        .in('extraction_run_id', activeRunIds)
         .eq('suppressed', false);
 
       for (const v of vulns ?? []) {
@@ -6687,6 +6709,7 @@ router.get('/:id/stats', async (req: AuthRequest, res) => {
         .from('project_dependency_vulnerabilities')
         .select('osv_id, severity, depscore, project_id')
         .in('project_id', projectIds)
+        .in('extraction_run_id', activeRunIds)
         .eq('suppressed', false)
         .in('severity', ['critical', 'high'])
         .order('depscore', { ascending: false })
@@ -6735,10 +6758,10 @@ router.get('/:id/stats', async (req: AuthRequest, res) => {
     // Code findings
     let semgrepTotal = 0;
     let secretTotal = 0;
-    if (projectIds.length > 0) {
+    if (projectIds.length > 0 && activeRunIds.length > 0) {
       const [sr, scr] = await Promise.all([
-        supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).in('project_id', projectIds),
-        supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).in('project_id', projectIds),
+        supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).in('project_id', projectIds).in('extraction_run_id', activeRunIds),
+        supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).in('project_id', projectIds).in('extraction_run_id', activeRunIds),
       ]);
       semgrepTotal = sr.count ?? 0;
       secretTotal = scr.count ?? 0;
@@ -6759,17 +6782,18 @@ router.get('/:id/stats', async (req: AuthRequest, res) => {
     // Dependencies total
     let depsTotalCount = 0;
     if (projectIds.length > 0) {
-      const { count } = await supabase.from('project_dependencies').select('id', { count: 'exact', head: true }).in('project_id', projectIds);
+      const { count } = await supabase.from('project_dependencies').select('id', { count: 'exact', head: true }).in('project_id', projectIds).is('removed_at', null);
       depsTotalCount = count ?? 0;
     }
 
     // SLA aggregates (org-wide)
     let slaAgg = { compliance_percent: 100, on_track: 0, warning: 0, breached: 0, exempt: 0, met: 0, resolved_late: 0 };
-    if (projectIds.length > 0) {
+    if (projectIds.length > 0 && activeRunIds.length > 0) {
       const { data: pdvSla } = await supabase
         .from('project_dependency_vulnerabilities')
         .select('sla_status')
-        .in('project_id', projectIds);
+        .in('project_id', projectIds)
+        .in('extraction_run_id', activeRunIds);
       const list = pdvSla ?? [];
       const met = list.filter((p: any) => p.sla_status === 'met').length;
       const resolvedLate = list.filter((p: any) => p.sla_status === 'resolved_late').length;
