@@ -322,11 +322,7 @@ export const router = createBrowserRouter([
   },
   {
     path: "/settings/security",
-    element: (
-      <ProtectedRoute>
-        <SettingsPage />
-      </ProtectedRoute>
-    ),
+    element: <Navigate to="/settings/general" replace />,
   },
 
   // ============================================

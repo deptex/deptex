@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useOutletContext, useNavigate } from 'react-router-dom';
 import { cn } from '../../lib/utils';
-import { BookOpen, Sparkles, Loader2, X, Clock, Eye, Ban, FileQuestion, Info } from 'lucide-react';
+import { BookOpen, Sparkles, Loader2, X, Check, Clock, Eye, Ban, FileQuestion, Info } from 'lucide-react';
 import { api, Organization, RolePermissions, ProjectPolicyException, OrganizationPolicyChange, ProjectPolicyChangeRequest } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { PolicyCodeEditor } from '../../components/PolicyCodeEditor';
@@ -384,11 +384,12 @@ export default function PoliciesPage({ isSettingsSubpage = false }: PoliciesPage
   const prCheckDirty = prCheckCode !== prCheckOriginal;
 
   /** Map policy API validation result to NotificationRulesSection-style checks for the validation-failed card. */
-  const validationChecksFromResult = validationResult
+  type ValidationCheckItem = { name: string; pass: boolean; error?: string };
+  const validationChecksFromResult: ValidationCheckItem[] | null = validationResult
     ? [
-        { name: 'syntax' as const, pass: validationResult.syntaxPass, error: validationResult.syntaxError },
-        { name: 'shape' as const, pass: validationResult.shapePass, error: validationResult.shapeError },
-        { name: 'fetch_resilience' as const, pass: validationResult.fetchResiliencePass, error: validationResult.fetchResilienceError },
+        { name: 'syntax', pass: validationResult.syntaxPass, error: validationResult.syntaxError },
+        { name: 'shape', pass: validationResult.shapePass, error: validationResult.shapeError },
+        { name: 'fetch_resilience', pass: validationResult.fetchResiliencePass, error: validationResult.fetchResilienceError },
       ]
     : null;
   const showValidationFailedCard =

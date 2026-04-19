@@ -20,6 +20,7 @@ import {
   FileCode,
   GitCommit,
 } from 'lucide-react';
+import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
 import { api } from '../../lib/api';
 import { cn } from '../../lib/utils';
 
@@ -93,6 +94,9 @@ export default function ProjectWatchtowerPage() {
   const [filter, setFilter] = useState<'all' | 'alerts' | 'blocked' | 'safe'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
+
+  const realtime = useRealtimeStatus(orgId, projectId);
+  const isExtractionOngoing = realtime.status !== 'ready';
 
   const fetchData = useCallback(async () => {
     if (!orgId || !projectId) return;
@@ -170,6 +174,30 @@ export default function ProjectWatchtowerPage() {
     );
   }
 
+  if (isExtractionOngoing) {
+    return (
+      <div className="px-6 py-8">
+        <div className="max-w-2xl mx-auto">
+          <div className="rounded-lg border border-border bg-background-card p-6">
+            <div className="flex items-center gap-4">
+              <div className="flex-1 space-y-2 min-w-0">
+                <h3 className="text-sm font-semibold text-foreground">Project extraction still in progress</h3>
+                <p className="text-sm text-foreground-secondary">
+                  {!realtime.isLoading && realtime.status === 'not_connected'
+                    ? 'Connect a repository in Project Settings to use Watchtower.'
+                    : 'Watchtower will be available once extraction completes. You can enable supply chain monitoring from this tab then.'}
+                </p>
+              </div>
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
+                <Loader2 className="h-4 w-4 animate-spin text-foreground-secondary" aria-hidden />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!stats?.enabled) {
     return (
       <div className="px-6 py-8">
@@ -200,9 +228,6 @@ export default function ProjectWatchtowerPage() {
               Docs
             </Link>
           </div>
-          {totalDirect === 0 && (
-            <p className="text-sm text-foreground-secondary">No dependencies found. Run an extraction first.</p>
-          )}
 
           <div className="grid grid-cols-2 gap-4 mt-8 max-w-lg mx-auto text-left">
             {[

@@ -3111,6 +3111,17 @@ export interface ExtractionRun {
   created_at: string;
   completed_at: string | null;
   error: string | null;
+  /** How the run was triggered: initial connect, webhook push, or manual sync */
+  trigger_type?: 'initial' | 'webhook' | 'manual';
+  /** Deptex user who started the run (manual or initial); resolved for display */
+  started_by_user_id?: string;
+  started_by?: { avatar_url?: string; full_name?: string };
+  /** Git commit (set for webhook runs; optional for others) */
+  commit_sha?: string;
+  commit_message?: string;
+  branch?: string;
+  /** Commit author from Git (webhook runs) */
+  commit_author?: { username?: string; avatar_url?: string };
 }
 
 export interface ProjectVulnerability {
@@ -4113,7 +4124,16 @@ export const billingApi = {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
       body: JSON.stringify({ priceId, billingEmail }),
     });
-    if (!res.ok) throw new Error('Failed to create checkout');
+    if (!res.ok) {
+      let message = 'Failed to create checkout';
+      try {
+        const body = await res.json();
+        if (typeof body?.error === 'string') message = body.error;
+      } catch {
+        // non-JSON or empty body: keep default message
+      }
+      throw new Error(message);
+    }
     return res.json();
   },
 

@@ -8,13 +8,23 @@ primary_region = 'iad'
 
 [build]
 
+# VDB + dep-scan cache + atom/research outputs; 10gb can fill during VDB extract (OSError 28).
+[mounts]
+source = "depscan_vdb"
+destination = "/data"
+initial_size = "30gb"
+
 [env]
   NODE_ENV = 'production'
+  VDB_HOME = '/data'
+  DEPSCAN_CACHE_DIR = '/data/cache'
 
 [http_service]
   internal_port = 3000
   force_https = true
-  auto_stop_machines = 'stop'
+  # Worker exits after 60s idle (see extraction-worker/src/index.ts); we rely on that for
+  # scale-to-zero. Fly must not stop the machine based on HTTP traffic (we have none).
+  auto_stop_machines = 'off'
   auto_start_machines = true
   min_machines_running = 0
   processes = ['app']

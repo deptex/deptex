@@ -612,7 +612,7 @@ export default function TeamsPage() {
                 type="text"
                 value={teamName}
                 onChange={(e) => setTeamName(e.target.value)}
-                placeholder="Engineering Team"
+                placeholder=""
                 className="w-full px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent mb-4"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
@@ -631,7 +631,7 @@ export default function TeamsPage() {
                 id="team-description"
                 value={teamDescription}
                 onChange={(e) => setTeamDescription(e.target.value)}
-                placeholder="Describe the team's purpose..."
+                placeholder=""
                 rows={4}
                 className="w-full px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent resize-none"
               />

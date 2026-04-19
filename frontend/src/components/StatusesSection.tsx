@@ -320,11 +320,12 @@ export default function StatusesSection() {
     }
   }, [showCommitSidebar]);
 
-  const validationChecksFromResult = validationResult
+  type ValidationCheckItem = { name: string; pass: boolean; error?: string };
+  const validationChecksFromResult: ValidationCheckItem[] | null = validationResult
     ? [
-        { name: 'syntax' as const, pass: validationResult.syntaxPass, error: validationResult.syntaxError },
-        { name: 'shape' as const, pass: validationResult.shapePass, error: validationResult.shapeError },
-        { name: 'fetch_resilience' as const, pass: validationResult.fetchResiliencePass, error: validationResult.fetchResilienceError },
+        { name: 'syntax', pass: validationResult.syntaxPass, error: validationResult.syntaxError },
+        { name: 'shape', pass: validationResult.shapePass, error: validationResult.shapeError },
+        { name: 'fetch_resilience', pass: validationResult.fetchResiliencePass, error: validationResult.fetchResilienceError },
       ]
     : null;
   const showValidationFailedCard =

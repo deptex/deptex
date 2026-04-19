@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { useOutletContext, useNavigate } from 'react-router-dom';
+import { useOutletContext, useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Grid3x3, List, ChevronRight, Bell, Plus, X, Loader2 } from 'lucide-react';
 import { api, Project, TeamWithRole, TeamPermissions } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
@@ -52,6 +52,7 @@ const formatDate = (dateString: string): string => {
 
 export default function TeamProjectsPage() {
   const { team, organizationId, userPermissions } = useOutletContext<TeamContextType>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -60,6 +61,15 @@ export default function TeamProjectsPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const { toast } = useToast();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (searchParams.get('openCreate') === '1') {
+      setShowCreateModal(true);
+      const next = new URLSearchParams(searchParams);
+      next.delete('openCreate');
+      setSearchParams(next, { replace: true });
+    }
+  }, []);
 
   // Filter projects to only show those belonging to this team
   const teamProjects = useMemo(() => {

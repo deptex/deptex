@@ -94,6 +94,7 @@ export function useOrganizationVulnerabilitiesGraphLayout(
       const py = centerY + Math.sin(angle) * teamRingRadius;
       const projectWorstSeverity = proj.worstSeverity ?? getWorstSeverity(proj.graphDepNodes);
       const slaBreachCount = getSlaBreachCount(proj.graphDepNodes);
+      const isExtracting = proj.isExtracting === true;
 
       nodes.push({
         id: projectNodeId,
@@ -108,6 +109,7 @@ export function useOrganizationVulnerabilitiesGraphLayout(
           framework: proj.framework ?? undefined,
           worstSeverity: projectWorstSeverity,
           slaBreachCount,
+          isExtracting,
         },
         draggable: true,
         selectable: false,
@@ -125,23 +127,23 @@ export function useOrganizationVulnerabilitiesGraphLayout(
         markerEnd: { type: MarkerType.ArrowClosed, color: grayStroke, width: 12, height: 12 },
       });
 
-      if (proj.graphDepNodes.length > 0) {
-        const prefix = `project-${proj.projectId}-`;
-        const namespacedDepNodes: VulnGraphDepNode[] = proj.graphDepNodes.map((d) => ({
-          ...d,
-          id: prefix + d.id,
-          parentId: d.parentId === 'project' ? projectNodeId : prefix + d.parentId,
-        }));
-        const sub = buildDepAndVulnNodesAndEdges(projectNodeId, namespacedDepNodes, showOnlyReachable);
-        sub.nodes.forEach((n) => {
-          nodes.push({ ...n, position: { x: (n.position.x ?? 0) + px, y: (n.position.y ?? 0) + py } } as Node);
-        });
-        sub.edges.forEach((e) => {
-          const edge: Edge = { ...e, id: prefix + e.id } as Edge;
-          if (e.source === projectNodeId && e.sourceHandle) edge.sourceHandle = 'source-' + e.sourceHandle;
-          edges.push(edge);
-        });
-      }
+      if (isExtracting || proj.graphDepNodes.length === 0) return;
+
+      const prefix = `project-${proj.projectId}-`;
+      const namespacedDepNodes: VulnGraphDepNode[] = proj.graphDepNodes.map((d) => ({
+        ...d,
+        id: prefix + d.id,
+        parentId: d.parentId === 'project' ? projectNodeId : prefix + d.parentId,
+      }));
+      const sub = buildDepAndVulnNodesAndEdges(projectNodeId, namespacedDepNodes, showOnlyReachable);
+      sub.nodes.forEach((n) => {
+        nodes.push({ ...n, position: { x: (n.position.x ?? 0) + px, y: (n.position.y ?? 0) + py } } as Node);
+      });
+      sub.edges.forEach((e) => {
+        const edge: Edge = { ...e, id: prefix + e.id } as Edge;
+        if (e.source === projectNodeId && e.sourceHandle) edge.sourceHandle = 'source-' + e.sourceHandle;
+        edges.push(edge);
+      });
     });
 
     realTeams.forEach((teamData) => {
@@ -151,8 +153,9 @@ export function useOrganizationVulnerabilitiesGraphLayout(
       const tx = centerX + Math.cos(teamAngle) * teamRingRadius;
       const ty = centerY + Math.sin(teamAngle) * teamRingRadius;
 
+      const hasExtractingProjects = teamData.projects.some((p) => p.isExtracting === true);
       const teamWorstSeverity = getWorstSeverity(
-        teamData.projects.flatMap((p) => p.graphDepNodes)
+        teamData.projects.filter((p) => !p.isExtracting).flatMap((p) => p.graphDepNodes)
       );
 
       nodes.push({
@@ -167,6 +170,7 @@ export function useOrganizationVulnerabilitiesGraphLayout(
           projectId: teamData.teamId,
           worstSeverity: teamWorstSeverity,
           isTeamNode: true,
+          hasExtractingProjects,
         },
         draggable: true,
         selectable: false,
@@ -194,6 +198,7 @@ export function useOrganizationVulnerabilitiesGraphLayout(
 
         const projectWorstSeverity = proj.worstSeverity ?? getWorstSeverity(proj.graphDepNodes);
         const slaBreachCount = getSlaBreachCount(proj.graphDepNodes);
+        const isExtracting = proj.isExtracting === true;
 
         nodes.push({
           id: projectNodeId,
@@ -208,6 +213,7 @@ export function useOrganizationVulnerabilitiesGraphLayout(
             framework: proj.framework ?? undefined,
             worstSeverity: projectWorstSeverity,
             slaBreachCount,
+            isExtracting,
           },
           draggable: true,
           selectable: false,
@@ -227,7 +233,7 @@ export function useOrganizationVulnerabilitiesGraphLayout(
           markerEnd: { type: MarkerType.ArrowClosed, color: grayStroke, width: 12, height: 12 },
         });
 
-        if (proj.graphDepNodes.length === 0) return;
+        if (isExtracting || proj.graphDepNodes.length === 0) return;
 
         const prefix = `project-${proj.projectId}-`;
         const namespacedDepNodes: VulnGraphDepNode[] = proj.graphDepNodes.map((d) => ({

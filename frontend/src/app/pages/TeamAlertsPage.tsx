@@ -91,6 +91,7 @@ export default function TeamAlertsPage() {
               projectName: p.name,
               graphDepNodes: result.graphDepNodes,
               framework: p.framework,
+              isExtracting: p.repo_status != null && p.repo_status !== 'ready',
             }))
           )
         )
