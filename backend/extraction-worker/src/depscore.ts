@@ -20,6 +20,18 @@ export interface DepscoreContext {
   packageScore?: number | null;
 }
 
+export interface BaseDepscoreContext {
+  cvss: number;
+  epss: number;
+  cisaKev: boolean;
+  assetTier: AssetTier;
+  tierMultiplier?: number;
+  isDirect?: boolean;
+  isDevDependency?: boolean;
+  isMalicious?: boolean;
+  packageScore?: number | null;
+}
+
 const REACHABILITY_LEVEL_WEIGHTS: Record<string, number> = {
   confirmed: 1.0,
   data_flow: 0.9,
@@ -51,18 +63,39 @@ function packageReputationWeight(score: number | null | undefined): number {
   return 1.0;
 }
 
-export function calculateDepscore(ctx: DepscoreContext): number {
+function computeBaseImpactAndMultipliers(ctx: BaseDepscoreContext): { baseImpact: number; threatMultiplier: number; dependencyContextMultiplier: number; tierWeight: number } {
   const cvss = Math.max(0, Math.min(10, ctx.cvss));
   const epss = Math.max(0, Math.min(1, ctx.epss));
 
   const baseImpact = cvss * 10;
-
   const threatMultiplier = ctx.cisaKev
     ? 1.2
     : 0.6 + 0.6 * Math.sqrt(epss);
 
-  // Use custom multiplier if provided, otherwise fall back to legacy enum lookup
   const tierWeight = ctx.tierMultiplier ?? TIER_WEIGHT[ctx.assetTier];
+
+  const directnessWeight = ctx.isDirect === false ? 0.75 : 1.0;
+  const envWeight = ctx.isDevDependency === true ? 0.4 : 1.0;
+  const maliciousWeight = ctx.isMalicious === true ? 1.3 : 1.0;
+  const reputationWeight = packageReputationWeight(ctx.packageScore);
+  const dependencyContextMultiplier = directnessWeight * envWeight * maliciousWeight * reputationWeight;
+
+  return {
+    baseImpact,
+    threatMultiplier,
+    dependencyContextMultiplier,
+    tierWeight,
+  };
+}
+
+export function calculateBaseDepscoreNoReachability(ctx: BaseDepscoreContext): number {
+  const { baseImpact, threatMultiplier, dependencyContextMultiplier, tierWeight } = computeBaseImpactAndMultipliers(ctx);
+  const score = baseImpact * threatMultiplier * tierWeight * dependencyContextMultiplier;
+  return Math.min(100, Math.round(score));
+}
+
+export function calculateDepscore(ctx: DepscoreContext): number {
+  const { baseImpact, threatMultiplier, dependencyContextMultiplier, tierWeight } = computeBaseImpactAndMultipliers(ctx);
 
   let reachabilityWeight: number;
   if (ctx.reachabilityLevel && ctx.reachabilityLevel !== 'unreachable') {
@@ -73,14 +106,6 @@ export function calculateDepscore(ctx: DepscoreContext): number {
     reachabilityWeight = 1.0;
   }
 
-  const environmentalMultiplier = tierWeight * reachabilityWeight;
-
-  const directnessWeight = ctx.isDirect === false ? 0.75 : 1.0;
-  const envWeight = ctx.isDevDependency === true ? 0.4 : 1.0;
-  const maliciousWeight = ctx.isMalicious === true ? 1.3 : 1.0;
-  const reputationWeight = packageReputationWeight(ctx.packageScore);
-  const dependencyContextMultiplier = directnessWeight * envWeight * maliciousWeight * reputationWeight;
-
-  const score = baseImpact * threatMultiplier * environmentalMultiplier * dependencyContextMultiplier;
+  const score = baseImpact * threatMultiplier * tierWeight * reachabilityWeight * dependencyContextMultiplier;
   return Math.min(100, Math.round(score));
 }
