@@ -444,6 +444,11 @@ export default function OrganizationLayout() {
                 organizationId={id}
                 teams={teams}
                 onProjectsReload={refetchProjectsAndNotify}
+                onProjectCreated={(project) => {
+                  window.dispatchEvent(new CustomEvent('organization:projectCreated', {
+                    detail: { id: project.id, name: project.name, owner_team_id: project.owner_team_id ?? null, team_ids: project.team_ids ?? [] }
+                  }));
+                }}
               />
             )}
             {organization && id && (

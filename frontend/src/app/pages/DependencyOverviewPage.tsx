@@ -2,7 +2,7 @@ import { useParams, useOutletContext } from 'react-router-dom';
 import { useMemo, useState, useEffect, useCallback } from 'react';
 import PackageOverview from '../../components/PackageOverview';
 import { PackageOverviewSkeleton } from '../../components/PackageOverviewSkeleton';
-import { api, type ProjectDependency, type ProjectEffectivePolicies, type LatestSafeVersionResponse } from '../../lib/api';
+import { api, type ProjectDependency, type ProjectEffectivePolicies } from '../../lib/api';
 import type { DependencyContextType } from './DependencyLayout';
 
 // Build ProjectDependency for overview – real fields from overview API, rest placeholder
@@ -85,7 +85,6 @@ function buildDependencyFromOverview(
 export default function DependencyOverviewPage() {
   const { orgId, projectId, dependencyId } = useParams<{ orgId: string; projectId: string; dependencyId: string }>();
   const { organization, dependency: layoutDependency } = useOutletContext<DependencyContextType>();
-  const otherProjectsScopeIsOrg = organization?.permissions?.manage_teams_and_projects ?? false;
   const [overview, setOverview] = useState<{
     dependency_id: string | null;
     name: string | null;
@@ -128,9 +127,6 @@ export default function DependencyOverviewPage() {
   const [bumpTeamId, setBumpTeamId] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [safeVersionData, setSafeVersionData] = useState<LatestSafeVersionResponse | null>(null);
-  const [safeVersionSeverity, setSafeVersionSeverity] = useState<string>('high');
-  const [safeVersionLoading, setSafeVersionLoading] = useState(false);
 
   // Can manage deprecations when org or team scope (same as ban permission)
   const canManageDeprecations = bumpScope === 'org' || bumpScope === 'team';
@@ -219,22 +215,6 @@ export default function DependencyOverviewPage() {
     }
   }, [orgId, projectId, dependencyId]);
 
-  // Fetch latest safe version (refresh=true so Watchtower check results in DB are always reflected)
-  useEffect(() => {
-    if (!orgId || !projectId || !dependencyId) return;
-    setSafeVersionLoading(true);
-    api.getLatestSafeVersion(orgId, projectId, dependencyId, safeVersionSeverity, true, { refresh: true })
-      .then((data) => {
-        setSafeVersionData(data);
-      })
-      .catch((err) => {
-        console.error('Failed to fetch latest safe version:', err);
-        setSafeVersionData(null);
-      })
-      .finally(() => {
-        setSafeVersionLoading(false);
-      });
-  }, [orgId, projectId, dependencyId, safeVersionSeverity]);
 
   const handleDeprecate = useCallback(async (alternativeName: string) => {
     if (!orgId || !overview?.dependency_id) return;
@@ -268,54 +248,12 @@ export default function DependencyOverviewPage() {
     setDeprecation(null);
   }, [orgId, overview?.dependency_id, deprecation?.scope, deprecation?.team_id]);
 
-  const handleSeverityChange = useCallback((severity: string) => {
-    setSafeVersionSeverity(severity);
-  }, []);
-
-  const [bumpPrUrl, setBumpPrUrl] = useState<string | null>(null);
-  const [bumpPrCheckLoading, setBumpPrCheckLoading] = useState(false);
-  const [bumping, setBumping] = useState(false);
 
   const dependency = useMemo(
     () => (projectId && dependencyId ? buildDependencyFromOverview(projectId, dependencyId, overview) : null),
     [projectId, dependencyId, overview]
   );
 
-  const handleBumpVersion = useCallback(async () => {
-    if (!orgId || !projectId || !dependencyId || !safeVersionData?.safeVersion || bumping) return;
-    setBumping(true);
-    try {
-      const result = await api.createWatchtowerBumpPR(orgId, projectId, dependencyId, safeVersionData.safeVersion);
-      if (result.pr_url) {
-        setBumpPrUrl(result.pr_url);
-        window.open(result.pr_url, '_blank');
-      }
-    } catch (err: any) {
-      console.error('Failed to create bump PR:', err);
-    } finally {
-      setBumping(false);
-    }
-  }, [orgId, projectId, dependencyId, safeVersionData?.safeVersion, bumping]);
-
-  // Check for existing bump PR when safe version data changes (show View PR if any bump PR exists)
-  useEffect(() => {
-    if (!overview?.name || !dependencyId || !safeVersionData?.safeVersion) {
-      setBumpPrUrl(null);
-      setBumpPrCheckLoading(false);
-      return;
-    }
-    setBumpPrCheckLoading(true);
-    api.getWatchtowerSummary(overview.name, dependencyId)
-      .then((summary) => {
-        setBumpPrUrl(summary.bump_pr_url ?? null);
-      })
-      .catch(() => {
-        setBumpPrUrl(null);
-      })
-      .finally(() => {
-        setBumpPrCheckLoading(false);
-      });
-  }, [overview?.name, dependencyId, safeVersionData?.safeVersion]);
 
   if (!orgId || !projectId || !dependencyId) {
     return (
@@ -353,16 +291,6 @@ export default function DependencyOverviewPage() {
         canManageDeprecations={canManageDeprecations}
         onDeprecate={handleDeprecate}
         onRemoveDeprecation={handleRemoveDeprecation}
-        removePrUrlFromOverview={overview?.remove_pr_url ?? null}
-        safeVersionData={safeVersionData}
-        safeVersionSeverity={safeVersionSeverity}
-        onSeverityChange={handleSeverityChange}
-        onBumpVersion={handleBumpVersion}
-        safeVersionLoading={safeVersionLoading}
-        bumpPrUrl={bumpPrUrl}
-        bumpPrCheckLoading={bumpPrCheckLoading}
-        bumping={bumping}
-        otherProjectsScopeIsOrg={otherProjectsScopeIsOrg}
         isDevDependency={layoutDependency?.source === 'devDependencies'}
       />
     </main>

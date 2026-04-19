@@ -106,7 +106,10 @@ function OrganizationSidebar({
     }
     setCreating(true);
     try {
-      await api.createTeam(organizationId, createTeamName.trim(), '');
+      const newTeam = await api.createTeam(organizationId, createTeamName.trim(), '');
+      window.dispatchEvent(new CustomEvent('organization:teamCreated', {
+        detail: { id: newTeam.id, name: newTeam.name, role_display_name: newTeam.role_display_name ?? null, role_color: newTeam.role_color ?? null }
+      }));
       setShowCreateTeamModal(false);
       setCreateTeamName('');
       await onRefetchTeams?.();

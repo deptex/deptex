@@ -17,6 +17,11 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
 import { RoleBadge } from './RoleBadge';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from './ui/dialog';
 import { cn } from '../lib/utils';
 
 interface DependencyNotesSidebarProps {
@@ -281,21 +286,12 @@ export default function DependencyNotesSidebar({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50">
-      <div
-        className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-        onClick={() => onOpenChange(false)}
-        aria-hidden
-      />
-      <div
-        className="fixed right-0 top-0 h-full w-full max-w-md bg-background border-l border-border shadow-2xl flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header — unified solid background, no X button */}
-        <div className="flex items-center gap-2.5 min-w-0 px-5 pt-5 pb-4 border-b border-border shrink-0 bg-background">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent hideClose className="sm:max-w-[700px] max-h-[80vh] bg-background flex flex-col p-0 gap-0 overflow-hidden">
+        <div className="flex items-center gap-2.5 px-6 pt-6 pb-4 border-b border-border shrink-0">
           <MessageSquareText className="h-5 w-5 text-foreground-secondary shrink-0" />
           <div className="min-w-0">
-            <h2 className="text-base font-semibold text-foreground truncate">Project notes</h2>
+            <DialogTitle className="truncate">Project notes</DialogTitle>
             <p className="text-xs text-foreground-secondary truncate mt-0.5">{packageName}</p>
           </div>
         </div>
@@ -579,7 +575,7 @@ export default function DependencyNotesSidebar({
             Ctrl+Enter to send
           </p>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

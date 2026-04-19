@@ -7,42 +7,13 @@ import { Button } from '../../components/ui/button';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
 import { ProjectTeamSelect } from '../../components/ProjectTeamSelect';
 import { FrameworkIcon } from '../../components/framework-icon';
+import { ProjectStatusBadge } from '../../components/ProjectStatusBadge';
 import { SlideInSidebar } from '../../components/SlideInSidebar';
 import { CreateProjectSidebar } from '../../components/CreateProjectSidebar';
 
 interface OrganizationContextType {
   organization: Organization | null;
   reloadOrganization: () => Promise<void>;
-}
-
-// Short extraction status label for project cards
-function projectStatusLabel(project: Project): { label: string; inProgress: boolean; isError: boolean; statusColor?: string } {
-  const status = project.repo_status;
-  if (status === 'initializing' || status === 'extracting' || status === 'analyzing' || status === 'finalizing') {
-    const step = project.extraction_step;
-    const labels: Record<string, string> = {
-      queued: 'Creating',
-      cloning: 'Creating',
-      sbom: 'Creating',
-      deps_synced: 'Creating',
-      ast_parsing: 'Creating',
-      scanning: 'Creating',
-      uploading: 'Creating',
-      completed: 'Creating',
-    };
-    const label = step ? (labels[step] ?? 'Creating') : (status === 'analyzing' || status === 'finalizing' ? 'Analyzing' : 'Creating');
-    return { label, inProgress: true, isError: false };
-  }
-  if (status === 'error') return { label: 'Failed', inProgress: false, isError: true };
-  // Phase 4: Support custom status names and colors from organization_statuses
-  if (project.status_name) {
-    return { label: project.status_name, inProgress: false, isError: false, statusColor: project.status_color };
-  }
-  return {
-    label: project.is_compliant !== false ? 'COMPLIANT' : 'NOT COMPLIANT',
-    inProgress: false,
-    isError: false,
-  };
 }
 
 // Format date as "01 Dec 25"
@@ -515,52 +486,7 @@ export default function ProjectsPage() {
                 <div className="flex items-center gap-3 flex-1 min-w-0">
                   <FrameworkIcon frameworkId={project.framework} size={24} />
                   <h3 className="text-base font-semibold text-foreground truncate">{project.name}</h3>
-                  {(() => {
-                    const { label, inProgress, isError, statusColor } = projectStatusLabel(project);
-                    if (inProgress) {
-                      return (
-                        <span className="px-2 py-0.5 rounded text-xs font-medium border bg-foreground-secondary/20 text-foreground-secondary border-foreground-secondary/40 flex-shrink-0 flex items-center gap-1">
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                          {label}
-                        </span>
-                      );
-                    }
-                    if (isError) {
-                      return (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40 flex-shrink-0">
-                              Failed
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent>{project.extraction_error || 'Extraction failed'}</TooltipContent>
-                        </Tooltip>
-                      );
-                    }
-                    if (project.status_name) {
-                      if (statusColor) {
-                        return (
-                          <span className="px-2 py-0.5 rounded text-xs font-medium border flex-shrink-0" style={{ backgroundColor: `${statusColor}20`, color: statusColor, borderColor: `${statusColor}40` }}>
-                            {label}
-                          </span>
-                        );
-                      }
-                      return (
-                        <span className="px-2 py-0.5 rounded text-xs font-medium border flex-shrink-0 bg-transparent text-foreground-secondary border-foreground/20">
-                          {label}
-                        </span>
-                      );
-                    }
-                    return label === 'COMPLIANT' ? (
-                      <span className="px-2 py-0.5 rounded text-xs font-medium border bg-success/20 text-success border-success/40 flex-shrink-0">
-                        COMPLIANT
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40 flex-shrink-0">
-                        NOT COMPLIANT
-                      </span>
-                    );
-                  })()}
+                  <ProjectStatusBadge project={project} className="flex-shrink-0" />
                 </div>
                 <ChevronRight className="h-5 w-5 text-foreground-secondary group-hover:text-foreground transition-colors flex-shrink-0 ml-2" />
               </div>
@@ -609,52 +535,7 @@ export default function ProjectsPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    {(() => {
-                      const { label, inProgress, isError, statusColor } = projectStatusLabel(project);
-                      if (inProgress) {
-                        return (
-                          <span className="px-2 py-0.5 rounded text-xs font-medium border bg-foreground-secondary/20 text-foreground-secondary border-foreground-secondary/40 flex items-center gap-1 w-fit">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            {label}
-                          </span>
-                        );
-                      }
-                      if (isError) {
-                        return (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span className="px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40 w-fit cursor-help">
-                                Failed
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent>{project.extraction_error || 'Extraction failed'}</TooltipContent>
-                          </Tooltip>
-                        );
-                      }
-                      if (project.status_name) {
-                        if (statusColor) {
-                          return (
-                            <span className="px-2 py-0.5 rounded text-xs font-medium border w-fit" style={{ backgroundColor: `${statusColor}20`, color: statusColor, borderColor: `${statusColor}40` }}>
-                              {label}
-                            </span>
-                          );
-                        }
-                        return (
-                          <span className="px-2 py-0.5 rounded text-xs font-medium border w-fit bg-transparent text-foreground-secondary border-foreground/20">
-                            {label}
-                          </span>
-                        );
-                      }
-                      return label === 'COMPLIANT' ? (
-                        <span className="px-2 py-0.5 rounded text-xs font-medium border bg-success/20 text-success border-success/40">
-                          COMPLIANT
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40">
-                          NOT COMPLIANT
-                        </span>
-                      );
-                    })()}
+                    <ProjectStatusBadge project={project} className="w-fit" />
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1.5">

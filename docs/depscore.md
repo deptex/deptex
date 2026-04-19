@@ -25,7 +25,6 @@ Signals retained:
 - asset tier multiplier
 - direct/transitive weight
 - dev/prod weight
-- malicious package boost
 - package reputation adjustment
 
 ## 2) EPD Factor
@@ -140,3 +139,4 @@ In progress:
 
 - deeper source-function extraction and confidence-tier enrichment across ecosystems
 - broader API/UI exposure and shadow-to-default rollout gating
+

@@ -2233,5 +2233,141 @@ router.get('/:id/teams/:teamId/stats', async (req: AuthRequest, res) => {
   }
 });
 
+// GET /api/organizations/:id/teams/:teamId/vulnerabilities — paginated dep vulns for a team's projects
+router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, teamId } = req.params;
+
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const { data: projectTeams } = await supabase
+      .from('project_teams')
+      .select('project_id')
+      .eq('team_id', teamId);
+
+    const projectIds = (projectTeams || []).map((pt: any) => pt.project_id);
+    if (projectIds.length === 0) {
+      return res.json({ data: [], total: 0, page: 1, per_page: 50 });
+    }
+
+    const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+    const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page as string, 10) || 50));
+    const severityFilter = (req.query.severity as string) || '';
+    const allowedSeverity = ['critical', 'high', 'medium', 'low'].includes(severityFilter) ? severityFilter : '';
+
+    let countQuery = supabase
+      .from('project_dependency_vulnerabilities')
+      .select('*', { count: 'exact', head: true })
+      .in('project_id', projectIds)
+      .eq('suppressed', false);
+    if (allowedSeverity) countQuery = countQuery.eq('severity', allowedSeverity);
+
+    const { count: totalCount, error: countError } = await countQuery;
+    if (countError) throw countError;
+
+    const from = (page - 1) * perPage;
+    const to = from + perPage - 1;
+
+    let dataQuery = supabase
+      .from('project_dependency_vulnerabilities')
+      .select(
+        'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, sla_status, sla_deadline_at, reachability_level'
+      )
+      .in('project_id', projectIds)
+      .eq('suppressed', false);
+    if (allowedSeverity) dataQuery = dataQuery.eq('severity', allowedSeverity);
+
+    const { data: rows, error: dataError } = await dataQuery
+      .order('contextual_depscore', { ascending: false, nullsFirst: false })
+      .order('depscore', { ascending: false, nullsFirst: false })
+      .range(from, to);
+
+    if (dataError) throw dataError;
+
+    const list = rows || [];
+    const pdIds = [...new Set(list.map((r: any) => r.project_dependency_id).filter(Boolean))];
+    const projIds = [...new Set(list.map((r: any) => r.project_id).filter(Boolean))];
+
+    const depMap = new Map<string, { name: string; version: string; dependency_id: string }>();
+    const projMap = new Map<string, { name: string }>();
+
+    if (pdIds.length > 0) {
+      const { data: deps, error: depErr } = await supabase
+        .from('project_dependencies')
+        .select('id, name, version, dependency_id')
+        .in('id', pdIds);
+      if (depErr) throw depErr;
+      for (const d of deps || []) {
+        depMap.set((d as any).id, {
+          name: (d as any).name ?? 'Unknown',
+          version: (d as any).version ?? 'Unknown',
+          dependency_id: (d as any).dependency_id ?? '',
+        });
+      }
+    }
+
+    if (projIds.length > 0) {
+      const { data: projs, error: projErr } = await supabase
+        .from('projects')
+        .select('id, name')
+        .in('id', projIds);
+      if (projErr) throw projErr;
+      for (const p of projs || []) {
+        projMap.set((p as any).id, { name: (p as any).name ?? 'Unknown' });
+      }
+    }
+
+    const data = list.map((r: any) => {
+      const dep = r.project_dependency_id ? depMap.get(r.project_dependency_id) : undefined;
+      const proj = r.project_id ? projMap.get(r.project_id) : undefined;
+      return {
+        id: r.id,
+        osv_id: r.osv_id,
+        severity: r.severity,
+        summary: r.summary ?? null,
+        details: null,
+        aliases: r.aliases || [],
+        fixed_versions: r.fixed_versions || [],
+        published_at: r.published_at ?? null,
+        modified_at: null,
+        dependency_id: dep?.dependency_id ?? '',
+        dependency_name: dep?.name ?? 'Unknown',
+        dependency_version: dep?.version ?? 'Unknown',
+        is_reachable: r.is_reachable ?? undefined,
+        epss_score: r.epss_score,
+        cvss_score: r.cvss_score ?? null,
+        cisa_kev: r.cisa_kev ?? false,
+        depscore: r.depscore ?? null,
+        contextual_depscore: r.contextual_depscore ?? null,
+        sla_status: r.sla_status ?? null,
+        sla_deadline_at: r.sla_deadline_at ?? null,
+        reachability_level: r.reachability_level ?? null,
+        project_id: r.project_id,
+        project_name: proj?.name ?? 'Unknown',
+      };
+    });
+
+    res.json({
+      data,
+      total: totalCount ?? 0,
+      page,
+      per_page: perPage,
+    });
+  } catch (error: any) {
+    console.error('Error fetching team vulnerabilities:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch team vulnerabilities' });
+  }
+});
+
 export default router;
 

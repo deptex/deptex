@@ -42,7 +42,11 @@ export function ComplianceSidepanel(props: ComplianceSidepanelProps) {
     <aside
       className={cn(
         'w-52 shrink-0 border-r border-border flex flex-col py-4',
-        embedSurface ? 'bg-background-card-header' : 'bg-background-content'
+        embedSurface
+          ? 'bg-background-card-header'
+          : isOrg
+            ? 'bg-background'
+            : 'bg-background-content'
       )}
     >
       <div className="px-3 mb-2">

@@ -49,7 +49,7 @@ export default function ProjectWatchtowerPage() {
   const [showUpgradeCard, setShowUpgradeCard] = useState(false);
   const navigate = useNavigate();
   const realtime = useRealtimeStatus(orgId, projectId);
-  const isExtractionOngoing = checkExtractionOngoing(realtime.status);
+  const isExtractionOngoing = checkExtractionOngoing(realtime.status, realtime.extractionStep);
   const { toast } = useToast();
 
   const handleEnableClick = () => {

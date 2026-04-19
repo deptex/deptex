@@ -209,7 +209,7 @@ describe('PackageOverview', () => {
     expect(screen.getByRole('button', { name: /Create PR to Remove/i })).toBeInTheDocument();
   });
 
-  it('shows View removal PR link when direct zombie and removePrUrlFromOverview is set', () => {
+  it('shows Unused Package label for direct dependency with zero imports', () => {
     const dep = minimalDependency({
       is_direct: true,
       files_importing_count: 0,
@@ -218,14 +218,10 @@ describe('PackageOverview', () => {
       <PackageOverview
         dependency={dep}
         {...defaultProps}
-        removePrUrlFromOverview="https://github.com/org/repo/pull/1"
       />
     );
 
-    expect(screen.getByText('Zombie Package')).toBeInTheDocument();
-    const viewPrLink = screen.getByRole('link', { name: /View removal PR/i });
-    expect(viewPrLink).toBeInTheDocument();
-    expect(viewPrLink).toHaveAttribute('href', 'https://github.com/org/repo/pull/1');
+    expect(screen.getByText('Unused Package')).toBeInTheDocument();
   });
 
   it('shows imported files count when direct with files_importing_count > 0', () => {
@@ -250,114 +246,6 @@ describe('PackageOverview', () => {
     expect(screen.getByText(/Transitive dependency — not directly imported/)).toBeInTheDocument();
   });
 
-  it('shows "Using latest safe version" when safeVersionData.isCurrent is true', () => {
-    const dep = minimalDependency();
-    render(
-      <PackageOverview
-        dependency={dep}
-        {...defaultProps}
-        safeVersionData={{
-          safeVersion: '1.2.3',
-          isCurrent: true,
-          safeVersionId: null,
-          severity: 'high',
-          versionsChecked: 0,
-          message: null,
-        }}
-      />
-    );
-
-    expect(screen.getByText('Using latest safe version')).toBeInTheDocument();
-  });
-
-  it('shows version bump and Bump button when safe version available and not current', () => {
-    const dep = minimalDependency({ version: '1.0.0' });
-    render(
-      <PackageOverview
-        dependency={dep}
-        {...defaultProps}
-        safeVersionData={{
-          safeVersion: '1.2.3',
-          isCurrent: false,
-          safeVersionId: null,
-          severity: 'high',
-          versionsChecked: 0,
-          message: null,
-        }}
-        onBumpVersion={async () => {}}
-      />
-    );
-
-    expect(screen.getByText(/v1\.0\.0 → v1\.2\.3/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Bump/i })).toBeInTheDocument();
-  });
-
-  it('shows View PR button when bumpPrUrl is set', () => {
-    const dep = minimalDependency({ version: '1.0.0' });
-    render(
-      <PackageOverview
-        dependency={dep}
-        {...defaultProps}
-        safeVersionData={{
-          safeVersion: '1.2.3',
-          isCurrent: false,
-          safeVersionId: null,
-          severity: 'high',
-          versionsChecked: 0,
-          message: null,
-        }}
-        bumpPrUrl="https://github.com/org/repo/pull/42"
-        onBumpVersion={async () => {}}
-      />
-    );
-
-    expect(screen.getByRole('button', { name: /View PR/i })).toBeInTheDocument();
-  });
-
-  it('shows "No safe version" when safeVersionData has no safeVersion', () => {
-    const dep = minimalDependency();
-    render(
-      <PackageOverview
-        dependency={dep}
-        {...defaultProps}
-        safeVersionData={{
-          safeVersion: null,
-          isCurrent: false,
-          safeVersionId: null,
-          severity: 'high',
-          versionsChecked: 0,
-          message: null,
-        }}
-      />
-    );
-
-    expect(screen.getByText('No safe version')).toBeInTheDocument();
-  });
-
-  it('hides Suggestion block for zombie package', () => {
-    const dep = minimalDependency({
-      is_direct: true,
-      files_importing_count: 0,
-    });
-    render(
-      <PackageOverview
-        dependency={dep}
-        {...defaultProps}
-        safeVersionData={{
-          safeVersion: '1.2.3',
-          isCurrent: true,
-          safeVersionId: null,
-          severity: 'high',
-          versionsChecked: 0,
-          message: null,
-        }}
-      />
-    );
-
-    expect(screen.getByText('Zombie Package')).toBeInTheDocument();
-    expect(screen.queryByText('Using latest safe version')).not.toBeInTheDocument();
-    expect(screen.queryByText('Suggestion')).not.toBeInTheDocument();
-  });
 
   it('shows Deprecate button when canManageDeprecations and not deprecated', () => {
     const dep = minimalDependency();
