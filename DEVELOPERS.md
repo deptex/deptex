@@ -68,43 +68,27 @@ npm run dev
 
 Frontend runs at `http://localhost:3000` (or the port Vite assigns).
 
-### 6. Workers (optional)
+### 6. Extraction worker (optional)
 
-Deptex ships three workers. For local development, running the extraction worker is usually enough; the others are driven by the backend in production.
+For dependency extraction (clone, SBOM, dep-scan):
 
 ```bash
-# Extraction worker — clone repo, cdxgen SBOM, dep-scan, AST, Semgrep, TruffleHog
 cd backend/extraction-worker
 npm install
-# Copy .env from backend/.env or set SUPABASE_* manually
+# Set SUPABASE_* and optionally REDIS in .env
 npm run dev
-
-# Watchtower worker — supply-chain forensic analysis (job-based, no HTTP)
-cd backend/watchtower-worker
-npm install && npm run dev
-
-# Aider worker — AI-powered fix worker (Python; requires Python 3 + pip)
-cd backend/aider-worker
-pip install -r requirements.txt
-python src/server.py
 ```
-
-See [fly.md](./fly.md) for how each worker is deployed on Fly.io.
 
 ---
 
 ## Project Structure
 
-| Directory                      | Purpose                                                                 |
-| ------------------------------ | ----------------------------------------------------------------------- |
-| `backend/`                     | Express API; routes in `backend/src/routes/`, libs in `backend/src/lib/` |
-| `backend/extraction-worker/`   | Clone, cdxgen, dep-scan, AST, Semgrep, TruffleHog (Fly.io scale-to-zero) |
-| `backend/watchtower-worker/`   | Supply-chain forensic analysis (Fly.io scale-to-zero)                   |
-| `backend/aider-worker/`        | AI-powered fix worker, Python/Aider (Fly.io)                            |
-| `frontend/`                    | React dashboard (Vite + Tailwind + Radix)                               |
-| `backend/database/`            | SQL migrations (~140 files)                                             |
-| `.cursor/plans/`               | Current roadmap (archived phase plans live in `archive/`)               |
-| `docs/`                        | Topic docs (depscore, polling, adding ecosystems / integrations)         |
+| Directory                    | Purpose                                               |
+| ---------------------------- | ----------------------------------------------------- |
+| `backend/`                   | Express API; routes in `backend/src/routes/`, libs in `backend/src/lib/` |
+| `backend/extraction-worker/` | Clone, cdxgen, SBOM, dep-scan pipeline                |
+| `frontend/`                  | React dashboard                                       |
+| `backend/database/`          | SQL migrations                                        |
 
 ---
 
