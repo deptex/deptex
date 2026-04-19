@@ -1443,7 +1443,7 @@ router.delete('/organizations/:orgId/integrations/github', authenticateUser, asy
 
 // ============================================================
 // Push event: intelligent extraction based on manifest changes + sync_frequency
-// Phase 8B: Complete rewrite with change detection, commit tracking, concurrency caps
+// Complete rewrite with change detection, commit tracking, concurrency caps
 // ============================================================
 type PushProjectRow = {
   project_id: string;
@@ -1905,7 +1905,7 @@ async function handlePullRequestClosedEvent(payload: any) {
       .eq('pr_number', prNumber)
       .eq('provider', 'github');
 
-    // Phase 7: Update AI fix job status when fix PR is merged/closed
+    // Update AI fix job status when fix PR is merged/closed
     const fixStatus = isMerged ? 'merged' : 'pr_closed';
     await supabase
       .from('project_security_fixes')
@@ -1915,7 +1915,7 @@ async function handlePullRequestClosedEvent(payload: any) {
       .eq('pr_provider', 'github')
       .in('status', ['completed']);
 
-    // Phase 16: Update fix outcome on merge/close
+    // Update fix outcome on merge/close
     try {
       const { updateOutcomeOnMerge } = await import('../lib/learning/outcome-recorder');
       await updateOutcomeOnMerge(
@@ -2184,7 +2184,7 @@ async function handlePullRequestEvent(payload: any): Promise<void> {
 
         const { acceptedLicenses } = await getEffectivePolicies(organizationId, projectId);
 
-        // Load guardrails config (Phase 8H: policy engine or legacy)
+        // Load guardrails config (policy engine or legacy)
         let prCheckCode: string | null = null;
         try {
           const { data: proj } = await supabase.from('projects').select('effective_pr_check_code').eq('id', projectId).single();
@@ -2221,7 +2221,7 @@ async function handlePullRequestEvent(payload: any): Promise<void> {
             ? `${v.critical_vulns} critical, ${v.high_vulns} high, ${v.medium_vulns} medium, ${v.low_vulns} low vulnerabilities`
             : '0 vulnerabilities';
 
-        // Phase 10B: Watchtower check for upgraded packages
+        // Watchtower check for upgraded packages
         const { data: wtProject } = await supabase.from('projects').select('watchtower_enabled').eq('id', projectId).single();
         if (wtProject?.watchtower_enabled && directBumpedPkgs.length > 0) {
           for (const { name: pkgName, newVersion } of directBumpedPkgs) {

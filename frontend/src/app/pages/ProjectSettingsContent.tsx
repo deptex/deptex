@@ -661,7 +661,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
   const [policyActiveTab, setPolicyActiveTab] = useState<'package_policy' | 'project_status' | 'pr_check' | 'change_requests'>('package_policy');
   const [policyChanges, setPolicyChanges] = useState<ProjectPolicyChange[]>([]);
   const [usePhase4Policies, setUsePhase4Policies] = useState(false);
-  // Phase 4: three policy types (when backend returns inherited_* / effective_*)
+  // three policy types (when backend returns inherited_* / effective_*)
   const [packagePolicyBody, setPackagePolicyBody] = useState('');
   const [inheritedPackagePolicyBody, setInheritedPackagePolicyBody] = useState('');
   const [projectStatusBody, setProjectStatusBody] = useState('');

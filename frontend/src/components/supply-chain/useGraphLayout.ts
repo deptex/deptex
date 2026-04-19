@@ -87,9 +87,9 @@ export interface VulnerabilityNodeData {
   is_reachable?: boolean | null;
   reachability_level?: string | null;
   fixed_versions?: string[] | null;
-  /** Phase 7: AI fix status for this vulnerability */
+  /** AI fix status for this vulnerability */
   fixStatus?: 'queued' | 'running' | 'completed' | 'failed' | null;
-  /** Phase 15: SLA status for badge (warning = amber clock, breached = red clock) */
+  /** SLA status for badge (warning = amber clock, breached = red clock) */
   sla_status?: string | null;
   sla_deadline_at?: string | null;
 }

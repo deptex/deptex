@@ -26,7 +26,7 @@ import {
 // All routes require authentication
 router.use(authenticateUser);
 
-// Phase 14: IP allowlist and MFA enforcement for org-scoped routes (/:id/...)
+// IP allowlist and MFA enforcement for org-scoped routes (/:id/...)
 router.use('/:id', createIPAllowlistMiddleware());
 router.use('/:id', async (req: AuthRequest, res: express.Response, next: express.NextFunction) => {
   const orgId = req.params.id;
@@ -2544,7 +2544,7 @@ router.put('/:id/policies', async (req: AuthRequest, res) => {
   }
 });
 
-// ───── Phase 4: Organization Statuses CRUD ─────
+// ───── Organization Statuses CRUD ─────
 
 async function canManageStatuses(organizationId: string, userId: string): Promise<boolean> {
   const { data: membership } = await supabase
@@ -2783,7 +2783,7 @@ router.delete('/:id/statuses/:statusId', async (req: AuthRequest, res) => {
   }
 });
 
-// ───── Phase 4: Organization Asset Tiers CRUD ─────
+// ───── Organization Asset Tiers CRUD ─────
 
 // GET /api/organizations/:id/asset-tiers
 router.get('/:id/asset-tiers', async (req: AuthRequest, res) => {
@@ -2992,7 +2992,7 @@ router.delete('/:id/asset-tiers/:tierId', async (req: AuthRequest, res) => {
   }
 });
 
-// ───── Phase 15: Security SLA Management ─────
+// ───── Security SLA Management ─────
 
 const SLA_DEFAULT_HOURS: Record<string, number> = {
   critical: 48,
@@ -3667,7 +3667,7 @@ router.get('/:id/sla-policy-changes', async (req: AuthRequest, res) => {
   }
 });
 
-// ───── Phase 4: Split Policy Code CRUD ─────
+// ───── Split Policy Code CRUD ─────
 
 // GET /api/organizations/:id/policy-code
 router.get('/:id/policy-code', async (req: AuthRequest, res) => {
@@ -6651,7 +6651,7 @@ router.get('/:id/webhook-deliveries/stats', async (req: AuthRequest, res) => {
 });
 
 // ============================================================================
-// Phase 10: Organization Stats endpoint
+// Organization Stats endpoint
 // ============================================================================
 
 // GET /api/organizations/:id/stats
@@ -6794,7 +6794,7 @@ router.get('/:id/stats', async (req: AuthRequest, res) => {
       depsTotalCount = count ?? 0;
     }
 
-    // Phase 15: SLA aggregates (org-wide)
+    // SLA aggregates (org-wide)
     let slaAgg = { compliance_percent: 100, on_track: 0, warning: 0, breached: 0, exempt: 0, met: 0, resolved_late: 0 };
     if (projectIds.length > 0) {
       const { data: pdvSla } = await supabase
@@ -6835,7 +6835,7 @@ router.get('/:id/stats', async (req: AuthRequest, res) => {
   }
 });
 
-// ===== ORG WATCHTOWER ENDPOINTS (Phase 10B) =====
+// ===== ORG WATCHTOWER ENDPOINTS =====
 
 router.get('/:id/watchtower/overview', async (req: AuthRequest, res) => {
   try {
@@ -7232,7 +7232,7 @@ async function checkSecurityPermission(orgId: string, userId: string): Promise<b
 }
 
 // ============================================================
-// Phase 14: Enterprise Security Endpoints
+// Enterprise Security Endpoints
 // ============================================================
 
 // --- 14A: Security Audit Log ---

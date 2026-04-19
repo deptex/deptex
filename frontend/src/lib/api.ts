@@ -1899,7 +1899,7 @@ export const api = {
     );
   },
 
-  // Phase 6: Security Tab API functions
+  // Security Tab API functions
   async getProjectSemgrepFindings(
     organizationId: string,
     projectId: string,
@@ -2001,7 +2001,7 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/security-summary`);
   },
 
-  // Phase 6B: Reachability endpoints
+  // Reachability endpoints
   async getReachableFlows(
     organizationId: string,
     projectId: string,
@@ -2416,7 +2416,7 @@ export const api = {
     );
   },
 
-  // ───── Phase 4: Statuses ─────
+  // ───── Statuses ─────
 
   async getOrganizationStatuses(orgId: string): Promise<OrganizationStatus[]> {
     return fetchWithAuth(`/api/organizations/${orgId}/statuses`);
@@ -2448,7 +2448,7 @@ export const api = {
     return Array.isArray(res) ? res : (res?.statuses ?? []);
   },
 
-  // ───── Phase 4: Asset Tiers ─────
+  // ───── Asset Tiers ─────
 
   async getOrganizationAssetTiers(orgId: string): Promise<OrganizationAssetTier[]> {
     return fetchWithAuth(`/api/organizations/${orgId}/asset-tiers`);
@@ -2475,7 +2475,7 @@ export const api = {
     });
   },
 
-  // ───── Phase 4: Split Policy Code ─────
+  // ───── Split Policy Code ─────
 
   async getOrganizationPolicyCode(orgId: string): Promise<{
     package_policy: { package_policy_code: string | null };
@@ -2509,7 +2509,7 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/policy-change-requests`);
   },
 
-  // ───── Phase 15: Security SLA Management ─────
+  // ───── Security SLA Management ─────
 
   async getSlaPolicies(orgId: string): Promise<{ policies: SlaPolicy[]; sla_paused_at: string | null }> {
     return fetchWithAuth(`/api/organizations/${orgId}/sla-policies`);
@@ -2552,7 +2552,7 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/sla-policy-changes`);
   },
 
-  // ───── Phase 4: Policy Evaluation ─────
+  // ───── Policy Evaluation ─────
 
   async validatePolicyCode(orgId: string, code: string, codeType: string): Promise<PolicyValidationResult> {
     return fetchWithAuth(`/api/organizations/${orgId}/validate-policy`, {
@@ -2583,7 +2583,7 @@ export const api = {
     });
   },
 
-  // ───── Phase 5: Compliance Endpoints ─────
+  // ───── Compliance Endpoints ─────
 
   async reEvaluateProjectPolicy(orgId: string, projectId: string): Promise<{ statusName: string; violations: string[]; depResults: number }> {
     return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/evaluate-policy`, {
@@ -2642,7 +2642,7 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/license-obligations`);
   },
 
-  // ───── Phase 4: Project Policy Changes ─────
+  // ───── Project Policy Changes ─────
 
   async getProjectPolicyChanges(orgId: string, projectId: string, codeType?: string): Promise<ProjectPolicyChange[]> {
     const params = codeType ? `?code_type=${codeType}` : '';
@@ -2670,7 +2670,7 @@ export const api = {
     });
   },
 
-  // ───── Phase 8: Pull Requests & Commits ─────
+  // ───── Pull Requests & Commits ─────
 
   async getProjectPullRequests(
     orgId: string,
@@ -2698,7 +2698,7 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/commits?${params}`);
   },
 
-  // Phase 10: Overview stats endpoints
+  // Overview stats endpoints
   async getProjectStats(orgId: string, projectId: string): Promise<ProjectStats> {
     return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/stats`);
   },
@@ -2728,7 +2728,7 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/teams/${teamId}/stats`);
   },
 
-  // Phase 7: AI Fix
+  // AI Fix
   async requestFix(orgId: string, projectId: string, body: {
     strategy: string;
     vulnerabilityOsvId?: string;
@@ -2769,7 +2769,7 @@ export const api = {
     });
   },
 
-  // Phase 16: Learning
+  // Learning
   async getStrategyRecommendations(orgId: string, params: {
     ecosystem: string;
     vulnerabilityType?: string;
@@ -2902,7 +2902,7 @@ export interface Project {
   role?: string;
   asset_tier?: AssetTier;
   notifications_paused_until?: string | null;
-  // Phase 4: Custom statuses and tiers
+  // Custom statuses and tiers
   status_id?: string | null;
   status_name?: string;
   status_color?: string;
@@ -2932,7 +2932,7 @@ export interface ProjectRepository {
   webhook_status?: string | null;
   last_webhook_at?: string | null;
   last_webhook_event?: string | null;
-  /** Last successful extraction / dependency sync completion (Phase 8). */
+  /** Last successful extraction / dependency sync completion. */
   last_extracted_at?: string | null;
 }
 
@@ -3032,7 +3032,7 @@ export interface DependencyVersionVulnerability {
   from_package?: string;
   /** Depscore (0-100) when available from project vulnerability data. */
   depscore?: number | null;
-  /** Phase 18: contextual score (base × EPD factor) when EPD has run for this project. */
+  /** contextual score (base × EPD factor) when EPD has run for this project. */
   contextual_depscore?: number | null;
   cvss_score?: number | null;
   epss_score?: number | null;
@@ -3273,12 +3273,12 @@ export interface ProjectVulnerability {
   cvss_score?: number;
   cisa_kev?: boolean;
   depscore?: number;
-  /** Phase 18: EPD-weighted score when present; prefer for prioritization over raw depscore. */
+  /** EPD-weighted score when present; prefer for prioritization over raw depscore. */
   contextual_depscore?: number | null;
-  /** Phase 15: SLA status (on_track, warning, breached, met, resolved_late, exempt). */
+  /** SLA status (on_track, warning, breached, met, resolved_late, exempt). */
   sla_status?: string | null;
   sla_deadline_at?: string | null;
-  /** Phase 6B / org list */
+  /** Reachability (org list rows) */
   reachability_level?: ReachabilityLevel;
   /** Set on organization-wide vulnerability list rows */
   project_id?: string;
@@ -3674,7 +3674,7 @@ export interface ProjectEffectivePolicies {
   accepted_exceptions: ProjectPolicyException[];
   pending_exceptions: ProjectPolicyException[];
   revoked_exceptions?: ProjectPolicyException[];
-  // Phase 4: split policy code (inherited from org, effective = project override or inherited)
+  // split policy code (inherited from org, effective = project override or inherited)
   inherited_package_policy_code?: string;
   inherited_project_status_code?: string;
   inherited_pr_check_code?: string;
@@ -3698,7 +3698,7 @@ export interface ProjectPRGuardrails {
   updated_at?: string;
 }
 
-// Phase 5: Registry search types
+// Registry search types
 export interface RegistrySearchResult {
   name: string;
   version: string;
@@ -3811,7 +3811,7 @@ export interface WatchtowerCommitsResponse {
   offset: number;
 }
 
-// Phase 6: Security Tab types
+// Security Tab types
 
 export interface SemgrepFinding {
   id: string;
@@ -4000,7 +4000,7 @@ export interface PaginatedResponse<T> {
   per_page: number;
 }
 
-// Phase 6B: Reachability types
+// Reachability types
 export interface ReachableFlowNode {
   id?: number;
   label?: string;
@@ -4065,7 +4065,7 @@ export interface CodeContext {
 
 export type ReachabilityLevel = 'unreachable' | 'module' | 'function' | 'data_flow' | 'confirmed' | null;
 
-// Phase 8: PR & Commit tracking types
+// PR & Commit tracking types
 
 export interface ProjectPullRequest {
   id: string;
@@ -4117,7 +4117,7 @@ export interface ProjectCommit {
   created_at: string;
 }
 
-// Phase 10: Overview Stats types
+// Overview Stats types
 
 export interface ProjectStats {
   health_score: number;
@@ -4206,7 +4206,7 @@ export interface TopVuln {
   worst_project: { id: string; name: string };
 }
 
-// ─── Phase 16: Learning types ───
+// ─── Learning types ───
 
 export interface StrategyRecommendation {
   strategy: string;
@@ -4263,7 +4263,7 @@ export interface LearningDashboard {
   totalRatings: number;
 }
 
-// ─── Phase 13: Billing API ───
+// ─── Billing API ───
 
 export interface StripeInvoice {
   id: string;

@@ -38,7 +38,7 @@ interface MembersPageProps {
   isSettingsSubpage?: boolean;
   inviteModalOpen?: boolean;
   onInviteModalOpenChange?: (open: boolean) => void;
-  /** Phase 3: When parent (OrganizationSettingsPage) has loaded members/roles, pass them to avoid duplicate fetches */
+  /** When parent (OrganizationSettingsPage) has loaded members/roles, pass them to avoid duplicate fetches */
   sharedMembers?: OrganizationMember[];
   sharedRoles?: OrganizationRole[];
   sharedDataLoaded?: boolean;
@@ -120,7 +120,7 @@ export default function MembersPage({
     }
   }, [organization, id, navigate, permissionsChecked]);
 
-  // Phase 3: Sync shared data from parent when provided (avoids duplicate fetches)
+  // Sync shared data from parent when provided (avoids duplicate fetches)
   const useSharedData = isSettingsSubpage && sharedDataLoaded && sharedMembers !== undefined && sharedRoles !== undefined;
   useEffect(() => {
     if (useSharedData && sharedMembers && sharedRoles) {
@@ -171,7 +171,7 @@ export default function MembersPage({
     try {
       setLoading(true);
       if (skipMembersAndRoles && useSharedData && sharedMembers && sharedRoles) {
-        // Phase 3: Only fetch invitations and teams; use parent's members and roles
+        // Only fetch invitations and teams; use parent's members and roles
         const [invitationsData, teamsData] = await Promise.all([
           api.getOrganizationInvitations(id),
           api.getTeams(id).catch(() => []),

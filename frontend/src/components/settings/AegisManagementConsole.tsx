@@ -922,7 +922,7 @@ export function AegisManagementConsole({ organizationId, userPermissions }: Aegi
   );
 }
 
-// ─── Phase 17: Incident Response Section ─────────────────────────────────────
+// ─── Incident Response Section ─────────────────────────────────────
 
 interface IncidentStats {
   active: number;

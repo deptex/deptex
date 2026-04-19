@@ -1,5 +1,5 @@
 /**
- * Phase 10B: Watchtower recovery endpoint unit tests
+ * Watchtower recovery endpoint unit tests
  */
 
 const chain = {

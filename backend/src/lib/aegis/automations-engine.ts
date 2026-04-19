@@ -1,5 +1,5 @@
 /**
- * Phase 7B: Aegis automations engine for scheduled and event-driven jobs.
+ * Aegis automations engine for scheduled and event-driven jobs.
  *
  * Handles:
  * - Cron-based scheduled automations (checkDueAutomations via QStash cron every 5 min)

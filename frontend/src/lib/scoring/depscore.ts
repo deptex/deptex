@@ -11,7 +11,7 @@ export interface DepscoreContext {
   epss: number;       // 0–1
   cisaKev: boolean;
   isReachable: boolean;
-  /** Phase 6B: tiered reachability (confirmed, data_flow, function, module, unreachable). */
+  /** tiered reachability (confirmed, data_flow, function, module, unreachable). */
   reachabilityLevel?: string | null;
   assetTier: AssetTier;
   tierMultiplier?: number;

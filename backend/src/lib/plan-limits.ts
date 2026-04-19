@@ -16,7 +16,7 @@ export const TIER_DISPLAY_NAMES: Record<string, string> = {
 
 export type PlanTier = keyof typeof TIER_MAP;
 
-// Full tier limits (Phase 13 billing)
+// Full tier limits (billing)
 export const PLAN_LIMITS: Record<string, Record<string, number>> = {
   free: { projects: 3, members: 5, syncs: 10, watchtower: 1, teams: 1, notification_rules: 3, integrations: 5, automations: 0, api_rpm: 60 },
   pro: { projects: 15, members: 20, syncs: 100, watchtower: 5, teams: 5, notification_rules: 10, integrations: 10, automations: 5, api_rpm: 300 },
@@ -24,7 +24,7 @@ export const PLAN_LIMITS: Record<string, Record<string, number>> = {
   enterprise: { projects: -1, members: -1, syncs: -1, watchtower: -1, teams: -1, notification_rules: -1, integrations: -1, automations: -1, api_rpm: 5000 },
 };
 
-// Feature gates by tier (Phase 13)
+// Feature gates by tier
 export const PLAN_FEATURES: Record<string, Record<string, boolean>> = {
   free: {
     aegis_chat: false,

@@ -2860,7 +2860,7 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
       accessCheck.orgMembership?.role === 'admin' ||
       accessCheck.orgRole?.permissions?.manage_compliance === true;
 
-    // Verify project exists and belongs to org; include Phase 4 effective code columns
+    // Verify project exists and belongs to org; include effective code columns
     const { data: project, error: projectError } = await supabase
       .from('projects')
       .select('id, name, effective_package_policy_code, effective_project_status_code, effective_pr_check_code')
@@ -2881,7 +2881,7 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
 
     const inheritedPolicyCode = (orgPolicies?.policy_code ?? '').trim() || '';
 
-    // Phase 4: Get org split policy code (inherited per type)
+    // Get org split policy code (inherited per type)
     const [
       { data: orgPackagePolicy },
       { data: orgStatusCode },
@@ -2989,7 +2989,7 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
       effective,
       pending_exceptions: pendingExceptionsLegacy,
       revoked_exceptions: revokedExceptionsLegacy,
-      // Phase 4: split policy code (inherited from org, effective = project override or inherited)
+      // split policy code (inherited from org, effective = project override or inherited)
       inherited_package_policy_code: inheritedPackagePolicyCode,
       inherited_project_status_code: inheritedProjectStatusCode,
       inherited_pr_check_code: inheritedPrCheckCode,
@@ -9406,7 +9406,7 @@ router.post('/:id/bump-all', async (req: AuthRequest, res) => {
   }
 });
 
-// ───── Phase 4: Policy Engine Endpoints ─────
+// ───── Policy Engine Endpoints ─────
 
 import { evaluateProjectPolicies, validatePolicyCode, preflightCheck } from '../lib/policy-engine';
 import { checkRateLimit } from '../lib/rate-limit';
@@ -9546,7 +9546,7 @@ router.post('/:id/projects/:projectId/preflight-check', async (req: AuthRequest,
   }
 });
 
-// ───── Phase 4: Project Policy Changes (git-like versioning) ─────
+// ───── Project Policy Changes (git-like versioning) ─────
 
 // GET /api/organizations/:id/projects/:projectId/policy-changes
 router.get('/:id/projects/:projectId/policy-changes', async (req: AuthRequest, res) => {
@@ -9824,7 +9824,7 @@ router.post('/:id/projects/:projectId/revert-policy', async (req: AuthRequest, r
   }
 });
 
-// ───── Phase 5: Compliance Endpoints ─────
+// ───── Compliance Endpoints ─────
 
 // GET /api/organizations/:id/projects/:projectId/sbom
 router.get('/:id/projects/:projectId/sbom', async (req: AuthRequest, res) => {
@@ -10371,7 +10371,7 @@ router.get('/:id/projects/:projectId/license-obligations', async (req: AuthReque
   }
 });
 
-// ===== Phase 6: Security Tab API Endpoints =====
+// ===== Security Tab API Endpoints =====
 
 // GET /api/organizations/:id/projects/:projectId/semgrep-findings
 router.get('/:id/projects/:projectId/semgrep-findings', async (req: AuthRequest, res) => {
@@ -10551,7 +10551,7 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
       .limit(1)
       .single();
 
-    // Phase 6B: fetch reachable flows for affected dependencies
+    // fetch reachable flows for affected dependencies
     const affectedDepIds = affectedDeps.map((d: any) => d.dependency_id).filter(Boolean);
     let reachableFlows: any[] = [];
     if (affectedDepIds.length > 0) {
@@ -10812,7 +10812,7 @@ router.get('/:id/projects/:projectId/dependencies/:depId/security-summary', asyn
       }
     }
 
-    // Phase 6B: fetch usage slices for this dependency
+    // fetch usage slices for this dependency
     let usageSlices: any[] = [];
     if (projDep.name) {
       const { data: slices } = await supabase
@@ -10825,7 +10825,7 @@ router.get('/:id/projects/:projectId/dependencies/:depId/security-summary', asyn
       usageSlices = slices ?? [];
     }
 
-    // Phase 6B: fetch reachable flows for this dependency
+    // fetch reachable flows for this dependency
     let reachableFlows: any[] = [];
     if (projDep.dependency_id) {
       const { data: flows } = await supabase
@@ -11122,7 +11122,7 @@ router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase 6B: Reachable Flows & Usage Slices Endpoints
+// Reachable Flows & Usage Slices Endpoints
 // ---------------------------------------------------------------------------
 
 // GET /api/organizations/:id/projects/:projectId/reachable-flows
@@ -11455,7 +11455,7 @@ router.get('/:id/projects/:projectId/pull-requests', async (req: AuthRequest, re
 });
 
 // ============================================================================
-// Phase 10: Project Stats, Recent Activity, and Sync endpoints
+// Project Stats, Recent Activity, and Sync endpoints
 // ============================================================================
 
 // GET /api/organizations/:id/projects/:projectId/stats
@@ -11588,7 +11588,7 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       worst_severity: vulnByPd.get(d.id) ?? 'none',
     }));
 
-    // Phase 15: SLA aggregates
+    // SLA aggregates
     const slaOnTrack = vulnRows.filter((v: any) => v.sla_status === 'on_track').length;
     const slaWarning = vulnRows.filter((v: any) => v.sla_status === 'warning').length;
     const slaBreached = vulnRows.filter((v: any) => v.sla_status === 'breached').length;
@@ -11853,7 +11853,7 @@ router.post('/:id/projects/:projectId/sync', async (req: AuthRequest, res) => {
 });
 
 // ============================================================================
-// Phase 7: AI-Powered Security Fixing
+// AI-Powered Security Fixing
 // ============================================================================
 
 // POST /api/organizations/:id/projects/:projectId/fix - Request an AI fix
@@ -12035,7 +12035,7 @@ router.get('/:id/projects/:projectId/fix-status', async (req: AuthRequest, res) 
   }
 });
 
-// ===== PROJECT WATCHTOWER ENDPOINTS (Phase 10B) =====
+// ===== PROJECT WATCHTOWER ENDPOINTS =====
 
 router.post('/:orgId/projects/:projectId/watchtower/toggle', async (req: AuthRequest, res) => {
   try {

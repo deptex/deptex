@@ -1,5 +1,5 @@
 /**
- * Phase 6C: AI / Aegis Frontend Test Suite
+ * AI / Aegis Frontend Test Suite
  * 24 tests: AegisPanel (1-8), Streaming (9-12), BYOK UI (13-17),
  *           Rate Limits & Usage (18-21), Safety (22-24).
  */

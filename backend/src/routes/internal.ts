@@ -54,7 +54,7 @@ router.post('/watchtower/create-bump-pr', async (req, res) => {
 
 /**
  * POST /api/internal/sla-check
- * Phase 15: Called by QStash cron every 15 minutes.
+ * Called by QStash cron every 15 minutes.
  * Transitions vulns to warning/breached and emits notification events.
  */
 router.post('/sla-check', async (_req, res) => {
@@ -125,7 +125,7 @@ router.post('/sla-check', async (_req, res) => {
       }
     }
 
-    // Phase 15: Invalidate stats caches for affected projects/orgs
+    // Invalidate stats caches for affected projects/orgs
     const projectIds = new Set<string>();
     const orgIds = new Set<string>();
     for (const row of approaching ?? []) {

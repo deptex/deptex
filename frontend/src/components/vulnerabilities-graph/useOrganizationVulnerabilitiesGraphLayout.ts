@@ -24,7 +24,7 @@ import {
 } from './overviewOrgLayout';
 
 export const ORG_CENTER_ID = 'org-center';
-/** @deprecated Synthetic team id for ungrouped projects. Phase 6 places these directly at team ring level. */
+/** @deprecated Synthetic team id for ungrouped projects. Ungrouped projects now render directly at team ring level. */
 export const UNGROUPED_TEAM_ID = 'org-ungrouped';
 
 export interface TeamWithProjectsData {

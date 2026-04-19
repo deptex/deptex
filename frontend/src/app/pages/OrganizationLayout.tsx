@@ -110,7 +110,7 @@ export default function OrganizationLayout() {
     return null;
   }, [organization?.permissions, cachedPermissions, dbPermissions]);
 
-  // Load permissions from database when organization loads (Phase 2: skip if org API already returned permissions)
+  // Load permissions from database when organization loads (skip if org API already returned permissions)
   useEffect(() => {
     if (!organization?.id || !organization?.role) {
       setDbPermissions(null);

@@ -1,5 +1,5 @@
 /**
- * Phase 10B: Organization Watchtower API tests (overview, projects).
+ * Organization Watchtower API tests (overview, projects).
  */
 
 import request from 'supertest';
@@ -14,7 +14,7 @@ jest.mock('../../lib/cache', () => ({
   CACHE_TTL_SECONDS: {},
 }));
 
-describe('Organization Watchtower (Phase 10B)', () => {
+describe('Organization Watchtower', () => {
   const mockUser = { id: 'user-1', email: 'u@example.com' };
   const orgId = 'org-1';
 

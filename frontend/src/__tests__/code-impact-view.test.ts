@@ -1,5 +1,5 @@
 /**
- * Phase 6B: CodeImpactView + Reachability UI Tests
+ * CodeImpactView + Reachability UI Tests
  *
  * Tests 44-48: CodeImpactView Component
  * Tests 49-51: Code Context Endpoint Integration
