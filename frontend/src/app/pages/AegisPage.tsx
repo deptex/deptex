@@ -3,9 +3,9 @@ import { useLocation, useNavigate, useOutletContext, useParams } from 'react-rou
 import { aegisApi, type AegisThread } from '../../lib/aegis-api';
 import type { Organization } from '../../lib/api';
 import { ThreadList } from '../../components/aegis/ThreadList';
-import { EmptyState } from '../../components/aegis/EmptyState';
-import { ChatInput } from '../../components/aegis/ChatInput';
+import { LandingHero } from '../../components/aegis/LandingHero';
 import { ChatPane } from '../../components/aegis/ChatPane';
+import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
 
 interface OrgOutlet {
@@ -18,7 +18,15 @@ export default function AegisPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { organization } = useOutletContext<OrgOutlet>();
+  const { user } = useAuth();
   const { toast } = useToast();
+
+  const displayName = (() => {
+    const full = user?.user_metadata?.full_name as string | undefined;
+    if (full) return full.split(' ')[0];
+    if (user?.email) return user.email.split('@')[0];
+    return 'there';
+  })();
 
   const [threads, setThreads] = useState<AegisThread[]>([]);
   const [loading, setLoading] = useState(true);
@@ -88,22 +96,35 @@ export default function AegisPage() {
   }, [orgId, navigate]);
 
   const handleRename = useCallback(async (threadId: string, title: string) => {
+    let previous: AegisThread | undefined;
+    setThreads((prev) => {
+      previous = prev.find((t) => t.id === threadId);
+      return prev.map((t) => (t.id === threadId ? { ...t, title } : t));
+    });
     try {
-      const updated = await aegisApi.renameThread(threadId, title);
-      setThreads((prev) => prev.map((t) => (t.id === threadId ? updated : t)));
+      await aegisApi.renameThread(threadId, title);
     } catch (err: any) {
+      if (previous) {
+        setThreads((prev) => prev.map((t) => (t.id === threadId ? previous! : t)));
+      }
       toast({ title: 'Rename failed', description: err?.message, variant: 'destructive' });
     }
   }, [toast]);
 
   const handleDelete = useCallback(async (threadId: string) => {
+    // Optimistic — remove locally and navigate away, rollback on failure.
+    let snapshot: AegisThread[] = [];
+    setThreads((prev) => {
+      snapshot = prev;
+      return prev.filter((t) => t.id !== threadId);
+    });
+    if (activeThreadId === threadId && orgId) {
+      navigate(`/organizations/${orgId}/aegis`, { replace: true });
+    }
     try {
       await aegisApi.deleteThread(threadId);
-      setThreads((prev) => prev.filter((t) => t.id !== threadId));
-      if (activeThreadId === threadId && orgId) {
-        navigate(`/organizations/${orgId}/aegis`, { replace: true });
-      }
     } catch (err: any) {
+      setThreads(snapshot);
       toast({ title: 'Delete failed', description: err?.message, variant: 'destructive' });
     }
   }, [activeThreadId, orgId, navigate, toast]);
@@ -160,12 +181,11 @@ export default function AegisPage() {
             onThreadUpdated={() => void refreshThreads()}
           />
         ) : (
-          <>
-            <div className="flex-1 overflow-y-auto">
-              <EmptyState onSelectPrompt={handlePromptSelect} />
-            </div>
-            <ChatInput onSubmit={(msg) => void startChatWithMessage(msg)} autoFocus />
-          </>
+          <LandingHero
+            name={displayName}
+            onSubmit={(msg) => void startChatWithMessage(msg)}
+            onSelectPrompt={handlePromptSelect}
+          />
         )}
       </main>
     </div>
