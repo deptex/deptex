@@ -213,12 +213,29 @@ router.post('/chat', async (req: AuthRequest, res: Response) => {
       typeof lastUserMessage.content === 'string' && lastUserMessage.content.length > 0
         ? lastUserMessage.content
         : userParts.map((p) => (p.type === 'text' ? p.text : '')).join('');
-    await supabase.from('aegis_chat_messages').insert({
-      thread_id: threadId,
-      role: 'user',
-      content: userContent,
-      metadata: { parts: userParts },
-    });
+
+    // Regenerate flow leaves the user message in-place on the server — avoid
+    // double-persisting by skipping the insert when the most recent row is
+    // already that same user message.
+    const { data: mostRecent } = await supabase
+      .from('aegis_chat_messages')
+      .select('role, content')
+      .eq('thread_id', threadId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const alreadyPersisted =
+      mostRecent && mostRecent.role === 'user' && mostRecent.content === userContent;
+
+    if (!alreadyPersisted) {
+      await supabase.from('aegis_chat_messages').insert({
+        thread_id: threadId,
+        role: 'user',
+        content: userContent,
+        metadata: { parts: userParts },
+      });
+    }
   }
 
   const activeThreadId = threadId!;
