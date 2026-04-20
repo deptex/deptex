@@ -6,6 +6,7 @@ import {
   queuePopulateDependencyBatch,
   queueBackfillDependencyTrees,
   verifyQStashSignature,
+  verifyJobRequest,
   isQStashConfigured,
 } from '../lib/qstash';
 import { resolveAndUpsertTransitiveEdges } from '../lib/transitive-edges';
@@ -1109,27 +1110,18 @@ const verifyWorkerSecret = async (req: express.Request, res: express.Response, n
   next();
 };
 
-// Middleware to verify QStash signatures
+// Middleware for job-queue callbacks. Accepts QStash signature (cloud) or
+// X-Internal-Api-Key (self-host). In dev with no job backend configured,
+// allows through so scripts can exercise these endpoints directly.
 const verifyQStash = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const signature = req.headers['upstash-signature'] as string;
-
-  if (!signature) {
-    // Allow requests without signature in dev mode (when QStash not configured)
-    if (!isQStashConfigured()) {
-      return next();
-    }
-    return res.status(401).json({ error: 'Missing QStash signature' });
+  if (!isQStashConfigured() && !req.headers['x-internal-api-key'] && !req.headers['upstash-signature']) {
+    return next();
   }
-
-  // Use the raw body captured by express.json verify callback
-  // This is critical - QStash signs the exact raw body, not re-stringified JSON
   const rawBody = (req as any).rawBody || JSON.stringify(req.body);
-  const isValid = await verifyQStashSignature(signature, rawBody);
-
+  const isValid = await verifyJobRequest(req.headers, rawBody);
   if (!isValid) {
-    return res.status(401).json({ error: 'Invalid QStash signature' });
+    return res.status(401).json({ error: 'Unauthorized worker request' });
   }
-
   next();
 };
 
@@ -1963,21 +1955,9 @@ router.post('/extract-deps', async (req: express.Request, res: express.Response)
 // ============================================================================
 
 const verifyQStashOrInternal = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const signature = req.headers['upstash-signature'] as string;
-  const internalKey = req.headers['x-internal-api-key'] as string;
-
-  if (internalKey && internalKey === process.env.INTERNAL_API_KEY) {
-    return next();
-  }
-
-  if (!signature) {
-    return res.status(401).json({ error: 'Missing signature' });
-  }
-
   const body = (req as any).rawBody || JSON.stringify(req.body);
-  const valid = await verifyQStashSignature(signature, body);
-  if (!valid) {
-    return res.status(401).json({ error: 'Invalid signature' });
+  if (!(await verifyJobRequest(req.headers, body))) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
   next();
 };
