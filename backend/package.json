@@ -9,7 +9,10 @@
     "build": "tsc",
     "start": "cross-env NODE_PATH=node_modules tsx src/index.ts",
     "test": "cross-env NODE_PATH=node_modules DEPTEX_EDITION=ee jest",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "migrate": "tsx scripts/migrate.ts",
+    "migrate:baseline": "tsx scripts/migrate.ts baseline",
+    "migrate:status": "tsx scripts/migrate.ts status"
   },
   "keywords": [
     "dependency-tracking",
