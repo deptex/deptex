@@ -32,6 +32,8 @@
     "@supabase/supabase-js": "^2.39.0",
     "@upstash/qstash": "^2.9.0",
     "@upstash/redis": "^1.25.0",
+    "bullmq": "^5.34.0",
+    "ioredis": "^5.4.1",
     "ai": "^6.0.106",
     "cors": "^2.8.5",
     "deptex-extraction-worker": "file:extraction-worker",
