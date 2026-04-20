@@ -1,0 +1,64 @@
+name: Schema drift check
+
+# Enforces: if a PR adds/modifies any file in backend/database/*.sql,
+# it MUST also update backend/database/schema.sql in the same PR.
+#
+# The schema.sql file is the single source of truth for the local-mode
+# extraction worker (PGLite backend) and CI smoke tests. It's regenerated
+# from live Supabase via `npm run schema:dump` (see scripts/dump-schema.ts).
+#
+# This check runs on every PR. It does NOT require any secrets or Supabase
+# credentials, so it works transparently for fork PRs from OSS contributors.
+
+on:
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  check-schema-updated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect migration changes
+        id: diff
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          CHANGED=$(git diff --name-only "$BASE" "$HEAD" -- 'backend/database/*.sql')
+          echo "Changed SQL files in backend/database/:"
+          echo "$CHANGED"
+
+          MIGRATIONS_TOUCHED=$(echo "$CHANGED" | grep -v '^backend/database/schema\.sql$' || true)
+          SCHEMA_TOUCHED=$(echo "$CHANGED" | grep '^backend/database/schema\.sql$' || true)
+
+          echo "migrations_touched<<EOF" >> $GITHUB_OUTPUT
+          echo "$MIGRATIONS_TOUCHED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          if [ -n "$SCHEMA_TOUCHED" ]; then
+            echo "schema_touched=yes" >> $GITHUB_OUTPUT
+          else
+            echo "schema_touched=no" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Fail if migration added without schema.sql refresh
+        if: steps.diff.outputs.migrations_touched != '' && steps.diff.outputs.schema_touched == 'no'
+        run: |
+          echo "::error::This PR touches backend/database/*.sql migration files but does NOT update backend/database/schema.sql."
+          echo ""
+          echo "Run \`npm run schema:dump\` in backend/extraction-worker/ after applying your migration to Supabase, then commit the regenerated schema.sql."
+          echo ""
+          echo "Migration files changed:"
+          echo "${{ steps.diff.outputs.migrations_touched }}"
+          exit 1
+
+      - name: Summary
+        run: |
+          if [ -z "${{ steps.diff.outputs.migrations_touched }}" ]; then
+            echo "No migration changes — schema.sql check skipped."
+          else
+            echo "Migrations changed AND schema.sql updated — OK."
+          fi
