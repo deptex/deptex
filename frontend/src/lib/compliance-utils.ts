@@ -13,7 +13,7 @@ export interface SbomNoticeItem {
 }
 
 /**
- * @deprecated Phase 5: These functions are superseded by the policy engine's
+ * @deprecated These functions are superseded by the policy engine's
  * `project_dependencies.policy_result`. Kept for backward compatibility with
  * the org-level CompliancePage and PackageOverview until they migrate.
  */

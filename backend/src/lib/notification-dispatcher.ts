@@ -1,5 +1,5 @@
 /**
- * Phase 9: Core notification dispatch engine.
+ * Core notification dispatch engine.
  *
  * When QStash delivers a dispatch job, this engine:
  * 1. Loads the event from notification_events
@@ -131,7 +131,7 @@ export async function dispatchNotification(eventId: string): Promise<void> {
     .eq('id', eventId);
 
   try {
-    // Phase 17: Check incident triggers inline during dispatch
+    // Check incident triggers inline during dispatch
     try {
       const { checkIncidentTriggers } = require('./incident-triggers');
       await checkIncidentTriggers(event);
@@ -506,7 +506,7 @@ export async function buildNotificationContext(
         if (version !== 'unknown') {
           const { data: dv } = await supabase
             .from('dependency_versions')
-            .select('slsa_level, registry_integrity_status, install_scripts_status, entropy_analysis_status')
+            .select('slsa_level')
             .eq('dependency_id', dep.id)
             .eq('version', version)
             .maybeSingle();
@@ -545,9 +545,6 @@ export async function buildNotificationContext(
             ? (event.payload.malicious_indicator || { source: 'deptex', confidence: 'high', reason: 'Flagged as malicious' })
             : null,
           slsa_level: versionData?.slsa_level ?? 0,
-          registry_integrity_status: versionData?.registry_integrity_status ?? null,
-          install_scripts_status: versionData?.install_scripts_status ?? null,
-          entropy_analysis_status: versionData?.entropy_analysis_status ?? null,
           vulnerabilities: (vulns || []).map((v: any) => ({
             osv_id: v.osv_id,
             severity: v.severity,

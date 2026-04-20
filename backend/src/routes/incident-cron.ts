@@ -1,5 +1,5 @@
 /**
- * Phase 17: CE escalation route for incident phase timeouts.
+ * CE escalation route for incident phase timeouts.
  * Called by QStash delayed publish when a phase exceeds its timeout.
  */
 

@@ -3,7 +3,7 @@ import ReCAPTCHA from 'react-google-recaptcha';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
-import { ScanSearch, Scale, Bell, Telescope } from 'lucide-react';
+import { ScanSearch, Scale, Bell } from 'lucide-react';
 
 const RECAPTCHA_SITE_KEY = import.meta.env.VITE_RECAPTCHA_SITE_KEY as string | undefined;
 
@@ -24,7 +24,6 @@ const CYCLING_ITEMS: { phrase: string; icon: React.ReactNode }[] = [
   { phrase: 'Try our custom policy as code', icon: <Scale className="h-5 w-5 shrink-0" /> },
   { phrase: 'Check out our integrations — connect anything you want', icon: <Bell className="h-5 w-5 shrink-0" /> },
   { phrase: 'Aegis AI that investigates, fixes, and reports', icon: <AegisIcon /> },
-  { phrase: 'Supply chain forensics and Watchtower', icon: <Telescope className="h-5 w-5 shrink-0" /> },
   { phrase: 'Dependency intelligence with reachability', icon: <ScanSearch className="h-5 w-5 shrink-0" /> },
   { phrase: 'SBOM and compliance made simple', icon: <Scale className="h-5 w-5 shrink-0" /> },
 ];

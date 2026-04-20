@@ -1,9 +1,8 @@
 /**
- * Shared watchtower polling logic extracted from watchtower-poller/src/.
- * Called by the QStash cron endpoint (POST /api/workers/watchtower-daily-poll).
- *
- * Re-exports the core functions so the main backend can run them without
- * needing the standalone poller process.
+ * Daily maintenance jobs called by the QStash cron at
+ * POST /api/workers/watchtower-daily-poll: npm latest-version refresh,
+ * GHSA batch vuln sync, weekly download counts, webhook health checks,
+ * and old webhook-delivery cleanup.
  */
 
 import { supabase } from './supabase';
@@ -115,7 +114,7 @@ async function refreshDownloadCounts(byName: Map<string, { ids: string[]; direct
   return { updated, errors };
 }
 
-export async function runDependencyRefresh(): Promise<{ processed: number; errors: number; vulnsUpdated: number; newVersionJobs: number }> {
+export async function runDependencyRefresh(): Promise<{ processed: number; errors: number; vulnsUpdated: number }> {
   console.log('[watchtower-poll] Dependency refresh starting...');
 
   const [directIds, allRows] = await Promise.all([
@@ -143,7 +142,6 @@ export async function runDependencyRefresh(): Promise<{ processed: number; error
 
   let processed = 0;
   let errors = 0;
-  let newVersionJobsInserted = 0;
 
   const entries = Array.from(byName.entries());
 
@@ -164,22 +162,6 @@ export async function runDependencyRefresh(): Promise<{ processed: number; error
               })
               .eq('name', name);
             console.log(`[watchtower-poll] ${name}: ${group.latest_version ?? 'none'} → ${npm.latestVersion}`);
-
-            // Enqueue new_version job for the watchtower worker
-            for (const depId of group.directIds) {
-              await supabase.from('watchtower_jobs').insert({
-                job_type: 'new_version',
-                priority: 1,
-                payload: {
-                  type: 'new_version',
-                  new_version: npm.latestVersion,
-                  latest_release_date: npm.publishedAt,
-                },
-                dependency_id: depId,
-                package_name: name,
-              });
-            }
-            newVersionJobsInserted++;
           }
         }
         return { count: group.ids.length };
@@ -223,61 +205,11 @@ export async function runDependencyRefresh(): Promise<{ processed: number; error
     console.error('[watchtower-poll] GHSA sync error:', err?.message);
   }
 
-  // Start watchtower machine if we inserted new-version jobs
-  if (newVersionJobsInserted > 0) {
-    try {
-      const { startWatchtowerMachine } = require('./fly-machines');
-      await startWatchtowerMachine();
-    } catch {
-      // fly-machines not available
-    }
-  }
-
   // Refresh weekly download counts (sequential, slow — runs after version + vuln refresh)
   const downloads = await refreshDownloadCounts(byName);
 
-  console.log(`[watchtower-poll] Refresh complete. Processed: ${processed}, Errors: ${errors}, Vulns: ${vulnsUpdated}, New-version jobs: ${newVersionJobsInserted}, Downloads updated: ${downloads.updated}`);
-  return { processed, errors, vulnsUpdated, newVersionJobs: newVersionJobsInserted };
-}
-
-export async function runPollSweep(): Promise<{ packagesPolled: number; jobsQueued: number }> {
-  console.log('[watchtower-poll] Poll sweep starting...');
-
-  const { data: packages } = await supabase
-    .from('watched_packages')
-    .select('id, name, last_known_commit_sha, status')
-    .eq('status', 'ready');
-
-  const pkgList = packages ?? [];
-  console.log(`[watchtower-poll] Found ${pkgList.length} ready watched packages`);
-
-  if (pkgList.length === 0) {
-    return { packagesPolled: 0, jobsQueued: 0 };
-  }
-
-  const jobRows = pkgList.map((pkg: any) => ({
-    job_type: 'poll_sweep',
-    priority: 5,
-    payload: { watched_package_id: pkg.id, last_known_commit_sha: pkg.last_known_commit_sha },
-    package_name: pkg.name,
-  }));
-
-  const { error } = await supabase.from('watchtower_jobs').insert(jobRows);
-  if (error) {
-    console.error('[watchtower-poll] Failed to insert poll sweep jobs:', error.message);
-    return { packagesPolled: pkgList.length, jobsQueued: 0 };
-  }
-
-  // Start watchtower machine once after all jobs are inserted
-  try {
-    const { startWatchtowerMachine } = require('../lib/fly-machines');
-    await startWatchtowerMachine();
-  } catch {
-    // fly-machines not available in CE mode
-  }
-
-  console.log(`[watchtower-poll] Poll sweep complete (${pkgList.length} packages, ${jobRows.length} jobs queued)`);
-  return { packagesPolled: pkgList.length, jobsQueued: jobRows.length };
+  console.log(`[watchtower-poll] Refresh complete. Processed: ${processed}, Errors: ${errors}, Vulns: ${vulnsUpdated}, Downloads updated: ${downloads.updated}`);
+  return { processed, errors, vulnsUpdated };
 }
 
 export async function runWebhookHealthCheck(): Promise<{ markedInactive: number }> {

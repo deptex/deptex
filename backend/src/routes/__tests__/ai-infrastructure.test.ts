@@ -1,5 +1,5 @@
 /**
- * Phase 6C — AI Infrastructure test suite.
+ * AI Infrastructure test suite.
  *
  * Covers BYOK key management, provider abstraction, background vuln monitoring,
  * rate limits / cost caps, usage logging, and safety guards.

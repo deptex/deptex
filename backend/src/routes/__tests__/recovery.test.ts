@@ -1,5 +1,5 @@
 /**
- * Phase 2M: Recovery endpoint unit tests
+ * Recovery endpoint unit tests
  */
 
 const chain = {

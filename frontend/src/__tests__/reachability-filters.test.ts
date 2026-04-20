@@ -1,5 +1,5 @@
 /**
- * Phase 6B: Reachability Filter Tests
+ * Reachability Filter Tests
  * Additional tests for SecurityFilterBar reachability level integration.
  */
 

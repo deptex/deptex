@@ -1,5 +1,5 @@
 /**
- * Phase 4B: Policy-as-Code Execution Engine.
+ * Policy-as-Code Execution Engine.
  *
  * Sandboxed policy evaluation using isolated-vm with controlled fetch(),
  * helper functions, and strict return-shape validation.

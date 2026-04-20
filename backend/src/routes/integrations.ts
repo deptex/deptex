@@ -15,7 +15,7 @@ import {
   updateIssueComment,
   type CheckRunOutput,
 } from '../lib/github';
-import { queueExtractionJob, queueASTParsingJob } from '../lib/redis';
+import { queueExtractionJob } from '../lib/extraction-jobs';
 import { invalidateProjectCaches } from '../lib/cache';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
 import { getVulnCountsForPackageVersion, exceedsThreshold, type VulnCounts } from '../lib/vuln-counts';
@@ -1443,7 +1443,7 @@ router.delete('/organizations/:orgId/integrations/github', authenticateUser, asy
 
 // ============================================================
 // Push event: intelligent extraction based on manifest changes + sync_frequency
-// Phase 8B: Complete rewrite with change detection, commit tracking, concurrency caps
+// Complete rewrite with change detection, commit tracking, concurrency caps
 // ============================================================
 type PushProjectRow = {
   project_id: string;
@@ -1571,20 +1571,6 @@ async function handlePushEvent(payload: any): Promise<void> {
         }
       } else {
         console.warn(`[webhook push] Per-org cap reached (${MAX_EXTRACTION_PER_PUSH}), skipping extraction for project`, row.project_id);
-      }
-    }
-
-    if (!extractionTriggered) {
-      const anyFileInWorkspace = changedFiles.some((f) => isFileInWorkspace(f, workspace));
-      if (anyFileInWorkspace) {
-        await queueASTParsingJob(row.project_id, {
-          repo_full_name: repoFullName,
-          installation_id: String(installationId),
-          default_branch: row.default_branch,
-          package_json_path: workspace,
-        }).catch((err: any) => {
-          console.warn('[webhook push] AST job not queued for project', row.project_id, err?.message);
-        });
       }
     }
 
@@ -1919,7 +1905,7 @@ async function handlePullRequestClosedEvent(payload: any) {
       .eq('pr_number', prNumber)
       .eq('provider', 'github');
 
-    // Phase 7: Update AI fix job status when fix PR is merged/closed
+    // Update AI fix job status when fix PR is merged/closed
     const fixStatus = isMerged ? 'merged' : 'pr_closed';
     await supabase
       .from('project_security_fixes')
@@ -1929,7 +1915,7 @@ async function handlePullRequestClosedEvent(payload: any) {
       .eq('pr_provider', 'github')
       .in('status', ['completed']);
 
-    // Phase 16: Update fix outcome on merge/close
+    // Update fix outcome on merge/close
     try {
       const { updateOutcomeOnMerge } = await import('../lib/learning/outcome-recorder');
       await updateOutcomeOnMerge(
@@ -2198,7 +2184,7 @@ async function handlePullRequestEvent(payload: any): Promise<void> {
 
         const { acceptedLicenses } = await getEffectivePolicies(organizationId, projectId);
 
-        // Load guardrails config (Phase 8H: policy engine or legacy)
+        // Load guardrails config (policy engine or legacy)
         let prCheckCode: string | null = null;
         try {
           const { data: proj } = await supabase.from('projects').select('effective_pr_check_code').eq('id', projectId).single();
@@ -2234,47 +2220,6 @@ async function handlePullRequestEvent(payload: any): Promise<void> {
           [v.critical_vulns, v.high_vulns, v.medium_vulns, v.low_vulns].some(n => n > 0)
             ? `${v.critical_vulns} critical, ${v.high_vulns} high, ${v.medium_vulns} medium, ${v.low_vulns} low vulnerabilities`
             : '0 vulnerabilities';
-
-        // Phase 10B: Watchtower check for upgraded packages
-        const { data: wtProject } = await supabase.from('projects').select('watchtower_enabled').eq('id', projectId).single();
-        if (wtProject?.watchtower_enabled && directBumpedPkgs.length > 0) {
-          for (const { name: pkgName, newVersion } of directBumpedPkgs) {
-            const { data: dep } = await supabase.from('dependencies').select('id').eq('name', pkgName).single();
-            if (!dep) continue;
-
-            const { data: wlEntry } = await supabase
-              .from('organization_watchlist')
-              .select('id, quarantine_until, is_current_version_quarantined')
-              .eq('organization_id', organizationId)
-              .eq('dependency_id', dep.id)
-              .single();
-
-            if (!wlEntry) continue;
-
-            const isQuarantined = wlEntry.quarantine_until && new Date(wlEntry.quarantine_until) > new Date();
-            if (isQuarantined) {
-              const daysLeft = Math.ceil((new Date(wlEntry.quarantine_until).getTime() - Date.now()) / 86400000);
-              blocked = true;
-              blockedBy.watchtower_quarantine = (blockedBy.watchtower_quarantine ?? 0) + 1;
-              lines.push(`- **${pkgName}@${newVersion}** — blocked by Watchtower: quarantined (${daysLeft} day${daysLeft !== 1 ? 's' : ''} remaining)`);
-            }
-
-            const { data: wp } = await supabase.from('watched_packages').select('analysis_data').eq('name', pkgName).single();
-            if (wp) {
-              const ad = wp.analysis_data as any;
-              if (ad?.registryIntegrityStatus === 'fail' || ad?.installScriptsStatus === 'fail' || ad?.entropyAnalysisStatus === 'fail') {
-                blocked = true;
-                blockedBy.watchtower_check_failed = (blockedBy.watchtower_check_failed ?? 0) + 1;
-                const failedChecks = [
-                  ad?.registryIntegrityStatus === 'fail' ? 'registry integrity' : null,
-                  ad?.installScriptsStatus === 'fail' ? 'install scripts' : null,
-                  ad?.entropyAnalysisStatus === 'fail' ? 'entropy analysis' : null,
-                ].filter(Boolean).join(', ');
-                lines.push(`- **${pkgName}@${newVersion}** — blocked by Watchtower: ${failedChecks} check(s) failed`);
-              }
-            }
-          }
-        }
 
         // Run org/project pullRequestCheck policy when code is present
         if (prCheckCode?.trim() && (directAddedPkgs.length > 0 || directBumpedPkgs.length > 0)) {

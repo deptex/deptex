@@ -1,5 +1,6 @@
 /**
- * 8O: Watchtower Daily Poll (QStash cron endpoint)
+ * Daily maintenance cron (QStash). Runs dep-version + GHSA refresh,
+ * webhook health check, and old webhook-delivery cleanup.
  * Mounted at /api/workers (see backend/src/index.ts).
  * Schedule: 0 4 * * * (daily at 4 AM UTC)
  */
@@ -7,7 +8,6 @@
 import express from 'express';
 import {
   runDependencyRefresh,
-  runPollSweep,
   runWebhookHealthCheck,
   cleanupOldWebhookDeliveries,
 } from '../lib/watchtower-poll';
@@ -45,7 +45,6 @@ router.post('/watchtower-daily-poll', async (req, res) => {
 
   try {
     const refreshResult = await runDependencyRefresh();
-    const sweepResult = await runPollSweep();
     const healthResult = await runWebhookHealthCheck();
     const cleanupResult = await cleanupOldWebhookDeliveries();
 
@@ -55,7 +54,6 @@ router.post('/watchtower-daily-poll', async (req, res) => {
     res.json({
       deps_refreshed: refreshResult.processed,
       vulns_updated: refreshResult.vulnsUpdated,
-      packages_polled: sweepResult.packagesPolled,
       webhooks_marked_inactive: healthResult.markedInactive,
       deliveries_cleaned: cleanupResult.deleted,
       elapsed_ms: elapsed,

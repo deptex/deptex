@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * Phase 16: Aegis Learning API (EE route)
+ * Aegis Learning API (EE route)
  * Mounted at /api/organizations
  */
 

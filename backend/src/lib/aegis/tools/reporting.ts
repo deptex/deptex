@@ -201,7 +201,7 @@ registerAegisTool(
   })
 );
 
-// Phase 15: getSLAReport
+// getSLAReport
 registerAegisTool(
   'getSLAReport',
   { category: 'reporting', permissionLevel: 'safe', requiredRbacPermissions: [] },

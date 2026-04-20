@@ -1,5 +1,5 @@
 /**
- * Default policy templates and seed data for Phase 4: Policy-as-Code Engine.
+ * Default policy templates and seed data for the Policy-as-Code Engine.
  * Used when creating new organizations and for fallback values.
  */
 

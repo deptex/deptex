@@ -80,7 +80,7 @@ export const POLICY_MONARCH: languages.IMonarchLanguage = {
 };
 
 // Monaco instance from @monaco-editor/react beforeMount; typescript defaults exist at runtime
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+ 
 type MonacoBeforeMount = any;
 
 export function beforeMountPolicyMonaco(monaco: MonacoBeforeMount): void {

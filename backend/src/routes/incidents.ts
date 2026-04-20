@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * Phase 17: Incident Response API endpoints (EE).
+ * Incident Response API endpoints (EE).
  * Handles incident CRUD, playbook management, stats, notes, post-mortem, and dry-run.
  */
 

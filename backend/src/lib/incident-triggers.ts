@@ -1,7 +1,7 @@
 /**
- * Phase 17: Incident trigger system.
+ * Incident trigger system.
  *
- * Bridges Phase 9 notification events to incident creation.
+ * Bridges notification events to incident creation.
  * Runs inline during notification dispatch — when an event fires,
  * also check if it matches any active playbook auto-triggers.
  */

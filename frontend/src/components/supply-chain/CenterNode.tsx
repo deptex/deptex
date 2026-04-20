@@ -1,8 +1,7 @@
-import { memo, useState } from 'react';
+import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Package, ChevronDown, GitPullRequest, Loader2, Scale, Ban, CheckCircle2, AlertTriangle, XCircle, ShieldCheck } from 'lucide-react';
+import { Package, ChevronDown, GitPullRequest, Loader2, Scale, Ban, AlertTriangle, ShieldCheck } from 'lucide-react';
 import type { CenterNodeData } from './useGraphLayout';
-import { api } from '../../lib/api';
 import type { BannedVersion } from '../../lib/api';
 import {
   DropdownMenu,
@@ -28,10 +27,6 @@ function CenterNodeComponent({ data }: NodeProps) {
     onVersionChange,
     isViewingAlternateVersion,
     bumpPrs,
-    dependencyId,
-    orgId,
-    projectId,
-    onPrCreated,
     canManage,
     bannedVersions,
     bannedVersionsLoading,
@@ -39,14 +34,11 @@ function CenterNodeComponent({ data }: NodeProps) {
     onBanClick,
     onUnbanClick,
     currentVersion,
-    versionSecurityData,
     safeVersion,
     versionVulnerabilitySummary,
     versionSwitching,
     onOpenVersionsSidebar,
   } = data as unknown as CenterNodeData;
-
-  const [creatingPr, setCreatingPr] = useState(false);
 
   const hasMultipleVersions = availableVersions && availableVersions.length > 1;
 
@@ -54,24 +46,6 @@ function CenterNodeComponent({ data }: NodeProps) {
   const existingPr = isViewingAlternateVersion
     ? bumpPrs.find((pr) => pr.target_version === version)
     : null;
-
-  const handleCreatePr = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!orgId || !projectId || !dependencyId || creatingPr) return;
-    setCreatingPr(true);
-    try {
-      const result = await api.createWatchtowerBumpPR(orgId, projectId, dependencyId, version);
-      onPrCreated({
-        target_version: version,
-        pr_url: result.pr_url,
-        pr_number: result.pr_number,
-      });
-    } catch (err) {
-      console.error('Failed to create bump PR:', err);
-    } finally {
-      setCreatingPr(false);
-    }
-  };
 
   // Determine colors based on worst vulnerability severity
   const getColorScheme = () => {
@@ -203,30 +177,9 @@ function CenterNodeComponent({ data }: NodeProps) {
                   {availableVersions.map((v) => {
                     const isBanned = bannedVersions?.some((b: BannedVersion) => b.banned_version === v.version);
                     const isCurrent = currentVersion != null && v.version === currentVersion;
-                    const isQuarantined = versionSecurityData?.onWatchtower && versionSecurityData.quarantinedVersions?.includes(v.version);
                     const isSafest = safeVersion != null && v.version === safeVersion;
                     const vulnSummary = versionVulnerabilitySummary?.[v.version];
                     const hasVulnerabilities = vulnSummary ? vulnSummary.hasDirect || vulnSummary.hasTransitive : false;
-                    const checks = versionSecurityData?.onWatchtower ? versionSecurityData.securityChecks[v.version] : null;
-                    const statusIcon = (s: string | null, label: string) => {
-                      const icon =
-                        s === 'pass' ? (
-                          <CheckCircle2 className="h-3 w-3 text-success shrink-0" />
-                        ) : s === 'warning' ? (
-                          <AlertTriangle className="h-3 w-3 text-warning shrink-0" />
-                        ) : s === 'fail' ? (
-                          <XCircle className="h-3 w-3 text-error shrink-0" />
-                        ) : null;
-                      if (!icon) return null;
-                      return (
-                        <Tooltip key={label}>
-                          <TooltipTrigger asChild>
-                            <span className="inline-flex cursor-default">{icon}</span>
-                          </TooltipTrigger>
-                          <TooltipContent>{label}</TooltipContent>
-                        </Tooltip>
-                      );
-                    };
                     return (
                       <DropdownMenuRadioItem
                         key={v.dependency_version_id}
@@ -245,11 +198,6 @@ function CenterNodeComponent({ data }: NodeProps) {
                               Banned
                             </span>
                           )}
-                          {isQuarantined && (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">
-                              Quarantined
-                            </span>
-                          )}
                           {isSafest && (
                             <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary/15 text-green-500 border border-primary/30">
                               <ShieldCheck className="h-3 w-3 shrink-0" />
@@ -265,13 +213,6 @@ function CenterNodeComponent({ data }: NodeProps) {
                               </TooltipTrigger>
                               <TooltipContent>Vulnerabilities present (direct or transitive)</TooltipContent>
                             </Tooltip>
-                          )}
-                          {checks && (
-                            <span className="flex items-center gap-0.5 ml-0.5">
-                              {statusIcon(checks.registry_integrity_status, 'Registry')}
-                              {statusIcon(checks.install_scripts_status, 'Install scripts')}
-                              {statusIcon(checks.entropy_analysis_status, 'Entropy')}
-                            </span>
                           )}
                         </span>
                       </DropdownMenuRadioItem>
@@ -293,15 +234,12 @@ function CenterNodeComponent({ data }: NodeProps) {
         )}
       </div>
 
-      {/* PR action: View PR always shown when it exists; Create PR only when version is not banned — full-width strip matches table header colour. Skip when banned (no PR strip, Ban strip directly follows) */}
-      {(() => {
+      {/* View PR strip (only shown when a bump PR already exists for the viewed alternate version). */}
+      {isViewingAlternateVersion && existingPr && (() => {
         const isBanned = bannedVersions?.some((b: BannedVersion) => b.banned_version === version);
-        const hasPrContent = existingPr || (!isBanned && !bannedVersionsLoading);
-        const banStripBelow = isViewingAlternateVersion && (bannedVersionsLoading || isBanned || canManage);
-        if (!isViewingAlternateVersion || !hasPrContent) return null;
+        const banStripBelow = bannedVersionsLoading || isBanned || canManage;
         return (
           <div className={`mt-2 -mx-5 px-5 ${banStripBelow ? 'pt-2.5 pb-1.5' : 'py-2.5'} border-t border-border bg-background-card ${!banStripBelow ? 'rounded-b-xl' : ''}`}>
-          {existingPr ? (
             <a
               href={existingPr.pr_url}
               target="_blank"
@@ -312,21 +250,7 @@ function CenterNodeComponent({ data }: NodeProps) {
               <GitPullRequest className="h-3 w-3" />
               View PR #{existingPr.pr_number}
             </a>
-          ) : !isBanned ? (
-            <button
-              onClick={handleCreatePr}
-              disabled={creatingPr}
-              className="flex items-center justify-center gap-1.5 w-full px-3 py-1.5 rounded-md text-xs font-medium bg-foreground-secondary/5 text-foreground-secondary border border-border hover:bg-foreground-secondary/8 hover:text-foreground-secondary transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              {creatingPr ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <GitPullRequest className="h-3 w-3" />
-              )}
-              Create PR
-            </button>
-          ) : null}
-        </div>
+          </div>
         );
       })()}
 

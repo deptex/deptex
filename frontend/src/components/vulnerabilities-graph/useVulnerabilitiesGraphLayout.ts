@@ -35,7 +35,7 @@ export interface VulnGraphDepNode {
     cvss_score?: number | null;
     cisa_kev?: boolean | null;
     fixed_versions?: string[] | null;
-    /** Phase 15: SLA status for graph badge (warning = amber clock, breached = red clock). */
+    /** SLA status for graph badge (warning = amber clock, breached = red clock). */
     sla_status?: string | null;
     sla_deadline_at?: string | null;
   }>;
@@ -427,7 +427,7 @@ export function buildDepAndVulnNodesAndEdges(
 
 export type WorstSeverity = 'critical' | 'high' | 'medium' | 'low' | 'none';
 
-/** Phase 15: Count vulns with sla_status === 'breached' across all deps. */
+/** Count vulns with sla_status === 'breached' across all deps. */
 export function getSlaBreachCount(depNodes: VulnGraphDepNode[]): number {
   let count = 0;
   for (const dep of depNodes) {

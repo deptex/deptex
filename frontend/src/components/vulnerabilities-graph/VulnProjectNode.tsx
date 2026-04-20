@@ -18,7 +18,7 @@ export interface VulnProjectNodeData {
   worstSeverity?: WorstSeverity;
   /** When true, render as a team node (Users icon) instead of a project (framework/folder icon). */
   isTeamNode?: boolean;
-  /** Phase 15: Number of vulnerabilities with SLA breached. Shown as "SLA: X breached" when > 0. */
+  /** Number of vulnerabilities with SLA breached. Shown as "SLA: X breached" when > 0. */
   slaBreachCount?: number;
   /** When true, extraction pipeline is running (sync button spins). */
   isExtracting?: boolean;

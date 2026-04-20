@@ -1,5 +1,5 @@
 /**
- * Phase 16 — Aegis Outcome-Based Learning test suite (40 backend tests).
+ * Aegis Outcome-Based Learning test suite (40 backend tests).
  *
  * Covers outcome recording, pattern extraction, strategy recommendations,
  * human feedback, API endpoints, and QStash crons.

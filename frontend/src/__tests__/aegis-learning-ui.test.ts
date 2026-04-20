@@ -1,5 +1,5 @@
 /**
- * Phase 16: Aegis Learning — frontend UI tests (10 tests).
+ * Aegis Learning — frontend UI tests (10 tests).
  * Covers StrategyPicker display, cold-start state, LearningDashboard sections.
  */
 

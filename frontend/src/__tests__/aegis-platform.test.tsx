@@ -1,5 +1,5 @@
 /**
- * Phase 7B — Aegis frontend tests (plan 7B-Q tests 67–76, 91–100).
+ * Aegis frontend tests (plan 7B-Q tests 67–76, 91–100).
  * AegisPage layout, Management Console tabs, permissions.
  */
 
@@ -64,7 +64,7 @@ function mockMatchMedia() {
   });
 }
 
-describe('Phase 7B: Aegis frontend', () => {
+describe('Aegis frontend', () => {
   beforeEach(() => {
     mockMatchMedia();
   });

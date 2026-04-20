@@ -26,7 +26,7 @@ import {
 // All routes require authentication
 router.use(authenticateUser);
 
-// Phase 14: IP allowlist and MFA enforcement for org-scoped routes (/:id/...)
+// IP allowlist and MFA enforcement for org-scoped routes (/:id/...)
 router.use('/:id', createIPAllowlistMiddleware());
 router.use('/:id', async (req: AuthRequest, res: express.Response, next: express.NextFunction) => {
   const orgId = req.params.id;
@@ -2544,7 +2544,7 @@ router.put('/:id/policies', async (req: AuthRequest, res) => {
   }
 });
 
-// ───── Phase 4: Organization Statuses CRUD ─────
+// ───── Organization Statuses CRUD ─────
 
 async function canManageStatuses(organizationId: string, userId: string): Promise<boolean> {
   const { data: membership } = await supabase
@@ -2783,7 +2783,7 @@ router.delete('/:id/statuses/:statusId', async (req: AuthRequest, res) => {
   }
 });
 
-// ───── Phase 4: Organization Asset Tiers CRUD ─────
+// ───── Organization Asset Tiers CRUD ─────
 
 // GET /api/organizations/:id/asset-tiers
 router.get('/:id/asset-tiers', async (req: AuthRequest, res) => {
@@ -2992,7 +2992,7 @@ router.delete('/:id/asset-tiers/:tierId', async (req: AuthRequest, res) => {
   }
 });
 
-// ───── Phase 15: Security SLA Management ─────
+// ───── Security SLA Management ─────
 
 const SLA_DEFAULT_HOURS: Record<string, number> = {
   critical: 48,
@@ -3667,7 +3667,7 @@ router.get('/:id/sla-policy-changes', async (req: AuthRequest, res) => {
   }
 });
 
-// ───── Phase 4: Split Policy Code CRUD ─────
+// ───── Split Policy Code CRUD ─────
 
 // GET /api/organizations/:id/policy-code
 router.get('/:id/policy-code', async (req: AuthRequest, res) => {
@@ -4692,7 +4692,6 @@ router.get('/:id/notification-rule-templates', async (req: AuthRequest, res) => 
     { id: 'pr-check-failure', name: 'PR Check Failure', description: 'Alert when a PR fails dependency policy checks', code: "if (context.event.type !== 'pr_check_completed') return false;\nreturn context.pr && context.pr.check_result === 'failed';", suggestedDestinations: ['slack', 'discord'] },
     { id: 'crown-jewels-any-change', name: 'Crown Jewels - Any Change', description: 'Alert on any event affecting Crown Jewels projects', code: "return context.project.asset_tier === 'Crown Jewels';", suggestedDestinations: ['slack', 'pagerduty'] },
     { id: 'new-dep-low-score', name: 'New Dependency with Low Score', description: 'Alert when a new dependency is added with a low reputation score', code: "if (context.event.type !== 'dependency_added') return false;\nreturn context.dependency && context.dependency.score < 50;", suggestedDestinations: ['slack', 'jira'] },
-    { id: 'watchtower-alerts', name: 'Watchtower Alerts', description: 'Alert on supply chain security check failures, high-anomaly commits, and new version availability', code: "const watchEvents = [\n  'security_analysis_failure',\n  'supply_chain_anomaly',\n  'new_version_available'\n];\nif (!watchEvents.includes(context.event.type)) return false;\nreturn true;", suggestedDestinations: ['slack', 'email'] },
   ];
   res.json(RULE_TEMPLATES);
 });
@@ -4751,9 +4750,6 @@ interface Dependency {
   score: number;            // Deptex reputation 0-100
   openssf_score: number;    // OpenSSF Scorecard 0.0-10.0
   weekly_downloads: number;
-  registry_integrity_status: AnalysisStatus;
-  install_scripts_status: AnalysisStatus;
-  entropy_analysis_status: AnalysisStatus;
   vulnerabilities: Vulnerability[];
 }
 
@@ -4800,23 +4796,13 @@ if (!context.dependency) return false;
 return context.dependency.is_direct && context.dependency.openssf_score < 3;
 \`\`\`
 
-EXAMPLE 4 - Supply chain security failures:
-\`\`\`
-if (!context.dependency) return false;
-var types = ['dependency_added', 'dependency_updated', 'security_analysis_failure'];
-if (types.indexOf(context.event.type) === -1) return false;
-return context.dependency.registry_integrity_status === 'fail'
-    || context.dependency.install_scripts_status === 'fail'
-    || context.dependency.entropy_analysis_status === 'fail';
-\`\`\`
-
-EXAMPLE 5 - Crown Jewel projects — any vulnerability:
+EXAMPLE 4 - Crown Jewel projects — any vulnerability:
 \`\`\`
 if (context.event.type !== 'vulnerability_discovered') return false;
 return context.project.asset_tier === 'CROWN_JEWELS';
 \`\`\`
 
-EXAMPLE 6 - License violation for banned licenses:
+EXAMPLE 5 - License violation for banned licenses:
 \`\`\`
 if (context.event.type !== 'license_violation') return false;
 if (!context.dependency) return false;
@@ -5100,9 +5086,6 @@ interface Dependency {
   last_published_at: string;
   releases_last_12_months: number;
   files_importing_count: number;
-  registry_integrity_status: AnalysisStatus;
-  install_scripts_status: AnalysisStatus;
-  entropy_analysis_status: AnalysisStatus;
   vulnerabilities: Vulnerability[];
 }
 
@@ -5212,21 +5195,7 @@ for (const pkg of context.added) {
 return { passed: violations.length === 0, violations };
 \`\`\`
 
-EXAMPLE 4 - Supply chain integrity (pullRequestCheck body):
-\`\`\`
-const violations = [];
-for (const pkg of [...context.added, ...context.updated]) {
-  if (pkg.registry_integrity_status === "fail")
-    violations.push(\`Registry integrity failure: \${pkg.name}@\${pkg.version}\`);
-  if (pkg.install_scripts_status === "fail")
-    violations.push(\`Suspicious install scripts: \${pkg.name}@\${pkg.version}\`);
-  if (pkg.entropy_analysis_status === "fail")
-    violations.push(\`High entropy (obfuscation): \${pkg.name}@\${pkg.version}\`);
-}
-return { passed: violations.length === 0, violations };
-\`\`\`
-
-EXAMPLE 5 - Non-Compliant if any dependency blocked by packagePolicy (projectStatus body):
+EXAMPLE 4 - Non-Compliant if any dependency blocked by packagePolicy (projectStatus body):
 \`\`\`
 var deps = context.dependencies || [];
 var blocked = deps.filter(function(d) {
@@ -6651,7 +6620,7 @@ router.get('/:id/webhook-deliveries/stats', async (req: AuthRequest, res) => {
 });
 
 // ============================================================================
-// Phase 10: Organization Stats endpoint
+// Organization Stats endpoint
 // ============================================================================
 
 // GET /api/organizations/:id/stats
@@ -6794,7 +6763,7 @@ router.get('/:id/stats', async (req: AuthRequest, res) => {
       depsTotalCount = count ?? 0;
     }
 
-    // Phase 15: SLA aggregates (org-wide)
+    // SLA aggregates (org-wide)
     let slaAgg = { compliance_percent: 100, on_track: 0, warning: 0, breached: 0, exempt: 0, met: 0, resolved_late: 0 };
     if (projectIds.length > 0) {
       const { data: pdvSla } = await supabase
@@ -6832,205 +6801,6 @@ router.get('/:id/stats', async (req: AuthRequest, res) => {
   } catch (error: any) {
     console.error('Error fetching org stats:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch organization stats' });
-  }
-});
-
-// ===== ORG WATCHTOWER ENDPOINTS (Phase 10B) =====
-
-router.get('/:id/watchtower/overview', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const orgId = req.params.id;
-
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', orgId)
-      .eq('user_id', userId)
-      .single();
-
-    if (!membership) {
-      res.status(403).json({ error: 'Not a member' });
-      return;
-    }
-
-    const cacheKey = `watchtower-org-stats:${orgId}`;
-    const cached = await getCached(cacheKey);
-    if (cached) { res.json(cached); return; }
-
-    const { data: projects } = await supabase
-      .from('projects')
-      .select('id, name, watchtower_enabled, watchtower_enabled_at, asset_tier_id, health_score')
-      .eq('organization_id', orgId);
-
-    const allProjects = projects || [];
-    const enabledProjects = allProjects.filter((p: any) => p.watchtower_enabled);
-
-    const { data: watchlistEntries } = await supabase
-      .from('organization_watchlist')
-      .select('id, dependency_id')
-      .eq('organization_id', orgId);
-
-    const depIds = (watchlistEntries || []).map((w: any) => w.dependency_id);
-    let depNames: string[] = [];
-    if (depIds.length > 0) {
-      const { data: deps } = await supabase
-        .from('dependencies')
-        .select('id, name')
-        .in('id', depIds);
-      depNames = (deps || []).map((d: any) => d.name);
-    }
-
-    let totalAlerts = 0;
-    let totalBlocked = 0;
-    if (depNames.length > 0) {
-      const { data: pkgs } = await supabase
-        .from('watched_packages')
-        .select('id, name, status, analysis_data')
-        .in('name', depNames);
-
-      for (const pkg of pkgs || []) {
-        const ad = pkg.analysis_data as any;
-        if (ad?.registryIntegrityStatus === 'fail' || ad?.installScriptsStatus === 'fail' || ad?.entropyAnalysisStatus === 'fail') {
-          totalAlerts++;
-        }
-      }
-    }
-
-    const { data: tiers } = await supabase
-      .from('organization_asset_tiers')
-      .select('id, name')
-      .eq('organization_id', orgId);
-
-    const tierMap = new Map((tiers || []).map((t: any) => [t.id, t.name]));
-
-    const projectsSummary = allProjects.map((p: any) => ({
-      id: p.id,
-      name: p.name,
-      tier: tierMap.get(p.asset_tier_id) || null,
-      watchtower_enabled: p.watchtower_enabled,
-      enabled_at: p.watchtower_enabled_at,
-    }));
-
-    const result = {
-      projects_enabled: enabledProjects.length,
-      projects_total: allProjects.length,
-      packages_monitored: depNames.length,
-      total_alerts: totalAlerts,
-      total_blocked: totalBlocked,
-      projects: projectsSummary,
-    };
-
-    await setCached(cacheKey, result, 60);
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch overview' });
-  }
-});
-
-router.get('/:id/watchtower/projects', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const orgId = req.params.id;
-
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', orgId)
-      .eq('user_id', userId)
-      .single();
-
-    if (!membership) {
-      res.status(403).json({ error: 'Not a member' });
-      return;
-    }
-
-    const { data: projects } = await supabase
-      .from('projects')
-      .select('id, name, watchtower_enabled, watchtower_enabled_at, asset_tier_id')
-      .eq('organization_id', orgId);
-
-    const { data: tiers } = await supabase
-      .from('organization_asset_tiers')
-      .select('id, name')
-      .eq('organization_id', orgId);
-
-    const tierMap = new Map((tiers || []).map((t: any) => [t.id, t.name]));
-
-    const result = (projects || []).map((p: any) => ({
-      id: p.id,
-      name: p.name,
-      tier: tierMap.get(p.asset_tier_id) || null,
-      watchtower_enabled: p.watchtower_enabled,
-      enabled_at: p.watchtower_enabled_at,
-    }));
-
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch projects' });
-  }
-});
-
-router.get('/:id/watchtower/package-usage', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const orgId = req.params.id;
-
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', orgId)
-      .eq('user_id', userId)
-      .single();
-
-    if (!membership) {
-      res.status(403).json({ error: 'Not a member' });
-      return;
-    }
-
-    const { data: orgProjects } = await supabase
-      .from('projects')
-      .select('id')
-      .eq('organization_id', orgId);
-
-    const projectIds = (orgProjects || []).map((p: any) => p.id);
-    if (projectIds.length === 0) {
-      res.json([]);
-      return;
-    }
-
-    const { data: deps } = await supabase
-      .from('project_dependencies')
-      .select('dependency_id, name, project_id')
-      .in('project_id', projectIds)
-      .eq('is_direct', true);
-
-    const usageMap = new Map<string, { name: string; dependency_id: string; project_count: number; project_ids: string[] }>();
-    for (const dep of deps || []) {
-      const existing = usageMap.get(dep.name);
-      if (existing) {
-        existing.project_count++;
-        existing.project_ids.push(dep.project_id);
-      } else {
-        usageMap.set(dep.name, { name: dep.name, dependency_id: dep.dependency_id, project_count: 1, project_ids: [dep.project_id] });
-      }
-    }
-
-    const { data: watchlistEntries } = await supabase
-      .from('organization_watchlist')
-      .select('dependency_id')
-      .eq('organization_id', orgId);
-
-    const watchedDepIds = new Set((watchlistEntries || []).map((w: any) => w.dependency_id));
-
-    const result = Array.from(usageMap.values())
-      .map((u) => ({ ...u, watched: watchedDepIds.has(u.dependency_id) }))
-      .sort((a, b) => b.project_count - a.project_count)
-      .slice(0, 50);
-
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch package usage' });
   }
 });
 
@@ -7232,7 +7002,7 @@ async function checkSecurityPermission(orgId: string, userId: string): Promise<b
 }
 
 // ============================================================
-// Phase 14: Enterprise Security Endpoints
+// Enterprise Security Endpoints
 // ============================================================
 
 // --- 14A: Security Audit Log ---

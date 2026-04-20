@@ -6,7 +6,6 @@ import {
   ScanSearch,
   Scale,
   Bell,
-  Telescope,
   ListChecks,
   MessageSquare,
   ClipboardCheck,
@@ -69,18 +68,6 @@ const FEATURES = [
     ],
     icon: Bell,
   },
-  {
-    slug: "advanced-upstream-insights",
-    label: "Advanced Upstream Insights",
-    intro: "Supply-chain forensics and contributor anomalies. Watch packages, analyze commits and contributors, and detect suspicious behavior upstream.",
-    docsSlug: "watchtower",
-    cards: [
-      { title: "Package watchlist", description: "Add packages to the org watchlist. Full analysis: registry integrity, scripts, entropy, commits, contributors." },
-      { title: "Commits & anomalies", description: "See commits that touch your imported code. Anomaly scores for new contributors and unusual patterns." },
-      { title: "Quarantine & PRs", description: "Quarantine new versions until reviewed. Create bump or removal PRs from the supply-chain view." },
-    ],
-    icon: Telescope,
-  },
 ] as const;
 
 const slugList = FEATURES.map((f) => f.slug);
@@ -91,7 +78,6 @@ const FEATURE_HERO_IMAGES: Record<FeatureSlug, string> = {
   "vulnerability-intelligence": "/images/vulnerabilitiesimage.png",
   "customizable-compliance": "/images/complianceimage.png",
   "customizable-notifications": "/images/notificationsimage.png",
-  "advanced-upstream-insights": "/images/upstreaminsightsimage.png",
 };
 
 export default function PlatformFeaturesPage() {

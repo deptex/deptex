@@ -27,7 +27,7 @@ router.post('/execute-task-step', async (req, res) => {
 
     const result = await executeTaskStep(taskId, stepId);
 
-    // Phase 17: Check if this step is part of an incident playbook
+    // Check if this step is part of an incident playbook
     const { data: completedStep } = await (await import('../lib/supabase')).supabase
       .from('aegis_task_steps')
       .select('*')

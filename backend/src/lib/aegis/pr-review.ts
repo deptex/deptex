@@ -1,5 +1,5 @@
 /**
- * Phase 7B: PR Security Review triggered by Phase 8 webhooks.
+ * PR Security Review triggered by webhooks.
  * Runs autonomous Aegis analysis for dependency changes in PRs.
  */
 // @ts-nocheck

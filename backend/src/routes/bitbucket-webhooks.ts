@@ -7,7 +7,7 @@
 import express from 'express';
 import * as crypto from 'crypto';
 import { supabase } from '../lib/supabase';
-import { queueExtractionJob, queueASTParsingJob } from '../lib/redis';
+import { queueExtractionJob } from '../lib/extraction-jobs';
 import { invalidateProjectCaches } from '../lib/cache';
 import { detectAffectedWorkspaces, isFileInWorkspace } from '../lib/manifest-registry';
 import { checkRateLimit } from '../lib/rate-limit';

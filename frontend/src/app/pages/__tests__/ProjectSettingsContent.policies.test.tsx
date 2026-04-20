@@ -30,7 +30,7 @@ const pkg = 'function packagePolicy(context) {\n  return { allowed: true, reason
 const status = 'function projectStatus(context) {\n  return { status: \'Compliant\', violations: [] };\n}';
 const pr = 'function pullRequestCheck(context) {\n  return { passed: true, violations: [] };\n}';
 
-/** Phase 4 shape so ProjectSettingsPage uses split tabs (Package Policy, Project Status, Pull Request). */
+/** Split-tab policy shape so ProjectSettingsPage renders Package Policy, Project Status, Pull Request tabs. */
 const phase4ProjectPolicies = {
   inherited_package_policy_code: pkg,
   inherited_project_status_code: status,
@@ -129,7 +129,7 @@ describe('ProjectSettingsPage – Policies', () => {
     });
   });
 
-  it('shows Phase 4 sub-tabs Package Policy, Project Status, Pull Request, Change requests', async () => {
+  it('shows sub-tabs Package Policy, Project Status, Pull Request, Change requests', async () => {
     render(<ProjectSettingsPage />);
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Policies' })).toBeInTheDocument();
