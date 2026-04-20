@@ -1,0 +1,17 @@
+{
+  "name": "deptex-test-npm",
+  "version": "1.0.0",
+  "description": "Deptex E2E test fixture — npm ecosystem with intentional CVEs",
+  "license": "MIT",
+  "dependencies": {
+    "lodash": "4.17.20",
+    "minimist": "1.2.5",
+    "jsonwebtoken": "8.5.1",
+    "axios": "0.21.1",
+    "node-fetch": "2.6.1",
+    "readline-sync": "1.4.10"
+  },
+  "devDependencies": {
+    "mocha": "9.2.0"
+  }
+}

@@ -1,0 +1,15 @@
+# Per-fixture artifacts regenerated on every scan — not committed.
+node_modules/
+vendor/
+target/
+.results/
+.pglite-buckets/
+.buckets/
+depscan-reports/
+sbom*.json
+dep-scan.json
+semgrep.json
+trufflehog.json
+
+# Lockfiles (package-lock.json, go.sum, etc.) ARE committed intentionally —
+# deterministic dependency resolution is required for snapshot stability.

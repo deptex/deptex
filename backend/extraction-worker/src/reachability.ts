@@ -6,7 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Readable } from 'stream';
-import { SupabaseClient } from '@supabase/supabase-js';
+import type { Storage } from './storage';
 import { parsePurl, resolvePurlToDependencyId } from './purl';
 
 interface LogLike {
@@ -45,7 +45,7 @@ export async function parseReachableFlows(
   reportsDir: string,
   projectId: string,
   runId: string,
-  supabase: SupabaseClient,
+  supabase: Storage,
   logger: LogLike,
 ): Promise<void> {
   const reachableFiles = fs.readdirSync(reportsDir)
@@ -154,7 +154,7 @@ export async function parseUsageSlices(
   projectId: string,
   runId: string,
   ecosystem: string,
-  supabase: SupabaseClient,
+  supabase: Storage,
   logger: LogLike,
 ): Promise<void> {
   const usageFiles = fs.readdirSync(reportsDir)
@@ -262,7 +262,7 @@ export async function parseLlmPrompts(
   reportsDir: string,
   projectId: string,
   runId: string,
-  supabase: SupabaseClient,
+  supabase: Storage,
   logger: LogLike,
 ): Promise<void> {
   const promptFiles = fs.readdirSync(reportsDir)
@@ -309,7 +309,7 @@ async function matchPromptsToFlows(
   prompts: any[],
   projectId: string,
   runId: string,
-  supabase: SupabaseClient,
+  supabase: Storage,
 ): Promise<number> {
   let matched = 0;
 
@@ -384,7 +384,7 @@ function readCodeSnippet(workspaceRoot: string, filePath: string, lineNumber: nu
 export async function updateReachabilityLevels(
   projectId: string,
   runId: string,
-  supabase: SupabaseClient,
+  supabase: Storage,
   logger: LogLike,
   workspaceRoot?: string,
 ): Promise<void> {
@@ -610,7 +610,7 @@ export async function computeImportCountsFromUsageSlices(
   projectId: string,
   runId: string,
   ecosystem: string,
-  supabase: SupabaseClient,
+  supabase: Storage,
   logger: LogLike,
 ): Promise<void> {
   // For npm, the oxc-parser AST analysis is more precise — only supplement if it found nothing
@@ -729,7 +729,7 @@ export async function parseGoImportsFromSource(
   workspaceRoot: string,
   projectId: string,
   runId: string,
-  supabase: SupabaseClient,
+  supabase: Storage,
   logger: LogLike,
 ): Promise<number> {
   const goFiles = findGoFiles(workspaceRoot);

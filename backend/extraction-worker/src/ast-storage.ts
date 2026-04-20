@@ -1,4 +1,4 @@
-import { SupabaseClient } from '@supabase/supabase-js';
+import type { Storage } from './storage';
 import { Redis } from '@upstash/redis';
 import type { FileAnalysis } from './ast-parser';
 
@@ -29,7 +29,7 @@ export interface PackageImportStats {
  * Does NOT update project_repositories status -- the pipeline handles that.
  */
 export async function storeAstAnalysisResults(
-  supabase: SupabaseClient,
+  supabase: Storage,
   projectId: string,
   organizationId: string,
   runId: string,

@@ -1,4 +1,4 @@
-import { SupabaseClient } from '@supabase/supabase-js';
+import type { Storage } from './storage';
 
 const SECRET_PATTERNS = [
   /ghp_[A-Za-z0-9]{36}/g,
@@ -40,11 +40,11 @@ export type LogStep =
 export type LogLevel = 'info' | 'success' | 'warning' | 'error';
 
 export class ExtractionLogger {
-  private supabase: SupabaseClient;
+  private supabase: Storage;
   private projectId: string;
   private runId: string;
 
-  constructor(supabase: SupabaseClient, projectId: string, runId: string) {
+  constructor(supabase: Storage, projectId: string, runId: string) {
     this.supabase = supabase;
     this.projectId = projectId;
     this.runId = runId;

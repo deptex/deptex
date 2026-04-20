@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { SupabaseClient } from '@supabase/supabase-js';
+import type { Storage } from './storage';
 
 export type ReachabilityStatus = 'reachable' | 'unreachable' | 'unknown';
 export type EntryPointClassification = 'PUBLIC_UNAUTH' | 'AUTH_INTERNAL' | 'OFFLINE_WORKER';
@@ -412,7 +412,7 @@ function countByField<T>(rows: T[], key: keyof T): Record<string, number> {
  * EPD scoring pass with BYOK Anthropic verification and conservative fallback semantics.
  */
 export async function applyEpdScoringFallback(
-  supabase: SupabaseClient,
+  supabase: Storage,
   projectId: string,
   repoRoot: string,
   logger: LogLike,
