@@ -54,6 +54,8 @@ export interface WriteOutputsResult {
   summary: RunSummary;
   vulns: any[];
   deps: any[];
+  semgrep: any[];
+  secrets: any[];
 }
 
 export async function writeOutputs(
@@ -99,7 +101,7 @@ export async function writeOutputs(
   writeJson(path.join(opts.outputDir, 'secrets.json'), sortRows(secretsRaw));
   writeJson(path.join(opts.outputDir, 'reachable_flows.json'), sortRows(flowsRaw));
 
-  return { summary, vulns, deps: depsRaw };
+  return { summary, vulns, deps: depsRaw, semgrep: semgrepRaw, secrets: secretsRaw };
 }
 
 async function fetchRows(
