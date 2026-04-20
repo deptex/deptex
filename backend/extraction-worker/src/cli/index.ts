@@ -2,12 +2,19 @@
 /**
  * deptex-scan — local-mode extraction worker CLI.
  *
- * Usage:
- *   deptex-scan run <path> [options]
+ * Runs INSIDE the Docker image (built from this repo's Dockerfile). The host-
+ * side entry point is `./bin/deptex-scan`, which mounts the workspace at
+ * /workspace and the output dir at /output before invoking this file.
+ *
+ * Usage (host):
+ *   ./bin/deptex-scan run <path> [options]
+ *
+ * Usage (inside container):
+ *   node /app/dist/cli/index.js run /workspace [options]
  *
  * Options:
  *   --output=<dir>        Where to write summary.json + per-finding JSON files
- *                         (default: ./extraction-results)
+ *                         (default: ./extraction-results on host, /output in container)
  *   --ecosystem=<name>    Force ecosystem (npm|pypi|maven|golang|cargo|gem|composer)
  *                         (default: auto-detect from manifest files)
  *   --severity=<list>     Comma-separated filter (e.g. --severity=high,critical)

@@ -309,9 +309,9 @@ function binaryAvailable(name: string): boolean {
 
 const INSTALL_HINTS: Record<string, string> = {
   semgrep:
-    "Semgrep not found — install with: pipx install semgrep (or brew install semgrep). Static analysis skipped.",
+    "Semgrep not found — the Dockerfile bundles it, so this likely means the image is misbuilt or you are running the worker outside the container. Static analysis skipped.",
   trufflehog:
-    "TruffleHog not found — install with: brew install trufflesecurity/trufflehog/trufflehog (or https://github.com/trufflesecurity/trufflehog#installation). Secret scanning skipped.",
+    "TruffleHog not found — the Dockerfile bundles it, so this likely means the image is misbuilt or you are running the worker outside the container. Secret scanning skipped.",
 };
 
 function classifyCloneError(message: string): string {
