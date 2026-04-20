@@ -4,7 +4,7 @@
   "description": "Extraction worker for Deptex - Clone, cdxgen SBOM, dep-scan, Semgrep, TruffleHog",
   "main": "dist/index.js",
   "bin": {
-    "deptex-scan": "dist/cli/index.js"
+    "deptex-scan": "bin/deptex-scan"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -14,7 +14,9 @@
     "schema:dump": "tsx scripts/dump-schema.ts",
     "smoke:pglite": "tsx test/smoke-pglite.ts",
     "test:storage": "tsx test/storage-pglite.test.ts",
-    "cli": "tsx src/cli/index.ts",
+    "docker:prepare": "mkdir -p .schema && cp ../database/schema.sql .schema/schema.sql",
+    "docker:build": "npm run docker:prepare && docker build -t deptex-cli:local .",
+    "scan": "./bin/deptex-scan",
     "test:fixtures": "tsx test/snapshot.ts"
   },
   "keywords": ["extraction", "sbom", "dep-scan"],

@@ -2,6 +2,11 @@
 .pglite-buckets/
 .results/
 .tmp-results/
+extraction-results/
+test-*-results/
+
+# Staged by docker:prepare for COPY into image
+.schema/
 
 # Build artifacts
 dist/
