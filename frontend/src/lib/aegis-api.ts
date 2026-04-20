@@ -7,6 +7,8 @@ export interface AegisThread {
   title: string;
   createdAt: string;
   updatedAt: string;
+  pinnedAt: string | null;
+  archivedAt: string | null;
 }
 
 export type TextPart = { type: 'text'; text: string };
@@ -54,6 +56,22 @@ export const aegisApi = {
     const { thread } = await fetchWithAuth(`/api/aegis/threads/${threadId}`, {
       method: 'PATCH',
       body: JSON.stringify({ title }),
+    });
+    return thread;
+  },
+
+  async setThreadPinned(threadId: string, pinned: boolean): Promise<AegisThread> {
+    const { thread } = await fetchWithAuth(`/api/aegis/threads/${threadId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ pinned }),
+    });
+    return thread;
+  },
+
+  async setThreadArchived(threadId: string, archived: boolean): Promise<AegisThread> {
+    const { thread } = await fetchWithAuth(`/api/aegis/threads/${threadId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ archived }),
     });
     return thread;
   },
