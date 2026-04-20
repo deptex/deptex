@@ -1,8 +1,11 @@
 import { Router, Response } from 'express';
+import { generateText, type UIMessage } from 'ai';
 import { supabase } from '../lib/supabase';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { userHasOrgPermission } from '../lib/permissions';
-import { rowToMessage, rowToThread } from '../lib/aegis/types';
+import { rowToMessage, rowToThread, type MessagePart } from '../lib/aegis/types';
+import { streamChat } from '../lib/aegis/chat';
+import { getAegisModel } from '../lib/aegis/provider';
 
 const router = Router();
 
@@ -163,6 +166,131 @@ router.delete('/messages/:id/below', async (req: AuthRequest, res: Response) => 
 
   if (error) return res.status(500).json({ error: error.message });
   res.status(204).send();
+});
+
+// POST /api/aegis/chat — streaming chat endpoint
+router.post('/chat', async (req: AuthRequest, res: Response) => {
+  const userId = req.user!.id;
+  const { organizationId, threadId: incomingThreadId, messages } = req.body ?? {};
+
+  if (!organizationId || !Array.isArray(messages)) {
+    return res.status(400).json({ error: 'organizationId and messages are required' });
+  }
+  if (!(await userHasOrgPermission(userId, organizationId, AEGIS_PERMISSION))) {
+    return res.status(403).json({ error: 'Permission denied: interact_with_aegis' });
+  }
+
+  const { data: org } = await supabase
+    .from('organizations')
+    .select('id, name')
+    .eq('id', organizationId)
+    .single();
+  if (!org) return res.status(404).json({ error: 'Organization not found' });
+
+  let threadId: string | null = null;
+  if (incomingThreadId) {
+    const thread = await ensureThreadOwnership(incomingThreadId, userId);
+    if (!thread || thread.organization_id !== organizationId) {
+      return res.status(404).json({ error: 'Thread not found' });
+    }
+    threadId = thread.id;
+  } else {
+    const { data: created, error: createErr } = await supabase
+      .from('aegis_chat_threads')
+      .insert({ organization_id: organizationId, user_id: userId, title: 'New chat' })
+      .select('id')
+      .single();
+    if (createErr || !created) return res.status(500).json({ error: createErr?.message ?? 'Thread create failed' });
+    threadId = created.id;
+  }
+
+  const lastUserMessage = [...messages].reverse().find((m: any) => m.role === 'user');
+  if (lastUserMessage) {
+    const userParts: MessagePart[] = Array.isArray(lastUserMessage.parts)
+      ? lastUserMessage.parts.filter((p: any) => p.type === 'text').map((p: any) => ({ type: 'text', text: p.text }))
+      : [{ type: 'text', text: lastUserMessage.content ?? '' }];
+    const userContent =
+      typeof lastUserMessage.content === 'string' && lastUserMessage.content.length > 0
+        ? lastUserMessage.content
+        : userParts.map((p) => (p.type === 'text' ? p.text : '')).join('');
+    await supabase.from('aegis_chat_messages').insert({
+      thread_id: threadId,
+      role: 'user',
+      content: userContent,
+      metadata: { parts: userParts },
+    });
+  }
+
+  const activeThreadId = threadId!;
+  res.setHeader('X-Thread-Id', activeThreadId);
+  res.setHeader('Access-Control-Expose-Headers', 'X-Thread-Id');
+
+  const result = await streamChat({
+    organizationId,
+    orgName: org.name,
+    userId,
+    uiMessages: messages as UIMessage[],
+    onFinishPersist: async ({ text, parts }) => {
+      await supabase.from('aegis_chat_messages').insert({
+        thread_id: activeThreadId,
+        role: 'assistant',
+        content: text,
+        metadata: { parts },
+      });
+      await supabase
+        .from('aegis_chat_threads')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', activeThreadId);
+    },
+  });
+
+  result.pipeUIMessageStreamToResponse(res);
+});
+
+// POST /api/aegis/threads/:id/auto-title — generate a short title from the first exchange
+router.post('/threads/:id/auto-title', async (req: AuthRequest, res: Response) => {
+  const userId = req.user!.id;
+  const threadId = req.params.id;
+
+  const thread = await ensureThreadOwnership(threadId, userId);
+  if (!thread) return res.status(404).json({ error: 'Thread not found' });
+  if (!(await userHasOrgPermission(userId, thread.organization_id, AEGIS_PERMISSION))) {
+    return res.status(403).json({ error: 'Permission denied: interact_with_aegis' });
+  }
+
+  const { data: firstMessages } = await supabase
+    .from('aegis_chat_messages')
+    .select('role, content')
+    .eq('thread_id', threadId)
+    .order('created_at', { ascending: true })
+    .limit(2);
+  if (!firstMessages || firstMessages.length === 0) {
+    return res.status(400).json({ error: 'Thread has no messages yet' });
+  }
+
+  const prompt = `Summarize this chat in 3-5 words, Title Case, no quotes, no trailing punctuation.
+
+User: ${(firstMessages[0]?.content ?? '').slice(0, 800)}
+Assistant: ${(firstMessages[1]?.content ?? '').slice(0, 800)}
+
+Title:`;
+
+  let title: string;
+  try {
+    const { text } = await generateText({ model: getAegisModel(), prompt, temperature: 0.3 });
+    title = text.trim().replace(/^["']|["']$/g, '').replace(/[.?!]+$/, '').slice(0, 80) || 'New chat';
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'Auto-title failed' });
+  }
+
+  const { data: updated, error } = await supabase
+    .from('aegis_chat_threads')
+    .update({ title })
+    .eq('id', threadId)
+    .select('id, organization_id, user_id, title, created_at, updated_at')
+    .single();
+  if (error || !updated) return res.status(500).json({ error: error?.message ?? 'Update failed' });
+  res.json({ thread: rowToThread(updated) });
 });
 
 export default router;
