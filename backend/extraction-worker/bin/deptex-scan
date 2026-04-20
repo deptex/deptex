@@ -85,7 +85,17 @@ if [ -t 1 ]; then
   TTY_FLAG=(-t)
 fi
 
-exec docker run --rm -i "${TTY_FLAG[@]}" \
+# On Linux, Docker volume mounts preserve host UIDs, so files written by the
+# containerized `worker` user (UID 1000) become owned by UID 1000 on the host
+# — wrong for anyone whose host UID isn't 1000. Pass --user to run as the
+# invoking user instead. Docker Desktop (macOS/Windows) remaps automatically,
+# so this guard is Linux-only.
+USER_FLAG=()
+if [ "$(uname)" = "Linux" ]; then
+  USER_FLAG=(--user "$(id -u):$(id -g)")
+fi
+
+exec docker run --rm -i "${TTY_FLAG[@]}" "${USER_FLAG[@]}" \
   -v "$ABS_WS:/workspace" \
   -v "$ABS_OUT:/output" \
   "$IMAGE" \
