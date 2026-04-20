@@ -3,13 +3,19 @@
   "version": "0.1.0",
   "description": "Extraction worker for Deptex - Clone, cdxgen SBOM, dep-scan, Semgrep, TruffleHog",
   "main": "dist/index.js",
+  "bin": {
+    "deptex-scan": "dist/cli/index.js"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "type-check": "tsc --noEmit",
     "schema:dump": "tsx scripts/dump-schema.ts",
-    "smoke:pglite": "tsx test/smoke-pglite.ts"
+    "smoke:pglite": "tsx test/smoke-pglite.ts",
+    "test:storage": "tsx test/storage-pglite.test.ts",
+    "cli": "tsx src/cli/index.ts",
+    "test:fixtures": "tsx test/snapshot.ts"
   },
   "keywords": ["extraction", "sbom", "dep-scan"],
   "license": "LicenseRef-FSL-1.1-ALv2",

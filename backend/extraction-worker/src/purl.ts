@@ -3,7 +3,7 @@
  * Bridges dep-scan's PURL references to our database dependency IDs.
  */
 
-import { SupabaseClient } from '@supabase/supabase-js';
+import type { Storage } from './storage';
 
 export interface ParsedPurl {
   ecosystem: string;
@@ -76,7 +76,7 @@ export function parsePurl(purl: string): ParsedPurl | null {
 }
 
 export async function resolvePurlToDependencyId(
-  supabase: SupabaseClient,
+  supabase: Storage,
   parsed: ParsedPurl,
 ): Promise<string | null> {
   const { data } = await supabase

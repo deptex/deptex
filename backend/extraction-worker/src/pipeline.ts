@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync, spawn } from 'child_process';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import type { Storage } from './storage';
 import { cloneRepository, cleanupRepository, cloneByProvider } from './clone';
 import { parseSbom, getBomRefToNameVersion, patchDevDependencies, type ParsedSbomDep, type ParsedSbomRelationship } from './sbom';
 import { calculateBaseDepscoreNoReachability, calculateDepscore, calculateSecretDepscore, calculateSemgrepDepscore, SEVERITY_TO_CVSS, type AssetTier } from './depscore';
@@ -47,7 +48,7 @@ function getSupabase(): SupabaseClient {
 }
 
 async function updateStep(
-  supabase: SupabaseClient,
+  supabase: Storage,
   projectId: string,
   step: string,
   status?: string
@@ -63,7 +64,7 @@ async function updateStep(
 }
 
 async function setError(
-  supabase: SupabaseClient,
+  supabase: Storage,
   projectId: string,
   message: string
 ): Promise<void> {
@@ -220,6 +221,13 @@ export interface ExtractionJob {
   integration_id?: string;
   /** Set by worker so pipeline can write commit into job payload after clone */
   jobId?: string;
+  /**
+   * Local-mode only. When set, the pipeline skips the clone step and uses
+   * this path as the workspace root. The path is NOT cleaned up on exit.
+   * Used by the CLI (bin/extract.ts) so `deptex scan ./my-repo` runs
+   * against an already-checked-out tree without any git credentials.
+   */
+  localWorkspacePath?: string;
 }
 
 function runDepScan(
@@ -342,9 +350,10 @@ export async function runPipeline(
   job: ExtractionJob,
   logger?: ExtractionLogger | PipelineLogger,
   checkCancelled?: () => Promise<boolean>,
-  heartbeat?: () => Promise<void>
+  heartbeat?: () => Promise<void>,
+  storage?: Storage,
 ): Promise<void> {
-  const supabase = getSupabase();
+  const supabase: Storage = storage ?? (getSupabase() as unknown as Storage);
   const projectId = job.projectId;
   const organizationId = job.organizationId;
   const packageJsonPath = (job.package_json_path ?? '').trim();
@@ -364,38 +373,50 @@ export async function runPipeline(
     // === Clear only dep-scan cache (keep VDB ~30GB so we don't re-download every run) ===
     clearDepscanCacheOnly();
 
-    // === STEP: Clone (CRITICAL) ===
+    // === STEP: Clone (CRITICAL — or bypass for local-mode) ===
     if (checkCancelled && await checkCancelled()) return;
     await updateStep(supabase, projectId, 'cloning', 'extracting');
-    await log.info('cloning', `Cloning repository from ${(job.provider || 'github').charAt(0).toUpperCase() + (job.provider || 'github').slice(1)}...`);
 
     const cloneStart = Date.now();
-    try {
-      repoPath = await withTimeout(
-        () => retry(() => cloneByProvider(job), 'clone'),
-        15 * 60_000,
-        'clone'
-      );
-    } catch (e: any) {
-      if (job.jobId) {
-        const { code, message, stack } = classifyError(e);
-        await logStepError(supabase, {
-          jobId: job.jobId,
-          projectId,
-          step: 'clone',
-          code,
-          message,
-          stack,
-          durationMs: Date.now() - cloneStart,
-          severity: 'error',
-        });
+    if (job.localWorkspacePath) {
+      if (!fs.existsSync(job.localWorkspacePath)) {
+        const msg = `Local workspace not found: ${job.localWorkspacePath}`;
+        await log.error('cloning', msg);
+        await setError(supabase, projectId, msg);
+        throw new Error(msg);
       }
-      const userMsg = classifyCloneError(e.message);
-      await log.error('cloning', userMsg, e);
-      await setError(supabase, projectId, userMsg);
-      throw new Error(userMsg);
+      repoPath = job.localWorkspacePath;
+      await log.info('cloning', `Scanning local workspace: ${job.localWorkspacePath}`);
+      await log.success('cloning', 'Local workspace ready', Date.now() - cloneStart);
+    } else {
+      await log.info('cloning', `Cloning repository from ${(job.provider || 'github').charAt(0).toUpperCase() + (job.provider || 'github').slice(1)}...`);
+      try {
+        repoPath = await withTimeout(
+          () => retry(() => cloneByProvider(job), 'clone'),
+          15 * 60_000,
+          'clone'
+        );
+      } catch (e: any) {
+        if (job.jobId) {
+          const { code, message, stack } = classifyError(e);
+          await logStepError(supabase, {
+            jobId: job.jobId,
+            projectId,
+            step: 'clone',
+            code,
+            message,
+            stack,
+            durationMs: Date.now() - cloneStart,
+            severity: 'error',
+          });
+        }
+        const userMsg = classifyCloneError(e.message);
+        await log.error('cloning', userMsg, e);
+        await setError(supabase, projectId, userMsg);
+        throw new Error(userMsg);
+      }
+      await log.success('cloning', 'Repository cloned successfully', Date.now() - cloneStart);
     }
-    await log.success('cloning', 'Repository cloned successfully', Date.now() - cloneStart);
 
     // Record HEAD commit into job payload for Recent Activity (manual/initial runs; webhook already set it)
     if (job.jobId && repoPath) {
@@ -1626,7 +1647,9 @@ export async function runPipeline(
     await setError(supabase, projectId, error.message);
     throw error;
   } finally {
-    if (repoPath) {
+    // Don't nuke a local workspace the user handed us — that would delete
+    // their actual source tree. Only cleanup repos we cloned ourselves.
+    if (repoPath && !job.localWorkspacePath) {
       if (process.env.KEEP_EXTRACT_WORKSPACE === '1') {
         console.log('[EXTRACT] KEEP_EXTRACT_WORKSPACE=1; skipping workspace cleanup');
       } else {

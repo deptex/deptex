@@ -1,4 +1,4 @@
-import { SupabaseClient } from '@supabase/supabase-js';
+import type { Storage } from './storage';
 
 /**
  * Thrown when a pipeline step exceeds its budget.
@@ -71,7 +71,7 @@ export interface LogStepErrorOptions {
  * Surfaced in /admin/extraction-failures.
  */
 export async function logStepError(
-  supabase: SupabaseClient,
+  supabase: Storage,
   opts: LogStepErrorOptions
 ): Promise<void> {
   const { error } = await supabase.from('extraction_step_errors').insert({

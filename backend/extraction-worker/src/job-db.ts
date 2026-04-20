@@ -1,4 +1,4 @@
-import { SupabaseClient } from '@supabase/supabase-js';
+import type { Storage } from './storage';
 
 export interface ExtractionJobRow {
   id: string;
@@ -18,7 +18,7 @@ export interface ExtractionJobRow {
 }
 
 export async function claimJob(
-  supabase: SupabaseClient,
+  supabase: Storage,
   machineId: string
 ): Promise<ExtractionJobRow | null> {
   const { data, error } = await supabase.rpc('claim_extraction_job', {
@@ -38,7 +38,7 @@ export async function claimJob(
 }
 
 export async function updateJobStatus(
-  supabase: SupabaseClient,
+  supabase: Storage,
   jobId: string,
   status: 'completed' | 'failed',
   error?: string
@@ -54,7 +54,7 @@ export async function updateJobStatus(
 }
 
 export async function sendHeartbeat(
-  supabase: SupabaseClient,
+  supabase: Storage,
   jobId: string
 ): Promise<void> {
   await supabase
@@ -64,7 +64,7 @@ export async function sendHeartbeat(
 }
 
 export async function isJobCancelled(
-  supabase: SupabaseClient,
+  supabase: Storage,
   jobId: string
 ): Promise<boolean> {
   const { data } = await supabase
@@ -80,7 +80,7 @@ export async function isJobCancelled(
  * (e.g. webhook may have set them; worker fills them after clone for manual/initial runs).
  */
 export async function updateJobPayloadCommit(
-  supabase: SupabaseClient,
+  supabase: Storage,
   jobId: string,
   commit: { commit_sha: string; commit_message?: string; branch?: string }
 ): Promise<void> {
