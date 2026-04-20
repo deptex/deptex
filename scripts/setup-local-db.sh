@@ -37,6 +37,9 @@ psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$SCHEMA"
 echo "==> Installing pg_catalog_dump_v1() helper"
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$HELPER"
 
+echo "==> Marking current migrations as baseline"
+(cd "$ROOT/backend" && DATABASE_URL="$DB_URL" npm run --silent migrate:baseline)
+
 echo ""
 echo "Done. Connection info:"
 supabase status
