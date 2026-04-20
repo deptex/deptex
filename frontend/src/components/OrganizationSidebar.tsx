@@ -157,6 +157,7 @@ function OrganizationSidebar({
       if (settingsTab) return 'settings';
     }
     if (pathParts.includes('vulnerabilities')) return 'vulnerabilities';
+    if (pathParts.includes('aegis')) return 'aegis';
     if (currentTab === organizationId) {
       const overviewTab = visibleNavItems.find((tab) => tab.id === 'overview');
       return overviewTab ? 'overview' : 'overview';
