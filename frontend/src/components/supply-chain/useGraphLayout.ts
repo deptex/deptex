@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { type Node, type Edge, MarkerType, Position } from '@xyflow/react';
-import type { SupplyChainResponse, SupplyChainChild, SupplyChainAvailableVersion, SupplyChainBumpPr, ProjectEffectivePolicies, BannedVersion, SupplyChainVersionSecurityData, VersionVulnerabilitySummaryItem } from '../../lib/api';
+import type { SupplyChainResponse, SupplyChainChild, SupplyChainAvailableVersion, SupplyChainBumpPr, ProjectEffectivePolicies, BannedVersion, VersionVulnerabilitySummaryItem } from '../../lib/api';
 import type { AssetTier } from '../../lib/api';
 import { calculateDepscore, SEVERITY_TO_CVSS } from '../../lib/scoring/depscore';
 
@@ -40,9 +40,8 @@ export interface CenterNodeData {
   bumpScopeLoading?: boolean;
   onBanClick: (version: string) => void;
   onUnbanClick: (banId: string) => void;
-  // Watchtower: current project version + per-version security/quarantine (only when org has package on watchtower)
+  /** Current project version (used to mark "current" in the versions dropdown). */
   currentVersion?: string;
-  versionSecurityData?: SupplyChainVersionSecurityData | null;
   /** Safest version (from latest-safe-version) for "Safest version" badge in dropdown */
   safeVersion?: string | null;
   /** Per-version vulnerability flags for dropdown (direct or transitive). */
@@ -87,9 +86,9 @@ export interface VulnerabilityNodeData {
   is_reachable?: boolean | null;
   reachability_level?: string | null;
   fixed_versions?: string[] | null;
-  /** Phase 7: AI fix status for this vulnerability */
+  /** AI fix status for this vulnerability */
   fixStatus?: 'queued' | 'running' | 'completed' | 'failed' | null;
-  /** Phase 15: SLA status for badge (warning = amber clock, breached = red clock) */
+  /** SLA status for badge (warning = amber clock, breached = red clock) */
   sla_status?: string | null;
   sla_deadline_at?: string | null;
 }
@@ -192,7 +191,6 @@ export function useGraphLayout(
     onBanClick: (version: string) => void;
     onUnbanClick: (banId: string) => void;
     currentVersion?: string;
-    versionSecurityData?: SupplyChainVersionSecurityData | null;
     safeVersion?: string | null;
     versionSwitching?: boolean;
     onOpenVersionsSidebar?: () => void;
@@ -309,7 +307,6 @@ export function useGraphLayout(
         onBanClick: extras?.onBanClick ?? (() => { }),
         onUnbanClick: extras?.onUnbanClick ?? (() => { }),
         currentVersion: extras?.currentVersion ?? data.parent.version,
-        versionSecurityData: extras?.versionSecurityData ?? null,
         safeVersion: extras?.safeVersion ?? null,
         versionVulnerabilitySummary: data.versionVulnerabilitySummary ?? null,
         versionSwitching: extras?.versionSwitching ?? false,
@@ -592,5 +589,5 @@ export function useGraphLayout(
     });
 
     return { nodes, edges };
-  }, [data, versionSwitcher?.selectedVersionId, versionSwitcher?.availableVersions, versionSwitcher?.selectedVersion, versionSwitcher?.onVersionChange, extras?.policies, extras?.isViewingAlternateVersion, extras?.originalVersion, extras?.bumpPrs, extras?.dependencyId, extras?.orgId, extras?.projectId, extras?.onPrCreated, extras?.canManage, extras?.bannedVersions, extras?.bannedVersionsLoading, extras?.bumpScopeLoading, extras?.onBanClick, extras?.onUnbanClick, extras?.currentVersion, extras?.versionSecurityData, extras?.safeVersion, extras?.versionSwitching, extras?.onOpenVersionsSidebar, extras?.assetTier, data?.versionVulnerabilitySummary]);
+  }, [data, versionSwitcher?.selectedVersionId, versionSwitcher?.availableVersions, versionSwitcher?.selectedVersion, versionSwitcher?.onVersionChange, extras?.policies, extras?.isViewingAlternateVersion, extras?.originalVersion, extras?.bumpPrs, extras?.dependencyId, extras?.orgId, extras?.projectId, extras?.onPrCreated, extras?.canManage, extras?.bannedVersions, extras?.bannedVersionsLoading, extras?.bumpScopeLoading, extras?.onBanClick, extras?.onUnbanClick, extras?.currentVersion, extras?.safeVersion, extras?.versionSwitching, extras?.onOpenVersionsSidebar, extras?.assetTier, data?.versionVulnerabilitySummary]);
 }

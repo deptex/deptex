@@ -85,7 +85,7 @@ describe('Organization Routes', () => {
   });
 
   describe('POST /api/organizations', () => {
-    it.skip('should create an organization — mock chain out of sync with Phase 4 org creation', async () => {
+    it.skip('should create an organization — mock chain out of sync with org creation', async () => {
       const newOrg = {
         id: 'new-org-1',
         name: 'New Org',
@@ -117,7 +117,7 @@ describe('Organization Routes', () => {
       // 3. Create Default Roles
       queryBuilder.then.mockImplementationOnce((resolve: any) => resolve({ error: null }));
 
-      // 4-10. Statuses, tiers, policy tables (Phase 4), seedOrganizationPolicyDefaults is mocked
+      // 4-10. Statuses, tiers, policy tables, seedOrganizationPolicyDefaults is mocked
       // Provide default so all remaining .then() calls resolve (avoids hang/timeout)
       queryBuilder.then.mockImplementation((resolve: any) => resolve({ data: {}, error: null }));
 

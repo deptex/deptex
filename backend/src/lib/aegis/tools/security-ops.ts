@@ -580,7 +580,7 @@ registerAegisTool(
   }),
 );
 
-// 11. getSLAStatus (Phase 15)
+// 11. getSLAStatus
 registerAegisTool(
   'getSLAStatus',
   {

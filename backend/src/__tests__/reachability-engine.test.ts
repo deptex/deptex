@@ -1,5 +1,5 @@
 /**
- * Phase 6B: Reachability Engine Tests
+ * Reachability Engine Tests
  *
  * Tests 1-6: Research Profile Pipeline
  * Tests 7-11: PURL Resolution

@@ -174,7 +174,7 @@ All version comparisons for vulnerabilities use **semver** (e.g. `semver.coerce`
 
 ## 8. Related Code
 
-- **Poller**: `backend/watchtower-poller/src/index.ts` (daily job), `dependency-refresh.ts` (refresh logic), `osv-checker.ts` (npm latest + currently OSV/npm advisories).
+- **Poller**: `backend/src/lib/watchtower-poll.ts` — invoked by a QStash cron hitting `POST /api/workers/watchtower-daily-poll`. (The standalone `watchtower-poller/` worker was removed; its logic now lives in this shared lib.)
 - **Worker**: `backend/watchtower-worker/src/index.ts` (new_version job, auto-bump), `create-bump-pr.ts` (PR + branch fallback), `github-app.ts` (listPullRequestsByHead).
 - **GHSA**: `backend/src/lib/ghsa.ts` (batch fetch, filter by version, row shape).
 - **Backend create-bump-pr**: `backend/src/lib/create-bump-pr.ts` (branch fallback reference).

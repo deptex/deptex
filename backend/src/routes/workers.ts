@@ -1483,7 +1483,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
       }
     }
 
-    // Phase 6: Log vulnerability timeline events (detected/resolved) with dedup guard
+    // Log vulnerability timeline events (detected/resolved) with dedup guard
     if (projectId && successful > 0) {
       try {
         const { data: currentVulns } = await supabase
@@ -1543,7 +1543,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
                 metadata: {},
               });
 
-              // Phase 15: If PDV row still exists (e.g. not yet removed by extraction), set sla_status = met | resolved_late
+              // If PDV row still exists (e.g. not yet removed by extraction), set sla_status = met | resolved_late
               const now = new Date().toISOString();
               const { data: stillOpen } = await supabase
                 .from('project_dependency_vulnerabilities')
@@ -1570,7 +1570,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
         console.error(`[Phase6] Failed to log timeline events:`, timelineErr?.message);
       }
 
-      // Phase 15: Set SLA deadlines for open vulns that have no SLA yet (newly detected or backfill)
+      // Set SLA deadlines for open vulns that have no SLA yet (newly detected or backfill)
       if (organizationId) {
         try {
           const { data: project } = await supabase
@@ -1635,7 +1635,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
       }
     }
 
-    // Phase 6: Compute version candidates for vulnerable packages
+    // Compute version candidates for vulnerable packages
     if (projectId && organizationId && successful > 0) {
       try {
         const { data: projVulns } = await supabase
@@ -1772,7 +1772,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
       }
     }
 
-    // Run policy evaluation after populate completes (Phase 4)
+    // Run policy evaluation after populate completes
     if (projectId && organizationId && successful > 0) {
       try {
         const { evaluateProjectPolicies } = await import('../lib/policy-engine');
@@ -1794,7 +1794,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
           .update({ status: 'ready', extraction_step: 'completed', last_extracted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
           .eq('project_id', projectId);
 
-        // Phase 10: compute health score and invalidate stats caches
+        // compute health score and invalidate stats caches
         try {
           const { computeHealthScore } = await import('../lib/health-score');
           const score = await computeHealthScore(projectId);
@@ -1806,87 +1806,6 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
         const { invalidateCache } = await import('../lib/cache');
         await invalidateCache(`project-stats:${projectId}`).catch(() => {});
         await invalidateCache(`org-stats:${organizationId}`).catch(() => {});
-
-        // Phase 10B: auto-sync watchtower watchlist when project has watchtower enabled
-        try {
-          const { data: proj } = await supabase
-            .from('projects')
-            .select('watchtower_enabled')
-            .eq('id', projectId)
-            .single();
-
-          if (proj?.watchtower_enabled) {
-            const { data: currentDirect } = await supabase
-              .from('project_dependencies')
-              .select('dependency_id, name, version')
-              .eq('project_id', projectId)
-              .eq('is_direct', true);
-
-            const currentDepIds = new Set((currentDirect || []).map((d: any) => d.dependency_id));
-
-            const { data: existingPwRows } = await supabase
-              .from('project_watchlist')
-              .select('id, organization_watchlist_id, organization_watchlist:organization_watchlist_id(dependency_id)')
-              .eq('project_id', projectId);
-
-            const existingDepIds = new Set(
-              (existingPwRows || []).map((r: any) => (r as any).organization_watchlist?.dependency_id).filter(Boolean)
-            );
-
-            // Add new direct deps
-            const toAdd = (currentDirect || []).filter((d: any) => !existingDepIds.has(d.dependency_id));
-            const newJobs: any[] = [];
-
-            for (const dep of toAdd) {
-              const { data: wl } = await supabase
-                .from('organization_watchlist')
-                .upsert({ organization_id: organizationId, dependency_id: dep.dependency_id }, { onConflict: 'organization_id,dependency_id' })
-                .select('id')
-                .single();
-
-              if (wl) {
-                await supabase.from('project_watchlist')
-                  .upsert({ project_id: projectId, organization_watchlist_id: wl.id }, { onConflict: 'project_id,organization_watchlist_id' });
-
-                const { data: wp } = await supabase.from('watched_packages').select('id').eq('name', dep.name).single();
-                if (wp) {
-                  newJobs.push({
-                    packageName: dep.name,
-                    payload: { watchedPackageId: wp.id, currentVersion: dep.version },
-                    organizationId,
-                    projectId,
-                    dependencyId: dep.dependency_id,
-                  });
-                }
-              }
-            }
-
-            if (newJobs.length > 0) {
-              const { queueWatchtowerJobs: queueBatch } = await import('../lib/watchtower-queue');
-              await queueBatch(newJobs);
-              console.log(`[Watchtower] Auto-added ${newJobs.length} new packages to watchlist for project ${projectId}`);
-            }
-
-            // Remove deps that are no longer direct
-            const toRemove = (existingPwRows || []).filter((r: any) => {
-              const depId = (r as any).organization_watchlist?.dependency_id;
-              return depId && !currentDepIds.has(depId);
-            });
-
-            for (const row of toRemove) {
-              await supabase.from('project_watchlist').delete().eq('id', row.id);
-            }
-
-            if (toRemove.length > 0) {
-              console.log(`[Watchtower] Removed ${toRemove.length} packages from watchlist for project ${projectId}`);
-            }
-
-            await invalidateCache(`watchtower-project-stats:${projectId}`).catch(() => {});
-            await invalidateCache(`watchtower-org-stats:${organizationId}`).catch(() => {});
-          }
-        } catch (wtErr: any) {
-          console.warn(`[Watchtower] Auto-sync failed for project ${projectId}:`, wtErr?.message);
-        }
       } catch (policyErr: any) {
         console.error(`[Policy] Failed to evaluate policies for project ${projectId}:`, policyErr?.message);
       }
@@ -2008,7 +1927,7 @@ router.post('/extract-deps', async (req: express.Request, res: express.Response)
 });
 
 // ============================================================================
-// NOTIFICATION DISPATCH ENDPOINTS (Phase 9)
+// NOTIFICATION DISPATCH ENDPOINTS
 // ============================================================================
 
 const verifyQStashOrInternal = async (req: express.Request, res: express.Response, next: express.NextFunction) => {

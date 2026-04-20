@@ -1,5 +1,5 @@
 /**
- * Phase 7B: Aegis Slack bot handler.
+ * Aegis Slack bot handler.
  * Handles:
  * - app_mention events from Slack Events API
  * - Slash commands: /aegis status, /aegis fix CVE-..., /aegis report

@@ -16,21 +16,20 @@ export const TIER_DISPLAY_NAMES: Record<string, string> = {
 
 export type PlanTier = keyof typeof TIER_MAP;
 
-// Full tier limits (Phase 13 billing)
+// Full tier limits (billing)
 export const PLAN_LIMITS: Record<string, Record<string, number>> = {
-  free: { projects: 3, members: 5, syncs: 10, watchtower: 1, teams: 1, notification_rules: 3, integrations: 5, automations: 0, api_rpm: 60 },
-  pro: { projects: 15, members: 20, syncs: 100, watchtower: 5, teams: 5, notification_rules: 10, integrations: 10, automations: 5, api_rpm: 300 },
-  team: { projects: 50, members: -1, syncs: 1000, watchtower: 20, teams: 20, notification_rules: 25, integrations: 15, automations: 20, api_rpm: 1000 },
-  enterprise: { projects: -1, members: -1, syncs: -1, watchtower: -1, teams: -1, notification_rules: -1, integrations: -1, automations: -1, api_rpm: 5000 },
+  free: { projects: 3, members: 5, syncs: 10, teams: 1, notification_rules: 3, integrations: 5, automations: 0, api_rpm: 60 },
+  pro: { projects: 15, members: 20, syncs: 100, teams: 5, notification_rules: 10, integrations: 10, automations: 5, api_rpm: 300 },
+  team: { projects: 50, members: -1, syncs: 1000, teams: 20, notification_rules: 25, integrations: 15, automations: 20, api_rpm: 1000 },
+  enterprise: { projects: -1, members: -1, syncs: -1, teams: -1, notification_rules: -1, integrations: -1, automations: -1, api_rpm: 5000 },
 };
 
-// Feature gates by tier (Phase 13)
+// Feature gates by tier
 export const PLAN_FEATURES: Record<string, Record<string, boolean>> = {
   free: {
     aegis_chat: false,
     ai_fixes: false,
     background_monitoring: false,
-    watchtower_forensics: false,
     sync_frequency: false,
     sso: false,
     mfa_enforcement: false,
@@ -45,7 +44,6 @@ export const PLAN_FEATURES: Record<string, Record<string, boolean>> = {
     aegis_chat: true,
     ai_fixes: true,
     background_monitoring: true,
-    watchtower_forensics: true,
     sync_frequency: true,
     sso: false,
     mfa_enforcement: false,
@@ -60,7 +58,6 @@ export const PLAN_FEATURES: Record<string, Record<string, boolean>> = {
     aegis_chat: true,
     ai_fixes: true,
     background_monitoring: true,
-    watchtower_forensics: true,
     sync_frequency: true,
     sso: true,
     mfa_enforcement: true,
@@ -75,7 +72,6 @@ export const PLAN_FEATURES: Record<string, Record<string, boolean>> = {
     aegis_chat: true,
     ai_fixes: true,
     background_monitoring: true,
-    watchtower_forensics: true,
     sync_frequency: true,
     sso: true,
     mfa_enforcement: true,
@@ -206,7 +202,7 @@ export function getResolvedLimits(tier: string, customLimits: Record<string, num
   return out;
 }
 
-// Resource count order expected by tests: projects, members, teams, watchtower, notification_rules, integrations, automations
+// Resource count order: projects, members, teams, notification_rules, integrations, automations
 async function getResourceCounts(organizationId: string): Promise<number[]> {
   const count = async (table: string, column: string): Promise<number> => {
     try {
@@ -221,17 +217,16 @@ async function getResourceCounts(organizationId: string): Promise<number[]> {
     }
   };
 
-  const [projects, members, teams, watchtower, notification_rules, integrations, automations] = await Promise.all([
+  const [projects, members, teams, notification_rules, integrations, automations] = await Promise.all([
     count('projects', 'organization_id'),
     count('organization_members', 'organization_id'),
     count('teams', 'organization_id'),
-    count('organization_watchlist', 'organization_id'),
     count('organization_notification_rules', 'organization_id'),
     count('organization_integrations', 'organization_id'),
     count('aegis_automations', 'organization_id'),
   ]);
 
-  return [projects, members, teams, watchtower, notification_rules, integrations, automations];
+  return [projects, members, teams, notification_rules, integrations, automations];
 }
 
 export interface UsageSummary {
@@ -247,13 +242,12 @@ export interface UsageSummary {
 export async function getUsageSummary(organizationId: string): Promise<UsageSummary> {
   const plan = await getOrgPlan(organizationId);
   const limits = getResolvedLimits(plan.plan_tier, plan.custom_limits);
-  const [projects, members, teams, watchtower, notification_rules, integrations, automations] = await getResourceCounts(organizationId);
+  const [projects, members, teams, notification_rules, integrations, automations] = await getResourceCounts(organizationId);
 
   const usage: Record<string, number> = {
     projects,
     members,
     syncs: plan.syncs_used,
-    watchtower,
     teams,
     notification_rules,
     integrations,
@@ -283,7 +277,7 @@ export async function checkPlanLimit(
   if (limit === -1) return { allowed: true, tier: plan.plan_tier };
 
   const counts = await getResourceCounts(organizationId);
-  const resourceOrder = ['projects', 'members', 'teams', 'watchtower', 'notification_rules', 'integrations', 'automations'];
+  const resourceOrder = ['projects', 'members', 'teams', 'notification_rules', 'integrations', 'automations'];
   const idx = resourceOrder.indexOf(resource);
   let current = idx >= 0 ? counts[idx] : 0;
   if (resource === 'syncs') current = plan.syncs_used;
@@ -304,7 +298,7 @@ export async function checkPlanFeature(
   const features = PLAN_FEATURES[plan.plan_tier] ?? PLAN_FEATURES.free;
   const allowed = features[feature] === true;
   const requiredTier = (() => {
-    if (['aegis_chat', 'ai_fixes', 'background_monitoring', 'watchtower_forensics', 'sync_frequency', 'aegis_management'].includes(feature)) return 'pro';
+    if (['aegis_chat', 'ai_fixes', 'background_monitoring', 'sync_frequency', 'aegis_management'].includes(feature)) return 'pro';
     if (['sso', 'mfa_enforcement', 'legal_docs', 'audit_logs', 'security_slas'].includes(feature)) return 'team';
     if (feature === 'custom_sla') return 'enterprise';
     return 'free';
@@ -318,12 +312,11 @@ export async function checkDowngradeAllowed(
 ): Promise<{ allowed: boolean; overLimits: Array<{ resource: string; current: number; limit: number }> }> {
   const plan = await getOrgPlan(organizationId);
   const targetLimits = getResolvedLimits(targetTier, null);
-  const [projects, members, teams, watchtower, notification_rules, integrations, automations] = await getResourceCounts(organizationId);
+  const [projects, members, teams, notification_rules, integrations, automations] = await getResourceCounts(organizationId);
   const usage = {
     projects,
     members,
     syncs: plan.syncs_used,
-    watchtower,
     teams,
     notification_rules,
     integrations,

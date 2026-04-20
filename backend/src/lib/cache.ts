@@ -29,8 +29,7 @@ export function getRedisClient(): Redis | null {
  */
 const CACHE_TTL = {
   LATEST_SAFE_VERSION: 10 * 60, // 10 minutes - safe versions don't change frequently
-  WATCHTOWER_SUMMARY: 5 * 60,   // 5 minutes - summary can change more frequently
-  VERSIONS: 5 * 60,             // 5 minutes - dependency versions list (watchtower sidebar)
+  VERSIONS: 5 * 60,             // 5 minutes - dependency versions list
   DEPENDENCIES: 12 * 60 * 60,   // 12 hours - dependencies tab list
   POLICIES: 12 * 60 * 60,       // 12 hours - project effective policies
   IMPORT_STATUS: 12 * 60 * 60,  // 12 hours - import/AST completion status
@@ -51,18 +50,7 @@ export function getLatestSafeVersionCacheKey(
 }
 
 /**
- * Generate cache key for watchtower summary
- */
-export function getWatchtowerSummaryCacheKey(
-  packageName: string,
-  projectDependencyId?: string
-): string {
-  const depId = projectDependencyId || 'none';
-  return `watchtower-summary:${packageName}:${depId}`;
-}
-
-/**
- * Cache key for dependency versions (watchtower versions sidebar)
+ * Cache key for dependency versions (versions sidebar)
  */
 export function getDependencyVersionsCacheKey(
   organizationId: string,
@@ -333,31 +321,6 @@ export async function invalidateLatestSafeVersionCache(
     await Promise.all(keys.map((key) => client.del(key)));
   } catch (error: any) {
     console.warn(`[Cache] Failed to invalidate latest safe version cache:`, error.message);
-  }
-}
-
-/**
- * Invalidate watchtower summary cache for a package
- */
-export async function invalidateWatchtowerSummaryCache(
-  packageName: string,
-  projectDependencyId?: string
-): Promise<void> {
-  const client = getRedisClient();
-  if (!client) {
-    return;
-  }
-
-  try {
-    const key = getWatchtowerSummaryCacheKey(packageName, projectDependencyId);
-    await client.del(key);
-    // Also invalidate the version without projectDependencyId if it exists
-    if (projectDependencyId) {
-      const globalKey = getWatchtowerSummaryCacheKey(packageName);
-      await client.del(globalKey);
-    }
-  } catch (error: any) {
-    console.warn(`[Cache] Failed to invalidate watchtower summary cache:`, error.message);
   }
 }
 

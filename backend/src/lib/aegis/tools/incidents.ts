@@ -1,5 +1,5 @@
 /**
- * Phase 17: Aegis incident response tools.
+ * Aegis incident response tools.
  * Registers declareIncident, getIncidentStatus, listActiveIncidents.
  */
 

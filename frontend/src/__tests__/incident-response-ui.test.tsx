@@ -1,7 +1,7 @@
 /**
- * Phase 17: Incident Response UI — frontend tests.
+ * Incident Response UI — frontend tests.
  * Covers AegisPage incident sidebar, IncidentDetailView, IncidentResponseSection,
- * and integration flows (Phase 9 notifications, Phase 7 fix sprint, re-extraction, Phase 15 SLA).
+ * and integration flows (notifications, fix sprint, re-extraction, SLA).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -82,7 +82,7 @@ function getFetchUrl(input: unknown): string {
   return String(input);
 }
 
-describe('Phase 17: Incident Response UI', () => {
+describe('Incident Response UI', () => {
   beforeEach(() => {
     mockMatchMedia();
     mockFetch.mockReset();
@@ -461,7 +461,7 @@ describe('Phase 17: Incident Response UI', () => {
   });
 
   describe('Integration (41–44)', () => {
-    it('41: Phase 9 notification events dispatch for incident lifecycle events', () => {
+    it('41: notification events dispatch for incident lifecycle events', () => {
       const incidentLifecycleEventTypes = [
         'incident_declared',
         'incident_contained',
@@ -473,7 +473,7 @@ describe('Phase 17: Incident Response UI', () => {
       expect(incidentLifecycleEventTypes.length).toBe(3);
     });
 
-    it('42: Remediation phase triggers Phase 7 fix sprint', () => {
+    it('42: Remediation phase triggers fix sprint', () => {
       const remediatePhaseTools = ['createSecuritySprint', 'triggerAiFix'];
       const zeroDayRemediateTool = 'createSecuritySprint';
       expect(remediatePhaseTools).toContain(zeroDayRemediateTool);
@@ -487,8 +487,8 @@ describe('Phase 17: Incident Response UI', () => {
       expect(zeroDayVerifyTool).toBe('triggerExtraction');
     });
 
-    it('44: SLA deadlines from Phase 15 shown in Assess phase output', () => {
-      const assessPhaseTools = ['assessBlastRadius', 'getSLAStatus', 'getWatchtowerSummary'];
+    it('44: SLA deadlines shown in Assess phase output', () => {
+      const assessPhaseTools = ['assessBlastRadius', 'getSLAStatus'];
       const slaTool = 'getSLAStatus';
       expect(assessPhaseTools).toContain(slaTool);
       expect(slaTool).toBe('getSLAStatus');

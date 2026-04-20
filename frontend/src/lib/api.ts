@@ -43,7 +43,6 @@ export interface RolePermissions {
   manage_teams_and_projects: boolean;
   manage_integrations: boolean;
   manage_notifications?: boolean;
-  manage_watchtower?: boolean;
   view_overview?: boolean;
   view_all_teams_and_projects?: boolean;
 }
@@ -258,7 +257,6 @@ export const api = {
   // Dependency tab prefetch caches (keyed by "orgId:projectId:depId")
   _depOverviewPrefetchCache: new Map<string, Promise<[any, ProjectEffectivePolicies | null]>>(),
   _supplyChainPrefetchCache: new Map<string, Promise<[SupplyChainResponse, ProjectEffectivePolicies | null]>>(),
-  _watchtowerPrefetchCache: new Map<string, Promise<[WatchtowerSummary | null, WatchtowerCommitsResponse]>>(),
   _notesPrefetchCache: new Map<string, Promise<{ notes: DependencyNote[] }>>(),
 
   async authenticatedGet<T = unknown>(url: string): Promise<T> {
@@ -1697,31 +1695,6 @@ export const api = {
     return null;
   },
 
-  prefetchWatchtowerData(depName: string, depId: string, orgId: string): void {
-    const key = `${orgId}:${depId}`;
-    if (!this._watchtowerPrefetchCache.has(key)) {
-      const promise = Promise.all([
-        this.getWatchtowerSummary(depName, depId).catch(() => null),
-        this.getWatchtowerCommits(depName, 50, 0, orgId, depId)
-          .catch(() => ({ commits: [], total: 0, limit: 50, offset: 0 } as WatchtowerCommitsResponse)),
-      ]).catch(() => {
-        this._watchtowerPrefetchCache.delete(key);
-        return [null, { commits: [], total: 0, limit: 50, offset: 0 }] as [null, WatchtowerCommitsResponse];
-      });
-      this._watchtowerPrefetchCache.set(key, promise);
-    }
-  },
-
-  consumePrefetchedWatchtower(orgId: string, depId: string): Promise<[WatchtowerSummary | null, WatchtowerCommitsResponse]> | null {
-    const key = `${orgId}:${depId}`;
-    const cached = this._watchtowerPrefetchCache.get(key);
-    if (cached) {
-      this._watchtowerPrefetchCache.delete(key);
-      return cached;
-    }
-    return null;
-  },
-
   prefetchDependencyNotes(orgId: string, projectId: string, projectDependencyId: string): void {
     const key = `${orgId}:${projectId}:${projectDependencyId}`;
     if (!this._notesPrefetchCache.has(key)) {
@@ -1743,51 +1716,11 @@ export const api = {
     return null;
   },
 
-  async updateDependencyWatching(
-    organizationId: string,
-    projectId: string,
-    dependencyId: string,
-    isWatching: boolean
-  ): Promise<{ id: string; is_watching: boolean }> {
-    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/dependencies/${dependencyId}/watching`, {
-      method: 'PATCH',
-      body: JSON.stringify({ is_watching: isWatching }),
-    });
-  },
-
-  async clearWatchtowerCommits(
-    organizationId: string,
-    projectId: string,
-    dependencyId: string
-  ): Promise<{ id: string; watchtower_cleared_at: string }> {
-    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/dependencies/${dependencyId}/clear-commits`, {
-      method: 'PATCH',
-    });
-  },
-
-  async patchWatchlistQuarantine(
-    organizationId: string,
-    projectId: string,
-    dependencyId: string,
-    quarantine_next_release: boolean
-  ): Promise<{ quarantine_next_release: boolean }> {
-    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/dependencies/${dependencyId}/watchlist-quarantine`, {
-      method: 'PATCH',
-      body: JSON.stringify({ quarantine_next_release }),
-    });
-  },
-
   async getProjectImportStatus(
     organizationId: string,
     projectId: string
   ): Promise<ProjectImportStatus> {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/import-status`);
-  },
-
-  async requeueAstParsing(organizationId: string, projectId: string): Promise<{ success: boolean; message?: string }> {
-    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/requeue-ast`, {
-      method: 'POST',
-    });
   },
 
   async cancelExtraction(organizationId: string, projectId: string): Promise<{ success: boolean }> {
@@ -1905,7 +1838,7 @@ export const api = {
     );
   },
 
-  // Phase 6: Security Tab API functions
+  // Security Tab API functions
   async getProjectSemgrepFindings(
     organizationId: string,
     projectId: string,
@@ -2007,7 +1940,7 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/security-summary`);
   },
 
-  // Phase 6B: Reachability endpoints
+  // Reachability endpoints
   async getReachableFlows(
     organizationId: string,
     projectId: string,
@@ -2120,87 +2053,6 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(data),
     });
-  },
-
-  // Watchtower API
-  async getWatchtowerSummary(
-    packageName: string,
-    projectDependencyId?: string,
-    options?: { refresh?: boolean }
-  ): Promise<WatchtowerSummary> {
-    const params = new URLSearchParams();
-    if (projectDependencyId) params.set('project_dependency_id', projectDependencyId);
-    if (options?.refresh) params.set('refresh', 'true');
-    const query = params.toString() ? `?${params.toString()}` : '';
-    return fetchWithAuth(`/api/watchtower/${encodeURIComponent(packageName)}/summary${query}`);
-  },
-
-  async getWatchtowerCommits(
-    packageName: string,
-    limit: number = 50,
-    offset: number = 0,
-    organizationId?: string,
-    projectDependencyId?: string,
-    filter?: 'touches_imported',
-    sort?: 'anomaly'
-  ): Promise<WatchtowerCommitsResponse> {
-    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-    if (organizationId) params.set('organization_id', organizationId);
-    if (projectDependencyId) params.set('project_dependency_id', projectDependencyId);
-    if (filter === 'touches_imported') params.set('filter', 'touches_imported');
-    if (sort === 'anomaly') params.set('sort', 'anomaly');
-    return fetchWithAuth(
-      `/api/watchtower/${encodeURIComponent(packageName)}/commits?${params.toString()}`
-    );
-  },
-
-  async clearWatchtowerCommit(
-    organizationId: string,
-    projectId: string,
-    dependencyId: string,
-    commitSha: string
-  ): Promise<void> {
-    await fetchWithAuth(
-      `/api/organizations/${organizationId}/projects/${projectId}/dependencies/${dependencyId}/cleared-commits`,
-      { method: 'POST', body: JSON.stringify({ commit_sha: commitSha }) }
-    );
-  },
-
-  async analyzeWatchtowerCommit(packageName: string, commitSha: string, repoFullName: string): Promise<{ analysis: string }> {
-    return fetchWithAuth('/api/watchtower/analyze-commit', {
-      method: 'POST',
-      body: JSON.stringify({ packageName, commitSha, repoFullName }),
-    });
-  },
-
-  async getWatchtowerContributors(packageName: string): Promise<any[]> {
-    return fetchWithAuth(`/api/watchtower/${encodeURIComponent(packageName)}/contributors`);
-  },
-
-  async createWatchtowerBumpPR(
-    organizationId: string,
-    projectId: string,
-    dependencyId: string,
-    targetVersion?: string
-  ): Promise<{ pr_url: string; pr_number: number; already_exists?: boolean }> {
-    return fetchWithAuth(
-      `/api/organizations/${organizationId}/projects/${projectId}/dependencies/${dependencyId}/watchtower/bump`,
-      {
-        method: 'POST',
-        body: targetVersion ? JSON.stringify({ target_version: targetVersion }) : undefined,
-      }
-    );
-  },
-
-  async createWatchtowerDecreasePR(
-    organizationId: string,
-    projectId: string,
-    dependencyId: string
-  ): Promise<{ pr_url: string; pr_number: number; already_exists?: boolean }> {
-    return fetchWithAuth(
-      `/api/organizations/${organizationId}/projects/${projectId}/dependencies/${dependencyId}/watchtower/decrease`,
-      { method: 'POST' }
-    );
   },
 
   async createRemoveDependencyPR(
@@ -2422,7 +2274,7 @@ export const api = {
     );
   },
 
-  // ───── Phase 4: Statuses ─────
+  // ───── Statuses ─────
 
   async getOrganizationStatuses(orgId: string): Promise<OrganizationStatus[]> {
     return fetchWithAuth(`/api/organizations/${orgId}/statuses`);
@@ -2454,7 +2306,7 @@ export const api = {
     return Array.isArray(res) ? res : (res?.statuses ?? []);
   },
 
-  // ───── Phase 4: Asset Tiers ─────
+  // ───── Asset Tiers ─────
 
   async getOrganizationAssetTiers(orgId: string): Promise<OrganizationAssetTier[]> {
     return fetchWithAuth(`/api/organizations/${orgId}/asset-tiers`);
@@ -2481,7 +2333,7 @@ export const api = {
     });
   },
 
-  // ───── Phase 4: Split Policy Code ─────
+  // ───── Split Policy Code ─────
 
   async getOrganizationPolicyCode(orgId: string): Promise<{
     package_policy: { package_policy_code: string | null };
@@ -2515,7 +2367,7 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/policy-change-requests`);
   },
 
-  // ───── Phase 15: Security SLA Management ─────
+  // ───── Security SLA Management ─────
 
   async getSlaPolicies(orgId: string): Promise<{ policies: SlaPolicy[]; sla_paused_at: string | null }> {
     return fetchWithAuth(`/api/organizations/${orgId}/sla-policies`);
@@ -2558,7 +2410,7 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/sla-policy-changes`);
   },
 
-  // ───── Phase 4: Policy Evaluation ─────
+  // ───── Policy Evaluation ─────
 
   async validatePolicyCode(orgId: string, code: string, codeType: string): Promise<PolicyValidationResult> {
     return fetchWithAuth(`/api/organizations/${orgId}/validate-policy`, {
@@ -2589,7 +2441,7 @@ export const api = {
     });
   },
 
-  // ───── Phase 5: Compliance Endpoints ─────
+  // ───── Compliance Endpoints ─────
 
   async reEvaluateProjectPolicy(orgId: string, projectId: string): Promise<{ statusName: string; violations: string[]; depResults: number }> {
     return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/evaluate-policy`, {
@@ -2648,7 +2500,7 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/license-obligations`);
   },
 
-  // ───── Phase 4: Project Policy Changes ─────
+  // ───── Project Policy Changes ─────
 
   async getProjectPolicyChanges(orgId: string, projectId: string, codeType?: string): Promise<ProjectPolicyChange[]> {
     const params = codeType ? `?code_type=${codeType}` : '';
@@ -2676,7 +2528,7 @@ export const api = {
     });
   },
 
-  // ───── Phase 8: Pull Requests & Commits ─────
+  // ───── Pull Requests & Commits ─────
 
   async getProjectPullRequests(
     orgId: string,
@@ -2704,7 +2556,7 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/commits?${params}`);
   },
 
-  // Phase 10: Overview stats endpoints
+  // Overview stats endpoints
   async getProjectStats(orgId: string, projectId: string): Promise<ProjectStats> {
     return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/stats`);
   },
@@ -2734,7 +2586,7 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/teams/${teamId}/stats`);
   },
 
-  // Phase 7: AI Fix
+  // AI Fix
   async requestFix(orgId: string, projectId: string, body: {
     strategy: string;
     vulnerabilityOsvId?: string;
@@ -2775,7 +2627,7 @@ export const api = {
     });
   },
 
-  // Phase 16: Learning
+  // Learning
   async getStrategyRecommendations(orgId: string, params: {
     ecosystem: string;
     vulnerabilityType?: string;
@@ -2908,7 +2760,7 @@ export interface Project {
   role?: string;
   asset_tier?: AssetTier;
   notifications_paused_until?: string | null;
-  // Phase 4: Custom statuses and tiers
+  // Custom statuses and tiers
   status_id?: string | null;
   status_name?: string;
   status_color?: string;
@@ -2938,7 +2790,7 @@ export interface ProjectRepository {
   webhook_status?: string | null;
   last_webhook_at?: string | null;
   last_webhook_event?: string | null;
-  /** Last successful extraction / dependency sync completion (Phase 8). */
+  /** Last successful extraction / dependency sync completion. */
   last_extracted_at?: string | null;
 }
 
@@ -2989,7 +2841,6 @@ export interface ProjectDependency {
   parent_package?: string | null;
   environment?: 'prod' | 'dev' | null;
   is_watching: boolean;
-  watchtower_cleared_at?: string | null;
   files_importing_count?: number | null;
   imported_functions?: string[];
   imported_file_paths?: string[];
@@ -3038,7 +2889,7 @@ export interface DependencyVersionVulnerability {
   from_package?: string;
   /** Depscore (0-100) when available from project vulnerability data. */
   depscore?: number | null;
-  /** Phase 18: contextual score (base × EPD factor) when EPD has run for this project. */
+  /** contextual score (base × EPD factor) when EPD has run for this project. */
   contextual_depscore?: number | null;
   cvss_score?: number | null;
   epss_score?: number | null;
@@ -3053,15 +2904,9 @@ export interface DependencyVersionItem {
   transitiveVulnCount?: number;
   transitiveVulnerabilities?: DependencyVersionVulnerability[];
   totalVulnCount?: number;
-  registry_integrity_status: 'pass' | 'warning' | 'fail' | null;
-  registry_integrity_reason: string | null;
-  install_scripts_status: 'pass' | 'warning' | 'fail' | null;
-  install_scripts_reason: string | null;
-  entropy_analysis_status: 'pass' | 'warning' | 'fail' | null;
-  entropy_analysis_reason: string | null;
 }
 
-export interface WatchtowerPRItem {
+export interface DependencyBumpPR {
   target_version: string;
   pr_url: string;
   pr_number: number;
@@ -3071,7 +2916,7 @@ export interface DependencyVersionsResponse {
   versions: DependencyVersionItem[];
   currentVersion: string;
   latestVersion: string;
-  prs: WatchtowerPRItem[];
+  prs: DependencyBumpPR[];
   bannedVersions?: string[];
   /** Present when request used limit/offset (paginated); total count of versions. */
   total?: number;
@@ -3106,18 +2951,6 @@ export interface SupplyChainBumpPr {
   target_version: string;
   pr_url: string;
   pr_number: number;
-}
-
-export interface VersionSecurityChecks {
-  registry_integrity_status: string | null;
-  install_scripts_status: string | null;
-  entropy_analysis_status: string | null;
-}
-
-export interface SupplyChainVersionSecurityData {
-  onWatchtower: boolean;
-  quarantinedVersions: string[];
-  securityChecks: Record<string, VersionSecurityChecks>;
 }
 
 export interface VersionVulnerabilitySummaryItem {
@@ -3158,8 +2991,6 @@ export interface SupplyChainResponse {
   ancestors: SupplyChainAncestorNode[][];
   availableVersions: SupplyChainAvailableVersion[];
   bumpPrs: SupplyChainBumpPr[];
-  /** Present when org has this package on watchtower: security checks and quarantined versions per version. */
-  versionSecurityData?: SupplyChainVersionSecurityData;
   /** Per-version vulnerability flags for dropdown (direct and transitive). Key is version string. */
   versionVulnerabilitySummary?: Record<string, VersionVulnerabilitySummaryItem>;
   /** Banned versions for this dependency (org + team when project in context). Included in initial load to avoid a second request. */
@@ -3279,12 +3110,12 @@ export interface ProjectVulnerability {
   cvss_score?: number;
   cisa_kev?: boolean;
   depscore?: number;
-  /** Phase 18: EPD-weighted score when present; prefer for prioritization over raw depscore. */
+  /** EPD-weighted score when present; prefer for prioritization over raw depscore. */
   contextual_depscore?: number | null;
-  /** Phase 15: SLA status (on_track, warning, breached, met, resolved_late, exempt). */
+  /** SLA status (on_track, warning, breached, met, resolved_late, exempt). */
   sla_status?: string | null;
   sla_deadline_at?: string | null;
-  /** Phase 6B / org list */
+  /** Reachability (org list rows) */
   reachability_level?: ReachabilityLevel;
   /** Set on organization-wide vulnerability list rows */
   project_id?: string;
@@ -3298,8 +3129,6 @@ export interface ProjectPermissions {
   manage_members: boolean;
   view_settings: boolean;
   edit_settings: boolean;
-  /** True when user has org manage_teams_and_projects or team manage_projects (owner team). Required for watchtower management. */
-  can_manage_watchtower?: boolean;
   view_watchlist?: boolean;
 }
 
@@ -3680,7 +3509,7 @@ export interface ProjectEffectivePolicies {
   accepted_exceptions: ProjectPolicyException[];
   pending_exceptions: ProjectPolicyException[];
   revoked_exceptions?: ProjectPolicyException[];
-  // Phase 4: split policy code (inherited from org, effective = project override or inherited)
+  // split policy code (inherited from org, effective = project override or inherited)
   inherited_package_policy_code?: string;
   inherited_project_status_code?: string;
   inherited_pr_check_code?: string;
@@ -3704,7 +3533,7 @@ export interface ProjectPRGuardrails {
   updated_at?: string;
 }
 
-// Phase 5: Registry search types
+// Registry search types
 export interface RegistrySearchResult {
   name: string;
   version: string;
@@ -3764,60 +3593,7 @@ export interface BumpAllResponse {
   }>;
 }
 
-// Watchtower types
-
-export interface WatchtowerSummary {
-  name: string;
-  status: 'pending' | 'analyzing' | 'ready' | 'error';
-  latest_version?: string | null;
-  latest_release_date?: string | null;
-  latest_allowed_version?: string | null;
-  quarantine_next_release?: boolean;
-  is_current_version_quarantined?: boolean;
-  quarantine_until?: string | null;
-  bump_pr_url?: string | null;
-  decrease_pr_url?: string | null;
-  registry_integrity_status?: 'pass' | 'warning' | 'fail' | null;
-  registry_integrity_reason?: string | null;
-  install_scripts_status?: 'pass' | 'warning' | 'fail' | null;
-  install_scripts_reason?: string | null;
-  entropy_analysis_status?: 'pass' | 'warning' | 'fail' | null;
-  entropy_analysis_reason?: string | null;
-  maintainer_analysis_status?: 'pass' | 'warning' | 'fail' | null;
-  quarantine_expires_at?: string | null;
-  analyzed_at?: string | null;
-  commits_count: number;
-  contributors_count: number;
-  anomalies_count: number;
-  top_anomaly_score: number;
-}
-
-export interface WatchtowerCommit {
-  id: string;
-  sha: string;
-  author: string;
-  author_email: string;
-  message: string;
-  timestamp: string;
-  lines_added: number;
-  lines_deleted: number;
-  files_changed: number;
-  anomaly?: {
-    score: number;
-    breakdown: Array<{ factor: string; points: number; reason: string }>;
-  } | null;
-  touched_functions?: string[];
-  touches_imported_functions?: string[];
-}
-
-export interface WatchtowerCommitsResponse {
-  commits: WatchtowerCommit[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
-// Phase 6: Security Tab types
+// Security Tab types
 
 export interface SemgrepFinding {
   id: string;
@@ -3981,7 +3757,6 @@ export interface DependencySecuritySummary {
     risk_accepted: boolean;
   }>;
   version_candidates: VersionCandidate[];
-  watchtower: { status: string; analysis_data: any } | null;
   usage_slices?: UsageSlice[];
   reachable_flows?: ReachableFlow[];
 }
@@ -4006,7 +3781,7 @@ export interface PaginatedResponse<T> {
   per_page: number;
 }
 
-// Phase 6B: Reachability types
+// Reachability types
 export interface ReachableFlowNode {
   id?: number;
   label?: string;
@@ -4071,7 +3846,7 @@ export interface CodeContext {
 
 export type ReachabilityLevel = 'unreachable' | 'module' | 'function' | 'data_flow' | 'confirmed' | null;
 
-// Phase 8: PR & Commit tracking types
+// PR & Commit tracking types
 
 export interface ProjectPullRequest {
   id: string;
@@ -4123,7 +3898,7 @@ export interface ProjectCommit {
   created_at: string;
 }
 
-// Phase 10: Overview Stats types
+// Overview Stats types
 
 export interface ProjectStats {
   health_score: number;
@@ -4212,7 +3987,7 @@ export interface TopVuln {
   worst_project: { id: string; name: string };
 }
 
-// ─── Phase 16: Learning types ───
+// ─── Learning types ───
 
 export interface StrategyRecommendation {
   strategy: string;
@@ -4269,7 +4044,7 @@ export interface LearningDashboard {
   totalRatings: number;
 }
 
-// ─── Phase 13: Billing API ───
+// ─── Billing API ───
 
 export interface StripeInvoice {
   id: string;

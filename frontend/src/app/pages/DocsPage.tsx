@@ -8,7 +8,6 @@ import OrganizationsContent from "./docs/OrganizationsContent";
 import SBOMComplianceContent from "./docs/SBOMComplianceContent";
 import TeamsContent from "./docs/TeamsContent";
 import AegisContent from "./docs/AegisContent";
-import WatchtowerContent from "./docs/WatchtowerContent";
 import EnterpriseSecurityContent from "./docs/EnterpriseSecurityContent";
 import IntegrationsContent from "./docs/IntegrationsContent";
 import PoliciesContent from "./docs/PoliciesContent";
@@ -86,10 +85,6 @@ const docMeta: Record<string, DocMeta> = {
   "enterprise-security": {
     title: "Enterprise Security",
     description: "MFA, SSO (SAML), session management, IP allowlist, API tokens, audit log, and SCIM provisioning.",
-  },
-  watchtower: {
-    title: "Watchtower",
-    description: "Supply chain monitoring and forensic analysis per dependency, with an organization-level overview.",
   },
   aegis: {
     title: "Aegis",
@@ -195,8 +190,6 @@ export default function DocsPage({ section }: DocsPageProps) {
         return <PoliciesContent />;
       case "notification-rules":
         return <NotificationRulesContent />;
-      case "watchtower":
-        return <WatchtowerContent />;
       case "aegis":
         return <AegisContent />;
       case "terms":

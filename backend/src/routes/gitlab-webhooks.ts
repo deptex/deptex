@@ -6,7 +6,7 @@
 // @ts-nocheck
 import express from 'express';
 import { supabase } from '../lib/supabase';
-import { queueExtractionJob, queueASTParsingJob } from '../lib/redis';
+import { queueExtractionJob } from '../lib/extraction-jobs';
 import { invalidateProjectCaches } from '../lib/cache';
 import { detectAffectedWorkspaces, isFileInWorkspace } from '../lib/manifest-registry';
 import { checkRateLimit } from '../lib/rate-limit';
@@ -312,16 +312,6 @@ async function handleGitLabPushEvent(payload: any): Promise<void> {
       } catch (err: any) {
         console.error(`[gitlab-webhook] Extraction queue failed for ${row.project_id}:`, err?.message);
       }
-    }
-
-    const anyFileInWorkspace = changedFiles.some(f => isFileInWorkspace(f, workspace));
-    if (anyFileInWorkspace && !isAffected) {
-      await queueASTParsingJob(row.project_id, {
-        repo_full_name: repoFullName,
-        installation_id: '',
-        default_branch: row.default_branch,
-        package_json_path: workspace,
-      }).catch(() => {});
     }
 
     // Record commits

@@ -12,7 +12,6 @@ import {
   ChevronDown,
   ExternalLink,
   Bot,
-  TowerControl,
 } from "lucide-react";
 
 const quickLinks = [
@@ -57,12 +56,6 @@ const quickLinks = [
     title: "Aegis",
     description: "Autonomous security agent: chat, tasks, automations, Slack, and PR review.",
     to: "/docs/aegis",
-  },
-  {
-    icon: TowerControl,
-    title: "Watchtower",
-    description: "Supply chain monitoring and forensic analysis per dependency.",
-    to: "/docs/watchtower",
   },
 ];
 

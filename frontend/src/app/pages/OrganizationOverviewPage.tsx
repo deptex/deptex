@@ -2189,7 +2189,7 @@ export default function OrganizationVulnerabilitiesPage() {
                     type: 'smoothstep',
                     style: { stroke: ORG_OVERVIEW_EDGE_STROKE, strokeWidth: 1 },
                     pathOptions: { borderRadius: 20 },
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                   
                   } as any
                 }
               >

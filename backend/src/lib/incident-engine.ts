@@ -1,5 +1,5 @@
 /**
- * Phase 17: Incident execution engine.
+ * Incident execution engine.
  *
  * Converts playbook phases into aegis_task + aegis_task_steps,
  * handles phase transitions, escalation scheduling, and resolution.

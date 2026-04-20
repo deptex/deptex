@@ -162,7 +162,7 @@ declare function pullRequestCheck(context: PullRequestCheckContext): PullRequest
  */
 declare function projectCompliance(context: ProjectComplianceContext): ComplianceResult;
 
-// ───── Phase 4: New function signatures ─────
+// ───── New function signatures ─────
 
 /** Context for packagePolicy() - runs per dependency with tier info. */
 interface PackagePolicyContext {

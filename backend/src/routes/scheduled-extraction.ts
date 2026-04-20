@@ -83,7 +83,7 @@ router.post('/scheduled-extraction', async (req, res) => {
         }
 
         try {
-          const { queueExtractionJob } = await import('../lib/redis');
+          const { queueExtractionJob } = await import('../lib/extraction-jobs');
           const { data: repo } = await supabase
             .from('project_repositories')
             .select('*')

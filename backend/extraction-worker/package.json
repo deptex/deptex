@@ -10,7 +10,7 @@
     "type-check": "tsc --noEmit"
   },
   "keywords": ["extraction", "sbom", "dep-scan"],
-  "license": "MIT",
+  "license": "LicenseRef-FSL-1.1-ALv2",
   "dependencies": {
     "@cyclonedx/cdxgen": "^11.0.0",
     "@supabase/supabase-js": "^2.39.0",

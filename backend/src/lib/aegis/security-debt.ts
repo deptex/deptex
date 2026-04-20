@@ -1,5 +1,5 @@
 /**
- * Phase 7B: Security debt tracking and burndown.
+ * Security debt tracking and burndown.
  * Requires security_debt_snapshots table (phase7b_aegis_platform.sql).
  */
 import { supabase } from '../../lib/supabase';

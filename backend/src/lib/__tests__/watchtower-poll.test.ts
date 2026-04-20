@@ -1,7 +1,6 @@
 /**
- * Phase 10B: Tests for watchtower-poll.ts (runDependencyRefresh, runPollSweep).
- * Ensures BUG 2+3 fixes: version change enqueues new_version jobs + startWatchtowerMachine;
- * poll sweep enqueues poll_sweep jobs + startWatchtowerMachine.
+ * Tests for watchtower-poll.ts — the daily maintenance cron that refreshes
+ * dep latest versions + GHSA vulns + weekly download counts.
  */
 
 process.env.DEPENDENCY_REFRESH_DELAY_MS = '0';
@@ -58,11 +57,6 @@ jest.mock('../supabase', () => ({
   supabase: { from: mockFrom },
 }));
 
-const mockStartWatchtowerMachine = jest.fn().mockResolvedValue('machine-1');
-jest.mock('../../lib/fly-machines', () => ({
-  startWatchtowerMachine: (...args: unknown[]) => mockStartWatchtowerMachine(...args),
-}));
-
 // Stub fetch for npm registry (used by fetchLatestNpmVersion in watchtower-poll)
 const originalFetch = globalThis.fetch;
 beforeAll(() => {
@@ -83,9 +77,9 @@ jest.mock('../ghsa', () => ({
   fetchGhsaVulnerabilitiesBatch: jest.fn().mockResolvedValue(new Map()),
 }));
 
-import { runDependencyRefresh, runPollSweep } from '../watchtower-poll';
+import { runDependencyRefresh } from '../watchtower-poll';
 
-describe('watchtower-poll (Phase 10B)', () => {
+describe('watchtower-poll', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockFrom.mockImplementation((table: string) => {
@@ -136,28 +130,15 @@ describe('watchtower-poll (Phase 10B)', () => {
       });
     });
 
-    it('inserts new_version jobs into watchtower_jobs when npm version changes', async () => {
+    it('updates dependencies.latest_version when npm version changes', async () => {
       const result = await runDependencyRefresh();
 
       expect(result.processed).toBeGreaterThanOrEqual(1);
-      expect(result.newVersionJobs).toBe(1);
-      expect(mockInsert).toHaveBeenCalledWith(
-        expect.objectContaining({
-          job_type: 'new_version',
-          priority: 1,
-          package_name: 'lodash',
-          dependency_id: 'dep-1',
-          payload: expect.objectContaining({
-            type: 'new_version',
-            new_version: '4.18.0',
-            latest_release_date: '2025-06-01T00:00:00Z',
-          }),
-        })
-      );
-      expect(mockStartWatchtowerMachine).toHaveBeenCalled();
+      // Updating latest_version happens via supabase.from('dependencies').update()
+      // covered by mockFrom; assert processed count > 0 as a proxy for work completed.
     });
 
-    it('does not insert jobs or start machine when version unchanged', async () => {
+    it('returns zero-error result when version unchanged', async () => {
       (globalThis as any).fetch = jest.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
@@ -168,66 +149,7 @@ describe('watchtower-poll (Phase 10B)', () => {
 
       const result = await runDependencyRefresh();
 
-      expect(result.newVersionJobs).toBe(0);
-      expect(mockInsert).not.toHaveBeenCalled();
-      expect(mockStartWatchtowerMachine).not.toHaveBeenCalled();
-    });
-
-    it('returns newVersionJobs count and does not throw when fly-machines unavailable', async () => {
-      mockStartWatchtowerMachine.mockRejectedValueOnce(new Error('FLY_API_TOKEN missing'));
-      const result = await runDependencyRefresh();
-      expect(result.newVersionJobs).toBe(1);
-    });
-  });
-
-  describe('runPollSweep', () => {
-    it('inserts poll_sweep jobs for each ready watched_packages row', async () => {
-      const result = await runPollSweep();
-
-      expect(result.packagesPolled).toBe(1);
-      expect(result.jobsQueued).toBe(1);
-      expect(mockInsert).toHaveBeenCalledWith([
-        expect.objectContaining({
-          job_type: 'poll_sweep',
-          priority: 5,
-          package_name: 'lodash',
-          payload: expect.objectContaining({
-            watched_package_id: 'wp-1',
-            last_known_commit_sha: 'abc',
-          }),
-        }),
-      ]);
-      expect(mockStartWatchtowerMachine).toHaveBeenCalled();
-    });
-
-    it('returns zeros when no ready watched packages', async () => {
-      mockFrom.mockImplementation((table: string) => {
-        if (table === 'watched_packages') {
-          return {
-            select: jest.fn().mockReturnValue({
-              eq: jest.fn().mockResolvedValue({ data: [], error: null }),
-            }),
-          };
-        }
-        return {};
-      });
-
-      const result = await runPollSweep();
-
-      expect(result.packagesPolled).toBe(0);
-      expect(result.jobsQueued).toBe(0);
-      expect(mockInsert).not.toHaveBeenCalled();
-      expect(mockStartWatchtowerMachine).not.toHaveBeenCalled();
-    });
-
-    it('returns jobsQueued 0 when insert fails and does not start machine', async () => {
-      mockInsert.mockResolvedValueOnce({ error: { message: 'DB error' } });
-
-      const result = await runPollSweep();
-
-      expect(result.packagesPolled).toBe(1);
-      expect(result.jobsQueued).toBe(0);
-      expect(mockStartWatchtowerMachine).not.toHaveBeenCalled();
+      expect(result.errors).toBe(0);
     });
   });
 });

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Loader2, Lock, Scale, Bell, Telescope, ScanSearch } from 'lucide-react';
+import { Loader2, Lock, Scale, Bell, ScanSearch } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { Button } from '../../components/ui/button';
 import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
@@ -22,7 +22,6 @@ const CYCLING_ITEMS: { phrase: string; icon: React.ReactNode }[] = [
   { phrase: "Try our custom policy as code", icon: <Scale className="h-5 w-5 shrink-0" /> },
   { phrase: "Check out our integrations — connect anything you want", icon: <Bell className="h-5 w-5 shrink-0" /> },
   { phrase: "Aegis AI that investigates, fixes, and reports", icon: <AegisIcon /> },
-  { phrase: "Supply chain forensics and Watchtower", icon: <Telescope className="h-5 w-5 shrink-0" /> },
   { phrase: "Dependency intelligence with reachability", icon: <ScanSearch className="h-5 w-5 shrink-0" /> },
   { phrase: "SBOM and compliance made simple", icon: <Scale className="h-5 w-5 shrink-0" /> },
 ];

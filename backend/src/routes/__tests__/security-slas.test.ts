@@ -1,5 +1,5 @@
 /**
- * Phase 15: Security SLA Management — backend tests.
+ * Security SLA Management — backend tests.
  * Covers SLA compliance response shape, getSLAStatus/getSLAReport tool behavior, and cache invalidation.
  */
 
@@ -8,7 +8,7 @@
 const ORG_ID = '00000000-0000-0000-0000-000000000001';
 const PROJECT_ID = '00000000-0000-0000-0000-000000000002';
 
-describe('Phase 15: SLA compliance response shape', () => {
+describe('SLA compliance response shape', () => {
   test('sla compliance response has required fields', () => {
     const shape = {
       overall_compliance_percent: 100,
@@ -45,7 +45,7 @@ describe('Phase 15: SLA compliance response shape', () => {
   });
 });
 
-describe('Phase 15: getSLAStatus tool output shape', () => {
+describe('getSLAStatus tool output shape', () => {
   test('getSLAStatus returns on_track, warning, breached, breaches, approaching', () => {
     const output = {
       on_track: 5,
@@ -62,7 +62,7 @@ describe('Phase 15: getSLAStatus tool output shape', () => {
   });
 });
 
-describe('Phase 15: getSLAReport tool output shape', () => {
+describe('getSLAReport tool output shape', () => {
   test('getSLAReport returns compliance and violation counts', () => {
     const output = {
       overall_compliance_percent: 90,
@@ -82,7 +82,7 @@ describe('Phase 15: getSLAReport tool output shape', () => {
   });
 });
 
-describe('Phase 15: SLA filter application (client-side logic)', () => {
+describe('SLA filter application (client-side logic)', () => {
   function filterBySlaStatus<T extends { sla_status?: string | null }>(items: T[], slaStatus: string): T[] {
     if (slaStatus === 'all') return items;
     return items.filter((v) => (v.sla_status ?? null) === slaStatus);
@@ -105,7 +105,7 @@ describe('Phase 15: SLA filter application (client-side logic)', () => {
   });
 });
 
-describe('Phase 15: suggestFixPriority SLA sort order', () => {
+describe('suggestFixPriority SLA sort order', () => {
   function slaOrder(a: { sla_status?: string | null }, b: { sla_status?: string | null }): number {
     const order = (s: string | null) => (s === 'breached' ? 0 : s === 'warning' ? 1 : 2);
     return order(a.sla_status ?? null) - order(b.sla_status ?? null);
@@ -129,7 +129,7 @@ describe('Phase 15: suggestFixPriority SLA sort order', () => {
   });
 });
 
-describe('Phase 15: SLA policy payload shape', () => {
+describe('SLA policy payload shape', () => {
   test('sla policy has severity, asset_tier_id, max_hours, warning_threshold_percent', () => {
     const policy = {
       severity: 'critical' as const,
@@ -144,7 +144,7 @@ describe('Phase 15: SLA policy payload shape', () => {
   });
 });
 
-describe('Phase 15: sla_warning_at pre-compute', () => {
+describe('sla_warning_at pre-compute', () => {
   test('sla_warning_at is detected_at + (max_hours * warning_pct / 100)', () => {
     const detectedAt = new Date('2025-01-01T00:00:00Z').getTime();
     const maxHours = 48;
@@ -156,7 +156,7 @@ describe('Phase 15: sla_warning_at pre-compute', () => {
   });
 });
 
-describe('Phase 15: SLA export CSV shape', () => {
+describe('SLA export CSV shape', () => {
   test('export row has project, vuln, severity, detected, deadline, status', () => {
     const row = {
       project_name: 'p1',
@@ -172,7 +172,7 @@ describe('Phase 15: SLA export CSV shape', () => {
   });
 });
 
-describe('Phase 15: SLA pause resume deadline shift', () => {
+describe('SLA pause resume deadline shift', () => {
   test('deadline shift adds (now - paused_at) to deadline', () => {
     const deadline = new Date('2025-01-05T12:00:00Z').getTime();
     const pausedAt = new Date('2025-01-03T12:00:00Z').getTime();

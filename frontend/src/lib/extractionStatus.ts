@@ -1,5 +1,5 @@
 /**
- * Single source of truth for "project is currently extracting" across Overview, Dependencies, Compliance, Watchtower.
+ * Single source of truth for "project is currently extracting" across Overview, Dependencies, and Compliance.
  * Backend project_repositories.status uses: initializing | extracting | analyzing | finalizing | ready | not_connected | error | cancelled | pending
  * Only the first four mean "extraction in progress"; everything else (ready, not_connected, error, loading, etc.) must NOT show the extracting spinner.
  *

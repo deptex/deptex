@@ -1,5 +1,5 @@
 /**
- * Phase 7B: Aegis automations engine for scheduled and event-driven jobs.
+ * Aegis automations engine for scheduled and event-driven jobs.
  *
  * Handles:
  * - Cron-based scheduled automations (checkDueAutomations via QStash cron every 5 min)
@@ -51,7 +51,7 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
     description: 'Weekdays at 7am: New CVEs, EPSS changes, anomalies',
     cronExpression: '0 7 * * 1-5',
     timezone: 'UTC',
-    prompt: 'Generate a daily security briefing for the organization. Include: new CVEs affecting our dependencies, significant EPSS score changes, Watchtower anomalies, and any stale vulnerabilities that need attention.',
+    prompt: 'Generate a daily security briefing for the organization. Include: new CVEs affecting our dependencies, significant EPSS score changes, and any stale vulnerabilities that need attention.',
     templateConfig: { focus: ['cve', 'epss', 'anomalies', 'stale_vulns'] },
   },
   {

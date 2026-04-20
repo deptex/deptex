@@ -1,5 +1,5 @@
 /**
- * Phase 9: Notification trigger code validation and execution.
+ * Notification trigger code validation and execution.
  *
  * Replicates the policy-engine.ts sandbox pattern with notification-specific
  * adjustments: shorter timeout, lower fetch limit, and notification-shaped

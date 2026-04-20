@@ -1,5 +1,5 @@
 /**
- * Phase 9: Central event emission system for the notification pipeline.
+ * Central event emission system for the notification pipeline.
  *
  * Persists events to `notification_events` and queues async dispatch via QStash.
  * Critical events are dispatched immediately; normal/low events are batched and

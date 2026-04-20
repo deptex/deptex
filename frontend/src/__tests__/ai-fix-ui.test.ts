@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-describe('Phase 7: AI Fix UI', () => {
+describe('AI Fix UI', () => {
   describe('Fix Button States (7D)', () => {
     it('1. FixWithAIButton renders disabled when no BYOK provider', () => {
       // Component renders disabled button with tooltip
