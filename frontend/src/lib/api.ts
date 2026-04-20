@@ -212,7 +212,7 @@ async function getAuthToken(): Promise<string | null> {
   return null;
 }
 
-async function fetchWithAuth(url: string, options: RequestInit = {}) {
+export async function fetchWithAuth(url: string, options: RequestInit = {}) {
   const token = await getAuthToken();
 
   if (!token) {
