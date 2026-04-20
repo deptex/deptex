@@ -535,7 +535,9 @@ export async function updateReachabilityLevels(
     updatedCount++;
   }
 
-  console.log(`[REACHABILITY] Updated ${updatedCount} vulns, ${detailsSetCount} with details, ${allUsageStrings.length} usage strings available`);
+  if (process.env.DEPTEX_CLI_MODE !== '1') {
+    console.log(`[REACHABILITY] Updated ${updatedCount} vulns, ${detailsSetCount} with details, ${allUsageStrings.length} usage strings available`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -771,7 +773,9 @@ export async function parseGoImportsFromSource(
     });
   }
 
-  console.log(`[go-imports] Parsed ${batch.length} imports from ${goFiles.length} .go files`);
+  if (process.env.DEPTEX_CLI_MODE !== '1') {
+    console.log(`[go-imports] Parsed ${batch.length} imports from ${goFiles.length} .go files`);
+  }
   return batch.length;
 }
 

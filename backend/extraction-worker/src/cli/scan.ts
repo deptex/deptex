@@ -17,6 +17,7 @@ import { ExtractionLogger } from '../logger';
 import { seedLocalDb } from './seed';
 import { detectEcosystem, type Ecosystem } from './ecosystem';
 import { writeOutputs, computeExitCode, SEVERITY_RANK, type RunSummary } from './output';
+import { formatLogLine } from './format';
 
 export interface ScanOptions {
   /** Path to the workspace (existing checked-out repo). Must exist. */
@@ -31,14 +32,20 @@ export interface ScanOptions {
   failOn?: string | null;
   /** Optional label (defaults to workspace basename). */
   label?: string;
-  /** When true, prints progress to stdout. */
+  /** Show info-level step chatter. */
   verbose?: boolean;
+  /** Suppress everything except warnings + errors. */
+  quiet?: boolean;
 }
 
 export interface ScanResult {
   exitCode: number;
   summary: RunSummary;
   outputDir: string;
+  vulns: any[];
+  deps: any[];
+  semgrep: any[];
+  secrets: any[];
 }
 
 export async function runScan(opts: ScanOptions): Promise<ScanResult> {
@@ -91,7 +98,15 @@ export async function runScan(opts: ScanOptions): Promise<ScanResult> {
     });
 
     const runId = `local_${Date.now()}`;
-    const logger = new ExtractionLogger(storage, projectId, runId);
+    const verbose = opts.verbose === true;
+    const quiet = opts.quiet === true;
+    const logger = new ExtractionLogger(storage, projectId, runId, {
+      cliMode: true,
+      sink: (message, level, step) => {
+        const line = formatLogLine(message, level, step, { verbose, quiet });
+        if (line) console.log(line);
+      },
+    });
 
     const job: ExtractionJob = {
       projectId,
@@ -119,7 +134,7 @@ export async function runScan(opts: ScanOptions): Promise<ScanResult> {
       (projRow as any)?.active_extraction_run_id ?? runId;
 
     log(opts, `writing outputs to ${opts.outputDir}...`);
-    const { summary, vulns } = await writeOutputs(storage, {
+    const { summary, vulns, deps, semgrep, secrets } = await writeOutputs(storage, {
       outputDir: opts.outputDir,
       organizationId,
       projectId,
@@ -131,12 +146,14 @@ export async function runScan(opts: ScanOptions): Promise<ScanResult> {
     });
 
     const exitCode = computeExitCode(vulns, opts.failOn ?? null);
-    return { exitCode, summary, outputDir: opts.outputDir };
+    return { exitCode, summary, outputDir: opts.outputDir, vulns, deps, semgrep, secrets };
   } finally {
     await storage.close();
   }
 }
 
 function log(opts: ScanOptions, msg: string): void {
-  if (opts.verbose !== false) console.log(`[scan] ${msg}`);
+  // Bootstrap noise (booting DB, seeding) — verbose only. Quiet-by-default
+  // matches Trivy/OSV-Scanner: user sees only warnings/errors and the table.
+  if (opts.verbose === true && !opts.quiet) console.log(`[scan] ${msg}`);
 }

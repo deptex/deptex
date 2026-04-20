@@ -4,7 +4,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync, spawn } from 'child_process';
+import { execSync, spawn, spawnSync } from 'child_process';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import type { Storage } from './storage';
 import { cloneRepository, cleanupRepository, cloneByProvider } from './clone';
@@ -245,7 +245,6 @@ function runDepScan(
     const child = spawn(depScanExe, args, { cwd, stdio: 'pipe' });
     let stdout = '';
     let stderr = '';
-    const startTime = Date.now();
 
     child.stdout.on('data', (data: Buffer) => {
       const chunk = data.toString();
@@ -261,11 +260,10 @@ function runDepScan(
       stderr += data.toString();
     });
 
+    // DB keep-alive only — no log emission (dep-scan is intentionally quiet).
     const heartbeatInterval = setInterval(async () => {
       try {
         await heartbeat();
-        const elapsed = Math.round((Date.now() - startTime) / 60000);
-        await logger.info('vuln_scan', `Scan still running (${elapsed} min elapsed, dep-scan is quiet in logs)...`);
       } catch {}
     }, 60_000);
 
@@ -288,6 +286,33 @@ function runDepScan(
     });
   });
 }
+
+/**
+ * Probe for a binary on PATH without spawning the real command. Returns true
+ * if `<name> --version` (or `-version`) exits cleanly. Keeps noise out of logs
+ * so we can surface a friendly install hint instead of a stack trace.
+ */
+function binaryAvailable(name: string): boolean {
+  try {
+    const res = spawnSync(name, ['--version'], { stdio: 'ignore', timeout: 5000 });
+    if (res.status === 0) return true;
+    // trufflehog uses `--version`, semgrep uses `--version` — both 0 on success.
+    // Fall back to a PATH lookup via `where`/`which` for binaries that don't
+    // implement --version in the expected way.
+    const which = process.platform === 'win32' ? 'where' : 'which';
+    const lookup = spawnSync(which, [name], { stdio: 'ignore', timeout: 5000 });
+    return lookup.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+const INSTALL_HINTS: Record<string, string> = {
+  semgrep:
+    "Semgrep not found — install with: pipx install semgrep (or brew install semgrep). Static analysis skipped.",
+  trufflehog:
+    "TruffleHog not found — install with: brew install trufflesecurity/trufflehog/trufflehog (or https://github.com/trufflesecurity/trufflehog#installation). Secret scanning skipped.",
+};
 
 function classifyCloneError(message: string): string {
   if (/401|403|authentication|authorization/i.test(message)) {
@@ -636,7 +661,9 @@ export async function runPipeline(
 
     const backendBaseUrl = process.env.BACKEND_URL || process.env.API_BASE_URL || 'http://localhost:3001';
     const workerSecret = process.env.EXTRACTION_WORKER_SECRET;
-    if (newDepsToPopulate.length > 0) {
+    // In local CLI mode there is no backend to accept the populate job — skip silently.
+    const skipPopulate = process.env.DEPTEX_CLI_MODE === '1' || !workerSecret;
+    if (newDepsToPopulate.length > 0 && !skipPopulate) {
       try {
         await callQueuePopulate(backendBaseUrl, workerSecret, projectId, organizationId, newDepsToPopulate, jobEcosystem);
       } catch (e: any) {
@@ -833,7 +860,9 @@ export async function runPipeline(
       ];
 
       // dep-scan command logged at debug level only
-      console.log(`[depscan] ${depScanExe} ${depScanArgs.join(' ')}`);
+      if (process.env.DEPTEX_CLI_MODE !== '1') {
+        console.log(`[depscan] ${depScanExe} ${depScanArgs.join(' ')}`);
+      }
 
       const heartbeatFn = heartbeat ?? (async () => {});
       try {
@@ -1204,7 +1233,7 @@ export async function runPipeline(
 
       // Log what dep-scan produced so we can diagnose ecosystem-specific gaps
       const depScanFiles = fs.readdirSync(reportsDir).filter(f => f.endsWith('.json'));
-      console.log(`[atom] dep-scan produced ${depScanFiles.length} JSON files in reports dir: ${depScanFiles.join(', ')}`);
+      if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] dep-scan produced ${depScanFiles.length} JSON files in reports dir: ${depScanFiles.join(', ')}`);
 
       let hasReachableSlices = depScanFiles.some(f => f.endsWith('-reachables.slices.json'));
       let hasUsageSlices = depScanFiles.some(f => f.endsWith('-usages.slices.json'));
@@ -1215,10 +1244,10 @@ export async function runPipeline(
         try {
           const out = execSync(`atom reachables -l ${atomLang} -s "${atomSlicesOut}" "${srcDir}" 2>&1`, { encoding: 'utf8', timeout: 600_000, maxBuffer: 50 * 1024 * 1024 });
           hasReachableSlices = fs.existsSync(atomSlicesOut) && fs.statSync(atomSlicesOut).size > 10;
-          console.log(`[atom] reachables (${atomLang}): produced=${hasReachableSlices}, size=${hasReachableSlices ? fs.statSync(atomSlicesOut).size : 0}`);
+          if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] reachables (${atomLang}): produced=${hasReachableSlices}, size=${hasReachableSlices ? fs.statSync(atomSlicesOut).size : 0}`);
         } catch (atomErr: any) {
           const msg = (atomErr.stderr || atomErr.message || '').slice(-500);
-          console.log(`[atom] reachables (${atomLang}) failed: ${msg}`);
+          if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] reachables (${atomLang}) failed: ${msg}`);
         }
       }
 
@@ -1228,10 +1257,10 @@ export async function runPipeline(
         try {
           const out = execSync(`atom usages -l ${atomLang} -s "${atomUsagesOut}" "${srcDir}" 2>&1`, { encoding: 'utf8', timeout: 600_000, maxBuffer: 50 * 1024 * 1024 });
           hasUsageSlices = fs.existsSync(atomUsagesOut) && fs.statSync(atomUsagesOut).size > 10;
-          console.log(`[atom] usages (${atomLang}): produced=${hasUsageSlices}, size=${hasUsageSlices ? fs.statSync(atomUsagesOut).size : 0}`);
+          if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] usages (${atomLang}): produced=${hasUsageSlices}, size=${hasUsageSlices ? fs.statSync(atomUsagesOut).size : 0}`);
         } catch (atomErr: any) {
           const msg = (atomErr.stderr || atomErr.message || '').slice(-500);
-          console.log(`[atom] usages (${atomLang}) failed: ${msg}`);
+          if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] usages (${atomLang}) failed: ${msg}`);
         }
       }
 
@@ -1253,7 +1282,7 @@ export async function runPipeline(
       // Compute files_importing_count from atom usage slices (all ecosystems)
       await computeImportCountsFromUsageSlices(projectId, runId, jobEcosystem, supabase, log);
     } catch (atomStepErr: any) {
-      console.log(`[atom] reachability step failed: ${atomStepErr.message}`);
+      if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] reachability step failed: ${atomStepErr.message}`);
     }
 
     // --- Sub-step: Recalculate depscores with updated reachability ---
@@ -1310,6 +1339,9 @@ export async function runPipeline(
 
     // === STEP: Semgrep (OPTIONAL) ===
     if (checkCancelled && await checkCancelled()) return;
+    if (!binaryAvailable('semgrep')) {
+      await log.warn('semgrep', INSTALL_HINTS.semgrep);
+    } else {
     await log.info('semgrep', 'Running static code analysis...');
     const semgrepStart = Date.now();
     let semgrepFindings = 0;
@@ -1422,12 +1454,16 @@ export async function runPipeline(
       if (e.status === 137) {
         await log.warn('semgrep', 'Static analysis ran out of memory — scanning skipped');
       } else {
-        await log.warn('semgrep', 'Static analysis skipped (Semgrep not installed or failed)');
+        await log.warn('semgrep', 'Static analysis failed');
       }
+    }
     }
 
     // === STEP: TruffleHog (OPTIONAL) ===
     if (checkCancelled && await checkCancelled()) return;
+    if (!binaryAvailable('trufflehog')) {
+      await log.warn('trufflehog', INSTALL_HINTS.trufflehog);
+    } else {
     await log.info('trufflehog', 'Scanning for exposed secrets...');
     const thStart = Date.now();
     try {
@@ -1566,6 +1602,7 @@ export async function runPipeline(
       }
       await log.warn('trufflehog', `Secret scanning failed: ${thErr.message}`);
     }
+    }
 
     // === STEP: Finalize ===
     if (checkCancelled && await checkCancelled()) return;
@@ -1611,7 +1648,7 @@ export async function runPipeline(
     //   - Returns summary JSONB — use for vulnerability_updates notification emission
     const finalizeStart = Date.now();
     try {
-      const { data: finalizeSummary, error: finalizeErr } = await withTimeout(
+      const { error: finalizeErr } = await withTimeout(
         async () => await supabase.rpc('finalize_extraction', {
           p_job_id: job.jobId ?? null,
           p_project_id: projectId,
@@ -1624,7 +1661,6 @@ export async function runPipeline(
         await log.error('finalize', `finalize_extraction RPC failed: ${finalizeErr.message}`);
         throw new Error(`finalize_extraction: ${finalizeErr.message}`);
       }
-      console.log('[EXTRACT] finalize_extraction summary:', JSON.stringify(finalizeSummary));
     } catch (finalizeErr: any) {
       if (job.jobId) {
         const { code, message, stack } = classifyError(finalizeErr);
