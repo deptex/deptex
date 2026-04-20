@@ -73,7 +73,10 @@ export default function AegisPage() {
       if (cancelled) return;
       setLoading(false);
       if (!activeThreadId && list && list.length > 0) {
-        navigate(`/organizations/${orgId}/aegis/${list[0].id}`, { replace: true });
+        const firstVisible = list.find((t) => !t.archivedAt);
+        if (firstVisible) {
+          navigate(`/organizations/${orgId}/aegis/${firstVisible.id}`, { replace: true });
+        }
       }
     });
     return () => { cancelled = true; };
@@ -110,6 +113,39 @@ export default function AegisPage() {
       toast({ title: 'Rename failed', description: err?.message, variant: 'destructive' });
     }
   }, [toast]);
+
+  const handleSetPinned = useCallback(async (threadId: string, pinned: boolean) => {
+    const nowIso = new Date().toISOString();
+    let snapshot: AegisThread[] = [];
+    setThreads((prev) => {
+      snapshot = prev;
+      return prev.map((t) => (t.id === threadId ? { ...t, pinnedAt: pinned ? nowIso : null } : t));
+    });
+    try {
+      await aegisApi.setThreadPinned(threadId, pinned);
+    } catch (err: any) {
+      setThreads(snapshot);
+      toast({ title: pinned ? 'Pin failed' : 'Unpin failed', description: err?.message, variant: 'destructive' });
+    }
+  }, [toast]);
+
+  const handleSetArchived = useCallback(async (threadId: string, archived: boolean) => {
+    const nowIso = new Date().toISOString();
+    let snapshot: AegisThread[] = [];
+    setThreads((prev) => {
+      snapshot = prev;
+      return prev.map((t) => (t.id === threadId ? { ...t, archivedAt: archived ? nowIso : null } : t));
+    });
+    if (archived && activeThreadId === threadId && orgId) {
+      navigate(`/organizations/${orgId}/aegis`, { replace: true });
+    }
+    try {
+      await aegisApi.setThreadArchived(threadId, archived);
+    } catch (err: any) {
+      setThreads(snapshot);
+      toast({ title: archived ? 'Archive failed' : 'Unarchive failed', description: err?.message, variant: 'destructive' });
+    }
+  }, [activeThreadId, orgId, navigate, toast]);
 
   const handleDelete = useCallback(async (threadId: string) => {
     // Optimistic — remove locally and navigate away, rollback on failure.
@@ -169,6 +205,8 @@ export default function AegisPage() {
           onSelect={handleSelect}
           onRename={handleRename}
           onDelete={handleDelete}
+          onSetPinned={handleSetPinned}
+          onSetArchived={handleSetArchived}
         />
       </aside>
       <main className="flex-1 flex flex-col min-w-0">

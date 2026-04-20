@@ -39,7 +39,7 @@ router.get('/threads', async (req: AuthRequest, res: Response) => {
 
   const { data, error } = await supabase
     .from('aegis_chat_threads')
-    .select('id, organization_id, user_id, title, created_at, updated_at')
+    .select('id, organization_id, user_id, title, created_at, updated_at, pinned_at, archived_at')
     .eq('organization_id', organizationId)
     .eq('user_id', userId)
     .order('updated_at', { ascending: false });
@@ -65,20 +65,32 @@ router.post('/threads', async (req: AuthRequest, res: Response) => {
       user_id: userId,
       title: typeof title === 'string' && title.trim() ? title.trim().slice(0, 120) : 'New chat',
     })
-    .select('id, organization_id, user_id, title, created_at, updated_at')
+    .select('id, organization_id, user_id, title, created_at, updated_at, pinned_at, archived_at')
     .single();
 
   if (error || !data) return res.status(500).json({ error: error?.message ?? 'Failed to create thread' });
   res.status(201).json({ thread: rowToThread(data) });
 });
 
-// PATCH /api/aegis/threads/:id  { title }
+// PATCH /api/aegis/threads/:id  { title?, pinned?, archived? }
 router.patch('/threads/:id', async (req: AuthRequest, res: Response) => {
   const userId = req.user!.id;
   const threadId = req.params.id;
-  const { title } = req.body ?? {};
-  if (typeof title !== 'string' || !title.trim()) {
-    return res.status(400).json({ error: 'title is required' });
+  const { title, pinned, archived } = req.body ?? {};
+
+  const updates: Record<string, unknown> = {};
+  if (typeof title === 'string') {
+    if (!title.trim()) return res.status(400).json({ error: 'title must not be empty' });
+    updates.title = title.trim().slice(0, 120);
+  }
+  if (typeof pinned === 'boolean') {
+    updates.pinned_at = pinned ? new Date().toISOString() : null;
+  }
+  if (typeof archived === 'boolean') {
+    updates.archived_at = archived ? new Date().toISOString() : null;
+  }
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: 'No updatable fields provided' });
   }
 
   const thread = await ensureThreadOwnership(threadId, userId);
@@ -90,9 +102,9 @@ router.patch('/threads/:id', async (req: AuthRequest, res: Response) => {
 
   const { data, error } = await supabase
     .from('aegis_chat_threads')
-    .update({ title: title.trim().slice(0, 120) })
+    .update(updates)
     .eq('id', threadId)
-    .select('id, organization_id, user_id, title, created_at, updated_at')
+    .select('id, organization_id, user_id, title, created_at, updated_at, pinned_at, archived_at')
     .single();
 
   if (error || !data) return res.status(500).json({ error: error?.message ?? 'Update failed' });
@@ -304,7 +316,7 @@ Title:`;
     .from('aegis_chat_threads')
     .update({ title })
     .eq('id', threadId)
-    .select('id, organization_id, user_id, title, created_at, updated_at')
+    .select('id, organization_id, user_id, title, created_at, updated_at, pinned_at, archived_at')
     .single();
   if (error || !updated) return res.status(500).json({ error: error?.message ?? 'Update failed' });
   res.json({ thread: rowToThread(updated) });

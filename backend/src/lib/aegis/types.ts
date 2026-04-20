@@ -5,6 +5,8 @@ export interface AegisThread {
   title: string;
   createdAt: string;
   updatedAt: string;
+  pinnedAt: string | null;
+  archivedAt: string | null;
 }
 
 export type TextPart = { type: 'text'; text: string };
@@ -52,6 +54,8 @@ export function rowToThread(row: {
   title: string;
   created_at: string;
   updated_at: string;
+  pinned_at?: string | null;
+  archived_at?: string | null;
 }): AegisThread {
   return {
     id: row.id,
@@ -60,6 +64,8 @@ export function rowToThread(row: {
     title: row.title,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    pinnedAt: row.pinned_at ?? null,
+    archivedAt: row.archived_at ?? null,
   };
 }
 
