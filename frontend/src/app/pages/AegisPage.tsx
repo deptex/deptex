@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { aegisApi, type AegisThread } from '../../lib/aegis-api';
 import type { Organization } from '../../lib/api';
 import { ThreadList } from '../../components/aegis/ThreadList';
 import { EmptyState } from '../../components/aegis/EmptyState';
+import { ChatInput } from '../../components/aegis/ChatInput';
+import { ChatPane } from '../../components/aegis/ChatPane';
 import { useToast } from '../../hooks/use-toast';
 
 interface OrgOutlet {
@@ -14,11 +16,29 @@ interface OrgOutlet {
 export default function AegisPage() {
   const { id: orgId, threadId: activeThreadId } = useParams<{ id: string; threadId?: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const { organization } = useOutletContext<OrgOutlet>();
   const { toast } = useToast();
 
   const [threads, setThreads] = useState<AegisThread[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Capture initialMessage once per thread navigation so it isn't resent on re-renders.
+  const consumedInitialRef = useRef<string | null>(null);
+  const [initialMessageForThread, setInitialMessageForThread] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    const state = location.state as { initialMessage?: string } | null;
+    const key = activeThreadId ?? null;
+    if (state?.initialMessage && consumedInitialRef.current !== key) {
+      consumedInitialRef.current = key;
+      setInitialMessageForThread(state.initialMessage);
+      // Clear the state so refresh doesn't re-trigger.
+      navigate(location.pathname, { replace: true, state: null });
+    } else if (consumedInitialRef.current !== key) {
+      consumedInitialRef.current = key;
+      setInitialMessageForThread(undefined);
+    }
+  }, [activeThreadId, location, navigate]);
 
   const canUseAegis = organization?.permissions?.interact_with_aegis === true;
 
@@ -88,10 +108,20 @@ export default function AegisPage() {
     }
   }, [activeThreadId, orgId, navigate, toast]);
 
-  const handlePromptSelect = useCallback((_prompt: string) => {
-    // Streaming is M5 — for now, create a fresh thread so the user has something.
-    void handleCreate();
-  }, [handleCreate]);
+  const startChatWithMessage = useCallback(async (message: string) => {
+    if (!orgId) return;
+    try {
+      const thread = await aegisApi.createThread(orgId);
+      setThreads((prev) => [thread, ...prev]);
+      navigate(`/organizations/${orgId}/aegis/${thread.id}`, { state: { initialMessage: message } });
+    } catch (err: any) {
+      toast({ title: 'Could not start chat', description: err?.message, variant: 'destructive' });
+    }
+  }, [orgId, navigate, toast]);
+
+  const handlePromptSelect = useCallback((prompt: string) => {
+    void startChatWithMessage(prompt);
+  }, [startChatWithMessage]);
 
   if (!orgId) return null;
   if (!canUseAegis) {
@@ -109,7 +139,7 @@ export default function AegisPage() {
 
   return (
     <div className="flex h-[calc(100vh-3rem)] bg-background">
-      <aside className="w-[260px] flex-shrink-0 border-r border-border bg-background-card">
+      <aside className="w-[260px] flex-shrink-0 border-r border-border bg-background">
         <ThreadList
           threads={threads}
           activeThreadId={activeThreadId ?? null}
@@ -122,11 +152,20 @@ export default function AegisPage() {
       </aside>
       <main className="flex-1 flex flex-col min-w-0">
         {activeThreadId ? (
-          <div className="flex h-full items-center justify-center text-sm text-foreground/60">
-            Chat pane lands in M5.
-          </div>
+          <ChatPane
+            key={activeThreadId}
+            threadId={activeThreadId}
+            organizationId={orgId}
+            initialMessage={initialMessageForThread}
+            onThreadUpdated={() => void refreshThreads()}
+          />
         ) : (
-          <EmptyState onSelectPrompt={handlePromptSelect} />
+          <>
+            <div className="flex-1 overflow-y-auto">
+              <EmptyState onSelectPrompt={handlePromptSelect} />
+            </div>
+            <ChatInput onSubmit={(msg) => void startChatWithMessage(msg)} autoFocus />
+          </>
         )}
       </main>
     </div>
