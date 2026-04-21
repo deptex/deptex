@@ -1,5 +1,5 @@
 import { useRef, useState, type KeyboardEvent, type FormEvent } from 'react';
-import { Play } from 'lucide-react';
+import { SendHorizontal } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 interface ChatInputProps {
@@ -63,13 +63,13 @@ export function ChatInput({ onSubmit, onChange, disabled, placeholder = 'Ask Aeg
             disabled={!canSend}
             aria-label="Send message"
             className={cn(
-              'absolute right-2.5 bottom-2.5 flex h-8 w-8 items-center justify-center rounded-full transition-colors',
+              'absolute right-3 bottom-3 flex items-center justify-center transition-colors',
               canSend
-                ? 'bg-foreground text-background hover:bg-foreground/90'
-                : 'bg-background-card text-foreground/40 cursor-not-allowed',
+                ? 'text-foreground hover:text-foreground/80 cursor-pointer'
+                : 'text-foreground/25 cursor-not-allowed',
             )}
           >
-            <Play className="h-3.5 w-3.5 fill-current" />
+            <SendHorizontal className="h-5 w-5" />
           </button>
         </div>
       </div>
