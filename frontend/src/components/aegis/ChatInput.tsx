@@ -1,5 +1,4 @@
 import { useRef, useState, type KeyboardEvent, type FormEvent } from 'react';
-import { SendHorizontal } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 interface ChatInputProps {
@@ -8,6 +7,15 @@ interface ChatInputProps {
   disabled?: boolean;
   placeholder?: string;
   autoFocus?: boolean;
+}
+
+// Solid filled send arrow (Material Design "send" path) — not available as a filled Lucide icon.
+function SendIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg" className={className}>
+      <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+    </svg>
+  );
 }
 
 export function ChatInput({ onSubmit, onChange, disabled, placeholder = 'Ask Aegis anything', autoFocus }: ChatInputProps) {
@@ -30,7 +38,8 @@ export function ChatInput({ onSubmit, onChange, disabled, placeholder = 'Ask Aeg
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // Enter alone sends; Shift/Ctrl/Cmd+Enter inserts a newline.
+    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
       submit();
     }
@@ -56,20 +65,20 @@ export function ChatInput({ onSubmit, onChange, disabled, placeholder = 'Ask Aeg
             disabled={disabled}
             autoFocus={autoFocus}
             rows={1}
-            className="flex-1 resize-none bg-transparent border-0 px-5 py-4 pr-12 text-sm text-foreground placeholder:text-foreground/50 outline-none focus:outline-none focus:ring-0 disabled:opacity-60"
+            className="flex-1 resize-none bg-transparent border-0 px-3 py-4 pr-10 text-sm text-foreground placeholder:text-foreground/50 outline-none focus:outline-none focus:ring-0 disabled:opacity-60"
           />
           <button
             type="submit"
             disabled={!canSend}
             aria-label="Send message"
             className={cn(
-              'absolute right-3 bottom-3 flex items-center justify-center transition-colors',
+              'absolute right-3 bottom-3.5 flex items-center justify-center transition-colors',
               canSend
                 ? 'text-foreground hover:text-foreground/80 cursor-pointer'
                 : 'text-foreground/25 cursor-not-allowed',
             )}
           >
-            <SendHorizontal className="h-5 w-5" />
+            <SendIcon className="h-5 w-5" />
           </button>
         </div>
       </div>
