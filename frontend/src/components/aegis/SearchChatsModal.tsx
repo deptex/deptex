@@ -71,7 +71,7 @@ export function SearchChatsModal({ open, onOpenChange, threads, onSelect }: Sear
         </div>
 
         {/* Results */}
-        <div className="overflow-y-auto max-h-[420px] px-2 pb-2">
+        <div className="overflow-y-auto min-h-[420px] max-h-[560px] px-2 pb-2">
           {total === 0 && (
             <div className="flex items-center gap-2.5 px-3 py-4 text-sm text-foreground/50">
               <Search className="h-4 w-4 flex-shrink-0" />
