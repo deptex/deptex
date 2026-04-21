@@ -4368,13 +4368,13 @@ DECLARE
   v_orphan_runs JSONB := '[]'::JSONB;
 BEGIN
   FOR v_orphan IN
-    SELECT DISTINCT ej.project_id, ej.run_id::TEXT AS run_id
+    SELECT DISTINCT ej.project_id, ej.id::TEXT AS run_id
     FROM extraction_jobs ej
     JOIN projects p ON p.id = ej.project_id
     WHERE ej.status IN ('failed', 'cancelled')
       AND ej.created_at < v_cutoff
-      AND ej.run_id::TEXT IS DISTINCT FROM COALESCE(p.active_extraction_run_id, '')
-      AND ej.run_id::TEXT IS DISTINCT FROM COALESCE(p.previous_extraction_run_id, '')
+      AND ej.id::TEXT IS DISTINCT FROM COALESCE(p.active_extraction_run_id, '')
+      AND ej.id::TEXT IS DISTINCT FROM COALESCE(p.previous_extraction_run_id, '')
       AND NOT EXISTS (
         SELECT 1 FROM extraction_jobs ej2
         WHERE ej2.project_id = ej.project_id

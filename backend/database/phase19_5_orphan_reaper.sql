@@ -39,21 +39,21 @@ DECLARE
   v_orphan_runs JSONB := '[]'::JSONB;
 BEGIN
   FOR v_orphan IN
-    SELECT DISTINCT ej.project_id, ej.run_id::TEXT AS run_id
+    SELECT DISTINCT ej.project_id, ej.id::TEXT AS run_id
     FROM extraction_jobs ej
     JOIN projects p ON p.id = ej.project_id
     WHERE ej.status IN ('failed', 'cancelled')
       AND ej.created_at < v_cutoff
-      AND ej.run_id::TEXT IS DISTINCT FROM COALESCE(p.active_extraction_run_id, '')
-      AND ej.run_id::TEXT IS DISTINCT FROM COALESCE(p.previous_extraction_run_id, '')
+      AND ej.id::TEXT IS DISTINCT FROM COALESCE(p.active_extraction_run_id, '')
+      AND ej.id::TEXT IS DISTINCT FROM COALESCE(p.previous_extraction_run_id, '')
       AND NOT EXISTS (
         SELECT 1 FROM extraction_jobs ej2
         WHERE ej2.project_id = ej.project_id
           AND ej2.status IN ('queued', 'processing')
       )
   LOOP
-    -- extraction_run_id is a globally-unique UUID (extraction_jobs.run_id), so
-    -- filtering by it alone is sufficient. Count files/fns BEFORE deleting PDs
+    -- extraction_run_id is extraction_jobs.id (the PK, used by runPipeline as runId).
+    -- Count files/fns BEFORE deleting PDs
     -- so we get accurate row-counts (PD delete CASCADEs pdf/pdfn).
     DELETE FROM project_dependency_files
     WHERE extraction_run_id = v_orphan.run_id;
