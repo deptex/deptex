@@ -9,7 +9,10 @@
     "build": "tsc",
     "start": "cross-env NODE_PATH=node_modules tsx src/index.ts",
     "test": "cross-env NODE_PATH=node_modules DEPTEX_EDITION=ee jest",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "migrate": "tsx scripts/migrate.ts",
+    "migrate:baseline": "tsx scripts/migrate.ts baseline",
+    "migrate:status": "tsx scripts/migrate.ts status"
   },
   "keywords": [
     "dependency-tracking",
@@ -29,6 +32,8 @@
     "@supabase/supabase-js": "^2.39.0",
     "@upstash/qstash": "^2.9.0",
     "@upstash/redis": "^1.25.0",
+    "bullmq": "^5.34.0",
+    "ioredis": "^5.4.1",
     "ai": "^6.0.106",
     "cors": "^2.8.5",
     "deptex-extraction-worker": "file:extraction-worker",

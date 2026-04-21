@@ -1,0 +1,21 @@
+# Minimal services needed for self-hosted Deptex when JOB_QUEUE_BACKEND=bullmq.
+# Start with `docker compose up -d`.
+# Stop with `docker compose down`. Data persists in the named volume.
+#
+# The rest of the stack (backend API, workers, frontend, Postgres, Supabase
+# services) runs via the normal npm scripts and the supabase CLI — see
+# docs/self-hosting.md.
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: deptex-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - deptex-redis:/data
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+volumes:
+  deptex-redis:

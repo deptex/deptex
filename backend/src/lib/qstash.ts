@@ -1,279 +1,134 @@
-import { Receiver } from '@upstash/qstash';
+/**
+ * Application-level job publishing.
+ *
+ * Historically this file spoke directly to QStash. It now routes through the
+ * JobQueue abstraction in ./job-queue so the same call sites work under
+ * QStash (cloud) and BullMQ (self-host). Public function signatures are
+ * unchanged — the 20+ consumers elsewhere in the backend continue to work.
+ *
+ * See ./job-queue/types.ts for the contract and ./job-queue/index.ts for the
+ * backend-selection rules.
+ */
 
-// NOTE: Environment variables are read lazily (inside functions) to ensure
-// dotenv.config() has been called before we access them.
-
-// Region-based config: set QSTASH_REGION (e.g. US_EAST_1 or EU_CENTRAL_1) and the
-// corresponding {REGION}_QSTASH_* vars. Otherwise legacy QSTASH_TOKEN / QSTASH_*_SIGNING_KEY apply.
-
-function getQStashRegionPrefix(): string | null {
-  const region = process.env.QSTASH_REGION;
-  if (!region) return null;
-  return `${region}_`;
-}
-
-function getQStashToken(): string | undefined {
-  const prefix = getQStashRegionPrefix();
-  if (prefix) {
-    const token = process.env[`${prefix}QSTASH_TOKEN`];
-    if (token) return token;
-  }
-  return process.env.QSTASH_TOKEN;
-}
-
-function getQStashBaseUrl(): string {
-  const prefix = getQStashRegionPrefix();
-  if (prefix) {
-    const url = process.env[`${prefix}QSTASH_URL`];
-    if (url) return url.replace(/\/$/, ''); // trim trailing slash
-  }
-  return 'https://qstash.upstash.io';
-}
-
-function getQStashSigningKeys(): { current: string; next: string } | null {
-  const prefix = getQStashRegionPrefix();
-  const currentKey = prefix
-    ? process.env[`${prefix}QSTASH_CURRENT_SIGNING_KEY`]
-    : process.env.QSTASH_CURRENT_SIGNING_KEY;
-  const nextKey = prefix
-    ? process.env[`${prefix}QSTASH_NEXT_SIGNING_KEY`]
-    : process.env.QSTASH_NEXT_SIGNING_KEY;
-  if (currentKey && nextKey) return { current: currentKey, next: nextKey };
-  return null;
-}
-
-// Cached receiver instance
-let receiver: Receiver | null = null;
-let receiverInitialized = false;
-
-function getReceiver(): Receiver | null {
-  if (!receiverInitialized) {
-    const keys = getQStashSigningKeys();
-    if (keys) {
-      receiver = new Receiver({
-        currentSigningKey: keys.current,
-        nextSigningKey: keys.next,
-      });
-    }
-    receiverInitialized = true;
-  }
-  return receiver;
-}
+import { getJobQueue } from './job-queue';
 
 /**
- * Base URL for the backend API. QStash requires destination URLs to have http:// or https://.
- * Normalizes values like "myapp.fly.dev" or "localhost:3001" to include a scheme.
+ * Base URL for the backend API. Destinations MUST have http:// or https://.
+ * Normalizes values like "myapp.fly.dev" or "localhost:3001".
  */
 function getApiBaseUrl(): string {
   const raw = process.env.API_BASE_URL || process.env.BACKEND_URL || 'http://localhost:3001';
   const trimmed = (raw || '').trim().replace(/\/$/, '');
   if (!trimmed) return 'http://localhost:3001';
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  // Localhost without scheme -> http; otherwise https (e.g. fly.dev, vercel.app)
   if (/^localhost(:\d+)?$/i.test(trimmed) || /^127\.0\.0\.1(:\d+)?$/i.test(trimmed)) {
     return `http://${trimmed}`;
   }
   return `https://${trimmed}`;
 }
 
-/** Ensure URL has http:// or https:// so QStash accepts it (invalid scheme -> 400). */
-function ensureScheme(url: string): string {
-  const s = (url || '').trim();
-  if (!s) return 'http://localhost:3001';
-  if (/^https?:\/\//i.test(s)) return s;
-  if (/^localhost(:\d+)?$/i.test(s) || /^127\.0\.0\.1(:\d+)?$/i.test(s)) return `http://${s}`;
-  return `https://${s}`;
+/**
+ * Verify that an inbound worker request is authentic. Accepts either:
+ *   - QStash signature via upstash-signature header (cloud mode)
+ *   - X-Internal-Api-Key equal to process.env.INTERNAL_API_KEY (self-host)
+ * Pass the raw Express headers object and the raw request body string.
+ */
+export async function verifyJobRequest(
+  headers: Record<string, string | string[] | undefined>,
+  rawBody: string,
+): Promise<boolean> {
+  return getJobQueue().verifyRequest(headers, rawBody);
 }
 
 /**
- * Verify that a request came from QStash
+ * @deprecated Prefer verifyJobRequest — it also accepts X-Internal-Api-Key for self-host.
+ * Back-compat shim for legacy call sites that only had the QStash signature at hand.
  */
 export async function verifyQStashSignature(
   signature: string,
-  body: string
+  body: string,
 ): Promise<boolean> {
-  const recv = getReceiver();
-  if (!recv) {
-    // If no signing keys configured, allow requests (dev mode)
-    console.warn('QStash signing keys not configured - skipping signature verification');
-    return true;
-  }
+  return getJobQueue().verifyRequest({ 'upstash-signature': signature }, body);
+}
 
-  try {
-    await recv.verify({
-      signature,
-      body,
-    });
-    return true;
-  } catch (error) {
-    console.error('QStash signature verification failed:', error);
-    return false;
-  }
+/** True if the selected job backend is fully configured. */
+export function isQStashConfigured(): boolean {
+  return getJobQueue().isConfigured();
 }
 
 /**
- * Queue a dependency analysis job via QStash
- * Uses QStash's built-in rate limiting with parallelism
+ * Queue a single dependency-analysis job.
  */
 export async function queueDependencyAnalysis(
   dependencyId: string,
   name: string,
-  version: string
+  version: string,
 ): Promise<{ messageId: string } | null> {
-  const token = getQStashToken();
-  if (!token) {
-    console.warn('QSTASH_TOKEN not configured - skipping queue');
-    return null;
-  }
-
-  const base = ensureScheme(getApiBaseUrl());
-  const url = `${base.replace(/\/$/, '')}/api/workers/analyze-dependency`;
-
-  const baseUrl = getQStashBaseUrl();
-  try {
-    const response = await fetch(`${baseUrl}/v2/publish/` + encodeURIComponent(url), {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'Upstash-Method': 'POST',
-        // Rate limiting: max 10 concurrent requests
-        'Upstash-Delay': '0s',
-        'Upstash-Retries': '3',
-        'Upstash-Forward-Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        dependencyId,
-        name,
-        version,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('QStash publish failed:', response.status, errorText);
-      return null;
-    }
-
-    const result = (await response.json()) as { messageId?: string };
-    return result.messageId ? { messageId: result.messageId } : null;
-  } catch (error) {
-    console.error('Failed to queue dependency analysis:', error);
-    return null;
-  }
+  const url = `${getApiBaseUrl().replace(/\/$/, '')}/api/workers/analyze-dependency`;
+  return getJobQueue().publish(
+    url,
+    { dependencyId, name, version },
+    { retries: 3 },
+  );
 }
 
 /**
- * Queue dependency analysis jobs in grouped batches
- * Groups packages together to reduce message count (important for free tier: 500 msgs/day)
+ * Queue a batch of analyze-dependency jobs, grouped into messages of up to 20.
+ * Uses a single flow-control key so batches run serially.
  */
 export async function queueDependencyAnalysisBatch(
-  dependencies: Array<{ dependencyId: string; name: string; version: string }>
+  dependencies: Array<{ dependencyId: string; name: string; version: string }>,
 ): Promise<{ queued: number; failed: number; messages: number }> {
-  const token = getQStashToken();
-  const apiBaseUrl = ensureScheme(getApiBaseUrl());
+  if (dependencies.length === 0) return { queued: 0, failed: 0, messages: 0 };
+  const url = `${getApiBaseUrl().replace(/\/$/, '')}/api/workers/analyze-dependencies`;
 
-  if (!token) {
-    console.warn('QSTASH_TOKEN not configured - skipping batch queue');
-    return { queued: 0, failed: dependencies.length, messages: 0 };
-  }
-
-  const url = `${apiBaseUrl.replace(/\/$/, '')}/api/workers/analyze-dependencies`;
-  
-  // Group dependencies into batches of 20 to reduce message count
   const BATCH_SIZE = 20;
   const batches: Array<Array<{ dependencyId: string; name: string; version: string }>> = [];
-  
   for (let i = 0; i < dependencies.length; i += BATCH_SIZE) {
     batches.push(dependencies.slice(i, i + BATCH_SIZE));
   }
 
-  // Create one message per batch with staggered delays and flow control
-  // Upstash-Flow-Control-Key + parallelism=1: at most 1 delivery to this endpoint at a time (per key)
-  // So even if multiple projects queue at once, QStash delivers one batch, waits for response, then the next
-  // Upstash-Retries: on 503 (busy) or 500, QStash will retry; we cap at 5 so retries are bounded
-  const FLOW_CONTROL_KEY = 'deptex-analyze-dependencies';
   const messages = batches.map((batch, index) => ({
-    destination: url,
-    headers: {
-      'Content-Type': 'application/json',
-      'Upstash-Delay': `${index * 30}s`, // 0s, 30s, 60s, 90s, etc.
-      'Upstash-Flow-Control-Key': FLOW_CONTROL_KEY,
-      'Upstash-Flow-Control-Value': 'parallelism=1',
-      'Upstash-Retries': '5',
+    url,
+    body: { dependencies: batch },
+    opts: {
+      delayMs: index * 30_000,
+      flowControlKey: 'deptex-analyze-dependencies',
+      retries: 5,
     },
-    body: JSON.stringify({
-      dependencies: batch,
-    }),
   }));
+
+  const results = await getJobQueue().publishBatch(messages);
 
   let queued = 0;
   let failed = 0;
   let messagesQueued = 0;
-
-  const baseUrl = getQStashBaseUrl();
-  try {
-    const response = await fetch(`${baseUrl}/v2/batch`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(messages),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('QStash batch publish failed:', response.status, errorText);
-      return { queued: 0, failed: dependencies.length, messages: 0 };
-    }
-
-    const results = await response.json();
-    
-    // Count successes and failures
-    if (Array.isArray(results)) {
-      results.forEach((result: any, index: number) => {
-        if (result.messageId) {
-          messagesQueued++;
-          queued += batches[index].length;
-        } else {
-          failed += batches[index].length;
-        }
-      });
+  results.forEach((r, i) => {
+    if (r?.messageId) {
+      messagesQueued++;
+      queued += batches[i].length;
     } else {
-      messagesQueued = messages.length;
-      queued = dependencies.length;
+      failed += batches[i].length;
     }
+  });
 
-    console.log(`Queued ${queued} dependencies in ${messagesQueued} messages`);
-    return { queued, failed, messages: messagesQueued };
-  } catch (error: any) {
-    console.error('Failed to queue dependency analysis batch:', error);
-    return { queued: 0, failed: dependencies.length, messages: 0 };
-  }
+  console.log(`Queued ${queued} dependencies in ${messagesQueued} messages`);
+  return { queued, failed, messages: messagesQueued };
 }
 
 /**
- * Queue dependency population jobs in grouped batches
- * Each job populates a new dependency: fetches npm info, creates version rows, GHSA vulns, OpenSSF, calculates reputation score
- * Batch size of 10 (each populate job does more work than the old per-version analysis)
+ * Queue a batch of populate-dependency jobs (per-ecosystem flow control).
+ * Each job populates a new dependency: registry info, version rows, GHSA,
+ * OpenSSF, reputation score.
  */
 export async function queuePopulateDependencyBatch(
   dependencies: Array<{ dependencyId: string; name: string; ecosystem?: string }>,
   projectId?: string,
   organizationId?: string,
 ): Promise<{ queued: number; failed: number; messages: number }> {
-  const token = getQStashToken();
-  const apiBaseUrl = ensureScheme(getApiBaseUrl());
+  if (dependencies.length === 0) return { queued: 0, failed: 0, messages: 0 };
+  const url = `${getApiBaseUrl().replace(/\/$/, '')}/api/workers/populate-dependencies`;
 
-  if (!token) {
-    console.warn('QSTASH_TOKEN not configured - skipping populate batch queue');
-    return { queued: 0, failed: dependencies.length, messages: 0 };
-  }
-
-  const url = `${apiBaseUrl.replace(/\/$/, '')}/api/workers/populate-dependencies`;
-
-  // Group by ecosystem first so each ecosystem gets its own flow-control lane
   const byEcosystem = new Map<string, Array<{ dependencyId: string; name: string; ecosystem?: string }>>();
   for (const dep of dependencies) {
     const eco = dep.ecosystem || 'npm';
@@ -282,7 +137,7 @@ export async function queuePopulateDependencyBatch(
   }
 
   const BATCH_SIZE = 10;
-  const messages: Array<{ destination: string; headers: Record<string, string>; body: string }> = [];
+  const messages: Array<{ url: string; body: unknown; opts: { delayMs: number; flowControlKey: string; retries: number } }> = [];
   const batchSizes: number[] = [];
 
   for (const [ecosystem, deps] of byEcosystem) {
@@ -291,143 +146,53 @@ export async function queuePopulateDependencyBatch(
       const batch = deps.slice(i, i + BATCH_SIZE);
       const batchIndex = messages.length;
       messages.push({
-        destination: url,
-        headers: {
-          'Content-Type': 'application/json',
-          'Upstash-Delay': `${batchIndex * 30}s`,
-          'Upstash-Flow-Control-Key': flowKey,
-          'Upstash-Flow-Control-Value': 'parallelism=1',
-          'Upstash-Retries': '5',
-        },
-        body: JSON.stringify({
+        url,
+        body: {
           dependencies: batch,
           ecosystem,
           ...(projectId && { projectId }),
           ...(organizationId && { organizationId }),
-        }),
+        },
+        opts: {
+          delayMs: batchIndex * 30_000,
+          flowControlKey: flowKey,
+          retries: 5,
+        },
       });
       batchSizes.push(batch.length);
     }
   }
 
+  const results = await getJobQueue().publishBatch(messages);
+
   let queued = 0;
   let failed = 0;
   let messagesQueued = 0;
-
-  const baseUrl = getQStashBaseUrl();
-  try {
-    const response = await fetch(`${baseUrl}/v2/batch`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(messages),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('QStash populate batch publish failed:', response.status, errorText);
-      return { queued: 0, failed: dependencies.length, messages: 0 };
-    }
-
-    const results = await response.json();
-
-    if (Array.isArray(results)) {
-      results.forEach((result: any, index: number) => {
-        if (result.messageId) {
-          messagesQueued++;
-          queued += batchSizes[index] ?? 0;
-        } else {
-          failed += batchSizes[index] ?? 0;
-        }
-      });
+  results.forEach((r, i) => {
+    if (r?.messageId) {
+      messagesQueued++;
+      queued += batchSizes[i] ?? 0;
     } else {
-      messagesQueued = messages.length;
-      queued = dependencies.length;
+      failed += batchSizes[i] ?? 0;
     }
+  });
 
-    console.log(`Queued ${queued} dependencies for population in ${messagesQueued} messages`);
-    return { queued, failed, messages: messagesQueued };
-  } catch (error: any) {
-    console.error('Failed to queue dependency population batch:', error);
-    return { queued: 0, failed: dependencies.length, messages: 0 };
-  }
+  console.log(`Queued ${queued} dependencies for population in ${messagesQueued} messages`);
+  return { queued, failed, messages: messagesQueued };
 }
 
 /**
- * Build backend base URL for QStash callbacks. Used when THIS process (the one handling
- * populate-dependencies) tells QStash where to call back. Set BACKEND_URL or API_BASE_URL
- * on the app that serves /api/workers/* (Vercel/Fly.io backend), not on the extraction worker.
- */
-function getBackfillDestinationBase(): string {
-  const raw = (process.env.API_BASE_URL || process.env.BACKEND_URL || '').trim().replace(/\/$/, '');
-  if (!raw) return 'http://localhost:3001';
-  if (/^https?:\/\//i.test(raw)) return raw;
-  if (/^localhost(:\d+)?$/i.test(raw) || /^127\.0\.0\.1(:\d+)?$/i.test(raw)) return `http://${raw}`;
-  return `https://${raw}`;
-}
-
-/**
- * Queue a backfill job to populate transitive dependency edges for a dependency.
- * Uses same flow key as populate so npm jobs never run concurrently.
- * Called from the backend when it handles POST /api/workers/populate-dependencies (invoked by QStash).
+ * Queue a backfill job to populate transitive dependency edges.
+ * Uses the same npm flow-control key so npm jobs never run concurrently.
  */
 export async function queueBackfillDependencyTrees(
   dependencyId: string,
-  name: string
+  name: string,
 ): Promise<{ messageId: string } | null> {
-  const token = getQStashToken();
-  if (!token) {
-    console.warn('QSTASH_TOKEN not configured - skipping backfill queue');
-    return null;
-  }
-
-  const base = getBackfillDestinationBase();
-  const url = `${base}/api/workers/backfill-dependency-trees`;
-  const baseUrl = getQStashBaseUrl();
-
-  console.log('[QStash backfill] destination url=', url, '| hasScheme=', /^https?:\/\//i.test(url));
-  if (!/^https?:\/\//i.test(url)) {
-    console.error('[QStash backfill] Destination URL missing scheme (set BACKEND_URL on backend). url=', url);
-  }
-
-  try {
-    const response = await fetch(`${baseUrl}/v2/publish/` + encodeURIComponent(url), {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'Upstash-Method': 'POST',
-        'Upstash-Delay': '0s',
-        'Upstash-Flow-Control-Key': 'deptex-npm-jobs',
-        'Upstash-Flow-Control-Value': 'parallelism=1',
-        'Upstash-Retries': '5',
-        'Upstash-Forward-Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        dependencyId,
-        name,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('QStash backfill publish failed:', response.status, errorText);
-      return null;
-    }
-
-    const result = (await response.json()) as { messageId?: string };
-    return result.messageId ? { messageId: result.messageId } : null;
-  } catch (error) {
-    console.error('Failed to queue backfill dependency trees:', error);
-    return null;
-  }
-}
-
-/**
- * Check if QStash is configured
- */
-export function isQStashConfigured(): boolean {
-  return !!getQStashToken();
+  const url = `${getApiBaseUrl().replace(/\/$/, '')}/api/workers/backfill-dependency-trees`;
+  return getJobQueue().publish(
+    url,
+    { dependencyId, name },
+    { flowControlKey: 'deptex-npm-jobs', retries: 5 },
+  );
 }

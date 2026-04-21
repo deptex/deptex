@@ -25,6 +25,7 @@ import scimRouter from './routes/scim';
 import learningCronRouter from './routes/learning-cron';
 import incidentCronRouter from './routes/incident-cron';
 import cronDispatcherRouter from './routes/cron-dispatcher';
+import { startSelfHostCrons } from './lib/self-host-cron';
 import feedbackRouter from './routes/feedback';
 import demoRequestRouter from './routes/demo-request';
 import enterpriseContactRouter from './routes/enterprise-contact';
@@ -149,6 +150,7 @@ if (require.main === module) {
     if (!process.env.AI_ENCRYPTION_KEY) {
       console.warn('[AI] WARNING: AI_ENCRYPTION_KEY is not set. BYOK AI provider features will be unavailable.');
     }
+    startSelfHostCrons();
   });
 }
 

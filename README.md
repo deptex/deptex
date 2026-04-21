@@ -83,6 +83,8 @@ flowchart TB
 
 Deptex is source-available under the [Functional Source License 1.1 (FSL-1.1-ALv2)](./LICENSE). You may use, modify, and self-host the code for any purpose other than providing it to others as a hosted/managed service that competes with Deptex. Each version converts to Apache License 2.0 on its second anniversary.
 
+Running it yourself? See [**docs/self-hosting.md**](./docs/self-hosting.md).
+
 ---
 
 ## Community & Support
