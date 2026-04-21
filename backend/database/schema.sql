@@ -1112,14 +1112,18 @@ CREATE TABLE IF NOT EXISTS public.project_vulnerability_events (
   event_type text NOT NULL,
   metadata jsonb,
   extraction_run_id text,
+  project_dependency_id uuid,
   created_at timestamp with time zone DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_pve_unique_per_run
-  ON public.project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id)
+  ON public.project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
   WHERE extraction_run_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_pve_extraction_run_id
   ON public.project_vulnerability_events (extraction_run_id)
   WHERE extraction_run_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pve_project_dependency_id
+  ON public.project_vulnerability_events (project_dependency_id)
+  WHERE project_dependency_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS public.project_watchlist (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   project_id uuid NOT NULL,
@@ -2722,15 +2726,15 @@ BEGIN
         FROM new_reasons nr
         WHERE pdv.id = nr.pdv_id
           AND jsonb_array_length(nr.reasons) > 0
-        RETURNING pdv.id, nr.osv_id, nr.reasons
+        RETURNING pdv.id, pdv.project_dependency_id AS pd_id, nr.osv_id, nr.reasons
       ),
       event_insert AS (
-        INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, metadata, created_at)
-        SELECT p_project_id, osv_id, 'rereview_triggered', p_extraction_run_id,
+        INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
+        SELECT p_project_id, osv_id, 'rereview_triggered', p_extraction_run_id, pd_id,
                jsonb_build_object('reasons', reasons),
                v_now
         FROM fired
-        ON CONFLICT (project_id, osv_id, event_type, extraction_run_id)
+        ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
           WHERE extraction_run_id IS NOT NULL
           DO NOTHING
       )
@@ -2738,7 +2742,7 @@ BEGIN
     END IF;
 
     WITH unmatched AS (
-      SELECT npdv.id AS pdv_id, npd.name AS dep_name, npdv.osv_id
+      SELECT npdv.id AS pdv_id, npdv.project_dependency_id AS pd_id, npd.name AS dep_name, npdv.osv_id
       FROM project_dependency_vulnerabilities npdv
       JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
       WHERE npdv.project_id = p_project_id
@@ -2756,6 +2760,7 @@ BEGIN
     classified AS (
       SELECT
         u.pdv_id,
+        u.pd_id,
         u.osv_id,
         u.dep_name,
         EXISTS (
@@ -2771,16 +2776,17 @@ BEGIN
       FROM unmatched u
     ),
     events_inserted AS (
-      INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, metadata, created_at)
+      INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
       SELECT
         p_project_id,
         c.osv_id,
         CASE WHEN c.is_reopened THEN 'reopened' ELSE 'detected' END,
         p_extraction_run_id,
+        c.pd_id,
         jsonb_build_object('dep_name', c.dep_name),
         v_now
       FROM classified c
-      ON CONFLICT (project_id, osv_id, event_type, extraction_run_id)
+      ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
         WHERE extraction_run_id IS NOT NULL
         DO NOTHING
       RETURNING id, event_type
@@ -2791,15 +2797,15 @@ BEGIN
     INTO v_pdv_reopened, v_pdv_new
     FROM events_inserted;
   ELSE
-    INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, metadata, created_at)
-    SELECT p_project_id, npdv.osv_id, 'detected', p_extraction_run_id,
+    INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
+    SELECT p_project_id, npdv.osv_id, 'detected', p_extraction_run_id, npdv.project_dependency_id,
            jsonb_build_object('dep_name', npd.name),
            v_now
     FROM project_dependency_vulnerabilities npdv
     JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
     WHERE npdv.project_id = p_project_id
       AND npdv.extraction_run_id = p_extraction_run_id
-    ON CONFLICT (project_id, osv_id, event_type, extraction_run_id)
+    ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
       WHERE extraction_run_id IS NOT NULL
       DO NOTHING;
 
@@ -3404,15 +3410,15 @@ BEGIN
         FROM new_reasons nr
         WHERE pdv.id = nr.pdv_id
           AND jsonb_array_length(nr.reasons) > 0
-        RETURNING pdv.id, nr.osv_id, nr.reasons
+        RETURNING pdv.id, pdv.project_dependency_id AS pd_id, nr.osv_id, nr.reasons
       ),
       event_insert AS (
-        INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, metadata, created_at)
-        SELECT p_project_id, osv_id, 'rereview_triggered', p_extraction_run_id,
+        INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
+        SELECT p_project_id, osv_id, 'rereview_triggered', p_extraction_run_id, pd_id,
                jsonb_build_object('reasons', reasons),
                v_now
         FROM fired
-        ON CONFLICT (project_id, osv_id, event_type, extraction_run_id)
+        ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
           WHERE extraction_run_id IS NOT NULL
           DO NOTHING
       )
@@ -3420,7 +3426,7 @@ BEGIN
     END IF;
 
     WITH unmatched AS (
-      SELECT npdv.id AS pdv_id, npd.name AS dep_name, npdv.osv_id
+      SELECT npdv.id AS pdv_id, npdv.project_dependency_id AS pd_id, npd.name AS dep_name, npdv.osv_id
       FROM project_dependency_vulnerabilities npdv
       JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
       WHERE npdv.project_id = p_project_id
@@ -3436,7 +3442,7 @@ BEGIN
         )
     ),
     classified AS (
-      SELECT u.pdv_id, u.osv_id, u.dep_name,
+      SELECT u.pdv_id, u.pd_id, u.osv_id, u.dep_name,
         EXISTS (
           SELECT 1
           FROM project_dependency_vulnerabilities opdv
@@ -3450,15 +3456,16 @@ BEGIN
       FROM unmatched u
     ),
     events_inserted AS (
-      INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, metadata, created_at)
+      INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
       SELECT
         p_project_id, c.osv_id,
         CASE WHEN c.is_reopened THEN 'reopened' ELSE 'detected' END,
         p_extraction_run_id,
+        c.pd_id,
         jsonb_build_object('dep_name', c.dep_name),
         v_now
       FROM classified c
-      ON CONFLICT (project_id, osv_id, event_type, extraction_run_id)
+      ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
         WHERE extraction_run_id IS NOT NULL
         DO NOTHING
       RETURNING id, event_type
@@ -3469,15 +3476,15 @@ BEGIN
     INTO v_pdv_reopened, v_pdv_new
     FROM events_inserted;
   ELSE
-    INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, metadata, created_at)
-    SELECT p_project_id, npdv.osv_id, 'detected', p_extraction_run_id,
+    INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
+    SELECT p_project_id, npdv.osv_id, 'detected', p_extraction_run_id, npdv.project_dependency_id,
            jsonb_build_object('dep_name', npd.name),
            v_now
     FROM project_dependency_vulnerabilities npdv
     JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
     WHERE npdv.project_id = p_project_id
       AND npdv.extraction_run_id = p_extraction_run_id
-    ON CONFLICT (project_id, osv_id, event_type, extraction_run_id)
+    ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
       WHERE extraction_run_id IS NOT NULL
       DO NOTHING;
 

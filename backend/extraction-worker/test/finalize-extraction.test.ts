@@ -469,6 +469,66 @@ async function testUnchangedVersionSeverityEscalationFires(): Promise<void> {
 }
 
 // -----------------------------------------------------------------------------
+// Test 9: Monorepo same CVE on two PDs — first-run emits one event per PD
+//
+// Regression for B1: the partial unique index idx_pve_unique_per_run originally
+// keyed on (project_id, osv_id, event_type, extraction_run_id) only. When two
+// PDs in the same project shared a CVE (e.g. lodash@4.17.20 direct +
+// lodash@4.17.21 nested-transitive, both with CVE-X), both INSERTs produced the
+// same conflict key and the second was ON CONFLICT DO NOTHING'd — so only one
+// `detected` event was emitted, contradicting the per-PD notification intent.
+// Phase 19.6 adds project_dependency_id to the unique key so distinct PDs
+// under the same CVE each emit their own event while retries (same pd_id)
+// still dedup cleanly.
+// -----------------------------------------------------------------------------
+async function testMonorepoSameCveTwoPDsEmitTwoEvents(): Promise<void> {
+  console.log('\nTest 9: monorepo same-CVE two PDs — two detected events, one per PD');
+  const db = await bootDb();
+  const RUN = 'run_first';
+  await seedOrgAndProject(db, null); // first run
+
+  const PD_20 = '11111111-1111-1111-1111-111111111111';
+  const PD_21 = '22222222-2222-2222-2222-222222222222';
+
+  await db.exec(`
+    INSERT INTO project_dependencies (id, project_id, name, version, is_direct, source, last_seen_extraction_run_id, created_at)
+    VALUES
+      ('${PD_20}', '${PROJECT_ID}', 'lodash', '4.17.20', true,  'dependencies', '${RUN}', NOW()),
+      ('${PD_21}', '${PROJECT_ID}', 'lodash', '4.17.21', false, 'dependencies', '${RUN}', NOW());
+  `);
+  await db.exec(`
+    INSERT INTO project_dependency_vulnerabilities
+      (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, detected_at, created_at)
+    VALUES
+      ('${PROJECT_ID}', '${PD_20}', 'CVE-2021-23337', 'high', '${RUN}', 'open', NOW(), NOW()),
+      ('${PROJECT_ID}', '${PD_21}', 'CVE-2021-23337', 'high', '${RUN}', 'open', NOW(), NOW());
+  `);
+
+  await callFinalize(db, RUN);
+
+  const events = await db.query<{ event_type: string; project_dependency_id: string | null }>(
+    `SELECT event_type, project_dependency_id
+     FROM project_vulnerability_events
+     WHERE project_id = $1 AND osv_id = 'CVE-2021-23337'
+     ORDER BY project_dependency_id`,
+    [PROJECT_ID],
+  );
+  assert(events.rows.length === 2, `two events written, one per PD (got ${events.rows.length})`);
+  assert(events.rows.every((e) => e.event_type === 'detected'), 'both events are type=detected');
+  const pdIds = events.rows.map((e) => e.project_dependency_id).sort();
+  assert(pdIds[0] === PD_20 && pdIds[1] === PD_21, `events carry distinct pd_ids (got ${JSON.stringify(pdIds)})`);
+
+  // Retry-within-same-run_id isn't a production scenario (recover_stuck_extraction_jobs
+  // always assigns a new run_id before requeuing). Cross-run retry idempotency is
+  // covered by the partial unique index itself: on a different run_id, events from
+  // the prior run stay, and the new run's INSERTs only conflict if the same
+  // (project, osv, event_type, run_id, pd_id) is re-inserted by the new run's own
+  // retry — which happens within a transaction that would've rolled back the events.
+
+  await db.close();
+}
+
+// -----------------------------------------------------------------------------
 async function main() {
   const t0 = Date.now();
   const tests = [
@@ -480,6 +540,7 @@ async function main() {
     testReapOldRuns,
     testMonorepoMultiVersionNoCrossSwap,
     testUnchangedVersionSeverityEscalationFires,
+    testMonorepoSameCveTwoPDsEmitTwoEvents,
   ];
 
   for (const t of tests) {
