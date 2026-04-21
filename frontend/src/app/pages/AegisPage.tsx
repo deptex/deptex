@@ -70,6 +70,12 @@ export default function AegisPage() {
     }
   }, [orgId, toast]);
 
+  // Tracks whether we've already done the initial auto-navigate to the latest thread.
+  // Prevents "New chat" (which clears activeThreadId) from being immediately overridden.
+  const autoNavigatedRef = useRef(false);
+  const activeThreadIdRef = useRef(activeThreadId);
+  activeThreadIdRef.current = activeThreadId;
+
   useEffect(() => {
     if (!orgId || !canUseAegis) {
       setLoading(false);
@@ -80,7 +86,8 @@ export default function AegisPage() {
     refreshThreads().then((list) => {
       if (cancelled) return;
       setLoading(false);
-      if (!activeThreadId && list && list.length > 0) {
+      if (!autoNavigatedRef.current && !activeThreadIdRef.current && list && list.length > 0) {
+        autoNavigatedRef.current = true;
         const firstVisible = list.find((t) => !t.archivedAt);
         if (firstVisible) {
           navigate(`/organizations/${orgId}/aegis/${firstVisible.id}`, { replace: true });
@@ -88,18 +95,17 @@ export default function AegisPage() {
       }
     });
     return () => { cancelled = true; };
-  }, [orgId, canUseAegis, refreshThreads, activeThreadId, navigate]);
+  // activeThreadId intentionally excluded — navigating away from a thread should
+  // not retrigger a load+auto-navigate that would override "New chat".
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgId, canUseAegis, refreshThreads]);
 
-  const handleCreate = useCallback(async () => {
+  // "New chat" just returns to the landing screen; the thread is created when the
+  // user actually submits their first message.
+  const handleCreate = useCallback(() => {
     if (!orgId) return;
-    try {
-      const thread = await aegisApi.createThread(orgId);
-      setThreads((prev) => [thread, ...prev]);
-      navigate(`/organizations/${orgId}/aegis/${thread.id}`);
-    } catch (err: any) {
-      toast({ title: 'Could not create chat', description: err?.message, variant: 'destructive' });
-    }
-  }, [orgId, navigate, toast]);
+    navigate(`/organizations/${orgId}/aegis`);
+  }, [orgId, navigate]);
 
   const handleSelect = useCallback((threadId: string) => {
     if (!orgId) return;
