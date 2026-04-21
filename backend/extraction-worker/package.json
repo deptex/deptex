@@ -3,16 +3,28 @@
   "version": "0.1.0",
   "description": "Extraction worker for Deptex - Clone, cdxgen SBOM, dep-scan, Semgrep, TruffleHog",
   "main": "dist/index.js",
+  "bin": {
+    "deptex-scan": "bin/deptex-scan"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "schema:dump": "tsx scripts/dump-schema.ts",
+    "smoke:pglite": "tsx test/smoke-pglite.ts",
+    "test:storage": "tsx test/storage-pglite.test.ts",
+    "test:finalize": "tsx test/finalize-extraction.test.ts",
+    "docker:prepare": "mkdir -p .schema && cp ../database/schema.sql .schema/schema.sql",
+    "docker:build": "npm run docker:prepare && docker build -t deptex-cli:local .",
+    "scan": "./bin/deptex-scan",
+    "test:fixtures": "tsx test/snapshot.ts"
   },
   "keywords": ["extraction", "sbom", "dep-scan"],
   "license": "LicenseRef-FSL-1.1-ALv2",
   "dependencies": {
     "@cyclonedx/cdxgen": "^11.0.0",
+    "@electric-sql/pglite": "^0.2.0",
     "@supabase/supabase-js": "^2.39.0",
     "@upstash/redis": "^1.25.0",
     "dotenv": "^16.3.1",

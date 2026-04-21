@@ -60,11 +60,17 @@ RUN npm ci
 
 COPY src ./src
 
+# Local CLI mode reads schema.sql via PGLiteStorage at runtime. The
+# `docker:build` npm script stages the backend/database folder into
+# extraction-worker/.schema before invoking docker build so we can COPY it
+# in here. On Fly.io (which uses Supabase, not PGLite) this dir is unused.
+COPY .schema/schema.sql /database/schema.sql
+
 RUN npm run build
 
 RUN rm -rf src tsconfig.json && npm ci --only=production
 
-RUN chown -R worker:worker /app /tmp /data
+RUN chown -R worker:worker /app /tmp /data /database
 
 USER worker
 

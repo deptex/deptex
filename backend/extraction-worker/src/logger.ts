@@ -1,4 +1,4 @@
-import { SupabaseClient } from '@supabase/supabase-js';
+import type { Storage } from './storage';
 
 const SECRET_PATTERNS = [
   /ghp_[A-Za-z0-9]{36}/g,
@@ -39,15 +39,43 @@ export type LogStep =
 
 export type LogLevel = 'info' | 'success' | 'warning' | 'error';
 
+/**
+ * Display labels — CLI mode only. Keeps LogStep enum (DB + frontend filters)
+ * stable while giving the terminal the words users expect from scanners.
+ */
+const CLI_STEP_LABELS: Record<string, string> = {
+  semgrep: 'sast',
+  trufflehog: 'secrets',
+  vuln_scan: 'vulns',
+  depscan: 'vulns',
+  ast_parsing: 'ast',
+  deps_sync: 'deps',
+  clone: 'clone',
+  cloning: 'clone',
+};
+
+export interface ConsoleSink {
+  (line: string, level: LogLevel, step: LogStep): void;
+}
+
 export class ExtractionLogger {
-  private supabase: SupabaseClient;
+  private supabase: Storage;
   private projectId: string;
   private runId: string;
+  private cliMode: boolean;
+  private sink: ConsoleSink | null;
 
-  constructor(supabase: SupabaseClient, projectId: string, runId: string) {
+  constructor(
+    supabase: Storage,
+    projectId: string,
+    runId: string,
+    options: { cliMode?: boolean; sink?: ConsoleSink | null } = {}
+  ) {
     this.supabase = supabase;
     this.projectId = projectId;
     this.runId = runId;
+    this.cliMode = options.cliMode ?? false;
+    this.sink = options.sink ?? null;
   }
 
   async info(step: LogStep, message: string, metadata?: Record<string, unknown>): Promise<void> {
@@ -81,7 +109,17 @@ export class ExtractionLogger {
     metadata?: Record<string, unknown>
   ): Promise<void> {
     const sanitizedMessage = sanitize(message);
-    console.log(`[EXTRACT] [${step}] [${level}] ${sanitizedMessage}`);
+
+    if (this.cliMode) {
+      if (this.sink) {
+        this.sink(sanitizedMessage, level, step);
+      } else {
+        const displayStep = CLI_STEP_LABELS[step] ?? step;
+        console.log(`[${displayStep}] [${level}] ${sanitizedMessage}`);
+      }
+    } else {
+      console.log(`[EXTRACT] [${step}] [${level}] ${sanitizedMessage}`);
+    }
 
     try {
       await this.supabase.from('extraction_logs').insert({

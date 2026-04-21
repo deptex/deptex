@@ -1991,24 +1991,38 @@ router.get('/:id/teams/:teamId/security-summary', async (req: AuthRequest, res) 
 
     const { data: projects } = await supabase
       .from('projects')
-      .select('id, name')
+      .select('id, name, active_extraction_run_id')
       .in('id', projectIds);
 
-    const { data: vulnRows } = await supabase
-      .from('project_dependency_vulnerabilities')
-      .select('project_id, severity, depscore, is_reachable, suppressed')
-      .in('project_id', projectIds)
-      .eq('suppressed', false);
+    // Phase 19: only include findings tagged with each project's currently active run
+    const activeRunIds = (projects ?? [])
+      .map((p: any) => p.active_extraction_run_id)
+      .filter(Boolean) as string[];
 
-    const { data: semgrepRows } = await supabase
-      .from('project_semgrep_findings')
-      .select('project_id')
-      .in('project_id', projectIds);
+    const { data: vulnRows } = activeRunIds.length > 0
+      ? await supabase
+          .from('project_dependency_vulnerabilities')
+          .select('project_id, severity, depscore, is_reachable, suppressed')
+          .in('project_id', projectIds)
+          .in('extraction_run_id', activeRunIds)
+          .eq('suppressed', false)
+      : { data: [] as any[] };
 
-    const { data: secretRows } = await supabase
-      .from('project_secret_findings')
-      .select('project_id, is_verified')
-      .in('project_id', projectIds);
+    const { data: semgrepRows } = activeRunIds.length > 0
+      ? await supabase
+          .from('project_semgrep_findings')
+          .select('project_id')
+          .in('project_id', projectIds)
+          .in('extraction_run_id', activeRunIds)
+      : { data: [] as any[] };
+
+    const { data: secretRows } = activeRunIds.length > 0
+      ? await supabase
+          .from('project_secret_findings')
+          .select('project_id, is_verified')
+          .in('project_id', projectIds)
+          .in('extraction_run_id', activeRunIds)
+      : { data: [] as any[] };
 
     const vulnByProject = new Map<string, any[]>();
     for (const v of vulnRows ?? []) {
@@ -2095,7 +2109,7 @@ router.get('/:id/teams/:teamId/stats', async (req: AuthRequest, res) => {
       statusesResult,
     ] = await Promise.all([
       projectIds.length > 0
-        ? supabase.from('projects').select('id, name, health_score, status_id').in('id', projectIds)
+        ? supabase.from('projects').select('id, name, health_score, status_id, active_extraction_run_id').in('id', projectIds)
         : Promise.resolve({ data: [] }),
       supabase.from('team_members').select('id', { count: 'exact', head: true }).eq('team_id', teamId),
       supabase.from('organization_statuses').select('id, name, color, is_passing').eq('organization_id', orgId),
@@ -2106,23 +2120,31 @@ router.get('/:id/teams/:teamId/stats', async (req: AuthRequest, res) => {
     const atRisk = projects.filter((p: any) => (p.health_score ?? 0) >= 50 && (p.health_score ?? 0) < 80).length;
     const critical = projects.filter((p: any) => (p.health_score ?? 0) < 50).length;
 
+    // Phase 19: only include findings tagged with each project's currently active run
+    const activeRunIds = (projects as any[])
+      .map((p) => p.active_extraction_run_id)
+      .filter(Boolean) as string[];
+
     let vulnTotals = { total: 0, critical: 0, high: 0, medium: 0, low: 0 };
     let topVulns: any[] = [];
     let syncingCount = 0;
 
     if (projectIds.length > 0) {
       const [vulnsResult, syncResult] = await Promise.all([
-        supabase.from('project_dependency_vulnerabilities')
-          .select('severity, depscore, project_id, osv_id')
-          .in('project_id', projectIds)
-          .eq('suppressed', false),
+        activeRunIds.length > 0
+          ? supabase.from('project_dependency_vulnerabilities')
+              .select('severity, depscore, project_id, osv_id')
+              .in('project_id', projectIds)
+              .in('extraction_run_id', activeRunIds)
+              .eq('suppressed', false)
+          : Promise.resolve({ data: [] as any[] }),
         supabase.from('extraction_jobs')
           .select('id', { count: 'exact', head: true })
           .in('project_id', projectIds)
           .in('status', ['queued', 'processing']),
       ]);
 
-      syncingCount = syncResult.count ?? 0;
+      syncingCount = (syncResult as any).count ?? 0;
       const vulns = vulnsResult.data ?? [];
 
       for (const v of vulns) {
@@ -2177,10 +2199,10 @@ router.get('/:id/teams/:teamId/stats', async (req: AuthRequest, res) => {
     // Code findings
     let semgrepTotal = 0;
     let secretTotal = 0;
-    if (projectIds.length > 0) {
+    if (projectIds.length > 0 && activeRunIds.length > 0) {
       const [sr, scr] = await Promise.all([
-        supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).in('project_id', projectIds),
-        supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).in('project_id', projectIds),
+        supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).in('project_id', projectIds).in('extraction_run_id', activeRunIds),
+        supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).in('project_id', projectIds).in('extraction_run_id', activeRunIds),
       ]);
       semgrepTotal = sr.count ?? 0;
       secretTotal = scr.count ?? 0;
@@ -2201,17 +2223,18 @@ router.get('/:id/teams/:teamId/stats', async (req: AuthRequest, res) => {
     // Dependencies total
     let depsTotalCount = 0;
     if (projectIds.length > 0) {
-      const { count } = await supabase.from('project_dependencies').select('id', { count: 'exact', head: true }).in('project_id', projectIds);
+      const { count } = await supabase.from('project_dependencies').select('id', { count: 'exact', head: true }).in('project_id', projectIds).is('removed_at', null);
       depsTotalCount = count ?? 0;
     }
 
     // SLA aggregates (team's projects)
     let slaAgg = { compliance_percent: 100, on_track: 0, warning: 0, breached: 0, exempt: 0, met: 0, resolved_late: 0 };
-    if (projectIds.length > 0) {
+    if (projectIds.length > 0 && activeRunIds.length > 0) {
       const { data: pdvSla } = await supabase
         .from('project_dependency_vulnerabilities')
         .select('sla_status')
-        .in('project_id', projectIds);
+        .in('project_id', projectIds)
+        .in('extraction_run_id', activeRunIds);
       const list = pdvSla ?? [];
       const met = list.filter((p: any) => p.sla_status === 'met').length;
       const resolvedLate = list.filter((p: any) => p.sla_status === 'resolved_late').length;
@@ -2273,6 +2296,18 @@ router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) =
       return res.json({ data: [], total: 0, page: 1, per_page: 50 });
     }
 
+    // Phase 19: only include findings tagged with each project's currently active run
+    const { data: projectsForActive } = await supabase
+      .from('projects')
+      .select('id, active_extraction_run_id')
+      .in('id', projectIds);
+    const activeRunIds = (projectsForActive ?? [])
+      .map((p: any) => p.active_extraction_run_id)
+      .filter(Boolean) as string[];
+    if (activeRunIds.length === 0) {
+      return res.json({ data: [], total: 0, page: 1, per_page: 50 });
+    }
+
     const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
     const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page as string, 10) || 50));
     const severityFilter = (req.query.severity as string) || '';
@@ -2283,6 +2318,7 @@ router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) =
       .from('project_dependency_vulnerabilities')
       .select('*', { count: 'exact', head: true })
       .in('project_id', projectIds)
+      .in('extraction_run_id', activeRunIds)
       .eq('suppressed', false);
     if (!showIgnored) countQuery = countQuery.eq('status', 'open');
     if (allowedSeverity) countQuery = countQuery.eq('severity', allowedSeverity);
@@ -2299,6 +2335,7 @@ router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) =
         'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, sla_status, sla_deadline_at, reachability_level, status'
       )
       .in('project_id', projectIds)
+      .in('extraction_run_id', activeRunIds)
       .eq('suppressed', false);
     if (!showIgnored) dataQuery = dataQuery.eq('status', 'open');
     if (allowedSeverity) dataQuery = dataQuery.eq('severity', allowedSeverity);
@@ -2321,7 +2358,8 @@ router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) =
       const { data: deps, error: depErr } = await supabase
         .from('project_dependencies')
         .select('id, name, version, dependency_id')
-        .in('id', pdIds);
+        .in('id', pdIds)
+        .is('removed_at', null);
       if (depErr) throw depErr;
       for (const d of deps || []) {
         depMap.set((d as any).id, {
@@ -2413,6 +2451,18 @@ router.get('/:id/teams/:teamId/secret-findings', async (req: AuthRequest, res) =
       return res.json({ data: [], total: 0, page: 1, per_page: 50 });
     }
 
+    // Phase 19: only include findings tagged with each project's currently active run
+    const { data: projectsForActive } = await supabase
+      .from('projects')
+      .select('id, active_extraction_run_id')
+      .in('id', projectIds);
+    const activeRunIds = (projectsForActive ?? [])
+      .map((p: any) => p.active_extraction_run_id)
+      .filter(Boolean) as string[];
+    if (activeRunIds.length === 0) {
+      return res.json({ data: [], total: 0, page: 1, per_page: 50 });
+    }
+
     const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
     const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page as string, 10) || 50));
     const showIgnored = req.query.show_ignored === 'true';
@@ -2420,7 +2470,8 @@ router.get('/:id/teams/:teamId/secret-findings', async (req: AuthRequest, res) =
     let countQ = supabase
       .from('project_secret_findings')
       .select('*', { count: 'exact', head: true })
-      .in('project_id', projectIds);
+      .in('project_id', projectIds)
+      .in('extraction_run_id', activeRunIds);
     if (!showIgnored) countQ = countQ.eq('status', 'open');
     const { count: totalCount, error: countError } = await countQ;
     if (countError) throw countError;
@@ -2431,7 +2482,8 @@ router.get('/:id/teams/:teamId/secret-findings', async (req: AuthRequest, res) =
     let dataQ = supabase
       .from('project_secret_findings')
       .select('id, project_id, detector_type, file_path, start_line, is_verified, is_current, description, redacted_value, code_snippet, depscore, status, created_at')
-      .in('project_id', projectIds);
+      .in('project_id', projectIds)
+      .in('extraction_run_id', activeRunIds);
     if (!showIgnored) dataQ = dataQ.eq('status', 'open');
     const { data: rows, error: dataError } = await dataQ
       .order('depscore', { ascending: false, nullsFirst: false })
@@ -2487,6 +2539,18 @@ router.get('/:id/teams/:teamId/semgrep-findings', async (req: AuthRequest, res) 
       return res.json({ data: [], total: 0, page: 1, per_page: 50 });
     }
 
+    // Phase 19: only include findings tagged with each project's currently active run
+    const { data: projectsForActive } = await supabase
+      .from('projects')
+      .select('id, active_extraction_run_id')
+      .in('id', projectIds);
+    const activeRunIds = (projectsForActive ?? [])
+      .map((p: any) => p.active_extraction_run_id)
+      .filter(Boolean) as string[];
+    if (activeRunIds.length === 0) {
+      return res.json({ data: [], total: 0, page: 1, per_page: 50 });
+    }
+
     const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
     const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page as string, 10) || 50));
     const showIgnored = req.query.show_ignored === 'true';
@@ -2494,7 +2558,8 @@ router.get('/:id/teams/:teamId/semgrep-findings', async (req: AuthRequest, res) 
     let countQ2 = supabase
       .from('project_semgrep_findings')
       .select('*', { count: 'exact', head: true })
-      .in('project_id', projectIds);
+      .in('project_id', projectIds)
+      .in('extraction_run_id', activeRunIds);
     if (!showIgnored) countQ2 = countQ2.eq('status', 'open');
     const { count: totalCount, error: countError } = await countQ2;
     if (countError) throw countError;
@@ -2505,7 +2570,8 @@ router.get('/:id/teams/:teamId/semgrep-findings', async (req: AuthRequest, res) 
     let dataQ2 = supabase
       .from('project_semgrep_findings')
       .select('id, project_id, rule_id, file_path, start_line, end_line, severity, message, cwe_ids, owasp_ids, category, code_snippet, depscore, status, created_at')
-      .in('project_id', projectIds);
+      .in('project_id', projectIds)
+      .in('extraction_run_id', activeRunIds);
     if (!showIgnored) dataQ2 = dataQ2.eq('status', 'open');
     const { data: rows, error: dataError } = await dataQ2
       .order('depscore', { ascending: false, nullsFirst: false })
@@ -2564,21 +2630,23 @@ router.get('/:id/teams/:teamId/license-violations', async (req: AuthRequest, res
     const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
     const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page as string, 10) || 50));
 
-    // Count blocked deps
+    // Count blocked deps (Phase 19: exclude soft-deleted deps from previous runs)
     const { count: totalCount, error: countError } = await supabase
       .from('project_dependencies')
       .select('*', { count: 'exact', head: true })
       .in('project_id', projectIds)
+      .is('removed_at', null)
       .eq('policy_result->>allowed', 'false');
     if (countError) throw countError;
 
-    // Fetch blocked deps
+    // Fetch blocked deps (Phase 19: exclude soft-deleted deps from previous runs)
     const from = (page - 1) * perPage;
     const to = from + perPage - 1;
     const { data: rows, error: dataError } = await supabase
       .from('project_dependencies')
       .select('id, project_id, name, version, is_direct, source, environment, policy_result, dependency_id')
       .in('project_id', projectIds)
+      .is('removed_at', null)
       .eq('policy_result->>allowed', 'false')
       .order('is_direct', { ascending: false })
       .order('name', { ascending: true })
