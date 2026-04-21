@@ -231,10 +231,8 @@ export function ThreadList({
 
       <div className="flex-1 overflow-y-auto px-2 pb-2">
         {loading && threads.length === 0 && (
-          <div className="space-y-1 px-1 py-2">
-            {[0, 1, 2].map((i) => (
-              <div key={i} className="h-8 rounded-md bg-background-subtle/50 animate-pulse" />
-            ))}
+          <div className="px-3 py-3">
+            <div className="h-3 w-36 rounded bg-foreground/8 animate-pulse" />
           </div>
         )}
 

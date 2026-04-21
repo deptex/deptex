@@ -62,6 +62,7 @@ export default function AegisPage() {
   const [pendingMessage, setPendingMessage] = useState<string | null>(null);
   // ID of the thread whose title is still being generated (shows skeleton in sidebar).
   const [pendingTitleThreadId, setPendingTitleThreadId] = useState<string | null>(null);
+  const pendingTitleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeThread = useMemo(
     () => threads.find((t) => t.id === activeThreadId) ?? null,
     [threads, activeThreadId],
@@ -240,6 +241,8 @@ export default function AegisPage() {
       const thread = await aegisApi.createThread(orgId);
       setThreads((prev) => [thread, ...prev]);
       setPendingTitleThreadId(thread.id);
+      if (pendingTitleTimeoutRef.current) clearTimeout(pendingTitleTimeoutRef.current);
+      pendingTitleTimeoutRef.current = setTimeout(() => setPendingTitleThreadId(null), 20_000);
       navigate(`/organizations/${orgId}/aegis/${thread.id}`, { state: { initialMessage: message } });
     } catch (err: any) {
       setPendingMessage(null);
@@ -291,6 +294,7 @@ export default function AegisPage() {
             initialMessage={initialMessageForThread}
             onThreadUpdated={() => {
               void refreshThreads();
+              if (pendingTitleTimeoutRef.current) clearTimeout(pendingTitleTimeoutRef.current);
               setPendingTitleThreadId(null);
             }}
             onMount={() => setPendingMessage(null)}
