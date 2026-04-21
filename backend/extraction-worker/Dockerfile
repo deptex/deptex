@@ -25,10 +25,12 @@ RUN curl -sL https://go.dev/dl/go1.22.10.linux-amd64.tar.gz \
   | tar xz -C /usr/local
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-# Install dep-scan and Semgrep
+# Install dep-scan and Semgrep. semgrep is exact-pinned because it ships
+# breaking changes frequently. dep-scan is major-version-pinned (6.*) to allow
+# patch uptake while blocking the 6→7 breaking-change class.
 RUN pip3 install --no-cache-dir --break-system-packages \
   owasp-depscan==6.* \
-  semgrep \
+  semgrep==1.92.0 \
   && depscan --help >/dev/null \
   && semgrep --version
 
@@ -39,9 +41,16 @@ RUN npm install -g @cyclonedx/cdxgen @appthreat/atom \
   && cdxgen --version \
   && atom --help >/dev/null 2>&1 || true
 
-# Install TruffleHog binary; fail build if install or verify fails
-RUN curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
-  | sh -s -- -b /usr/local/bin \
+# Install TruffleHog from a pinned release tarball instead of `curl | sh`.
+# The official install.sh fetches the latest release at build time AND was
+# itself a curl-pipe-sh supply-chain vector (compromised github account or
+# MITM could inject malicious payload). Pinning to a specific version makes
+# builds reproducible and removes the pipe-to-shell risk.
+RUN curl -sSfL https://github.com/trufflesecurity/trufflehog/releases/download/v3.83.6/trufflehog_3.83.6_linux_amd64.tar.gz \
+  -o /tmp/trufflehog.tar.gz \
+  && tar -xzf /tmp/trufflehog.tar.gz -C /usr/local/bin trufflehog \
+  && rm /tmp/trufflehog.tar.gz \
+  && chmod +x /usr/local/bin/trufflehog \
   && trufflehog --version
 
 RUN useradd -m -s /bin/bash worker

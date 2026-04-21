@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase';
+import { getActiveExtractionId, NO_ACTIVE_RUN } from './active-extraction';
 
 /**
  * Compute and persist a 0–100 health score for a project.
@@ -8,13 +9,18 @@ import { supabase } from '../lib/supabase';
  *   30% — inverse vulnerability severity
  *   20% — dependency freshness (is_outdated)
  *   10% — code findings (semgrep + secrets)
+ *
+ * Phase 19: every component score reads from the active extraction run only.
+ * Without these filters the aggregations included stale rows from prior runs
+ * still living in the DB until reaped, inflating health-score penalties.
  */
 export async function computeHealthScore(projectId: string): Promise<number> {
+  const activeRunId = (await getActiveExtractionId(supabase, projectId)) ?? NO_ACTIVE_RUN;
   const [complianceScore, vulnScore, freshnessScore, findingsScore] = await Promise.all([
     getComplianceScore(projectId),
-    getVulnScore(projectId),
+    getVulnScore(projectId, activeRunId),
     getFreshnessScore(projectId),
-    getFindingsScore(projectId),
+    getFindingsScore(projectId, activeRunId),
   ]);
 
   const scorePreClamp = Math.round(
@@ -38,7 +44,8 @@ async function getComplianceScore(projectId: string): Promise<number> {
   const { data: deps } = await supabase
     .from('project_dependencies')
     .select('policy_result')
-    .eq('project_id', projectId);
+    .eq('project_id', projectId)
+    .is('removed_at', null);
 
   if (!deps || deps.length === 0) return 100;
 
@@ -50,11 +57,12 @@ async function getComplianceScore(projectId: string): Promise<number> {
   return (compliant / deps.length) * 100;
 }
 
-async function getVulnScore(projectId: string): Promise<number> {
+async function getVulnScore(projectId: string, activeRunId: string): Promise<number> {
   const { data: vulns } = await supabase
     .from('project_dependency_vulnerabilities')
     .select('severity')
     .eq('project_id', projectId)
+    .eq('extraction_run_id', activeRunId)
     .eq('suppressed', false);
 
   if (!vulns || vulns.length === 0) return 100;
@@ -76,7 +84,8 @@ async function getFreshnessScore(projectId: string): Promise<number> {
   const { data: deps } = await supabase
     .from('project_dependencies')
     .select('is_outdated')
-    .eq('project_id', projectId);
+    .eq('project_id', projectId)
+    .is('removed_at', null);
 
   if (!deps || deps.length === 0) return 100;
 
@@ -94,26 +103,29 @@ export async function getHealthScoreBreakdown(projectId: string): Promise<{
   freshnessScore: number;
   findingsScore: number;
 }> {
+  const activeRunId = (await getActiveExtractionId(supabase, projectId)) ?? NO_ACTIVE_RUN;
   const [complianceScore, vulnScore, freshnessScore, findingsScore] = await Promise.all([
     getComplianceScore(projectId),
-    getVulnScore(projectId),
+    getVulnScore(projectId, activeRunId),
     getFreshnessScore(projectId),
-    getFindingsScore(projectId),
+    getFindingsScore(projectId, activeRunId),
   ]);
   return { complianceScore, vulnScore, freshnessScore, findingsScore };
 }
 
-async function getFindingsScore(projectId: string): Promise<number> {
+async function getFindingsScore(projectId: string, activeRunId: string): Promise<number> {
   const [{ count: semgrepCount }, { count: secretCount }] = await Promise.all([
     supabase
       .from('project_semgrep_findings')
       .select('id', { count: 'exact', head: true })
       .eq('project_id', projectId)
+      .eq('extraction_run_id', activeRunId)
       .then((r) => ({ count: r.count ?? 0 })),
     supabase
       .from('project_secret_findings')
       .select('id', { count: 'exact', head: true })
       .eq('project_id', projectId)
+      .eq('extraction_run_id', activeRunId)
       .eq('verified', true)
       .then((r) => ({ count: r.count ?? 0 })),
   ]);

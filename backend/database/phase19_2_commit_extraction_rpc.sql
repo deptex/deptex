@@ -82,26 +82,35 @@ BEGIN
     AND (v_previous IS NULL OR extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_pdv_deleted = ROW_COUNT;
 
+  -- The IS NOT NULL guards below are defensive: if any pre-Phase-19 rows
+  -- exist with extraction_run_id = NULL (no run can claim them), they should
+  -- NOT be silently reaped on the first finalize after the migration. The
+  -- PDV branch above had this guard from day one; the other tables didn't,
+  -- which would have hard-deleted any NULL-tagged rows asymmetrically.
   DELETE FROM project_semgrep_findings
   WHERE project_id = p_project_id
+    AND extraction_run_id IS NOT NULL
     AND extraction_run_id <> v_active
     AND (v_previous IS NULL OR extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_semgrep_deleted = ROW_COUNT;
 
   DELETE FROM project_secret_findings
   WHERE project_id = p_project_id
+    AND extraction_run_id IS NOT NULL
     AND extraction_run_id <> v_active
     AND (v_previous IS NULL OR extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_secret_deleted = ROW_COUNT;
 
   DELETE FROM project_reachable_flows
   WHERE project_id = p_project_id
+    AND extraction_run_id IS NOT NULL
     AND extraction_run_id <> v_active
     AND (v_previous IS NULL OR extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_flows_deleted = ROW_COUNT;
 
   DELETE FROM project_usage_slices
   WHERE project_id = p_project_id
+    AND extraction_run_id IS NOT NULL
     AND extraction_run_id <> v_active
     AND (v_previous IS NULL OR extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_slices_deleted = ROW_COUNT;
@@ -435,7 +444,12 @@ BEGIN
         re_review_triggered_at = old_data.re_review_triggered_at,
         re_review_reasons = old_data.re_review_reasons
       FROM (
-        SELECT
+        -- Bug-002 fix: see phase19_3 carry-forward for rationale. DISTINCT ON
+        -- picks exactly one source row per (new_pd_id, osv_id) target pair,
+        -- preferring UUID match (same version) then same-version name match
+        -- then deterministic tiebreaker. Eliminates monorepo fanout while
+        -- preserving version-bump carry-forward semantics.
+        SELECT DISTINCT ON (npd.id, opdv.osv_id)
           npd.id AS new_pd_id,
           opdv.osv_id,
           opdv.status, opdv.suppressed, opdv.suppressed_by, opdv.suppressed_at,
@@ -453,6 +467,11 @@ BEGIN
          AND npd.last_seen_extraction_run_id = p_extraction_run_id
         WHERE opdv.project_id = p_project_id
           AND opdv.extraction_run_id = v_prev_active
+        ORDER BY
+          npd.id, opdv.osv_id,
+          (npd.id = opd.id) DESC,
+          (npd.version = opd.version) DESC,
+          opdv.detected_at ASC NULLS LAST
       ) AS old_data
       WHERE new_pdv.project_id = p_project_id
         AND new_pdv.extraction_run_id = p_extraction_run_id
@@ -466,8 +485,12 @@ BEGIN
     -- 7. Trigger detection on carried-forward PDVs
     -- =========================================================================
     IF v_enabled THEN
+      -- Bug-001 fix: see phase19_3 trigger_calc for rationale. DISTINCT ON
+      -- (npdv.id) picks exactly one (opd, old_pdv) pair per new PDV,
+      -- preserving version-bump trigger detection while eliminating monorepo
+      -- fanout and re-enabling unchanged-version trigger firing.
       WITH trigger_calc AS (
-        SELECT
+        SELECT DISTINCT ON (npdv.id)
           npdv.id AS pdv_id,
           npdv.osv_id,
           CASE
@@ -524,7 +547,6 @@ BEGIN
         JOIN project_dependencies opd
           ON opd.project_id = npd.project_id
          AND opd.name = npd.name
-         AND opd.last_seen_extraction_run_id IS DISTINCT FROM p_extraction_run_id
         JOIN project_dependency_vulnerabilities old_pdv
           ON old_pdv.project_id = p_project_id
          AND old_pdv.project_dependency_id = opd.id
@@ -532,6 +554,11 @@ BEGIN
          AND old_pdv.extraction_run_id = v_prev_active
         WHERE npdv.project_id = p_project_id
           AND npdv.extraction_run_id = p_extraction_run_id
+        ORDER BY
+          npdv.id,
+          (opd.id = npd.id) DESC,
+          (opd.version = npd.version) DESC,
+          old_pdv.detected_at ASC NULLS LAST
       ),
       new_reasons AS (
         SELECT
@@ -548,14 +575,17 @@ BEGIN
         FROM new_reasons nr
         WHERE pdv.id = nr.pdv_id
           AND jsonb_array_length(nr.reasons) > 0
-        RETURNING pdv.id, nr.osv_id, nr.reasons
+        RETURNING pdv.id, pdv.project_dependency_id AS pd_id, nr.osv_id, nr.reasons
       ),
       event_insert AS (
-        INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, metadata, created_at)
-        SELECT p_project_id, osv_id, 'rereview_triggered',
-               jsonb_build_object('extraction_run_id', p_extraction_run_id, 'reasons', reasons),
+        INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
+        SELECT p_project_id, osv_id, 'rereview_triggered', p_extraction_run_id, pd_id,
+               jsonb_build_object('reasons', reasons),
                v_now
         FROM fired
+        ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
+          WHERE extraction_run_id IS NOT NULL
+          DO NOTHING
       )
       SELECT COUNT(*) INTO v_pdv_rereview_fired FROM fired;
     END IF;
@@ -564,7 +594,7 @@ BEGIN
     -- 8. Classify unmatched new PDVs (new vs reopened) + write events
     -- =========================================================================
     WITH unmatched AS (
-      SELECT npdv.id AS pdv_id, npd.name AS dep_name, npdv.osv_id
+      SELECT npdv.id AS pdv_id, npdv.project_dependency_id AS pd_id, npd.name AS dep_name, npdv.osv_id
       FROM project_dependency_vulnerabilities npdv
       JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
       WHERE npdv.project_id = p_project_id
@@ -582,6 +612,7 @@ BEGIN
     classified AS (
       SELECT
         u.pdv_id,
+        u.pd_id,
         u.osv_id,
         u.dep_name,
         EXISTS (
@@ -597,14 +628,19 @@ BEGIN
       FROM unmatched u
     ),
     events_inserted AS (
-      INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, metadata, created_at)
+      INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
       SELECT
         p_project_id,
         c.osv_id,
         CASE WHEN c.is_reopened THEN 'reopened' ELSE 'detected' END,
-        jsonb_build_object('extraction_run_id', p_extraction_run_id, 'dep_name', c.dep_name),
+        p_extraction_run_id,
+        c.pd_id,
+        jsonb_build_object('dep_name', c.dep_name),
         v_now
       FROM classified c
+      ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
+        WHERE extraction_run_id IS NOT NULL
+        DO NOTHING
       RETURNING id, event_type
     )
     SELECT
@@ -614,14 +650,17 @@ BEGIN
     FROM events_inserted;
   ELSE
     -- First extraction: every inserted PDV is new, write 'detected' events
-    INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, metadata, created_at)
-    SELECT p_project_id, npdv.osv_id, 'detected',
-           jsonb_build_object('extraction_run_id', p_extraction_run_id, 'dep_name', npd.name),
+    INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
+    SELECT p_project_id, npdv.osv_id, 'detected', p_extraction_run_id, npdv.project_dependency_id,
+           jsonb_build_object('dep_name', npd.name),
            v_now
     FROM project_dependency_vulnerabilities npdv
     JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
     WHERE npdv.project_id = p_project_id
-      AND npdv.extraction_run_id = p_extraction_run_id;
+      AND npdv.extraction_run_id = p_extraction_run_id
+    ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
+      WHERE extraction_run_id IS NOT NULL
+      DO NOTHING;
 
     v_pdv_carried := 0;
     v_pdv_rereview_fired := 0;

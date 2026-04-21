@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase';
+import { getActiveExtractionId, NO_ACTIVE_RUN } from './active-extraction';
 import { startAiderMachine, stopFlyMachine, AIDER_CONFIG } from './fly-machines';
 import { Redis } from '@upstash/redis';
 
@@ -209,10 +210,17 @@ async function gatherVulnerabilityContext(req: FixRequest): Promise<Record<strin
   }
 
   if (req.projectDependencyId) {
+    // Phase 19: scope all soft-switched reads to the active extraction run
+    // so AI fix context reflects the current codebase, not stale rows from
+    // prior extractions still living in the DB until reaped.
+
+    const activeRunId = (await getActiveExtractionId(supabase, req.projectId)) ?? NO_ACTIVE_RUN;
+
     const { data: pd } = await supabase
       .from('project_dependencies')
       .select('id, version, is_direct, source, environment, files_importing_count, dependencies!inner(name, ecosystem, latest_version)')
       .eq('id', req.projectDependencyId)
+      .is('removed_at', null)
       .single();
     if (pd) {
       ctx.dependency = {
@@ -229,6 +237,7 @@ async function gatherVulnerabilityContext(req: FixRequest): Promise<Record<strin
       .from('project_reachable_flows')
       .select('entry_point_file, entry_point_line, entry_point_method, sink_method, flow_nodes, llm_prompt')
       .eq('project_id', req.projectId)
+      .eq('extraction_run_id', activeRunId)
       .eq('dependency_id', req.dependencyId!)
       .limit(5);
     if (flows?.length) ctx.reachableFlows = flows;
@@ -237,6 +246,7 @@ async function gatherVulnerabilityContext(req: FixRequest): Promise<Record<strin
       .from('project_usage_slices')
       .select('file_path, line_number, target_name, resolved_method, target_type')
       .eq('project_id', req.projectId)
+      .eq('extraction_run_id', activeRunId)
       .limit(20);
     if (slices?.length) ctx.usageSlices = slices;
 
@@ -244,6 +254,7 @@ async function gatherVulnerabilityContext(req: FixRequest): Promise<Record<strin
       .from('project_dependency_files')
       .select('file_path')
       .eq('project_dependency_id', req.projectDependencyId)
+      .eq('extraction_run_id', activeRunId)
       .limit(30);
     if (files?.length) ctx.importingFiles = files.map((f: any) => f.file_path);
 
@@ -251,6 +262,7 @@ async function gatherVulnerabilityContext(req: FixRequest): Promise<Record<strin
       .from('project_dependency_functions')
       .select('function_name, import_type')
       .eq('project_dependency_id', req.projectDependencyId)
+      .eq('extraction_run_id', activeRunId)
       .limit(30);
     if (fns?.length) ctx.importedFunctions = fns;
   }
@@ -258,20 +270,31 @@ async function gatherVulnerabilityContext(req: FixRequest): Promise<Record<strin
   return ctx;
 }
 
-async function gatherSemgrepContext(findingId: string): Promise<Record<string, any>> {
+async function gatherSemgrepContext(findingId: string, projectId: string): Promise<Record<string, any>> {
+  // Validate the semgrep finding belongs to the active extraction run before
+  // pulling code context — stale findings from prior runs may reference files
+  // that have moved or no longer exist on disk.
+
+  const activeRunId = (await getActiveExtractionId(supabase, projectId)) ?? NO_ACTIVE_RUN;
   const { data } = await supabase
     .from('project_semgrep_findings')
     .select('rule_id, severity, message, path, line_start, line_end, category, cwe_ids')
     .eq('id', findingId)
+    .eq('extraction_run_id', activeRunId)
     .single();
   return data ? { semgrepFinding: data } : {};
 }
 
-async function gatherSecretContext(findingId: string): Promise<Record<string, any>> {
+async function gatherSecretContext(findingId: string, projectId: string): Promise<Record<string, any>> {
+  // Same Phase 19 contract as gatherSemgrepContext: validate the finding
+  // belongs to the active extraction run before pulling code context.
+
+  const activeRunId = (await getActiveExtractionId(supabase, projectId)) ?? NO_ACTIVE_RUN;
   const { data } = await supabase
     .from('project_secret_findings')
     .select('detector_type, file_path, line_number, verified')
     .eq('id', findingId)
+    .eq('extraction_run_id', activeRunId)
     .single();
   return data ? { secretFinding: data } : {};
 }
@@ -338,9 +361,9 @@ export async function requestFix(req: FixRequest): Promise<{ success: boolean; j
   if (fixType === 'vulnerability') {
     context = await gatherVulnerabilityContext(req);
   } else if (fixType === 'semgrep' && req.semgrepFindingId) {
-    context = await gatherSemgrepContext(req.semgrepFindingId);
+    context = await gatherSemgrepContext(req.semgrepFindingId, req.projectId);
   } else if (fixType === 'secret' && req.secretFindingId) {
-    context = await gatherSecretContext(req.secretFindingId);
+    context = await gatherSecretContext(req.secretFindingId, req.projectId);
   }
 
   // 8. Build payload (NO secrets)

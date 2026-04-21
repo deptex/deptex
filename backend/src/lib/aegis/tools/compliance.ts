@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { registerAegisTool } from './registry';
 import { supabase } from '../../../lib/supabase';
 import { getCached, setCached } from '../../cache';
+import { getActiveExtractionId, NO_ACTIVE_RUN } from '../../active-extraction';
 
 registerAegisTool(
   'getComplianceStatus',
@@ -17,7 +18,8 @@ registerAegisTool(
       const { data: deps, error } = await supabase
         .from('project_dependencies')
         .select('id, policy_result')
-        .eq('project_id', projectId);
+        .eq('project_id', projectId)
+        .is('removed_at', null);
       if (error) return JSON.stringify({ error: error.message });
       let violations = 0;
       const violationReasons: string[] = [];
@@ -82,10 +84,12 @@ registerAegisTool(
       osvIds: z.array(z.string()).optional(),
     }),
     execute: async ({ projectId, osvIds }) => {
+      const activeRunId = (await getActiveExtractionId(supabase, projectId)) ?? NO_ACTIVE_RUN;
       const { data: pdvs } = await supabase
         .from('project_dependency_vulnerabilities')
         .select('osv_id, reachability_level, is_reachable')
-        .eq('project_id', projectId);
+        .eq('project_id', projectId)
+        .eq('extraction_run_id', activeRunId);
       if (!pdvs?.length) return JSON.stringify({ error: 'No vulnerability data for this project.' });
       const filtered = osvIds?.length ? pdvs.filter((p: any) => osvIds.includes(p.osv_id)) : pdvs;
       const entries: Array<{ osv_id: string; status: string; justification?: string }> = filtered.map((p: any) => {
@@ -120,7 +124,11 @@ registerAegisTool(
       let notice = await getCached<string>(cacheKey);
       if (notice) return JSON.stringify({ notice, cached: true });
       const { data: project } = await supabase.from('projects').select('name').eq('id', projectId).single();
-      const { data: deps } = await supabase.from('project_dependencies').select('name, version, license').eq('project_id', projectId);
+      const { data: deps } = await supabase
+        .from('project_dependencies')
+        .select('name, version, license')
+        .eq('project_id', projectId)
+        .is('removed_at', null);
       if (!deps?.length) return JSON.stringify({ error: 'No dependencies found. Run an extraction first.' });
       const { data: obligations } = await supabase
         .from('license_obligations')
@@ -199,10 +207,12 @@ registerAegisTool(
       if (sbomBlob) {
         await supabase.storage.from('project-imports').upload(`${basePath}/sbom.json`, sbomBlob, { upsert: true });
       }
+      const auditActiveRunId = (await getActiveExtractionId(supabase, projectId)) ?? NO_ACTIVE_RUN;
       const { data: pdvs } = await supabase
         .from('project_dependency_vulnerabilities')
         .select('osv_id, reachability_level, is_reachable')
-        .eq('project_id', projectId);
+        .eq('project_id', projectId)
+        .eq('extraction_run_id', auditActiveRunId);
       const vexEntries = (pdvs ?? []).map((p: any) => ({
         osv_id: p.osv_id,
         status: (p.reachability_level === 'data_flow' || p.reachability_level === 'function' || p.reachability_level === 'confirmed' || p.is_reachable) ? 'affected' : 'not_affected',
@@ -216,7 +226,11 @@ registerAegisTool(
       const cacheKey = `legal-notice:${projectId}`;
       let notice = await getCached<string>(cacheKey);
       if (!notice) {
-        const { data: deps } = await supabase.from('project_dependencies').select('name, version, license').eq('project_id', projectId);
+        const { data: deps } = await supabase
+          .from('project_dependencies')
+          .select('name, version, license')
+          .eq('project_id', projectId)
+          .is('removed_at', null);
         const { data: obligations } = await supabase.from('license_obligations').select('license_spdx_id, summary, full_text, is_copyleft, is_weak_copyleft');
         const obMap = new Map((obligations ?? []).map(o => [o.license_spdx_id, o]));
         const lineList = ['THIRD-PARTY SOFTWARE NOTICES', `Project: ${project.name}`, `Generated: ${new Date().toISOString()}`, ''];

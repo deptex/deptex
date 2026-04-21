@@ -21,29 +21,32 @@ export class StepTimeoutError extends Error {
 
 /**
  * Runs `fn` with a timeout budget. If `fn` exceeds `timeoutMs`, rejects with
- * a StepTimeoutError. The underlying promise is NOT cancelled (Node has no
- * cancellation primitive) — it just loses the race and its result is ignored.
+ * a StepTimeoutError. An AbortSignal is passed to `fn`; when the timeout fires,
+ * the signal is aborted. Callers that spawn subprocesses should register
+ * `signal.addEventListener('abort', () => child.kill('SIGTERM'))` so the child
+ * actually stops — the Promise.race alone does not cancel in-flight work.
  *
- * Callers that spawn subprocesses should also wire `AbortSignal` into the
- * subprocess so the child actually stops. withTimeout alone is not enough
- * to reclaim OS resources.
+ * Existing callers that take no arguments (`() => Promise<T>`) remain
+ * compatible; TS allows passing a function that ignores its parameter.
  */
 export async function withTimeout<T>(
-  fn: () => Promise<T>,
+  fn: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
   step: string
 ): Promise<T> {
+  const controller = new AbortController();
   const start = Date.now();
   let timer: NodeJS.Timeout | undefined;
 
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
+      controller.abort();
       reject(new StepTimeoutError(step, timeoutMs, Date.now() - start));
     }, timeoutMs);
   });
 
   try {
-    return await Promise.race([fn(), timeoutPromise]);
+    return await Promise.race([fn(controller.signal), timeoutPromise]);
   } finally {
     if (timer) clearTimeout(timer);
   }
