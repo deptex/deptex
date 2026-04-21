@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+#
+# deptex-scan — Docker-based wrapper for the local extraction CLI.
+#
+# Usage:
+#   ./bin/deptex-scan run <path> [options]
+#   ./bin/deptex-scan --help
+#
+# The wrapper mounts the workspace + output directory into the container and
+# invokes `node /app/dist/cli/index.js` inside the bundled image. All heavy
+# tools (cdxgen, dep-scan, semgrep, trufflehog, atom, Python/Go/Java runtimes)
+# ship in the image — the host only needs Docker.
+#
+# Override the image with DEPTEX_CLI_IMAGE=<ref>.
+
+set -euo pipefail
+
+# Prevent MSYS/Git Bash on Windows from rewriting Linux paths we pass into the
+# container (e.g. `/app/dist/cli/index.js` → `C:/Program Files/Git/app/...`).
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+
+IMAGE="${DEPTEX_CLI_IMAGE:-deptex-cli:local}"
+
+if ! docker info >/dev/null 2>&1; then
+  echo "error: Docker daemon is not running. Start Docker Desktop and retry." >&2
+  exit 2
+fi
+
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  echo "error: image '$IMAGE' not found. Build it first:" >&2
+  echo "  npm run docker:build" >&2
+  echo "or set DEPTEX_CLI_IMAGE=<ref> to point at a remote tag." >&2
+  exit 2
+fi
+
+# Anything other than the `run <path>` subcommand (help, bad args, etc.) is
+# passed through verbatim — the CLI prints its own help/error.
+if [ "${1:-}" != "run" ]; then
+  exec docker run --rm -i "$IMAGE" node /app/dist/cli/index.js "$@"
+fi
+
+shift  # consume `run`
+
+if [ $# -lt 1 ]; then
+  echo "error: missing <path> after 'run'" >&2
+  echo "usage: deptex-scan run <path> [options]" >&2
+  exit 2
+fi
+
+WORKSPACE_PATH="$1"
+shift
+
+if [ ! -d "$WORKSPACE_PATH" ]; then
+  echo "error: workspace path '$WORKSPACE_PATH' is not a directory" >&2
+  exit 2
+fi
+
+ABS_WS="$(cd "$WORKSPACE_PATH" && pwd)"
+
+# Extract --output so we can mount the directory; everything else passes through.
+# Also default --label to the host workspace basename (inside the container the
+# workspace is always mounted at /workspace, so without this the label would be
+# "workspace" for every project).
+OUTPUT_DIR="./extraction-results"
+HAS_LABEL=0
+PASSTHROUGH=()
+for arg in "$@"; do
+  case "$arg" in
+    --output=*) OUTPUT_DIR="${arg#--output=}" ;;
+    --label=*) HAS_LABEL=1; PASSTHROUGH+=("$arg") ;;
+    *) PASSTHROUGH+=("$arg") ;;
+  esac
+done
+
+if [ "$HAS_LABEL" = "0" ]; then
+  PASSTHROUGH+=("--label=$(basename "$ABS_WS")")
+fi
+
+mkdir -p "$OUTPUT_DIR"
+ABS_OUT="$(cd "$OUTPUT_DIR" && pwd)"
+
+TTY_FLAG=()
+if [ -t 1 ]; then
+  TTY_FLAG=(-t)
+fi
+
+# On Linux, Docker volume mounts preserve host UIDs, so files written by the
+# containerized `worker` user (UID 1000) become owned by UID 1000 on the host
+# — wrong for anyone whose host UID isn't 1000. Pass --user to run as the
+# invoking user instead. Docker Desktop (macOS/Windows) remaps automatically,
+# so this guard is Linux-only.
+USER_FLAG=()
+if [ "$(uname)" = "Linux" ]; then
+  USER_FLAG=(--user "$(id -u):$(id -g)")
+fi
+
+exec docker run --rm -i "${TTY_FLAG[@]}" "${USER_FLAG[@]}" \
+  -v "$ABS_WS:/workspace" \
+  -v "$ABS_OUT:/output" \
+  "$IMAGE" \
+  node /app/dist/cli/index.js run /workspace --output=/output "${PASSTHROUGH[@]}"

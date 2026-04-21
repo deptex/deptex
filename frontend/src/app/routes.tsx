@@ -33,6 +33,8 @@ import PublicRoute from "../components/PublicRoute";
 import NotFoundRedirect from "../components/NotFoundRedirect";
 import OrganizationVulnerabilitiesPage from "./pages/OrganizationVulnerabilitiesPage";
 import AegisPage from "./pages/AegisPage";
+import AdminGate from "../components/AdminGate";
+import ExtractionFailuresPage from "./pages/admin/ExtractionFailuresPage";
 // Redirect /settings to /settings/general while preserving search params (for OAuth callbacks)
 function SettingsRedirect() {
   const { search } = useLocation();
@@ -68,6 +70,16 @@ export const router = createBrowserRouter([
     element: (
       <ProtectedRoute>
         <OrganizationsLanding />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: "/admin/extraction-failures",
+    element: (
+      <ProtectedRoute>
+        <AdminGate>
+          <ExtractionFailuresPage />
+        </AdminGate>
       </ProtectedRoute>
     ),
   },

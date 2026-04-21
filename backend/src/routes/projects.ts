@@ -27,6 +27,7 @@ import { isVersionAffected, isVersionFixed } from '../lib/semver-affected';
 import { fetchGhsaVulnerabilitiesBatch, filterGhsaVulnsByVersion, ghsaSeverityToLevel } from '../lib/ghsa';
 import { getVulnCountsBatch, getVulnCountsForVersion, getVulnCountsForVersionsBatch, VulnCounts } from '../lib/vuln-counts';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
+import { getActiveExtractionId } from '../lib/active-extraction';
 import { emitEvent } from '../lib/event-bus';
 import {
   registerGitLabWebhook,
@@ -61,7 +62,8 @@ function isStableVersion(version: string): boolean {
 /** Project-scoped vuln scores for VersionSidebar (current lockfile version only). */
 async function fetchPdvScoresByOsvForDependency(
   projectId: string,
-  projectDependencyId: string
+  projectDependencyId: string,
+  activeExtractionId: string | null
 ): Promise<
   Map<
     string,
@@ -80,7 +82,8 @@ async function fetchPdvScoresByOsvForDependency(
     .from('project_dependency_vulnerabilities')
     .select('osv_id, depscore, contextual_depscore, epss_score, cvss_score, cisa_kev, is_reachable')
     .eq('project_id', projectId)
-    .eq('project_dependency_id', projectDependencyId);
+    .eq('project_dependency_id', projectDependencyId)
+    .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
   if (error || !data?.length) return new Map();
   const m = new Map();
   for (const r of data) {
@@ -142,7 +145,8 @@ async function getAncestorPathsBatched(
   const { data: projectDeps, error: projectDepsError } = await client
     .from('project_dependencies')
     .select('dependency_version_id, name, version, is_direct')
-    .eq('project_id', projectId);
+    .eq('project_id', projectId)
+    .is('removed_at', null);
 
   if (projectDepsError || !projectDeps?.length) return [];
 
@@ -311,7 +315,8 @@ async function calculateProjectCompliance(organizationId: string, projectId: str
   const { data: projectDeps } = await supabase
     .from('project_dependencies')
     .select('dependency_id')
-    .eq('project_id', projectId);
+    .eq('project_id', projectId)
+    .is('removed_at', null);
 
   if (!projectDeps || projectDeps.length === 0) {
     return true; // No dependencies = compliant
@@ -917,6 +922,7 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
             .select('project_id')
             .in('project_id', projectIds)
             .eq('is_direct', true)
+            .is('removed_at', null)
         : Promise.resolve({ data: [] }),
     ]);
     const statusRows = (statusRes as any)?.data ?? [];
@@ -935,7 +941,8 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
       const { data: pdRows } = await supabase
         .from('project_dependencies')
         .select('project_id, policy_result')
-        .in('project_id', projectIds);
+        .in('project_id', projectIds)
+        .is('removed_at', null);
       const byProject: Record<string, { total: number; compliant: number }> = {};
       for (const pid of projectIds) byProject[pid] = { total: 0, compliant: 0 };
       (pdRows || []).forEach((row: any) => {
@@ -4786,6 +4793,7 @@ async function fetchEnrichedDependenciesForProject(
 ): Promise<any[]> {
   const debugTiming = options?.debugTiming === true;
   const t0 = debugTiming ? Date.now() : 0;
+  const activeExtractionId = await getActiveExtractionId(supabase, projectId);
   // Get project dependencies with joined dependency analysis data
     // Note: license column was removed from project_dependencies - it now comes from dependencies table
     const { data: projectDeps, error: depsError } = await supabase
@@ -4805,6 +4813,7 @@ async function fetchEnrichedDependenciesForProject(
         created_at
       `)
       .eq('project_id', projectId)
+      .is('removed_at', null)
       .order('name', { ascending: true });
 
     if (depsError) {
@@ -4863,10 +4872,10 @@ async function fetchEnrichedDependenciesForProject(
           )
         : Promise.resolve([]),
       projectDepIds.length > 0
-        ? supabase.from('project_dependency_functions').select('project_dependency_id, function_name').in('project_dependency_id', projectDepIds)
+        ? supabase.from('project_dependency_functions').select('project_dependency_id, function_name').in('project_dependency_id', projectDepIds).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
         : Promise.resolve({ data: null }),
       projectDepIds.length > 0
-        ? supabase.from('project_dependency_files').select('project_dependency_id, file_path').in('project_dependency_id', projectDepIds).order('file_path')
+        ? supabase.from('project_dependency_files').select('project_dependency_id, file_path').in('project_dependency_id', projectDepIds).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__').order('file_path')
         : Promise.resolve({ data: null }),
       namesNeedingFallback.length > 0
         ? supabase.from('dependencies').select('name, github_url, openssf_score, openssf_data, license, weekly_downloads, last_published_at, openssf_penalty, popularity_penalty, maintenance_penalty, releases_last_12_months, status, score, ecosystem, analyzed_at').in('name', namesNeedingFallback)
@@ -4913,7 +4922,8 @@ async function fetchEnrichedDependenciesForProject(
         .from('project_dependency_vulnerabilities')
         .select('project_dependency_id, depscore')
         .eq('project_id', projectId)
-        .eq('suppressed', false);
+        .eq('suppressed', false)
+        .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
       if (pdvRows) {
         for (const row of pdvRows as Array<{ project_dependency_id: string; depscore: number | null }>) {
           if (row.depscore == null) continue;
@@ -5237,11 +5247,14 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/overview'
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
+    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+
     const { data: pd, error: pdError } = await supabase
       .from('project_dependencies')
       .select('dependency_version_id, files_importing_count, ai_usage_summary, ai_usage_analyzed_at')
       .eq('id', projectDependencyId)
       .eq('project_id', projectId)
+      .is('removed_at', null)
       .single();
 
     if (pdError || !pd) {
@@ -5253,8 +5266,8 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/overview'
     const aiUsageAnalyzedAt = (pd as any).ai_usage_analyzed_at ?? null;
 
     const [functionsResult, filesResult] = await Promise.all([
-      supabase.from('project_dependency_functions').select('function_name').eq('project_dependency_id', projectDependencyId).order('function_name'),
-      supabase.from('project_dependency_files').select('file_path').eq('project_dependency_id', projectDependencyId).order('file_path'),
+      supabase.from('project_dependency_functions').select('function_name').eq('project_dependency_id', projectDependencyId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__').order('function_name'),
+      supabase.from('project_dependency_files').select('file_path').eq('project_dependency_id', projectDependencyId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__').order('file_path'),
     ]);
     const importedFunctions = ((functionsResult.data || []) as { function_name: string }[]).map((r) => r.function_name);
     const importedFilePaths = ((filesResult.data || []) as { file_path: string }[]).map((r) => r.file_path);
@@ -5311,6 +5324,7 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/overview'
             .eq('name', d.name)
             .eq('projects.organization_id', id)
             .neq('project_id', projectId)
+            .is('removed_at', null)
             .then((r) => r.data ?? [])
         : Promise.resolve([]),
       supabase
@@ -5440,12 +5454,15 @@ router.post('/:id/projects/:projectId/dependencies/:projectDependencyId/analyze-
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
+    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+
     // 1. Fetch dependency info
     const { data: pd, error: pdError } = await supabase
       .from('project_dependencies')
       .select('name, version, files_importing_count, is_direct')
       .eq('id', projectDependencyId)
       .eq('project_id', projectId)
+      .is('removed_at', null)
       .single();
 
     if (pdError || !pd) {
@@ -5462,6 +5479,7 @@ router.post('/:id/projects/:projectId/dependencies/:projectDependencyId/analyze-
       .from('project_dependency_functions')
       .select('function_name')
       .eq('project_dependency_id', projectDependencyId)
+      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
       .order('function_name');
     const importedFunctions = (funcRows || []).map((r: { function_name: string }) => r.function_name);
 
@@ -5470,6 +5488,7 @@ router.post('/:id/projects/:projectId/dependencies/:projectDependencyId/analyze-
       .from('project_dependency_files')
       .select('file_path')
       .eq('project_dependency_id', projectDependencyId)
+      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
       .order('file_path');
     const allFilePaths = (fileRows || []).map((r: { file_path: string }) => r.file_path);
 
@@ -5658,11 +5677,13 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/versions'
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
+    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+
     if (!paginate) {
       const cacheKey = getDependencyVersionsCacheKey(id, projectId, projectDependencyId);
       const cached = await getCached<{ versions: any[]; currentVersion: string; latestVersion: string; prs: any[]; bannedVersions: string[] }>(cacheKey);
       if (cached) {
-        const pdvByOsvCached = await fetchPdvScoresByOsvForDependency(projectId, projectDependencyId);
+        const pdvByOsvCached = await fetchPdvScoresByOsvForDependency(projectId, projectDependencyId, activeExtractionId);
         return res.json(enrichDependencyVersionsResponseWithPdv(cached, pdvByOsvCached));
       }
     }
@@ -5672,6 +5693,7 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/versions'
       .select('dependency_version_id')
       .eq('id', projectDependencyId)
       .eq('project_id', projectId)
+      .is('removed_at', null)
       .single();
 
     if (pdError || !pd) {
@@ -5795,7 +5817,7 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/versions'
     if (paginate && limit != null && offset != null) {
       versionList = versionList.slice(offset, offset + limit);
     }
-    const pdvByOsv = await fetchPdvScoresByOsvForDependency(projectId, projectDependencyId);
+    const pdvByOsv = await fetchPdvScoresByOsvForDependency(projectId, projectDependencyId, activeExtractionId);
     const versionStrs = versionList.map((v: any) => v.version ?? '');
     const vulnCountsMap = await getVulnCountsForVersionsBatch(supabase, dependencyId, versionStrs);
 
@@ -5967,6 +5989,7 @@ async function buildSupplyChainChildren(
     .select('dependency_version_id')
     .eq('id', projectDependencyId)
     .eq('project_id', projectId)
+    .is('removed_at', null)
     .single();
 
   if (pdError || !pd) return [];
@@ -6158,6 +6181,7 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
       .select('dependency_version_id, dependency_id, name, version, is_direct, source, files_importing_count')
       .eq('id', projectDependencyId)
       .eq('project_id', projectId)
+      .is('removed_at', null)
       .single();
 
     if (pdError || !pd) {
@@ -6535,6 +6559,7 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
       .select('id')
       .eq('id', projectDependencyId)
       .eq('project_id', projectId)
+      .is('removed_at', null)
       .single();
 
     if (pdError || !pd) {
@@ -6888,6 +6913,7 @@ router.post('/:id/projects/:projectId/dependencies/:dependencyId/remove-pr', asy
       .select('id, name, version, source, files_importing_count')
       .eq('id', dependencyId)
       .eq('project_id', projectId)
+      .is('removed_at', null)
       .single();
 
     if (detailsError || !depDetails) {
@@ -6935,11 +6961,14 @@ router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, 
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
+    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+
     // Prefer project_dependency_vulnerabilities (reachable vulns from extraction worker) when available
     const { count: pdvCount } = await supabase
       .from('project_dependency_vulnerabilities')
       .select('*', { count: 'exact', head: true })
-      .eq('project_id', projectId);
+      .eq('project_id', projectId)
+      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
 
     const usePdv = (pdvCount ?? 0) > 0;
     const rpcName = usePdv ? 'get_project_vulnerabilities_from_pdv' : 'get_project_vulnerabilities';
@@ -6952,7 +6981,8 @@ router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, 
       const { data: projectDeps, error: depsError } = await supabase
         .from('project_dependencies')
         .select('dependency_id, name, version')
-        .eq('project_id', projectId);
+        .eq('project_id', projectId)
+        .is('removed_at', null);
 
       if (depsError) throw depsError;
 
@@ -7094,7 +7124,8 @@ router.get('/:id/projects/:projectId/import-status', async (req: AuthRequest, re
     const { data: projectDeps } = await supabase
       .from('project_dependencies')
       .select('dependency_id, is_direct')
-      .eq('project_id', projectId);
+      .eq('project_id', projectId)
+      .is('removed_at', null);
 
     const directDepIds = [...new Set((projectDeps || [])
       .filter((pd: any) => pd.is_direct === true && pd.dependency_id)
@@ -7908,7 +7939,8 @@ router.post('/:id/ban-version', async (req: AuthRequest, res) => {
         .select('id, project_id, name, version')
         .eq('dependency_id', resolvedDependencyId)
         .eq('version', banned_version)
-        .in('project_id', projectIds);
+        .in('project_id', projectIds)
+        .is('removed_at', null);
       projectDeps = deps;
     }
 
@@ -8070,7 +8102,8 @@ router.post('/:id/teams/:teamId/ban-version', async (req: AuthRequest, res) => {
         .select('id, project_id, name, version')
         .eq('dependency_id', resolvedDependencyId)
         .eq('version', banned_version)
-        .in('project_id', projectIds);
+        .in('project_id', projectIds)
+        .is('removed_at', null);
       projectDeps = deps;
     }
     let projectsWithPrToBanned: Array<{ project_id: string }> = [];
@@ -8441,7 +8474,8 @@ router.post('/:id/bump-all', async (req: AuthRequest, res) => {
       .select('id, project_id, name, version')
       .eq('dependency_id', resolvedDependencyId)
       .neq('version', target_version)
-      .in('project_id', projectIds);
+      .in('project_id', projectIds)
+      .is('removed_at', null);
 
     if (!affectedDeps || affectedDeps.length === 0) {
       return res.json({ affected_projects: 0, pr_results: [] });
@@ -9017,7 +9051,8 @@ router.get('/:id/projects/:projectId/legal-notice', async (req: AuthRequest, res
     const { data: deps } = await supabase
       .from('project_dependencies')
       .select('name, version, license')
-      .eq('project_id', projectId);
+      .eq('project_id', projectId)
+      .is('removed_at', null);
 
     if (!deps || deps.length === 0) {
       return res.status(404).json({ error: 'No dependencies found. Run an extraction first.' });
@@ -9415,7 +9450,8 @@ router.get('/:id/projects/:projectId/license-obligations', async (req: AuthReque
     const { data: deps } = await supabase
       .from('project_dependencies')
       .select('name, version, license')
-      .eq('project_id', projectId);
+      .eq('project_id', projectId)
+      .is('removed_at', null);
 
     const licenses = new Set<string>();
     const licenseDepCounts = new Map<string, number>();
@@ -9471,15 +9507,19 @@ router.get('/:id/projects/:projectId/semgrep-findings', async (req: AuthRequest,
     const perPage = Math.min(200, Math.max(1, parseInt(String(req.query.per_page ?? '50'), 10) || 50));
     const offset = (page - 1) * perPage;
 
+    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+
     const { count } = await supabase
       .from('project_semgrep_findings')
       .select('id', { count: 'exact', head: true })
-      .eq('project_id', projectId);
+      .eq('project_id', projectId)
+      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
 
     const { data, error } = await supabase
       .from('project_semgrep_findings')
       .select('*')
       .eq('project_id', projectId)
+      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
       .order('severity', { ascending: true })
       .order('created_at', { ascending: false })
       .range(offset, offset + perPage - 1);
@@ -9512,15 +9552,19 @@ router.get('/:id/projects/:projectId/secret-findings', async (req: AuthRequest, 
     const perPage = Math.min(100, Math.max(1, parseInt(String(req.query.per_page ?? '50'), 10) || 50));
     const offset = (page - 1) * perPage;
 
+    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+
     const { count } = await supabase
       .from('project_secret_findings')
       .select('id', { count: 'exact', head: true })
-      .eq('project_id', projectId);
+      .eq('project_id', projectId)
+      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
 
     const { data, error } = await supabase
       .from('project_secret_findings')
       .select('*')
       .eq('project_id', projectId)
+      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
       .order('is_verified', { ascending: false })
       .order('created_at', { ascending: false })
       .range(offset, offset + perPage - 1);
@@ -9544,11 +9588,14 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
+    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+
     const { data: vulns, error: vulnError } = await supabase
       .from('project_dependency_vulnerabilities')
       .select('*')
       .eq('project_id', projectId)
-      .eq('osv_id', osvId);
+      .eq('osv_id', osvId)
+      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
 
     if (vulnError) throw vulnError;
     if (!vulns || vulns.length === 0) {
@@ -9563,7 +9610,8 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
       const { data: deps } = await supabase
         .from('project_dependencies')
         .select('id, name, version, is_direct, dependency_id, files_importing_count, environment')
-        .in('id', pdIds);
+        .in('id', pdIds)
+        .is('removed_at', null);
       affectedDeps = deps ?? [];
     }
 
@@ -9602,7 +9650,8 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
       const { data: files } = await supabase
         .from('project_dependency_files')
         .select('project_dependency_id, file_path')
-        .in('project_dependency_id', depIds);
+        .in('project_dependency_id', depIds)
+        .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
       for (const f of files ?? []) {
         if (!filesByDep[f.project_dependency_id]) filesByDep[f.project_dependency_id] = [];
         filesByDep[f.project_dependency_id].push(f.file_path);
@@ -9644,6 +9693,7 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
         .select('*')
         .eq('project_id', projectId)
         .in('dependency_id', affectedDepIds)
+        .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
         .order('flow_length', { ascending: true })
         .limit(20);
       reachableFlows = flows ?? [];
@@ -9691,6 +9741,8 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/suppress', async (
       return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
     }
 
+    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+
     const { error } = await supabase
       .from('project_dependency_vulnerabilities')
       .update({
@@ -9701,7 +9753,8 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/suppress', async (
         sla_exempt_reason: 'Suppressed',
       })
       .eq('project_id', projectId)
-      .eq('osv_id', osvId);
+      .eq('osv_id', osvId)
+      .eq('extraction_run_id', activeExtractionId);
 
     if (error) throw error;
 
@@ -9734,11 +9787,14 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unsuppress', async
       return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
     }
 
+    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+
     const { error } = await supabase
       .from('project_dependency_vulnerabilities')
       .update({ suppressed: false, suppressed_by: null, suppressed_at: null })
       .eq('project_id', projectId)
-      .eq('osv_id', osvId);
+      .eq('osv_id', osvId)
+      .eq('extraction_run_id', activeExtractionId);
 
     if (error) throw error;
 
@@ -9772,6 +9828,8 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/accept-risk', asyn
       return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
     }
 
+    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+
     const exemptReason = reason?.trim() ? `Risk accepted: ${reason.trim()}` : 'Risk accepted';
     const { error } = await supabase
       .from('project_dependency_vulnerabilities')
@@ -9784,7 +9842,8 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/accept-risk', asyn
         sla_exempt_reason: exemptReason,
       })
       .eq('project_id', projectId)
-      .eq('osv_id', osvId);
+      .eq('osv_id', osvId)
+      .eq('extraction_run_id', activeExtractionId);
 
     if (error) throw error;
 
@@ -9817,6 +9876,8 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unaccept-risk', as
       return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
     }
 
+    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+
     const { error } = await supabase
       .from('project_dependency_vulnerabilities')
       .update({
@@ -9826,7 +9887,8 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unaccept-risk', as
         risk_accepted_reason: null,
       })
       .eq('project_id', projectId)
-      .eq('osv_id', osvId);
+      .eq('osv_id', osvId)
+      .eq('extraction_run_id', activeExtractionId);
 
     if (error) throw error;
 
@@ -9854,11 +9916,14 @@ router.get('/:id/projects/:projectId/dependencies/:depId/security-summary', asyn
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
+    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+
     const { data: projDep, error: depError } = await supabase
       .from('project_dependencies')
       .select('id, name, version, license, is_direct, dependency_id, files_importing_count, ecosystem')
       .eq('project_id', projectId)
       .eq('id', depId)
+      .is('removed_at', null)
       .single();
 
     if (depError || !projDep) {
@@ -9868,13 +9933,15 @@ router.get('/:id/projects/:projectId/dependencies/:depId/security-summary', asyn
     const { data: files } = await supabase
       .from('project_dependency_files')
       .select('file_path')
-      .eq('project_dependency_id', depId);
+      .eq('project_dependency_id', depId)
+      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
 
     const { data: vulns } = await supabase
       .from('project_dependency_vulnerabilities')
       .select('osv_id, severity, depscore, is_reachable, epss_score, cisa_kev, fixed_versions, suppressed, risk_accepted')
       .eq('project_id', projectId)
       .eq('project_dependency_id', depId)
+      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
       .order('depscore', { ascending: false, nullsFirst: false });
 
     const { data: candidates } = await supabase
@@ -9891,6 +9958,7 @@ router.get('/:id/projects/:projectId/dependencies/:depId/security-summary', asyn
         .select('file_path, line_number, target_name, resolved_method, usage_label')
         .eq('project_id', projectId)
         .eq('target_type', projDep.name)
+        .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
         .order('line_number', { ascending: true })
         .limit(50);
       usageSlices = slices ?? [];
@@ -9904,6 +9972,7 @@ router.get('/:id/projects/:projectId/dependencies/:depId/security-summary', asyn
         .select('id, purl, entry_point_file, entry_point_method, entry_point_line, entry_point_tag, sink_method, sink_file, flow_length, llm_prompt')
         .eq('project_id', projectId)
         .eq('dependency_id', projDep.dependency_id)
+        .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
         .order('flow_length', { ascending: true })
         .limit(20);
       reachableFlows = flows ?? [];
@@ -9983,7 +10052,7 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
 
     const { data: projects } = await supabase
       .from('projects')
-      .select('id, name')
+      .select('id, name, active_extraction_run_id')
       .eq('organization_id', id);
 
     if (!projects || projects.length === 0) {
@@ -9991,6 +10060,10 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
     }
 
     const projectIds = projects.map((p: any) => p.id);
+    // Phase 19: only include findings tagged with the project's currently active run
+    const activeRunIds = (projects as any[])
+      .map((p) => p.active_extraction_run_id)
+      .filter(Boolean) as string[];
 
     const { data: projectTeams } = await supabase
       .from('project_teams')
@@ -10002,21 +10075,30 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
       if (pt.is_owner) ownerTeamMap.set(pt.project_id, pt.team_id);
     }
 
-    const { data: vulnRows } = await supabase
-      .from('project_dependency_vulnerabilities')
-      .select('project_id, severity, depscore, is_reachable, suppressed')
-      .in('project_id', projectIds)
-      .eq('suppressed', false);
+    const { data: vulnRows } = activeRunIds.length > 0
+      ? await supabase
+          .from('project_dependency_vulnerabilities')
+          .select('project_id, severity, depscore, is_reachable, suppressed')
+          .in('project_id', projectIds)
+          .in('extraction_run_id', activeRunIds)
+          .eq('suppressed', false)
+      : { data: [] as any[] };
 
-    const { data: semgrepRows } = await supabase
-      .from('project_semgrep_findings')
-      .select('project_id')
-      .in('project_id', projectIds);
+    const { data: semgrepRows } = activeRunIds.length > 0
+      ? await supabase
+          .from('project_semgrep_findings')
+          .select('project_id')
+          .in('project_id', projectIds)
+          .in('extraction_run_id', activeRunIds)
+      : { data: [] as any[] };
 
-    const { data: secretRows } = await supabase
-      .from('project_secret_findings')
-      .select('project_id, is_verified')
-      .in('project_id', projectIds);
+    const { data: secretRows } = activeRunIds.length > 0
+      ? await supabase
+          .from('project_secret_findings')
+          .select('project_id, is_verified')
+          .in('project_id', projectIds)
+          .in('extraction_run_id', activeRunIds)
+      : { data: [] as any[] };
 
     const vulnByProject = new Map<string, any[]>();
     for (const v of vulnRows ?? []) {
@@ -10082,6 +10164,19 @@ router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
       return res.json({ data: [], total: 0, page: 1, per_page: 50 });
     }
 
+    // Phase 19: fetch active_extraction_run_id for each accessible project so we only read rows
+    // tagged with the currently-visible run. Projects with no active run contribute no findings.
+    const { data: projectsForActive } = await supabase
+      .from('projects')
+      .select('id, active_extraction_run_id')
+      .in('id', accessibleProjectIds);
+    const activeRunIds = (projectsForActive ?? [])
+      .map((p: any) => p.active_extraction_run_id)
+      .filter(Boolean) as string[];
+    if (activeRunIds.length === 0) {
+      return res.json({ data: [], total: 0, page: 1, per_page: 50 });
+    }
+
     const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
     const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page as string, 10) || 50));
     const severityFilter = (req.query.severity as string) || '';
@@ -10091,6 +10186,7 @@ router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
       .from('project_dependency_vulnerabilities')
       .select('*', { count: 'exact', head: true })
       .in('project_id', accessibleProjectIds)
+      .in('extraction_run_id', activeRunIds)
       .eq('suppressed', false);
     if (allowedSeverity) countQuery = countQuery.eq('severity', allowedSeverity);
 
@@ -10106,6 +10202,7 @@ router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
         'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, sla_status, sla_deadline_at, reachability_level'
       )
       .in('project_id', accessibleProjectIds)
+      .in('extraction_run_id', activeRunIds)
       .eq('suppressed', false);
     if (allowedSeverity) dataQuery = dataQuery.eq('severity', allowedSeverity);
 
@@ -10127,7 +10224,8 @@ router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
       const { data: deps, error: depErr } = await supabase
         .from('project_dependencies')
         .select('id, name, version, dependency_id')
-        .in('id', pdIds);
+        .in('id', pdIds)
+        .is('removed_at', null);
       if (depErr) throw depErr;
       for (const d of deps || []) {
         depMap.set((d as any).id, {
@@ -10205,6 +10303,8 @@ router.get('/:id/projects/:projectId/reachable-flows', async (req: AuthRequest, 
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
+    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page as string) || 50));
     const dependencyId = (req.query.dependency_id as string) || null;
@@ -10214,6 +10314,7 @@ router.get('/:id/projects/:projectId/reachable-flows', async (req: AuthRequest, 
       .from('project_reachable_flows')
       .select('*', { count: 'exact' })
       .eq('project_id', projectId)
+      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
       .order('created_at', { ascending: false })
       .range((page - 1) * perPage, page * perPage - 1);
 
@@ -10240,6 +10341,8 @@ router.get('/:id/projects/:projectId/usage-slices', async (req: AuthRequest, res
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
+    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page as string) || 50));
     const targetType = (req.query.target_type as string) || null;
@@ -10249,6 +10352,7 @@ router.get('/:id/projects/:projectId/usage-slices', async (req: AuthRequest, res
       .from('project_usage_slices')
       .select('*', { count: 'exact' })
       .eq('project_id', projectId)
+      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
       .order('created_at', { ascending: false })
       .range((page - 1) * perPage, page * perPage - 1);
 
@@ -10284,11 +10388,13 @@ router.get('/:id/projects/:projectId/reachable-flows/:flowId/code-context', asyn
       return res.status(429).json({ error: 'Rate limit exceeded', retry_after: rateResult.retryAfterSeconds });
     }
 
+    const activeExtractionIdForFlow = await getActiveExtractionId(supabase, projectId);
     const { data: flow, error: flowError } = await supabase
       .from('project_reachable_flows')
       .select('flow_nodes')
       .eq('id', flowId)
       .eq('project_id', projectId)
+      .eq('extraction_run_id', activeExtractionIdForFlow ?? '__no_active_run__')
       .single();
 
     if (flowError || !flow) {
@@ -10543,6 +10649,8 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
     const cached = await getCached<any>(cacheKey);
     if (cached) return res.json(cached);
 
+    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+
     const [
       projectRow,
       depsRows,
@@ -10554,11 +10662,11 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       lastFailedJob,
     ] = await Promise.all([
       supabase.from('projects').select('health_score, status_id, asset_tier_id').eq('id', projectId).single().then(r => r.data),
-      supabase.from('project_dependencies').select('id, is_direct, policy_result, is_outdated, dependency_id').eq('project_id', projectId).then(r => r.data ?? []),
-      supabase.from('project_dependency_vulnerabilities').select('severity, depscore, is_reachable, project_dependency_id, sla_status').eq('project_id', projectId).eq('suppressed', false).then(r => r.data ?? []),
-      supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId),
-      supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId),
-      supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('verified', true),
+      supabase.from('project_dependencies').select('id, is_direct, policy_result, is_outdated, dependency_id').eq('project_id', projectId).is('removed_at', null).then(r => r.data ?? []),
+      supabase.from('project_dependency_vulnerabilities').select('severity, depscore, is_reachable, project_dependency_id, sla_status').eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__').eq('suppressed', false).then(r => r.data ?? []),
+      supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__'),
+      supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__'),
+      supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__').eq('verified', true),
       supabase.from('project_repositories').select('status, extraction_step, updated_at, default_branch').eq('project_id', projectId).single().then(r => r.data),
       supabase.from('extraction_jobs').select('error, created_at').eq('project_id', projectId).eq('status', 'failed').order('created_at', { ascending: false }).limit(1).single().then(r => r.data),
     ]);
@@ -10640,6 +10748,7 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       .select('id, dependency_id, dependencies!inner(name)')
       .eq('project_id', projectId)
       .eq('is_direct', true)
+      .is('removed_at', null)
       .limit(30);
 
     const severityRank: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };

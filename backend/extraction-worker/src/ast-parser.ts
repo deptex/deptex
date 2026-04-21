@@ -2,6 +2,8 @@ import { parseSync } from 'oxc-parser';
 import * as fs from 'fs';
 import * as path from 'path';
 
+const cliQuiet = (): boolean => process.env.DEPTEX_CLI_MODE === '1';
+
 export interface ImportInfo {
   packageName: string;
   functions: string[];
@@ -155,15 +157,17 @@ export function analyzeRepository(repoPath: string): FileAnalysis[] {
     const ext = path.extname(f).toLowerCase();
     extCounts.set(ext, (extCounts.get(ext) || 0) + 1);
   }
-  console.log(
-    `[parser] Found ${files.length} source file(s) (${[...extCounts.entries()].map(([e, n]) => `${e}:${n}`).join(', ') || 'none'})`
-  );
-  if (files.length > 0 && files.length <= 20) {
-    const relative = files.map((f) => path.relative(repoPath, f).replace(/\\/g, '/'));
-    console.log(`[parser] Files: ${relative.join(', ')}`);
-  } else if (files.length > 20) {
-    const sample = files.slice(0, 5).map((f) => path.relative(repoPath, f).replace(/\\/g, '/'));
-    console.log(`[parser] Sample: ${sample.join(', ')} ...`);
+  if (!cliQuiet()) {
+    console.log(
+      `[parser] Found ${files.length} source file(s) (${[...extCounts.entries()].map(([e, n]) => `${e}:${n}`).join(', ') || 'none'})`
+    );
+    if (files.length > 0 && files.length <= 20) {
+      const relative = files.map((f) => path.relative(repoPath, f).replace(/\\/g, '/'));
+      console.log(`[parser] Files: ${relative.join(', ')}`);
+    } else if (files.length > 20) {
+      const sample = files.slice(0, 5).map((f) => path.relative(repoPath, f).replace(/\\/g, '/'));
+      console.log(`[parser] Sample: ${sample.join(', ')} ...`);
+    }
   }
 
   for (const filePath of files) {
@@ -183,6 +187,6 @@ export function analyzeRepository(repoPath: string): FileAnalysis[] {
     }
   }
 
-  console.log(`[parser] Files with external imports: ${results.length}`);
+  if (!cliQuiet()) console.log(`[parser] Files with external imports: ${results.length}`);
   return results;
 }

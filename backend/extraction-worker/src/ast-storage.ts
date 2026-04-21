@@ -1,4 +1,4 @@
-import { SupabaseClient } from '@supabase/supabase-js';
+import type { Storage } from './storage';
 import { Redis } from '@upstash/redis';
 import type { FileAnalysis } from './ast-parser';
 
@@ -29,9 +29,10 @@ export interface PackageImportStats {
  * Does NOT update project_repositories status -- the pipeline handles that.
  */
 export async function storeAstAnalysisResults(
-  supabase: SupabaseClient,
+  supabase: Storage,
   projectId: string,
   organizationId: string,
+  runId: string,
   analysisResults: FileAnalysis[]
 ): Promise<{ success: boolean; error?: string }> {
   try {
@@ -74,7 +75,8 @@ export async function storeAstAnalysisResults(
       .from('project_dependencies')
       .select('id, name, is_direct')
       .eq('project_id', projectId)
-      .eq('is_direct', true);
+      .eq('is_direct', true)
+      .eq('last_seen_extraction_run_id', runId);
 
     if (depsError) {
       throw new Error(`Failed to fetch project dependencies: ${depsError.message}`);
@@ -102,8 +104,8 @@ export async function storeAstAnalysisResults(
     }
 
     const depIdToFileCount = new Map<string, Set<string>>();
-    const functionInserts: Array<{ project_dependency_id: string; function_name: string }> = [];
-    const filePathInserts: Array<{ project_dependency_id: string; file_path: string }> = [];
+    const functionInserts: Array<{ project_dependency_id: string; function_name: string; extraction_run_id: string }> = [];
+    const filePathInserts: Array<{ project_dependency_id: string; file_path: string; extraction_run_id: string }> = [];
 
     for (const [packageName, stats] of packageStats) {
       const depId = depMap.get(getRootPackageKey(packageName));
@@ -118,6 +120,7 @@ export async function storeAstAnalysisResults(
           functionInserts.push({
             project_dependency_id: depId,
             function_name: functionName,
+            extraction_run_id: runId,
           });
         }
 
@@ -125,6 +128,7 @@ export async function storeAstAnalysisResults(
           functionInserts.push({
             project_dependency_id: depId,
             function_name: 'default',
+            extraction_run_id: runId,
           });
         }
 
@@ -134,6 +138,7 @@ export async function storeAstAnalysisResults(
             filePathInserts.push({
               project_dependency_id: depId,
               file_path: filePath,
+              extraction_run_id: runId,
             });
           }
         }
@@ -159,7 +164,7 @@ export async function storeAstAnalysisResults(
     }
 
     if (functionInserts.length > 0) {
-      const uniqueFunctions = new Map<string, { project_dependency_id: string; function_name: string }>();
+      const uniqueFunctions = new Map<string, { project_dependency_id: string; function_name: string; extraction_run_id: string }>();
       for (const func of functionInserts) {
         const key = `${func.project_dependency_id}:${func.function_name}`;
         if (!uniqueFunctions.has(key)) {
@@ -176,7 +181,7 @@ export async function storeAstAnalysisResults(
         const { error: insertError } = await supabase
           .from('project_dependency_functions')
           .upsert(batch, {
-            onConflict: 'project_dependency_id,function_name',
+            onConflict: 'project_dependency_id,function_name,extraction_run_id',
           });
 
         if (insertError) {
@@ -186,7 +191,7 @@ export async function storeAstAnalysisResults(
     }
 
     if (filePathInserts.length > 0) {
-      const uniqueFilePaths = new Map<string, { project_dependency_id: string; file_path: string }>();
+      const uniqueFilePaths = new Map<string, { project_dependency_id: string; file_path: string; extraction_run_id: string }>();
       for (const fp of filePathInserts) {
         const key = `${fp.project_dependency_id}:${fp.file_path}`;
         if (!uniqueFilePaths.has(key)) {
@@ -203,7 +208,7 @@ export async function storeAstAnalysisResults(
         const { error: insertError } = await supabase
           .from('project_dependency_files')
           .upsert(batch, {
-            onConflict: 'project_dependency_id,file_path',
+            onConflict: 'project_dependency_id,file_path,extraction_run_id',
           });
 
         if (insertError) {

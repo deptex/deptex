@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import type { Storage } from './storage';
 import { runPipeline } from './pipeline';
 import { ExtractionLogger } from './logger';
 import {
@@ -16,14 +17,14 @@ const HEARTBEAT_INTERVAL_MS = 60_000;
 
 const MACHINE_ID = process.env.FLY_MACHINE_ID || `local-${process.pid}`;
 
-function getSupabase(): SupabaseClient {
+function getSupabase(): Storage {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set');
-  return createClient(url, key);
+  return createClient(url, key) as unknown as Storage;
 }
 
-async function processJob(supabase: SupabaseClient, job: ExtractionJobRow): Promise<void> {
+async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<void> {
   const payload = job.payload as {
     repo_full_name: string;
     installation_id: string;

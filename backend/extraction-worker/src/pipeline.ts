@@ -4,8 +4,9 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync, spawn } from 'child_process';
+import { execSync, spawn, spawnSync } from 'child_process';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import type { Storage } from './storage';
 import { cloneRepository, cleanupRepository, cloneByProvider } from './clone';
 import { parseSbom, getBomRefToNameVersion, patchDevDependencies, type ParsedSbomDep, type ParsedSbomRelationship } from './sbom';
 import { calculateBaseDepscoreNoReachability, calculateDepscore, calculateSecretDepscore, calculateSemgrepDepscore, SEVERITY_TO_CVSS, type AssetTier } from './depscore';
@@ -16,6 +17,7 @@ import { parsePurl, resolvePurlToDependencyId } from './purl';
 import { parseReachableFlows, parseUsageSlices, parseLlmPrompts, updateReachabilityLevels, computeImportCountsFromUsageSlices, parseGoImportsFromSource } from './reachability';
 import { updateJobPayloadCommit, updateJobStatus } from './job-db';
 import { applyEpdScoringFallback, EpdBudgetExceededError } from './epd';
+import { withTimeout, logStepError, classifyError } from './with-timeout';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
@@ -46,7 +48,7 @@ function getSupabase(): SupabaseClient {
 }
 
 async function updateStep(
-  supabase: SupabaseClient,
+  supabase: Storage,
   projectId: string,
   step: string,
   status?: string
@@ -62,7 +64,7 @@ async function updateStep(
 }
 
 async function setError(
-  supabase: SupabaseClient,
+  supabase: Storage,
   projectId: string,
   message: string
 ): Promise<void> {
@@ -219,6 +221,13 @@ export interface ExtractionJob {
   integration_id?: string;
   /** Set by worker so pipeline can write commit into job payload after clone */
   jobId?: string;
+  /**
+   * Local-mode only. When set, the pipeline skips the clone step and uses
+   * this path as the workspace root. The path is NOT cleaned up on exit.
+   * Used by the CLI (bin/extract.ts) so `deptex scan ./my-repo` runs
+   * against an already-checked-out tree without any git credentials.
+   */
+  localWorkspacePath?: string;
 }
 
 function runDepScan(
@@ -236,7 +245,6 @@ function runDepScan(
     const child = spawn(depScanExe, args, { cwd, stdio: 'pipe' });
     let stdout = '';
     let stderr = '';
-    const startTime = Date.now();
 
     child.stdout.on('data', (data: Buffer) => {
       const chunk = data.toString();
@@ -252,11 +260,10 @@ function runDepScan(
       stderr += data.toString();
     });
 
+    // DB keep-alive only — no log emission (dep-scan is intentionally quiet).
     const heartbeatInterval = setInterval(async () => {
       try {
         await heartbeat();
-        const elapsed = Math.round((Date.now() - startTime) / 60000);
-        await logger.info('vuln_scan', `Scan still running (${elapsed} min elapsed, dep-scan is quiet in logs)...`);
       } catch {}
     }, 60_000);
 
@@ -279,6 +286,33 @@ function runDepScan(
     });
   });
 }
+
+/**
+ * Probe for a binary on PATH without spawning the real command. Returns true
+ * if `<name> --version` (or `-version`) exits cleanly. Keeps noise out of logs
+ * so we can surface a friendly install hint instead of a stack trace.
+ */
+function binaryAvailable(name: string): boolean {
+  try {
+    const res = spawnSync(name, ['--version'], { stdio: 'ignore', timeout: 5000 });
+    if (res.status === 0) return true;
+    // trufflehog uses `--version`, semgrep uses `--version` — both 0 on success.
+    // Fall back to a PATH lookup via `where`/`which` for binaries that don't
+    // implement --version in the expected way.
+    const which = process.platform === 'win32' ? 'where' : 'which';
+    const lookup = spawnSync(which, [name], { stdio: 'ignore', timeout: 5000 });
+    return lookup.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+const INSTALL_HINTS: Record<string, string> = {
+  semgrep:
+    "Semgrep not found — the Dockerfile bundles it, so this likely means the image is misbuilt or you are running the worker outside the container. Static analysis skipped.",
+  trufflehog:
+    "TruffleHog not found — the Dockerfile bundles it, so this likely means the image is misbuilt or you are running the worker outside the container. Secret scanning skipped.",
+};
 
 function classifyCloneError(message: string): string {
   if (/401|403|authentication|authorization/i.test(message)) {
@@ -341,9 +375,10 @@ export async function runPipeline(
   job: ExtractionJob,
   logger?: ExtractionLogger | PipelineLogger,
   checkCancelled?: () => Promise<boolean>,
-  heartbeat?: () => Promise<void>
+  heartbeat?: () => Promise<void>,
+  storage?: Storage,
 ): Promise<void> {
-  const supabase = getSupabase();
+  const supabase: Storage = storage ?? (getSupabase() as unknown as Storage);
   const projectId = job.projectId;
   const organizationId = job.organizationId;
   const packageJsonPath = (job.package_json_path ?? '').trim();
@@ -357,26 +392,56 @@ export async function runPipeline(
 
   let repoPath: string | null = null;
   let projectDepsCount = 0;
+  let newDepsToPopulate: Array<{ dependencyId: string; name: string }> = [];
 
   try {
     // === Clear only dep-scan cache (keep VDB ~30GB so we don't re-download every run) ===
     clearDepscanCacheOnly();
 
-    // === STEP: Clone (CRITICAL) ===
+    // === STEP: Clone (CRITICAL — or bypass for local-mode) ===
     if (checkCancelled && await checkCancelled()) return;
     await updateStep(supabase, projectId, 'cloning', 'extracting');
-    await log.info('cloning', `Cloning repository from ${(job.provider || 'github').charAt(0).toUpperCase() + (job.provider || 'github').slice(1)}...`);
 
     const cloneStart = Date.now();
-    try {
-      repoPath = await retry(() => cloneByProvider(job), 'clone');
-    } catch (e: any) {
-      const userMsg = classifyCloneError(e.message);
-      await log.error('cloning', userMsg, e);
-      await setError(supabase, projectId, userMsg);
-      throw new Error(userMsg);
+    if (job.localWorkspacePath) {
+      if (!fs.existsSync(job.localWorkspacePath)) {
+        const msg = `Local workspace not found: ${job.localWorkspacePath}`;
+        await log.error('cloning', msg);
+        await setError(supabase, projectId, msg);
+        throw new Error(msg);
+      }
+      repoPath = job.localWorkspacePath;
+      await log.info('cloning', `Scanning local workspace: ${job.localWorkspacePath}`);
+      await log.success('cloning', 'Local workspace ready', Date.now() - cloneStart);
+    } else {
+      await log.info('cloning', `Cloning repository from ${(job.provider || 'github').charAt(0).toUpperCase() + (job.provider || 'github').slice(1)}...`);
+      try {
+        repoPath = await withTimeout(
+          () => retry(() => cloneByProvider(job), 'clone'),
+          15 * 60_000,
+          'clone'
+        );
+      } catch (e: any) {
+        if (job.jobId) {
+          const { code, message, stack } = classifyError(e);
+          await logStepError(supabase, {
+            jobId: job.jobId,
+            projectId,
+            step: 'clone',
+            code,
+            message,
+            stack,
+            durationMs: Date.now() - cloneStart,
+            severity: 'error',
+          });
+        }
+        const userMsg = classifyCloneError(e.message);
+        await log.error('cloning', userMsg, e);
+        await setError(supabase, projectId, userMsg);
+        throw new Error(userMsg);
+      }
+      await log.success('cloning', 'Repository cloned successfully', Date.now() - cloneStart);
     }
-    await log.success('cloning', 'Repository cloned successfully', Date.now() - cloneStart);
 
     // Record HEAD commit into job payload for Recent Activity (manual/initial runs; webhook already set it)
     if (job.jobId && repoPath) {
@@ -407,9 +472,27 @@ export async function runPipeline(
     const jobEcosystem = job.ecosystem || 'npm';
 
     // === STEP: Dependency resolution (ecosystem-specific install before SBOM) ===
+    const resolveStart = Date.now();
     try {
-      await resolveDependencies(workspaceRoot, jobEcosystem, log);
+      await withTimeout(
+        () => resolveDependencies(workspaceRoot, jobEcosystem, log),
+        10 * 60_000,
+        'resolve'
+      );
     } catch (resolveErr: any) {
+      if (job.jobId) {
+        const { code, message, stack } = classifyError(resolveErr);
+        await logStepError(supabase, {
+          jobId: job.jobId,
+          projectId,
+          step: 'resolve',
+          code,
+          message,
+          stack,
+          durationMs: Date.now() - resolveStart,
+          severity: 'warn',
+        });
+      }
       await log.warn('resolve', `Dependency resolution failed (non-fatal): ${resolveErr.message}`);
     }
 
@@ -421,8 +504,25 @@ export async function runPipeline(
     const sbomStart = Date.now();
     let sbomPath: string;
     try {
-      sbomPath = await retry(() => Promise.resolve(runCdxgen(workspaceRoot, jobEcosystem)), 'cdxgen');
+      sbomPath = await withTimeout(
+        () => retry(() => Promise.resolve(runCdxgen(workspaceRoot, jobEcosystem)), 'cdxgen'),
+        15 * 60_000,
+        'sbom'
+      );
     } catch (e: any) {
+      if (job.jobId) {
+        const { code, message, stack } = classifyError(e);
+        await logStepError(supabase, {
+          jobId: job.jobId,
+          projectId,
+          step: 'sbom',
+          code,
+          message,
+          stack,
+          durationMs: Date.now() - sbomStart,
+          severity: 'error',
+        });
+      }
       const userMsg = classifyCdxgenError(e.message);
       await log.error('sbom', userMsg, e);
       await setError(supabase, projectId, userMsg);
@@ -475,6 +575,8 @@ export async function runPipeline(
     // deps sync — no user-facing log
 
     const syncStart = Date.now();
+    try {
+      await withTimeout(async () => {
 
     const uniqueDeps = new Map<string, ParsedSbomDep>();
     for (const d of dependencies) {
@@ -552,14 +654,16 @@ export async function runPipeline(
     }
 
     const directNames = new Set(dependencies.filter((d) => d.is_direct).map((d) => d.name));
-    const newDepsToPopulate = namesToCreate
+    newDepsToPopulate = namesToCreate
       .filter((n) => directNames.has(n))
       .map((n) => ({ dependencyId: nameToDependencyId.get(n)!, name: n }))
       .filter((d) => d.dependencyId);
 
     const backendBaseUrl = process.env.BACKEND_URL || process.env.API_BASE_URL || 'http://localhost:3001';
     const workerSecret = process.env.EXTRACTION_WORKER_SECRET;
-    if (newDepsToPopulate.length > 0) {
+    // In local CLI mode there is no backend to accept the populate job — skip silently.
+    const skipPopulate = process.env.DEPTEX_CLI_MODE === '1' || !workerSecret;
+    if (newDepsToPopulate.length > 0 && !skipPopulate) {
       try {
         await callQueuePopulate(backendBaseUrl, workerSecret, projectId, organizationId, newDepsToPopulate, jobEcosystem);
       } catch (e: any) {
@@ -567,8 +671,11 @@ export async function runPipeline(
       }
     }
 
-    await supabase.from('project_dependencies').delete().eq('project_id', projectId);
-
+    // Phase 19 hybrid: upsert project_dependencies by (project_id, name, version, is_direct, source).
+    // UUIDs stay stable across re-extractions; lazarus rows (previously soft-deleted then
+    // returning) get removed_at cleared. dependency_notes + is_watching + ai_usage_summary
+    // survive naturally because FKs don't change. finalize_extraction marks rows absent
+    // from this run as removed_at = NOW().
     const projectDepsRaw = dependencies.map((d) => {
       const key = `${d.name}@${d.version}`;
       return {
@@ -580,25 +687,29 @@ export async function runPipeline(
         is_direct: d.is_direct,
         source: d.source,
         environment: d.source === 'dependencies' ? 'prod' : d.source === 'devDependencies' ? 'dev' : null,
+        last_seen_extraction_run_id: runId,
+        removed_at: null,
       };
     });
 
     const dedupeKey = (r: { name: string; version: string; is_direct: boolean; source: string }) =>
       `${r.name}|${r.version}|${r.is_direct}|${r.source}`;
     const seenProjDep = new Set<string>();
-    const projectDepsToInsert = projectDepsRaw.filter((r) => {
+    const projectDepsToUpsert = projectDepsRaw.filter((r) => {
       const k = dedupeKey(r);
       if (seenProjDep.has(k)) return false;
       seenProjDep.add(k);
       return true;
     });
 
-    for (let i = 0; i < projectDepsToInsert.length; i += 500) {
-      const chunk = projectDepsToInsert.slice(i, i + 500);
-      const { error } = await supabase.from('project_dependencies').insert(chunk);
+    for (let i = 0; i < projectDepsToUpsert.length; i += 500) {
+      const chunk = projectDepsToUpsert.slice(i, i + 500);
+      const { error } = await supabase
+        .from('project_dependencies')
+        .upsert(chunk, { onConflict: 'project_id,name,version,is_direct,source' });
       if (error) throw error;
     }
-    projectDepsCount = projectDepsToInsert.length;
+    projectDepsCount = projectDepsToUpsert.length;
 
     const edgesToInsert: Array<{ parent_version_id: string; child_version_id: string }> = [];
     const seenEdges = new Set<string>();
@@ -626,24 +737,60 @@ export async function runPipeline(
         .upsert(chunk, { onConflict: 'parent_version_id,child_version_id', ignoreDuplicates: true });
     }
 
-    const directCount = projectDepsToInsert.filter((d) => d.is_direct).length;
-    const transitiveCount = projectDepsToInsert.length - directCount;
+    const directCount = projectDepsToUpsert.filter((d) => d.is_direct).length;
+    const transitiveCount = projectDepsToUpsert.length - directCount;
     // deps sync complete (no user-facing log — internal step)
+
+      }, 5 * 60_000, 'deps_sync');
+    } catch (depsSyncErr: any) {
+      if (job.jobId) {
+        const { code, message, stack } = classifyError(depsSyncErr);
+        await logStepError(supabase, {
+          jobId: job.jobId,
+          projectId,
+          step: 'deps_sync',
+          code,
+          message,
+          stack,
+          durationMs: Date.now() - syncStart,
+          severity: 'error',
+        });
+      }
+      throw depsSyncErr;
+    }
 
     // === AST import analysis (npm/JS/TS only — other ecosystems use different import mechanisms) ===
     if (checkCancelled && await checkCancelled()) return;
     let astParsedSuccessfully = false;
     await updateStep(supabase, projectId, 'ast_parsing');
     if (jobEcosystem === 'npm') {
+      const astStart = Date.now();
       try {
-        const analysisResults = analyzeRepository(workspaceRoot);
-        if (analysisResults.length > 0) {
-          const storeResult = await storeAstAnalysisResults(supabase, projectId, organizationId, analysisResults);
-          if (storeResult.success) astParsedSuccessfully = true;
-        } else {
-          astParsedSuccessfully = true;
+        await withTimeout(async () => {
+          const analysisResults = analyzeRepository(workspaceRoot);
+          if (analysisResults.length > 0) {
+            const storeResult = await storeAstAnalysisResults(supabase, projectId, organizationId, runId, analysisResults);
+            if (storeResult.success) astParsedSuccessfully = true;
+          } else {
+            astParsedSuccessfully = true;
+          }
+        }, 5 * 60_000, 'ast_import');
+      } catch (astErr: any) {
+        if (job.jobId) {
+          const { code, message, stack } = classifyError(astErr);
+          await logStepError(supabase, {
+            jobId: job.jobId,
+            projectId,
+            step: 'ast_import',
+            code,
+            message,
+            stack,
+            durationMs: Date.now() - astStart,
+            severity: 'warn',
+          });
         }
-      } catch { /* non-fatal */ }
+        /* non-fatal */
+      }
     } else {
       astParsedSuccessfully = true;
     }
@@ -676,6 +823,7 @@ export async function runPipeline(
     let depScanSucceeded = false;
 
     try {
+      await withTimeout(async () => {
       fs.mkdirSync(reportsDir, { recursive: true });
       const bomArg = path.join(workspaceRoot, 'sbom.json');
       const outArg = reportsDir;
@@ -712,7 +860,9 @@ export async function runPipeline(
       ];
 
       // dep-scan command logged at debug level only
-      console.log(`[depscan] ${depScanExe} ${depScanArgs.join(' ')}`);
+      if (process.env.DEPTEX_CLI_MODE !== '1') {
+        console.log(`[depscan] ${depScanExe} ${depScanArgs.join(' ')}`);
+      }
 
       const heartbeatFn = heartbeat ?? (async () => {});
       try {
@@ -756,7 +906,21 @@ export async function runPipeline(
           throw spawnErr;
         }
       }
+      }, 45 * 60_000, 'dep_scan');
     } catch (e: any) {
+      if (job.jobId) {
+        const { code, message, stack } = classifyError(e);
+        await logStepError(supabase, {
+          jobId: job.jobId,
+          projectId,
+          step: 'dep_scan',
+          code,
+          message,
+          stack,
+          durationMs: Date.now() - scanStart,
+          severity: 'warn',
+        });
+      }
       if (/timed out|timeout/i.test(e.message)) {
         await log.warn('vuln_scan', 'Vulnerability scan timed out');
       } else {
@@ -873,7 +1037,8 @@ export async function runPipeline(
         const { data: pdRows } = await supabase
           .from('project_dependencies')
           .select('id, name, version')
-          .eq('project_id', projectId);
+          .eq('project_id', projectId)
+          .eq('last_seen_extraction_run_id', runId);
 
         const pdByNameVersion = new Map<string, string>();
         if (pdRows) {
@@ -893,6 +1058,7 @@ export async function runPipeline(
 
         const vulnRows: Array<{
           project_id: string; project_dependency_id: string; osv_id: string;
+          extraction_run_id: string;
           severity: string | null; summary: string | null; aliases: string[] | null;
           fixed_versions: string[] | null; is_reachable: boolean; epss_score: number | null;
           cvss_score: number | null; cisa_kev: boolean; depscore: number | null; published_at: string | null;
@@ -939,6 +1105,7 @@ export async function runPipeline(
               if (!pdId) continue;
               vulnRows.push({
                 project_id: projectId, project_dependency_id: pdId, osv_id: osvId,
+                extraction_run_id: runId,
                 severity, summary, aliases: null, fixed_versions, is_reachable: isReachable,
                 epss_score: epssFromVdrNum, cvss_score: cvssFromVdr, cisa_kev: false,
                 depscore: null, published_at: v.published ?? null,
@@ -959,7 +1126,9 @@ export async function runPipeline(
             const severity = v.severity ?? v.ratings?.[0]?.severity ?? null;
             vulnRows.push({
               project_id: projectId, project_dependency_id: pdId,
-              osv_id: (v.vuln_id ?? v.id ?? 'unknown').toString(), severity,
+              osv_id: (v.vuln_id ?? v.id ?? 'unknown').toString(),
+              extraction_run_id: runId,
+              severity,
               summary: v.summary ?? null, aliases: v.aliases ?? null,
               fixed_versions: v.fixed_version ? [v.fixed_version] : null,
               is_reachable: true, epss_score: v.epss ?? null,
@@ -1018,26 +1187,21 @@ export async function runPipeline(
         }
 
         if (vulnRows.length > 0) {
-          for (let i = 0; i < vulnRows.length; i += 100) {
-            const chunk = vulnRows.slice(i, i + 100);
-            const { error: upsertErr } = await supabase
+          // Deduplicate within this extraction run (same vuln reported twice by dep-scan
+          // under different affects entries). Stable ID for this run: (pd_id, osv_id).
+          const seenVuln = new Set<string>();
+          const dedupedVulns = vulnRows.filter((r) => {
+            const k = `${r.project_dependency_id}|${r.osv_id}`;
+            if (seenVuln.has(k)) return false;
+            seenVuln.add(k);
+            return true;
+          });
+          for (let i = 0; i < dedupedVulns.length; i += 100) {
+            const chunk = dedupedVulns.slice(i, i + 100);
+            const { error: insertErr } = await supabase
               .from('project_dependency_vulnerabilities')
-              .upsert(chunk, {
-                onConflict: 'project_id,project_dependency_id,osv_id',
-                ignoreDuplicates: true,
-              });
-            if (upsertErr) {
-              // Backward-compatible fallback for environments where EPD columns are not migrated yet.
-              const legacyChunk = chunk.map(({ base_depscore_no_reachability, reachability_status, epd_status, epd_schema_version, epd_prompt_version, ...legacy }) => legacy);
-              const { error: legacyErr } = await supabase
-                .from('project_dependency_vulnerabilities')
-                .upsert(legacyChunk, {
-                  onConflict: 'project_id,project_dependency_id,osv_id',
-                  ignoreDuplicates: true,
-                });
-              if (legacyErr) throw legacyErr;
-              await log.warn('vuln_scan', `EPD columns unavailable; stored legacy vulnerability fields only (${upsertErr.message})`);
-            }
+              .insert(chunk);
+            if (insertErr) throw insertErr;
           }
         }
 
@@ -1069,7 +1233,7 @@ export async function runPipeline(
 
       // Log what dep-scan produced so we can diagnose ecosystem-specific gaps
       const depScanFiles = fs.readdirSync(reportsDir).filter(f => f.endsWith('.json'));
-      console.log(`[atom] dep-scan produced ${depScanFiles.length} JSON files in reports dir: ${depScanFiles.join(', ')}`);
+      if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] dep-scan produced ${depScanFiles.length} JSON files in reports dir: ${depScanFiles.join(', ')}`);
 
       let hasReachableSlices = depScanFiles.some(f => f.endsWith('-reachables.slices.json'));
       let hasUsageSlices = depScanFiles.some(f => f.endsWith('-usages.slices.json'));
@@ -1080,10 +1244,10 @@ export async function runPipeline(
         try {
           const out = execSync(`atom reachables -l ${atomLang} -s "${atomSlicesOut}" "${srcDir}" 2>&1`, { encoding: 'utf8', timeout: 600_000, maxBuffer: 50 * 1024 * 1024 });
           hasReachableSlices = fs.existsSync(atomSlicesOut) && fs.statSync(atomSlicesOut).size > 10;
-          console.log(`[atom] reachables (${atomLang}): produced=${hasReachableSlices}, size=${hasReachableSlices ? fs.statSync(atomSlicesOut).size : 0}`);
+          if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] reachables (${atomLang}): produced=${hasReachableSlices}, size=${hasReachableSlices ? fs.statSync(atomSlicesOut).size : 0}`);
         } catch (atomErr: any) {
           const msg = (atomErr.stderr || atomErr.message || '').slice(-500);
-          console.log(`[atom] reachables (${atomLang}) failed: ${msg}`);
+          if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] reachables (${atomLang}) failed: ${msg}`);
         }
       }
 
@@ -1093,10 +1257,10 @@ export async function runPipeline(
         try {
           const out = execSync(`atom usages -l ${atomLang} -s "${atomUsagesOut}" "${srcDir}" 2>&1`, { encoding: 'utf8', timeout: 600_000, maxBuffer: 50 * 1024 * 1024 });
           hasUsageSlices = fs.existsSync(atomUsagesOut) && fs.statSync(atomUsagesOut).size > 10;
-          console.log(`[atom] usages (${atomLang}): produced=${hasUsageSlices}, size=${hasUsageSlices ? fs.statSync(atomUsagesOut).size : 0}`);
+          if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] usages (${atomLang}): produced=${hasUsageSlices}, size=${hasUsageSlices ? fs.statSync(atomUsagesOut).size : 0}`);
         } catch (atomErr: any) {
           const msg = (atomErr.stderr || atomErr.message || '').slice(-500);
-          console.log(`[atom] usages (${atomLang}) failed: ${msg}`);
+          if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] usages (${atomLang}) failed: ${msg}`);
         }
       }
 
@@ -1114,11 +1278,11 @@ export async function runPipeline(
         if (goImportCount > 0) hasUsageSlices = true;
       }
 
-      await updateReachabilityLevels(projectId, supabase, log, workspaceRoot);
+      await updateReachabilityLevels(projectId, runId, supabase, log, workspaceRoot);
       // Compute files_importing_count from atom usage slices (all ecosystems)
-      await computeImportCountsFromUsageSlices(projectId, jobEcosystem, supabase, log);
+      await computeImportCountsFromUsageSlices(projectId, runId, jobEcosystem, supabase, log);
     } catch (atomStepErr: any) {
-      console.log(`[atom] reachability step failed: ${atomStepErr.message}`);
+      if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] reachability step failed: ${atomStepErr.message}`);
     }
 
     // --- Sub-step: Recalculate depscores with updated reachability ---
@@ -1126,7 +1290,8 @@ export async function runPipeline(
       const { data: pdvsForRescore } = await supabase
         .from('project_dependency_vulnerabilities')
         .select('id, cvss_score, epss_score, cisa_kev, is_reachable, reachability_level, severity')
-        .eq('project_id', projectId);
+        .eq('project_id', projectId)
+        .eq('extraction_run_id', runId);
 
       if (pdvsForRescore && pdvsForRescore.length > 0) {
         const { data: projForTier } = await supabase.from('projects').select('asset_tier, asset_tier_id').eq('id', projectId).single();
@@ -1174,10 +1339,14 @@ export async function runPipeline(
 
     // === STEP: Semgrep (OPTIONAL) ===
     if (checkCancelled && await checkCancelled()) return;
+    if (!binaryAvailable('semgrep')) {
+      await log.warn('semgrep', INSTALL_HINTS.semgrep);
+    } else {
     await log.info('semgrep', 'Running static code analysis...');
     const semgrepStart = Date.now();
     let semgrepFindings = 0;
     try {
+      await withTimeout(async () => {
       execSync(`semgrep scan --config auto --json --output "${path.join(workspaceRoot, 'semgrep.json')}" "${workspaceRoot}" 2>/dev/null || true`, {
         stdio: 'pipe',
         timeout: 60000,
@@ -1249,12 +1418,13 @@ export async function runPipeline(
                   category,
                   metadata: sanitizeMetadata(r.extra?.metadata),
                   code_snippet: codeSnippet,
+                  semgrep_fingerprint: r.extra?.fingerprint ?? null,
                   depscore: calculateSemgrepDepscore({ severity, cweIds, category, assetTier, tierMultiplier }),
                 };
               });
             for (let i = 0; i < findings.length; i += 100) {
               await supabase.from('project_semgrep_findings').upsert(findings.slice(i, i + 100), {
-                onConflict: 'project_id,rule_id,file_path,start_line',
+                onConflict: 'project_id,rule_id,file_path,start_line,extraction_run_id',
               });
             }
           } catch (parseErr: any) {
@@ -1266,19 +1436,38 @@ export async function runPipeline(
       } else {
         await log.warn('semgrep', 'Static analysis skipped (Semgrep not installed)');
       }
+      }, 20 * 60_000, 'semgrep');
     } catch (e: any) {
+      if (job.jobId) {
+        const { code, message, stack } = classifyError(e);
+        await logStepError(supabase, {
+          jobId: job.jobId,
+          projectId,
+          step: 'semgrep',
+          code,
+          message,
+          stack,
+          durationMs: Date.now() - semgrepStart,
+          severity: 'warn',
+        });
+      }
       if (e.status === 137) {
         await log.warn('semgrep', 'Static analysis ran out of memory — scanning skipped');
       } else {
-        await log.warn('semgrep', 'Static analysis skipped (Semgrep not installed or failed)');
+        await log.warn('semgrep', 'Static analysis failed');
       }
+    }
     }
 
     // === STEP: TruffleHog (OPTIONAL) ===
     if (checkCancelled && await checkCancelled()) return;
+    if (!binaryAvailable('trufflehog')) {
+      await log.warn('trufflehog', INSTALL_HINTS.trufflehog);
+    } else {
     await log.info('trufflehog', 'Scanning for exposed secrets...');
     const thStart = Date.now();
     try {
+      await withTimeout(async () => {
       const trufflehogOut = path.join(workspaceRoot, 'trufflehog.json');
       const wsPrefix = workspaceRoot.endsWith('/') ? workspaceRoot : workspaceRoot + '/';
 
@@ -1365,7 +1554,7 @@ export async function runPipeline(
             if (findings.length > 0) {
               for (let i = 0; i < findings.length; i += 100) {
                 const { error: upsertErr } = await supabase.from('project_secret_findings').upsert(findings.slice(i, i + 100), {
-                  onConflict: 'project_id,detector_type,file_path,start_line',
+                  onConflict: 'project_id,detector_type,file_path,start_line,extraction_run_id',
                 });
                 if (upsertErr) {
                   await log.warn('trufflehog', `DB upsert error: ${upsertErr.message}`);
@@ -1396,8 +1585,23 @@ export async function runPipeline(
       } else {
         await log.warn('trufflehog', 'Secret scanning skipped (TruffleHog not installed or no output)');
       }
+      }, 10 * 60_000, 'trufflehog');
     } catch (thErr: any) {
+      if (job.jobId) {
+        const { code, message, stack } = classifyError(thErr);
+        await logStepError(supabase, {
+          jobId: job.jobId,
+          projectId,
+          step: 'trufflehog',
+          code,
+          message,
+          stack,
+          durationMs: Date.now() - thStart,
+          severity: 'warn',
+        });
+      }
       await log.warn('trufflehog', `Secret scanning failed: ${thErr.message}`);
+    }
     }
 
     // === STEP: Finalize ===
@@ -1432,38 +1636,56 @@ export async function runPipeline(
       .eq('id', projectId)
       .eq('organization_id', organizationId);
 
-    // Post-pipeline finalization: clean up stale findings from previous runs
+    // Phase 19.3: atomic finalization. Single-transaction RPC:
+    //   - Marks deps missing from this run as removed_at = NOW()
+    //   - Carries forward PDV user state (status, suppressed, SLA, re_review_reasons) by (dep_name, osv_id)
+    //   - Detects re-review triggers (depscore/severity/reachability/KEV/EPSS/direct/env deltas)
+    //   - Writes 'detected'/'reopened'/'rereview_triggered' events to project_vulnerability_events
+    //   - Carries forward semgrep status (by fingerprint, falls back to tuple) and secret status
+    //   - Computes SLA deadlines for newly-detected findings via tier-aware get_effective_sla_policy
+    //   - Flips active_extraction_run_id → this run, previous → old active
+    //   - Reaps finding rows from any run_id that is neither (new active, previous)
+    //   - Returns summary JSONB — use for vulnerability_updates notification emission
+    const finalizeStart = Date.now();
     try {
-      await supabase.from('project_semgrep_findings')
-        .delete()
-        .eq('project_id', projectId)
-        .neq('extraction_run_id', runId);
-
-      await supabase.from('project_secret_findings')
-        .delete()
-        .eq('project_id', projectId)
-        .neq('extraction_run_id', runId);
-
-      await supabase.from('project_reachable_flows')
-        .delete()
-        .eq('project_id', projectId)
-        .neq('extraction_run_id', runId);
-
-      await supabase.from('project_usage_slices')
-        .delete()
-        .eq('project_id', projectId)
-        .neq('extraction_run_id', runId);
-
-      // Stale cleanup complete (no user-facing log needed)
-    } catch (cleanupErr: any) {
-      await log.warn('finalize', `Stale findings cleanup failed: ${cleanupErr.message}`);
+      const { error: finalizeErr } = await withTimeout(
+        async () => await supabase.rpc('finalize_extraction', {
+          p_job_id: job.jobId ?? null,
+          p_project_id: projectId,
+          p_extraction_run_id: runId,
+        }),
+        2 * 60_000,
+        'finalize'
+      );
+      if (finalizeErr) {
+        await log.error('finalize', `finalize_extraction RPC failed: ${finalizeErr.message}`);
+        throw new Error(`finalize_extraction: ${finalizeErr.message}`);
+      }
+    } catch (finalizeErr: any) {
+      if (job.jobId) {
+        const { code, message, stack } = classifyError(finalizeErr);
+        await logStepError(supabase, {
+          jobId: job.jobId,
+          projectId,
+          step: 'finalize',
+          code,
+          message,
+          stack,
+          durationMs: Date.now() - finalizeStart,
+          severity: 'error',
+        });
+      }
+      await log.error('finalize', `Atomic commit failed: ${finalizeErr.message}`);
+      throw finalizeErr;
     }
 
   } catch (error: any) {
     await setError(supabase, projectId, error.message);
     throw error;
   } finally {
-    if (repoPath) {
+    // Don't nuke a local workspace the user handed us — that would delete
+    // their actual source tree. Only cleanup repos we cloned ourselves.
+    if (repoPath && !job.localWorkspacePath) {
       if (process.env.KEEP_EXTRACT_WORKSPACE === '1') {
         console.log('[EXTRACT] KEEP_EXTRACT_WORKSPACE=1; skipping workspace cleanup');
       } else {

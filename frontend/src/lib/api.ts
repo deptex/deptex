@@ -4137,3 +4137,54 @@ export const billingApi = {
     return res.json();
   },
 };
+
+// =============================================================================
+// Admin (Henry-only) API
+// =============================================================================
+
+export interface ExtractionFailure {
+  id: string;
+  extraction_job_id: string;
+  project_id: string;
+  project_name: string | null;
+  step: string;
+  code: string;
+  severity: 'warn' | 'error';
+  message: string;
+  stack: string | null;
+  machine_id: string | null;
+  duration_ms: number | null;
+  created_at: string;
+}
+
+export interface AdminExtractionFailuresResponse {
+  data: ExtractionFailure[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+export async function apiAdminPing(): Promise<{ ok: boolean; email: string }> {
+  return fetchWithAuth('/api/admin/ping');
+}
+
+export async function apiAdminListExtractionFailures(params: {
+  page?: number;
+  per_page?: number;
+  step?: string;
+  code?: string;
+  severity?: 'warn' | 'error';
+  project_id?: string;
+  since?: string;
+}): Promise<AdminExtractionFailuresResponse> {
+  const qs = new URLSearchParams();
+  if (params.page != null) qs.set('page', String(params.page));
+  if (params.per_page != null) qs.set('per_page', String(params.per_page));
+  if (params.step) qs.set('step', params.step);
+  if (params.code) qs.set('code', params.code);
+  if (params.severity) qs.set('severity', params.severity);
+  if (params.project_id) qs.set('project_id', params.project_id);
+  if (params.since) qs.set('since', params.since);
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return fetchWithAuth(`/api/admin/extraction-failures${suffix}`);
+}

@@ -44,6 +44,7 @@ function createChain() {
 const mockChain = createChain();
 const mockSupabase = {
   from: (t: string) => mockChain,
+  rpc: jest.fn().mockResolvedValue({ data: { extraction_run_id: 'test-run', deps_removed: 0, vulns_new: 0 }, error: null }),
   storage: {
     from: jest.fn().mockReturnValue({
       upload: jest.fn().mockResolvedValue({}),

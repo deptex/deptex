@@ -1,0 +1,9 @@
+{
+  "name": "deptex-test-minimal-npm",
+  "version": "1.0.0",
+  "description": "Minimal fixture for deptex-scan local-mode smoke test",
+  "license": "MIT",
+  "dependencies": {
+    "lodash": "4.17.20"
+  }
+}

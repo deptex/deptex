@@ -9,7 +9,7 @@ Deptex is an AI-powered open-core dependency security platform. It combines depe
 - Use git bash, not PowerShell
 - Backend: `cd backend && npm run dev` (port 3001). Frontend: `cd frontend && npm run dev` (port 3000)
 - API routes: add to `backend/src/routes/`, register in `backend/src/index.ts`
-- DB migrations: `backend/database/` (~140 SQL files)
+- DB migrations: `backend/database/` (~140 SQL files). **If you add or modify a migration, also run `cd backend/extraction-worker && npm run schema:dump` in the same PR to refresh `backend/database/schema.sql`.** That file is the source of truth for PGLite local-mode (extraction worker CLI + CI smoke tests). CI (`.github/workflows/schema-check.yml`) fails PRs that touch a migration without refreshing it.
 - UI components: Radix primitives + Tailwind (shadcn pattern). Add via `npx shadcn@latest`
 - See `DEVELOPERS.md` for full setup, `CONTRIBUTING.md` for PR flow, `fly.md` for Fly.io deployment
 - See `.cursor/skills/add-new-features/SKILL.md` for where to add routes and libs
