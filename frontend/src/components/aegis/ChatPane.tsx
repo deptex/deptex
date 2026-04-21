@@ -278,8 +278,7 @@ export function ChatPane({ threadId, organizationId, thread, currentUserId, init
   return (
     <div className="flex h-full flex-col">
       {thread && (
-        <div className="flex items-center justify-between px-6 py-3 border-b border-border">
-          <div className="text-sm font-medium text-foreground/90 truncate">{thread.title}</div>
+        <div className="flex items-center justify-end px-6 py-3 border-b border-border">
           <button
             type="button"
             onClick={() => setParticipantsOpen(true)}
