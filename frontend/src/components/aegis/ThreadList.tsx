@@ -22,6 +22,7 @@ interface ThreadListProps {
   threads: AegisThread[];
   activeThreadId: string | null;
   loading?: boolean;
+  pendingTitleThreadId?: string | null;
   onCreate: () => void;
   onSelect: (threadId: string) => void;
   onRename: (threadId: string, title: string) => Promise<void>;
@@ -37,6 +38,7 @@ export function ThreadList({
   threads,
   activeThreadId,
   loading,
+  pendingTitleThreadId,
   onCreate,
   onSelect,
   onRename,
@@ -91,7 +93,10 @@ export function ThreadList({
             className="w-full text-left px-3 py-2 text-sm truncate pr-8 flex items-center gap-2 text-foreground/90"
             title={thread.title}
           >
-            <span className="truncate">{thread.title}</span>
+            {thread.id === pendingTitleThreadId
+              ? <span className="h-3 w-28 rounded bg-foreground/10 animate-pulse inline-block" />
+              : <span className="truncate">{thread.title}</span>
+            }
             {thread.participantCount > 1 && (
               <Users
                 className="h-3 w-3 flex-shrink-0 text-foreground/40"

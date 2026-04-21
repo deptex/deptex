@@ -9,6 +9,29 @@ import { JoinByCodeModal } from '../../components/aegis/JoinByCodeModal';
 import { SearchChatsModal } from '../../components/aegis/SearchChatsModal';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
+import { MessageBubble } from '../../components/aegis/MessageBubble';
+import type { UIMessage } from 'ai';
+
+function PendingChatView({ message }: { message: string }) {
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex-1 overflow-y-auto">
+        <div className="py-4">
+          <MessageBubble
+            message={{ id: 'pending', role: 'user', parts: [{ type: 'text', text: message }] } as unknown as UIMessage}
+          />
+          <div className="px-4 py-3">
+            <div className="mx-auto max-w-3xl pl-10 flex gap-1">
+              <span className="h-1.5 w-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:0ms]" />
+              <span className="h-1.5 w-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:150ms]" />
+              <span className="h-1.5 w-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:300ms]" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 interface OrgOutlet {
   organization: Organization | null;
@@ -34,6 +57,11 @@ export default function AegisPage() {
   const [loading, setLoading] = useState(true);
   const [joinByCodeOpen, setJoinByCodeOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  // Shown immediately when the user submits from the landing hero, before the thread
+  // is created, so there's no blank flash between input and the chat view.
+  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
+  // ID of the thread whose title is still being generated (shows skeleton in sidebar).
+  const [pendingTitleThreadId, setPendingTitleThreadId] = useState<string | null>(null);
   const activeThread = useMemo(
     () => threads.find((t) => t.id === activeThreadId) ?? null,
     [threads, activeThreadId],
@@ -205,11 +233,16 @@ export default function AegisPage() {
 
   const startChatWithMessage = useCallback(async (message: string) => {
     if (!orgId) return;
+    // Show the pending chat view immediately — before the API call — so there's
+    // no blank flash between the user hitting send and the chat UI appearing.
+    setPendingMessage(message);
     try {
       const thread = await aegisApi.createThread(orgId);
       setThreads((prev) => [thread, ...prev]);
+      setPendingTitleThreadId(thread.id);
       navigate(`/organizations/${orgId}/aegis/${thread.id}`, { state: { initialMessage: message } });
     } catch (err: any) {
+      setPendingMessage(null);
       toast({ title: 'Could not start chat', description: err?.message, variant: 'destructive' });
     }
   }, [orgId, navigate, toast]);
@@ -235,6 +268,7 @@ export default function AegisPage() {
           threads={threads}
           activeThreadId={activeThreadId ?? null}
           loading={loading}
+          pendingTitleThreadId={pendingTitleThreadId}
           onCreate={handleCreate}
           onSelect={handleSelect}
           onRename={handleRename}
@@ -255,8 +289,14 @@ export default function AegisPage() {
             thread={activeThread ?? undefined}
             currentUserId={user?.id ?? ''}
             initialMessage={initialMessageForThread}
-            onThreadUpdated={() => void refreshThreads()}
+            onThreadUpdated={() => {
+              void refreshThreads();
+              setPendingTitleThreadId(null);
+            }}
+            onMount={() => setPendingMessage(null)}
           />
+        ) : pendingMessage ? (
+          <PendingChatView message={pendingMessage} />
         ) : (
           <LandingHero
             name={displayName}

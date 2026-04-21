@@ -22,6 +22,7 @@ interface ChatPaneProps {
   initialMessage?: string;
   onThreadUpdated?: () => void;
   onLeaveThread?: () => void;
+  onMount?: () => void;
 }
 
 function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
@@ -64,7 +65,7 @@ function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
   });
 }
 
-export function ChatPane({ threadId, organizationId, thread, currentUserId, initialMessage, onThreadUpdated }: ChatPaneProps) {
+export function ChatPane({ threadId, organizationId, thread, currentUserId, initialMessage, onThreadUpdated, onMount }: ChatPaneProps) {
   const { user } = useAuth();
   const [seed, setSeed] = useState<UIMessage[] | null>(null);
   const [seedError, setSeedError] = useState<string | null>(null);
@@ -77,6 +78,8 @@ export function ChatPane({ threadId, organizationId, thread, currentUserId, init
   const bottomRef = useRef<HTMLDivElement>(null);
   const typingChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const lastTypingSentRef = useRef(0);
+
+  useEffect(() => { onMount?.(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const myDisplayName = useMemo(() => {
     const full = user?.user_metadata?.full_name as string | undefined;
