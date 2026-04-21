@@ -251,7 +251,6 @@ function runDepScan(
     const child = spawn(depScanExe, args, { cwd, stdio: 'pipe' });
     let stdout = '';
     let stderr = '';
-    let settled = false;
 
     child.stdout.on('data', (data: Buffer) => {
       const chunk = data.toString();
@@ -274,28 +273,25 @@ function runDepScan(
     }, 60_000);
 
     const timeout = setTimeout(() => {
-      if (settled) return;
-      settled = true;
       child.kill('SIGTERM');
       clearInterval(heartbeatInterval);
       reject(new Error(`dep-scan timed out after ${timeoutMs / 60000} min`));
     }, timeoutMs);
 
+    // On outer abort: kill the child only. Don't reject — SIGTERM is an async
+    // OS signal so child.on('close') fires on a later I/O tick, by which time
+    // Promise.race in withTimeout has already rejected with StepTimeoutError.
+    // Rejecting here would race StepTimeoutError and win (synchronous reject
+    // queues its microtask before the outer's), leaking an opaque error that
+    // classifyError can't map to code='timeout'.
     const onAbort = () => {
-      if (settled) return;
-      settled = true;
-      child.kill('SIGTERM');
-      clearInterval(heartbeatInterval);
-      clearTimeout(timeout);
-      reject(new Error('dep-scan aborted by outer timeout'));
+      try { child.kill('SIGTERM'); } catch { /* already dead */ }
     };
     if (signal) {
       signal.addEventListener('abort', onAbort, { once: true });
     }
 
     child.on('close', (code: number | null) => {
-      if (settled) return;
-      settled = true;
       clearInterval(heartbeatInterval);
       clearTimeout(timeout);
       signal?.removeEventListener('abort', onAbort);
@@ -303,8 +299,6 @@ function runDepScan(
     });
 
     child.on('error', (err: Error) => {
-      if (settled) return;
-      settled = true;
       clearInterval(heartbeatInterval);
       clearTimeout(timeout);
       signal?.removeEventListener('abort', onAbort);
