@@ -10,6 +10,7 @@
 
 import { supabase } from '../lib/supabase';
 import { createActivity } from './activities';
+import { getActiveExtractionId, NO_ACTIVE_RUN } from './active-extraction';
 import * as dns from 'dns';
 import * as net from 'net';
 import * as url from 'url';
@@ -676,7 +677,11 @@ export async function evaluateProjectPolicies(
   projectId: string,
   organizationId: string,
 ): Promise<{ statusName: string; violations: string[]; depResults: number }> {
-  // Load project's tier
+  // Load project's tier + active extraction run id (Phase 19 soft-switch).
+  // Policy evaluation reads the project's CURRENT findings — not stale rows
+  // from prior extractions still living in the DB until reaped.
+  const activeRunId = (await getActiveExtractionId(supabase, projectId)) ?? NO_ACTIVE_RUN;
+
   const { data: project } = await supabase
     .from('projects')
     .select('id, name, asset_tier_id, effective_package_policy_code, effective_project_status_code')
@@ -709,7 +714,7 @@ export async function evaluateProjectPolicies(
     packagePolicyCode = orgPolicy?.package_policy_code || null;
   }
 
-  // Load deps
+  // Load deps (exclude soft-deleted from prior extractions)
   const { data: deps } = await supabase
     .from('project_dependencies')
     .select(`
@@ -719,7 +724,8 @@ export async function evaluateProjectPolicies(
         last_published_at, releases_last_12_months, score, ecosystem),
       dependency_versions!inner(malicious_indicator, slsa_level)
     `)
-    .eq('project_id', projectId);
+    .eq('project_id', projectId)
+    .is('removed_at', null);
 
   const projectDeps = deps ?? [];
 
@@ -780,7 +786,7 @@ export async function evaluateProjectPolicies(
 
   const statusNames = (orgStatuses ?? []).map((s: any) => s.name);
 
-  // Re-load deps with policy_result for projectStatus context
+  // Re-load deps with policy_result for projectStatus context (exclude soft-deleted)
   const { data: enrichedDeps } = await supabase
     .from('project_dependencies')
     .select(`
@@ -788,15 +794,17 @@ export async function evaluateProjectPolicies(
       is_outdated, versions_behind, policy_result,
       dependencies!inner(name, version, license, score)
     `)
-    .eq('project_id', projectId);
+    .eq('project_id', projectId)
+    .is('removed_at', null);
 
-  // Load vulns per dep
+  // Load vulns per dep — only the active extraction run's findings.
   const depContextForStatus = await Promise.all(
     (enrichedDeps ?? []).map(async (dep: any) => {
       const { data: vulns } = await supabase
         .from('project_dependency_vulnerabilities')
         .select('osv_id, severity, cvss_score, epss_score, depscore, is_reachable, cisa_kev, fixed_versions, summary')
-        .eq('project_dependency_id', dep.id);
+        .eq('project_dependency_id', dep.id)
+        .eq('extraction_run_id', activeRunId);
 
       return {
         name: dep.dependencies?.name ?? '',

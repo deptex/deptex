@@ -82,26 +82,35 @@ BEGIN
     AND (v_previous IS NULL OR extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_pdv_deleted = ROW_COUNT;
 
+  -- The IS NOT NULL guards below are defensive: if any pre-Phase-19 rows
+  -- exist with extraction_run_id = NULL (no run can claim them), they should
+  -- NOT be silently reaped on the first finalize after the migration. The
+  -- PDV branch above had this guard from day one; the other tables didn't,
+  -- which would have hard-deleted any NULL-tagged rows asymmetrically.
   DELETE FROM project_semgrep_findings
   WHERE project_id = p_project_id
+    AND extraction_run_id IS NOT NULL
     AND extraction_run_id <> v_active
     AND (v_previous IS NULL OR extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_semgrep_deleted = ROW_COUNT;
 
   DELETE FROM project_secret_findings
   WHERE project_id = p_project_id
+    AND extraction_run_id IS NOT NULL
     AND extraction_run_id <> v_active
     AND (v_previous IS NULL OR extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_secret_deleted = ROW_COUNT;
 
   DELETE FROM project_reachable_flows
   WHERE project_id = p_project_id
+    AND extraction_run_id IS NOT NULL
     AND extraction_run_id <> v_active
     AND (v_previous IS NULL OR extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_flows_deleted = ROW_COUNT;
 
   DELETE FROM project_usage_slices
   WHERE project_id = p_project_id
+    AND extraction_run_id IS NOT NULL
     AND extraction_run_id <> v_active
     AND (v_previous IS NULL OR extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_slices_deleted = ROW_COUNT;

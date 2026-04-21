@@ -8,6 +8,7 @@ import {
   CACHE_TTL_SECONDS,
 } from './cache';
 import { getVulnCountsForVersionsBatch, getVulnCountsBatch, exceedsThreshold as vulnExceedsThreshold } from '../lib/vuln-counts';
+import { getActiveExtractionId, NO_ACTIVE_RUN } from './active-extraction';
 
 export interface LatestSafeVersionResponse {
   safeVersion: string | null;
@@ -66,12 +67,13 @@ export async function calculateLatestSafeVersion(
     }
   }
 
-  // 1. Get current dependency version from project_dependency
+  // 1. Get current dependency version from project_dependency (must be live, not soft-deleted)
   const { data: pd, error: pdError } = await supabase
     .from('project_dependencies')
     .select('id, name, version, dependency_version_id')
     .eq('id', projectDependencyId)
     .eq('project_id', projectId)
+    .is('removed_at', null)
     .single();
 
   if (pdError || !pd) {
@@ -182,11 +184,15 @@ export async function calculateLatestSafeVersion(
     }
   }
 
-  // Try "newer safer version" from current reachable vulns with fixes (project context)
+  // Try "newer safer version" from current reachable vulns with fixes (project context).
+  // Phase 19: filter to the active extraction run so we don't recommend versions
+  // based on stale findings from prior runs still living in the DB until reaped.
+  const activeRunId = (await getActiveExtractionId(supabase, projectId)) ?? NO_ACTIVE_RUN;
   const { data: pdvRows } = await supabase
     .from('project_dependency_vulnerabilities')
     .select('osv_id, severity, fixed_versions')
     .eq('project_dependency_id', projectDependencyId)
+    .eq('extraction_run_id', activeRunId)
     .eq('is_reachable', true);
 
   if (pdvRows && pdvRows.length > 0) {

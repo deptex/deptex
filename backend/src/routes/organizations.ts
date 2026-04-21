@@ -12,7 +12,7 @@ import { updateAllProjectsCompliance } from './projects';
 import { invalidateAllProjectCachesInOrg, invalidateProjectCachesForTeam, getCached, setCached } from '../lib/cache';
 import { seedOrganizationPolicyDefaults } from '../lib/policy-seed';
 import { emitEvent } from '../lib/event-bus';
-import { getActiveExtractionId } from '../lib/active-extraction';
+import { getActiveExtractionId, getActiveExtractionIds } from '../lib/active-extraction';
 
 const router = express.Router();
 
@@ -3353,21 +3353,29 @@ router.post('/:id/sla-policies/disable', async (req: AuthRequest, res) => {
 
     const ids = (projectIds ?? []).map((p: { id: string }) => p.id);
     if (ids.length > 0) {
-      const { error: clearErr } = await supabase
-        .from('project_dependency_vulnerabilities')
-        .update({
-          detected_at: null,
-          sla_deadline_at: null,
-          sla_warning_at: null,
-          sla_status: null,
-          sla_breached_at: null,
-          sla_met_at: null,
-          sla_exempt_reason: null,
-          sla_warning_notified_at: null,
-          sla_breach_notified_at: null,
-        })
-        .in('project_id', ids);
-      if (clearErr) throw clearErr;
+      // Phase 19: only clear SLA state on the ACTIVE extraction run's PDVs.
+      // Without this filter, the UPDATE would scrub historical SLA metadata
+      // from rows tagged with prior runIds (still in DB until reaped),
+      // permanently corrupting the audit trail.
+      const activeRunIds = await getActiveExtractionIds(supabase, ids);
+      if (activeRunIds.length > 0) {
+        const { error: clearErr } = await supabase
+          .from('project_dependency_vulnerabilities')
+          .update({
+            detected_at: null,
+            sla_deadline_at: null,
+            sla_warning_at: null,
+            sla_status: null,
+            sla_breached_at: null,
+            sla_met_at: null,
+            sla_exempt_reason: null,
+            sla_warning_notified_at: null,
+            sla_breach_notified_at: null,
+          })
+          .in('project_id', ids)
+          .in('extraction_run_id', activeRunIds);
+        if (clearErr) throw clearErr;
+      }
     }
 
     const { error: deleteErr } = await supabase

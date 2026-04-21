@@ -1654,7 +1654,14 @@ export async function runPipeline(
           p_project_id: projectId,
           p_extraction_run_id: runId,
         }),
-        2 * 60_000,
+        // 10min budget. Finalize does mark-removed + carry-forward + trigger
+        // detection + lifecycle events + SLA computation + pointer flip + reap
+        // in a single transaction. For projects with 100k+ PDVs the carry-
+        // forward / reap stages can legitimately take minutes on shared
+        // Supabase infra. Original 2min budget caused premature timeouts on
+        // large monorepos, leaving the active_extraction_run_id pointer
+        // un-flipped and findings invisible until the next successful run.
+        10 * 60_000,
         'finalize'
       );
       if (finalizeErr) {

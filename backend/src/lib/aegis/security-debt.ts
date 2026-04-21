@@ -3,6 +3,7 @@
  * Requires security_debt_snapshots table (phase7b_aegis_platform.sql).
  */
 import { supabase } from '../../lib/supabase';
+import { getActiveExtractionIds } from '../active-extraction';
 
 const VULN_WEIGHTS: Record<string, number> = {
   critical: 10,
@@ -54,13 +55,20 @@ export async function computeDebtScore(
     };
   }
 
+  // Phase 19: resolve active runIds once and thread them into the per-component
+  // queries that read from soft-switched finding tables. Without this, debt
+  // aggregations included stale rows from prior extractions still living in the
+  // DB until reaped, inflating debt scores and skewing Aegis automation
+  // decisions (sprint planning, PR review priority, etc).
+  const activeRunIds = await getActiveExtractionIds(supabase, projectIds);
+
   const [vulnPoints, compliancePoints, stalePoints, codePoints, secretPoints] =
     await Promise.all([
-      getVulnDebtPoints(projectIds),
+      getVulnDebtPoints(projectIds, activeRunIds),
       getComplianceDebtPoints(projectIds),
       getStaleDebtPoints(projectIds),
-      getCodeIssuesDebtPoints(projectIds),
-      getSecretsDebtPoints(projectIds),
+      getCodeIssuesDebtPoints(projectIds, activeRunIds),
+      getSecretsDebtPoints(projectIds, activeRunIds),
     ]);
 
   const score = Math.min(
@@ -88,11 +96,13 @@ async function getOrgProjectIds(organizationId: string): Promise<string[]> {
   return (data ?? []).map((r: { id: string }) => r.id);
 }
 
-async function getVulnDebtPoints(projectIds: string[]): Promise<number> {
+async function getVulnDebtPoints(projectIds: string[], activeRunIds: string[]): Promise<number> {
+  if (activeRunIds.length === 0) return 0;
   const { data } = await supabase
     .from('project_dependency_vulnerabilities')
     .select('severity')
     .in('project_id', projectIds)
+    .in('extraction_run_id', activeRunIds)
     .eq('suppressed', false)
     .eq('risk_accepted', false);
 
@@ -108,7 +118,8 @@ async function getComplianceDebtPoints(projectIds: string[]): Promise<number> {
   const { data } = await supabase
     .from('project_dependencies')
     .select('policy_result')
-    .in('project_id', projectIds);
+    .in('project_id', projectIds)
+    .is('removed_at', null);
 
   let count = 0;
   for (const d of data ?? []) {
@@ -122,7 +133,8 @@ async function getStaleDebtPoints(projectIds: string[]): Promise<number> {
   const { data } = await supabase
     .from('project_dependencies')
     .select('is_outdated')
-    .in('project_id', projectIds);
+    .in('project_id', projectIds)
+    .is('removed_at', null);
 
   let count = 0;
   for (const d of data ?? []) {
@@ -131,11 +143,13 @@ async function getStaleDebtPoints(projectIds: string[]): Promise<number> {
   return count * STALE_DEP_WEIGHT;
 }
 
-async function getCodeIssuesDebtPoints(projectIds: string[]): Promise<number> {
+async function getCodeIssuesDebtPoints(projectIds: string[], activeRunIds: string[]): Promise<number> {
+  if (activeRunIds.length === 0) return 0;
   const { data } = await supabase
     .from('project_semgrep_findings')
     .select('severity')
-    .in('project_id', projectIds);
+    .in('project_id', projectIds)
+    .in('extraction_run_id', activeRunIds);
 
   let points = 0;
   for (const f of data ?? []) {
@@ -145,13 +159,15 @@ async function getCodeIssuesDebtPoints(projectIds: string[]): Promise<number> {
   return points;
 }
 
-async function getSecretsDebtPoints(projectIds: string[]): Promise<number> {
+async function getSecretsDebtPoints(projectIds: string[], activeRunIds: string[]): Promise<number> {
+  if (activeRunIds.length === 0) return 0;
   const hasIsCurrent = await checkSecretsHasIsCurrent();
 
   let query = supabase
     .from('project_secret_findings')
     .select('id')
-    .in('project_id', projectIds);
+    .in('project_id', projectIds)
+    .in('extraction_run_id', activeRunIds);
 
   if (hasIsCurrent) {
     query = query.eq('is_current', true);
