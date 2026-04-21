@@ -18,7 +18,7 @@ export function LandingHero({ name, onSubmit, onSelectPrompt }: LandingHeroProps
           </h1>
         </div>
 
-        <div className="rounded-2xl bg-background-subtle border border-border/30">
+        <div className="rounded-2xl bg-background-card border border-border/30">
           <ChatInput onSubmit={onSubmit} autoFocus />
         </div>
 
