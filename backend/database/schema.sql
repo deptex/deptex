@@ -4253,24 +4253,28 @@ BEGIN
 
   DELETE FROM project_semgrep_findings
   WHERE project_id = p_project_id
+    AND extraction_run_id IS NOT NULL
     AND extraction_run_id <> v_active
     AND (v_previous IS NULL OR extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_semgrep_deleted = ROW_COUNT;
 
   DELETE FROM project_secret_findings
   WHERE project_id = p_project_id
+    AND extraction_run_id IS NOT NULL
     AND extraction_run_id <> v_active
     AND (v_previous IS NULL OR extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_secret_deleted = ROW_COUNT;
 
   DELETE FROM project_reachable_flows
   WHERE project_id = p_project_id
+    AND extraction_run_id IS NOT NULL
     AND extraction_run_id <> v_active
     AND (v_previous IS NULL OR extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_flows_deleted = ROW_COUNT;
 
   DELETE FROM project_usage_slices
   WHERE project_id = p_project_id
+    AND extraction_run_id IS NOT NULL
     AND extraction_run_id <> v_active
     AND (v_previous IS NULL OR extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_slices_deleted = ROW_COUNT;
