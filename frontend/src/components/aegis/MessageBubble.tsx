@@ -1,5 +1,5 @@
 import type { UIMessage } from 'ai';
-import { User, Sparkles, Pencil, Check, X } from 'lucide-react';
+import { User, MessageSquare, Pencil, Check, X } from 'lucide-react';
 import { useState, type KeyboardEvent } from 'react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ToolCallCard } from './ToolCallCard';
@@ -76,7 +76,7 @@ export function MessageBubble({ message, currentUserId, participantNames, onEdit
               : 'bg-background-card border-border text-foreground/80',
           )}
         >
-          {isUser ? <User className="h-3.5 w-3.5" /> : <Sparkles className="h-3.5 w-3.5" />}
+          {isUser ? <User className="h-3.5 w-3.5" /> : <MessageSquare className="h-3.5 w-3.5" />}
         </div>
         <div className="flex-1 min-w-0 pt-0.5">
           <div className="text-xs font-medium text-foreground/70 mb-1">{authorName}</div>

@@ -232,9 +232,6 @@ export function ThreadList({
             ))}
           </div>
         )}
-        {!loading && threads.length === 0 && (
-          <p className="px-2 py-4 text-xs text-foreground/60">No chats yet.</p>
-        )}
 
         {pinned.length > 0 && (
           <>

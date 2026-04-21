@@ -1,6 +1,6 @@
 import { memo, useState, useMemo, useEffect } from 'react';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
-import { LayoutDashboard, Scale, ShieldAlert, Settings, Plus, Loader2, User, BookOpen, Mail, LogOut, Sparkles } from 'lucide-react';
+import { LayoutDashboard, Scale, ShieldAlert, Settings, Plus, Loader2, User, BookOpen, Mail, LogOut, MessageSquare } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { RolePermissions, Team, Project, api } from '../lib/api';
 import { useToast } from '../hooks/use-toast';
@@ -53,7 +53,7 @@ type NavItemDef = {
 
 const allNavItems: NavItemDef[] = [
   { id: 'overview', label: 'Overview', path: 'overview', icon: LayoutDashboard, requiredPermission: null },
-  { id: 'aegis', label: 'Aegis', path: 'aegis', icon: Sparkles, requiredPermission: 'interact_with_aegis' },
+  { id: 'aegis', label: 'Aegis', path: 'aegis', icon: MessageSquare, requiredPermission: 'interact_with_aegis' },
   { id: 'vulnerabilities', label: 'Vulnerabilities', path: 'vulnerabilities', icon: ShieldAlert, requiredPermission: null },
   { id: 'compliance', label: 'Compliance', path: 'compliance', icon: Scale, requiredPermission: null },
   // Settings visible to all org members; each tab inside is gated by its own permission
