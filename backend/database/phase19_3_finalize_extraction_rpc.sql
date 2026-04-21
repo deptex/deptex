@@ -106,7 +106,15 @@ BEGIN
         re_review_triggered_at = old_data.re_review_triggered_at,
         re_review_reasons = old_data.re_review_reasons
       FROM (
-        SELECT
+        -- Bug-002 fix: pick exactly one old source row per new target
+        -- (new_pd_id, osv_id) pair. Prior code joined by (project_id, name)
+        -- alone, which in monorepos with the same dep at multiple versions
+        -- (or same name as direct+transitive / prod+dev) produced N×M rows;
+        -- Postgres' UPDATE…FROM then picked one arbitrarily, silently swapping
+        -- suppression/SLA/re_review state between PDVs. DISTINCT ON preserves
+        -- version-bump carry-forward (name match still fires when UUIDs differ)
+        -- while enforcing uniqueness of the source row per target.
+        SELECT DISTINCT ON (npd.id, opdv.osv_id)
           npd.id AS new_pd_id,
           opdv.osv_id,
           opdv.status, opdv.suppressed, opdv.suppressed_by, opdv.suppressed_at,
@@ -124,6 +132,11 @@ BEGIN
          AND npd.last_seen_extraction_run_id = p_extraction_run_id
         WHERE opdv.project_id = p_project_id
           AND opdv.extraction_run_id = v_prev_active
+        ORDER BY
+          npd.id, opdv.osv_id,
+          (npd.id = opd.id) DESC,            -- 1. exact UUID match wins
+          (npd.version = opd.version) DESC,  -- 2. same version next
+          opdv.detected_at ASC NULLS LAST    -- 3. oldest detection (stable)
       ) AS old_data
       WHERE new_pdv.project_id = p_project_id
         AND new_pdv.extraction_run_id = p_extraction_run_id
@@ -134,8 +147,22 @@ BEGIN
     SELECT COUNT(*) INTO v_pdv_carried FROM carried;
 
     IF v_enabled THEN
+      -- Bug-001 fix: trigger_calc uses DISTINCT ON (npdv.id) to pick exactly
+      -- one old (opd, old_pdv) pair per new PDV. Prior code filtered via
+      -- "opd.last_seen IS DISTINCT FROM current_run", which silently excluded
+      -- every same-version dep (the upsert updates the single PD row in place
+      -- so its last_seen advances to the current run) — so triggers never
+      -- fired for the most common re-review case: unchanged dep, drifted CVE
+      -- metadata. The rewritten join matches by (project_id, name) and ranks
+      -- by (UUID match, same version) so version-bump triggers still fire
+      -- and monorepo multi-version cases pick a deterministic winner.
+      --
+      -- Known limitation: same-version case has opd.id = npd.id, so r_direct
+      -- and r_env never fire (is_direct/environment on the same row are
+      -- always equal). Detecting cross-run is_direct/environment changes on
+      -- an unchanged dep needs per-run snapshotting — tracked as follow-up.
       WITH trigger_calc AS (
-        SELECT
+        SELECT DISTINCT ON (npdv.id)
           npdv.id AS pdv_id,
           npdv.osv_id,
           CASE
@@ -192,7 +219,6 @@ BEGIN
         JOIN project_dependencies opd
           ON opd.project_id = npd.project_id
          AND opd.name = npd.name
-         AND opd.last_seen_extraction_run_id IS DISTINCT FROM p_extraction_run_id
         JOIN project_dependency_vulnerabilities old_pdv
           ON old_pdv.project_id = p_project_id
          AND old_pdv.project_dependency_id = opd.id
@@ -200,6 +226,11 @@ BEGIN
          AND old_pdv.extraction_run_id = v_prev_active
         WHERE npdv.project_id = p_project_id
           AND npdv.extraction_run_id = p_extraction_run_id
+        ORDER BY
+          npdv.id,
+          (opd.id = npd.id) DESC,            -- 1. exact UUID match wins
+          (opd.version = npd.version) DESC,  -- 2. same version next
+          old_pdv.detected_at ASC NULLS LAST -- 3. oldest detection (stable)
       ),
       new_reasons AS (
         SELECT pdv_id, osv_id,

@@ -347,6 +347,128 @@ async function testReapOldRuns(): Promise<void> {
 }
 
 // -----------------------------------------------------------------------------
+// Test 7: Monorepo — same dep name at two versions, suppressions don't swap
+//
+// Regression for Bug-002: prior code joined old→new PDs by (project_id, name)
+// only, so with lodash@4.17.20 AND lodash@4.17.21 in both runs the carry-forward
+// subquery produced N×M rows and Postgres' UPDATE…FROM picked one arbitrarily
+// per target, silently swapping suppression state between the two PDs.
+// -----------------------------------------------------------------------------
+async function testMonorepoMultiVersionNoCrossSwap(): Promise<void> {
+  console.log('\nTest 7: monorepo two-version — suppressions stay on the right PD');
+  const db = await bootDb();
+  const PREV_RUN = 'run_prev';
+  const NEW_RUN = 'run_new';
+  await seedOrgAndProject(db, PREV_RUN);
+
+  const PD_20 = '11111111-1111-1111-1111-111111111111';
+  const PD_21 = '22222222-2222-2222-2222-222222222222';
+  const ALICE = '33333333-3333-3333-3333-333333333333';
+
+  // Both PDs exist in prev AND new runs — UUIDs stable across runs (the
+  // upsert conflict key is (project_id, name, version, is_direct, source)).
+  await db.exec(`
+    INSERT INTO project_dependencies (id, project_id, name, version, is_direct, source, last_seen_extraction_run_id, created_at)
+    VALUES
+      ('${PD_20}', '${PROJECT_ID}', 'lodash', '4.17.20', true, 'dependencies', '${NEW_RUN}', NOW()),
+      ('${PD_21}', '${PROJECT_ID}', 'lodash', '4.17.21', true, 'dependencies', '${NEW_RUN}', NOW());
+  `);
+
+  // Prev run: PD_20's PDV is suppressed by Alice; PD_21's is not.
+  await db.exec(`
+    INSERT INTO project_dependency_vulnerabilities
+      (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, suppressed, suppressed_by, suppressed_at, detected_at, created_at)
+    VALUES
+      ('${PROJECT_ID}', '${PD_20}', 'CVE-2021-23337', 'high', '${PREV_RUN}', 'open', true,  '${ALICE}', NOW(), NOW(), NOW()),
+      ('${PROJECT_ID}', '${PD_21}', 'CVE-2021-23337', 'high', '${PREV_RUN}', 'open', false, NULL,      NULL,  NOW(), NOW());
+  `);
+
+  // New run: both PDVs re-inserted with default (unsuppressed) state.
+  await db.exec(`
+    INSERT INTO project_dependency_vulnerabilities
+      (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, suppressed, detected_at, created_at)
+    VALUES
+      ('${PROJECT_ID}', '${PD_20}', 'CVE-2021-23337', 'high', '${NEW_RUN}', 'open', false, NOW(), NOW()),
+      ('${PROJECT_ID}', '${PD_21}', 'CVE-2021-23337', 'high', '${NEW_RUN}', 'open', false, NOW(), NOW());
+  `);
+
+  await callFinalize(db, NEW_RUN);
+
+  const { rows } = await db.query<{ project_dependency_id: string; suppressed: boolean; suppressed_by: string | null }>(
+    `SELECT project_dependency_id, suppressed, suppressed_by
+     FROM project_dependency_vulnerabilities
+     WHERE project_id = $1 AND extraction_run_id = $2
+     ORDER BY project_dependency_id`,
+    [PROJECT_ID, NEW_RUN],
+  );
+  const byPd = Object.fromEntries(rows.map((r) => [r.project_dependency_id, r]));
+  assert(byPd[PD_20]?.suppressed === true, 'PD_20 (originally suppressed) stays suppressed');
+  assert(byPd[PD_20]?.suppressed_by === ALICE, 'PD_20 suppressed_by preserved');
+  assert(byPd[PD_21]?.suppressed === false, 'PD_21 (originally unsuppressed) stays unsuppressed (NO cross-swap)');
+  assert(byPd[PD_21]?.suppressed_by === null, 'PD_21 has no suppressed_by (NO cross-swap)');
+
+  await db.close();
+}
+
+// -----------------------------------------------------------------------------
+// Test 8: Unchanged version — severity escalation fires for same PD across runs
+//
+// Regression for Bug-001: prior code filtered opd via
+// "last_seen_extraction_run_id IS DISTINCT FROM current_run", which for
+// unchanged-version deps (upsert updates row in place, advancing last_seen
+// to current run) silently excluded every candidate — so triggers never fired
+// for the most common re-review case: stable installed version, drifted CVE
+// severity.
+// -----------------------------------------------------------------------------
+async function testUnchangedVersionSeverityEscalationFires(): Promise<void> {
+  console.log('\nTest 8: unchanged-version severity escalation fires (same PD UUID across runs)');
+  const db = await bootDb();
+  const PREV_RUN = 'run_prev';
+  const NEW_RUN = 'run_new';
+  await seedOrgAndProject(db, PREV_RUN);
+
+  const PD_ID = '11111111-1111-1111-1111-111111111111';
+
+  // Single PD row — same UUID across runs, last_seen advances to current run
+  // (simulating the upsert's in-place update for unchanged-version deps).
+  await db.exec(`
+    INSERT INTO project_dependencies (id, project_id, name, version, is_direct, source, last_seen_extraction_run_id, created_at)
+    VALUES ('${PD_ID}', '${PROJECT_ID}', 'lodash', '4.17.21', true, 'dependencies', '${NEW_RUN}', NOW());
+  `);
+
+  // Prev run: CVE at severity=low. New run: OSV reclassified to critical.
+  await db.exec(`
+    INSERT INTO project_dependency_vulnerabilities
+      (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, detected_at, created_at)
+    VALUES
+      ('${PROJECT_ID}', '${PD_ID}', 'CVE-2021-23337', 'low',      '${PREV_RUN}', 'open', NOW(), NOW()),
+      ('${PROJECT_ID}', '${PD_ID}', 'CVE-2021-23337', 'critical', '${NEW_RUN}',  'open', NOW(), NOW());
+  `);
+
+  const summary = await callFinalize(db, NEW_RUN);
+  assert((summary.vulns_re_review_fired as number) >= 1, 'summary reports >=1 re-review fired for unchanged dep');
+
+  const { rows } = await db.query<{ re_review_triggered_at: string | null; re_review_reasons: any }>(
+    `SELECT re_review_triggered_at, re_review_reasons
+     FROM project_dependency_vulnerabilities
+     WHERE project_id = $1 AND extraction_run_id = $2`,
+    [PROJECT_ID, NEW_RUN],
+  );
+  assert(rows[0]?.re_review_triggered_at !== null, 're_review_triggered_at set for unchanged dep');
+  const reasons = Array.isArray(rows[0]?.re_review_reasons) ? rows[0].re_review_reasons : [];
+  const triggers = reasons.map((r: any) => r?.trigger).filter(Boolean);
+  assert(triggers.includes('severity_escalation'), `severity_escalation fires (got: ${JSON.stringify(triggers)})`);
+
+  const events = await db.query<{ event_type: string }>(
+    `SELECT event_type FROM project_vulnerability_events WHERE project_id = $1 AND event_type = 'rereview_triggered'`,
+    [PROJECT_ID],
+  );
+  assert(events.rows.length >= 1, 'rereview_triggered event written');
+
+  await db.close();
+}
+
+// -----------------------------------------------------------------------------
 async function main() {
   const t0 = Date.now();
   const tests = [
@@ -356,6 +478,8 @@ async function main() {
     testSeverityEscalationTrigger,
     testFirstRunDetectedEvents,
     testReapOldRuns,
+    testMonorepoMultiVersionNoCrossSwap,
+    testUnchangedVersionSeverityEscalationFires,
   ];
 
   for (const t of tests) {
