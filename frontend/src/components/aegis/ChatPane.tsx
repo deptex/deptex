@@ -8,7 +8,7 @@ import { ChatInput } from './ChatInput';
 import { ParticipantsPanel } from './ParticipantsPanel';
 import { AddPeopleModal } from './AddPeopleModal';
 import { TypingIndicator } from './TypingIndicator';
-import { Loader2, Users } from 'lucide-react';
+import { Users } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -289,46 +289,56 @@ export function ChatPane({ threadId, organizationId, thread, currentUserId, init
         </div>
       )}
       <div className="flex-1 overflow-y-auto">
-        {seed === null && !seedError && (
-          <div className="flex h-full items-center justify-center text-sm text-foreground/60">
-            <Loader2 className="h-4 w-4 animate-spin mr-2" /> Loading…
-          </div>
-        )}
         {seedError && (
           <div className="flex h-full items-center justify-center text-sm text-red-500">{seedError}</div>
         )}
-        {seed !== null && (
-          <div className="py-4">
-            {messages.map((m) => (
+        <div className="py-4">
+          {/* While real messages are loading and an initialMessage exists, show it
+              provisionally so the user sees their text immediately with no blank flash. */}
+          {(() => {
+            const hasReal = messages.length > 0;
+            const display: UIMessage[] = hasReal ? messages : (
+              initialMessage ? [{
+                id: 'provisional',
+                role: 'user',
+                parts: [{ type: 'text', text: initialMessage }],
+                userId: currentUserId,
+              } as unknown as UIMessage] : []
+            );
+            return display.map((m) => (
               <MessageBubble
                 key={m.id}
                 message={m}
                 currentUserId={currentUserId}
                 participantNames={participantNames}
                 disabled={isStreaming}
-                onEdit={m.role === 'user' && (m as any).userId === currentUserId ? (newText) => void handleEdit(m.id, newText) : undefined}
+                onEdit={m.id !== 'provisional' && m.role === 'user' && (m as any).userId === currentUserId ? (newText) => void handleEdit(m.id, newText) : undefined}
               />
-            ))}
-            {isStreaming && messages[messages.length - 1]?.role === 'user' && (
-              <div className="px-4 py-3">
-                <div className="mx-auto max-w-3xl flex gap-3 items-center text-sm text-foreground/60">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Thinking…
-                </div>
+            ));
+          })()}
+          {isStreaming && messages[messages.length - 1]?.role === 'user' && (
+            <div className="px-4 py-3">
+              <div className="mx-auto max-w-3xl flex gap-3 items-center text-sm text-foreground/60">
+                <span className="flex gap-1">
+                  <span className="h-1.5 w-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:0ms]" />
+                  <span className="h-1.5 w-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:150ms]" />
+                  <span className="h-1.5 w-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:300ms]" />
+                </span>
               </div>
-            )}
-            {error && (
-              <div className="px-4 py-3">
-                <div className="mx-auto max-w-3xl text-sm text-red-500">
-                  {error.message || 'Something went wrong.'}
-                </div>
+            </div>
+          )}
+          {error && (
+            <div className="px-4 py-3">
+              <div className="mx-auto max-w-3xl text-sm text-red-500">
+                {error.message || 'Something went wrong.'}
               </div>
-            )}
-            <TypingIndicator
-              users={Object.entries(typingUsers).map(([userId, entry]) => ({ userId, displayName: entry.displayName }))}
-            />
-            <div ref={bottomRef} />
-          </div>
-        )}
+            </div>
+          )}
+          <TypingIndicator
+            users={Object.entries(typingUsers).map(([userId, entry]) => ({ userId, displayName: entry.displayName }))}
+          />
+          <div ref={bottomRef} />
+        </div>
       </div>
       <ChatInput onSubmit={handleSubmit} onChange={handleInputChange} disabled={isStreaming} autoFocus />
 
