@@ -1,5 +1,5 @@
 import { useMemo, useState, type KeyboardEvent } from 'react';
-import { MoreHorizontal, SquarePen, Search, Pencil, Trash2, Loader2, Pin, PinOff, Archive, ArchiveRestore } from 'lucide-react';
+import { MoreHorizontal, SquarePen, Search, Pencil, Trash2, Loader2, Pin, PinOff, Archive, ArchiveRestore, Users, LogOut, KeyRound } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -28,6 +28,9 @@ interface ThreadListProps {
   onDelete: (threadId: string) => Promise<void>;
   onSetPinned: (threadId: string, pinned: boolean) => Promise<void>;
   onSetArchived: (threadId: string, archived: boolean) => Promise<void>;
+  onLeave: (threadId: string) => Promise<void>;
+  onOpenJoinByCode: () => void;
+  onOpenSearch: () => void;
 }
 
 export function ThreadList({
@@ -40,33 +43,26 @@ export function ThreadList({
   onDelete,
   onSetPinned,
   onSetArchived,
+  onLeave,
+  onOpenJoinByCode,
+  onOpenSearch,
 }: ThreadListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [confirmLeaveId, setConfirmLeaveId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [query, setQuery] = useState('');
+  const [leaving, setLeaving] = useState(false);
 
-  const isSearching = query.trim().length > 0;
-
-  const { pinned, recents, archivedMatches } = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const match = (t: AegisThread) => !q || t.title.toLowerCase().includes(q);
-    const all = threads.filter(match);
-    const pinned = all.filter((t) => t.pinnedAt && !t.archivedAt);
-    const recents = all.filter((t) => !t.pinnedAt && !t.archivedAt);
-    // Archived only surfaced while searching.
-    const archivedMatches = q ? all.filter((t) => t.archivedAt) : [];
-    // Pinned sort: most-recently pinned first. Recents: most-recently updated.
+  const { pinned, recents } = useMemo(() => {
+    const pinned = threads.filter((t) => t.pinnedAt && !t.archivedAt);
+    const recents = threads.filter((t) => !t.pinnedAt && !t.archivedAt);
     pinned.sort((a, b) => (b.pinnedAt ?? '').localeCompare(a.pinnedAt ?? ''));
     recents.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    archivedMatches.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    return { pinned, recents, archivedMatches };
-  }, [threads, query]);
+    return { pinned, recents };
+  }, [threads]);
 
-  const totalVisible = pinned.length + recents.length + archivedMatches.length;
-
-  const renderRow = (thread: AegisThread, opts?: { archivedBadge?: boolean }) => {
+  const renderRow = (thread: AegisThread) => {
     const isActive = thread.id === activeThreadId;
     const isEditing = thread.id === editingId;
     const isPinned = !!thread.pinnedAt;
@@ -92,13 +88,16 @@ export function ThreadList({
           <button
             type="button"
             onClick={() => onSelect(thread.id)}
-            className={cn(
-              'w-full text-left px-3 py-2 text-sm truncate pr-8 flex items-center gap-2',
-              opts?.archivedBadge ? 'text-foreground/60 italic' : 'text-foreground/90',
-            )}
+            className="w-full text-left px-3 py-2 text-sm truncate pr-8 flex items-center gap-2 text-foreground/90"
             title={thread.title}
           >
             <span className="truncate">{thread.title}</span>
+            {thread.participantCount > 1 && (
+              <Users
+                className="h-3 w-3 flex-shrink-0 text-foreground/40"
+                aria-label={`${thread.participantCount} participants`}
+              />
+            )}
           </button>
         )}
         {!isEditing && (
@@ -114,10 +113,12 @@ export function ThreadList({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-40">
-              <DropdownMenuItem onClick={() => beginRename(thread)}>
-                <Pencil className="h-4 w-4 mr-2" />
-                Rename
-              </DropdownMenuItem>
+              {thread.isCreator && (
+                <DropdownMenuItem onClick={() => beginRename(thread)}>
+                  <Pencil className="h-4 w-4 mr-2" />
+                  Rename
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onClick={() => void onSetPinned(thread.id, !isPinned)}>
                 {isPinned ? <PinOff className="h-4 w-4 mr-2" /> : <Pin className="h-4 w-4 mr-2" />}
                 {isPinned ? 'Unpin' : 'Pin'}
@@ -126,13 +127,23 @@ export function ThreadList({
                 {isArchived ? <ArchiveRestore className="h-4 w-4 mr-2" /> : <Archive className="h-4 w-4 mr-2" />}
                 {isArchived ? 'Unarchive' : 'Archive'}
               </DropdownMenuItem>
-              <DropdownMenuItem
-                className="text-red-500 focus:text-red-500"
-                onClick={() => setConfirmDeleteId(thread.id)}
-              >
-                <Trash2 className="h-4 w-4 mr-2" />
-                Delete
-              </DropdownMenuItem>
+              {thread.isCreator ? (
+                <DropdownMenuItem
+                  className="text-red-500 focus:text-red-500"
+                  onClick={() => setConfirmDeleteId(thread.id)}
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem
+                  className="text-red-500 focus:text-red-500"
+                  onClick={() => setConfirmLeaveId(thread.id)}
+                >
+                  <LogOut className="h-4 w-4 mr-2" />
+                  Leave
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}
@@ -172,6 +183,18 @@ export function ThreadList({
     }
   };
 
+  const confirmLeave = async () => {
+    if (!confirmLeaveId) return;
+    const id = confirmLeaveId;
+    setLeaving(true);
+    try {
+      await onLeave(id);
+      setConfirmLeaveId(null);
+    } finally {
+      setLeaving(false);
+    }
+  };
+
   return (
     <div className="flex h-full flex-col">
       <div className="px-2 pt-3 pb-1 space-y-1">
@@ -183,16 +206,22 @@ export function ThreadList({
           <SquarePen className="h-4 w-4" />
           New chat
         </button>
-        <div className="relative px-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-foreground/40 pointer-events-none" />
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search chats"
-            className="w-full rounded-md bg-background-subtle/60 pl-8 pr-3 py-1.5 text-xs text-foreground placeholder:text-foreground/40 outline-none focus:bg-background-subtle"
-          />
-        </div>
+        <button
+          type="button"
+          onClick={onOpenSearch}
+          className="w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm text-foreground/90 hover:bg-background-subtle/60 transition-colors"
+        >
+          <Search className="h-4 w-4" />
+          Search chats
+        </button>
+        <button
+          type="button"
+          onClick={onOpenJoinByCode}
+          className="w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm text-foreground/90 hover:bg-background-subtle/60 transition-colors"
+        >
+          <KeyRound className="h-4 w-4" />
+          Join by code
+        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 pb-2">
@@ -205,9 +234,6 @@ export function ThreadList({
         )}
         {!loading && threads.length === 0 && (
           <p className="px-2 py-4 text-xs text-foreground/60">No chats yet.</p>
-        )}
-        {!loading && threads.length > 0 && totalVisible === 0 && (
-          <p className="px-2 py-4 text-xs text-foreground/60">No matches.</p>
         )}
 
         {pinned.length > 0 && (
@@ -232,17 +258,26 @@ export function ThreadList({
           </>
         )}
 
-        {isSearching && archivedMatches.length > 0 && (
-          <>
-            <div className="px-3 pt-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-foreground/40">
-              Archived
-            </div>
-            <div className="space-y-0.5">
-              {archivedMatches.map((t) => renderRow(t, { archivedBadge: true }))}
-            </div>
-          </>
-        )}
       </div>
+
+      <Dialog open={!!confirmLeaveId} onOpenChange={(open) => !open && !leaving && setConfirmLeaveId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Leave chat?</DialogTitle>
+            <DialogDescription>
+              You'll no longer see new messages in this chat. You can rejoin with an invite code.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setConfirmLeaveId(null)} disabled={leaving}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmLeave} disabled={leaving}>
+              {leaving ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Leaving…</> : 'Leave'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!confirmDeleteId} onOpenChange={(open) => !open && !deleting && setConfirmDeleteId(null)}>
         <DialogContent>

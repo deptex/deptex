@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { aegisApi, type AegisThread } from '../../lib/aegis-api';
 import type { Organization } from '../../lib/api';
 import { ThreadList } from '../../components/aegis/ThreadList';
 import { LandingHero } from '../../components/aegis/LandingHero';
 import { ChatPane } from '../../components/aegis/ChatPane';
+import { JoinByCodeModal } from '../../components/aegis/JoinByCodeModal';
+import { SearchChatsModal } from '../../components/aegis/SearchChatsModal';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
 
@@ -30,6 +32,12 @@ export default function AegisPage() {
 
   const [threads, setThreads] = useState<AegisThread[]>([]);
   const [loading, setLoading] = useState(true);
+  const [joinByCodeOpen, setJoinByCodeOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const activeThread = useMemo(
+    () => threads.find((t) => t.id === activeThreadId) ?? null,
+    [threads, activeThreadId],
+  );
 
   // Capture initialMessage once per thread navigation so it isn't resent on re-renders.
   const consumedInitialRef = useRef<string | null>(null);
@@ -147,6 +155,30 @@ export default function AegisPage() {
     }
   }, [activeThreadId, orgId, navigate, toast]);
 
+  const handleLeave = useCallback(async (threadId: string) => {
+    if (!user) return;
+    let snapshot: AegisThread[] = [];
+    setThreads((prev) => {
+      snapshot = prev;
+      return prev.filter((t) => t.id !== threadId);
+    });
+    if (activeThreadId === threadId && orgId) {
+      navigate(`/organizations/${orgId}/aegis`, { replace: true });
+    }
+    try {
+      await aegisApi.removeParticipant(threadId, user.id);
+    } catch (err: any) {
+      setThreads(snapshot);
+      toast({ title: 'Leave failed', description: err?.message, variant: 'destructive' });
+    }
+  }, [activeThreadId, orgId, navigate, toast, user]);
+
+  const handleJoined = useCallback((threadId: string) => {
+    if (!orgId) return;
+    refreshThreads();
+    navigate(`/organizations/${orgId}/aegis/${threadId}`);
+  }, [orgId, navigate, refreshThreads]);
+
   const handleDelete = useCallback(async (threadId: string) => {
     // Optimistic — remove locally and navigate away, rollback on failure.
     let snapshot: AegisThread[] = [];
@@ -207,6 +239,9 @@ export default function AegisPage() {
           onDelete={handleDelete}
           onSetPinned={handleSetPinned}
           onSetArchived={handleSetArchived}
+          onLeave={handleLeave}
+          onOpenJoinByCode={() => setJoinByCodeOpen(true)}
+          onOpenSearch={() => setSearchOpen(true)}
         />
       </aside>
       <main className="flex-1 flex flex-col min-w-0">
@@ -215,6 +250,8 @@ export default function AegisPage() {
             key={activeThreadId}
             threadId={activeThreadId}
             organizationId={orgId}
+            thread={activeThread ?? undefined}
+            currentUserId={user?.id ?? ''}
             initialMessage={initialMessageForThread}
             onThreadUpdated={() => void refreshThreads()}
           />
@@ -226,6 +263,19 @@ export default function AegisPage() {
           />
         )}
       </main>
+
+      <JoinByCodeModal
+        open={joinByCodeOpen}
+        onOpenChange={setJoinByCodeOpen}
+        onJoined={handleJoined}
+      />
+
+      <SearchChatsModal
+        open={searchOpen}
+        onOpenChange={setSearchOpen}
+        threads={threads}
+        onSelect={handleSelect}
+      />
     </div>
   );
 }

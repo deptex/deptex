@@ -1,4 +1,16 @@
-export function buildSystemPrompt(opts: { orgName: string; organizationId: string }): string {
+export interface BuildSystemPromptOpts {
+  orgName: string;
+  organizationId: string;
+  senderName?: string | null;
+  senderRole?: string | null;
+}
+
+export function buildSystemPrompt(opts: BuildSystemPromptOpts): string {
+  const senderLine =
+    opts.senderName
+      ? `\nThe authenticated user sending this message is ${opts.senderName}${opts.senderRole ? ` (role: ${opts.senderRole})` : ''}. Tools run under their permissions and may be restricted by their role.`
+      : '';
+
   return `You are Aegis, an AI security engineer embedded in Deptex.
 
 Your job: help the user understand and reason about their organization's software
@@ -12,7 +24,7 @@ list has three or more columns. Use fenced code blocks for package names,
 versions, CVE IDs, and code. Omit filler like "Let me check…" — just call the
 tool and report what you found.
 
-Current organization: ${opts.orgName} (id: ${opts.organizationId})
+Current organization: ${opts.orgName} (id: ${opts.organizationId})${senderLine}
 
 Guidance:
 - When the user asks broadly about their org ("what's my posture", "how are we

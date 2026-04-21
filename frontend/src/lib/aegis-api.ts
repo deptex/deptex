@@ -4,11 +4,31 @@ export interface AegisThread {
   id: string;
   organizationId: string;
   userId: string;
+  createdBy: string;
+  isCreator: boolean;
+  participantCount: number;
   title: string;
   createdAt: string;
   updatedAt: string;
   pinnedAt: string | null;
   archivedAt: string | null;
+}
+
+export interface AegisParticipant {
+  userId: string;
+  joinedAt: string;
+  isCreator: boolean;
+  displayName: string | null;
+  email: string | null;
+  avatarUrl: string | null;
+}
+
+export interface InvitableUser {
+  userId: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  email: string | null;
+  role: string | null;
 }
 
 export type TextPart = { type: 'text'; text: string };
@@ -31,6 +51,7 @@ export interface AegisMessage {
   id: string;
   threadId: string;
   role: 'user' | 'assistant';
+  userId: string | null;
   content: string;
   metadata: { parts: MessagePart[] };
   createdAt: string;
@@ -94,5 +115,55 @@ export const aegisApi = {
       method: 'POST',
     });
     return thread;
+  },
+
+  async listParticipants(threadId: string): Promise<AegisParticipant[]> {
+    const { participants } = await fetchWithAuth(`/api/aegis/threads/${threadId}/participants`);
+    return (participants ?? []).map((p: any) => ({
+      userId: p.user_id,
+      joinedAt: p.joined_at,
+      isCreator: p.is_creator,
+      displayName: p.display_name,
+      email: p.email,
+      avatarUrl: p.avatar_url,
+    }));
+  },
+
+  async addParticipant(threadId: string, userId: string): Promise<void> {
+    await fetchWithAuth(`/api/aegis/threads/${threadId}/participants`, {
+      method: 'POST',
+      body: JSON.stringify({ userId }),
+    });
+  },
+
+  async removeParticipant(threadId: string, userId: string): Promise<void> {
+    await fetchWithAuth(`/api/aegis/threads/${threadId}/participants/${userId}`, { method: 'DELETE' });
+  },
+
+  async getInviteCode(threadId: string): Promise<{ code: string | null }> {
+    return fetchWithAuth(`/api/aegis/threads/${threadId}/invite-code`);
+  },
+
+  async createInviteCode(threadId: string): Promise<{ code: string }> {
+    return fetchWithAuth(`/api/aegis/threads/${threadId}/invite-code`, { method: 'POST' });
+  },
+
+  async revokeInviteCode(threadId: string): Promise<void> {
+    await fetchWithAuth(`/api/aegis/threads/${threadId}/invite-code`, { method: 'DELETE' });
+  },
+
+  async redeemInviteCode(code: string): Promise<{ threadId: string }> {
+    return fetchWithAuth('/api/aegis/invite/redeem', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    });
+  },
+
+  async listInvitableUsers(organizationId: string, threadId?: string): Promise<InvitableUser[]> {
+    const qs = threadId ? `?threadId=${encodeURIComponent(threadId)}` : '';
+    const { users } = await fetchWithAuth(
+      `/api/aegis/organizations/${organizationId}/invitable-users${qs}`,
+    );
+    return users;
   },
 };
