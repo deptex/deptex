@@ -1,13 +1,56 @@
+import { useEffect, useState } from 'react';
 import { ChatInput } from './ChatInput';
-import { DEFAULT_PROMPTS } from './PromptChips';
+
+const AEGIS_PROMPTS = [
+  "What's my security posture?",
+  'How many reachable vulnerabilities does my org have?',
+  'Which projects are at highest risk?',
+  'Are any of my secrets exposed?',
+  'Which dependencies should I update first?',
+  'Show me my critical CVEs',
+];
+
+const TYPE_MS = 55;
+const BACKSPACE_MS = 30;
+const HOLD_MS = 2400;
+
+function useTypewriterPlaceholder(phrases: string[]) {
+  const [index, setIndex] = useState(0);
+  const [visible, setVisible] = useState(0);
+  const [phase, setPhase] = useState<'typing' | 'hold' | 'backspacing'>('typing');
+  const phrase = phrases[index];
+
+  useEffect(() => {
+    if (phase === 'hold') {
+      const t = setTimeout(() => setPhase('backspacing'), HOLD_MS);
+      return () => clearTimeout(t);
+    }
+    if (phase === 'typing') {
+      if (visible >= phrase.length) { setPhase('hold'); return; }
+      const t = setTimeout(() => setVisible((v) => v + 1), TYPE_MS);
+      return () => clearTimeout(t);
+    }
+    // backspacing
+    if (visible <= 0) {
+      setIndex((i) => (i + 1) % phrases.length);
+      setPhase('typing');
+      return;
+    }
+    const t = setTimeout(() => setVisible((v) => v - 1), BACKSPACE_MS);
+    return () => clearTimeout(t);
+  }, [phase, visible, phrase.length, phrases.length]);
+
+  return phrase.slice(0, visible);
+}
 
 interface LandingHeroProps {
   name: string;
   onSubmit: (message: string) => void;
-  onSelectPrompt: (prompt: string) => void;
 }
 
-export function LandingHero({ name, onSubmit, onSelectPrompt }: LandingHeroProps) {
+export function LandingHero({ name, onSubmit }: LandingHeroProps) {
+  const placeholder = useTypewriterPlaceholder(AEGIS_PROMPTS);
+
   return (
     <div className="flex h-full flex-col items-center justify-center px-6">
       <div className="w-full max-w-2xl -mt-12">
@@ -18,21 +61,8 @@ export function LandingHero({ name, onSubmit, onSelectPrompt }: LandingHeroProps
           </h1>
         </div>
 
-        <div className="rounded-2xl bg-background-card border border-border/30">
-          <ChatInput onSubmit={onSubmit} autoFocus />
-        </div>
-
-        <div className="flex flex-wrap justify-center gap-2 mt-4 px-4">
-          {DEFAULT_PROMPTS.map((prompt) => (
-            <button
-              key={prompt}
-              type="button"
-              onClick={() => onSelectPrompt(prompt)}
-              className="rounded-full border border-border bg-background-card hover:bg-background-subtle px-4 py-2 text-xs text-foreground/70 hover:text-foreground transition-colors"
-            >
-              {prompt}
-            </button>
-          ))}
+        <div className="rounded-2xl bg-background-card border border-border">
+          <ChatInput onSubmit={onSubmit} placeholder={placeholder} autoFocus />
         </div>
       </div>
     </div>
