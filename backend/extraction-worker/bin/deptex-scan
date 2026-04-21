@@ -62,15 +62,43 @@ ABS_WS="$(cd "$WORKSPACE_PATH" && pwd)"
 # Also default --label to the host workspace basename (inside the container the
 # workspace is always mounted at /workspace, so without this the label would be
 # "workspace" for every project).
+#
+# Both the equals form (--output=./path) and the space form (--output ./path)
+# are accepted — Node's parseArgs accepts either, so dropping the space form
+# silently routed writes to an ephemeral path inside the container (the bare
+# `--output` token fell through to PASSTHROUGH, the wrapper injected its own
+# `--output=/output`, and Node's last-wins parse sent findings to the user's
+# unmounted path, which disappeared on container exit).
 OUTPUT_DIR="./extraction-results"
 HAS_LABEL=0
 PASSTHROUGH=()
-for arg in "$@"; do
+args=("$@")
+i=0
+while [ $i -lt ${#args[@]} ]; do
+  arg="${args[$i]}"
   case "$arg" in
     --output=*) OUTPUT_DIR="${arg#--output=}" ;;
+    --output)
+      i=$((i + 1))
+      if [ $i -ge ${#args[@]} ]; then
+        echo "error: --output requires a value" >&2
+        exit 2
+      fi
+      OUTPUT_DIR="${args[$i]}"
+      ;;
     --label=*) HAS_LABEL=1; PASSTHROUGH+=("$arg") ;;
+    --label)
+      i=$((i + 1))
+      if [ $i -ge ${#args[@]} ]; then
+        echo "error: --label requires a value" >&2
+        exit 2
+      fi
+      HAS_LABEL=1
+      PASSTHROUGH+=("--label=${args[$i]}")
+      ;;
     *) PASSTHROUGH+=("$arg") ;;
   esac
+  i=$((i + 1))
 done
 
 if [ "$HAS_LABEL" = "0" ]; then

@@ -237,11 +237,17 @@ function runDepScan(
   logger: { info: (step: string, msg: string) => Promise<void>; warn: (step: string, msg: string) => Promise<void> },
   heartbeat: () => Promise<void>,
   timeoutMs: number = 180 * 60 * 1000,
+  signal?: AbortSignal,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const verboseLogs =
     process.env.DEPSCAN_VERBOSE_LOG === '1' || /^true$/i.test(process.env.DEPSCAN_VERBOSE_LOG ?? '');
 
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('dep-scan aborted before start'));
+      return;
+    }
+
     const child = spawn(depScanExe, args, { cwd, stdio: 'pipe' });
     let stdout = '';
     let stderr = '';
@@ -260,7 +266,6 @@ function runDepScan(
       stderr += data.toString();
     });
 
-    // DB keep-alive only — no log emission (dep-scan is intentionally quiet).
     const heartbeatInterval = setInterval(async () => {
       try {
         await heartbeat();
@@ -273,15 +278,30 @@ function runDepScan(
       reject(new Error(`dep-scan timed out after ${timeoutMs / 60000} min`));
     }, timeoutMs);
 
+    // On outer abort: kill the child only. Don't reject — SIGTERM is an async
+    // OS signal so child.on('close') fires on a later I/O tick, by which time
+    // Promise.race in withTimeout has already rejected with StepTimeoutError.
+    // Rejecting here would race StepTimeoutError and win (synchronous reject
+    // queues its microtask before the outer's), leaking an opaque error that
+    // classifyError can't map to code='timeout'.
+    const onAbort = () => {
+      try { child.kill('SIGTERM'); } catch { /* already dead */ }
+    };
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
     child.on('close', (code: number | null) => {
       clearInterval(heartbeatInterval);
       clearTimeout(timeout);
+      signal?.removeEventListener('abort', onAbort);
       resolve({ stdout, stderr, exitCode: code ?? 1 });
     });
 
     child.on('error', (err: Error) => {
       clearInterval(heartbeatInterval);
       clearTimeout(timeout);
+      signal?.removeEventListener('abort', onAbort);
       reject(err);
     });
   });
@@ -823,7 +843,7 @@ export async function runPipeline(
     let depScanSucceeded = false;
 
     try {
-      await withTimeout(async () => {
+      await withTimeout(async (signal) => {
       fs.mkdirSync(reportsDir, { recursive: true });
       const bomArg = path.join(workspaceRoot, 'sbom.json');
       const outArg = reportsDir;
@@ -866,14 +886,14 @@ export async function runPipeline(
 
       const heartbeatFn = heartbeat ?? (async () => {});
       try {
-        let res = await runDepScan(depScanExe, depScanArgs, workspaceRoot, log, heartbeatFn);
+        let res = await runDepScan(depScanExe, depScanArgs, workspaceRoot, log, heartbeatFn, undefined, signal);
         const rawStderr = stripAnsi((res.stderr ?? '').trim());
         const isVdbCorrupt = /CorruptError|malformed|database disk image is malformed/i.test(rawStderr);
 
         if (res.exitCode !== 0 && isVdbCorrupt) {
           await log.warn('vuln_scan', 'VDB on volume is corrupted (e.g. from previous out-of-space); clearing and retrying once...');
           clearVdbVolumeForRecovery();
-          res = await runDepScan(depScanExe, depScanArgs, workspaceRoot, log, heartbeatFn);
+          res = await runDepScan(depScanExe, depScanArgs, workspaceRoot, log, heartbeatFn, undefined, signal);
         }
 
         if (res.exitCode !== 0) {
@@ -1654,7 +1674,14 @@ export async function runPipeline(
           p_project_id: projectId,
           p_extraction_run_id: runId,
         }),
-        2 * 60_000,
+        // 10min budget. Finalize does mark-removed + carry-forward + trigger
+        // detection + lifecycle events + SLA computation + pointer flip + reap
+        // in a single transaction. For projects with 100k+ PDVs the carry-
+        // forward / reap stages can legitimately take minutes on shared
+        // Supabase infra. Original 2min budget caused premature timeouts on
+        // large monorepos, leaving the active_extraction_run_id pointer
+        // un-flipped and findings invisible until the next successful run.
+        10 * 60_000,
         'finalize'
       );
       if (finalizeErr) {

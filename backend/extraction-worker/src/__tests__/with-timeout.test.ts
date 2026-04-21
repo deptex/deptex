@@ -46,6 +46,45 @@ describe('withTimeout', () => {
       jest.useRealTimers();
     }
   });
+
+  it('aborts the passed AbortSignal when the timeout fires', async () => {
+    let signalRef: AbortSignal | null = null;
+    const slow = (signal: AbortSignal) => {
+      signalRef = signal;
+      return new Promise<string>((r) => setTimeout(() => r('late'), 500));
+    };
+    await expect(withTimeout(slow, 20, 'aborter')).rejects.toBeInstanceOf(StepTimeoutError);
+    expect(signalRef).not.toBeNull();
+    expect(signalRef!.aborted).toBe(true);
+  });
+
+  it('does not abort the signal when fn resolves under budget', async () => {
+    let signalRef: AbortSignal | null = null;
+    const fast = async (signal: AbortSignal) => {
+      signalRef = signal;
+      return 'ok';
+    };
+    await expect(withTimeout(fast, 500, 'non_aborter')).resolves.toBe('ok');
+    expect(signalRef).not.toBeNull();
+    expect(signalRef!.aborted).toBe(false);
+  });
+
+  it('StepTimeoutError wins Promise.race even when inner fn has a signal listener (runDepScan pattern)', async () => {
+    // Simulates runDepScan: on abort, the signal listener only kills the child
+    // — it does NOT synchronously resolve/reject its own promise. The child's
+    // close event (or equivalent) fires on a later I/O tick, so the outer's
+    // synchronously-queued StepTimeoutError rejection wins the race.
+    const slow = (signal: AbortSignal) => new Promise<string>((resolve) => {
+      signal.addEventListener('abort', () => {
+        // kill-equivalent: no-op in test. Crucially, we do NOT call resolve()
+        // synchronously here — that would race the outer StepTimeoutError.
+      }, { once: true });
+      setTimeout(() => resolve('late'), 200);
+    });
+    const err = await withTimeout(slow, 20, 'cancellable_step').catch((e) => e);
+    expect(err).toBeInstanceOf(StepTimeoutError);
+    expect((err as StepTimeoutError).step).toBe('cancellable_step');
+  });
 });
 
 describe('classifyError', () => {

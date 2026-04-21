@@ -108,8 +108,52 @@ router.post('/extraction-jobs', async (_req, res) => {
       }
     }
 
+    // Reap orphaned extractions (rows tagged with run_ids from failed/cancelled
+    // jobs > 24h old that never went through finalize_extraction's inline reap).
+    let orphanReap: {
+      runs_reaped: number;
+      orphan_runs: Array<{ project_id: string; run_id: string }>;
+    } | null = null;
+    let bucketFilesRemoved = 0;
+    try {
+      const { data: reapResult, error: reapError } = await supabase.rpc(
+        'reap_orphaned_extractions',
+        { p_older_than_hours: 24 }
+      );
+      if (reapError) {
+        console.error('[RECOVERY] Orphan reap RPC failed:', reapError.message);
+      } else if (reapResult) {
+        orphanReap = reapResult as typeof orphanReap;
+
+        // Clean up Supabase Storage bucket files for reaped runs.
+        // Pipeline writes SBOM, dep-scan, semgrep, trufflehog outputs under
+        // project-imports/${projectId}/${runId}/ — list + remove.
+        for (const { project_id, run_id } of orphanReap?.orphan_runs ?? []) {
+          try {
+            const prefix = `${project_id}/${run_id}`;
+            const { data: files } = await supabase.storage
+              .from('project-imports')
+              .list(prefix);
+            if (files?.length) {
+              const paths = files.map((f) => `${prefix}/${f.name}`);
+              const { error: removeErr } = await supabase.storage
+                .from('project-imports')
+                .remove(paths);
+              if (!removeErr) {
+                bucketFilesRemoved += paths.length;
+              }
+            }
+          } catch {
+            // non-fatal — continue with next run
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error('[RECOVERY] Orphan reap error:', err?.message ?? err);
+    }
+
     console.log(
-      `[RECOVERY] Requeued ${requeuedCount} stuck jobs, failed ${failedCount} exhausted jobs, started ${machinesStarted} machines for ${orphanedJobs?.length ?? 0} orphaned jobs`
+      `[RECOVERY] Requeued ${requeuedCount} stuck jobs, failed ${failedCount} exhausted jobs, started ${machinesStarted} machines for ${orphanedJobs?.length ?? 0} orphaned jobs, reaped ${orphanReap?.runs_reaped ?? 0} orphan runs (${bucketFilesRemoved} bucket files)`
     );
 
     res.json({
@@ -117,6 +161,8 @@ router.post('/extraction-jobs', async (_req, res) => {
       failed: failedCount,
       orphaned_jobs_found: orphanedJobs?.length ?? 0,
       machines_started: machinesStarted,
+      orphan_runs_reaped: orphanReap?.runs_reaped ?? 0,
+      orphan_bucket_files_removed: bucketFilesRemoved,
     });
   } catch (error: any) {
     console.error('[RECOVERY] Error:', error);

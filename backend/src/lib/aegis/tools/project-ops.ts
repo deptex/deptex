@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { registerAegisTool } from './registry';
 import { supabase } from '../../../lib/supabase';
 import { queueExtractionJob } from '../../redis';
+import { getActiveExtractionId, NO_ACTIVE_RUN } from '../../active-extraction';
 
 const safeProjectOpsMeta = {
   category: 'project_ops' as const,
@@ -95,14 +96,16 @@ registerAegisTool(
         return JSON.stringify({ error: projError?.message ?? 'Project not found' });
       }
 
+      const activeRunId = (await getActiveExtractionId(supabase, projectId)) ?? NO_ACTIVE_RUN;
       const [{ count: depCount }, { count: vulnCount }, { count: semgrepCount }] = await Promise.all([
-        supabase.from('project_dependencies').select('id', { count: 'exact', head: true }).eq('project_id', projectId),
+        supabase.from('project_dependencies').select('id', { count: 'exact', head: true }).eq('project_id', projectId).is('removed_at', null),
         supabase
           .from('project_dependency_vulnerabilities')
           .select('id', { count: 'exact', head: true })
           .eq('project_id', projectId)
+          .eq('extraction_run_id', activeRunId)
           .eq('suppressed', false),
-        supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId),
+        supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeRunId),
       ]);
 
       const result = {
@@ -156,6 +159,7 @@ registerAegisTool(
           dependency_versions(vuln_critical_count, vuln_high_count)
         `)
         .eq('project_id', projectId)
+        .is('removed_at', null)
         .limit(limit);
 
       if (isDirect !== undefined) {
@@ -194,6 +198,7 @@ registerAegisTool(
       limit: z.number().min(1).max(100).default(50),
     }),
     execute: async ({ projectId, severity, reachabilityLevel, limit = 50 }) => {
+      const activeRunId = (await getActiveExtractionId(supabase, projectId)) ?? NO_ACTIVE_RUN;
       let query = supabase
         .from('project_dependency_vulnerabilities')
         .select(`
@@ -207,6 +212,7 @@ registerAegisTool(
           project_dependencies(dependencies(name), version)
         `)
         .eq('project_id', projectId)
+        .eq('extraction_run_id', activeRunId)
         .eq('suppressed', false)
         .eq('risk_accepted', false)
         .order('depscore', { ascending: false })
@@ -257,7 +263,8 @@ registerAegisTool(
       let pdQuery = supabase
         .from('project_dependencies')
         .select('dependency_version_id')
-        .eq('project_id', projectId);
+        .eq('project_id', projectId)
+        .is('removed_at', null);
       if (dependencyId) {
         pdQuery = pdQuery.eq('dependency_id', dependencyId);
       }
@@ -318,10 +325,12 @@ registerAegisTool(
       limit: z.number().min(1).max(100).default(20),
     }),
     execute: async ({ projectId, dependencyId, limit = 20 }) => {
+      const activeRunId = (await getActiveExtractionId(supabase, projectId)) ?? NO_ACTIVE_RUN;
       let query = supabase
         .from('project_reachable_flows')
         .select('id, purl, dependency_id, flow_nodes, entry_point_file, entry_point_method, sink_file, sink_method, flow_length')
         .eq('project_id', projectId)
+        .eq('extraction_run_id', activeRunId)
         .limit(limit);
       if (dependencyId) query = query.eq('dependency_id', dependencyId);
       const { data, error } = await query.order('created_at', { ascending: false });
@@ -352,20 +361,23 @@ registerAegisTool(
       projectId: z.string().uuid(),
     }),
     execute: async ({ projectId }) => {
+      const activeRunId = (await getActiveExtractionId(supabase, projectId)) ?? NO_ACTIVE_RUN;
       const [vulnRes, semgrepRes, secretRes, depRes, complRes] = await Promise.all([
         supabase
           .from('project_dependency_vulnerabilities')
           .select('severity')
           .eq('project_id', projectId)
+          .eq('extraction_run_id', activeRunId)
           .eq('suppressed', false)
           .eq('risk_accepted', false),
-        supabase.from('project_semgrep_findings').select('severity').eq('project_id', projectId),
+        supabase.from('project_semgrep_findings').select('severity').eq('project_id', projectId).eq('extraction_run_id', activeRunId),
         supabase
           .from('project_secret_findings')
           .select('id')
           .eq('project_id', projectId)
+          .eq('extraction_run_id', activeRunId)
           .eq('is_current', true),
-        supabase.from('project_dependencies').select('id, policy_result').eq('project_id', projectId),
+        supabase.from('project_dependencies').select('id, policy_result').eq('project_id', projectId).is('removed_at', null),
       ]);
 
       const vulns = vulnRes.data || [];
