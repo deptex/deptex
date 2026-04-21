@@ -28,7 +28,7 @@ export function LandingHero({ name, onSubmit, onSelectPrompt }: LandingHeroProps
               key={prompt}
               type="button"
               onClick={() => onSelectPrompt(prompt)}
-              className="rounded-full bg-background-subtle/60 hover:bg-background-subtle px-4 py-2 text-xs text-foreground/80 hover:text-foreground transition-colors"
+              className="rounded-full border border-border bg-background-card hover:bg-background-subtle px-4 py-2 text-xs text-foreground/70 hover:text-foreground transition-colors"
             >
               {prompt}
             </button>
