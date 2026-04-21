@@ -1,10 +1,10 @@
 import { Router, Response } from 'express';
-import { generateText, type UIMessage } from 'ai';
+import { generateText } from 'ai';
 import { supabase } from '../lib/supabase';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { userHasOrgPermission } from '../lib/permissions';
-import { rowToMessage, rowToThread, type MessagePart, type ThreadRow, type UserStateRow } from '../lib/aegis/types';
-import { streamChat } from '../lib/aegis/chat';
+import { rowToMessage, rowToThread, type ThreadRow, type UserStateRow } from '../lib/aegis/types';
+import { generateChat } from '../lib/aegis/chat';
 import { getAegisModel } from '../lib/aegis/provider';
 import {
   isParticipant,
@@ -24,92 +24,6 @@ const AEGIS_PERMISSION = 'interact_with_aegis';
 router.use(authenticateUser);
 
 const THREAD_COLUMNS = 'id, organization_id, user_id, created_by, title, created_at, updated_at';
-const STREAM_TTL_MS = 5 * 60 * 1000; // 5 min — a stream held past this is treated as stale.
-const MAX_QUEUE_ITERATIONS = 5;
-
-/**
- * Atomically claim the thread's active-stream slot. Returns true if claimed,
- * false if another stream is already running within STREAM_TTL_MS.
- */
-async function claimStream(threadId: string): Promise<boolean> {
-  const now = new Date();
-  const until = new Date(now.getTime() + STREAM_TTL_MS).toISOString();
-  const staleBefore = now.toISOString();
-  const { data } = await supabase
-    .from('aegis_chat_threads')
-    .update({ active_stream_until: until })
-    .eq('id', threadId)
-    .or(`active_stream_until.is.null,active_stream_until.lt.${staleBefore}`)
-    .select('id')
-    .maybeSingle();
-  return !!data;
-}
-
-async function releaseStream(threadId: string): Promise<void> {
-  await supabase
-    .from('aegis_chat_threads')
-    .update({ active_stream_until: null })
-    .eq('id', threadId);
-}
-
-/**
- * After a stream finishes, if the most recent message is an unanswered user
- * message from another participant (sent while we were streaming), run another
- * streamText against the full history. Loops up to MAX_QUEUE_ITERATIONS times.
- * Runs silently — responses are visible to clients via Supabase Realtime.
- */
-async function runQueueLoop(threadId: string, organizationId: string, orgName: string): Promise<void> {
-  try {
-    for (let i = 0; i < MAX_QUEUE_ITERATIONS; i++) {
-      const { data: rows } = await supabase
-        .from('aegis_chat_messages')
-        .select('id, role, user_id, content, metadata')
-        .eq('thread_id', threadId)
-        .order('created_at', { ascending: true });
-      const messages = rows ?? [];
-      if (messages.length === 0) break;
-      const last = messages[messages.length - 1];
-      if (last.role === 'assistant') break;
-
-      const senderId = (last as any).user_id as string | null;
-      if (!senderId) break;
-      const { name: senderName, role: senderRole } = await getSenderNameAndRole(senderId, organizationId);
-
-      const uiMessages = messages.map((m: any) => ({
-        id: m.id,
-        role: m.role,
-        parts: [{ type: 'text', text: m.content }],
-      })) as unknown as UIMessage[];
-
-      const result = await streamChat({
-        organizationId,
-        orgName,
-        userId: senderId,
-        senderName,
-        senderRole,
-        uiMessages,
-        onFinishPersist: async ({ text, parts }) => {
-          await supabase.from('aegis_chat_messages').insert({
-            thread_id: threadId,
-            role: 'assistant',
-            user_id: null,
-            content: text,
-            metadata: { parts },
-          });
-          await supabase
-            .from('aegis_chat_threads')
-            .update({ updated_at: new Date().toISOString() })
-            .eq('id', threadId);
-        },
-      });
-      await result.consumeStream();
-    }
-  } catch (err) {
-    console.error('[aegis] queue loop error', err);
-  } finally {
-    await releaseStream(threadId);
-  }
-}
 
 async function getSenderNameAndRole(userId: string, organizationId: string): Promise<{ name: string | null; role: string | null }> {
   const [{ data: profile }, { data: membership }] = await Promise.all([
@@ -345,13 +259,16 @@ router.delete('/messages/:id/below', async (req: AuthRequest, res: Response) => 
   res.status(204).send();
 });
 
-// POST /api/aegis/chat — streaming chat endpoint
+// POST /api/aegis/chat  { organizationId, threadId, message }
+// Saves the user message, returns { threadId } immediately, then generates
+// the AI reply in the background. The assistant message lands in DB and
+// triggers a Supabase Realtime event the client is already subscribed to.
 router.post('/chat', async (req: AuthRequest, res: Response) => {
   const userId = req.user!.id;
-  const { organizationId, threadId: incomingThreadId, messages } = req.body ?? {};
+  const { organizationId, threadId: incomingThreadId, message } = req.body ?? {};
 
-  if (!organizationId || !Array.isArray(messages)) {
-    return res.status(400).json({ error: 'organizationId and messages are required' });
+  if (!organizationId || typeof message !== 'string' || !message.trim()) {
+    return res.status(400).json({ error: 'organizationId and message are required' });
   }
   if (!(await userHasOrgPermission(userId, organizationId, AEGIS_PERMISSION))) {
     return res.status(403).json({ error: 'Permission denied: interact_with_aegis' });
@@ -364,7 +281,8 @@ router.post('/chat', async (req: AuthRequest, res: Response) => {
     .single();
   if (!org) return res.status(404).json({ error: 'Organization not found' });
 
-  let threadId: string | null = null;
+  // Resolve existing thread or create a new one.
+  let threadId: string;
   if (incomingThreadId) {
     const thread = await getThreadForParticipant(incomingThreadId, userId);
     if (!thread || thread.organization_id !== organizationId) {
@@ -382,82 +300,69 @@ router.post('/chat', async (req: AuthRequest, res: Response) => {
     await addParticipant(threadId, userId);
   }
 
-  const lastUserMessage = [...messages].reverse().find((m: any) => m.role === 'user');
-  if (lastUserMessage) {
-    const userParts: MessagePart[] = Array.isArray(lastUserMessage.parts)
-      ? lastUserMessage.parts.filter((p: any) => p.type === 'text').map((p: any) => ({ type: 'text', text: p.text }))
-      : [{ type: 'text', text: lastUserMessage.content ?? '' }];
-    const userContent =
-      typeof lastUserMessage.content === 'string' && lastUserMessage.content.length > 0
-        ? lastUserMessage.content
-        : userParts.map((p) => (p.type === 'text' ? p.text : '')).join('');
+  const userText = message.trim();
 
-    const { data: mostRecent } = await supabase
-      .from('aegis_chat_messages')
-      .select('role, content, user_id')
-      .eq('thread_id', threadId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+  // Save user message synchronously so it's in DB before we return.
+  const { error: msgErr } = await supabase.from('aegis_chat_messages').insert({
+    thread_id: threadId,
+    role: 'user',
+    user_id: userId,
+    content: userText,
+    metadata: { parts: [{ type: 'text', text: userText }] },
+  });
+  if (msgErr) {
+    console.error('[aegis] save user message failed', msgErr);
+    return res.status(500).json({ error: 'Failed to save message' });
+  }
 
-    const alreadyPersisted =
-      mostRecent &&
-      mostRecent.role === 'user' &&
-      mostRecent.content === userContent &&
-      mostRecent.user_id === userId;
+  // Return immediately — the AI reply will arrive via Supabase Realtime.
+  res.json({ threadId });
 
-    if (!alreadyPersisted) {
+  // Fire-and-forget: generate AI reply and save it to DB.
+  (async () => {
+    try {
+      const { data: rows } = await supabase
+        .from('aegis_chat_messages')
+        .select('role, content')
+        .eq('thread_id', threadId)
+        .order('created_at', { ascending: true });
+
+      const { name: senderName, role: senderRole } = await getSenderNameAndRole(userId, organizationId);
+
+      const { text, parts } = await generateChat({
+        organizationId,
+        orgName: org.name,
+        userId,
+        senderName,
+        senderRole,
+        messages: (rows ?? []) as Array<{ role: 'user' | 'assistant'; content: string }>,
+      });
+
+      // Auto-title on the first exchange (title before saving so the Realtime
+      // event fires after the title is already updated).
+      const totalMessages = (rows ?? []).length + 1;
+      if (totalMessages <= 3) {
+        try {
+          const prompt = `Summarize this chat in 3-5 words, Title Case, no quotes, no trailing punctuation.\n\nUser: ${userText.slice(0, 800)}\nAssistant: ${text.slice(0, 800)}\n\nTitle:`;
+          const { text: titleText } = await generateText({ model: getAegisModel(), prompt, temperature: 0.3 });
+          const title = titleText.trim().replace(/^["']|["']$/g, '').replace(/[.?!]+$/, '').slice(0, 80) || 'New chat';
+          await supabase.from('aegis_chat_threads').update({ title }).eq('id', threadId);
+        } catch (err) {
+          console.error('[aegis] auto-title failed', err);
+        }
+      }
+
       await supabase.from('aegis_chat_messages').insert({
         thread_id: threadId,
-        role: 'user',
-        user_id: userId,
-        content: userContent,
-        metadata: { parts: userParts },
-      });
-    }
-  }
-
-  const activeThreadId = threadId!;
-
-  // If another stream is in flight, the user message is already persisted and
-  // the other stream's queue loop will pick it up. Return 202 — the client will
-  // see the assistant reply via Supabase Realtime.
-  const claimed = await claimStream(activeThreadId);
-  if (!claimed) {
-    return res.status(202).json({ queued: true, threadId: activeThreadId });
-  }
-
-  res.setHeader('X-Thread-Id', activeThreadId);
-  res.setHeader('Access-Control-Expose-Headers', 'X-Thread-Id');
-
-  const { name: senderName, role: senderRole } = await getSenderNameAndRole(userId, organizationId);
-
-  const result = await streamChat({
-    organizationId,
-    orgName: org.name,
-    userId,
-    senderName,
-    senderRole,
-    uiMessages: messages as UIMessage[],
-    onFinishPersist: async ({ text, parts }) => {
-      await supabase.from('aegis_chat_messages').insert({
-        thread_id: activeThreadId,
         role: 'assistant',
         user_id: null,
         content: text,
         metadata: { parts },
       });
-      await supabase
-        .from('aegis_chat_threads')
-        .update({ updated_at: new Date().toISOString() })
-        .eq('id', activeThreadId);
-      // Fire-and-forget: drain any messages queued during this turn. The loop
-      // also releases the active-stream claim when it's done.
-      void runQueueLoop(activeThreadId, organizationId, org.name);
-    },
-  });
-
-  result.pipeUIMessageStreamToResponse(res);
+    } catch (err) {
+      console.error('[aegis] background generation failed', err);
+    }
+  })();
 });
 
 // POST /api/aegis/threads/:id/auto-title
