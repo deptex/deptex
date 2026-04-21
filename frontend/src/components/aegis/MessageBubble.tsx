@@ -7,6 +7,8 @@ import { cn } from '../../lib/utils';
 
 interface MessageBubbleProps {
   message: UIMessage;
+  currentUserId?: string;
+  participantNames?: Record<string, string>;
   onEdit?: (newText: string) => void;
   disabled?: boolean;
 }
@@ -27,9 +29,14 @@ function mapState(state: ToolStateKey | string | undefined): 'running' | 'done' 
   return 'running';
 }
 
-export function MessageBubble({ message, onEdit, disabled }: MessageBubbleProps) {
+export function MessageBubble({ message, currentUserId, participantNames, onEdit, disabled }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const parts = (message as any).parts ?? [];
+  const authorId = (message as any).userId as string | null | undefined;
+  const isMine = !authorId || !currentUserId || authorId === currentUserId;
+  const authorName = isUser
+    ? (isMine ? 'You' : (participantNames?.[authorId!] ?? 'Teammate'))
+    : 'Aegis';
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -72,9 +79,7 @@ export function MessageBubble({ message, onEdit, disabled }: MessageBubbleProps)
           {isUser ? <User className="h-3.5 w-3.5" /> : <Sparkles className="h-3.5 w-3.5" />}
         </div>
         <div className="flex-1 min-w-0 pt-0.5">
-          <div className="text-xs font-medium text-foreground/70 mb-1">
-            {isUser ? 'You' : 'Aegis'}
-          </div>
+          <div className="text-xs font-medium text-foreground/70 mb-1">{authorName}</div>
           {editing ? (
             <div className="space-y-2">
               <textarea
@@ -130,7 +135,7 @@ export function MessageBubble({ message, onEdit, disabled }: MessageBubbleProps)
                   return null;
                 })}
               </div>
-              {isUser && onEdit && text && (
+              {isUser && isMine && onEdit && text && (
                 <div className="mt-1.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                   <button
                     type="button"

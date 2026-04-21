@@ -2,6 +2,9 @@ export interface AegisThread {
   id: string;
   organizationId: string;
   userId: string;
+  createdBy: string;
+  isCreator: boolean;
+  participantCount: number;
   title: string;
   createdAt: string;
   updatedAt: string;
@@ -32,6 +35,7 @@ export interface AegisMessage {
   id: string;
   threadId: string;
   role: 'user' | 'assistant';
+  userId: string | null;
   content: string;
   metadata: { parts: MessagePart[] };
   createdAt: string;
@@ -47,25 +51,39 @@ export interface ChatRequestBody {
   }>;
 }
 
-export function rowToThread(row: {
+export interface ThreadRow {
   id: string;
   organization_id: string;
   user_id: string;
+  created_by: string;
   title: string;
   created_at: string;
   updated_at: string;
-  pinned_at?: string | null;
-  archived_at?: string | null;
-}): AegisThread {
+}
+
+export interface UserStateRow {
+  pinned_at: string | null;
+  archived_at: string | null;
+}
+
+export function rowToThread(
+  row: ThreadRow,
+  viewerId: string,
+  userState: UserStateRow | null,
+  participantCount: number,
+): AegisThread {
   return {
     id: row.id,
     organizationId: row.organization_id,
     userId: row.user_id,
+    createdBy: row.created_by,
+    isCreator: row.user_id === viewerId,
+    participantCount,
     title: row.title,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    pinnedAt: row.pinned_at ?? null,
-    archivedAt: row.archived_at ?? null,
+    pinnedAt: userState?.pinned_at ?? null,
+    archivedAt: userState?.archived_at ?? null,
   };
 }
 
@@ -73,6 +91,7 @@ export function rowToMessage(row: {
   id: string;
   thread_id: string;
   role: 'user' | 'assistant';
+  user_id: string | null;
   content: string;
   metadata: unknown;
   created_at: string;
@@ -84,6 +103,7 @@ export function rowToMessage(row: {
     id: row.id,
     threadId: row.thread_id,
     role: row.role,
+    userId: row.user_id ?? null,
     content: row.content,
     metadata: { parts: metadata.parts ?? [] },
     createdAt: row.created_at,

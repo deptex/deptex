@@ -8,18 +8,20 @@ export interface StreamChatParams {
   organizationId: string;
   orgName: string;
   userId: string;
+  senderName?: string | null;
+  senderRole?: string | null;
   uiMessages: UIMessage[];
   onFinishPersist: (payload: { text: string; parts: MessagePart[] }) => Promise<void>;
 }
 
 export async function streamChat(params: StreamChatParams): Promise<StreamTextResult<ToolSet, never>> {
-  const { organizationId, orgName, userId, uiMessages, onFinishPersist } = params;
+  const { organizationId, orgName, userId, senderName, senderRole, uiMessages, onFinishPersist } = params;
   const tools = getAegisTools({ organizationId, userId });
   const messages = await convertToModelMessages(uiMessages);
 
   return streamText({
     model: getAegisModel(),
-    system: buildSystemPrompt({ orgName, organizationId }),
+    system: buildSystemPrompt({ orgName, organizationId, senderName, senderRole }),
     messages,
     tools,
     stopWhen: stepCountIs(15),

@@ -4,12 +4,13 @@ import { cn } from '../../lib/utils';
 
 interface ChatInputProps {
   onSubmit: (message: string) => void;
+  onChange?: () => void;
   disabled?: boolean;
   placeholder?: string;
   autoFocus?: boolean;
 }
 
-export function ChatInput({ onSubmit, disabled, placeholder = 'Ask Aegis anything…', autoFocus }: ChatInputProps) {
+export function ChatInput({ onSubmit, onChange, disabled, placeholder = 'Ask Aegis anything…', autoFocus }: ChatInputProps) {
   const [value, setValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -43,19 +44,19 @@ export function ChatInput({ onSubmit, disabled, placeholder = 'Ask Aegis anythin
   const canSend = value.trim().length > 0 && !disabled;
 
   return (
-    <form onSubmit={onFormSubmit} className="px-4 pb-4 pt-2">
+    <form onSubmit={onFormSubmit} className="px-4 pb-4 pt-2 outline-none">
       <div className="mx-auto max-w-3xl">
-        <div className="relative flex items-end rounded-2xl bg-background-subtle/60 focus-within:bg-background-subtle transition-colors">
+        <div className="relative flex items-end">
           <textarea
             ref={textareaRef}
             value={value}
-            onChange={(e) => { setValue(e.target.value); resize(); }}
+            onChange={(e) => { setValue(e.target.value); resize(); onChange?.(); }}
             onKeyDown={onKeyDown}
             placeholder={placeholder}
             disabled={disabled}
             autoFocus={autoFocus}
             rows={1}
-            className="flex-1 resize-none bg-transparent px-5 py-4 pr-12 text-sm text-foreground placeholder:text-foreground/50 outline-none disabled:opacity-60"
+            className="flex-1 resize-none bg-transparent border-0 px-5 py-4 pr-12 text-sm text-foreground placeholder:text-foreground/50 outline-none focus:outline-none focus:ring-0 disabled:opacity-60"
           />
           <button
             type="submit"
