@@ -1,6 +1,6 @@
 import { memo, useState, useMemo, useEffect } from 'react';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
-import { LayoutDashboard, Scale, ShieldAlert, Settings, Plus, Loader2, User, BookOpen, Mail, LogOut, MessageSquare } from 'lucide-react';
+import { LayoutDashboard, Scale, ShieldAlert, Settings, Plus, Loader2, User, Mail, LogOut, MessageSquare } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { RolePermissions, Team, Project, api } from '../lib/api';
 import { useToast } from '../hooks/use-toast';
@@ -296,18 +296,6 @@ function OrganizationSidebar({
                   <User className="h-4 w-4" />
                   Account Settings
                 </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <a
-                  href="/docs"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary"
-                  onClick={() => setProfileOpen(false)}
-                >
-                  <BookOpen className="h-4 w-4" />
-                  Documentation
-                </a>
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
                 <a
