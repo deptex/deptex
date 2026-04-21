@@ -208,10 +208,6 @@ export default function AegisPage() {
     }
   }, [orgId, navigate, toast]);
 
-  const handlePromptSelect = useCallback((prompt: string) => {
-    void startChatWithMessage(prompt);
-  }, [startChatWithMessage]);
-
   if (!orgId) return null;
   if (!canUseAegis) {
     return (
@@ -259,7 +255,6 @@ export default function AegisPage() {
           <LandingHero
             name={displayName}
             onSubmit={(msg) => void startChatWithMessage(msg)}
-            onSelectPrompt={handlePromptSelect}
           />
         )}
       </main>
