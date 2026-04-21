@@ -1111,8 +1111,15 @@ CREATE TABLE IF NOT EXISTS public.project_vulnerability_events (
   osv_id text NOT NULL,
   event_type text NOT NULL,
   metadata jsonb,
+  extraction_run_id text,
   created_at timestamp with time zone DEFAULT now()
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pve_unique_per_run
+  ON public.project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id)
+  WHERE extraction_run_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pve_extraction_run_id
+  ON public.project_vulnerability_events (extraction_run_id)
+  WHERE extraction_run_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS public.project_watchlist (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   project_id uuid NOT NULL,
@@ -2718,11 +2725,14 @@ BEGIN
         RETURNING pdv.id, nr.osv_id, nr.reasons
       ),
       event_insert AS (
-        INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, metadata, created_at)
-        SELECT p_project_id, osv_id, 'rereview_triggered',
-               jsonb_build_object('extraction_run_id', p_extraction_run_id, 'reasons', reasons),
+        INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, metadata, created_at)
+        SELECT p_project_id, osv_id, 'rereview_triggered', p_extraction_run_id,
+               jsonb_build_object('reasons', reasons),
                v_now
         FROM fired
+        ON CONFLICT (project_id, osv_id, event_type, extraction_run_id)
+          WHERE extraction_run_id IS NOT NULL
+          DO NOTHING
       )
       SELECT COUNT(*) INTO v_pdv_rereview_fired FROM fired;
     END IF;
@@ -2761,14 +2771,18 @@ BEGIN
       FROM unmatched u
     ),
     events_inserted AS (
-      INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, metadata, created_at)
+      INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, metadata, created_at)
       SELECT
         p_project_id,
         c.osv_id,
         CASE WHEN c.is_reopened THEN 'reopened' ELSE 'detected' END,
-        jsonb_build_object('extraction_run_id', p_extraction_run_id, 'dep_name', c.dep_name),
+        p_extraction_run_id,
+        jsonb_build_object('dep_name', c.dep_name),
         v_now
       FROM classified c
+      ON CONFLICT (project_id, osv_id, event_type, extraction_run_id)
+        WHERE extraction_run_id IS NOT NULL
+        DO NOTHING
       RETURNING id, event_type
     )
     SELECT
@@ -2777,14 +2791,17 @@ BEGIN
     INTO v_pdv_reopened, v_pdv_new
     FROM events_inserted;
   ELSE
-    INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, metadata, created_at)
-    SELECT p_project_id, npdv.osv_id, 'detected',
-           jsonb_build_object('extraction_run_id', p_extraction_run_id, 'dep_name', npd.name),
+    INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, metadata, created_at)
+    SELECT p_project_id, npdv.osv_id, 'detected', p_extraction_run_id,
+           jsonb_build_object('dep_name', npd.name),
            v_now
     FROM project_dependency_vulnerabilities npdv
     JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
     WHERE npdv.project_id = p_project_id
-      AND npdv.extraction_run_id = p_extraction_run_id;
+      AND npdv.extraction_run_id = p_extraction_run_id
+    ON CONFLICT (project_id, osv_id, event_type, extraction_run_id)
+      WHERE extraction_run_id IS NOT NULL
+      DO NOTHING;
 
     v_pdv_carried := 0;
     v_pdv_rereview_fired := 0;
@@ -3390,11 +3407,14 @@ BEGIN
         RETURNING pdv.id, nr.osv_id, nr.reasons
       ),
       event_insert AS (
-        INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, metadata, created_at)
-        SELECT p_project_id, osv_id, 'rereview_triggered',
-               jsonb_build_object('extraction_run_id', p_extraction_run_id, 'reasons', reasons),
+        INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, metadata, created_at)
+        SELECT p_project_id, osv_id, 'rereview_triggered', p_extraction_run_id,
+               jsonb_build_object('reasons', reasons),
                v_now
         FROM fired
+        ON CONFLICT (project_id, osv_id, event_type, extraction_run_id)
+          WHERE extraction_run_id IS NOT NULL
+          DO NOTHING
       )
       SELECT COUNT(*) INTO v_pdv_rereview_fired FROM fired;
     END IF;
@@ -3430,13 +3450,17 @@ BEGIN
       FROM unmatched u
     ),
     events_inserted AS (
-      INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, metadata, created_at)
+      INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, metadata, created_at)
       SELECT
         p_project_id, c.osv_id,
         CASE WHEN c.is_reopened THEN 'reopened' ELSE 'detected' END,
-        jsonb_build_object('extraction_run_id', p_extraction_run_id, 'dep_name', c.dep_name),
+        p_extraction_run_id,
+        jsonb_build_object('dep_name', c.dep_name),
         v_now
       FROM classified c
+      ON CONFLICT (project_id, osv_id, event_type, extraction_run_id)
+        WHERE extraction_run_id IS NOT NULL
+        DO NOTHING
       RETURNING id, event_type
     )
     SELECT
@@ -3445,14 +3469,17 @@ BEGIN
     INTO v_pdv_reopened, v_pdv_new
     FROM events_inserted;
   ELSE
-    INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, metadata, created_at)
-    SELECT p_project_id, npdv.osv_id, 'detected',
-           jsonb_build_object('extraction_run_id', p_extraction_run_id, 'dep_name', npd.name),
+    INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, metadata, created_at)
+    SELECT p_project_id, npdv.osv_id, 'detected', p_extraction_run_id,
+           jsonb_build_object('dep_name', npd.name),
            v_now
     FROM project_dependency_vulnerabilities npdv
     JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
     WHERE npdv.project_id = p_project_id
-      AND npdv.extraction_run_id = p_extraction_run_id;
+      AND npdv.extraction_run_id = p_extraction_run_id
+    ON CONFLICT (project_id, osv_id, event_type, extraction_run_id)
+      WHERE extraction_run_id IS NOT NULL
+      DO NOTHING;
 
     SELECT COUNT(*) INTO v_pdv_new
     FROM project_dependency_vulnerabilities
@@ -4308,6 +4335,94 @@ BEGIN
     'slices_deleted', v_slices_deleted,
     'dep_files_deleted', v_files_deleted,
     'dep_functions_deleted', v_fns_deleted
+  );
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.reap_orphaned_extractions(p_older_than_hours integer DEFAULT 24)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  v_orphan RECORD;
+  v_cutoff TIMESTAMPTZ := NOW() - (p_older_than_hours || ' hours')::INTERVAL;
+  v_runs_reaped INTEGER := 0;
+  v_pdv_deleted INTEGER := 0;
+  v_pd_deleted INTEGER := 0;
+  v_semgrep_deleted INTEGER := 0;
+  v_secret_deleted INTEGER := 0;
+  v_flows_deleted INTEGER := 0;
+  v_slices_deleted INTEGER := 0;
+  v_files_deleted INTEGER := 0;
+  v_fns_deleted INTEGER := 0;
+  v_events_deleted INTEGER := 0;
+  v_temp INTEGER;
+  v_orphan_runs JSONB := '[]'::JSONB;
+BEGIN
+  FOR v_orphan IN
+    SELECT DISTINCT ej.project_id, ej.run_id::TEXT AS run_id
+    FROM extraction_jobs ej
+    JOIN projects p ON p.id = ej.project_id
+    WHERE ej.status IN ('failed', 'cancelled')
+      AND ej.created_at < v_cutoff
+      AND ej.run_id::TEXT IS DISTINCT FROM COALESCE(p.active_extraction_run_id, '')
+      AND ej.run_id::TEXT IS DISTINCT FROM COALESCE(p.previous_extraction_run_id, '')
+      AND NOT EXISTS (
+        SELECT 1 FROM extraction_jobs ej2
+        WHERE ej2.project_id = ej.project_id
+          AND ej2.status IN ('queued', 'processing')
+      )
+  LOOP
+    DELETE FROM project_dependency_files WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT; v_files_deleted := v_files_deleted + v_temp;
+
+    DELETE FROM project_dependency_functions WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT; v_fns_deleted := v_fns_deleted + v_temp;
+
+    DELETE FROM project_dependency_vulnerabilities WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT; v_pdv_deleted := v_pdv_deleted + v_temp;
+
+    DELETE FROM project_semgrep_findings WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT; v_semgrep_deleted := v_semgrep_deleted + v_temp;
+
+    DELETE FROM project_secret_findings WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT; v_secret_deleted := v_secret_deleted + v_temp;
+
+    DELETE FROM project_reachable_flows WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT; v_flows_deleted := v_flows_deleted + v_temp;
+
+    DELETE FROM project_usage_slices WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT; v_slices_deleted := v_slices_deleted + v_temp;
+
+    DELETE FROM project_vulnerability_events WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT; v_events_deleted := v_events_deleted + v_temp;
+
+    DELETE FROM project_dependencies
+    WHERE project_id = v_orphan.project_id
+      AND last_seen_extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT; v_pd_deleted := v_pd_deleted + v_temp;
+
+    v_orphan_runs := v_orphan_runs || jsonb_build_object(
+      'project_id', v_orphan.project_id,
+      'run_id', v_orphan.run_id
+    );
+    v_runs_reaped := v_runs_reaped + 1;
+  END LOOP;
+
+  RETURN jsonb_build_object(
+    'cutoff_hours', p_older_than_hours,
+    'runs_reaped', v_runs_reaped,
+    'pdv_deleted', v_pdv_deleted,
+    'pd_deleted', v_pd_deleted,
+    'semgrep_deleted', v_semgrep_deleted,
+    'secret_deleted', v_secret_deleted,
+    'flows_deleted', v_flows_deleted,
+    'slices_deleted', v_slices_deleted,
+    'files_deleted', v_files_deleted,
+    'fns_deleted', v_fns_deleted,
+    'events_deleted', v_events_deleted,
+    'orphan_runs', v_orphan_runs
   );
 END;
 $function$
