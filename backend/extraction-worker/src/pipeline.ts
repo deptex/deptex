@@ -237,14 +237,21 @@ function runDepScan(
   logger: { info: (step: string, msg: string) => Promise<void>; warn: (step: string, msg: string) => Promise<void> },
   heartbeat: () => Promise<void>,
   timeoutMs: number = 180 * 60 * 1000,
+  signal?: AbortSignal,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const verboseLogs =
     process.env.DEPSCAN_VERBOSE_LOG === '1' || /^true$/i.test(process.env.DEPSCAN_VERBOSE_LOG ?? '');
 
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('dep-scan aborted before start'));
+      return;
+    }
+
     const child = spawn(depScanExe, args, { cwd, stdio: 'pipe' });
     let stdout = '';
     let stderr = '';
+    let settled = false;
 
     child.stdout.on('data', (data: Buffer) => {
       const chunk = data.toString();
@@ -260,7 +267,6 @@ function runDepScan(
       stderr += data.toString();
     });
 
-    // DB keep-alive only — no log emission (dep-scan is intentionally quiet).
     const heartbeatInterval = setInterval(async () => {
       try {
         await heartbeat();
@@ -268,20 +274,40 @@ function runDepScan(
     }, 60_000);
 
     const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
       child.kill('SIGTERM');
       clearInterval(heartbeatInterval);
       reject(new Error(`dep-scan timed out after ${timeoutMs / 60000} min`));
     }, timeoutMs);
 
-    child.on('close', (code: number | null) => {
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGTERM');
       clearInterval(heartbeatInterval);
       clearTimeout(timeout);
+      reject(new Error('dep-scan aborted by outer timeout'));
+    };
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    child.on('close', (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(heartbeatInterval);
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', onAbort);
       resolve({ stdout, stderr, exitCode: code ?? 1 });
     });
 
     child.on('error', (err: Error) => {
+      if (settled) return;
+      settled = true;
       clearInterval(heartbeatInterval);
       clearTimeout(timeout);
+      signal?.removeEventListener('abort', onAbort);
       reject(err);
     });
   });
@@ -823,7 +849,7 @@ export async function runPipeline(
     let depScanSucceeded = false;
 
     try {
-      await withTimeout(async () => {
+      await withTimeout(async (signal) => {
       fs.mkdirSync(reportsDir, { recursive: true });
       const bomArg = path.join(workspaceRoot, 'sbom.json');
       const outArg = reportsDir;
@@ -866,14 +892,14 @@ export async function runPipeline(
 
       const heartbeatFn = heartbeat ?? (async () => {});
       try {
-        let res = await runDepScan(depScanExe, depScanArgs, workspaceRoot, log, heartbeatFn);
+        let res = await runDepScan(depScanExe, depScanArgs, workspaceRoot, log, heartbeatFn, undefined, signal);
         const rawStderr = stripAnsi((res.stderr ?? '').trim());
         const isVdbCorrupt = /CorruptError|malformed|database disk image is malformed/i.test(rawStderr);
 
         if (res.exitCode !== 0 && isVdbCorrupt) {
           await log.warn('vuln_scan', 'VDB on volume is corrupted (e.g. from previous out-of-space); clearing and retrying once...');
           clearVdbVolumeForRecovery();
-          res = await runDepScan(depScanExe, depScanArgs, workspaceRoot, log, heartbeatFn);
+          res = await runDepScan(depScanExe, depScanArgs, workspaceRoot, log, heartbeatFn, undefined, signal);
         }
 
         if (res.exitCode !== 0) {
