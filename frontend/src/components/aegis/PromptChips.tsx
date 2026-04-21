@@ -1,7 +1,7 @@
 export const DEFAULT_PROMPTS = [
-  "What's my security posture?",
-  'Which vulnerabilities are reachable?',
-  'Summarize my riskiest projects',
+  'Security posture',
+  'Reachable vulnerabilities',
+  'Riskiest projects',
 ];
 
 interface PromptChipsProps {
