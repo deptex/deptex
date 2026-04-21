@@ -1,5 +1,5 @@
 import { useRef, useState, type KeyboardEvent, type FormEvent } from 'react';
-import { ArrowUp } from 'lucide-react';
+import { Play } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 interface ChatInputProps {
@@ -10,7 +10,7 @@ interface ChatInputProps {
   autoFocus?: boolean;
 }
 
-export function ChatInput({ onSubmit, onChange, disabled, placeholder = 'Ask Aegis anything…', autoFocus }: ChatInputProps) {
+export function ChatInput({ onSubmit, onChange, disabled, placeholder = 'Ask Aegis anything', autoFocus }: ChatInputProps) {
   const [value, setValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -69,7 +69,7 @@ export function ChatInput({ onSubmit, onChange, disabled, placeholder = 'Ask Aeg
                 : 'bg-background-card text-foreground/40 cursor-not-allowed',
             )}
           >
-            <ArrowUp className="h-4 w-4" />
+            <Play className="h-3.5 w-3.5 fill-current" />
           </button>
         </div>
       </div>
