@@ -25,9 +25,9 @@ RUN curl -sL https://go.dev/dl/go1.22.10.linux-amd64.tar.gz \
   | tar xz -C /usr/local
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-# Install dep-scan and Semgrep — pin both. Floating semgrep was a supply-chain
-# risk and would silently break behavior across rebuilds when semgrep ships
-# breaking changes (frequent on its release cadence).
+# Install dep-scan and Semgrep. semgrep is exact-pinned because it ships
+# breaking changes frequently. dep-scan is major-version-pinned (6.*) to allow
+# patch uptake while blocking the 6→7 breaking-change class.
 RUN pip3 install --no-cache-dir --break-system-packages \
   owasp-depscan==6.* \
   semgrep==1.92.0 \
