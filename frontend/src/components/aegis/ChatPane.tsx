@@ -1,5 +1,4 @@
-import { useChat } from '@ai-sdk/react';
-import { DefaultChatTransport, type UIMessage } from 'ai';
+import { type UIMessage } from 'ai';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { aegisApi, type AegisMessage, type AegisThread, type MessagePart } from '../../lib/aegis-api';
 import { getAuthToken } from '../../lib/api';
@@ -8,21 +7,61 @@ import { ChatInput } from './ChatInput';
 import { ParticipantsPanel } from './ParticipantsPanel';
 import { AddPeopleModal } from './AddPeopleModal';
 import { TypingIndicator } from './TypingIndicator';
-import { Users } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 
 const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:3001';
 
+const AEGIS_PROMPTS = [
+  "What's my security posture?",
+  'How many reachable vulnerabilities does my org have?',
+  'Which projects are at highest risk?',
+  'Are any of my secrets exposed?',
+  'Which dependencies should I update first?',
+  'Show me my critical CVEs',
+];
+
+const TYPE_MS = 55;
+const BACKSPACE_MS = 30;
+const HOLD_MS = 2400;
+
+function useTypewriterPlaceholder(phrases: string[], enabled: boolean) {
+  const [index, setIndex] = useState(0);
+  const [visible, setVisible] = useState(0);
+  const [phase, setPhase] = useState<'typing' | 'hold' | 'backspacing'>('typing');
+  const phrase = phrases[index];
+
+  useEffect(() => {
+    if (!enabled) return;
+    if (phase === 'hold') {
+      const t = setTimeout(() => setPhase('backspacing'), HOLD_MS);
+      return () => clearTimeout(t);
+    }
+    if (phase === 'typing') {
+      if (visible >= phrase.length) { setPhase('hold'); return; }
+      const t = setTimeout(() => setVisible((v) => v + 1), TYPE_MS);
+      return () => clearTimeout(t);
+    }
+    if (visible <= 0) {
+      setIndex((i) => (i + 1) % phrases.length);
+      setPhase('typing');
+      return;
+    }
+    const t = setTimeout(() => setVisible((v) => v - 1), BACKSPACE_MS);
+    return () => clearTimeout(t);
+  }, [phase, visible, phrase.length, phrases.length, enabled]);
+
+  return phrase.slice(0, visible);
+}
+
 interface ChatPaneProps {
-  threadId: string;
   organizationId: string;
+  threadId?: string;
   thread?: AegisThread;
   currentUserId: string;
-  initialMessage?: string;
+  displayName: string;
+  onThreadCreated: (threadId: string) => void;
   onThreadUpdated?: () => void;
-  onLeaveThread?: () => void;
-  onMount?: () => void;
 }
 
 function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
@@ -59,27 +98,42 @@ function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
     if (!hasText && msg.content) parts.unshift({ type: 'text', text: msg.content });
     if (parts.length === 0) parts.push({ type: 'text', text: msg.content ?? '' });
 
-    // Stash userId as an extra (non-standard) field so MessageBubble can show
-    // authorship in shared threads. The AI SDK doesn't read this.
     return { id: msg.id, role: msg.role, parts, userId: msg.userId } as unknown as UIMessage;
   });
 }
 
-export function ChatPane({ threadId, organizationId, thread, currentUserId, initialMessage, onThreadUpdated, onMount }: ChatPaneProps) {
+export function ChatPane({
+  organizationId,
+  threadId: propThreadId,
+  thread,
+  currentUserId,
+  displayName,
+  onThreadCreated,
+  onThreadUpdated,
+}: ChatPaneProps) {
   const { user } = useAuth();
-  const [seed, setSeed] = useState<UIMessage[] | null>(null);
-  const [seedError, setSeedError] = useState<string | null>(null);
+  // We track the thread ID that THIS mount is working with. The prop may arrive
+  // later (after a silent URL update). We never reset state just because the
+  // prop appeared — the parent changes `key` when it wants a fresh mount.
+  const [selfThreadId, setSelfThreadId] = useState<string | undefined>(propThreadId);
+  const activeThreadId = selfThreadId ?? propThreadId;
+
+  const [messages, setMessages] = useState<UIMessage[]>([]);
+  const [seedLoaded, setSeedLoaded] = useState(!propThreadId);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [participantsOpen, setParticipantsOpen] = useState(false);
   const [addPeopleOpen, setAddPeopleOpen] = useState(false);
   const [typingUsers, setTypingUsers] = useState<Record<string, { displayName: string; lastPing: number }>>({});
   const [participantNames, setParticipantNames] = useState<Record<string, string>>({});
-  const initialSentRef = useRef(false);
-  const autoTitleDoneRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const typingChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const lastTypingSentRef = useRef(0);
 
-  useEffect(() => { onMount?.(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Keep latest onThreadUpdated in a ref so the Realtime effect doesn't tear
+  // down on every parent render.
+  const onThreadUpdatedRef = useRef(onThreadUpdated);
+  useEffect(() => { onThreadUpdatedRef.current = onThreadUpdated; });
 
   const myDisplayName = useMemo(() => {
     const full = user?.user_metadata?.full_name as string | undefined;
@@ -88,69 +142,90 @@ export function ChatPane({ threadId, organizationId, thread, currentUserId, init
     return 'Someone';
   }, [user]);
 
+  // One-shot seed load: if we mounted with a threadId prop, load history.
+  // Never runs again — fresh thread = fresh mount via parent `key`.
   useEffect(() => {
+    if (!propThreadId) return;
     let cancelled = false;
-    setSeed(null);
-    setSeedError(null);
-    initialSentRef.current = false;
-    autoTitleDoneRef.current = false;
     aegisApi
-      .getMessages(threadId)
+      .getMessages(propThreadId)
       .then((msgs) => {
         if (cancelled) return;
-        setSeed(buildInitialMessages(msgs));
+        setMessages(buildInitialMessages(msgs));
+        setSeedLoaded(true);
       })
-      .catch((err) => {
+      .catch(() => {
         if (cancelled) return;
-        setSeedError(err?.message ?? 'Failed to load messages');
+        setSeedLoaded(true);
       });
     return () => { cancelled = true; };
-  }, [threadId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const transport = useMemo(
-    () =>
-      new DefaultChatTransport({
-        api: `${API_BASE_URL}/api/aegis/chat`,
-        headers: async (): Promise<Record<string, string>> => {
-          const token = await getAuthToken();
-          return token ? { Authorization: `Bearer ${token}` } : {};
+  const emitTyping = useCallback((typing: boolean) => {
+    const channel = typingChannelRef.current;
+    if (!channel) return;
+    const now = Date.now();
+    if (typing && now - lastTypingSentRef.current < 2000) return;
+    lastTypingSentRef.current = typing ? now : 0;
+    channel.send({
+      type: 'broadcast',
+      event: 'typing',
+      payload: { userId: currentUserId, typing, displayName: myDisplayName },
+    });
+  }, [currentUserId, myDisplayName]);
+
+  const handleSubmit = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || isGenerating) return;
+    emitTyping(false);
+    setSendError(null);
+
+    const tempId = `temp-${Date.now()}`;
+    const tempMsg: UIMessage = {
+      id: tempId,
+      role: 'user',
+      parts: [{ type: 'text', text: trimmed }],
+      userId: currentUserId,
+    } as unknown as UIMessage;
+    setMessages((prev) => [...prev, tempMsg]);
+    setIsGenerating(true);
+
+    try {
+      const token = await getAuthToken();
+      const response = await fetch(`${API_BASE_URL}/api/aegis/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: { threadId, organizationId },
-      }),
-    [threadId, organizationId],
-  );
-
-  const { messages, sendMessage, setMessages, status, error } = useChat({
-    id: threadId,
-    transport,
-    messages: seed ?? undefined,
-    onFinish: () => {
-      if (!autoTitleDoneRef.current) {
-        autoTitleDoneRef.current = true;
-        aegisApi
-          .autoTitle(threadId)
-          .then(() => onThreadUpdated?.())
-          .catch(() => {});
+        body: JSON.stringify({ organizationId, threadId: activeThreadId, message: trimmed }),
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error((err as any).error || 'Failed to send message');
       }
-    },
-  });
-
-  // Auto-send the queued initialMessage from the landing chat bar once seed loads.
-  useEffect(() => {
-    if (!seed || initialSentRef.current || !initialMessage) return;
-    if (seed.length > 0) { initialSentRef.current = true; return; }
-    initialSentRef.current = true;
-    void sendMessage({ text: initialMessage });
-  }, [seed, initialMessage, sendMessage]);
+      const data = (await response.json()) as { threadId: string };
+      if (!activeThreadId && data.threadId) {
+        setSelfThreadId(data.threadId);
+        onThreadCreated(data.threadId);
+      }
+    } catch (err: any) {
+      setIsGenerating(false);
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+      setSendError(err?.message ?? 'Failed to send message');
+    }
+  }, [organizationId, activeThreadId, currentUserId, isGenerating, emitTyping, onThreadCreated]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages, status]);
+  }, [messages, isGenerating]);
 
-  // Load participant display names for authorship rendering in shared threads.
+  // Load participant names when we have an active thread.
   useEffect(() => {
+    if (!activeThreadId) return;
     let cancelled = false;
-    aegisApi.listParticipants(threadId)
+    aegisApi.listParticipants(activeThreadId)
       .then((list) => {
         if (cancelled) return;
         const map: Record<string, string> = {};
@@ -159,18 +234,31 @@ export function ChatPane({ threadId, organizationId, thread, currentUserId, init
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [threadId, thread?.participantCount]);
+  }, [activeThreadId, thread?.participantCount]);
 
-  // Realtime: merge messages from other participants.
+  // Realtime subscription on aegis_chat_messages for this thread.
+  // Kicks in once we have an activeThreadId (either from prop or from a
+  // just-created thread). Doesn't depend on onThreadUpdated — uses the ref.
   useEffect(() => {
-    const channel = supabase
-      .channel(`aegis-thread-${threadId}`)
+    if (!activeThreadId) return;
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    (async () => {
+      // Ensure Realtime uses the authenticated user's JWT. Without this, the
+      // first channel after page-load can race the auth wiring and subscribe
+      // as anon — RLS then filters out every postgres_changes event.
+      const { data: { session } } = await supabase.auth.getSession();
+      await (supabase.realtime as any).setAuth(session?.access_token ?? null);
+      if (cancelled) return;
+
+      channel = supabase
+        .channel(`aegis-thread-${activeThreadId}`)
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'aegis_chat_messages', filter: `thread_id=eq.${threadId}` },
+        { event: 'INSERT', schema: 'public', table: 'aegis_chat_messages', filter: `thread_id=eq.${activeThreadId}` },
         (payload) => {
           const row = payload.new as any;
-          // Skip my own messages (already in local state via useChat).
           if (row.role === 'user' && row.user_id === currentUserId) return;
           setMessages((prev) => {
             if (prev.some((m) => m.id === row.id)) return prev;
@@ -187,15 +275,25 @@ export function ChatPane({ threadId, organizationId, thread, currentUserId, init
             ]);
             return [...prev, uiMsg];
           });
+          if (row.role === 'assistant') {
+            setIsGenerating(false);
+            onThreadUpdatedRef.current?.();
+          }
         },
       )
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [threadId, currentUserId, setMessages]);
+    })();
+
+    return () => {
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, [activeThreadId, currentUserId]);
 
   // Typing broadcast channel.
   useEffect(() => {
-    const channel = supabase.channel(`aegis-typing-${threadId}`, { config: { broadcast: { self: false } } });
+    if (!activeThreadId) return;
+    const channel = supabase.channel(`aegis-typing-${activeThreadId}`, { config: { broadcast: { self: false } } });
     channel
       .on('broadcast', { event: 'typing' }, (payload) => {
         const data = (payload as any).payload as { userId: string; typing: boolean; displayName: string };
@@ -215,9 +313,8 @@ export function ChatPane({ threadId, organizationId, thread, currentUserId, init
       supabase.removeChannel(channel);
       typingChannelRef.current = null;
     };
-  }, [threadId, currentUserId]);
+  }, [activeThreadId, currentUserId]);
 
-  // Expire stale typing entries (no ping in 3s).
   useEffect(() => {
     if (Object.keys(typingUsers).length === 0) return;
     const interval = setInterval(() => {
@@ -235,90 +332,64 @@ export function ChatPane({ threadId, organizationId, thread, currentUserId, init
     return () => clearInterval(interval);
   }, [typingUsers]);
 
-  const emitTyping = useCallback((typing: boolean) => {
-    const channel = typingChannelRef.current;
-    if (!channel) return;
-    const now = Date.now();
-    if (typing && now - lastTypingSentRef.current < 2000) return;
-    lastTypingSentRef.current = typing ? now : 0;
-    channel.send({
-      type: 'broadcast',
-      event: 'typing',
-      payload: { userId: currentUserId, typing, displayName: myDisplayName },
-    });
-  }, [currentUserId, myDisplayName]);
-
-  const handleSubmit = useCallback((text: string) => {
-    emitTyping(false);
-    void sendMessage({ text });
-  }, [sendMessage, emitTyping]);
-
   const handleInputChange = useCallback(() => {
     emitTyping(true);
   }, [emitTyping]);
 
-  const isStreaming = status === 'streaming' || status === 'submitted';
-
-  const handleEdit = useCallback(async (userId: string, newText: string) => {
+  const handleEdit = useCallback(async (messageId: string, newText: string) => {
     try {
-      await aegisApi.truncateBelow(userId);
+      await aegisApi.truncateBelow(messageId);
     } catch { /* ignore */ }
     setMessages((prev) => {
-      const idx = prev.findIndex((m) => m.id === userId);
+      const idx = prev.findIndex((m) => m.id === messageId);
       return idx === -1 ? prev : prev.slice(0, idx);
     });
-    autoTitleDoneRef.current = true;
-    void sendMessage({ text: newText });
-  }, [sendMessage, setMessages]);
+    void handleSubmit(newText);
+  }, [handleSubmit]);
 
+  const showLanding = !activeThreadId && messages.length === 0;
+  const placeholder = useTypewriterPlaceholder(AEGIS_PROMPTS, showLanding);
 
-  const participantCount = thread?.participantCount ?? 1;
-  const isShared = participantCount > 1;
+  if (showLanding) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center px-6">
+        <div className="w-full max-w-2xl -mt-12">
+          <div className="mb-8">
+            <div className="text-base text-foreground/60 mb-1">Hi {displayName}</div>
+            <h1 className="text-3xl font-semibold text-foreground tracking-tight">
+              What can I help you secure?
+            </h1>
+          </div>
+
+          <div className="rounded-2xl bg-background-card border border-border">
+            <ChatInput onSubmit={handleSubmit} placeholder={placeholder} autoFocus />
+          </div>
+          {sendError && (
+            <div className="mt-3 text-sm text-red-500">{sendError}</div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full flex-col">
-      {thread && (
-        <div className="flex items-center justify-end px-6 py-3 border-b border-border">
-          <button
-            type="button"
-            onClick={() => setParticipantsOpen(true)}
-            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-foreground/60 hover:text-foreground hover:bg-background-subtle/60 transition-colors"
-            title="Participants"
-          >
-            <Users className="h-3.5 w-3.5" />
-            {isShared ? `${participantCount}` : 'Share'}
-          </button>
-        </div>
-      )}
       <div className="flex-1 overflow-y-auto">
-        {seedError && (
-          <div className="flex h-full items-center justify-center text-sm text-red-500">{seedError}</div>
-        )}
         <div className="py-4">
-          {/* While real messages are loading and an initialMessage exists, show it
-              provisionally so the user sees their text immediately with no blank flash. */}
-          {(() => {
-            const hasReal = messages.length > 0;
-            const display: UIMessage[] = hasReal ? messages : (
-              initialMessage ? [{
-                id: 'provisional',
-                role: 'user',
-                parts: [{ type: 'text', text: initialMessage }],
-                userId: currentUserId,
-              } as unknown as UIMessage] : []
-            );
-            return display.map((m) => (
-              <MessageBubble
-                key={m.id}
-                message={m}
-                currentUserId={currentUserId}
-                participantNames={participantNames}
-                disabled={isStreaming}
-                onEdit={m.id !== 'provisional' && m.role === 'user' && (m as any).userId === currentUserId ? (newText) => void handleEdit(m.id, newText) : undefined}
-              />
-            ));
-          })()}
-          {isStreaming && messages[messages.length - 1]?.role === 'user' && (
+          {!seedLoaded && activeThreadId && (
+            <div className="flex h-full items-center justify-center text-sm text-foreground/40">Loading…</div>
+          )}
+          {messages.map((m) => (
+            <MessageBubble
+              key={m.id}
+              message={m}
+              currentUserId={currentUserId}
+              participantNames={participantNames}
+              disabled={isGenerating}
+              onEdit={!m.id.startsWith('temp-') && m.role === 'user' && (m as any).userId === currentUserId ? (newText) => void handleEdit(m.id, newText) : undefined}
+            />
+          ))}
+          {isGenerating && (
             <div className="px-4 py-3">
               <div className="mx-auto max-w-3xl flex gap-3 items-center text-sm text-foreground/60">
                 <span className="flex gap-1">
@@ -329,11 +400,9 @@ export function ChatPane({ threadId, organizationId, thread, currentUserId, init
               </div>
             </div>
           )}
-          {error && (
+          {sendError && (
             <div className="px-4 py-3">
-              <div className="mx-auto max-w-3xl text-sm text-red-500">
-                {error.message || 'Something went wrong.'}
-              </div>
+              <div className="mx-auto max-w-3xl text-sm text-red-500">{sendError}</div>
             </div>
           )}
           <TypingIndicator
@@ -342,24 +411,28 @@ export function ChatPane({ threadId, organizationId, thread, currentUserId, init
           <div ref={bottomRef} />
         </div>
       </div>
-      <ChatInput onSubmit={handleSubmit} onChange={handleInputChange} disabled={isStreaming} autoFocus />
+      <ChatInput onSubmit={handleSubmit} onChange={handleInputChange} disabled={isGenerating} autoFocus />
 
-      <ParticipantsPanel
-        open={participantsOpen}
-        onOpenChange={setParticipantsOpen}
-        threadId={threadId}
-        currentUserId={currentUserId}
-        isCreator={thread?.isCreator ?? false}
-        onOpenAddPeople={() => { setParticipantsOpen(false); setAddPeopleOpen(true); }}
-        onParticipantsChanged={() => onThreadUpdated?.()}
-      />
-      <AddPeopleModal
-        open={addPeopleOpen}
-        onOpenChange={setAddPeopleOpen}
-        organizationId={organizationId}
-        threadId={threadId}
-        onAdded={() => onThreadUpdated?.()}
-      />
+      {activeThreadId && (
+        <>
+          <ParticipantsPanel
+            open={participantsOpen}
+            onOpenChange={setParticipantsOpen}
+            threadId={activeThreadId}
+            currentUserId={currentUserId}
+            isCreator={thread?.isCreator ?? false}
+            onOpenAddPeople={() => { setParticipantsOpen(false); setAddPeopleOpen(true); }}
+            onParticipantsChanged={() => onThreadUpdated?.()}
+          />
+          <AddPeopleModal
+            open={addPeopleOpen}
+            onOpenChange={setAddPeopleOpen}
+            organizationId={organizationId}
+            threadId={activeThreadId}
+            onAdded={() => onThreadUpdated?.()}
+          />
+        </>
+      )}
     </div>
   );
 }

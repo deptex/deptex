@@ -1,37 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { aegisApi, type AegisThread } from '../../lib/aegis-api';
 import type { Organization } from '../../lib/api';
 import { ThreadList } from '../../components/aegis/ThreadList';
-import { LandingHero } from '../../components/aegis/LandingHero';
 import { ChatPane } from '../../components/aegis/ChatPane';
 import { JoinByCodeModal } from '../../components/aegis/JoinByCodeModal';
 import { SearchChatsModal } from '../../components/aegis/SearchChatsModal';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
-import { MessageBubble } from '../../components/aegis/MessageBubble';
-import type { UIMessage } from 'ai';
-
-function PendingChatView({ message }: { message: string }) {
-  return (
-    <div className="flex h-full flex-col">
-      <div className="flex-1 overflow-y-auto">
-        <div className="py-4">
-          <MessageBubble
-            message={{ id: 'pending', role: 'user', parts: [{ type: 'text', text: message }] } as unknown as UIMessage}
-          />
-          <div className="px-4 py-3">
-            <div className="mx-auto max-w-3xl pl-10 flex gap-1">
-              <span className="h-1.5 w-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:0ms]" />
-              <span className="h-1.5 w-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:150ms]" />
-              <span className="h-1.5 w-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:300ms]" />
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 interface OrgOutlet {
   organization: Organization | null;
@@ -41,7 +17,6 @@ interface OrgOutlet {
 export default function AegisPage() {
   const { id: orgId, threadId: activeThreadId } = useParams<{ id: string; threadId?: string }>();
   const navigate = useNavigate();
-  const location = useLocation();
   const { organization } = useOutletContext<OrgOutlet>();
   const { user } = useAuth();
   const { toast } = useToast();
@@ -57,33 +32,29 @@ export default function AegisPage() {
   const [loading, setLoading] = useState(true);
   const [joinByCodeOpen, setJoinByCodeOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  // Shown immediately when the user submits from the landing hero, before the thread
-  // is created, so there's no blank flash between input and the chat view.
-  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
-  // ID of the thread whose title is still being generated (shows skeleton in sidebar).
   const [pendingTitleThreadId, setPendingTitleThreadId] = useState<string | null>(null);
   const pendingTitleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // The key passed to ChatPane. It stays stable across "silent" URL updates
+  // (e.g. when ChatPane creates a thread from the landing state and we just
+  // want to reflect the new threadId in the URL). It only changes when the
+  // user intentionally switches context — clicking a different thread in the
+  // sidebar, hitting "New chat", etc.
+  const [chatKey, setChatKey] = useState<string>(() => activeThreadId ?? 'new');
+  const silentUrlUpdateRef = useRef(false);
+
+  useEffect(() => {
+    if (silentUrlUpdateRef.current) {
+      silentUrlUpdateRef.current = false;
+      return;
+    }
+    setChatKey(activeThreadId ?? `new-${Date.now()}`);
+  }, [activeThreadId]);
+
   const activeThread = useMemo(
     () => threads.find((t) => t.id === activeThreadId) ?? null,
     [threads, activeThreadId],
   );
-
-  // Capture initialMessage once per thread navigation so it isn't resent on re-renders.
-  const consumedInitialRef = useRef<string | null>(null);
-  const [initialMessageForThread, setInitialMessageForThread] = useState<string | undefined>(undefined);
-  useEffect(() => {
-    const state = location.state as { initialMessage?: string } | null;
-    const key = activeThreadId ?? null;
-    if (state?.initialMessage && consumedInitialRef.current !== key) {
-      consumedInitialRef.current = key;
-      setInitialMessageForThread(state.initialMessage);
-      // Clear the state so refresh doesn't re-trigger.
-      navigate(location.pathname, { replace: true, state: null });
-    } else if (consumedInitialRef.current !== key) {
-      consumedInitialRef.current = key;
-      setInitialMessageForThread(undefined);
-    }
-  }, [activeThreadId, location, navigate]);
 
   const canUseAegis = organization?.permissions?.interact_with_aegis === true;
 
@@ -99,8 +70,6 @@ export default function AegisPage() {
     }
   }, [orgId, toast]);
 
-  // Tracks whether we've already done the initial auto-navigate to the latest thread.
-  // Prevents "New chat" (which clears activeThreadId) from being immediately overridden.
   const autoNavigatedRef = useRef(false);
   const activeThreadIdRef = useRef(activeThreadId);
   activeThreadIdRef.current = activeThreadId;
@@ -124,13 +93,9 @@ export default function AegisPage() {
       }
     });
     return () => { cancelled = true; };
-  // activeThreadId intentionally excluded — navigating away from a thread should
-  // not retrigger a load+auto-navigate that would override "New chat".
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgId, canUseAegis, refreshThreads]);
 
-  // "New chat" just returns to the landing screen; the thread is created when the
-  // user actually submits their first message.
   const handleCreate = useCallback(() => {
     if (!orgId) return;
     navigate(`/organizations/${orgId}/aegis`);
@@ -140,6 +105,42 @@ export default function AegisPage() {
     if (!orgId) return;
     navigate(`/organizations/${orgId}/aegis/${threadId}`);
   }, [orgId, navigate]);
+
+  // Called by ChatPane when it creates a thread from the landing state.
+  // Updates the URL silently (no remount) and injects an optimistic thread
+  // into the sidebar so the user sees the skeleton title immediately.
+  const handleThreadCreated = useCallback((threadId: string) => {
+    if (!orgId) return;
+    silentUrlUpdateRef.current = true;
+    const now = new Date().toISOString();
+    setThreads((prev) => {
+      if (prev.some((t) => t.id === threadId)) return prev;
+      const optimistic: AegisThread = {
+        id: threadId,
+        organizationId: orgId,
+        userId: user?.id ?? '',
+        createdBy: user?.id ?? '',
+        isCreator: true,
+        participantCount: 1,
+        title: 'New chat',
+        createdAt: now,
+        updatedAt: now,
+        pinnedAt: null,
+        archivedAt: null,
+      };
+      return [optimistic, ...prev];
+    });
+    setPendingTitleThreadId(threadId);
+    if (pendingTitleTimeoutRef.current) clearTimeout(pendingTitleTimeoutRef.current);
+    pendingTitleTimeoutRef.current = setTimeout(() => setPendingTitleThreadId(null), 20_000);
+    navigate(`/organizations/${orgId}/aegis/${threadId}`, { replace: true });
+  }, [orgId, user, navigate]);
+
+  const handleThreadUpdated = useCallback(() => {
+    void refreshThreads();
+    if (pendingTitleTimeoutRef.current) clearTimeout(pendingTitleTimeoutRef.current);
+    setPendingTitleThreadId(null);
+  }, [refreshThreads]);
 
   const handleRename = useCallback(async (threadId: string, title: string) => {
     let previous: AegisThread | undefined;
@@ -215,7 +216,6 @@ export default function AegisPage() {
   }, [orgId, navigate, refreshThreads]);
 
   const handleDelete = useCallback(async (threadId: string) => {
-    // Optimistic — remove locally and navigate away, rollback on failure.
     let snapshot: AegisThread[] = [];
     setThreads((prev) => {
       snapshot = prev;
@@ -231,24 +231,6 @@ export default function AegisPage() {
       toast({ title: 'Delete failed', description: err?.message, variant: 'destructive' });
     }
   }, [activeThreadId, orgId, navigate, toast]);
-
-  const startChatWithMessage = useCallback(async (message: string) => {
-    if (!orgId) return;
-    // Show the pending chat view immediately — before the API call — so there's
-    // no blank flash between the user hitting send and the chat UI appearing.
-    setPendingMessage(message);
-    try {
-      const thread = await aegisApi.createThread(orgId);
-      setThreads((prev) => [thread, ...prev]);
-      setPendingTitleThreadId(thread.id);
-      if (pendingTitleTimeoutRef.current) clearTimeout(pendingTitleTimeoutRef.current);
-      pendingTitleTimeoutRef.current = setTimeout(() => setPendingTitleThreadId(null), 20_000);
-      navigate(`/organizations/${orgId}/aegis/${thread.id}`, { state: { initialMessage: message } });
-    } catch (err: any) {
-      setPendingMessage(null);
-      toast({ title: 'Could not start chat', description: err?.message, variant: 'destructive' });
-    }
-  }, [orgId, navigate, toast]);
 
   if (!orgId) return null;
   if (!canUseAegis) {
@@ -284,29 +266,16 @@ export default function AegisPage() {
         />
       </aside>
       <main className="flex-1 flex flex-col min-w-0">
-        {activeThreadId ? (
-          <ChatPane
-            key={activeThreadId}
-            threadId={activeThreadId}
-            organizationId={orgId}
-            thread={activeThread ?? undefined}
-            currentUserId={user?.id ?? ''}
-            initialMessage={initialMessageForThread}
-            onThreadUpdated={() => {
-              void refreshThreads();
-              if (pendingTitleTimeoutRef.current) clearTimeout(pendingTitleTimeoutRef.current);
-              setPendingTitleThreadId(null);
-            }}
-            onMount={() => setPendingMessage(null)}
-          />
-        ) : pendingMessage ? (
-          <PendingChatView message={pendingMessage} />
-        ) : (
-          <LandingHero
-            name={displayName}
-            onSubmit={(msg) => void startChatWithMessage(msg)}
-          />
-        )}
+        <ChatPane
+          key={chatKey}
+          organizationId={orgId}
+          threadId={activeThreadId}
+          thread={activeThread ?? undefined}
+          currentUserId={user?.id ?? ''}
+          displayName={displayName}
+          onThreadCreated={handleThreadCreated}
+          onThreadUpdated={handleThreadUpdated}
+        />
       </main>
 
       <JoinByCodeModal
