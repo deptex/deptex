@@ -46,6 +46,28 @@ describe('withTimeout', () => {
       jest.useRealTimers();
     }
   });
+
+  it('aborts the passed AbortSignal when the timeout fires', async () => {
+    let signalRef: AbortSignal | null = null;
+    const slow = (signal: AbortSignal) => {
+      signalRef = signal;
+      return new Promise<string>((r) => setTimeout(() => r('late'), 500));
+    };
+    await expect(withTimeout(slow, 20, 'aborter')).rejects.toBeInstanceOf(StepTimeoutError);
+    expect(signalRef).not.toBeNull();
+    expect(signalRef!.aborted).toBe(true);
+  });
+
+  it('does not abort the signal when fn resolves under budget', async () => {
+    let signalRef: AbortSignal | null = null;
+    const fast = async (signal: AbortSignal) => {
+      signalRef = signal;
+      return 'ok';
+    };
+    await expect(withTimeout(fast, 500, 'non_aborter')).resolves.toBe('ok');
+    expect(signalRef).not.toBeNull();
+    expect(signalRef!.aborted).toBe(false);
+  });
 });
 
 describe('classifyError', () => {
