@@ -45,19 +45,40 @@ if (-not (Test-Path $WorkspacePath -PathType Container)) {
 
 $AbsWs = (Resolve-Path $WorkspacePath).Path
 
-# Extract --output + default --label to host basename.
+# Extract --output + default --label to host basename. Accept both equals form
+# (--output=./path) and space form (--output ./path) — see bin/deptex-scan for
+# why the space form matters.
 $OutputDir = './extraction-results'
 $HasLabel = $false
 $Passthrough = @()
-foreach ($arg in $args[2..($args.Count - 1)]) {
+$Rest = $args[2..($args.Count - 1)]
+$i = 0
+while ($i -lt $Rest.Count) {
+  $arg = $Rest[$i]
   if ($arg -like '--output=*') {
     $OutputDir = $arg.Substring('--output='.Length)
+  } elseif ($arg -eq '--output') {
+    $i++
+    if ($i -ge $Rest.Count) {
+      Write-Error '--output requires a value'
+      exit 2
+    }
+    $OutputDir = $Rest[$i]
   } elseif ($arg -like '--label=*') {
     $HasLabel = $true
     $Passthrough += $arg
+  } elseif ($arg -eq '--label') {
+    $i++
+    if ($i -ge $Rest.Count) {
+      Write-Error '--label requires a value'
+      exit 2
+    }
+    $HasLabel = $true
+    $Passthrough += "--label=$($Rest[$i])"
   } else {
     $Passthrough += $arg
   }
+  $i++
 }
 
 if (-not $HasLabel) {

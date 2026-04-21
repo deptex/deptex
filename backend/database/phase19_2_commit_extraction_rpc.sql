@@ -435,7 +435,12 @@ BEGIN
         re_review_triggered_at = old_data.re_review_triggered_at,
         re_review_reasons = old_data.re_review_reasons
       FROM (
-        SELECT
+        -- Bug-002 fix: see phase19_3 carry-forward for rationale. DISTINCT ON
+        -- picks exactly one source row per (new_pd_id, osv_id) target pair,
+        -- preferring UUID match (same version) then same-version name match
+        -- then deterministic tiebreaker. Eliminates monorepo fanout while
+        -- preserving version-bump carry-forward semantics.
+        SELECT DISTINCT ON (npd.id, opdv.osv_id)
           npd.id AS new_pd_id,
           opdv.osv_id,
           opdv.status, opdv.suppressed, opdv.suppressed_by, opdv.suppressed_at,
@@ -453,6 +458,11 @@ BEGIN
          AND npd.last_seen_extraction_run_id = p_extraction_run_id
         WHERE opdv.project_id = p_project_id
           AND opdv.extraction_run_id = v_prev_active
+        ORDER BY
+          npd.id, opdv.osv_id,
+          (npd.id = opd.id) DESC,
+          (npd.version = opd.version) DESC,
+          opdv.detected_at ASC NULLS LAST
       ) AS old_data
       WHERE new_pdv.project_id = p_project_id
         AND new_pdv.extraction_run_id = p_extraction_run_id
@@ -466,8 +476,12 @@ BEGIN
     -- 7. Trigger detection on carried-forward PDVs
     -- =========================================================================
     IF v_enabled THEN
+      -- Bug-001 fix: see phase19_3 trigger_calc for rationale. DISTINCT ON
+      -- (npdv.id) picks exactly one (opd, old_pdv) pair per new PDV,
+      -- preserving version-bump trigger detection while eliminating monorepo
+      -- fanout and re-enabling unchanged-version trigger firing.
       WITH trigger_calc AS (
-        SELECT
+        SELECT DISTINCT ON (npdv.id)
           npdv.id AS pdv_id,
           npdv.osv_id,
           CASE
@@ -524,7 +538,6 @@ BEGIN
         JOIN project_dependencies opd
           ON opd.project_id = npd.project_id
          AND opd.name = npd.name
-         AND opd.last_seen_extraction_run_id IS DISTINCT FROM p_extraction_run_id
         JOIN project_dependency_vulnerabilities old_pdv
           ON old_pdv.project_id = p_project_id
          AND old_pdv.project_dependency_id = opd.id
@@ -532,6 +545,11 @@ BEGIN
          AND old_pdv.extraction_run_id = v_prev_active
         WHERE npdv.project_id = p_project_id
           AND npdv.extraction_run_id = p_extraction_run_id
+        ORDER BY
+          npdv.id,
+          (opd.id = npd.id) DESC,
+          (opd.version = npd.version) DESC,
+          old_pdv.detected_at ASC NULLS LAST
       ),
       new_reasons AS (
         SELECT
