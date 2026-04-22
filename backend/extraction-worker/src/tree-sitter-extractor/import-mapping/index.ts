@@ -44,7 +44,7 @@ export function resolveImportToDep(
     case 'cargo':
       return resolveCargoImport(importName, namesOf(deps));
     case 'nuget':
-      return resolveNugetImport(importName, namesOf(deps));
+      return resolveNugetImport(importName, deps);
     default: {
       const _exhaustive: never = ecosystem;
       return _exhaustive;
