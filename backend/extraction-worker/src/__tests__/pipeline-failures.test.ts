@@ -144,6 +144,10 @@ describe('runPipeline', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (global as any).fetch = jest.fn().mockResolvedValue({ ok: true });
+    // binaryAvailable() uses spawnSync(which/where, [name]) and checks
+    // .status === 0. Default the mock to "installed" so the semgrep /
+    // trufflehog steps run their logic; individual tests can override.
+    mockSpawnSync.mockReturnValue({ status: 0, stdout: '', stderr: '' });
   });
 
   it('clone auth failure (401/403) -> pipeline throws, error message contains "Authentication failed"', async () => {

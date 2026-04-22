@@ -16,10 +16,12 @@
  * list below strips those before diffing. Per-fixture
  * `fixtures/<name>/snapshot-ignore.json` (optional) can add more.
  *
- * This runner intentionally shells out to the CLI (via `npm run cli`)
- * rather than importing runScan directly — that matches how downstream
- * users invoke the tool and catches CLI-specific regressions (arg parsing,
- * exit codes, stdout format) alongside pipeline changes.
+ * This runner intentionally shells out to the CLI (via `./bin/deptex-scan`,
+ * the Docker wrapper) rather than importing runScan directly — that matches
+ * how downstream users invoke the tool and catches CLI-specific regressions
+ * (arg parsing, exit codes, stdout format) alongside pipeline changes.
+ *
+ * Prereq: the CLI image must be built first (`npm run docker:build`).
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -172,17 +174,26 @@ function runCli(
   outputDir: string,
   fixture: FixtureManifest,
 ): number {
-  const args = ['run', 'cli', '--', 'run', workspacePath, `--output=${outputDir}`, '--quiet'];
+  const wrapper = path.join(WORKER_ROOT, 'bin', 'deptex-scan');
+  const args = ['run', workspacePath, `--output=${outputDir}`, '--quiet'];
   if (fixture.ecosystem) args.push(`--ecosystem=${fixture.ecosystem}`);
-  const res = spawnSync('npm', args, {
+  // On Windows the bash shebang isn't honored by spawn — invoke bash explicitly.
+  const [cmd, cmdArgs] = process.platform === 'win32'
+    ? ['bash', [wrapper, ...args]] as [string, string[]]
+    : [wrapper, args] as [string, string[]];
+  const res = spawnSync(cmd, cmdArgs, {
     cwd: WORKER_ROOT,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    shell: process.platform === 'win32',
   });
   if (res.stdout && res.stdout.trim()) {
     for (const line of res.stdout.trim().split(/\r?\n/).slice(-3)) {
       console.log(`    stdout: ${line}`);
+    }
+  }
+  if (res.stderr && res.stderr.trim()) {
+    for (const line of res.stderr.trim().split(/\r?\n/).slice(-5)) {
+      console.log(`    stderr: ${line}`);
     }
   }
   return res.status ?? 2;

@@ -79,18 +79,34 @@ export const nestjsDetector: FrameworkDetector = {
       // Simplest path: walk up to the containing node and look for sibling
       // decorator nodes.
 
-      const classParent = node.parent;
+      // tree-sitter-typescript nests decorators inside class_declaration
+      // (before the class body), while export_statement wraps exported classes
+      // so decorators may also sit as preceding siblings under the parent.
+      // Check both locations. Node-wrapper identity is unreliable in
+      // web-tree-sitter, so compare startIndex positions.
       let controllerPrefix: string | null = null;
       let isController = false;
-      if (classParent) {
-        for (let i = 0; i < classParent.namedChildCount; i++) {
-          const sib = classParent.namedChild(i)!;
-          if (sib === node) break;
-          if (sib.type === 'decorator') {
-            const name = decoratorName(sib, source);
-            if (name === 'Controller') {
-              isController = true;
-              controllerPrefix = decoratorFirstStringArg(sib, source);
+      for (let i = 0; i < node.namedChildCount; i++) {
+        const child = node.namedChild(i)!;
+        if (child.type !== 'decorator') break;
+        const name = decoratorName(child, source);
+        if (name === 'Controller') {
+          isController = true;
+          controllerPrefix = decoratorFirstStringArg(child, source);
+        }
+      }
+      if (!isController) {
+        const classParent = node.parent;
+        if (classParent) {
+          for (let i = 0; i < classParent.namedChildCount; i++) {
+            const sib = classParent.namedChild(i)!;
+            if (sib.startIndex >= node.startIndex) break;
+            if (sib.type === 'decorator') {
+              const name = decoratorName(sib, source);
+              if (name === 'Controller') {
+                isController = true;
+                controllerPrefix = decoratorFirstStringArg(sib, source);
+              }
             }
           }
         }
