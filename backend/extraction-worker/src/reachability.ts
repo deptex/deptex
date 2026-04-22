@@ -398,11 +398,17 @@ export async function updateReachabilityLevels(
 
   const { data: pds } = await supabase
     .from('project_dependencies')
-    .select('id, dependency_id')
+    .select('id, dependency_id, is_direct, files_importing_count')
     .eq('project_id', projectId)
     .eq('last_seen_extraction_run_id', runId);
 
   const depIdMap = new Map(pds?.map((pd: any) => [pd.id, pd.dependency_id]) ?? []);
+  const pdMetaMap = new Map<string, { isDirect: boolean; filesImporting: number }>(
+    pds?.map((pd: any) => [
+      pd.id,
+      { isDirect: !!pd.is_direct, filesImporting: Number(pd.files_importing_count ?? 0) },
+    ]) ?? []
+  );
 
   const { data: flows } = await supabase
     .from('project_reachable_flows')
@@ -517,7 +523,16 @@ export async function updateReachabilityLevels(
           };
         }
       } else {
-        level = 'module';
+        // No usage slices referenced this dep. If it's a transitive dep that
+        // nothing in the source imports, classify as `unreachable` (depscore
+        // weight 0.0). Direct deps and deps with at least one import stay
+        // `module` — we know they're touched, we just don't know the function.
+        const meta = pdMetaMap.get(pdv.project_dependency_id);
+        if (meta && !meta.isDirect && meta.filesImporting === 0) {
+          level = 'unreachable';
+        } else {
+          level = 'module';
+        }
       }
     }
 

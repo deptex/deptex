@@ -54,7 +54,11 @@ const TIER_WEIGHT: Record<AssetTier, number> = {
 };
 
 /** Unreachable vulns are heavily discounted (not used in code). Same for all tiers. */
-const REACHABILITY_WEIGHT_UNREACHABLE = 0.2;
+// Zero weight: a vuln classified `unreachable` is scored 0 for prioritization.
+// We still surface it in the UI (not hidden) but it drops out of the depscore
+// ranking entirely. Reach this state only when the static extractor confirmed
+// the dep is transitive AND no source file imports it.
+const REACHABILITY_WEIGHT_UNREACHABLE = 0.0;
 
 function packageReputationWeight(score: number | null | undefined): number {
   if (score == null) return 1.0;

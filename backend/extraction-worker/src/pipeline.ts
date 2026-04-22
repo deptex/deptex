@@ -10,8 +10,8 @@ import type { Storage } from './storage';
 import { cloneRepository, cleanupRepository, cloneByProvider } from './clone';
 import { parseSbom, getBomRefToNameVersion, patchDevDependencies, type ParsedSbomDep, type ParsedSbomRelationship } from './sbom';
 import { calculateBaseDepscoreNoReachability, calculateDepscore, calculateSecretDepscore, calculateSemgrepDepscore, SEVERITY_TO_CVSS, type AssetTier } from './depscore';
-import { analyzeRepository } from './ast-parser';
-import { storeAstAnalysisResults } from './ast-storage';
+import { extractUsage, type SupportedEcosystem } from './tree-sitter-extractor';
+import { storeUsageExtractionResults } from './tree-sitter-extractor/storage';
 import { ExtractionLogger } from './logger';
 import { parsePurl, resolvePurlToDependencyId } from './purl';
 import { parseReachableFlows, parseUsageSlices, parseLlmPrompts, updateReachabilityLevels, computeImportCountsFromUsageSlices, parseGoImportsFromSource } from './reachability';
@@ -779,40 +779,74 @@ export async function runPipeline(
       throw depsSyncErr;
     }
 
-    // === AST import analysis (npm/JS/TS only — other ecosystems use different import mechanisms) ===
+    // === Usage extraction (tree-sitter) ===
+    // Replaces the old oxc-based npm-only AST pass. Language modules land
+    // across Phase 2 milestones; unsupported ecosystems silently produce an
+    // empty result and the step still succeeds.
     if (checkCancelled && await checkCancelled()) return;
     let astParsedSuccessfully = false;
-    await updateStep(supabase, projectId, 'ast_parsing');
-    if (jobEcosystem === 'npm') {
-      const astStart = Date.now();
+    await updateStep(supabase, projectId, 'usage_extraction');
+    {
+      const extractStart = Date.now();
       try {
         await withTimeout(async () => {
-          const analysisResults = analyzeRepository(workspaceRoot);
-          if (analysisResults.length > 0) {
-            const storeResult = await storeAstAnalysisResults(supabase, projectId, organizationId, runId, analysisResults);
-            if (storeResult.success) astParsedSuccessfully = true;
-          } else {
-            astParsedSuccessfully = true;
+          const depNames: string[] = [];
+          {
+            const { data: depRows } = await supabase
+              .from('project_dependencies')
+              .select('name')
+              .eq('project_id', projectId)
+              .eq('last_seen_extraction_run_id', runId);
+            for (const row of (depRows ?? []) as Array<{ name: string }>) {
+              if (row.name) depNames.push(row.name);
+            }
           }
-        }, 5 * 60_000, 'ast_import');
-      } catch (astErr: any) {
+
+          const supportedEcosystems: readonly SupportedEcosystem[] = [
+            'npm', 'pypi', 'maven', 'go', 'rubygems', 'composer', 'cargo', 'nuget',
+          ];
+          if (!supportedEcosystems.includes(jobEcosystem as SupportedEcosystem)) {
+            astParsedSuccessfully = true;
+            return;
+          }
+
+          const result = await extractUsage({
+            workspaceRoot,
+            ecosystem: jobEcosystem as SupportedEcosystem,
+            depNames,
+          });
+
+          if (result.files.length === 0) {
+            astParsedSuccessfully = true;
+            return;
+          }
+
+          const storeResult = await storeUsageExtractionResults(
+            supabase,
+            projectId,
+            organizationId,
+            runId,
+            jobEcosystem,
+            result
+          );
+          if (storeResult.success) astParsedSuccessfully = true;
+        }, 5 * 60_000, 'usage_extraction');
+      } catch (err: any) {
         if (job.jobId) {
-          const { code, message, stack } = classifyError(astErr);
+          const { code, message, stack } = classifyError(err);
           await logStepError(supabase, {
             jobId: job.jobId,
             projectId,
-            step: 'ast_import',
+            step: 'usage_extraction',
             code,
             message,
             stack,
-            durationMs: Date.now() - astStart,
+            durationMs: Date.now() - extractStart,
             severity: 'warn',
           });
         }
         /* non-fatal */
       }
-    } else {
-      astParsedSuccessfully = true;
     }
 
     // Fetch asset tier for depscore calculations (used by vuln scan, semgrep, and trufflehog)

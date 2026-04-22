@@ -20,19 +20,28 @@
     "scan": "./bin/deptex-scan",
     "test:fixtures": "tsx test/snapshot.ts"
   },
-  "keywords": ["extraction", "sbom", "dep-scan"],
+  "keywords": [
+    "extraction",
+    "sbom",
+    "dep-scan"
+  ],
   "license": "LicenseRef-FSL-1.1-ALv2",
   "dependencies": {
     "@cyclonedx/cdxgen": "^11.0.0",
     "@electric-sql/pglite": "^0.2.0",
+    "@repomix/tree-sitter-wasms": "^0.1.17",
     "@supabase/supabase-js": "^2.39.0",
     "@upstash/redis": "^1.25.0",
     "dotenv": "^16.3.1",
+    "js-yaml": "^4.1.1",
     "oxc-parser": "^0.15.0",
     "simple-git": "^3.22.0",
-    "stream-json": "^1.8.0"
+    "stream-json": "^1.8.0",
+    "web-tree-sitter": "^0.26.8",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.10.6",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"
