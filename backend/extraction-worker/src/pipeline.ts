@@ -1532,10 +1532,32 @@ export async function runPipeline(
       const trufflehogOut = path.join(workspaceRoot, 'trufflehog.json');
       const wsPrefix = workspaceRoot.endsWith('/') ? workspaceRoot : workspaceRoot + '/';
 
+      // Upstream tools (cdxgen, dep-scan, Semgrep, TruffleHog itself) all
+      // drop their raw outputs into the workspace before TruffleHog runs, so
+      // a naive scan picks up URLs + tokens from our own intermediates. Ship
+      // an exclude file scoped to those known paths — relative matchers that
+      // work regardless of the workspace's absolute location.
+      const excludeFile = path.join(workspaceRoot, '.deptex-trufflehog-excludes');
+      fs.writeFileSync(
+        excludeFile,
+        [
+          'trufflehog.json',
+          'semgrep.json',
+          'sbom.json',
+          'sbom.json.map',
+          'deps.slices.json',
+          'depscan-reports/',
+          '.results/',
+          '.buckets/',
+          '.pglite-buckets/',
+        ].join('\n') + '\n',
+        'utf8',
+      );
+
       // Run TruffleHog with spawnSync to capture stdout/stderr separately
       const thResult = require('child_process').spawnSync(
         'trufflehog',
-        ['filesystem', workspaceRoot, '--json', '--no-update'],
+        ['filesystem', workspaceRoot, '--json', '--no-update', `--exclude-paths=${excludeFile}`],
         { encoding: 'utf8', timeout: 120000, maxBuffer: 10 * 1024 * 1024 }
       );
       const stdout = thResult.stdout ?? '';
@@ -1609,6 +1631,21 @@ export async function runPipeline(
             .filter((f: any) => f.detector_type !== 'Unknown' || f.file_path !== 'unknown')
             // Filter out .git/ internals — these are clone credentials, not user code secrets
             .filter((f: any) => !f.file_path.startsWith('.git/') && !f.file_path.startsWith('.git\\'));
+
+            // TruffleHog can emit the same (detector_type, file_path, start_line)
+            // tuple more than once per scan (e.g. when the same value matches
+            // multiple chunks of a big file). Postgres' ON CONFLICT DO UPDATE
+            // rejects a statement that targets the same conflict-key row twice,
+            // so an unfiltered batch crashes the whole upsert and we lose every
+            // secret for the run. Dedupe on the upsert conflict key.
+            const dedupeKey = (f: any): string =>
+              `${f.detector_type}\x00${f.file_path}\x00${f.start_line ?? ''}`;
+            const seen = new Set<string>();
+            for (let i = findings.length - 1; i >= 0; i--) {
+              const key = dedupeKey(findings[i]);
+              if (seen.has(key)) findings.splice(i, 1);
+              else seen.add(key);
+            }
 
             secretCount = findings.length;
 

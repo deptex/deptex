@@ -2,6 +2,7 @@
 .pglite-buckets/
 .results/
 .tmp-results/
+.test-results/
 extraction-results/
 test-*-results/
 
