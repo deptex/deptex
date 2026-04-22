@@ -17,7 +17,7 @@ export function projectStatusLabel(project: Project): {
       cloning: 'Creating',
       sbom: 'Creating',
       deps_synced: 'Creating',
-      ast_parsing: 'Creating',
+      usage_extraction: 'Creating',
       scanning: 'Creating',
       uploading: 'Creating',
       completed: 'Creating',

@@ -72,12 +72,12 @@ jest.mock('child_process', () => ({
   spawn: (...args: unknown[]) => mockSpawn(...args),
 }));
 
-jest.mock('../ast-parser', () => ({
-  analyzeRepository: jest.fn().mockReturnValue([]),
+jest.mock('../tree-sitter-extractor', () => ({
+  extractUsage: jest.fn().mockResolvedValue({ files: [], filesImportingByDep: {} }),
 }));
 
-jest.mock('../ast-storage', () => ({
-  storeAstAnalysisResults: jest.fn().mockResolvedValue({ success: true }),
+jest.mock('../tree-sitter-extractor/storage', () => ({
+  storeUsageExtractionResults: jest.fn().mockResolvedValue({ success: true }),
 }));
 
 const SBOM_WITH_DEPS = JSON.stringify({

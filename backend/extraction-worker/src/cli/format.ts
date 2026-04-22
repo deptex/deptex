@@ -60,7 +60,7 @@ const STEP_DISPLAY: Record<string, string> = {
   trufflehog: 'secrets',
   vuln_scan: 'vulns',
   depscan: 'vulns',
-  ast_parsing: 'ast',
+  usage_extraction: 'imports',
   deps_sync: 'deps',
   cloning: 'clone',
   clone: 'clone',
