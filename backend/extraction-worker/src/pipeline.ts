@@ -12,6 +12,7 @@ import { parseSbom, getBomRefToNameVersion, patchDevDependencies, type ParsedSbo
 import { calculateBaseDepscoreNoReachability, calculateDepscore, calculateSecretDepscore, calculateSemgrepDepscore, SEVERITY_TO_CVSS, type AssetTier } from './depscore';
 import { extractUsage, type SupportedEcosystem } from './tree-sitter-extractor';
 import { storeUsageExtractionResults } from './tree-sitter-extractor/storage';
+import { storeEntryPoints } from './framework-rules/storage';
 import { ExtractionLogger } from './logger';
 import { parsePurl, resolvePurlToDependencyId } from './purl';
 import { parseReachableFlows, parseUsageSlices, parseLlmPrompts, updateReachabilityLevels, computeImportCountsFromUsageSlices, parseGoImportsFromSource } from './reachability';
@@ -831,6 +832,18 @@ export async function runPipeline(
             result
           );
           if (storeResult.success) astParsedSuccessfully = true;
+
+          // Framework entry-point detection. Each language module already ran
+          // its registered detectors during extraction (output attached to
+          // ExtractedFile.entryPoints); here we just persist them. The step
+          // is logged separately so users see the attribution in CLI output.
+          await updateStep(supabase, projectId, 'framework_detection');
+          const entryResult = await storeEntryPoints(supabase, projectId, runId, result.files);
+          if (!entryResult.success && entryResult.error) {
+            await log.warn('framework_detection', `Entry-point write failed: ${entryResult.error}`);
+          } else if (entryResult.count > 0) {
+            await log.info('framework_detection', `Detected ${entryResult.count} framework entry point(s)`);
+          }
         }, 5 * 60_000, 'usage_extraction');
       } catch (err: any) {
         if (job.jobId) {

@@ -61,6 +61,7 @@ const STEP_DISPLAY: Record<string, string> = {
   vuln_scan: 'vulns',
   depscan: 'vulns',
   usage_extraction: 'imports',
+  framework_detection: 'frameworks',
   deps_sync: 'deps',
   cloning: 'clone',
   clone: 'clone',
