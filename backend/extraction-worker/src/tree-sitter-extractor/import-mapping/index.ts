@@ -35,9 +35,9 @@ export function resolveImportToDep(
       return resolvePypiImport(importName, namesOf(deps));
     case 'maven':
       return resolveMavenImport(importName, deps);
-    case 'go':
+    case 'golang':
       return resolveGoImport(importName, namesOf(deps));
-    case 'rubygems':
+    case 'gem':
       return resolveRubygemsImport(importName, namesOf(deps));
     case 'composer':
       return resolveComposerImport(importName, namesOf(deps));
