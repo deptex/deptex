@@ -30,6 +30,27 @@ CREATE TABLE IF NOT EXISTS public.activities (
   metadata jsonb DEFAULT '{}'::jsonb,
   created_at timestamp with time zone DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS public.aegis_chat_invite_codes (
+  thread_id uuid NOT NULL,
+  code text NOT NULL,
+  created_by uuid NOT NULL,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  revoked_at timestamp with time zone
+);
+CREATE TABLE IF NOT EXISTS public.aegis_chat_messages (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  thread_id uuid NOT NULL,
+  role text NOT NULL,
+  content text NOT NULL,
+  metadata jsonb DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone DEFAULT now(),
+  user_id uuid
+);
+CREATE TABLE IF NOT EXISTS public.aegis_chat_participants (
+  thread_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  joined_at timestamp with time zone NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS public.aegis_chat_threads (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL,
@@ -40,7 +61,15 @@ CREATE TABLE IF NOT EXISTS public.aegis_chat_threads (
   project_id uuid,
   context_type text,
   context_id text,
-  total_tokens_used integer DEFAULT 0
+  total_tokens_used integer DEFAULT 0,
+  created_by uuid NOT NULL,
+  active_stream_until timestamp with time zone
+);
+CREATE TABLE IF NOT EXISTS public.aegis_chat_user_state (
+  thread_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  pinned_at timestamp with time zone,
+  archived_at timestamp with time zone
 );
 CREATE TABLE IF NOT EXISTS public.aegis_event_triggers (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -628,7 +657,8 @@ CREATE TABLE IF NOT EXISTS public.organizations (
   max_session_duration_hours integer DEFAULT 168,
   require_reauth_for_sensitive boolean DEFAULT false,
   ip_allowlist_enabled boolean DEFAULT false,
-  allow_autonomous_containment boolean DEFAULT false
+  allow_autonomous_containment boolean DEFAULT false,
+  canvas_cursors_enabled boolean DEFAULT true
 );
 CREATE TABLE IF NOT EXISTS public.package_anomalies (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -814,6 +844,24 @@ CREATE TABLE IF NOT EXISTS public.project_dependency_vulnerabilities (
   extraction_run_id text,
   re_review_triggered_at timestamp with time zone,
   re_review_reasons jsonb
+);
+CREATE TABLE IF NOT EXISTS public.project_entry_points (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL,
+  extraction_run_id text NOT NULL,
+  file_path text NOT NULL,
+  line_number integer NOT NULL,
+  framework text NOT NULL,
+  handler_name text,
+  http_method text,
+  route_pattern text,
+  entry_point_type text NOT NULL,
+  classification text NOT NULL DEFAULT 'UNKNOWN'::text,
+  authenticated boolean,
+  auth_mechanism text,
+  middleware_chain text[],
+  metadata jsonb,
+  created_at timestamp with time zone DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS public.project_integrations (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1111,19 +1159,10 @@ CREATE TABLE IF NOT EXISTS public.project_vulnerability_events (
   osv_id text NOT NULL,
   event_type text NOT NULL,
   metadata jsonb,
+  created_at timestamp with time zone DEFAULT now(),
   extraction_run_id text,
-  project_dependency_id uuid,
-  created_at timestamp with time zone DEFAULT now()
+  project_dependency_id uuid
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_pve_unique_per_run
-  ON public.project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
-  WHERE extraction_run_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_pve_extraction_run_id
-  ON public.project_vulnerability_events (extraction_run_id)
-  WHERE extraction_run_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_pve_project_dependency_id
-  ON public.project_vulnerability_events (project_dependency_id)
-  WHERE project_dependency_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS public.project_watchlist (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   project_id uuid NOT NULL,
@@ -1403,7 +1442,11 @@ CREATE TABLE IF NOT EXISTS public.webhook_deliveries (
 -- CONSTRAINTS (PK, UNIQUE, CHECK, FK — in that order)
 -- ============================================
 ALTER TABLE public.activities ADD CONSTRAINT activities_pkey PRIMARY KEY (id);
+ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_pkey PRIMARY KEY (thread_id);
+ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_pkey PRIMARY KEY (id);
+ALTER TABLE public.aegis_chat_participants ADD CONSTRAINT aegis_chat_participants_pkey PRIMARY KEY (thread_id, user_id);
 ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_pkey PRIMARY KEY (id);
+ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_pkey PRIMARY KEY (thread_id, user_id);
 ALTER TABLE public.aegis_event_triggers ADD CONSTRAINT aegis_event_triggers_pkey PRIMARY KEY (id);
 ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_pkey PRIMARY KEY (id);
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_pkey PRIMARY KEY (id);
@@ -1462,6 +1505,7 @@ ALTER TABLE public.project_dependencies ADD CONSTRAINT project_dependencies_pkey
 ALTER TABLE public.project_dependency_files ADD CONSTRAINT project_dependency_files_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_integrations ADD CONSTRAINT project_integrations_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_notification_rules ADD CONSTRAINT project_notification_rules_pkey PRIMARY KEY (id);
@@ -1501,6 +1545,7 @@ ALTER TABLE public.user_sessions ADD CONSTRAINT user_sessions_pkey PRIMARY KEY (
 ALTER TABLE public.watched_packages ADD CONSTRAINT watched_packages_pkey PRIMARY KEY (id);
 ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_pkey PRIMARY KEY (id);
 ALTER TABLE public.webhook_deliveries ADD CONSTRAINT webhook_deliveries_pkey PRIMARY KEY (id);
+ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_code_key UNIQUE (code);
 ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_organization_id_key UNIQUE (organization_id);
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_token_hash_key UNIQUE (token_hash);
 ALTER TABLE public.dependencies ADD CONSTRAINT dependencies_new_name_key UNIQUE (name);
@@ -1537,6 +1582,7 @@ ALTER TABLE public.project_dependencies ADD CONSTRAINT project_dependencies_proj
 ALTER TABLE public.project_dependency_files ADD CONSTRAINT pdf_extraction_run_unique UNIQUE (project_dependency_id, file_path, extraction_run_id);
 ALTER TABLE public.project_dependency_functions ADD CONSTRAINT pdfn_extraction_run_unique UNIQUE (project_dependency_id, function_name, extraction_run_id);
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT pdv_extraction_run_unique UNIQUE (project_id, project_dependency_id, osv_id, extraction_run_id);
+ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_extraction_run_id_file_path_key UNIQUE (project_id, extraction_run_id, file_path, line_number, framework, handler_name);
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_project_id_user_id_key UNIQUE (project_id, user_id);
 ALTER TABLE public.project_pr_guardrails ADD CONSTRAINT project_pr_guardrails_project_id_key UNIQUE (project_id);
 ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_project_id_extraction_run_id_purl_e_key UNIQUE (project_id, extraction_run_id, purl, entry_point_file, entry_point_line, sink_method);
@@ -1560,6 +1606,7 @@ ALTER TABLE public.user_notification_preferences ADD CONSTRAINT user_notificatio
 ALTER TABLE public.user_profiles ADD CONSTRAINT user_profiles_user_id_key UNIQUE (user_id);
 ALTER TABLE public.user_sessions ADD CONSTRAINT user_sessions_session_id_key UNIQUE (session_id);
 ALTER TABLE public.watched_packages ADD CONSTRAINT watched_packages_dependency_id_key UNIQUE (dependency_id);
+ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_role_check CHECK ((role = ANY (ARRAY['user'::text, 'assistant'::text])));
 ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_type_check CHECK ((type = ANY (ARRAY['bump'::text, 'decrease'::text, 'remove'::text])));
 ALTER TABLE public.extraction_jobs ADD CONSTRAINT extraction_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])));
 ALTER TABLE public.extraction_logs ADD CONSTRAINT extraction_logs_level_check CHECK ((level = ANY (ARRAY['info'::text, 'success'::text, 'warning'::text, 'error'::text])));
@@ -1601,9 +1648,18 @@ ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_job_type_check
 ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text])));
 ALTER TABLE public.activities ADD CONSTRAINT activities_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.activities ADD CONSTRAINT activities_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
+ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+ALTER TABLE public.aegis_chat_participants ADD CONSTRAINT aegis_chat_participants_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_chat_participants ADD CONSTRAINT aegis_chat_participants_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
 ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL;
 ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_event_triggers ADD CONSTRAINT aegis_event_triggers_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
@@ -1699,6 +1755,7 @@ ALTER TABLE public.project_dependency_files ADD CONSTRAINT project_dependency_fi
 ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_integrations ADD CONSTRAINT project_integrations_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_role_id_fkey FOREIGN KEY (role_id) REFERENCES project_roles(id) ON DELETE RESTRICT;
@@ -1729,6 +1786,7 @@ ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_project_id_fkey FO
 ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
 ALTER TABLE public.project_usage_slices ADD CONSTRAINT project_usage_slices_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_version_candidates ADD CONSTRAINT project_version_candidates_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_vulnerability_events ADD CONSTRAINT project_vulnerability_events_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE SET NULL;
 ALTER TABLE public.project_vulnerability_events ADD CONSTRAINT project_vulnerability_events_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_organization_watchlist_id_fkey FOREIGN KEY (organization_watchlist_id) REFERENCES organization_watchlist(id) ON DELETE CASCADE;
 ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
@@ -1781,9 +1839,14 @@ CREATE INDEX idx_activities_metadata ON public.activities USING gin (metadata);
 CREATE INDEX idx_activities_org_type_date ON public.activities USING btree (organization_id, activity_type, created_at DESC);
 CREATE INDEX idx_activities_organization_id ON public.activities USING btree (organization_id);
 CREATE INDEX idx_activities_user_id ON public.activities USING btree (user_id);
+CREATE INDEX idx_aegis_chat_invite_codes_active_code ON public.aegis_chat_invite_codes USING btree (code) WHERE (revoked_at IS NULL);
+CREATE INDEX idx_aegis_chat_messages_created_at ON public.aegis_chat_messages USING btree (created_at DESC);
+CREATE INDEX idx_aegis_chat_messages_thread_id ON public.aegis_chat_messages USING btree (thread_id);
+CREATE INDEX idx_aegis_chat_participants_user_id ON public.aegis_chat_participants USING btree (user_id);
 CREATE INDEX idx_aegis_chat_threads_organization_id ON public.aegis_chat_threads USING btree (organization_id);
 CREATE INDEX idx_aegis_chat_threads_updated_at ON public.aegis_chat_threads USING btree (updated_at DESC);
 CREATE INDEX idx_aegis_chat_threads_user_id ON public.aegis_chat_threads USING btree (user_id);
+CREATE INDEX idx_aegis_chat_user_state_user_id ON public.aegis_chat_user_state USING btree (user_id);
 CREATE INDEX idx_aegis_event_triggers_event ON public.aegis_event_triggers USING btree (event_type) WHERE (enabled = true);
 CREATE INDEX idx_aegis_event_triggers_org ON public.aegis_event_triggers USING btree (organization_id);
 CREATE INDEX idx_api_tokens_hash ON public.api_tokens USING btree (token_hash) WHERE (revoked_at IS NULL);
@@ -1897,6 +1960,11 @@ CREATE INDEX idx_pdv_sla_deadline ON public.project_dependency_vulnerabilities U
 CREATE INDEX idx_pdv_sla_status ON public.project_dependency_vulnerabilities USING btree (sla_status) WHERE (sla_status IS NOT NULL);
 CREATE INDEX idx_pdv_sla_warning_at ON public.project_dependency_vulnerabilities USING btree (sla_warning_at) WHERE ((sla_status = 'on_track'::text) AND (sla_warning_at IS NOT NULL));
 CREATE INDEX idx_pdv_status ON public.project_dependency_vulnerabilities USING btree (status);
+CREATE INDEX idx_pep_classification ON public.project_entry_points USING btree (classification);
+CREATE INDEX idx_pep_framework ON public.project_entry_points USING btree (framework);
+CREATE INDEX idx_pep_project ON public.project_entry_points USING btree (project_id);
+CREATE INDEX idx_pep_project_run ON public.project_entry_points USING btree (project_id, extraction_run_id);
+CREATE INDEX idx_pep_run ON public.project_entry_points USING btree (extraction_run_id);
 CREATE INDEX idx_policy_eval_jobs_org ON public.policy_evaluation_jobs USING btree (organization_id);
 CREATE INDEX idx_policy_eval_jobs_status ON public.policy_evaluation_jobs USING btree (organization_id, status);
 CREATE INDEX idx_prf_project_dep ON public.project_reachable_flows USING btree (project_id, dependency_id);
@@ -1976,7 +2044,9 @@ CREATE INDEX idx_pus_run ON public.project_usage_slices USING btree (extraction_
 CREATE INDEX idx_pvc_project_package ON public.project_version_candidates USING btree (project_id, package_name, ecosystem);
 CREATE INDEX idx_pve_created_at ON public.project_vulnerability_events USING btree (created_at DESC);
 CREATE INDEX idx_pve_event_type ON public.project_vulnerability_events USING btree (event_type);
+CREATE INDEX idx_pve_extraction_run_id ON public.project_vulnerability_events USING btree (extraction_run_id) WHERE (extraction_run_id IS NOT NULL);
 CREATE INDEX idx_pve_osv_id ON public.project_vulnerability_events USING btree (osv_id);
+CREATE INDEX idx_pve_project_dependency_id ON public.project_vulnerability_events USING btree (project_dependency_id) WHERE (project_dependency_id IS NOT NULL);
 CREATE INDEX idx_pve_project_id ON public.project_vulnerability_events USING btree (project_id);
 CREATE INDEX idx_reputation_scores_dep ON public.package_reputation_scores USING btree (dependency_id);
 CREATE INDEX idx_reputation_scores_score ON public.package_reputation_scores USING btree (score);
@@ -2027,6 +2097,7 @@ CREATE UNIQUE INDEX idx_project_commits_project_sha ON public.project_commits US
 CREATE UNIQUE INDEX idx_project_prs_project_pr ON public.project_pull_requests USING btree (project_id, pr_number, provider);
 CREATE UNIQUE INDEX idx_project_repositories_repo_full_name_package_json_path ON public.project_repositories USING btree (repo_full_name, package_json_path);
 CREATE UNIQUE INDEX idx_project_teams_single_owner ON public.project_teams USING btree (project_id) WHERE (is_owner = true);
+CREATE UNIQUE INDEX idx_pve_unique_per_run ON public.project_vulnerability_events USING btree (project_id, osv_id, event_type, extraction_run_id, project_dependency_id) WHERE (extraction_run_id IS NOT NULL);
 CREATE UNIQUE INDEX organization_deprecations_organization_id_dependency_id_key ON public.organization_deprecations USING btree (organization_id, dependency_id);
 CREATE UNIQUE INDEX organization_watchlist_cleared_commits_org_dependency_id_commit ON public.organization_watchlist_cleared_commits USING btree (organization_id, dependency_id, commit_sha);
 CREATE UNIQUE INDEX team_banned_versions_team_id_dependency_id_banned_version_key ON public.team_banned_versions USING btree (team_id, dependency_id, banned_version);
@@ -2253,6 +2324,90 @@ CREATE OR REPLACE FUNCTION public.binary_quantize(vector)
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
 AS '$libdir/vector', $function$binary_quantize$function$
+;
+
+CREATE OR REPLACE FUNCTION public.can_access_org_canvas_topic(_topic text, _user_id uuid, _mode text)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  _parts text[];
+  _org_id uuid;
+  _scope text;
+  _scope_id text;
+  _is_org_member boolean;
+  _is_admin boolean;
+begin
+  if _topic is null or _user_id is null then
+    return false;
+  end if;
+
+  _parts := string_to_array(_topic, ':');
+  if array_length(_parts, 1) < 3 or _parts[1] <> 'org-canvas' then
+    return false;
+  end if;
+
+  begin
+    _org_id := _parts[2]::uuid;
+  exception when others then
+    return false;
+  end;
+  _scope := _parts[3];
+
+  select exists (
+    select 1 from public.organization_members
+    where organization_id = _org_id and user_id = _user_id
+  ) into _is_org_member;
+  if not _is_org_member then
+    return false;
+  end if;
+
+  select
+    (om.role = 'owner')
+    or coalesce((roles.permissions->>'manage_teams_and_projects')::boolean, false)
+  into _is_admin
+  from public.organization_members om
+  left join public.organization_roles roles
+    on roles.organization_id = om.organization_id and roles.name = om.role
+  where om.organization_id = _org_id and om.user_id = _user_id
+  limit 1;
+  _is_admin := coalesce(_is_admin, false);
+
+  -- Org-wide channel: all org members read; admins write.
+  -- Carries org-center drag events only (the org node is visible to everyone).
+  if _scope = 'org' then
+    if _mode = 'read'  then return true; end if;
+    if _mode = 'write' then return _is_admin; end if;
+    return false;
+  end if;
+
+  -- Admin-only channel: admin read + admin write. Carries admin cursor
+  -- presence so admins see each other. Members never touch it.
+  if _scope = 'admins' then
+    return _is_admin;
+  end if;
+
+  -- Team channel: team members or admins.
+  if _scope = 'team' and array_length(_parts, 1) >= 4 then
+    _scope_id := _parts[4];
+    if _is_admin then
+      return true;
+    end if;
+    begin
+      return exists (
+        select 1 from public.team_members
+        where team_id = _scope_id::uuid and user_id = _user_id
+      );
+    exception when others then
+      return false;
+    end;
+  end if;
+
+  return false;
+end;
+$function$
 ;
 
 CREATE OR REPLACE FUNCTION public.claim_extraction_job(p_machine_id text)
@@ -2726,23 +2881,20 @@ BEGIN
         FROM new_reasons nr
         WHERE pdv.id = nr.pdv_id
           AND jsonb_array_length(nr.reasons) > 0
-        RETURNING pdv.id, pdv.project_dependency_id AS pd_id, nr.osv_id, nr.reasons
+        RETURNING pdv.id, nr.osv_id, nr.reasons
       ),
       event_insert AS (
-        INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
-        SELECT p_project_id, osv_id, 'rereview_triggered', p_extraction_run_id, pd_id,
-               jsonb_build_object('reasons', reasons),
+        INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, metadata, created_at)
+        SELECT p_project_id, osv_id, 'rereview_triggered',
+               jsonb_build_object('extraction_run_id', p_extraction_run_id, 'reasons', reasons),
                v_now
         FROM fired
-        ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
-          WHERE extraction_run_id IS NOT NULL
-          DO NOTHING
       )
       SELECT COUNT(*) INTO v_pdv_rereview_fired FROM fired;
     END IF;
 
     WITH unmatched AS (
-      SELECT npdv.id AS pdv_id, npdv.project_dependency_id AS pd_id, npd.name AS dep_name, npdv.osv_id
+      SELECT npdv.id AS pdv_id, npd.name AS dep_name, npdv.osv_id
       FROM project_dependency_vulnerabilities npdv
       JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
       WHERE npdv.project_id = p_project_id
@@ -2760,7 +2912,6 @@ BEGIN
     classified AS (
       SELECT
         u.pdv_id,
-        u.pd_id,
         u.osv_id,
         u.dep_name,
         EXISTS (
@@ -2776,19 +2927,14 @@ BEGIN
       FROM unmatched u
     ),
     events_inserted AS (
-      INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
+      INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, metadata, created_at)
       SELECT
         p_project_id,
         c.osv_id,
         CASE WHEN c.is_reopened THEN 'reopened' ELSE 'detected' END,
-        p_extraction_run_id,
-        c.pd_id,
-        jsonb_build_object('dep_name', c.dep_name),
+        jsonb_build_object('extraction_run_id', p_extraction_run_id, 'dep_name', c.dep_name),
         v_now
       FROM classified c
-      ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
-        WHERE extraction_run_id IS NOT NULL
-        DO NOTHING
       RETURNING id, event_type
     )
     SELECT
@@ -2797,17 +2943,14 @@ BEGIN
     INTO v_pdv_reopened, v_pdv_new
     FROM events_inserted;
   ELSE
-    INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
-    SELECT p_project_id, npdv.osv_id, 'detected', p_extraction_run_id, npdv.project_dependency_id,
-           jsonb_build_object('dep_name', npd.name),
+    INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, metadata, created_at)
+    SELECT p_project_id, npdv.osv_id, 'detected',
+           jsonb_build_object('extraction_run_id', p_extraction_run_id, 'dep_name', npd.name),
            v_now
     FROM project_dependency_vulnerabilities npdv
     JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
     WHERE npdv.project_id = p_project_id
-      AND npdv.extraction_run_id = p_extraction_run_id
-    ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
-      WHERE extraction_run_id IS NOT NULL
-      DO NOTHING;
+      AND npdv.extraction_run_id = p_extraction_run_id;
 
     v_pdv_carried := 0;
     v_pdv_rereview_fired := 0;
@@ -3953,6 +4096,43 @@ CREATE OR REPLACE FUNCTION public.hamming_distance(bit, bit)
 AS '$libdir/vector', $function$hamming_distance$function$
 ;
 
+CREATE OR REPLACE FUNCTION public.handle_aegis_creator_leaves_org()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  t RECORD;
+  new_owner UUID;
+BEGIN
+  FOR t IN
+    SELECT id FROM aegis_chat_threads
+    WHERE organization_id = OLD.organization_id
+      AND user_id = OLD.user_id
+  LOOP
+    -- Drop the leaving user from participants first
+    DELETE FROM aegis_chat_participants
+    WHERE thread_id = t.id AND user_id = OLD.user_id;
+
+    -- Find oldest remaining participant
+    SELECT user_id INTO new_owner
+    FROM aegis_chat_participants
+    WHERE thread_id = t.id
+    ORDER BY joined_at ASC
+    LIMIT 1;
+
+    IF new_owner IS NULL THEN
+      DELETE FROM aegis_chat_threads WHERE id = t.id;
+    ELSE
+      UPDATE aegis_chat_threads SET user_id = new_owner WHERE id = t.id;
+    END IF;
+  END LOOP;
+  RETURN OLD;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.hnsw_bit_support(internal)
  RETURNS internal
  LANGUAGE c
@@ -4986,6 +5166,7 @@ AS '$libdir/vector', $function$vector$function$
 -- TRIGGERS
 -- ============================================
 CREATE TRIGGER add_project_creator_trigger AFTER INSERT ON public.projects FOR EACH ROW EXECUTE FUNCTION add_project_creator_as_owner();
+CREATE TRIGGER aegis_creator_leaves_org AFTER DELETE ON public.organization_members FOR EACH ROW EXECUTE FUNCTION handle_aegis_creator_leaves_org();
 CREATE TRIGGER create_project_roles_trigger AFTER INSERT ON public.projects FOR EACH ROW EXECUTE FUNCTION create_default_project_roles();
 CREATE TRIGGER create_team_roles_trigger AFTER INSERT ON public.teams FOR EACH ROW EXECUTE FUNCTION create_default_team_roles();
 CREATE TRIGGER organization_integrations_updated_at BEFORE UPDATE ON public.organization_integrations FOR EACH ROW EXECUTE FUNCTION update_organization_integrations_updated_at();
