@@ -27,7 +27,7 @@ export interface ImportBinding {
   source: string;
   /** 0-based line number. */
   line: number;
-  kind: 'default' | 'named' | 'namespace' | 'side-effect' | 'cjs-require';
+  kind: 'default' | 'named' | 'namespace' | 'side-effect' | 'cjs-require' | 'cjs-require-iife';
 }
 
 export interface UsageSlice {

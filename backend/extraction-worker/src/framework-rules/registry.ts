@@ -1,6 +1,17 @@
 import type { SupportedLanguageId } from '../tree-sitter-extractor/languages/types';
 import type { FrameworkDetector } from './types';
 import { expressDetector } from './detectors/express';
+import { fastifyDetector } from './detectors/fastify';
+import { koaDetector } from './detectors/koa';
+import { nestjsDetector } from './detectors/nestjs';
+import { nextjsDetector } from './detectors/nextjs';
+import { awsLambdaDetector } from './detectors/aws-lambda';
+import { flaskDetector } from './detectors/flask';
+import { fastapiDetector } from './detectors/fastapi';
+import { starletteDetector } from './detectors/starlette';
+import { djangoDetector } from './detectors/django';
+import { tornadoDetector } from './detectors/tornado';
+import { aiohttpDetector } from './detectors/aiohttp';
 
 /**
  * All registered framework detectors. Adding a new framework is a two-step
@@ -10,6 +21,17 @@ import { expressDetector } from './detectors/express';
  */
 const ALL_DETECTORS: readonly FrameworkDetector[] = [
   expressDetector,
+  fastifyDetector,
+  koaDetector,
+  nestjsDetector,
+  nextjsDetector,
+  awsLambdaDetector,
+  flaskDetector,
+  fastapiDetector,
+  starletteDetector,
+  djangoDetector,
+  tornadoDetector,
+  aiohttpDetector,
 ];
 
 /** Detectors that might apply to files of the given language. */

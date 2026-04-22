@@ -118,13 +118,29 @@ function collectImports(root: Node, source: string): { imports: ImportBinding[];
       node.type === 'variable_declarator' ||
       node.type === 'assignment_expression'
     ) {
-      // CJS: `const x = require('m')`, `const { a, b: c } = require('m')`, `x = require('m')`
+      // CJS: `const x = require('m')`, `const { a, b: c } = require('m')`,
+      // `x = require('m')`, `const x = require('m')(...)` (IIFE — fastify style).
       const valueField =
         node.type === 'variable_declarator' ? node.childForFieldName('value') : node.childForFieldName('right');
+      // Unwrap IIFE: `require('m')(config)` → use the inner require call and
+      // flag the binding so detectors can treat the local name as an instance.
+      let requireCall: import('web-tree-sitter').Node | null = null;
+      let importKind: ImportBinding['kind'] = 'cjs-require';
       if (valueField?.type === 'call_expression') {
         const fn = valueField.childForFieldName('function');
-        if (fn && textOf(fn, source) === 'require') {
-          const args = valueField.childForFieldName('arguments');
+        if (fn?.type === 'identifier' && textOf(fn, source) === 'require') {
+          requireCall = valueField;
+        } else if (fn?.type === 'call_expression') {
+          const innerFn = fn.childForFieldName('function');
+          if (innerFn?.type === 'identifier' && textOf(innerFn, source) === 'require') {
+            requireCall = fn;
+            importKind = 'cjs-require-iife';
+          }
+        }
+      }
+      if (requireCall) {
+        {
+          const args = requireCall.childForFieldName('arguments');
           const firstArg = args?.namedChild(0);
           const modSource = extractStringLiteral(firstArg ?? null, source);
           if (modSource) {
@@ -133,7 +149,7 @@ function collectImports(root: Node, source: string): { imports: ImportBinding[];
               node.type === 'variable_declarator' ? node.childForFieldName('name') : node.childForFieldName('left');
             if (nameField?.type === 'identifier') {
               const local = textOf(nameField, source);
-              imports.push({ localName: local, importedName: 'default', source: modSource, line, kind: 'cjs-require' });
+              imports.push({ localName: local, importedName: 'default', source: modSource, line, kind: importKind });
               aliases.localToSource.set(local, modSource);
               aliases.localToExported.set(local, 'default');
             } else if (nameField?.type === 'object_pattern') {
@@ -141,7 +157,7 @@ function collectImports(root: Node, source: string): { imports: ImportBinding[];
                 const prop = nameField.namedChild(i)!;
                 if (prop.type === 'shorthand_property_identifier_pattern') {
                   const local = textOf(prop, source);
-                  imports.push({ localName: local, importedName: local, source: modSource, line, kind: 'cjs-require' });
+                  imports.push({ localName: local, importedName: local, source: modSource, line, kind: importKind });
                   aliases.localToSource.set(local, modSource);
                   aliases.localToExported.set(local, local);
                 } else if (prop.type === 'pair_pattern') {
@@ -150,7 +166,7 @@ function collectImports(root: Node, source: string): { imports: ImportBinding[];
                   const exported = textOf(keyNode, source);
                   const local = valueNode?.type === 'identifier' ? textOf(valueNode, source) : exported;
                   if (exported && local) {
-                    imports.push({ localName: local, importedName: exported, source: modSource, line, kind: 'cjs-require' });
+                    imports.push({ localName: local, importedName: exported, source: modSource, line, kind: importKind });
                     aliases.localToSource.set(local, modSource);
                     aliases.localToExported.set(local, exported);
                   }
@@ -272,7 +288,9 @@ export const javascriptModule: LanguageModule = {
     const entryPoints: EntryPoint[] = [];
     for (const detector of getDetectorsForLanguage('javascript')) {
       const importedSources = new Set(imports.map((i) => i.source));
-      const triggered = detector.triggerImports.some((t) => {
+      // Empty triggerImports = run unconditionally (detectors like Next.js
+      // and AWS Lambda gate on filename/export convention, not on imports).
+      const triggered = detector.triggerImports.length === 0 || detector.triggerImports.some((t) => {
         if (importedSources.has(t)) return true;
         for (const imp of imports) if (imp.source.startsWith(`${t}/`)) return true;
         return false;

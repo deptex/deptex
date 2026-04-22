@@ -3,6 +3,8 @@ import * as path from 'path';
 import { loadLanguage, makeParser } from '../parser';
 import { resolvePypiImport } from '../import-mapping/pypi';
 import type { ExtractedFile, ImportBinding, LanguageContext, LanguageModule, UsageSlice } from './types';
+import { getDetectorsForLanguage } from '../../framework-rules/registry';
+import type { EntryPoint } from '../../framework-rules/types';
 
 const PY_EXTENSIONS: readonly string[] = ['.py', '.pyi'];
 
@@ -185,6 +187,22 @@ export const pythonModule: LanguageModule = {
     const { imports, aliases } = collectImports(tree.rootNode, source);
     const depNames = ctx.deps.map((d) => d.name);
     const usages = collectUsages(tree.rootNode, source, aliases, filePath, depNames);
-    return { filePath, language: 'python', imports, usages };
+
+    const extracted: ExtractedFile = { filePath, language: 'python', imports, usages };
+    const entryPoints: EntryPoint[] = [];
+    for (const detector of getDetectorsForLanguage('python')) {
+      const importedSources = new Set(imports.map((i) => i.source));
+      const triggered = detector.triggerImports.length === 0 || detector.triggerImports.some((t) => {
+        if (importedSources.has(t)) return true;
+        for (const imp of imports) if (imp.source.startsWith(`${t}.`)) return true;
+        return false;
+      });
+      if (!triggered) continue;
+      try {
+        entryPoints.push(...detector.detect({ source, tree, file: extracted }));
+      } catch { /* detector failures are non-fatal */ }
+    }
+    extracted.entryPoints = entryPoints;
+    return extracted;
   },
 };
