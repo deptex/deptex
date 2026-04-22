@@ -30,7 +30,7 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 # patch uptake while blocking the 6→7 breaking-change class.
 RUN pip3 install --no-cache-dir --break-system-packages \
   owasp-depscan==6.* \
-  semgrep==1.92.0 \
+  semgrep==1.160.0 \
   && depscan --help >/dev/null \
   && semgrep --version
 

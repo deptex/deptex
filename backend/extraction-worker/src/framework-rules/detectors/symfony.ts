@@ -103,30 +103,49 @@ function findRouteAttribute(decl: Node, source: string): { path: string | null; 
       if (!args) return { path: null, methods: [] };
       let path: string | null = null;
       const methods: HttpMethod[] = [];
-      for (let k = 0; k < args.namedChildCount; k++) {
-        const arg = args.namedChild(k)!;
-        const inner = arg.type === 'argument' ? arg.namedChild(0) : arg;
-        if (!inner) continue;
-        if (inner.type === 'string' && path === null) {
-          path = phpStringLiteral(inner, source);
-        } else if (inner.type === 'named_argument' || inner.type === 'keyword_argument') {
-          const key = inner.namedChild(0);
-          const value = inner.namedChild(1);
-          if (key && value && textOf(key, source) === 'methods' && value.type === 'array_creation_expression') {
-            for (let l = 0; l < value.namedChildCount; l++) {
-              const el = value.namedChild(l)!;
-              const elInner = el.type === 'array_element_initializer' ? el.namedChild(0) : el;
-              if (elInner?.type === 'string') {
-                const s = phpStringLiteral(elInner, source);
-                if (s) {
-                  const upper = s.toUpperCase();
-                  if (upper in PHP_HTTP_METHODS || ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].includes(upper)) {
-                    methods.push(upper as HttpMethod);
-                  }
-                }
-              }
+      const collectMethodsFromArray = (arr: Node): void => {
+        for (let l = 0; l < arr.namedChildCount; l++) {
+          const el = arr.namedChild(l)!;
+          const elInner = el.type === 'array_element_initializer' ? el.namedChild(0) : el;
+          if (elInner?.type === 'string') {
+            const s = phpStringLiteral(elInner, source);
+            if (!s) continue;
+            const upper = s.toUpperCase();
+            if (upper in PHP_HTTP_METHODS || ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].includes(upper)) {
+              methods.push(upper as HttpMethod);
             }
           }
+        }
+      };
+      for (let k = 0; k < args.namedChildCount; k++) {
+        const arg = args.namedChild(k)!;
+        // Two PHP-argument shapes:
+        //   (1) positional:       argument > <value>
+        //   (2) named (PHP 8):    argument > name + <value>
+        // Older grammars also emit `named_argument`/`keyword_argument` wrapper
+        // nodes; handle that path as a fallback.
+        let namedKey: string | null = null;
+        let inner: Node | null = null;
+        if (arg.type === 'argument') {
+          const first = arg.namedChild(0);
+          const second = arg.namedChild(1);
+          if (first?.type === 'name' && second) {
+            namedKey = textOf(first, source);
+            inner = second;
+          } else {
+            inner = first;
+          }
+        } else if (arg.type === 'named_argument' || arg.type === 'keyword_argument') {
+          namedKey = textOf(arg.namedChild(0), source) || null;
+          inner = arg.namedChild(1);
+        } else {
+          inner = arg;
+        }
+        if (!inner) continue;
+        if (!namedKey && inner.type === 'string' && path === null) {
+          path = phpStringLiteral(inner, source);
+        } else if (namedKey === 'methods' && inner.type === 'array_creation_expression') {
+          collectMethodsFromArray(inner);
         }
       }
       return { path, methods };
