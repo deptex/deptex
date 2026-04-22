@@ -48,6 +48,12 @@ export interface ExtractedFile {
   language: SupportedLanguageId;
   imports: ImportBinding[];
   usages: UsageSlice[];
+  /**
+   * Framework entry points detected in the file (HTTP routes, event handlers,
+   * etc.). Populated by per-language detector passes during extraction; left
+   * undefined by language modules that don't yet run any detectors.
+   */
+  entryPoints?: import('../../framework-rules/types').EntryPoint[];
 }
 
 export interface KnownDep {

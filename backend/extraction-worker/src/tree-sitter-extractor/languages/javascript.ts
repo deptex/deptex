@@ -3,6 +3,8 @@ import * as path from 'path';
 import { loadLanguage, makeParser } from '../parser';
 import { resolveNpmImport } from '../import-mapping/npm';
 import type { ExtractedFile, ImportBinding, LanguageContext, LanguageModule, UsageSlice } from './types';
+import { getDetectorsForLanguage } from '../../framework-rules/registry';
+import type { EntryPoint } from '../../framework-rules/types';
 
 const JS_EXTENSIONS: readonly string[] = ['.js', '.mjs', '.cjs', '.jsx'];
 const TS_EXTENSIONS: readonly string[] = ['.ts', '.mts', '.cts'];
@@ -265,6 +267,24 @@ export const javascriptModule: LanguageModule = {
     const { imports, aliases } = collectImports(root, source);
     const depNames = ctx.deps.map((d) => d.name);
     const usages = collectUsages(root, source, aliases, filePath, depNames);
-    return { filePath, language: 'javascript', imports, usages };
+
+    const extracted: ExtractedFile = { filePath, language: 'javascript', imports, usages };
+    const entryPoints: EntryPoint[] = [];
+    for (const detector of getDetectorsForLanguage('javascript')) {
+      const importedSources = new Set(imports.map((i) => i.source));
+      const triggered = detector.triggerImports.some((t) => {
+        if (importedSources.has(t)) return true;
+        for (const imp of imports) if (imp.source.startsWith(`${t}/`)) return true;
+        return false;
+      });
+      if (!triggered) continue;
+      try {
+        entryPoints.push(...detector.detect({ source, tree, file: extracted }));
+      } catch {
+        // Detector failures are non-fatal — skip and move on.
+      }
+    }
+    extracted.entryPoints = entryPoints;
+    return extracted;
   },
 };
