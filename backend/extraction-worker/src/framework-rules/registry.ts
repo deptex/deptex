@@ -12,6 +12,16 @@ import { starletteDetector } from './detectors/starlette';
 import { djangoDetector } from './detectors/django';
 import { tornadoDetector } from './detectors/tornado';
 import { aiohttpDetector } from './detectors/aiohttp';
+import { springDetector } from './detectors/spring';
+import { jaxrsDetector } from './detectors/jaxrs';
+import { quarkusDetector } from './detectors/quarkus';
+import { micronautDetector } from './detectors/micronaut';
+import { nethttpDetector } from './detectors/nethttp';
+import { ginDetector } from './detectors/gin';
+import { echoDetector } from './detectors/echo';
+import { fiberDetector } from './detectors/fiber';
+import { chiDetector } from './detectors/chi';
+import { gorillaMuxDetector } from './detectors/gorilla-mux';
 
 /**
  * All registered framework detectors. Adding a new framework is a two-step
@@ -32,6 +42,16 @@ const ALL_DETECTORS: readonly FrameworkDetector[] = [
   djangoDetector,
   tornadoDetector,
   aiohttpDetector,
+  springDetector,
+  jaxrsDetector,
+  quarkusDetector,
+  micronautDetector,
+  nethttpDetector,
+  ginDetector,
+  echoDetector,
+  fiberDetector,
+  chiDetector,
+  gorillaMuxDetector,
 ];
 
 /** Detectors that might apply to files of the given language. */

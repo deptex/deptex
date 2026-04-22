@@ -3,6 +3,8 @@ import * as path from 'path';
 import { loadLanguage, makeParser } from '../parser';
 import { resolveMavenImport } from '../import-mapping/maven';
 import type { ExtractedFile, ImportBinding, LanguageContext, LanguageModule, UsageSlice } from './types';
+import { getDetectorsForLanguage } from '../../framework-rules/registry';
+import type { EntryPoint } from '../../framework-rules/types';
 
 const JAVA_EXTENSIONS: readonly string[] = ['.java'];
 
@@ -39,7 +41,17 @@ function collectImports(root: Node, source: string): { imports: ImportBinding[];
     const child = root.namedChild(i)!;
     if (child.type !== 'import_declaration') continue;
 
-    const fqnNode = child.namedChild(child.namedChildCount - 1);
+    // Find the scoped_identifier / identifier — not the trailing `*` for
+    // wildcard imports (which shows up as a named `asterisk` child on newer
+    // tree-sitter-java grammars).
+    let fqnNode: Node | null = null;
+    for (let j = child.namedChildCount - 1; j >= 0; j--) {
+      const candidate = child.namedChild(j)!;
+      if (candidate.type === 'scoped_identifier' || candidate.type === 'identifier') {
+        fqnNode = candidate;
+        break;
+      }
+    }
     if (!fqnNode) continue;
     const fqn = textOf(fqnNode, source);
     if (!fqn) continue;
@@ -196,6 +208,25 @@ export const javaModule: LanguageModule = {
     const { imports, ctx } = collectImports(root, source);
     collectVariableTypes(root, source, ctx);
     const usages = collectUsages(root, source, filePath, ctx, langCtx.deps);
-    return { filePath, language: 'java', imports, usages };
+
+    const extracted: ExtractedFile = { filePath, language: 'java', imports, usages };
+    const entryPoints: EntryPoint[] = [];
+    for (const detector of getDetectorsForLanguage('java')) {
+      const importedSources = new Set(imports.map((i) => i.source));
+      const triggered = detector.triggerImports.length === 0 || detector.triggerImports.some((t) => {
+        if (importedSources.has(t)) return true;
+        // Java imports often use the package-prefix form `org.springframework.*`
+        // or `javax.ws.rs.*` — match either the wildcard or any import path
+        // that shares the triggerPackage as a dotted prefix.
+        for (const imp of imports) if (imp.source === t || imp.source.startsWith(`${t}.`)) return true;
+        return false;
+      });
+      if (!triggered) continue;
+      try {
+        entryPoints.push(...detector.detect({ source, tree, file: extracted }));
+      } catch { /* non-fatal */ }
+    }
+    extracted.entryPoints = entryPoints;
+    return extracted;
   },
 };

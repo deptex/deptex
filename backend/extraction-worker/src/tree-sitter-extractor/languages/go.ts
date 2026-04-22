@@ -4,6 +4,8 @@ import * as path from 'path';
 import { loadLanguage, makeParser } from '../parser';
 import { resolveGoImport } from '../import-mapping/go';
 import type { ExtractedFile, ImportBinding, LanguageContext, LanguageModule, UsageSlice } from './types';
+import { getDetectorsForLanguage } from '../../framework-rules/registry';
+import type { EntryPoint } from '../../framework-rules/types';
 
 const GO_EXTENSIONS: readonly string[] = ['.go'];
 
@@ -77,8 +79,13 @@ function collectImports(root: Node, source: string, selfModule: string | null): 
       }
       alias = nameText;
     } else {
+      // Go import-path major-version convention: `.../echo/v4` exposes the
+      // package as `echo`, not `v4`. Same for fiber/v2, chi/v5, etc. Skip
+      // the trailing /vN+ segment and use the penultimate as the alias.
       const segs = rawPath.split('/');
-      alias = segs[segs.length - 1];
+      let idx = segs.length - 1;
+      if (idx > 0 && /^v\d+$/.test(segs[idx])) idx -= 1;
+      alias = segs[idx];
     }
 
     imports.push({
@@ -173,6 +180,22 @@ export const goModule: LanguageModule = {
     const depNames = ctx.deps.map((d) => d.name);
     const { imports, aliasToPath } = collectImports(tree.rootNode, source, selfModule);
     const usages = collectUsages(tree.rootNode, source, filePath, aliasToPath, depNames);
-    return { filePath, language: 'go', imports, usages };
+
+    const extracted: ExtractedFile = { filePath, language: 'go', imports, usages };
+    const entryPoints: EntryPoint[] = [];
+    for (const detector of getDetectorsForLanguage('go')) {
+      const triggered = detector.triggerImports.length === 0 || detector.triggerImports.some((t) => {
+        for (const imp of imports) {
+          if (imp.source === t || imp.source.startsWith(`${t}/`)) return true;
+        }
+        return false;
+      });
+      if (!triggered) continue;
+      try {
+        entryPoints.push(...detector.detect({ source, tree, file: extracted }));
+      } catch { /* non-fatal */ }
+    }
+    extracted.entryPoints = entryPoints;
+    return extracted;
   },
 };
