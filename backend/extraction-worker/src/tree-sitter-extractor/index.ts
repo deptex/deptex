@@ -4,6 +4,10 @@ import { javascriptModule } from './languages/javascript';
 import { pythonModule } from './languages/python';
 import { javaModule } from './languages/java';
 import { goModule } from './languages/go';
+import { rubyModule } from './languages/ruby';
+import { phpModule } from './languages/php';
+import { rustModule } from './languages/rust';
+import { csharpModule } from './languages/csharp';
 import { resolveImportToDep } from './import-mapping';
 import { walkSourceFiles } from './walk';
 
@@ -27,7 +31,16 @@ export interface ExtractUsageResult {
   filesImportingByDep: Record<string, number>;
 }
 
-const LANGUAGE_MODULES: LanguageModule[] = [javascriptModule, pythonModule, javaModule, goModule];
+const LANGUAGE_MODULES: LanguageModule[] = [
+  javascriptModule,
+  pythonModule,
+  javaModule,
+  goModule,
+  rubyModule,
+  phpModule,
+  rustModule,
+  csharpModule,
+];
 
 /**
  * Universal usage extractor built on web-tree-sitter.

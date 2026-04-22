@@ -1267,24 +1267,17 @@ export async function runPipeline(
       await log.warn('vuln_scan', 'No vulnerability scan results available');
     }
 
-    // --- Sub-step: Atom reachability analysis ---
-    try {
-      const atomLangMap: Record<string, string> = {
-        npm: 'javascript', maven: 'java', golang: 'go', pypi: 'python',
-        cargo: 'rust', gem: 'ruby', composer: 'php', nuget: 'csharp',
-      };
-      const atomLang = atomLangMap[jobEcosystem] || 'javascript';
-
-      // For Go projects, atom must analyze the module root (where go.mod is), not src/
-      // For Java, source is typically in src/. For others, try src/ first then root.
-      let srcDir: string;
-      if (jobEcosystem === 'golang' || jobEcosystem === 'go') {
-        srcDir = workspaceRoot;
-      } else {
-        srcDir = fs.existsSync(path.join(workspaceRoot, 'src'))
-          ? path.join(workspaceRoot, 'src')
-          : workspaceRoot;
-      }
+    // --- Sub-step: Atom reachability analysis (Java-only) ---
+    // Tree-sitter now covers usage extraction for all MVP ecosystems. Atom
+    // remains the source of truth for full data-flow reachable slices on
+    // Java — its Java CPG is materially better than anything we can
+    // produce from tree-sitter alone — so we keep it running for Maven
+    // projects and skip it everywhere else.
+    if (jobEcosystem === 'maven') try {
+      const atomLang = 'java';
+      const srcDir = fs.existsSync(path.join(workspaceRoot, 'src'))
+        ? path.join(workspaceRoot, 'src')
+        : workspaceRoot;
 
       // Log what dep-scan produced so we can diagnose ecosystem-specific gaps
       const depScanFiles = fs.readdirSync(reportsDir).filter(f => f.endsWith('.json'));
@@ -1327,17 +1320,17 @@ export async function runPipeline(
         await parseUsageSlices(reportsDir, projectId, runId, jobEcosystem, supabase, log);
       }
 
-      // Fallback: if atom produced no usage slices for Go, parse .go imports directly
-      if (!hasUsageSlices && (jobEcosystem === 'golang' || jobEcosystem === 'go')) {
-        const goImportCount = await parseGoImportsFromSource(workspaceRoot, projectId, runId, supabase, log);
-        if (goImportCount > 0) hasUsageSlices = true;
-      }
-
-      await updateReachabilityLevels(projectId, runId, supabase, log, workspaceRoot);
-      // Compute files_importing_count from atom usage slices (all ecosystems)
-      await computeImportCountsFromUsageSlices(projectId, runId, jobEcosystem, supabase, log);
     } catch (atomStepErr: any) {
       if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] reachability step failed: ${atomStepErr.message}`);
+    }
+
+    // Reachability classification runs for every ecosystem — it consumes
+    // tree-sitter's usage_slices (non-Java) or atom's slices + usages
+    // (Java). files_importing_count is authoritative from the tree-sitter
+    // storage write for non-Java; for Java we recompute from atom output.
+    await updateReachabilityLevels(projectId, runId, supabase, log, workspaceRoot);
+    if (jobEcosystem === 'maven') {
+      await computeImportCountsFromUsageSlices(projectId, runId, jobEcosystem, supabase, log);
     }
 
     // --- Sub-step: Recalculate depscores with updated reachability ---
