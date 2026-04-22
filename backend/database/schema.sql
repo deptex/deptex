@@ -774,7 +774,8 @@ CREATE TABLE IF NOT EXISTS public.project_dependencies (
   versions_behind integer DEFAULT 0,
   policy_result jsonb,
   removed_at timestamp with time zone,
-  last_seen_extraction_run_id text
+  last_seen_extraction_run_id text,
+  namespace text
 );
 CREATE TABLE IF NOT EXISTS public.project_dependency_files (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1950,6 +1951,7 @@ CREATE INDEX idx_package_commits_watched_package_id ON public.package_commits US
 CREATE INDEX idx_package_contributors_author_email ON public.package_contributors USING btree (author_email);
 CREATE INDEX idx_package_contributors_total_commits ON public.package_contributors USING btree (total_commits DESC);
 CREATE INDEX idx_package_contributors_watched_package_id ON public.package_contributors USING btree (watched_package_id);
+CREATE INDEX idx_pd_namespace ON public.project_dependencies USING btree (namespace) WHERE (namespace IS NOT NULL);
 CREATE INDEX idx_pdf_dep_extraction_run ON public.project_dependency_files USING btree (project_dependency_id, extraction_run_id);
 CREATE INDEX idx_pdfn_dep_extraction_run ON public.project_dependency_functions USING btree (project_dependency_id, extraction_run_id);
 CREATE INDEX idx_pdv_project_epd_confidence ON public.project_dependency_vulnerabilities USING btree (project_id, epd_confidence_tier);

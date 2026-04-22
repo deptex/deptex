@@ -11,6 +11,7 @@ export interface SbomComponent {
   name?: string;
   version?: string;
   purl?: string;
+  group?: string;
   licenses?: unknown;
 }
 
@@ -30,6 +31,7 @@ export interface CycloneDxSbom {
 export interface ParsedSbomDep {
   name: string;
   version: string;
+  namespace: string | null;
   license: string | null;
   is_direct: boolean;
   source: 'dependencies' | 'devDependencies' | 'transitive';
@@ -61,6 +63,20 @@ function nameFromPurl(purl: string): string {
 
 function versionFromPurl(purl: string): string | null {
   return parsePurl(purl)?.version ?? null;
+}
+
+/**
+ * Parse the namespace (Maven groupId, NuGet parent namespace, etc.) from a
+ * purl. For `pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1` returns
+ * `org.apache.logging.log4j`. Returns null for single-segment ecosystems
+ * (npm without scope, pypi, go, cargo, rubygems, nuget without nesting).
+ */
+function namespaceFromPurl(purl: string): string | null {
+  const parsed = parsePurl(purl);
+  if (!parsed) return null;
+  const slashIdx = parsed.name.lastIndexOf('/');
+  if (slashIdx === -1) return null;
+  return parsed.name.slice(0, slashIdx);
 }
 
 /**
@@ -170,9 +186,14 @@ export function parseSbom(sbom: CycloneDxSbom): {
     const isDirect = directRefs.has(ref);
     const source: 'dependencies' | 'devDependencies' | 'transitive' = isDirect ? 'dependencies' : 'transitive';
 
+    // Prefer explicit comp.group (cdxgen always sets it for Maven), fall back
+    // to parsing the purl when the SBOM generator omits it.
+    const namespace = comp.group ?? (comp.purl ? namespaceFromPurl(comp.purl) : null);
+
     dependencies.push({
       name,
       version,
+      namespace,
       license,
       is_direct: isDirect,
       source,
