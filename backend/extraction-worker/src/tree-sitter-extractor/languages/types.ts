@@ -50,12 +50,24 @@ export interface ExtractedFile {
   usages: UsageSlice[];
 }
 
+export interface KnownDep {
+  name: string;
+  /** Maven groupId / NuGet parent namespace / null for flat ecosystems. */
+  namespace: string | null;
+}
+
+export interface LanguageContext {
+  deps: readonly KnownDep[];
+  /** Absolute path to the workspace root — some modules (go) read co-located manifest files. */
+  workspaceRoot: string;
+}
+
 export interface LanguageModule {
   id: SupportedLanguageId;
   supportsFile(filePath: string): boolean;
   extractFile(
     source: string,
     filePath: string,
-    knownDeps: readonly string[]
+    ctx: LanguageContext
   ): Promise<ExtractedFile>;
 }

@@ -2,7 +2,7 @@ import type { Node } from 'web-tree-sitter';
 import * as path from 'path';
 import { loadLanguage, makeParser } from '../parser';
 import { resolvePypiImport } from '../import-mapping/pypi';
-import type { ExtractedFile, ImportBinding, LanguageModule, UsageSlice } from './types';
+import type { ExtractedFile, ImportBinding, LanguageContext, LanguageModule, UsageSlice } from './types';
 
 const PY_EXTENSIONS: readonly string[] = ['.py', '.pyi'];
 
@@ -114,7 +114,7 @@ function collectUsages(
   source: string,
   aliases: AliasMap,
   filePath: string,
-  knownDeps: readonly string[]
+  depNames: readonly string[]
 ): UsageSlice[] {
   const usages: UsageSlice[] = [];
 
@@ -127,7 +127,7 @@ function collectUsages(
   ): void => {
     const src = aliases.localToSource.get(localName);
     if (!src) return;
-    const depName = resolvePypiImport(src, knownDeps);
+    const depName = resolvePypiImport(src, depNames);
     if (!depName) return;
     usages.push({
       filePath,
@@ -175,7 +175,7 @@ export const pythonModule: LanguageModule = {
   supportsFile(filePath: string): boolean {
     return PY_EXTENSIONS.includes(path.extname(filePath).toLowerCase());
   },
-  async extractFile(source: string, filePath: string, knownDeps: readonly string[]): Promise<ExtractedFile> {
+  async extractFile(source: string, filePath: string, ctx: LanguageContext): Promise<ExtractedFile> {
     const language = await loadLanguage('tree-sitter-python.wasm');
     const parser = await makeParser(language);
     const tree = parser.parse(source);
@@ -183,7 +183,8 @@ export const pythonModule: LanguageModule = {
       return { filePath, language: 'python', imports: [], usages: [] };
     }
     const { imports, aliases } = collectImports(tree.rootNode, source);
-    const usages = collectUsages(tree.rootNode, source, aliases, filePath, knownDeps);
+    const depNames = ctx.deps.map((d) => d.name);
+    const usages = collectUsages(tree.rootNode, source, aliases, filePath, depNames);
     return { filePath, language: 'python', imports, usages };
   },
 };
