@@ -22,6 +22,18 @@ import { echoDetector } from './detectors/echo';
 import { fiberDetector } from './detectors/fiber';
 import { chiDetector } from './detectors/chi';
 import { gorillaMuxDetector } from './detectors/gorilla-mux';
+import { sinatraDetector } from './detectors/sinatra';
+import { railsDetector } from './detectors/rails';
+import { grapeDetector } from './detectors/grape';
+import { laravelDetector } from './detectors/laravel';
+import { symfonyDetector } from './detectors/symfony';
+import { slimDetector } from './detectors/slim';
+import { actixDetector } from './detectors/actix';
+import { rocketDetector } from './detectors/rocket';
+import { axumDetector } from './detectors/axum';
+import { warpDetector } from './detectors/warp';
+import { aspnetCoreDetector } from './detectors/aspnet-core';
+import { minimalApisDetector } from './detectors/minimal-apis';
 
 /**
  * All registered framework detectors. Adding a new framework is a two-step
@@ -52,6 +64,18 @@ const ALL_DETECTORS: readonly FrameworkDetector[] = [
   fiberDetector,
   chiDetector,
   gorillaMuxDetector,
+  sinatraDetector,
+  railsDetector,
+  grapeDetector,
+  laravelDetector,
+  symfonyDetector,
+  slimDetector,
+  actixDetector,
+  rocketDetector,
+  axumDetector,
+  warpDetector,
+  aspnetCoreDetector,
+  minimalApisDetector,
 ];
 
 /** Detectors that might apply to files of the given language. */
