@@ -3,6 +3,8 @@ import * as path from 'path';
 import { loadLanguage, makeParser } from '../parser';
 import { resolveCargoImport } from '../import-mapping/cargo';
 import type { ExtractedFile, ImportBinding, LanguageContext, LanguageModule, UsageSlice } from './types';
+import { getDetectorsForLanguage } from '../../framework-rules/registry';
+import type { EntryPoint } from '../../framework-rules/types';
 
 const RUST_EXTENSIONS: readonly string[] = ['.rs'];
 
@@ -189,6 +191,16 @@ export const rustModule: LanguageModule = {
     };
 
     walk(tree.rootNode);
-    return { filePath, language: 'rust', imports, usages };
+
+    const extracted: ExtractedFile = { filePath, language: 'rust', imports, usages };
+    const entryPoints: EntryPoint[] = [];
+    for (const detector of getDetectorsForLanguage('rust')) {
+      const aliases = new Set(aliasToCrate.values());
+      const triggered = detector.triggerImports.length === 0 || detector.triggerImports.some((t) => aliases.has(t));
+      if (!triggered) continue;
+      try { entryPoints.push(...detector.detect({ source, tree, file: extracted })); } catch { /* non-fatal */ }
+    }
+    extracted.entryPoints = entryPoints;
+    return extracted;
   },
 };

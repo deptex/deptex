@@ -3,6 +3,8 @@ import * as path from 'path';
 import { loadLanguage, makeParser } from '../parser';
 import { resolveRubygemsImport } from '../import-mapping/rubygems';
 import type { ExtractedFile, ImportBinding, LanguageContext, LanguageModule, UsageSlice } from './types';
+import { getDetectorsForLanguage } from '../../framework-rules/registry';
+import type { EntryPoint } from '../../framework-rules/types';
 
 const RUBY_EXTENSIONS: readonly string[] = ['.rb', '.rake'];
 
@@ -129,6 +131,20 @@ export const rubyModule: LanguageModule = {
     };
 
     walk(tree.rootNode);
-    return { filePath, language: 'ruby', imports, usages };
+
+    const extracted: ExtractedFile = { filePath, language: 'ruby', imports, usages };
+    const entryPoints: EntryPoint[] = [];
+    for (const detector of getDetectorsForLanguage('ruby')) {
+      const importedSources = new Set(imports.map((i) => i.source));
+      const triggered = detector.triggerImports.length === 0 || detector.triggerImports.some((t) => {
+        if (importedSources.has(t)) return true;
+        for (const imp of imports) if (imp.source.startsWith(`${t}/`)) return true;
+        return false;
+      });
+      if (!triggered) continue;
+      try { entryPoints.push(...detector.detect({ source, tree, file: extracted })); } catch { /* non-fatal */ }
+    }
+    extracted.entryPoints = entryPoints;
+    return extracted;
   },
 };
