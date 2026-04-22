@@ -4,12 +4,13 @@
     "version": "4.17.20",
     "is_direct": true,
     "source": "dependencies",
-    "files_importing_count": 0,
+    "files_importing_count": 1,
     "ai_usage_summary": null,
     "ai_usage_analyzed_at": null,
     "environment": "prod",
     "is_outdated": false,
     "versions_behind": 0,
-    "policy_result": null
+    "policy_result": null,
+    "namespace": ""
   }
 ]

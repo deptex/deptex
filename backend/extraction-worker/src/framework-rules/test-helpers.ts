@@ -2,8 +2,8 @@ import type {
   ExtractedFile,
   KnownDep,
   LanguageModule,
-} from '../../tree-sitter-extractor/languages/types';
-import type { EntryPoint } from '../types';
+} from '../tree-sitter-extractor/languages/types';
+import type { EntryPoint } from './types';
 
 /**
  * Run a language module over an inline source string and return the parsed

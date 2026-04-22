@@ -59,7 +59,7 @@
       "4.18.0"
     ],
     "is_reachable": true,
-    "epss_score": "0.0007",
+    "epss_score": "0.0002",
     "published_at": "2026-04-01T23:50:27.000Z",
     "cvss_score": "6.5",
     "cisa_kev": false,
@@ -161,11 +161,11 @@
       "4.18.0"
     ],
     "is_reachable": true,
-    "epss_score": "0.0009",
+    "epss_score": "0.0005",
     "published_at": "2026-04-01T23:51:12.000Z",
     "cvss_score": "8.1",
     "cisa_kev": false,
-    "depscore": 28,
+    "depscore": 27,
     "suppressed": false,
     "suppressed_by": null,
     "suppressed_at": null,

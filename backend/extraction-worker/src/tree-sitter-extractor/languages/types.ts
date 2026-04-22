@@ -1,9 +1,12 @@
+/** Ecosystem names match the canonical `project.ecosystem` values the pipeline
+ * passes through (same spelling as cdxgen/dep-scan and `cli/ecosystem.ts`), not
+ * tree-sitter's language IDs. Mismatch here silently skips the extractor. */
 export type SupportedEcosystem =
   | 'npm'
   | 'pypi'
   | 'maven'
-  | 'go'
-  | 'rubygems'
+  | 'golang'
+  | 'gem'
   | 'composer'
   | 'cargo'
   | 'nuget';

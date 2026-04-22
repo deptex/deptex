@@ -805,7 +805,7 @@ export async function runPipeline(
           }
 
           const supportedEcosystems: readonly SupportedEcosystem[] = [
-            'npm', 'pypi', 'maven', 'go', 'rubygems', 'composer', 'cargo', 'nuget',
+            'npm', 'pypi', 'maven', 'golang', 'gem', 'composer', 'cargo', 'nuget',
           ];
           if (!supportedEcosystems.includes(jobEcosystem as SupportedEcosystem)) {
             astParsedSuccessfully = true;
