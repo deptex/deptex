@@ -1,4 +1,4 @@
-import type { SupportedEcosystem } from '../languages/types';
+import type { KnownDep, SupportedEcosystem } from '../languages/types';
 import { resolveNpmImport } from './npm';
 import { resolveGoImport } from './go';
 import { resolvePypiImport } from './pypi';
@@ -8,6 +8,10 @@ import { resolveComposerImport } from './composer';
 import { resolveCargoImport } from './cargo';
 import { resolveNugetImport } from './nuget';
 
+function namesOf(deps: readonly KnownDep[]): readonly string[] {
+  return deps.map((d) => d.name);
+}
+
 /**
  * Resolve a source-level import identifier to a dependency name known to the
  * project's SBOM.
@@ -16,33 +20,31 @@ import { resolveNugetImport } from './nuget';
  * maps to a known dep, or `null` if the import belongs to the stdlib, refers
  * to an unknown package, or is a first-party relative import.
  *
- * The set of known deps is passed in so per-ecosystem resolvers can short-
- * circuit (e.g. for Go where the import path IS the module path) or apply
- * longest-common-prefix matching (e.g. for Java where `org.apache.logging.log4j.Logger`
- * belongs to the `log4j-core` artifact).
+ * Per-ecosystem resolvers handle the quirks: npm scoped/subpath, pypi
+ * distribution↔module split, go longest-prefix, maven groupId→artifact.
  */
 export function resolveImportToDep(
   importName: string,
   ecosystem: SupportedEcosystem,
-  knownDeps: readonly string[] = []
+  deps: readonly KnownDep[] = []
 ): string | null {
   switch (ecosystem) {
     case 'npm':
-      return resolveNpmImport(importName, knownDeps);
+      return resolveNpmImport(importName, namesOf(deps));
     case 'pypi':
-      return resolvePypiImport(importName, knownDeps);
+      return resolvePypiImport(importName, namesOf(deps));
     case 'maven':
-      return resolveMavenImport(importName, knownDeps);
+      return resolveMavenImport(importName, deps);
     case 'go':
-      return resolveGoImport(importName, knownDeps);
+      return resolveGoImport(importName, namesOf(deps));
     case 'rubygems':
-      return resolveRubygemsImport(importName, knownDeps);
+      return resolveRubygemsImport(importName, namesOf(deps));
     case 'composer':
-      return resolveComposerImport(importName, knownDeps);
+      return resolveComposerImport(importName, namesOf(deps));
     case 'cargo':
-      return resolveCargoImport(importName, knownDeps);
+      return resolveCargoImport(importName, namesOf(deps));
     case 'nuget':
-      return resolveNugetImport(importName, knownDeps);
+      return resolveNugetImport(importName, namesOf(deps));
     default: {
       const _exhaustive: never = ecosystem;
       return _exhaustive;

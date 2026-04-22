@@ -704,6 +704,7 @@ export async function runPipeline(
         dependency_version_id: keyToVersionId.get(key) ?? null,
         name: d.name,
         version: d.version,
+        namespace: d.namespace,
         is_direct: d.is_direct,
         source: d.source,
         environment: d.source === 'dependencies' ? 'prod' : d.source === 'devDependencies' ? 'dev' : null,
@@ -790,15 +791,15 @@ export async function runPipeline(
       const extractStart = Date.now();
       try {
         await withTimeout(async () => {
-          const depNames: string[] = [];
+          const deps: Array<{ name: string; namespace: string | null }> = [];
           {
             const { data: depRows } = await supabase
               .from('project_dependencies')
-              .select('name')
+              .select('name, namespace')
               .eq('project_id', projectId)
               .eq('last_seen_extraction_run_id', runId);
-            for (const row of (depRows ?? []) as Array<{ name: string }>) {
-              if (row.name) depNames.push(row.name);
+            for (const row of (depRows ?? []) as Array<{ name: string; namespace: string | null }>) {
+              if (row.name) deps.push({ name: row.name, namespace: row.namespace ?? null });
             }
           }
 
@@ -813,7 +814,7 @@ export async function runPipeline(
           const result = await extractUsage({
             workspaceRoot,
             ecosystem: jobEcosystem as SupportedEcosystem,
-            depNames,
+            deps,
           });
 
           if (result.files.length === 0) {

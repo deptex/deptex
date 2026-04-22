@@ -2,7 +2,7 @@ import type { Node } from 'web-tree-sitter';
 import * as path from 'path';
 import { loadLanguage, makeParser } from '../parser';
 import { resolveNpmImport } from '../import-mapping/npm';
-import type { ExtractedFile, ImportBinding, LanguageModule, UsageSlice } from './types';
+import type { ExtractedFile, ImportBinding, LanguageContext, LanguageModule, UsageSlice } from './types';
 
 const JS_EXTENSIONS: readonly string[] = ['.js', '.mjs', '.cjs', '.jsx'];
 const TS_EXTENSIONS: readonly string[] = ['.ts', '.mts', '.cts'];
@@ -186,7 +186,7 @@ function collectUsages(
   source: string,
   aliases: AliasMap,
   filePath: string,
-  knownDeps: readonly string[]
+  depNames: readonly string[]
 ): UsageSlice[] {
   const usages: UsageSlice[] = [];
 
@@ -199,7 +199,7 @@ function collectUsages(
   ): void => {
     const src = aliases.localToSource.get(localName);
     if (!src) return;
-    const depName = resolveNpmImport(src, knownDeps);
+    const depName = resolveNpmImport(src, depNames);
     if (!depName) return;
     usages.push({
       filePath,
@@ -254,7 +254,7 @@ export const javascriptModule: LanguageModule = {
     const ext = path.extname(filePath).toLowerCase();
     return JS_EXTENSIONS.includes(ext) || TS_EXTENSIONS.includes(ext) || TSX_EXTENSIONS.includes(ext);
   },
-  async extractFile(source: string, filePath: string, knownDeps: readonly string[]): Promise<ExtractedFile> {
+  async extractFile(source: string, filePath: string, ctx: LanguageContext): Promise<ExtractedFile> {
     const language = await loadLanguage(pickWasmForFile(filePath));
     const parser = await makeParser(language);
     const tree = parser.parse(source);
@@ -263,7 +263,8 @@ export const javascriptModule: LanguageModule = {
     }
     const root = tree.rootNode;
     const { imports, aliases } = collectImports(root, source);
-    const usages = collectUsages(root, source, aliases, filePath, knownDeps);
+    const depNames = ctx.deps.map((d) => d.name);
+    const usages = collectUsages(root, source, aliases, filePath, depNames);
     return { filePath, language: 'javascript', imports, usages };
   },
 };
