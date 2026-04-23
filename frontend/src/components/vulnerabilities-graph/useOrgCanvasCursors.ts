@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { z } from 'zod';
-import { PerfectCursor } from 'perfect-cursors';
+import { PerfectCursor } from '../../lib/perfectCursor';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '../../lib/supabase';
 import { api } from '../../lib/api';
