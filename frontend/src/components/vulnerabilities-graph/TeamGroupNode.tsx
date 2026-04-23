@@ -1,8 +1,7 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
+import { UsersRound } from 'lucide-react';
 import { overviewStatusBadgeInlineStyle } from '../../lib/overviewStatusRollup';
-import { GraphScopePill } from './GraphScopePill';
 import type { OrgSatelliteTargetEdge } from './overviewOrgLayout';
 import { OverviewOrgTargetHandleFan } from './overviewOrgFlowHandles';
 
@@ -60,9 +59,7 @@ function TeamGroupNodeComponent({ data }: NodeProps) {
     overviewStatusBadgeColor,
     overviewStatusTooltip,
     overviewProjectsTotal,
-    overviewCollapsedSummary,
     overviewMemberCount,
-    overviewNonPassingCount,
   } = (data as unknown as TeamGroupNodeData) ?? {};
 
   const hasStatusRollup =
@@ -77,14 +74,19 @@ function TeamGroupNodeComponent({ data }: NodeProps) {
   const overviewTopBottomHandleStyle = { left: tbMid, transform: 'translateX(-50%)' } as const;
   const edge = overviewOrgEdgeTargetHandle;
 
+  const subtitle = (() => {
+    const parts: string[] = [];
+    if (typeof overviewProjectsTotal === 'number') {
+      parts.push(`${overviewProjectsTotal} ${overviewProjectsTotal === 1 ? 'project' : 'projects'}`);
+    }
+    if (typeof overviewMemberCount === 'number') {
+      parts.push(`${overviewMemberCount} ${overviewMemberCount === 1 ? 'member' : 'members'}`);
+    }
+    return parts.join(' · ');
+  })();
+
   return (
-    <div
-      className="relative box-border flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-background-card-header shadow-lg shadow-slate-500/5"
-      style={{
-        width,
-        height,
-      }}
-    >
+    <div className="relative h-full w-full rounded-xl" style={{ width, height }}>
       {/* Handles for edges - invisible but functional */}
       <Handle
         id="top"
@@ -120,51 +122,32 @@ function TeamGroupNodeComponent({ data }: NodeProps) {
       <Handle id="source-bottom" type="source" position={Position.Bottom} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
       <Handle id="source-left" type="source" position={Position.Left} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
 
-      {/* Header: team name + role badge vertically centered as a row (2-line title: badge centers on block) */}
-      <div className="relative z-[1] flex flex-1 flex-col justify-start gap-0.5 px-4 pr-11 pt-4">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="min-w-0 text-left text-base font-semibold leading-snug text-foreground line-clamp-2 break-words">
-              {teamName}
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" sideOffset={4} className="max-w-sm">
-            {teamName}
-          </TooltipContent>
-        </Tooltip>
-        {overviewCollapsedSummary && overviewProjectsTotal != null && (
-          <p className="text-xs text-muted-foreground tabular-nums">
-            {overviewProjectsTotal} {overviewProjectsTotal === 1 ? 'project' : 'projects'}
-            {typeof overviewMemberCount === 'number' && ` · ${overviewMemberCount} ${overviewMemberCount === 1 ? 'member' : 'members'}`}
-          </p>
-        )}
-      </div>
-
-      {/* Top-right: scope */}
-      <div className="pointer-events-auto absolute top-2 right-2 z-[2] flex items-center gap-0.5">
-        <GraphScopePill type="team" />
-      </div>
-
-
-
-      {/* Bottom bar: aggregated project status (worst-of + breakdown tooltip) — parity with VulnProjectNode org overview footer */}
+      {/* Top-right: status rollup badge (only when present) */}
       {hasStatusRollup && (
-        <div className="relative z-[1] flex shrink-0 items-center gap-2 bg-background-card-header/95 px-4 py-3">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span
-                className="inline-flex max-w-full cursor-default items-center truncate rounded-md border px-2 py-0.5 text-[10px] font-medium"
-                style={overviewStatusBadgeInlineStyle(overviewStatusBadgeLabel!, overviewStatusBadgeColor ?? null)}
-              >
-                {overviewStatusBadgeLabel}
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="top" sideOffset={6} className="max-w-xs">
-              {overviewStatusTooltip}
-            </TooltipContent>
-          </Tooltip>
+        <div className="pointer-events-auto absolute top-1.5 right-1.5 z-[2]">
+          <span
+            className="inline-flex cursor-default items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium leading-none"
+            style={overviewStatusBadgeInlineStyle(overviewStatusBadgeLabel!, overviewStatusBadgeColor ?? null)}
+          >
+            {overviewStatusBadgeLabel}
+          </span>
         </div>
       )}
+
+      {/* Card body — icon tile left, text right (matches org card family) */}
+      <div className={`relative flex h-full w-full items-center gap-2.5 overflow-hidden rounded-xl border border-border bg-background-card-header shadow-lg shadow-slate-500/5 pl-2.5 ${hasStatusRollup ? 'pr-9' : 'pr-2.5'}`}>
+        <div
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border/70 bg-muted/40 text-muted-foreground"
+          aria-hidden
+        >
+          <UsersRound className="h-4 w-4" strokeWidth={1.6} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-foreground truncate leading-tight tracking-tight">
+            {teamName}
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

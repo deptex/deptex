@@ -1,9 +1,8 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { Users } from 'lucide-react';
-import { GraphScopePill } from './GraphScopePill';
 import { OrgOverviewSourceHandles } from './overviewOrgFlowHandles';
-import { ORG_OVERVIEW_CENTER_WIDTH, ORG_OVERVIEW_CENTER_HEIGHT } from './overviewOrgLayout';
+import { ORG_OVERVIEW_CENTER_WIDTH, ORG_OVERVIEW_CENTER_HEIGHT, ORG_OVERVIEW_ORG_WIDTH, ORG_OVERVIEW_ORG_HEIGHT } from './overviewOrgLayout';
 import { RoleBadge } from '../RoleBadge';
 
 export interface GroupCenterNodeData {
@@ -83,8 +82,13 @@ function GroupCenterNodeComponent({ data }: NodeProps) {
 
   // ─── Org overview ────────────────────────────────────────────────────────────
   if (useNeutralOrgStyle) {
-    const orgConnectY = ORG_OVERVIEW_CENTER_HEIGHT / 2;
-    const orgConnectX = ORG_OVERVIEW_CENTER_WIDTH / 2;
+    // Showcase variants (V2/V6/V8/V9/V10) still use the larger card dimensions;
+    // the production (variant-less) org card is the compact project-sized node.
+    const isCompactOrgCard = !variant;
+    const orgW = isCompactOrgCard ? ORG_OVERVIEW_ORG_WIDTH : ORG_OVERVIEW_CENTER_WIDTH;
+    const orgH = isCompactOrgCard ? ORG_OVERVIEW_ORG_HEIGHT : ORG_OVERVIEW_CENTER_HEIGHT;
+    const orgConnectY = orgH / 2;
+    const orgConnectX = orgW / 2;
     const orgSideHandleStyle = { top: orgConnectY, transform: 'translateY(-50%)' } as const;
     const orgTBHandleStyle = { left: orgConnectX, transform: 'translateX(-50%)' } as const;
 
@@ -127,24 +131,17 @@ function GroupCenterNodeComponent({ data }: NodeProps) {
     // ── Production design ─────────────────────────────────────────────────────
     if (!variant) {
       return (
-        <div className="relative h-full w-full min-h-0">
+        <div className="relative h-full w-full min-h-0 rounded-xl">
           {handles}
-          <div className="pointer-events-auto absolute top-1.5 right-1.5 z-[2]">
-            <GraphScopePill type="organization" />
-          </div>
-          <div className={`relative flex h-full w-full flex-col justify-between overflow-hidden rounded-xl border ${borderClass} bg-background-card-header shadow-lg px-5 py-5`}>
-            <div className="flex items-center gap-4 min-w-0">
-              <AvatarOrIcon size={40} />
-              <div className="min-w-0 flex-1">
-                <p className="text-lg font-semibold text-foreground truncate leading-tight tracking-tight">{title}</p>
-                {planDisplay && (
-                  <p className="text-xs text-muted-foreground mt-1">{planDisplay} plan</p>
-                )}
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5 pl-[4px] animate-[org-active-ping_3s_ease-in-out_infinite]">
-              <span className="w-2 h-2 rounded-full flex-shrink-0 bg-green-500" />
-              <span className="text-xs font-medium text-green-500">Active</span>
+          <div className="relative flex h-full w-full items-center gap-3 overflow-hidden rounded-xl border border-border bg-background-card-header shadow-lg pl-3 pr-3">
+            <AvatarOrIcon size={38} rounded="rounded-lg" />
+            <div className="min-w-0 flex-1 flex flex-col gap-1">
+              <p className="text-base font-semibold text-foreground truncate leading-tight tracking-tight">{title}</p>
+              {planDisplay && (
+                <span className="self-start inline-flex items-center rounded border border-border/70 bg-muted/40 px-1 py-0 text-[10px] font-medium text-muted-foreground leading-[14px]">
+                  {planDisplay}
+                </span>
+              )}
             </div>
           </div>
         </div>
