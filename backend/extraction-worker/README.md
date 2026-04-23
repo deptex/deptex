@@ -70,6 +70,25 @@ npm run test:storage    # PGLite integration tests
 npm run test:fixtures   # deterministic output snapshot tests
 ```
 
+Framework detector unit tests run via Jest:
+
+```bash
+NODE_OPTIONS=--experimental-vm-modules npx jest src/framework-rules/__tests__/
+```
+
+---
+
+## Reachability extractor
+
+The worker runs a tree-sitter-based usage extractor that maps first-party source files to SBOM dependencies, then emits per-file imports, call-sites, and framework entry points (HTTP routes, serverless handlers, etc.) into the DB. These power EPD contextual scoring and, ultimately, the `depscore`.
+
+Supported languages: JavaScript/TypeScript, Python, Java, Go, Ruby, PHP, Rust, C# (8 MVP languages). 34 framework detectors across those languages — Express, NestJS, Spring, Gin, Rails, Laravel, Actix, ASP.NET Core, and more.
+
+Adding a new framework or debugging why a detector doesn't fire:
+
+- **[Framework rule-pack guide](docs/framework-rule-pack-guide.md)** — how to add a new detector, lifecycle, testing.
+- **[Language query guide](docs/language-query-guide.md)** — AST shapes, node types, and known grammar quirks per language.
+
 ---
 
 ## Fly.io worker mode
