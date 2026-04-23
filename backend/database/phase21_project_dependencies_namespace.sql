@@ -14,6 +14,9 @@
 ALTER TABLE project_dependencies
   ADD COLUMN IF NOT EXISTS namespace TEXT;
 
-CREATE INDEX IF NOT EXISTS idx_pd_namespace
+-- CONCURRENTLY so this migration doesn't lock writes on a hot table.
+-- Note: CONCURRENTLY cannot run inside a transaction — if your runner wraps
+-- each file in BEGIN/COMMIT, strip the transaction for this statement.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_pd_namespace
   ON project_dependencies(namespace)
   WHERE namespace IS NOT NULL;

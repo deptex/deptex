@@ -37,8 +37,8 @@ const TIER_WEIGHT: Record<AssetTier, number> = {
   NON_PRODUCTION: 0.6,
 };
 
-/** Unreachable vulns are heavily discounted (not used in code). Same for all tiers. */
-const REACHABILITY_WEIGHT_UNREACHABLE = 0.2;
+/** Unreachable vulns score to 0 (extractor-confirmed absence). Must match backend depscore.ts. */
+const REACHABILITY_WEIGHT_UNREACHABLE = 0.0;
 
 function packageReputationWeight(score: number | null | undefined): number {
   if (score == null) return 1.0;

@@ -4,7 +4,7 @@ import * as path from 'path';
 import type { Storage } from './storage';
 
 export type ReachabilityStatus = 'reachable' | 'unreachable' | 'unknown';
-export type EntryPointClassification = 'PUBLIC_UNAUTH' | 'AUTH_INTERNAL' | 'OFFLINE_WORKER';
+export type EntryPointClassification = 'PUBLIC_UNAUTH' | 'AUTH_INTERNAL' | 'OFFLINE_WORKER' | 'UNKNOWN';
 
 export class EpdBudgetExceededError extends Error {
   constructor(message: string) {
@@ -56,10 +56,11 @@ const TOKEN_PRICING: Record<string, { input: number; output: number }> = {
   'claude-3-haiku-20240307': { input: 0.25 / 1_000_000, output: 1.25 / 1_000_000 },
 };
 
-const ENTRY_WEIGHT_BY_CLASS: Record<EntryPointClassification, number> = {
+export const ENTRY_WEIGHT_BY_CLASS: Record<EntryPointClassification, number> = {
   PUBLIC_UNAUTH: 1.0,
   AUTH_INTERNAL: 0.5,
-  OFFLINE_WORKER: 0.1,
+  OFFLINE_WORKER: 0.2,
+  UNKNOWN: 1.0,
 };
 
 interface AiVerificationResult {
@@ -377,7 +378,7 @@ ${dataFlowContext}`,
 function classifyFallbackEntryPoint(tag: string | null): { classification: EntryPointClassification; weight: number } {
   const normalized = (tag ?? '').toLowerCase();
   if (normalized.includes('worker') || normalized.includes('cron') || normalized.includes('batch') || normalized.includes('queue')) {
-    return { classification: 'OFFLINE_WORKER', weight: 0.1 };
+    return { classification: 'OFFLINE_WORKER', weight: ENTRY_WEIGHT_BY_CLASS.OFFLINE_WORKER };
   }
   if (normalized.includes('framework-input') || normalized.includes('http') || normalized.includes('route') || normalized.includes('controller')) {
     return { classification: 'PUBLIC_UNAUTH', weight: 1.0 };
