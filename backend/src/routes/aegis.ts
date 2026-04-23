@@ -352,13 +352,16 @@ router.post('/chat', async (req: AuthRequest, res: Response) => {
         }
       }
 
-      await supabase.from('aegis_chat_messages').insert({
-        thread_id: threadId,
-        role: 'assistant',
-        user_id: null,
-        content: text,
-        metadata: { parts },
-      });
+      await Promise.all([
+        supabase.from('aegis_chat_messages').insert({
+          thread_id: threadId,
+          role: 'assistant',
+          user_id: null,
+          content: text,
+          metadata: { parts },
+        }),
+        supabase.from('aegis_chat_threads').update({ updated_at: new Date().toISOString() }).eq('id', threadId),
+      ]);
     } catch (err) {
       console.error('[aegis] background generation failed', err);
     }
