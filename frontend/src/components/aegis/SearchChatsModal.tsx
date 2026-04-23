@@ -1,7 +1,6 @@
 import { useMemo, useState, type KeyboardEvent } from 'react';
 import { Dialog, DialogContent } from '../ui/dialog';
-import { Search, MessageCircle, Users, X, Archive, ArchiveRestore } from 'lucide-react';
-import { cn } from '../../lib/utils';
+import { Search, Users, X, Archive, ArchiveRestore } from 'lucide-react';
 import type { AegisThread } from '../../lib/aegis-api';
 
 interface SearchChatsModalProps {
@@ -66,7 +65,7 @@ export function SearchChatsModal({ open, onOpenChange, threads, onSelect, onSetA
       <DialogContent className="max-w-2xl p-0 gap-0">
         {/* Search bar */}
         <div className="relative flex items-center border-b border-border">
-          <Search className="absolute left-4 h-4 w-4 text-foreground/40 pointer-events-none" />
+          <Search className="absolute left-4 h-4 w-4 text-foreground/50 pointer-events-none" />
           <input
             type="text"
             value={query}
@@ -80,7 +79,7 @@ export function SearchChatsModal({ open, onOpenChange, threads, onSelect, onSetA
             <button
               type="button"
               onClick={() => setQuery('')}
-              className="absolute right-3 flex h-6 w-6 items-center justify-center rounded text-foreground/40 hover:text-foreground"
+              className="absolute right-3 flex h-6 w-6 items-center justify-center rounded text-foreground/50 hover:text-foreground transition-colors"
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -90,7 +89,7 @@ export function SearchChatsModal({ open, onOpenChange, threads, onSelect, onSetA
         {/* Results */}
         <div className="overflow-y-auto min-h-[420px] max-h-[560px] px-2 pb-2">
           {total === 0 && (
-            <div className="flex items-center gap-2.5 px-3 py-4 text-sm text-foreground/50">
+            <div className="flex items-center gap-2.5 px-3 py-4 text-sm text-foreground/60">
               <Search className="h-4 w-4 flex-shrink-0" />
               <span>{threads.length === 0 ? 'No chats yet.' : 'No results'}</span>
             </div>
@@ -98,30 +97,24 @@ export function SearchChatsModal({ open, onOpenChange, threads, onSelect, onSetA
 
           {groups.map(({ label, items }) => (
             <div key={label}>
-              <div className="px-3 pt-3 pb-1 text-xs text-foreground/40">{label}</div>
+              <div className="px-3 pt-3 pb-1 text-xs font-medium text-foreground/50">{label}</div>
               <div className="space-y-0.5">
                 {items.map((t) => (
                   <div key={t.id} className="group relative">
                     <button
                       type="button"
                       onClick={() => handleSelect(t.id)}
-                      className="w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm text-left text-foreground/90 hover:bg-background-subtle/60"
+                      className="w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm text-left text-foreground hover:bg-white/[0.04]"
                     >
-                      <MessageCircle className="h-4 w-4 flex-shrink-0 text-foreground/30" />
-                      <span className="truncate">{t.title}</span>
-                      {t.archivedAt && <Archive className="h-3 w-3 flex-shrink-0 text-foreground/30" />}
-                      {!t.archivedAt && t.participantCount > 1 && <Users className="h-3 w-3 flex-shrink-0 text-foreground/30 ml-auto" />}
+                      <span className="truncate flex-1">{t.title}</span>
+                      {t.archivedAt && <Archive className="h-3.5 w-3.5 flex-shrink-0 text-foreground/50" />}
+                      {!t.archivedAt && t.participantCount > 1 && <Users className="h-3.5 w-3.5 flex-shrink-0 text-foreground/50" />}
                     </button>
                     {t.archivedAt && (
                       <button
                         type="button"
                         onClick={(e) => handleUnarchive(e, t.id)}
-                        className={cn(
-                          'absolute right-2 top-1/2 -translate-y-1/2',
-                          'flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium',
-                          'text-foreground/50 hover:text-foreground/90 hover:bg-background-subtle',
-                          'opacity-0 group-hover:opacity-100 transition-opacity',
-                        )}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5 px-2 py-1 rounded-md border border-border bg-background-card text-foreground text-xs font-medium hover:bg-background-subtle transition-colors opacity-0 group-hover:opacity-100"
                       >
                         <ArchiveRestore className="h-3 w-3" />
                         Unarchive
