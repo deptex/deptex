@@ -105,19 +105,12 @@ export function SearchChatsModal({ open, onOpenChange, threads, onSelect, onSetA
                     <button
                       type="button"
                       onClick={() => handleSelect(t.id)}
-                      className={cn(
-                        'w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm text-left hover:bg-background-subtle/60',
-                        t.archivedAt ? 'text-foreground/50 pr-24' : 'text-foreground/90',
-                      )}
+                      className="w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm text-left text-foreground/90 hover:bg-background-subtle/60"
                     >
                       <MessageCircle className="h-4 w-4 flex-shrink-0 text-foreground/30" />
-                      <span className="truncate flex-1">{t.title}</span>
-                      {t.archivedAt
-                        ? <Archive className="h-3.5 w-3.5 flex-shrink-0 text-foreground/30" />
-                        : t.participantCount > 1
-                          ? <Users className="h-3 w-3 flex-shrink-0 text-foreground/30" />
-                          : null
-                      }
+                      <span className="truncate">{t.title}</span>
+                      {t.archivedAt && <Archive className="h-3 w-3 flex-shrink-0 text-foreground/30" />}
+                      {!t.archivedAt && t.participantCount > 1 && <Users className="h-3 w-3 flex-shrink-0 text-foreground/30 ml-auto" />}
                     </button>
                     {t.archivedAt && (
                       <button
