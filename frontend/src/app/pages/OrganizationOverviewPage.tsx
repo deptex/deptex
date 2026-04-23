@@ -44,7 +44,6 @@ import {
   ORG_OVERVIEW_ORG_HEIGHT,
   ORG_OVERVIEW_TEAM_WIDTH,
   ORG_OVERVIEW_TEAM_HEIGHT,
-  computeOrgOverviewEdgeRouting,
   getOrgToSatelliteHandles,
 } from '../../components/vulnerabilities-graph/overviewOrgLayout';
 import { GroupCenterNode } from '../../components/vulnerabilities-graph/GroupCenterNode';
@@ -254,42 +253,27 @@ function OrgProjectVulnerabilitiesTableSkeleton({ rowCount = 6 }: { rowCount?: n
 }
 
 /**
- * Recomputes org→satellite and team→project edge handles based on current node
- * positions. Used to keep edge routing correct after remote drag moves/stops,
- * where the layout hook does not re-run (only the local user's drag stop triggers
- * an optimistic rawTeamsWithProjects update that re-runs the layout).
+ * Recomputes org→satellite and team→project edge handles for the observer's canvas
+ * during remote drag. Uses simple face handles (top/right/bottom/left) which are
+ * always rendered unconditionally on every node — no slot-fan synchronisation needed.
  */
-function recomputeOrgCanvasEdges(edges: Edge[], nodes: Node[]): Edge[] {
+function recomputeOrgCanvasLayout(edges: Edge[], nodes: Node[]): Edge[] {
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
   const orgNode = nodeById.get(ORG_CENTER_ID);
   if (!orgNode) return edges;
 
-  const orgCX = orgNode.position.x + ORG_OVERVIEW_ORG_WIDTH / 2;
-  const orgCY = orgNode.position.y + ORG_OVERVIEW_ORG_HEIGHT / 2;
-
-  // Collect all org→satellite targets to compute slot-spread routing in one pass.
-  const orgLinkItems: Array<{ targetId: string; cx: number; cy: number }> = [];
-  for (const edge of edges) {
-    if (edge.source !== ORG_CENTER_ID) continue;
-    const tgt = nodeById.get(edge.target);
-    if (!tgt) continue;
-    const tw = tgt.width ?? ORG_OVERVIEW_TEAM_WIDTH;
-    const th = tgt.height ?? ORG_OVERVIEW_TEAM_HEIGHT;
-    orgLinkItems.push({
-      targetId: edge.target,
-      cx: tgt.position.x + tw / 2 - orgCX,
-      cy: tgt.position.y + th / 2 - orgCY,
-    });
-  }
-  const orgRouting = computeOrgOverviewEdgeRouting(orgLinkItems);
+  const orgCX = orgNode.position.x + (orgNode.width ?? ORG_OVERVIEW_ORG_WIDTH) / 2;
+  const orgCY = orgNode.position.y + (orgNode.height ?? ORG_OVERVIEW_ORG_HEIGHT) / 2;
 
   return edges.map((edge) => {
     if (edge.source === ORG_CENTER_ID) {
-      const route = orgRouting.get(edge.target);
-      if (!route) return edge;
-      return { ...edge, sourceHandle: route.sourceHandle, targetHandle: route.targetHandle, pathOptions: route.pathOptions } as Edge;
+      const tgt = nodeById.get(edge.target);
+      if (!tgt) return edge;
+      const dx = tgt.position.x + (tgt.width ?? ORG_OVERVIEW_TEAM_WIDTH) / 2 - orgCX;
+      const dy = tgt.position.y + (tgt.height ?? ORG_OVERVIEW_TEAM_HEIGHT) / 2 - orgCY;
+      const { sourceHandle, targetHandle } = getOrgToSatelliteHandles(dx, dy);
+      return { ...edge, sourceHandle, targetHandle };
     }
-
     if (edge.source.startsWith('team-') && edge.target.startsWith('project-')) {
       const src = nodeById.get(edge.source);
       const tgt = nodeById.get(edge.target);
@@ -299,7 +283,6 @@ function recomputeOrgCanvasEdges(edges: Edge[], nodes: Node[]): Edge[] {
       const { sourceHandle, targetHandle } = getTeamProjectHandles(Math.atan2(dy, dx));
       return { ...edge, sourceHandle, targetHandle };
     }
-
     return edge;
   });
 }
@@ -1174,28 +1157,24 @@ export default function OrganizationVulnerabilitiesPage() {
     );
     if (validMoves.length === 0) return;
     const byId = new Map(validMoves.map((m) => [m.nodeId, m]));
-    setGraphNodes((nodes) =>
-      nodes.map((n) => {
-        const m = byId.get(n.id);
-        if (!m) return n;
-        return { ...n, position: { x: m.x, y: m.y } };
-      }),
-    );
-    // Recompute edge handle routing with the updated positions so edges
-    // always exit/enter from the closest face, not the stale baked-in handles.
+    // Apply position updates and recompute edge face routing.
+    // Uses simple face handles (top/right/bottom/left) which always exist — no slot-fan sync needed.
     const updatedNodes = graphNodesRef.current.map((n) => {
       const m = byId.get(n.id);
       return m ? { ...n, position: { x: m.x, y: m.y } } : n;
     });
-    setGraphEdges((edges) => recomputeOrgCanvasEdges(edges, updatedNodes));
+    setGraphNodes(updatedNodes);
+    setGraphEdges(recomputeOrgCanvasLayout(graphEdgesRef.current, updatedNodes));
   }, [setGraphNodes, setGraphEdges]);
 
   const handleRemoteDragStop = useCallback((msg: RemoteDragStopMessage) => {
+    // Recompute edge routing unconditionally — covers the case where drag-start was
+    // missed (channel gap) but drag-move messages already updated node positions.
+    setGraphEdges(recomputeOrgCanvasLayout(graphEdgesRef.current, graphNodesRef.current));
+
     const draggerId = msg.sessionId || msg.userId;
-    // Verify the stop is for the node this dragger actually claimed. Out-of-
-    // order messages or a buggy/hostile sender could drag-stop another node
-    // and clear an unrelated claim ring — ignore the stop in that case and
-    // let the 5-second stale sweep recover if it's truly stuck.
+    // Guard: verify the stop is for the node this dragger claimed. Out-of-order or
+    // hostile messages must not clear an unrelated drag ring.
     const claimed = remoteDraggersRef.current[draggerId];
     if (!claimed || claimed !== msg.nodeId) return;
     delete dragHeartbeatRef.current[draggerId];
@@ -1214,8 +1193,6 @@ export default function OrganizationVulnerabilitiesPage() {
       const childIds = (team?.projects ?? []).map((p) => `project-${p.projectId}`);
       if (childIds.length > 0) tagNodeClass(new Set(childIds), 'remote-drag-child', false);
     }
-    // Recompute edge routing from final node positions after the remote drag settles.
-    setGraphEdges((edges) => recomputeOrgCanvasEdges(edges, graphNodesRef.current));
   }, [tagNodeClass, setGraphEdges]);
 
   // Sweep: if a remote drag hasn't heartbeated in 5s, synthesize a stop.
@@ -2164,6 +2141,11 @@ export default function OrganizationVulnerabilitiesPage() {
   useEffect(() => {
     graphNodesRef.current = graphNodes;
   }, [graphNodes]);
+
+  const graphEdgesRef = useRef<Edge[]>([]);
+  useEffect(() => {
+    graphEdgesRef.current = graphEdges;
+  }, [graphEdges]);
 
   useEffect(() => {
     rawTeamsWithProjectsRef.current = rawTeamsWithProjects;
