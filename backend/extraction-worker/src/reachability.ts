@@ -412,16 +412,33 @@ export async function updateReachabilityLevels(
 
   const { data: flows } = await supabase
     .from('project_reachable_flows')
-    .select('dependency_id, entry_point_file, entry_point_line, entry_point_tag, sink_method')
+    .select('dependency_id, reachability_source, osv_id, rule_id, entry_point_file, entry_point_line, entry_point_tag, sink_method')
     .eq('project_id', projectId)
     .eq('extraction_run_id', runId);
 
+  // Flows are polymorphic over their source (Phase 23). `flowsByDep` preserves
+  // the original "any flow for this dep" semantics used by the data_flow
+  // branch — atom and semgrep-derived rows both count there, since either
+  // proves the dep is actually wired into the project's call graph.
+  //
+  // `taintByDepOsv` is the narrower index used by the new confirmed branch:
+  // a match requires not just the right dep but the specific CVE the taint
+  // rule was authored for, so a semgrep hit on CVE-A can't promote a PDV
+  // for CVE-B on the same package.
   const flowsByDep = new Map<string, any[]>();
+  const taintByDepOsv = new Map<string, any[]>();
   for (const flow of flows ?? []) {
     if (!flow.dependency_id) continue;
     const existing = flowsByDep.get(flow.dependency_id) ?? [];
     existing.push(flow);
     flowsByDep.set(flow.dependency_id, existing);
+
+    if (flow.reachability_source === 'semgrep_taint' && flow.osv_id) {
+      const key = `${flow.dependency_id}|${flow.osv_id}`;
+      const taintBucket = taintByDepOsv.get(key) ?? [];
+      taintBucket.push(flow);
+      taintByDepOsv.set(key, taintBucket);
+    }
   }
 
   const { data: usages } = await supabase
@@ -463,11 +480,25 @@ export async function updateReachabilityLevels(
     if (!dependencyId) continue;
 
     const matchingFlows = flowsByDep.get(dependencyId) ?? [];
+    const taintMatches = pdv.osv_id
+      ? taintByDepOsv.get(`${dependencyId}|${pdv.osv_id}`) ?? []
+      : [];
 
     let level: string;
     let details: any = null;
 
-    if (matchingFlows.length > 0) {
+    if (taintMatches.length > 0) {
+      // A hand-authored Semgrep taint rule for this specific CVE fired on
+      // this specific dep — the highest-confidence signal we produce.
+      // Trumps the heuristic ladder below regardless of what atom thinks.
+      level = 'confirmed';
+      details = {
+        rule_ids: [...new Set(taintMatches.map((f: any) => f.rule_id).filter(Boolean))],
+        flow_count: taintMatches.length,
+        entry_points: taintMatches.map((f: any) => `${f.entry_point_file}:${f.entry_point_line}`),
+        sink_methods: [...new Set(taintMatches.map((f: any) => f.sink_method).filter(Boolean))],
+      };
+    } else if (matchingFlows.length > 0) {
       level = 'data_flow';
       details = {
         flow_count: matchingFlows.length,
