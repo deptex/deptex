@@ -1,5 +1,5 @@
 import { useMemo, useState, type KeyboardEvent } from 'react';
-import { MoreHorizontal, SquarePen, Search, Pencil, Trash2, Loader2, Pin, PinOff, Archive, ArchiveRestore, Clock } from 'lucide-react';
+import { MoreHorizontal, SquarePen, Search, Pencil, Trash2, Loader2, Pin, PinOff, Archive, ArchiveRestore, Clock, ChevronRight } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -49,13 +49,16 @@ export function ThreadList({
   const [draftTitle, setDraftTitle] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [archivedOpen, setArchivedOpen] = useState(false);
 
-  const { pinned, recents } = useMemo(() => {
+  const { pinned, recents, archived } = useMemo(() => {
     const pinned = threads.filter((t) => t.pinnedAt && !t.archivedAt);
     const recents = threads.filter((t) => !t.pinnedAt && !t.archivedAt);
+    const archived = threads.filter((t) => !!t.archivedAt);
     pinned.sort((a, b) => (b.pinnedAt ?? '').localeCompare(a.pinnedAt ?? ''));
     recents.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    return { pinned, recents };
+    archived.sort((a, b) => (b.archivedAt ?? '').localeCompare(a.archivedAt ?? ''));
+    return { pinned, recents, archived };
   }, [threads]);
 
   const renderRow = (thread: AegisThread) => {
@@ -232,6 +235,25 @@ export function ThreadList({
             <div className="space-y-0.5">
               {recents.map((t) => renderRow(t))}
             </div>
+          </>
+        )}
+
+        {archived.length > 0 && (
+          <>
+            <button
+              type="button"
+              onClick={() => setArchivedOpen((o) => !o)}
+              className="w-full px-3 pt-3 pb-1 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-foreground/40 hover:text-foreground/60 transition-colors"
+            >
+              <ChevronRight className={cn('h-3 w-3 transition-transform', archivedOpen && 'rotate-90')} />
+              Archived
+              <span className="ml-auto font-normal normal-case tracking-normal text-foreground/30">{archived.length}</span>
+            </button>
+            {archivedOpen && (
+              <div className="space-y-0.5 opacity-70">
+                {archived.map((t) => renderRow(t))}
+              </div>
+            )}
           </>
         )}
 
