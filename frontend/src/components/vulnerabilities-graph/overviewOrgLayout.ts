@@ -1,10 +1,19 @@
 /**
- * Layout slot + collision box for the org hub center card (larger than default vuln graph center).
- * Keeps satellite placement from overlapping the beefier org node.
+ * Layout width/height of the team card on the overview graph. Used by team nodes
+ * and kept as the "hub envelope" for the routing math in this file.
  */
 export const ORG_OVERVIEW_CENTER_WIDTH = 300;
-/** Rendered height of the org center card. */
+/** Rendered height of the team card. */
 export const ORG_OVERVIEW_CENTER_HEIGHT = 140;
+
+/** Dedicated rendered size for the org-center card. */
+export const ORG_OVERVIEW_ORG_WIDTH = 180;
+export const ORG_OVERVIEW_ORG_HEIGHT = 60;
+
+/** Width for team cards in the org overview canvas (previously matched org center width). */
+export const ORG_OVERVIEW_TEAM_WIDTH = 170;
+/** Rendered height for compact team satellite cards (slimmer than org center). */
+export const ORG_OVERVIEW_TEAM_HEIGHT = 52;
 
 const ORG_HALF_W = ORG_OVERVIEW_CENTER_WIDTH / 2;
 const ORG_HALF_H = ORG_OVERVIEW_CENTER_HEIGHT / 2;

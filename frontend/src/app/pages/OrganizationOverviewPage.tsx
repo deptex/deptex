@@ -2,21 +2,21 @@ import { Fragment, useState, useEffect, useRef, useCallback, useMemo } from 'rea
 import { useOutletContext, useParams, useNavigate, Link, useSearchParams } from 'react-router-dom';
 import {
   ReactFlow,
-  Background,
   useNodesState,
   useEdgesState,
-  BackgroundVariant,
   type Node,
   type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, CircleCheck, Bell, Grid3x3, List, MoreVertical, Trash2, Save, Mail, Webhook, ChevronDown, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, RotateCw } from 'lucide-react';
+import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, CircleCheck, Bell, Grid3x3, List, MoreVertical, Trash2, Save, Mail, Webhook, ChevronDown, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, RotateCw, MousePointer2, MousePointerClick } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
 import { Checkbox } from '../../components/ui/checkbox';
@@ -29,6 +29,7 @@ import { isExtractionOngoing, isInitialExtraction } from '../../lib/extractionSt
 import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
 import { ExtractionProgressCard } from '../../components/ExtractionProgressCard';
 import { useAuth } from '../../contexts/AuthContext';
+import { useUserProfile } from '../../hooks/useUserProfile';
 import { useToast } from '../../hooks/use-toast';
 import {
   useOrganizationOverviewGraphLayout,
@@ -38,11 +39,22 @@ import {
 } from '../../components/vulnerabilities-graph/useOrganizationVulnerabilitiesGraphLayout';
 import {
   ORG_OVERVIEW_EDGE_STROKE,
-  ORG_OVERVIEW_CENTER_WIDTH,
-  ORG_OVERVIEW_CENTER_HEIGHT,
+  ORG_OVERVIEW_ORG_WIDTH,
+  ORG_OVERVIEW_ORG_HEIGHT,
 } from '../../components/vulnerabilities-graph/overviewOrgLayout';
 import { GroupCenterNode } from '../../components/vulnerabilities-graph/GroupCenterNode';
 import { SkeletonGroupCenterNode } from '../../components/vulnerabilities-graph/SkeletonGroupCenterNode';
+import { ReactiveDotGrid } from '../../components/vulnerabilities-graph/ReactiveDotGrid';
+import { OrgCanvasCursors } from '../../components/vulnerabilities-graph/OrgCanvasCursors';
+import { setCanvasDragging } from '../../components/vulnerabilities-graph/canvasDragSignal';
+import {
+  useOrgCanvasCursors,
+  type LocalIdentity,
+  type NodePositionUpdate,
+  type RemoteDragMoveMessage,
+  type RemoteDragStartMessage,
+  type RemoteDragStopMessage,
+} from '../../components/vulnerabilities-graph/useOrgCanvasCursors';
 import { VulnProjectNode, OVERVIEW_PROJECT_NODE_WIDTH, OVERVIEW_PROJECT_NODE_HEIGHT } from '../../components/vulnerabilities-graph/VulnProjectNode';
 import { ProjectCenterNode } from '../../components/vulnerabilities-graph/ProjectCenterNode';
 import { TeamGroupNode } from '../../components/vulnerabilities-graph/TeamGroupNode';
@@ -83,8 +95,8 @@ const skeletonNodeTypes: NodeTypes = {
 };
 
 const ORG_SKELETON_CENTER_POS = {
-  x: -ORG_OVERVIEW_CENTER_WIDTH / 2,
-  y: -ORG_OVERVIEW_CENTER_HEIGHT / 2,
+  x: -ORG_OVERVIEW_ORG_WIDTH / 2,
+  y: -ORG_OVERVIEW_ORG_HEIGHT / 2,
 };
 
 const orgSkeletonNodes = [
@@ -93,12 +105,17 @@ const orgSkeletonNodes = [
     type: 'skeletonGroupCenterNode',
     position: ORG_SKELETON_CENTER_POS,
     data: {},
-    style: { width: ORG_OVERVIEW_CENTER_WIDTH, height: ORG_OVERVIEW_CENTER_HEIGHT },
+    style: { width: ORG_OVERVIEW_ORG_WIDTH, height: ORG_OVERVIEW_ORG_HEIGHT },
   },
 ];
 
 const UNGROUPED_TEAM_ID = 'org-ungrouped';
 const UNGROUPED_TEAM_NAME = 'No team';
+// Stable empty-state references so the OrgCanvasCursors memo/deps don't
+// churn every render when the cursor toggles are off.
+const EMPTY_CURSORS: [] = [];
+const EMPTY_DRAGGERS: Record<string, string> = {};
+const noopCursorMove = (_x: number, _y: number) => {};
 
 
 /** Top-left of a node in flow coordinates, including parent group offset (nested project nodes). */
@@ -235,6 +252,7 @@ export default function OrganizationVulnerabilitiesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { avatarUrl: myAvatarUrl, fullName: myFullName } = useUserProfile();
   const { toast } = useToast();
   const { organization } = useOutletContext<OrganizationContextType>();
   const [teamsById, setTeamsById] = useState<Record<string, Team>>({});
@@ -273,6 +291,7 @@ export default function OrganizationVulnerabilitiesPage() {
   const [expandedNodes, setExpandedNodes] = useState<Node[]>([]);
   const [expandedEdges, setExpandedEdges] = useState<Edge[]>([]);
   const graphNodesRef = useRef<Node[]>([]);
+  const rawTeamsWithProjectsRef = useRef<OverviewTeamWithProjects[]>([]);
   const [teamSidebarStats, setTeamSidebarStats] = useState<TeamStats | null>(null);
   const [teamSidebarMembers, setTeamSidebarMembers] = useState<TeamMember[]>([]);
   const [teamSidebarProjects, setTeamSidebarProjects] = useState<Project[]>([]);
@@ -490,10 +509,10 @@ export default function OrganizationVulnerabilitiesPage() {
     const node = instance.getNode(nodeId);
     if (!node) return;
 
-    // Get the node's center position in flow coordinates (org hub uses overview center slot size)
+    // Get the node's center position in flow coordinates (org hub uses compact org slot size)
     const nodeWidth =
-      nodeId === ORG_CENTER_ID ? ORG_OVERVIEW_CENTER_WIDTH : 400;
-    const nodeHeight = nodeId === ORG_CENTER_ID ? ORG_OVERVIEW_CENTER_HEIGHT : 300;
+      nodeId === ORG_CENTER_ID ? ORG_OVERVIEW_ORG_WIDTH : 400;
+    const nodeHeight = nodeId === ORG_CENTER_ID ? ORG_OVERVIEW_ORG_HEIGHT : 300;
     const nodeCenterX = node.position.x + nodeWidth / 2;
     const nodeCenterY = node.position.y + nodeHeight / 2;
 
@@ -819,6 +838,8 @@ export default function OrganizationVulnerabilitiesPage() {
               isInitialExtractionFailed: repoStatus === 'error' && !lastExtractedAt,
               healthScore: typeof (p as Project).health_score === 'number' ? (p as Project).health_score : null,
               dependenciesCount: (p as Project).direct_dependencies_count ?? null,
+              canvasPositionX: p.canvas_position_x ?? null,
+              canvasPositionY: p.canvas_position_y ?? null,
             });
           }
         });
@@ -838,6 +859,8 @@ export default function OrganizationVulnerabilitiesPage() {
               projects: teamProjects,
               projectCount: teamProjects.length,
               memberCount: teamMeta?.member_count ?? undefined,
+              canvasPositionX: teamMeta?.canvas_position_x ?? null,
+              canvasPositionY: teamMeta?.canvas_position_y ?? null,
             };
           });
           setRawTeamsWithProjects(result);
@@ -907,6 +930,8 @@ export default function OrganizationVulnerabilitiesPage() {
               isInitialExtractionFailed: repoStatus === 'error' && !lastExtractedAt,
               healthScore: typeof p.health_score === 'number' ? p.health_score : null,
               dependenciesCount: p.direct_dependencies_count ?? null,
+              canvasPositionX: p.canvas_position_x ?? null,
+              canvasPositionY: p.canvas_position_y ?? null,
             });
           }
         });
@@ -922,6 +947,8 @@ export default function OrganizationVulnerabilitiesPage() {
             teamId: t.id, teamName: t.name,
             userRoleLabel: roleInfo?.label ?? undefined, userRoleColor: roleInfo?.color ?? undefined,
             projects: teamProjects, projectCount: teamProjects.length, memberCount: teamMeta?.member_count ?? undefined,
+            canvasPositionX: teamMeta?.canvas_position_x ?? null,
+            canvasPositionY: teamMeta?.canvas_position_y ?? null,
           };
         });
         // Preserve the existing project order within each team to avoid nodes jumping around.
@@ -1004,6 +1031,251 @@ export default function OrganizationVulnerabilitiesPage() {
   const [graphNodes, setGraphNodes, onNodesChange] = useNodesState<Node>([]);
   const [graphEdges, setGraphEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const stillShowingSkeleton = (!organization || loading) && teamsWithProjects.length === 0;
+
+  const canvasIdentity = useMemo<LocalIdentity | null>(() => {
+    if (!user) return null;
+    const stockAvatar = myAvatarUrl && !myAvatarUrl.endsWith('/images/blank_profile_image.png')
+      ? myAvatarUrl
+      : null;
+    return {
+      userId: user.id,
+      name: myFullName ?? user.email?.split('@')[0] ?? 'You',
+      avatarUrl: stockAvatar,
+      role: organization?.role ?? null,
+      roleLabel: orgRoleLabel,
+      roleColor: orgRoleColor,
+    };
+  }, [user, myAvatarUrl, myFullName, organization?.role, orgRoleLabel, orgRoleColor]);
+
+  // userId -> the id of the node that user is currently dragging.
+  // Populated on drag-start, cleared on drag-stop. Used to hide their cursor
+  // floating and anchor it to the dragged node instead.
+  const [remoteDraggers, setRemoteDraggers] = useState<Record<string, string>>({});
+  // Mirror of remoteDraggers as a ref so drag-stop can verify the claimed
+  // nodeId without depending on remoteDraggers in its callback deps.
+  const remoteDraggersRef = useRef<Record<string, string>>({});
+  remoteDraggersRef.current = remoteDraggers;
+
+  const tagNodeClass = useCallback(
+    (nodeIds: Set<string>, cls: string, add: boolean) => {
+      setGraphNodes((nodes) =>
+        nodes.map((n) => {
+          if (!nodeIds.has(n.id)) return n;
+          const existing = (n.className ?? '').split(' ').filter(Boolean);
+          const has = existing.includes(cls);
+          if (add && !has) return { ...n, className: [...existing, cls].join(' ') };
+          if (!add && has) {
+            const stripped = existing.filter((c) => c !== cls).join(' ');
+            return { ...n, className: stripped || undefined };
+          }
+          return n;
+        }),
+      );
+    },
+    [setGraphNodes],
+  );
+
+  // Track last-seen timestamp per remote dragger so we can auto-clear
+  // stale entries if drag-stop never arrives (e.g. sender crashed).
+  const dragHeartbeatRef = useRef<Record<string, number>>({});
+  // Always-current snapshot of cursor-visibility prefs; read inside drag callbacks
+  // without needing them in the deps arrays (avoids re-registering the channel hook).
+  const cursorVisibleRef = useRef({ showOthers: true, orgEnabled: false });
+
+  const handleRemoteDragStart = useCallback((msg: RemoteDragStartMessage) => {
+    const draggerId = msg.sessionId || msg.userId;
+    dragHeartbeatRef.current[draggerId] = Date.now();
+    setRemoteDraggers((prev) => ({ ...prev, [draggerId]: msg.nodeId }));
+    const { showOthers, orgEnabled } = cursorVisibleRef.current;
+    if (showOthers && orgEnabled) {
+      // canDrag: false means sender lacks manage_teams_and_projects — drag won't persist.
+      // Show a faint amber ghost ring instead of the full white "claimed" ring.
+      const cls = msg.canDrag === false ? 'remote-ghost-drag' : 'remote-dragging';
+      tagNodeClass(new Set([msg.nodeId]), cls, true);
+      if (msg.nodeId.startsWith('team-')) {
+        const teamId = msg.nodeId.slice('team-'.length);
+        const team = rawTeamsWithProjectsRef.current.find((t) => t.teamId === teamId);
+        const childIds = (team?.projects ?? []).map((p) => `project-${p.projectId}`);
+        if (childIds.length > 0) tagNodeClass(new Set(childIds), 'remote-drag-child', true);
+      }
+    }
+  }, [tagNodeClass]);
+
+  const handleRemoteDragMove = useCallback((msg: RemoteDragMoveMessage) => {
+    dragHeartbeatRef.current[msg.sessionId || msg.userId] = Date.now();
+    if (!Array.isArray(msg.moves) || msg.moves.length === 0) return;
+    // Drop malformed entries (missing/empty nodeId, non-finite coords) so a
+    // broken or hostile sender can't flick nodes off-screen or into NaN-land.
+    const validMoves = msg.moves.filter(
+      (m) =>
+        typeof m?.nodeId === 'string' &&
+        m.nodeId.length > 0 &&
+        typeof m.x === 'number' &&
+        Number.isFinite(m.x) &&
+        typeof m.y === 'number' &&
+        Number.isFinite(m.y),
+    );
+    if (validMoves.length === 0) return;
+    const byId = new Map(validMoves.map((m) => [m.nodeId, m]));
+    setGraphNodes((nodes) =>
+      nodes.map((n) => {
+        const m = byId.get(n.id);
+        if (!m) return n;
+        return { ...n, position: { x: m.x, y: m.y } };
+      }),
+    );
+  }, [setGraphNodes]);
+
+  const handleRemoteDragStop = useCallback((msg: RemoteDragStopMessage) => {
+    const draggerId = msg.sessionId || msg.userId;
+    // Verify the stop is for the node this dragger actually claimed. Out-of-
+    // order messages or a buggy/hostile sender could drag-stop another node
+    // and clear an unrelated claim ring — ignore the stop in that case and
+    // let the 5-second stale sweep recover if it's truly stuck.
+    const claimed = remoteDraggersRef.current[draggerId];
+    if (!claimed || claimed !== msg.nodeId) return;
+    delete dragHeartbeatRef.current[draggerId];
+    setRemoteDraggers((prev) => {
+      if (!(draggerId in prev)) return prev;
+      const next = { ...prev };
+      delete next[draggerId];
+      return next;
+    });
+    // Remove both possible drag classes — whichever was applied on start.
+    tagNodeClass(new Set([msg.nodeId]), 'remote-dragging', false);
+    tagNodeClass(new Set([msg.nodeId]), 'remote-ghost-drag', false);
+    if (msg.nodeId.startsWith('team-')) {
+      const teamId = msg.nodeId.slice('team-'.length);
+      const team = rawTeamsWithProjectsRef.current.find((t) => t.teamId === teamId);
+      const childIds = (team?.projects ?? []).map((p) => `project-${p.projectId}`);
+      if (childIds.length > 0) tagNodeClass(new Set(childIds), 'remote-drag-child', false);
+    }
+  }, [tagNodeClass]);
+
+  // Sweep: if a remote drag hasn't heartbeated in 5s, synthesize a stop.
+  // Covers the sender crashing / tab closing mid-drag so nodes don't get
+  // stuck visually "picked up".
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const stale: Array<{ draggerId: string; nodeId: string }> = [];
+      for (const [draggerId, nodeId] of Object.entries(remoteDraggers)) {
+        const ts = dragHeartbeatRef.current[draggerId];
+        if (!ts || now - ts > 5000) stale.push({ draggerId, nodeId });
+      }
+      for (const s of stale) {
+        // Pass draggerId as both sessionId and userId so handleRemoteDragStop
+        // resolves the same key regardless of whether it's a sessionId or userId.
+        handleRemoteDragStop({ userId: s.draggerId, sessionId: s.draggerId, nodeId: s.nodeId, seq: 0 });
+      }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [remoteDraggers, handleRemoteDragStop]);
+
+  const readBoolPref = (key: string, fallback: boolean) => {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw === null ? fallback : raw === '1';
+    } catch { return fallback; }
+  };
+  const [showOthersCursors, setShowOthersCursors] = useState<boolean>(
+    () => readBoolPref('org-canvas:cursors-show-others', true),
+  );
+  const [broadcastOwnCursor, setBroadcastOwnCursor] = useState<boolean>(
+    () => readBoolPref('org-canvas:cursors-broadcast-own', true),
+  );
+  const persistShowOthers = useCallback((next: boolean) => {
+    setShowOthersCursors(next);
+    try { localStorage.setItem('org-canvas:cursors-show-others', next ? '1' : '0'); } catch { /* ignore */ }
+  }, []);
+  const persistBroadcastOwn = useCallback((next: boolean) => {
+    setBroadcastOwnCursor(next);
+    try { localStorage.setItem('org-canvas:cursors-broadcast-own', next ? '1' : '0'); } catch { /* ignore */ }
+  }, []);
+
+  // Org-level cursor enable flag (owner-controlled).
+  // Default false until org loads so we never broadcast before knowing the org's setting.
+  const [canvasCursorsOrgEnabled, setCanvasCursorsOrgEnabled] = useState(false);
+  useEffect(() => {
+    if (organization) setCanvasCursorsOrgEnabled(organization.canvas_cursors_enabled ?? true);
+  }, [organization?.canvas_cursors_enabled, organization]);
+
+  // Keep cursor-visibility ref current every render so drag-start callbacks read fresh values.
+  cursorVisibleRef.current = { showOthers: showOthersCursors, orgEnabled: canvasCursorsOrgEnabled };
+
+  // Re-sync when the tab regains focus — covers the case where the owner toggled while we were offline/backgrounded
+  // and we missed the realtime broadcast.
+  useEffect(() => {
+    if (!organization?.id) return;
+    const handleVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      api.getOrganization(organization.id, false)
+        .then((org) => setCanvasCursorsOrgEnabled(org.canvas_cursors_enabled ?? true))
+        .catch(() => {});
+    };
+    document.addEventListener('visibilitychange', handleVisible);
+    return () => document.removeEventListener('visibilitychange', handleVisible);
+  }, [organization?.id]);
+
+  const toggleOrgCursorsEnabled = useCallback(async (next: boolean) => {
+    if (!organization?.id) return;
+    setCanvasCursorsOrgEnabled(next);
+    canvasChannelRef.current.sendOrgSettings(next);
+    try {
+      await api.updateCanvasSettings(organization.id, { canvas_cursors_enabled: next });
+    } catch { setCanvasCursorsOrgEnabled(!next); }
+  }, [organization?.id]);
+
+  // Actual team memberships for the current user in this org. For non-admins
+  // this equals visibleTeamIds (the API only returns their teams), but for
+  // admins we need the real subset so their cursor only broadcasts to
+  // teams they're actually in (strict rule).
+  const [myActualTeamIds, setMyActualTeamIds] = useState<string[]>([]);
+  useEffect(() => {
+    if (!organization?.id || !user?.id) return;
+    let cancelled = false;
+    supabase
+      .from('team_members')
+      .select('team_id, teams!inner(organization_id)')
+      .eq('user_id', user.id)
+      .eq('teams.organization_id', organization.id)
+      .then(({ data }) => {
+        if (cancelled) return;
+        setMyActualTeamIds((data ?? []).map((r: any) => r.team_id));
+      });
+    return () => { cancelled = true; };
+  }, [organization?.id, user?.id]);
+
+  const canvasAccess = useMemo(() => {
+    const isOrgAdmin = organization?.permissions?.manage_teams_and_projects === true
+      || organization?.role === 'owner';
+    const visibleTeamIds = rawTeamsWithProjects
+      .map((t) => t.teamId)
+      .filter((id) => id !== UNGROUPED_TEAM_ID);
+    const projectTeamMap: Record<string, string> = {};
+    for (const t of rawTeamsWithProjects) {
+      if (t.teamId === UNGROUPED_TEAM_ID) continue;
+      for (const p of t.projects) projectTeamMap[p.projectId] = t.teamId;
+    }
+    return { visibleTeamIds, myActualTeamIds, isOrgAdmin, projectTeamMap };
+  }, [
+    organization?.permissions?.manage_teams_and_projects,
+    organization?.role,
+    rawTeamsWithProjects,
+    myActualTeamIds,
+  ]);
+
+  // Hook is always on so drag sync works regardless of cursor visibility.
+  // The toggle only controls whether the OrgCanvasCursors layer renders —
+  // which in turn is what tracks local pointer + paints remote cursors.
+  const canvasChannel = useOrgCanvasCursors(organization?.id, canvasIdentity, canvasAccess, {
+    onRemoteDragStart: handleRemoteDragStart,
+    onRemoteDragMove: handleRemoteDragMove,
+    onRemoteDragStop: handleRemoteDragStop,
+    onOrgSettingsChange: setCanvasCursorsOrgEnabled,
+  });
+  const canvasChannelRef = useRef(canvasChannel);
+  canvasChannelRef.current = canvasChannel;
 
   const closeOrgSidebar = useCallback(() => {
     setOrgSidebarVisible(false);
@@ -1440,6 +1712,292 @@ export default function OrganizationVulnerabilitiesPage() {
     ]
   );
 
+  const canManageCanvas = organization?.permissions?.manage_teams_and_projects === true;
+
+  // Pre-drag positions keyed by node id. Used to detect actual movement and to
+  // revert the visual position if the server rejects the write.
+  const dragStartPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+
+  // Child project ids of the currently-dragged team (null when a team isn't
+  // being dragged). Captured at drag start so the drag-move handler can
+  // translate the same set of children even if rawTeamsWithProjects changes.
+  const draggingTeamChildrenRef = useRef<string[] | null>(null);
+
+  const handleNodeDragStart = useCallback(
+    (_: React.MouseEvent, node: Node) => {
+      setCanvasDragging(true);
+      canvasChannelRef.current.sendDragStart(node.id);
+      // Always remember the dragged node's start position.
+      dragStartPositionsRef.current.set(node.id, { x: node.position.x, y: node.position.y });
+
+      // If this is a team, snapshot every child project's start position too,
+      // so we can translate them rigidly with the team on each drag frame.
+      if (node.id.startsWith('team-')) {
+        const teamId = node.id.slice('team-'.length);
+        if (teamId === UNGROUPED_TEAM_ID) {
+          draggingTeamChildrenRef.current = null;
+          return;
+        }
+        const team = rawTeamsWithProjectsRef.current.find((t) => t.teamId === teamId);
+        const childIds = team?.projects.map((p) => p.projectId) ?? [];
+        draggingTeamChildrenRef.current = childIds;
+
+        const currentNodes = graphNodesRef.current;
+        for (const projectId of childIds) {
+          const childNode = currentNodes.find((n) => n.id === `project-${projectId}`);
+          if (childNode) {
+            dragStartPositionsRef.current.set(childNode.id, {
+              x: childNode.position.x,
+              y: childNode.position.y,
+            });
+          }
+        }
+
+        // Tag child project nodes so CSS can mirror the "held" affordance
+        // (scale + ring) on them while the parent team is being dragged.
+        if (childIds.length > 0) {
+          const childNodeIds = new Set(childIds.map((pid) => `project-${pid}`));
+          setGraphNodes((nodes) =>
+            nodes.map((n) => {
+              if (!childNodeIds.has(n.id)) return n;
+              const existing = n.className ?? '';
+              if (existing.split(' ').includes('team-drag-child')) return n;
+              return { ...n, className: existing ? `${existing} team-drag-child` : 'team-drag-child' };
+            }),
+          );
+        }
+      } else {
+        draggingTeamChildrenRef.current = null;
+      }
+    },
+    [setGraphNodes],
+  );
+
+  // While a team is being dragged, translate its children by the same delta.
+  // React Flow handles the dragged team node itself — we only touch children.
+  const handleNodeDrag = useCallback(
+    (_: React.MouseEvent, node: Node) => {
+      // Broadcast this frame's positions to other clients (throttled inside the hook).
+      const moves: NodePositionUpdate[] = [{
+        nodeId: node.id,
+        x: node.position.x,
+        y: node.position.y,
+      }];
+
+      const childIds = draggingTeamChildrenRef.current;
+      const isTeamDrag = !!childIds && childIds.length > 0 && node.id.startsWith('team-');
+      if (isTeamDrag) {
+        const teamStart = dragStartPositionsRef.current.get(node.id);
+        if (teamStart) {
+          const dx = node.position.x - teamStart.x;
+          const dy = node.position.y - teamStart.y;
+          for (const pid of childIds!) {
+            const start = dragStartPositionsRef.current.get(`project-${pid}`);
+            if (!start) continue;
+            moves.push({ nodeId: `project-${pid}`, x: start.x + dx, y: start.y + dy });
+          }
+        }
+      }
+      canvasChannelRef.current.sendDragMove(moves);
+
+      if (!childIds || childIds.length === 0) return;
+      if (!node.id.startsWith('team-')) return;
+
+      const teamStart = dragStartPositionsRef.current.get(node.id);
+      if (!teamStart) return;
+
+      const dx = node.position.x - teamStart.x;
+      const dy = node.position.y - teamStart.y;
+      if (dx === 0 && dy === 0) return;
+
+      const childNodeIds = new Set(childIds.map((pid) => `project-${pid}`));
+      setGraphNodes((nodes) =>
+        nodes.map((n) => {
+          if (!childNodeIds.has(n.id)) return n;
+          const start = dragStartPositionsRef.current.get(n.id);
+          if (!start) return n;
+          return { ...n, position: { x: start.x + dx, y: start.y + dy } };
+        }),
+      );
+    },
+    [setGraphNodes],
+  );
+
+  const handleNodeDragStop = useCallback(
+    async (_: React.MouseEvent, node: Node) => {
+      setCanvasDragging(false);
+      canvasChannelRef.current.sendDragStop(node.id);
+      const orgIdNow = organization?.id;
+      const draggedChildIds = draggingTeamChildrenRef.current ?? [];
+      draggingTeamChildrenRef.current = null;
+
+      // Remove the team-drag-child CSS tag from any carried children. The
+      // layout recompute after an optimistic rawTeamsWithProjects update will
+      // also produce fresh nodes without the className, but we strip it here
+      // to cover the no-movement early-return paths.
+      if (draggedChildIds.length > 0) {
+        const childNodeIds = new Set(draggedChildIds.map((pid) => `project-${pid}`));
+        setGraphNodes((nodes) =>
+          nodes.map((n) => {
+            if (!childNodeIds.has(n.id) || !n.className) return n;
+            const stripped = n.className
+              .split(' ')
+              .filter((c) => c !== 'team-drag-child')
+              .join(' ');
+            return { ...n, className: stripped || undefined };
+          }),
+        );
+      }
+
+      const cleanupStartPositions = () => {
+        dragStartPositionsRef.current.delete(node.id);
+        for (const pid of draggedChildIds) {
+          dragStartPositionsRef.current.delete(`project-${pid}`);
+        }
+      };
+
+      if (!orgIdNow || node.id === ORG_CENTER_ID) {
+        cleanupStartPositions();
+        return;
+      }
+
+      const startPos = dragStartPositionsRef.current.get(node.id);
+      const { x, y } = node.position;
+      if (startPos && startPos.x === x && startPos.y === y) {
+        cleanupStartPositions();
+        return; // no actual movement
+      }
+
+      const isTeam = node.id.startsWith('team-');
+      const isProject = node.id.startsWith('project-');
+      const teamId = isTeam ? node.id.slice('team-'.length) : null;
+      const projectId = isProject ? node.id.slice('project-'.length) : null;
+      if (isTeam && teamId === UNGROUPED_TEAM_ID) {
+        cleanupStartPositions();
+        return;
+      }
+      if (!isTeam && !isProject) {
+        cleanupStartPositions();
+        return;
+      }
+
+      // Compute final positions for carried children (team-drag case).
+      const childUpdates: Array<{ id: string; x: number; y: number }> = [];
+      if (isTeam && startPos) {
+        const dx = x - startPos.x;
+        const dy = y - startPos.y;
+        for (const pid of draggedChildIds) {
+          const childStart = dragStartPositionsRef.current.get(`project-${pid}`);
+          if (!childStart) continue;
+          childUpdates.push({ id: pid, x: childStart.x + dx, y: childStart.y + dy });
+        }
+      }
+
+      cleanupStartPositions();
+
+      // Snapshot current child canvas positions so we can revert them if the
+      // server rejects the write. Read from rawTeamsWithProjectsRef to avoid a
+      // stale closure.
+      const childRevertMap = new Map<string, { x: number | null; y: number | null }>();
+      if (isTeam && childUpdates.length > 0) {
+        const teamData = rawTeamsWithProjectsRef.current.find((t) => t.teamId === teamId);
+        if (teamData) {
+          for (const p of teamData.projects) {
+            childRevertMap.set(p.projectId, {
+              x: p.canvasPositionX ?? null,
+              y: p.canvasPositionY ?? null,
+            });
+          }
+        }
+      }
+
+      // Optimistically update rawTeamsWithProjects BEFORE firing the PATCH.
+      // This prevents a concurrent PATCH resolution from triggering a layout
+      // recompute that emits this node at its stale saved position while our
+      // own PATCH is still in flight.
+      setRawTeamsWithProjects((prev) => {
+        if (isTeam) {
+          const childPosById = new Map(childUpdates.map((u) => [u.id, { x: u.x, y: u.y }]));
+          return prev.map((t) => {
+            if (t.teamId !== teamId) return t;
+            return {
+              ...t,
+              canvasPositionX: x,
+              canvasPositionY: y,
+              projects: t.projects.map((p) => {
+                const newPos = childPosById.get(p.projectId);
+                return newPos
+                  ? { ...p, canvasPositionX: newPos.x, canvasPositionY: newPos.y }
+                  : p;
+              }),
+            };
+          });
+        }
+        return prev.map((t) => ({
+          ...t,
+          projects: t.projects.map((p) =>
+            p.projectId === projectId
+              ? { ...p, canvasPositionX: x, canvasPositionY: y }
+              : p,
+          ),
+        }));
+      });
+
+      try {
+        if (isTeam) {
+          if (childUpdates.length > 0) {
+            await api.updateCanvasPositionsBatch(orgIdNow, {
+              teams: [{ id: teamId!, x, y }],
+              projects: childUpdates,
+            });
+          } else {
+            await api.updateTeamCanvasPosition(orgIdNow, teamId!, { x, y });
+          }
+        } else {
+          await api.updateProjectCanvasPosition(orgIdNow, projectId!, { x, y });
+        }
+      } catch (err: any) {
+        toast({
+          title: 'Failed to save position',
+          description: err?.message || 'Please try again.',
+          variant: 'destructive',
+        });
+        // Revert the optimistic rawTeamsWithProjects update. This cascades
+        // through the layout hook → sync effect → graphNodes automatically,
+        // so we don't need to touch graphNodes directly.
+        const revertX = startPos?.x ?? null;
+        const revertY = startPos?.y ?? null;
+        setRawTeamsWithProjects((prev) => {
+          if (isTeam) {
+            return prev.map((t) => {
+              if (t.teamId !== teamId) return t;
+              return {
+                ...t,
+                canvasPositionX: revertX,
+                canvasPositionY: revertY,
+                projects: t.projects.map((p) => {
+                  const revertPos = childRevertMap.get(p.projectId);
+                  return revertPos
+                    ? { ...p, canvasPositionX: revertPos.x, canvasPositionY: revertPos.y }
+                    : p;
+                }),
+              };
+            });
+          }
+          return prev.map((t) => ({
+            ...t,
+            projects: t.projects.map((p) =>
+              p.projectId === projectId
+                ? { ...p, canvasPositionX: revertX, canvasPositionY: revertY }
+                : p,
+            ),
+          }));
+        });
+      }
+    },
+    [organization?.id, toast],
+  );
+
   const onExpandProject = useCallback(
     async (projectId: string, filter: ExpandFilter = 'all') => {
       if (!orgId) return;
@@ -1540,6 +2098,10 @@ export default function OrganizationVulnerabilitiesPage() {
   useEffect(() => {
     graphNodesRef.current = graphNodes;
   }, [graphNodes]);
+
+  useEffect(() => {
+    rawTeamsWithProjectsRef.current = rawTeamsWithProjects;
+  }, [rawTeamsWithProjects]);
 
   // Fetch team stats, members, projects, org members, roles, and team data when team sidebar opens
   useEffect(() => {
@@ -2011,6 +2573,7 @@ export default function OrganizationVulnerabilitiesPage() {
         </div>
       )}
       <div className="flex-1 min-h-0 relative">
+{!stillShowingSkeleton && (
 <div className="absolute top-3 right-3 z-10 flex flex-col items-end gap-2">
           <div className="flex items-center gap-2 rounded-lg border border-border bg-background-card-header p-1 shadow-sm">
           {/* Reduce clutter toggle — shown when total projects across all teams ≥ 6 */}
@@ -2069,6 +2632,84 @@ export default function OrganizationVulnerabilitiesPage() {
                 <FolderPlus className="h-4 w-4" />
                 Create project
               </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className={cn(
+                  'h-8 w-8 p-0 hover:bg-white/5',
+                  canvasCursorsOrgEnabled && (showOthersCursors || broadcastOwnCursor)
+                    ? 'text-foreground-secondary hover:text-foreground'
+                    : 'text-foreground-secondary/40 hover:text-foreground/60'
+                )}
+                aria-label="Live cursor settings"
+              >
+                {canvasCursorsOrgEnabled && (showOthersCursors || broadcastOwnCursor) ? (
+                  <MousePointerClick className="h-3.5 w-3.5" strokeWidth={1.8} />
+                ) : (
+                  <MousePointer2 className="h-3.5 w-3.5" strokeWidth={1.8} />
+                )}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-60 rounded-lg border-border bg-background-card shadow-lg">
+              <DropdownMenuLabel className="text-foreground font-semibold px-2 pt-2 pb-1">Live cursors</DropdownMenuLabel>
+              {!canvasCursorsOrgEnabled && organization?.role !== 'owner' && (
+                <p className="px-3 pb-1 text-xs text-muted-foreground">Disabled by org owner</p>
+              )}
+              <div className="pb-1">
+                {([
+                  { label: 'Show others\' cursors', value: showOthersCursors && canvasCursorsOrgEnabled, toggle: persistShowOthers, disabled: !canvasCursorsOrgEnabled },
+                  { label: 'Broadcast my cursor', value: broadcastOwnCursor && canvasCursorsOrgEnabled, toggle: persistBroadcastOwn, disabled: !canvasCursorsOrgEnabled },
+                ] as { label: string; value: boolean; toggle: (v: boolean) => void; disabled: boolean }[]).map(({ label, value, toggle, disabled }) => (
+                  <DropdownMenuCheckboxItem
+                    key={label}
+                    checked={value}
+                    disabled={disabled}
+                    onCheckedChange={(checked) => toggle(checked)}
+                    className={cn('gap-2', disabled && 'opacity-40 cursor-not-allowed')}
+                  >
+                    <span className="text-sm flex-1 text-foreground">{label}</span>
+                    <span
+                      className={cn(
+                        'ml-auto text-xs font-medium px-2 py-0.5 rounded-md border transition-colors min-w-[28px] text-center',
+                        value
+                          ? 'border-foreground/60 bg-foreground/10 text-foreground'
+                          : 'border-border bg-transparent text-muted-foreground',
+                      )}
+                    >
+                      {value ? 'ON' : 'OFF'}
+                    </span>
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </div>
+              {organization?.role === 'owner' && (
+                <>
+                  <DropdownMenuSeparator />
+                  <div className="pt-1 pb-1.5">
+                    <p className="text-[11px] text-muted-foreground mb-1 font-medium uppercase tracking-wide px-2">Org settings</p>
+                    <DropdownMenuCheckboxItem
+                      checked={canvasCursorsOrgEnabled}
+                      onCheckedChange={toggleOrgCursorsEnabled}
+                      className="gap-2"
+                    >
+                      <span className="text-sm flex-1 text-foreground">Enable for org</span>
+                      <span
+                        className={cn(
+                          'ml-auto text-xs font-medium px-2 py-0.5 rounded-md border transition-colors min-w-[28px] text-center',
+                          canvasCursorsOrgEnabled
+                            ? 'border-foreground/60 bg-foreground/10 text-foreground'
+                            : 'border-border bg-transparent text-muted-foreground',
+                        )}
+                      >
+                        {canvasCursorsOrgEnabled ? 'ON' : 'OFF'}
+                      </span>
+                    </DropdownMenuCheckboxItem>
+                  </div>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
           <DropdownMenu>
@@ -2161,6 +2802,7 @@ export default function OrganizationVulnerabilitiesPage() {
           </DropdownMenu>
           </div>
         </div>
+)}
         <div className="absolute inset-0 flex min-h-0">
           {/* Graph */}
           <div className="flex-1 min-w-0 min-h-0 overflow-hidden bg-background relative">
@@ -2172,6 +2814,9 @@ export default function OrganizationVulnerabilitiesPage() {
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onNodeClick={onNodeClick}
+                onNodeDragStart={handleNodeDragStart}
+                onNodeDrag={handleNodeDrag}
+                onNodeDragStop={handleNodeDragStop}
                 onInit={(instance) => { reactFlowInstanceRef.current = instance as any; }}
                 nodeTypes={stillShowingSkeleton ? skeletonNodeTypes : nodeTypes}
                 fitView
@@ -2182,22 +2827,27 @@ export default function OrganizationVulnerabilitiesPage() {
                 minZoom={0.12}
                 maxZoom={2}
                 proOptions={{ hideAttribution: true }}
-                nodesDraggable={false}
+                nodesDraggable={canManageCanvas && !stillShowingSkeleton}
                 nodesConnectable={false}
+                panOnDrag={true}
+                zoomOnScroll={true}
+                zoomOnPinch={true}
                 defaultEdgeOptions={
                   {
                     type: 'smoothstep',
                     style: { stroke: ORG_OVERVIEW_EDGE_STROKE, strokeWidth: 1 },
                     pathOptions: { borderRadius: 20 },
-                   
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   } as any
                 }
               >
-                <Background
-                  variant={BackgroundVariant.Dots}
-                  gap={16}
-                  size={1.2}
-                  color="rgba(148, 163, 184, 0.3)"
+                <ReactiveDotGrid />
+                <OrgCanvasCursors
+                  remoteCursors={organization && canvasCursorsOrgEnabled && showOthersCursors ? canvasChannel.remoteCursors : EMPTY_CURSORS}
+                  onLocalCursorMove={organization && canvasCursorsOrgEnabled && broadcastOwnCursor ? canvasChannel.sendLocal : noopCursorMove}
+                  onLocalCursorLeave={organization && canvasCursorsOrgEnabled && broadcastOwnCursor ? canvasChannel.sendLeave : undefined}
+                  remoteDraggers={organization && canvasCursorsOrgEnabled && showOthersCursors ? remoteDraggers : EMPTY_DRAGGERS}
+                  graphNodes={graphNodes}
                 />
               </ReactFlow>
             </div>

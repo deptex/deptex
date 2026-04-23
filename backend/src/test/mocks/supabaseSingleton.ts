@@ -1,7 +1,17 @@
-import { createMockSupabase, TableRegistry } from './supabase';
+import { createMockSupabase, TableRegistry, RpcRegistry } from './supabase';
 
 const registry: TableRegistry = {};
-export const { supabase, queryBuilder } = createMockSupabase(registry);
+const rpcRegistry: RpcRegistry = {};
+export const { supabase, queryBuilder } = createMockSupabase(registry, rpcRegistry);
+
+/** Set the response for a Supabase RPC call by function name. */
+export function setRpcResponse(name: string, value: { data: any; error: any }) {
+  rpcRegistry[name] = value;
+}
+
+export function clearRpcRegistry() {
+  for (const k of Object.keys(rpcRegistry)) delete rpcRegistry[k];
+}
 
 /** Replace (overwrite) the response for a given table+method. */
 export function setTableResponse(

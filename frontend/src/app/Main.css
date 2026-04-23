@@ -475,12 +475,6 @@
   z-index: 1;
 }
 
-/* Org center node: subtle "Active" dot breathing */
-@keyframes org-active-ping {
-  0%, 100% { opacity: 0.6; }
-  50% { opacity: 1; }
-}
-
 /* Flowing dashed edges on org overview hub graph */
 @keyframes org-edge-flow {
   from { stroke-dashoffset: 0; }
@@ -488,6 +482,51 @@
 }
 .org-overview-hub-flow .react-flow__edge path[style*="stroke-dasharray"] {
   animation: org-edge-flow 1.2s linear infinite;
+}
+
+/* Drag juice — scale the inner node content (outer element is reserved
+   for React Flow's translate transform). Spring settle on drop via a
+   cubic-bezier with slight overshoot. Applies to all interactive nodes,
+   including the non-draggable org card (which shows a "grab" affordance
+   on click without actually being draggable). Figma-style accent ring
+   while held so it's clear the node is grabbed. */
+.org-overview-hub-flow .react-flow__node > * {
+  transition:
+    transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 0.15s ease-out;
+}
+/* Held (mousedown) or actively dragging — scale + subtle white ring
+   (Vercel-style monochrome affordance on dark canvas). `.team-drag-child`
+   mirrors the same state on child project nodes while their parent team
+   is being dragged. */
+.org-overview-hub-flow .react-flow__node:active > *,
+.org-overview-hub-flow .react-flow__node.dragging > *,
+.org-overview-hub-flow .react-flow__node.team-drag-child > *,
+.org-overview-hub-flow .react-flow__node.remote-dragging > *,
+.org-overview-hub-flow .react-flow__node.remote-drag-child > * {
+  transform: scale(1.04);
+  box-shadow:
+    0 0 0 1.5px rgba(212, 212, 212, 0.5),
+    0 0 0 4px rgba(212, 212, 212, 0.04);
+}
+.org-overview-hub-flow .react-flow__node:active > *,
+.org-overview-hub-flow .react-flow__node.dragging > * {
+  cursor: grabbing !important;
+}
+/* Ghost drag: sender lacks manage permission — drag won't persist server-side.
+   Faint amber ring instead of the white "claimed" ring to signal uncertainty. */
+.org-overview-hub-flow .react-flow__node.remote-ghost-drag > * {
+  transform: scale(1.02);
+  box-shadow:
+    0 0 0 1.5px rgba(234, 179, 8, 0.35),
+    0 0 0 4px rgba(234, 179, 8, 0.05);
+}
+.org-overview-hub-flow .react-flow__node.dragging,
+.org-overview-hub-flow .react-flow__node.team-drag-child,
+.org-overview-hub-flow .react-flow__node.remote-dragging,
+.org-overview-hub-flow .react-flow__node.remote-drag-child,
+.org-overview-hub-flow .react-flow__node.remote-ghost-drag {
+  z-index: 100 !important;
 }
 
 /* Monaco editor: force dark background to match app theme (#1A1C1E) */

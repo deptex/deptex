@@ -75,6 +75,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(session);
       const user = session?.user ?? null;
       setUser(user);
+      // Push the initial token to the realtime socket so private-channel RLS
+      // evaluates auth.uid() correctly. Without this, realtime.messages policies
+      // silently reject broadcasts after the first token refresh.
+      supabase.realtime.setAuth(session?.access_token ?? null);
       // Check and restore avatar if needed
       if (user) {
         checkAndRestoreAvatar(user);
@@ -88,6 +92,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(session);
       const user = session?.user ?? null;
       setUser(user);
+      // Keep the realtime socket's JWT in sync on every auth transition so
+      // long sessions don't silently break when Supabase rotates the token.
+      supabase.realtime.setAuth(session?.access_token ?? null);
       if (event === 'INITIAL_SESSION') {
         setLoading(false);
       }

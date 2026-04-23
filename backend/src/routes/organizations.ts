@@ -7946,4 +7946,64 @@ router.post('/:id/security/scim', async (req: AuthRequest, res) => {
   }
 });
 
+// Toggle org-wide live cursor presence. Owner-only.
+router.patch('/:id/canvas-settings', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const { canvas_cursors_enabled } = req.body;
+
+    if (typeof canvas_cursors_enabled !== 'boolean') {
+      return res.status(400).json({ error: 'canvas_cursors_enabled must be a boolean' });
+    }
+
+    const { data: membership, error: membershipError } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (membershipError || !membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+    if (membership.role !== 'owner') {
+      return res.status(403).json({ error: 'Only the owner can change canvas settings' });
+    }
+
+    const { data: currentOrg } = await supabase
+      .from('organizations')
+      .select('canvas_cursors_enabled')
+      .eq('id', id)
+      .single();
+
+    const { error: updateError } = await supabase
+      .from('organizations')
+      .update({ canvas_cursors_enabled, updated_at: new Date().toISOString() })
+      .eq('id', id);
+
+    if (updateError) throw updateError;
+
+    if (currentOrg?.canvas_cursors_enabled !== canvas_cursors_enabled) {
+      await createActivity({
+        organization_id: id,
+        user_id: userId,
+        activity_type: 'changed_canvas_settings',
+        description: `${canvas_cursors_enabled ? 'enabled' : 'disabled'} live canvas cursors`,
+        metadata: {
+          old_value: currentOrg?.canvas_cursors_enabled ?? null,
+          new_value: canvas_cursors_enabled,
+        },
+      });
+    }
+
+    res.json({ success: true });
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : 'unknown';
+    console.error('[canvas-settings] update failed', { organizationId: req.params.id, userId: req.user?.id, error: msg });
+    res.status(500).json({ error: 'Failed to update canvas settings' });
+  }
+});
+
 export default router;
+
