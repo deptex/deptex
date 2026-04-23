@@ -1,6 +1,6 @@
 import { useMemo, useState, type KeyboardEvent } from 'react';
 import { Dialog, DialogContent } from '../ui/dialog';
-import { Search, MessageCircle, Users, X, Archive } from 'lucide-react';
+import { Search, MessageCircle, Users, X, Archive, ArchiveRestore } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import type { AegisThread } from '../../lib/aegis-api';
 
@@ -9,6 +9,7 @@ interface SearchChatsModalProps {
   onOpenChange: (open: boolean) => void;
   threads: AegisThread[];
   onSelect: (threadId: string) => void;
+  onSetArchived: (threadId: string, archived: boolean) => Promise<void>;
 }
 
 function monthLabel(iso: string): string {
@@ -20,29 +21,34 @@ function monthLabel(iso: string): string {
   return d.toLocaleDateString('en-US', opts);
 }
 
-export function SearchChatsModal({ open, onOpenChange, threads, onSelect }: SearchChatsModalProps) {
+export function SearchChatsModal({ open, onOpenChange, threads, onSelect, onSetArchived }: SearchChatsModalProps) {
   const [query, setQuery] = useState('');
 
-  const { groups, flatResults } = useMemo(() => {
+  const { activeGroups, archived, flatActive } = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const filtered = threads.filter((t) => !q || t.title.toLowerCase().includes(q));
-    filtered.sort((a, b) => {
-      // Non-archived first, then by date
-      if (!!a.archivedAt !== !!b.archivedAt) return a.archivedAt ? 1 : -1;
-      return b.updatedAt.localeCompare(a.updatedAt);
-    });
+    const all = threads.filter((t) => !q || t.title.toLowerCase().includes(q));
+
+    const active = all.filter((t) => !t.archivedAt);
+    const archived = all.filter((t) => !!t.archivedAt);
+
+    active.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    archived.sort((a, b) => (b.archivedAt ?? '').localeCompare(a.archivedAt ?? ''));
 
     const map = new Map<string, AegisThread[]>();
-    for (const t of filtered) {
-      const label = t.archivedAt ? 'Archived' : monthLabel(t.updatedAt);
+    for (const t of active) {
+      const label = monthLabel(t.updatedAt);
       if (!map.has(label)) map.set(label, []);
       map.get(label)!.push(t);
     }
-    const groups = Array.from(map.entries()).map(([label, items]) => ({ label, items }));
-    return { groups, flatResults: filtered };
+
+    return {
+      activeGroups: Array.from(map.entries()).map(([label, items]) => ({ label, items })),
+      archived,
+      flatActive: active,
+    };
   }, [threads, query]);
 
-  const total = flatResults.length;
+  const total = flatActive.length + archived.length;
 
   const handleSelect = (id: string) => {
     onSelect(id);
@@ -50,9 +56,14 @@ export function SearchChatsModal({ open, onOpenChange, threads, onSelect }: Sear
     setQuery('');
   };
 
+  const handleUnarchive = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    void onSetArchived(id, false);
+  };
+
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && flatResults.length > 0) {
-      handleSelect(flatResults[0].id);
+    if (e.key === 'Enter' && flatActive.length > 0) {
+      handleSelect(flatActive[0].id);
     }
   };
 
@@ -90,22 +101,18 @@ export function SearchChatsModal({ open, onOpenChange, threads, onSelect }: Sear
               <span>{threads.length === 0 ? 'No chats yet.' : 'No results'}</span>
             </div>
           )}
-          {groups.map(({ label, items }) => (
+
+          {/* Active threads grouped by month */}
+          {activeGroups.map(({ label, items }) => (
             <div key={label}>
-              <div className="px-3 pt-3 pb-1 text-xs text-foreground/40 flex items-center gap-1.5">
-                {label === 'Archived' && <Archive className="h-3 w-3" />}
-                {label}
-              </div>
+              <div className="px-3 pt-3 pb-1 text-xs text-foreground/40">{label}</div>
               <div className="space-y-0.5">
                 {items.map((t) => (
                   <button
                     key={t.id}
                     type="button"
                     onClick={() => handleSelect(t.id)}
-                    className={cn(
-                      'w-full flex items-center gap-2.5 rounded-md px-3 py-2 text-sm text-left hover:bg-background-subtle/60',
-                      t.archivedAt ? 'text-foreground/40' : 'text-foreground/90',
-                    )}
+                    className="w-full flex items-center gap-2.5 rounded-md px-3 py-2 text-sm text-left text-foreground/90 hover:bg-background-subtle/60"
                   >
                     <MessageCircle className="h-4 w-4 flex-shrink-0 text-foreground/30" />
                     <span className="truncate flex-1">{t.title}</span>
@@ -115,6 +122,43 @@ export function SearchChatsModal({ open, onOpenChange, threads, onSelect }: Sear
               </div>
             </div>
           ))}
+
+          {/* Archived threads */}
+          {archived.length > 0 && (
+            <div>
+              <div className="px-3 pt-3 pb-1 text-xs text-foreground/40 flex items-center gap-1.5">
+                <Archive className="h-3 w-3" />
+                Archived
+              </div>
+              <div className="space-y-0.5">
+                {archived.map((t) => (
+                  <div key={t.id} className="group relative">
+                    <button
+                      type="button"
+                      onClick={() => handleSelect(t.id)}
+                      className="w-full flex items-center gap-2.5 rounded-md px-3 py-2 text-sm text-left text-foreground/40 hover:bg-background-subtle/60 pr-24"
+                    >
+                      <Archive className="h-4 w-4 flex-shrink-0 text-foreground/25" />
+                      <span className="truncate flex-1">{t.title}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => handleUnarchive(e, t.id)}
+                      className={cn(
+                        'absolute right-2 top-1/2 -translate-y-1/2',
+                        'flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium',
+                        'text-foreground/50 hover:text-foreground/90 hover:bg-background-subtle',
+                        'opacity-0 group-hover:opacity-100 transition-opacity',
+                      )}
+                    >
+                      <ArchiveRestore className="h-3 w-3" />
+                      Unarchive
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>

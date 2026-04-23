@@ -238,6 +238,7 @@ export default function AegisPage() {
         onOpenChange={setSearchOpen}
         threads={threads}
         onSelect={handleSelect}
+        onSetArchived={handleSetArchived}
       />
     </div>
   );
