@@ -32,7 +32,7 @@ function projectStatusLabel(project: {
     const step = project.extraction_step;
     const labels: Record<string, string> = {
       queued: 'Creating', cloning: 'Creating', sbom: 'Creating', deps_synced: 'Creating',
-      ast_parsing: 'Creating', scanning: 'Creating', uploading: 'Creating', completed: 'Creating',
+      usage_extraction: 'Creating', scanning: 'Creating', uploading: 'Creating', completed: 'Creating',
     };
     const label = step ? (labels[step] ?? 'Creating') : (status === 'analyzing' || status === 'finalizing' ? 'Analyzing' : 'Creating');
     return { label, inProgress: true, isError: false };

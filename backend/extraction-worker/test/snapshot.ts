@@ -16,10 +16,12 @@
  * list below strips those before diffing. Per-fixture
  * `fixtures/<name>/snapshot-ignore.json` (optional) can add more.
  *
- * This runner intentionally shells out to the CLI (via `npm run cli`)
- * rather than importing runScan directly — that matches how downstream
- * users invoke the tool and catches CLI-specific regressions (arg parsing,
- * exit codes, stdout format) alongside pipeline changes.
+ * This runner intentionally shells out to the CLI (via `./bin/deptex-scan`,
+ * the Docker wrapper) rather than importing runScan directly — that matches
+ * how downstream users invoke the tool and catches CLI-specific regressions
+ * (arg parsing, exit codes, stdout format) alongside pipeline changes.
+ *
+ * Prereq: the CLI image must be built first (`npm run docker:build`).
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -126,13 +128,69 @@ async function main() {
   for (const fixture of targets) {
     console.log(`\n=== ${fixture.name} ===`);
     const workspacePath = path.join(FIXTURES_ROOT, fixture.name);
-    const resultDir = path.join(workspacePath, '.results');
+    // Output dir sits outside the workspace. Previously we used
+    // `<workspace>/.results`, but the deptex-scan Docker wrapper mounts the
+    // workspace and the output dir as separate bind mounts — when the output
+    // dir is *inside* the workspace on the host, /workspace/.results in the
+    // container is the same on-disk storage as /output, so TruffleHog and
+    // Semgrep walk the CLI's own PGLite buckets + dep-scan reports as if they
+    // were user code. Keep the dir inside the repo (gitignored) so Docker
+    // Desktop's bind-mount permissions work on Windows.
+    const resultDir = path.join(WORKER_ROOT, '.test-results', fixture.name);
     const snapshotDir = path.join(workspacePath, 'snapshots');
 
     // Clean previous run output so we diff deterministically.
     if (fs.existsSync(resultDir)) fs.rmSync(resultDir, { recursive: true, force: true });
 
-    const exitCode = runCli(workspacePath, resultDir, fixture);
+    // The pipeline writes a handful of intermediate artifacts directly into
+    // the workspace (SBOM, dep-scan reports, semgrep+trufflehog raw output).
+    // On a fresh Fly.io machine they never exist at scan start, but local
+    // re-runs leak them between invocations and TruffleHog/Semgrep then scan
+    // their own previous output as if it were user code. Wipe them up front.
+    for (const artifact of [
+      'sbom.json',
+      'sbom.json.map',
+      'trufflehog.json',
+      'semgrep.json',
+      'depscan-reports',
+      'deps.slices.json',
+    ]) {
+      const p = path.join(workspacePath, artifact);
+      if (fs.existsSync(p)) fs.rmSync(p, { recursive: true, force: true });
+    }
+
+    // Move committed snapshots/ out of the workspace during the scan.
+    // TruffleHog and Semgrep walk the entire workspace; without this, the
+    // previous run's snapshot files get scanned and every finding appears to
+    // duplicate on each re-run (and worse: TruffleHog emits duplicate rows
+    // for the embedded secrets, which crashes the ON CONFLICT upsert and
+    // drops every finding for the run). Park outside the workspace entirely
+    // — a sibling path inside the workspace root is still walked.
+    const snapshotParkDir = path.join(
+      require('os').tmpdir(),
+      `deptex-snapshot-${fixture.name}-${process.pid}`,
+    );
+    const hadSnapshotDir = fs.existsSync(snapshotDir);
+    if (hadSnapshotDir) {
+      if (fs.existsSync(snapshotParkDir)) {
+        fs.rmSync(snapshotParkDir, { recursive: true, force: true });
+      }
+      fs.renameSync(snapshotDir, snapshotParkDir);
+    }
+
+    let exitCode: number;
+    try {
+      exitCode = runCli(workspacePath, resultDir, fixture);
+    } finally {
+      if (hadSnapshotDir) {
+        // Restore regardless of scan outcome so CI failures leave the tree
+        // in a clean state.
+        if (fs.existsSync(snapshotDir)) {
+          fs.rmSync(snapshotDir, { recursive: true, force: true });
+        }
+        fs.renameSync(snapshotParkDir, snapshotDir);
+      }
+    }
 
     if (exitCode !== fixture.expectedExitCode) {
       console.error(
@@ -172,17 +230,26 @@ function runCli(
   outputDir: string,
   fixture: FixtureManifest,
 ): number {
-  const args = ['run', 'cli', '--', 'run', workspacePath, `--output=${outputDir}`, '--quiet'];
+  const wrapper = path.join(WORKER_ROOT, 'bin', 'deptex-scan');
+  const args = ['run', workspacePath, `--output=${outputDir}`, '--quiet'];
   if (fixture.ecosystem) args.push(`--ecosystem=${fixture.ecosystem}`);
-  const res = spawnSync('npm', args, {
+  // On Windows the bash shebang isn't honored by spawn — invoke bash explicitly.
+  const [cmd, cmdArgs] = process.platform === 'win32'
+    ? ['bash', [wrapper, ...args]] as [string, string[]]
+    : [wrapper, args] as [string, string[]];
+  const res = spawnSync(cmd, cmdArgs, {
     cwd: WORKER_ROOT,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    shell: process.platform === 'win32',
   });
   if (res.stdout && res.stdout.trim()) {
     for (const line of res.stdout.trim().split(/\r?\n/).slice(-3)) {
       console.log(`    stdout: ${line}`);
+    }
+  }
+  if (res.stderr && res.stderr.trim()) {
+    for (const line of res.stderr.trim().split(/\r?\n/).slice(-5)) {
+      console.log(`    stderr: ${line}`);
     }
   }
   return res.status ?? 2;

@@ -208,6 +208,30 @@ describe('calculateDepscore', () => {
       expect(highMultiplier).toBeGreaterThan(lowMultiplier);
     });
 
+    it('reachabilityLevel=unreachable zeroes the score (Phase 2 extractor-confirmed)', () => {
+      const ctx: DepscoreContext = {
+        cvss: 9,
+        epss: 0.8,
+        cisaKev: true,
+        isReachable: true,
+        reachabilityLevel: 'unreachable',
+        assetTier: 'CROWN_JEWELS',
+      };
+      expect(calculateDepscore(ctx)).toBe(0);
+    });
+
+    it('reachabilityLevel=module keeps mild weighting (extractor import-only signal)', () => {
+      const ctx: DepscoreContext = {
+        cvss: 7,
+        epss: 0.3,
+        cisaKev: false,
+        isReachable: true,
+        reachabilityLevel: 'module',
+        assetTier: 'INTERNAL',
+      };
+      expect(calculateDepscore(ctx)).toBeGreaterThan(0);
+    });
+
     it('tierMultiplier: 1.0 (Internal-equivalent) matches legacy INTERNAL for reachable', () => {
       const base: DepscoreContext = {
         cvss: 6,

@@ -50,3 +50,7 @@ backend/watchtower-worker/src/**/*.d.ts
 temp-open-saas
 
 documents
+
+# Per-run review artefacts from /criticalreview and /ultrareview — ephemeral,
+# not shipped code.
+.cursor/reviews/

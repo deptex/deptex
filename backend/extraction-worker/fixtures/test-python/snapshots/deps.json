@@ -1,0 +1,58 @@
+[
+  {
+    "name": "jinja2",
+    "version": "3.0.3",
+    "is_direct": true,
+    "source": "dependencies",
+    "files_importing_count": 1,
+    "ai_usage_summary": null,
+    "ai_usage_analyzed_at": null,
+    "environment": "prod",
+    "is_outdated": false,
+    "versions_behind": 0,
+    "policy_result": null,
+    "namespace": ""
+  },
+  {
+    "name": "pillow",
+    "version": "8.3.2",
+    "is_direct": true,
+    "source": "dependencies",
+    "files_importing_count": 1,
+    "ai_usage_summary": null,
+    "ai_usage_analyzed_at": null,
+    "environment": "prod",
+    "is_outdated": false,
+    "versions_behind": 0,
+    "policy_result": null,
+    "namespace": ""
+  },
+  {
+    "name": "pyyaml",
+    "version": "5.4",
+    "is_direct": true,
+    "source": "dependencies",
+    "files_importing_count": 1,
+    "ai_usage_summary": null,
+    "ai_usage_analyzed_at": null,
+    "environment": "prod",
+    "is_outdated": false,
+    "versions_behind": 0,
+    "policy_result": null,
+    "namespace": ""
+  },
+  {
+    "name": "requests",
+    "version": "2.25.1",
+    "is_direct": true,
+    "source": "dependencies",
+    "files_importing_count": 1,
+    "ai_usage_summary": null,
+    "ai_usage_analyzed_at": null,
+    "environment": "prod",
+    "is_outdated": false,
+    "versions_behind": 0,
+    "policy_result": null,
+    "namespace": ""
+  }
+]

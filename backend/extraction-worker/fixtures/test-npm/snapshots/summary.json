@@ -1,0 +1,12 @@
+{
+  "schema_version": "deptex-local-v1",
+  "project_name": "test-npm",
+  "ecosystem": "npm",
+  "dependencies_count": 98,
+  "vulnerabilities_count": 26,
+  "semgrep_count": 2,
+  "secrets_count": 1,
+  "reachable_flows_count": 0,
+  "entry_points_count": 0,
+  "finalize_summary": null
+}
