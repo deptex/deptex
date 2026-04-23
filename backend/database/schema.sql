@@ -2019,6 +2019,7 @@ CREATE INDEX idx_project_teams_team_id ON public.project_teams USING btree (team
 CREATE INDEX idx_project_watchlist_project ON public.project_watchlist USING btree (project_id);
 CREATE INDEX idx_project_watchlist_watchlist ON public.project_watchlist USING btree (organization_watchlist_id);
 CREATE INDEX idx_projects_asset_tier_id ON public.projects USING btree (asset_tier_id);
+CREATE INDEX idx_projects_canvas_position_updated_by ON public.projects USING btree (canvas_position_updated_by) WHERE (canvas_position_updated_by IS NOT NULL);
 CREATE INDEX idx_projects_framework ON public.projects USING btree (framework);
 CREATE INDEX idx_projects_is_compliant ON public.projects USING btree (is_compliant);
 CREATE INDEX idx_projects_organization_id ON public.projects USING btree (organization_id);
@@ -2074,6 +2075,7 @@ CREATE INDEX idx_team_members_user_id ON public.team_members USING btree (user_i
 CREATE INDEX idx_team_notification_rules_team_id ON public.team_notification_rules USING btree (team_id);
 CREATE INDEX idx_team_roles_display_order ON public.team_roles USING btree (team_id, display_order);
 CREATE INDEX idx_team_roles_team_id ON public.team_roles USING btree (team_id);
+CREATE INDEX idx_teams_canvas_position_updated_by ON public.teams USING btree (canvas_position_updated_by) WHERE (canvas_position_updated_by IS NOT NULL);
 CREATE INDEX idx_teams_organization_id ON public.teams USING btree (organization_id);
 CREATE INDEX idx_user_integrations_provider ON public.user_integrations USING btree (provider);
 CREATE INDEX idx_user_integrations_user_id ON public.user_integrations USING btree (user_id);
@@ -2331,7 +2333,7 @@ AS '$libdir/vector', $function$binary_quantize$function$
 CREATE OR REPLACE FUNCTION public.can_access_org_canvas_topic(_topic text, _user_id uuid, _mode text)
  RETURNS boolean
  LANGUAGE plpgsql
- SECURITY DEFINER
+ STABLE SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
 declare
@@ -2341,6 +2343,7 @@ declare
   _scope_id text;
   _is_org_member boolean;
   _is_admin boolean;
+  _cursors_enabled boolean;
 begin
   if _topic is null or _user_id is null then
     return false;
@@ -2358,6 +2361,7 @@ begin
   end;
   _scope := _parts[3];
 
+  -- Must be a member of the org, full stop.
   select exists (
     select 1 from public.organization_members
     where organization_id = _org_id and user_id = _user_id
@@ -2366,6 +2370,17 @@ begin
     return false;
   end if;
 
+  -- Org-wide kill switch. When disabled, deny every realtime path for this
+  -- org. Default TRUE so rows missing the column still work.
+  select coalesce(canvas_cursors_enabled, true)
+    into _cursors_enabled
+    from public.organizations
+    where id = _org_id;
+  if not coalesce(_cursors_enabled, true) then
+    return false;
+  end if;
+
+  -- Admin check: owner role OR manage_teams_and_projects permission.
   select
     (om.role = 'owner')
     or coalesce((roles.permissions->>'manage_teams_and_projects')::boolean, false)
@@ -2378,29 +2393,35 @@ begin
   _is_admin := coalesce(_is_admin, false);
 
   -- Org-wide channel: all org members read; admins write.
-  -- Carries org-center drag events only (the org node is visible to everyone).
   if _scope = 'org' then
     if _mode = 'read'  then return true; end if;
     if _mode = 'write' then return _is_admin; end if;
     return false;
   end if;
 
-  -- Admin-only channel: admin read + admin write. Carries admin cursor
-  -- presence so admins see each other. Members never touch it.
+  -- Admin-only channel: admin read + admin write.
   if _scope = 'admins' then
     return _is_admin;
   end if;
 
-  -- Team channel: team members or admins.
+  -- Team channel: team members (of a team that actually belongs to this org)
+  -- or admins. The teams.organization_id join is the cross-org guard.
   if _scope = 'team' and array_length(_parts, 1) >= 4 then
     _scope_id := _parts[4];
     if _is_admin then
-      return true;
+      return exists (
+        select 1 from public.teams t
+        where t.id::text = _scope_id and t.organization_id = _org_id
+      );
     end if;
     begin
       return exists (
-        select 1 from public.team_members
-        where team_id = _scope_id::uuid and user_id = _user_id
+        select 1
+        from public.team_members tm
+        join public.teams t on t.id = tm.team_id
+        where tm.team_id = _scope_id::uuid
+          and tm.user_id = _user_id
+          and t.organization_id = _org_id
       );
     exception when others then
       return false;
@@ -2558,12 +2579,14 @@ BEGIN
   v_enabled := COALESCE((v_rereview_settings->>'enabled')::boolean, true);
   v_triggers := COALESCE(v_rereview_settings->'triggers', '{}'::jsonb);
 
+  -- Phase 22: namespace is now included in typedef/INSERT/DO UPDATE SET.
   WITH input_deps AS (
     SELECT * FROM jsonb_to_recordset(p_dependencies) AS d(
       name TEXT, version TEXT, is_direct BOOLEAN, source TEXT,
       environment TEXT, license TEXT, dependency_id UUID,
       files_importing_count INTEGER, is_outdated BOOLEAN, versions_behind INTEGER,
-      policy_result JSONB, dependency_version_id UUID
+      policy_result JSONB, dependency_version_id UUID,
+      namespace TEXT
     )
   ),
   upserted AS (
@@ -2571,7 +2594,7 @@ BEGIN
       project_id, name, version, is_direct, source,
       environment, license, dependency_id,
       files_importing_count, is_outdated, versions_behind,
-      policy_result, dependency_version_id,
+      policy_result, dependency_version_id, namespace,
       last_seen_extraction_run_id, removed_at, created_at
     )
     SELECT
@@ -2580,7 +2603,7 @@ BEGIN
       COALESCE(d.files_importing_count, 0),
       COALESCE(d.is_outdated, false),
       COALESCE(d.versions_behind, 0),
-      d.policy_result, d.dependency_version_id,
+      d.policy_result, d.dependency_version_id, d.namespace,
       p_extraction_run_id, NULL, v_now
     FROM input_deps d
     ON CONFLICT (project_id, name, version, is_direct, source) DO UPDATE SET
@@ -2592,6 +2615,7 @@ BEGIN
       versions_behind = EXCLUDED.versions_behind,
       policy_result = EXCLUDED.policy_result,
       dependency_version_id = EXCLUDED.dependency_version_id,
+      namespace = EXCLUDED.namespace,
       last_seen_extraction_run_id = p_extraction_run_id,
       removed_at = NULL
     RETURNING (xmax = 0) AS was_inserted
@@ -2883,20 +2907,23 @@ BEGIN
         FROM new_reasons nr
         WHERE pdv.id = nr.pdv_id
           AND jsonb_array_length(nr.reasons) > 0
-        RETURNING pdv.id, nr.osv_id, nr.reasons
+        RETURNING pdv.id, pdv.project_dependency_id AS pd_id, nr.osv_id, nr.reasons
       ),
       event_insert AS (
-        INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, metadata, created_at)
-        SELECT p_project_id, osv_id, 'rereview_triggered',
-               jsonb_build_object('extraction_run_id', p_extraction_run_id, 'reasons', reasons),
+        INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
+        SELECT p_project_id, osv_id, 'rereview_triggered', p_extraction_run_id, pd_id,
+               jsonb_build_object('reasons', reasons),
                v_now
         FROM fired
+        ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
+          WHERE extraction_run_id IS NOT NULL
+          DO NOTHING
       )
       SELECT COUNT(*) INTO v_pdv_rereview_fired FROM fired;
     END IF;
 
     WITH unmatched AS (
-      SELECT npdv.id AS pdv_id, npd.name AS dep_name, npdv.osv_id
+      SELECT npdv.id AS pdv_id, npdv.project_dependency_id AS pd_id, npd.name AS dep_name, npdv.osv_id
       FROM project_dependency_vulnerabilities npdv
       JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
       WHERE npdv.project_id = p_project_id
@@ -2914,6 +2941,7 @@ BEGIN
     classified AS (
       SELECT
         u.pdv_id,
+        u.pd_id,
         u.osv_id,
         u.dep_name,
         EXISTS (
@@ -2929,14 +2957,19 @@ BEGIN
       FROM unmatched u
     ),
     events_inserted AS (
-      INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, metadata, created_at)
+      INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
       SELECT
         p_project_id,
         c.osv_id,
         CASE WHEN c.is_reopened THEN 'reopened' ELSE 'detected' END,
-        jsonb_build_object('extraction_run_id', p_extraction_run_id, 'dep_name', c.dep_name),
+        p_extraction_run_id,
+        c.pd_id,
+        jsonb_build_object('dep_name', c.dep_name),
         v_now
       FROM classified c
+      ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
+        WHERE extraction_run_id IS NOT NULL
+        DO NOTHING
       RETURNING id, event_type
     )
     SELECT
@@ -2945,14 +2978,17 @@ BEGIN
     INTO v_pdv_reopened, v_pdv_new
     FROM events_inserted;
   ELSE
-    INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, metadata, created_at)
-    SELECT p_project_id, npdv.osv_id, 'detected',
-           jsonb_build_object('extraction_run_id', p_extraction_run_id, 'dep_name', npd.name),
+    INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
+    SELECT p_project_id, npdv.osv_id, 'detected', p_extraction_run_id, npdv.project_dependency_id,
+           jsonb_build_object('dep_name', npd.name),
            v_now
     FROM project_dependency_vulnerabilities npdv
     JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
     WHERE npdv.project_id = p_project_id
-      AND npdv.extraction_run_id = p_extraction_run_id;
+      AND npdv.extraction_run_id = p_extraction_run_id
+    ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
+      WHERE extraction_run_id IS NOT NULL
+      DO NOTHING;
 
     v_pdv_carried := 0;
     v_pdv_rereview_fired := 0;
@@ -4451,6 +4487,7 @@ DECLARE
   v_slices_deleted INTEGER := 0;
   v_files_deleted INTEGER := 0;
   v_fns_deleted INTEGER := 0;
+  v_entry_points_deleted INTEGER := 0;
 BEGIN
   SELECT active_extraction_run_id, previous_extraction_run_id
     INTO v_active, v_previous
@@ -4513,6 +4550,13 @@ BEGIN
     AND (v_previous IS NULL OR pdfn.extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_fns_deleted = ROW_COUNT;
 
+  DELETE FROM project_entry_points
+  WHERE project_id = p_project_id
+    AND extraction_run_id IS NOT NULL
+    AND extraction_run_id <> v_active
+    AND (v_previous IS NULL OR extraction_run_id <> v_previous);
+  GET DIAGNOSTICS v_entry_points_deleted = ROW_COUNT;
+
   RETURN jsonb_build_object(
     'project_id', p_project_id,
     'active', v_active,
@@ -4523,7 +4567,8 @@ BEGIN
     'flows_deleted', v_flows_deleted,
     'slices_deleted', v_slices_deleted,
     'dep_files_deleted', v_files_deleted,
-    'dep_functions_deleted', v_fns_deleted
+    'dep_functions_deleted', v_fns_deleted,
+    'entry_points_deleted', v_entry_points_deleted
   );
 END;
 $function$
@@ -4546,6 +4591,7 @@ DECLARE
   v_files_deleted INTEGER := 0;
   v_fns_deleted INTEGER := 0;
   v_events_deleted INTEGER := 0;
+  v_entry_points_deleted INTEGER := 0;
   v_temp INTEGER;
   v_orphan_runs JSONB := '[]'::JSONB;
 BEGIN
@@ -4563,34 +4609,56 @@ BEGIN
           AND ej2.status IN ('queued', 'processing')
       )
   LOOP
-    DELETE FROM project_dependency_files WHERE extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT; v_files_deleted := v_files_deleted + v_temp;
+    DELETE FROM project_dependency_files
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_files_deleted := v_files_deleted + v_temp;
 
-    DELETE FROM project_dependency_functions WHERE extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT; v_fns_deleted := v_fns_deleted + v_temp;
+    DELETE FROM project_dependency_functions
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_fns_deleted := v_fns_deleted + v_temp;
 
-    DELETE FROM project_dependency_vulnerabilities WHERE extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT; v_pdv_deleted := v_pdv_deleted + v_temp;
+    DELETE FROM project_dependency_vulnerabilities
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_pdv_deleted := v_pdv_deleted + v_temp;
 
-    DELETE FROM project_semgrep_findings WHERE extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT; v_semgrep_deleted := v_semgrep_deleted + v_temp;
+    DELETE FROM project_semgrep_findings
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_semgrep_deleted := v_semgrep_deleted + v_temp;
 
-    DELETE FROM project_secret_findings WHERE extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT; v_secret_deleted := v_secret_deleted + v_temp;
+    DELETE FROM project_secret_findings
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_secret_deleted := v_secret_deleted + v_temp;
 
-    DELETE FROM project_reachable_flows WHERE extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT; v_flows_deleted := v_flows_deleted + v_temp;
+    DELETE FROM project_reachable_flows
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_flows_deleted := v_flows_deleted + v_temp;
 
-    DELETE FROM project_usage_slices WHERE extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT; v_slices_deleted := v_slices_deleted + v_temp;
+    DELETE FROM project_usage_slices
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_slices_deleted := v_slices_deleted + v_temp;
 
-    DELETE FROM project_vulnerability_events WHERE extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT; v_events_deleted := v_events_deleted + v_temp;
+    DELETE FROM project_vulnerability_events
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_events_deleted := v_events_deleted + v_temp;
+
+    DELETE FROM project_entry_points
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_entry_points_deleted := v_entry_points_deleted + v_temp;
 
     DELETE FROM project_dependencies
     WHERE project_id = v_orphan.project_id
       AND last_seen_extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT; v_pd_deleted := v_pd_deleted + v_temp;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_pd_deleted := v_pd_deleted + v_temp;
 
     v_orphan_runs := v_orphan_runs || jsonb_build_object(
       'project_id', v_orphan.project_id,
@@ -4611,6 +4679,7 @@ BEGIN
     'files_deleted', v_files_deleted,
     'fns_deleted', v_fns_deleted,
     'events_deleted', v_events_deleted,
+    'entry_points_deleted', v_entry_points_deleted,
     'orphan_runs', v_orphan_runs
   );
 END;
@@ -4847,6 +4916,100 @@ BEGIN
   NEW.updated_at = NOW();
   RETURN NEW;
 END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.update_canvas_positions_batch(_org_id uuid, _user_id uuid, _teams jsonb, _projects jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  _now timestamptz := now();
+  _expected_teams int := coalesce(jsonb_array_length(_teams), 0);
+  _expected_projects int := coalesce(jsonb_array_length(_projects), 0);
+  _updated_teams jsonb := '[]'::jsonb;
+  _updated_projects jsonb := '[]'::jsonb;
+  _team_count int := 0;
+  _project_count int := 0;
+begin
+  if _expected_teams > 0 then
+    with
+      team_input as (
+        select
+          (elem->>'id')::uuid as id,
+          (elem->>'x')::numeric as x,
+          (elem->>'y')::numeric as y
+        from jsonb_array_elements(_teams) elem
+      ),
+      team_updates as (
+        update public.teams t
+        set
+          canvas_position_x = ti.x,
+          canvas_position_y = ti.y,
+          canvas_position_updated_at = _now,
+          canvas_position_updated_by = _user_id
+        from team_input ti
+        where t.id = ti.id and t.organization_id = _org_id
+        returning
+          t.id,
+          t.canvas_position_x,
+          t.canvas_position_y,
+          t.canvas_position_updated_at
+      )
+    select
+      coalesce(jsonb_agg(to_jsonb(tu.*)), '[]'::jsonb),
+      count(*)
+    into _updated_teams, _team_count
+    from team_updates tu;
+
+    if _team_count <> _expected_teams then
+      raise exception using
+        errcode = 'P0001',
+        message = 'one or more teams not found in this organization';
+    end if;
+  end if;
+
+  if _expected_projects > 0 then
+    with
+      project_input as (
+        select
+          (elem->>'id')::uuid as id,
+          (elem->>'x')::numeric as x,
+          (elem->>'y')::numeric as y
+        from jsonb_array_elements(_projects) elem
+      ),
+      project_updates as (
+        update public.projects p
+        set
+          canvas_position_x = pi.x,
+          canvas_position_y = pi.y,
+          canvas_position_updated_at = _now,
+          canvas_position_updated_by = _user_id
+        from project_input pi
+        where p.id = pi.id and p.organization_id = _org_id
+        returning
+          p.id,
+          p.canvas_position_x,
+          p.canvas_position_y,
+          p.canvas_position_updated_at
+      )
+    select
+      coalesce(jsonb_agg(to_jsonb(pu.*)), '[]'::jsonb),
+      count(*)
+    into _updated_projects, _project_count
+    from project_updates pu;
+
+    if _project_count <> _expected_projects then
+      raise exception using
+        errcode = 'P0001',
+        message = 'one or more projects not found in this organization';
+    end if;
+  end if;
+
+  return jsonb_build_object('teams', _updated_teams, 'projects', _updated_projects);
+end;
 $function$
 ;
 
