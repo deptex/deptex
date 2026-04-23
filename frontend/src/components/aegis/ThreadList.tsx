@@ -1,5 +1,5 @@
 import { useMemo, useState, type KeyboardEvent } from 'react';
-import { MoreHorizontal, SquarePen, Search, Pencil, Trash2, Loader2, Pin, PinOff, Archive, ArchiveRestore, Users, LogOut, KeyRound } from 'lucide-react';
+import { MoreHorizontal, SquarePen, Search, Pencil, Trash2, Loader2, Pin, PinOff, Archive, ArchiveRestore, Clock } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,8 +29,6 @@ interface ThreadListProps {
   onDelete: (threadId: string) => Promise<void>;
   onSetPinned: (threadId: string, pinned: boolean) => Promise<void>;
   onSetArchived: (threadId: string, archived: boolean) => Promise<void>;
-  onLeave: (threadId: string) => Promise<void>;
-  onOpenJoinByCode: () => void;
   onOpenSearch: () => void;
 }
 
@@ -45,16 +43,12 @@ export function ThreadList({
   onDelete,
   onSetPinned,
   onSetArchived,
-  onLeave,
-  onOpenJoinByCode,
   onOpenSearch,
 }: ThreadListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [confirmLeaveId, setConfirmLeaveId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [leaving, setLeaving] = useState(false);
 
   const { pinned, recents } = useMemo(() => {
     const pinned = threads.filter((t) => t.pinnedAt && !t.archivedAt);
@@ -69,12 +63,13 @@ export function ThreadList({
     const isEditing = thread.id === editingId;
     const isPinned = !!thread.pinnedAt;
     const isArchived = !!thread.archivedAt;
+    const isPending = thread.id === pendingTitleThreadId;
     return (
       <div
         key={thread.id}
         className={cn(
           'group relative rounded-md',
-          isActive ? 'bg-background-subtle' : 'hover:bg-background-subtle/60',
+          isActive && !isPending ? 'bg-white/[0.06]' : 'hover:bg-white/[0.04]',
         )}
       >
         {isEditing ? (
@@ -94,15 +89,10 @@ export function ThreadList({
             title={thread.title}
           >
             {thread.id === pendingTitleThreadId
-              ? <span className="h-3 w-28 rounded bg-foreground/10 animate-pulse inline-block" />
+              ? <span className="h-3 w-40 rounded bg-foreground/10 animate-pulse inline-block" />
               : <span className="truncate">{thread.title}</span>
             }
-            {thread.participantCount > 1 && (
-              <Users
-                className="h-3 w-3 flex-shrink-0 text-foreground/40"
-                aria-label={`${thread.participantCount} participants`}
-              />
-            )}
+
           </button>
         )}
         {!isEditing && (
@@ -132,21 +122,13 @@ export function ThreadList({
                 {isArchived ? <ArchiveRestore className="h-4 w-4 mr-2" /> : <Archive className="h-4 w-4 mr-2" />}
                 {isArchived ? 'Unarchive' : 'Archive'}
               </DropdownMenuItem>
-              {thread.isCreator ? (
+              {thread.isCreator && (
                 <DropdownMenuItem
                   className="text-red-500 focus:text-red-500"
                   onClick={() => setConfirmDeleteId(thread.id)}
                 >
                   <Trash2 className="h-4 w-4 mr-2" />
                   Delete
-                </DropdownMenuItem>
-              ) : (
-                <DropdownMenuItem
-                  className="text-red-500 focus:text-red-500"
-                  onClick={() => setConfirmLeaveId(thread.id)}
-                >
-                  <LogOut className="h-4 w-4 mr-2" />
-                  Leave
                 </DropdownMenuItem>
               )}
             </DropdownMenuContent>
@@ -188,18 +170,6 @@ export function ThreadList({
     }
   };
 
-  const confirmLeave = async () => {
-    if (!confirmLeaveId) return;
-    const id = confirmLeaveId;
-    setLeaving(true);
-    try {
-      await onLeave(id);
-      setConfirmLeaveId(null);
-    } finally {
-      setLeaving(false);
-    }
-  };
-
   return (
     <div className="flex h-full flex-col">
       <div className="px-2 pt-3 pb-1 space-y-1">
@@ -219,26 +189,32 @@ export function ThreadList({
           <Search className="h-4 w-4" />
           Search chats
         </button>
-        <button
-          type="button"
-          onClick={onOpenJoinByCode}
-          className="w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm text-foreground/90 hover:bg-background-subtle/60 transition-colors"
-        >
-          <KeyRound className="h-4 w-4" />
-          Join by code
-        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 pb-2">
         {loading && threads.length === 0 && (
-          <div className="px-3 py-3">
-            <div className="h-3 w-36 rounded bg-foreground/8 animate-pulse" />
-          </div>
+          <>
+            <div className="px-3 pt-3 pb-1 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-foreground/60">
+              <Clock className="h-3 w-3" />
+              Recents
+            </div>
+            <div className="space-y-0.5">
+              {[160, 112, 144, 96, 128].map((w, i) => (
+                <div key={i} className="px-3 py-2" style={{ opacity: 1 - i * 0.18 }}>
+                  <div
+                    className="h-3 rounded bg-foreground/[0.08] animate-pulse"
+                    style={{ width: w, animationDelay: `${i * 80}ms` }}
+                  />
+                </div>
+              ))}
+            </div>
+          </>
         )}
 
         {pinned.length > 0 && (
           <>
-            <div className="px-3 pt-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-foreground/40">
+            <div className="px-3 pt-3 pb-1 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-foreground/60">
+              <Pin className="h-3 w-3" />
               Pinned
             </div>
             <div className="space-y-0.5">
@@ -249,7 +225,8 @@ export function ThreadList({
 
         {recents.length > 0 && (
           <>
-            <div className="px-3 pt-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-foreground/40">
+            <div className="px-3 pt-3 pb-1 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-foreground/60">
+              <Clock className="h-3 w-3" />
               Recents
             </div>
             <div className="space-y-0.5">
@@ -259,25 +236,6 @@ export function ThreadList({
         )}
 
       </div>
-
-      <Dialog open={!!confirmLeaveId} onOpenChange={(open) => !open && !leaving && setConfirmLeaveId(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Leave chat?</DialogTitle>
-            <DialogDescription>
-              You'll no longer see new messages in this chat. You can rejoin with an invite code.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setConfirmLeaveId(null)} disabled={leaving}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={confirmLeave} disabled={leaving}>
-              {leaving ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Leaving…</> : 'Leave'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={!!confirmDeleteId} onOpenChange={(open) => !open && !deleting && setConfirmDeleteId(null)}>
         <DialogContent>

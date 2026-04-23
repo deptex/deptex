@@ -4,9 +4,6 @@ import { aegisApi, type AegisMessage, type AegisThread, type MessagePart } from 
 import { getAuthToken } from '../../lib/api';
 import { MessageBubble } from './MessageBubble';
 import { ChatInput } from './ChatInput';
-import { ParticipantsPanel } from './ParticipantsPanel';
-import { AddPeopleModal } from './AddPeopleModal';
-import { TypingIndicator } from './TypingIndicator';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -57,7 +54,6 @@ function useTypewriterPlaceholder(phrases: string[], enabled: boolean) {
 interface ChatPaneProps {
   organizationId: string;
   threadId?: string;
-  thread?: AegisThread;
   currentUserId: string;
   displayName: string;
   onThreadCreated: (threadId: string) => void;
@@ -105,7 +101,6 @@ function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
 export function ChatPane({
   organizationId,
   threadId: propThreadId,
-  thread,
   currentUserId,
   displayName,
   onThreadCreated,
@@ -122,25 +117,12 @@ export function ChatPane({
   const [seedLoaded, setSeedLoaded] = useState(!propThreadId);
   const [isGenerating, setIsGenerating] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
-  const [participantsOpen, setParticipantsOpen] = useState(false);
-  const [addPeopleOpen, setAddPeopleOpen] = useState(false);
-  const [typingUsers, setTypingUsers] = useState<Record<string, { displayName: string; lastPing: number }>>({});
-  const [participantNames, setParticipantNames] = useState<Record<string, string>>({});
   const bottomRef = useRef<HTMLDivElement>(null);
-  const typingChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
-  const lastTypingSentRef = useRef(0);
 
   // Keep latest onThreadUpdated in a ref so the Realtime effect doesn't tear
   // down on every parent render.
   const onThreadUpdatedRef = useRef(onThreadUpdated);
   useEffect(() => { onThreadUpdatedRef.current = onThreadUpdated; });
-
-  const myDisplayName = useMemo(() => {
-    const full = user?.user_metadata?.full_name as string | undefined;
-    if (full) return full;
-    if (user?.email) return user.email.split('@')[0];
-    return 'Someone';
-  }, [user]);
 
   // One-shot seed load: if we mounted with a threadId prop, load history.
   // Never runs again — fresh thread = fresh mount via parent `key`.
@@ -162,23 +144,9 @@ export function ChatPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const emitTyping = useCallback((typing: boolean) => {
-    const channel = typingChannelRef.current;
-    if (!channel) return;
-    const now = Date.now();
-    if (typing && now - lastTypingSentRef.current < 2000) return;
-    lastTypingSentRef.current = typing ? now : 0;
-    channel.send({
-      type: 'broadcast',
-      event: 'typing',
-      payload: { userId: currentUserId, typing, displayName: myDisplayName },
-    });
-  }, [currentUserId, myDisplayName]);
-
   const handleSubmit = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || isGenerating) return;
-    emitTyping(false);
     setSendError(null);
 
     const tempId = `temp-${Date.now()}`;
@@ -215,26 +183,11 @@ export function ChatPane({
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setSendError(err?.message ?? 'Failed to send message');
     }
-  }, [organizationId, activeThreadId, currentUserId, isGenerating, emitTyping, onThreadCreated]);
+  }, [organizationId, activeThreadId, currentUserId, isGenerating, onThreadCreated]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, isGenerating]);
-
-  // Load participant names when we have an active thread.
-  useEffect(() => {
-    if (!activeThreadId) return;
-    let cancelled = false;
-    aegisApi.listParticipants(activeThreadId)
-      .then((list) => {
-        if (cancelled) return;
-        const map: Record<string, string> = {};
-        for (const p of list) map[p.userId] = p.displayName ?? p.email ?? 'Teammate';
-        setParticipantNames(map);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [activeThreadId, thread?.participantCount]);
 
   // Realtime subscription on aegis_chat_messages for this thread.
   // Kicks in once we have an activeThreadId (either from prop or from a
@@ -290,63 +243,6 @@ export function ChatPane({
     };
   }, [activeThreadId, currentUserId]);
 
-  // Typing broadcast channel.
-  useEffect(() => {
-    if (!activeThreadId) return;
-    const channel = supabase.channel(`aegis-typing-${activeThreadId}`, { config: { broadcast: { self: false } } });
-    channel
-      .on('broadcast', { event: 'typing' }, (payload) => {
-        const data = (payload as any).payload as { userId: string; typing: boolean; displayName: string };
-        if (!data || data.userId === currentUserId) return;
-        setTypingUsers((prev) => {
-          if (!data.typing) {
-            const next = { ...prev };
-            delete next[data.userId];
-            return next;
-          }
-          return { ...prev, [data.userId]: { displayName: data.displayName, lastPing: Date.now() } };
-        });
-      })
-      .subscribe();
-    typingChannelRef.current = channel;
-    return () => {
-      supabase.removeChannel(channel);
-      typingChannelRef.current = null;
-    };
-  }, [activeThreadId, currentUserId]);
-
-  useEffect(() => {
-    if (Object.keys(typingUsers).length === 0) return;
-    const interval = setInterval(() => {
-      setTypingUsers((prev) => {
-        const now = Date.now();
-        let changed = false;
-        const next: typeof prev = {};
-        for (const [uid, entry] of Object.entries(prev)) {
-          if (now - entry.lastPing < 3000) next[uid] = entry;
-          else changed = true;
-        }
-        return changed ? next : prev;
-      });
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [typingUsers]);
-
-  const handleInputChange = useCallback(() => {
-    emitTyping(true);
-  }, [emitTyping]);
-
-  const handleEdit = useCallback(async (messageId: string, newText: string) => {
-    try {
-      await aegisApi.truncateBelow(messageId);
-    } catch { /* ignore */ }
-    setMessages((prev) => {
-      const idx = prev.findIndex((m) => m.id === messageId);
-      return idx === -1 ? prev : prev.slice(0, idx);
-    });
-    void handleSubmit(newText);
-  }, [handleSubmit]);
-
   const showLanding = !activeThreadId && messages.length === 0;
   const placeholder = useTypewriterPlaceholder(AEGIS_PROMPTS, showLanding);
 
@@ -376,27 +272,20 @@ export function ChatPane({
     <div className="flex h-full flex-col">
       <div className="flex-1 overflow-y-auto">
         <div className="py-4">
-          {!seedLoaded && activeThreadId && (
-            <div className="flex h-full items-center justify-center text-sm text-foreground/40">Loading…</div>
-          )}
           {messages.map((m) => (
             <MessageBubble
               key={m.id}
               message={m}
               currentUserId={currentUserId}
-              participantNames={participantNames}
-              disabled={isGenerating}
-              onEdit={!m.id.startsWith('temp-') && m.role === 'user' && (m as any).userId === currentUserId ? (newText) => void handleEdit(m.id, newText) : undefined}
             />
           ))}
           {isGenerating && (
             <div className="px-4 py-3">
-              <div className="mx-auto max-w-3xl flex gap-3 items-center text-sm text-foreground/60">
-                <span className="flex gap-1">
-                  <span className="h-1.5 w-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:0ms]" />
-                  <span className="h-1.5 w-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:150ms]" />
-                  <span className="h-1.5 w-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:300ms]" />
-                </span>
+              <div className="mx-auto max-w-3xl">
+                <span
+                  className="h-4 w-4 rounded-full bg-foreground/60 inline-block"
+                  style={{ animation: 'aegis-thinking 1.6s ease-in-out infinite' }}
+                />
               </div>
             </div>
           )}
@@ -405,34 +294,17 @@ export function ChatPane({
               <div className="mx-auto max-w-3xl text-sm text-red-500">{sendError}</div>
             </div>
           )}
-          <TypingIndicator
-            users={Object.entries(typingUsers).map(([userId, entry]) => ({ userId, displayName: entry.displayName }))}
-          />
           <div ref={bottomRef} />
         </div>
       </div>
-      <ChatInput onSubmit={handleSubmit} onChange={handleInputChange} disabled={isGenerating} autoFocus />
+      <div className="px-4 pb-4">
+        <div className="mx-auto max-w-3xl">
+          <div className="rounded-2xl bg-background-card border border-border">
+            <ChatInput onSubmit={handleSubmit} disabled={isGenerating} placeholder="Ask anything" autoFocus />
+          </div>
+        </div>
+      </div>
 
-      {activeThreadId && (
-        <>
-          <ParticipantsPanel
-            open={participantsOpen}
-            onOpenChange={setParticipantsOpen}
-            threadId={activeThreadId}
-            currentUserId={currentUserId}
-            isCreator={thread?.isCreator ?? false}
-            onOpenAddPeople={() => { setParticipantsOpen(false); setAddPeopleOpen(true); }}
-            onParticipantsChanged={() => onThreadUpdated?.()}
-          />
-          <AddPeopleModal
-            open={addPeopleOpen}
-            onOpenChange={setAddPeopleOpen}
-            organizationId={organizationId}
-            threadId={activeThreadId}
-            onAdded={() => onThreadUpdated?.()}
-          />
-        </>
-      )}
     </div>
   );
 }
