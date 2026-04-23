@@ -1,6 +1,6 @@
 import { useMemo, useState, type KeyboardEvent } from 'react';
 import { Dialog, DialogContent } from '../ui/dialog';
-import { Search, Users, X, Archive, ArchiveRestore } from 'lucide-react';
+import { Search, MessageCircle, Users, X, Archive, ArchiveRestore } from 'lucide-react';
 import type { AegisThread } from '../../lib/aegis-api';
 
 interface SearchChatsModalProps {
@@ -106,6 +106,7 @@ export function SearchChatsModal({ open, onOpenChange, threads, onSelect, onSetA
                       onClick={() => handleSelect(t.id)}
                       className="w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm text-left text-foreground hover:bg-white/[0.04]"
                     >
+                      <MessageCircle className="h-4 w-4 flex-shrink-0 text-foreground/50" />
                       <span className="truncate flex-1">{t.title}</span>
                       {t.archivedAt && <Archive className="h-3.5 w-3.5 flex-shrink-0 text-foreground/50" />}
                       {!t.archivedAt && t.participantCount > 1 && <Users className="h-3.5 w-3.5 flex-shrink-0 text-foreground/50" />}
