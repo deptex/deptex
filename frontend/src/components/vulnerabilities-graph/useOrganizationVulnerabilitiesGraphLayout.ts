@@ -18,13 +18,15 @@ import {
   getOrgToSatelliteHandles,
   computeOrgOverviewEdgeRouting,
   ORG_OVERVIEW_EDGE_STROKE,
-  ORG_OVERVIEW_CENTER_WIDTH,
-  ORG_OVERVIEW_CENTER_HEIGHT,
+  ORG_OVERVIEW_ORG_WIDTH,
+  ORG_OVERVIEW_ORG_HEIGHT,
+  ORG_OVERVIEW_TEAM_WIDTH,
+  ORG_OVERVIEW_TEAM_HEIGHT,
   type OrgSatelliteTargetEdge,
 } from './overviewOrgLayout';
 
 export const ORG_CENTER_ID = 'org-center';
-/** @deprecated Synthetic team id for ungrouped projects. Ungrouped projects now render directly at team ring level. */
+/** @deprecated Synthetic team id for ungrouped projects. Phase 6 places these directly at team ring level. */
 export const UNGROUPED_TEAM_ID = 'org-ungrouped';
 
 export interface TeamWithProjectsData {
@@ -312,6 +314,10 @@ export interface OverviewProjectItem {
   healthScore?: number | null;
   /** Number of direct dependencies shown as subtext on project card. */
   dependenciesCount?: number | null;
+  /** Saved canvas top-left x (React Flow coords). NULL = unplaced, renders at spawn point. */
+  canvasPositionX?: number | null;
+  /** Saved canvas top-left y (React Flow coords). NULL = unplaced, renders at spawn point. */
+  canvasPositionY?: number | null;
 }
 
 export interface OverviewTeamWithProjects {
@@ -326,7 +332,27 @@ export interface OverviewTeamWithProjects {
   projectCount?: number;
   /** Number of members (for team node bottom bar). */
   memberCount?: number;
+  /** Saved canvas top-left x for the team node. NULL = unplaced, renders at spawn point. */
+  canvasPositionX?: number | null;
+  /** Saved canvas top-left y for the team node. NULL = unplaced, renders at spawn point. */
+  canvasPositionY?: number | null;
 }
+
+/**
+ * Spawn point (React Flow top-left coords) for any unplaced team or ungrouped project.
+ * Placed just to the right of the org center so admins see it on first visit.
+ * Note: all unplaced nodes stack at this exact point — admins drag to arrange.
+ */
+export const OVERVIEW_TEAM_SPAWN_X = 200;
+export const OVERVIEW_TEAM_SPAWN_Y = -ORG_OVERVIEW_ORG_HEIGHT / 2;
+
+/**
+ * Spawn offset for an unplaced project: positioned just to the right of its
+ * owning team's current position, vertically centered on the team card.
+ */
+export const OVERVIEW_PROJECT_SPAWN_OFFSET_X = ORG_OVERVIEW_ORG_WIDTH + 40;
+export const OVERVIEW_PROJECT_SPAWN_OFFSET_Y =
+  (ORG_OVERVIEW_ORG_HEIGHT - OVERVIEW_PROJECT_NODE_HEIGHT) / 2;
 
 /** Match OrganizationSwitcher / RoleBadge defaults when API has no role_color */
 const OVERVIEW_DEFAULT_ROLE_COLORS: Record<string, string> = {
@@ -368,52 +394,6 @@ interface OverviewOrgGridCell {
     totalProjectCount: number;
     collapsedSummary: boolean;
   };
-}
-
-/**
- * Builds nodes and edges for org overview only: org center, teams, projects. No dependency/vuln nodes.
- * All nodes use neutral styling. Team containers size to their project grid (tight hug).
- */
-/** Max projects shown in a ring around a team node before overflow. */
-const MAX_PROJECTS_PER_TEAM_RING = 8;
-
-/** Compute ring radius for N project satellites around a team hub. */
-function teamProjectRingRadius(count: number): number {
-  const clearance =
-    Math.max(ORG_OVERVIEW_CENTER_WIDTH, ORG_OVERVIEW_CENTER_HEIGHT) / 2 +
-    Math.max(OVERVIEW_PROJECT_NODE_WIDTH, OVERVIEW_PROJECT_NODE_HEIGHT) / 2 +
-    50;
-  return clearance + Math.max(0, count - 3) * 18;
-}
-
-/**
- * Place N project nodes in a fan on the **far side** of the team — away from the
- * org center — so no project lands between the team and the org, preventing
- * edges from crossing over other nodes.
- *
- * @param awayAngle  Angle (radians) from org center (0,0) to team center.
- *                   Projects fan out centered on this direction.
- */
-function placeProjectsInRing(
-  count: number,
-  teamCX: number,
-  teamCY: number,
-  awayAngle: number,
-): Array<{ x: number; y: number; angle: number }> {
-  const radius = teamProjectRingRadius(count);
-
-  // Wide fan (~280°) so projects spread naturally; single project sits directly away.
-  const arcWidth = count <= 1 ? 0 : (14 * Math.PI) / 9; // ≈ 280°
-
-  return Array.from({ length: count }, (_, i) => {
-    const t = count <= 1 ? 0 : (i / (count - 1)) - 0.5; // –0.5 … +0.5
-    const angle = awayAngle + t * arcWidth;
-    return {
-      x: teamCX + Math.cos(angle) * radius - OVERVIEW_PROJECT_NODE_WIDTH / 2,
-      y: teamCY + Math.sin(angle) * radius - OVERVIEW_PROJECT_NODE_HEIGHT / 2,
-      angle,
-    };
-  });
 }
 
 /** Pick cardinal source/target handles for a team→project edge based on angle. */
@@ -500,13 +480,13 @@ export function useOrganizationOverviewGraphLayout(
       id: ORG_CENTER_ID,
       type: 'groupCenterNode',
       position: {
-        x: centerX - ORG_OVERVIEW_CENTER_WIDTH / 2,
-        y: centerY - ORG_OVERVIEW_CENTER_HEIGHT / 2,
+        x: centerX - ORG_OVERVIEW_ORG_WIDTH / 2,
+        y: centerY - ORG_OVERVIEW_ORG_HEIGHT / 2,
       },
       data: orgCenterData,
       draggable: false,
       selectable: false,
-      style: { zIndex: 3, width: ORG_OVERVIEW_CENTER_WIDTH, height: ORG_OVERVIEW_CENTER_HEIGHT },
+      style: { zIndex: 3, width: ORG_OVERVIEW_ORG_WIDTH, height: ORG_OVERVIEW_ORG_HEIGHT },
     });
 
     const totalRingItems = realTeams.length + ungrouped.length;
@@ -518,77 +498,56 @@ export function useOrganizationOverviewGraphLayout(
       strokeDasharray: '5 5',
     };
 
-    // ── Concentric ring layout ──────────────────────────────────────────────
-    //   Ring 1 (inner):  ungrouped projects — close to org
-    //   Ring 2 (outer):  team hubs — further out
-    //   Around each team: project fan (placeProjectsInRing)
+    // ── Saved-position layout ──────────────────────────────────────────────
+    //   Each team/project uses its saved canvas_position if set. Otherwise it
+    //   renders at a fixed spawn point (teams: right of org; projects: right
+    //   of their parent team's current position). Unplaced nodes stack at
+    //   these spawn points — admins drag them apart as desired.
 
-    const teamW = ORG_OVERVIEW_CENTER_WIDTH;   // 300
-    const teamH = ORG_OVERVIEW_CENTER_HEIGHT;  // 140
+    const teamW = ORG_OVERVIEW_TEAM_WIDTH;    // 220 — team card width
+    const teamH = ORG_OVERVIEW_TEAM_HEIGHT; // 72 — slimmer than org center
 
-    // ── Ring 1: ungrouped projects ─────────────────────────────────────────
-    const UNGROUPED_RING_RADIUS = 360;
-    const ungroupedPositions = new Map<string, { x: number; y: number; angle: number }>();
+    // ── Ungrouped projects (no parent team) ───────────────────────────────
+    const ungroupedPositions = new Map<string, { x: number; y: number }>();
+    ungrouped.forEach((proj) => {
+      const hasSaved =
+        typeof proj.canvasPositionX === 'number' && typeof proj.canvasPositionY === 'number';
+      const x = hasSaved
+        ? (proj.canvasPositionX as number)
+        : OVERVIEW_TEAM_SPAWN_X;
+      const y = hasSaved
+        ? (proj.canvasPositionY as number)
+        : OVERVIEW_TEAM_SPAWN_Y + (teamH - OVERVIEW_PROJECT_NODE_HEIGHT) / 2;
+      ungroupedPositions.set(proj.projectId, { x, y });
+    });
 
-    if (ungrouped.length > 0) {
-      ungrouped.forEach((proj, i) => {
-        const angle = (2 * Math.PI * i) / ungrouped.length - Math.PI / 2;
-        const cx = Math.cos(angle) * UNGROUPED_RING_RADIUS;
-        const cy = Math.sin(angle) * UNGROUPED_RING_RADIUS;
-        ungroupedPositions.set(proj.projectId, {
-          x: cx - OVERVIEW_PROJECT_NODE_WIDTH / 2,
-          y: cy - OVERVIEW_PROJECT_NODE_HEIGHT / 2,
-          angle,
-        });
-      });
-    }
-
-    // ── Ring 2: teams ──────────────────────────────────────────────────────
-    // Radius clears the ungrouped ring + enough room for the team node itself.
-    // When projects are expanded, add extra for the largest project fan so
-    // adjacent team clusters don't overlap.
-    const teamVisibleCounts = realTeams.map((t) =>
-      Math.min(t.projects.length, MAX_PROJECTS_PER_TEAM_RING)
-    );
-    const maxFanRadius = compactTeams
-      ? 0
-      : Math.max(0, ...teamVisibleCounts.map((n) => (n > 0 ? teamProjectRingRadius(n) : 0)));
-
-    const TEAM_RING_BASE = ungrouped.length > 0
-      ? UNGROUPED_RING_RADIUS + Math.max(OVERVIEW_PROJECT_NODE_HEIGHT, OVERVIEW_PROJECT_NODE_WIDTH) / 2 + 200
-      : 450;
-    const TEAM_RING_RADIUS = TEAM_RING_BASE + maxFanRadius;
-
+    // ── Teams ──────────────────────────────────────────────────────────────
     interface TeamPlacement {
       teamData: OverviewTeamWithProjects;
+      /** Team top-left in React Flow coords. */
+      x: number;
+      y: number;
+      /** Team center in React Flow coords (for edge endpoint math). */
       cx: number;
       cy: number;
-      angle: number;
-      visibleProjectCount: number;
       totalProjectCount: number;
     }
     const teamPlacements: TeamPlacement[] = [];
 
-    if (realTeams.length > 0) {
-      // Offset team ring so it sits in the gaps between ungrouped projects
-      const teamOffset = ungrouped.length > 0
-        ? Math.PI / Math.max(ungrouped.length, 1) // half-step between ungrouped angles
-        : 0;
-
-      realTeams.forEach((teamData, i) => {
-        const angle = (2 * Math.PI * i) / realTeams.length - Math.PI / 2 + teamOffset;
-        const cx = Math.cos(angle) * TEAM_RING_RADIUS;
-        const cy = Math.sin(angle) * TEAM_RING_RADIUS;
-        teamPlacements.push({
-          teamData,
-          cx,
-          cy,
-          angle,
-          visibleProjectCount: teamVisibleCounts[i],
-          totalProjectCount: teamData.projects.length,
-        });
+    realTeams.forEach((teamData) => {
+      const hasSaved =
+        typeof teamData.canvasPositionX === 'number' && typeof teamData.canvasPositionY === 'number';
+      const x = hasSaved ? (teamData.canvasPositionX as number) : OVERVIEW_TEAM_SPAWN_X;
+      const y = hasSaved ? (teamData.canvasPositionY as number) : OVERVIEW_TEAM_SPAWN_Y;
+      teamPlacements.push({
+        teamData,
+        x,
+        y,
+        cx: x + teamW / 2,
+        cy: y + teamH / 2,
+        totalProjectCount: teamData.projects.length,
       });
-    }
+    });
 
     // ── Edge routing from org ──────────────────────────────────────────────
     const orgLinkItems: Array<{ targetId: string; cx: number; cy: number }> = [];
@@ -609,10 +568,8 @@ export function useOrganizationOverviewGraphLayout(
     // ── Emit team nodes & edges ───────────────────────────────────────────────
 
     for (const tp of teamPlacements) {
-      const { teamData, cx: teamCX, cy: teamCY, totalProjectCount, visibleProjectCount } = tp;
+      const { teamData, x: teamX, y: teamY, cx: teamCX, cy: teamCY, totalProjectCount } = tp;
       const teamNodeId = `team-${teamData.teamId}`;
-      const teamX = teamCX - teamW / 2;
-      const teamY = teamCY - teamH / 2;
       const { targetEdge } = getOrgToSatelliteHandles(teamCX, teamCY);
 
       nodes.push({
@@ -636,7 +593,6 @@ export function useOrganizationOverviewGraphLayout(
             ? { overviewMemberCount: teamData.memberCount }
             : {}),
         },
-        draggable: false,
         selectable: false,
         style: { zIndex: 2 },
       });
@@ -656,21 +612,27 @@ export function useOrganizationOverviewGraphLayout(
         } as Edge);
       }
 
-      // ── Project satellites around team ──────────────────────────────────
-      if (!compactTeams && visibleProjectCount > 0) {
-        const shownProjects = teamData.projects.slice(0, visibleProjectCount);
-        const awayAngle = Math.atan2(teamCY, teamCX);
-        const projectPositions = placeProjectsInRing(shownProjects.length, teamCX, teamCY, awayAngle);
+      // ── Projects — saved position, or spawn offset from parent team ─────
+      if (!compactTeams && teamData.projects.length > 0) {
+        teamData.projects.forEach((proj) => {
+          const hasSaved =
+            typeof proj.canvasPositionX === 'number' && typeof proj.canvasPositionY === 'number';
+          const px = hasSaved
+            ? (proj.canvasPositionX as number)
+            : teamX + OVERVIEW_PROJECT_SPAWN_OFFSET_X;
+          const py = hasSaved
+            ? (proj.canvasPositionY as number)
+            : teamY + OVERVIEW_PROJECT_SPAWN_OFFSET_Y;
 
-        shownProjects.forEach((proj, projIdx) => {
-          const pp = projectPositions[projIdx];
           const projectNodeId = `project-${proj.projectId}`;
-          const handles = getTeamProjectHandles(pp.angle);
+          const projCX = px + OVERVIEW_PROJECT_NODE_WIDTH / 2;
+          const projCY = py + OVERVIEW_PROJECT_NODE_HEIGHT / 2;
+          const handles = getTeamProjectHandles(Math.atan2(projCY - teamCY, projCX - teamCX));
 
           nodes.push({
             id: projectNodeId,
             type: 'vulnProjectNode',
-            position: { x: pp.x, y: pp.y },
+            position: { x: px, y: py },
             width: OVERVIEW_PROJECT_NODE_WIDTH,
             height: OVERVIEW_PROJECT_NODE_HEIGHT,
             data: {
@@ -691,7 +653,6 @@ export function useOrganizationOverviewGraphLayout(
                       ...(proj.isExtracting ? { isExtracting: true } : {}),
                     }),
             },
-            draggable: false,
             selectable: false,
             style: { zIndex: 1 },
           });
@@ -742,7 +703,6 @@ export function useOrganizationOverviewGraphLayout(
                   ...(proj.isExtracting ? { isExtracting: true } : {}),
                 }),
         },
-        draggable: false,
         selectable: false,
         style: { zIndex: 1 },
       });

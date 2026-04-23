@@ -18,7 +18,7 @@ export interface VulnProjectNodeData {
   worstSeverity?: WorstSeverity;
   /** When true, render as a team node (Users icon) instead of a project (framework/folder icon). */
   isTeamNode?: boolean;
-  /** Number of vulnerabilities with SLA breached. Shown as "SLA: X breached" when > 0. */
+  /** Phase 15: Number of vulnerabilities with SLA breached. Shown as "SLA: X breached" when > 0. */
   slaBreachCount?: number;
   /** When true, extraction pipeline is running (sync button spins). */
   isExtracting?: boolean;
@@ -63,9 +63,9 @@ const NODE_HEIGHT = 64;
  */
 export const OVERVIEW_TEAM_RING_CARD_WIDTH = 276;
 export const OVERVIEW_TEAM_RING_CARD_HEIGHT = 104;
-/** Org overview project tiles + ungrouped satellites: narrower than team cards; includes a status footer row. */
-export const OVERVIEW_PROJECT_NODE_WIDTH = 220;
-export const OVERVIEW_PROJECT_NODE_HEIGHT = 88;
+/** Org overview project tiles + ungrouped satellites: compact icon-only node with the label rendered below. */
+export const OVERVIEW_PROJECT_NODE_WIDTH = 60;
+export const OVERVIEW_PROJECT_NODE_HEIGHT = 60;
 
 function getColorScheme(worstSeverity: WorstSeverity | undefined) {
   const s = worstSeverity ?? 'none';
@@ -208,7 +208,7 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
       : { minWidth: nodeWidth, minHeight: nodeHeight };
 
   return (
-    <div className="relative" style={rootStyle}>
+    <div className="relative rounded-xl" style={rootStyle}>
       <Handle
         id="top"
         type="target"
@@ -257,8 +257,8 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
             </div>
             <GraphScopePill type="team" className="shrink-0" />
           </div>
-          {/* Bottom bar: risk badge + project count (icon) + member count (icon) */}
-          <div className="border-t border-border px-4 py-2.5 flex items-center gap-3 flex-wrap w-full text-left rounded-b-xl">
+          {/* Bottom bar: risk badge only */}
+          <div className="border-t border-border px-4 py-2.5 flex items-center rounded-b-xl">
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="flex-shrink-0 rounded-md border border-green-500/35 bg-green-500/15 px-2 py-0.5 text-xs font-semibold text-green-500 cursor-default">
@@ -267,79 +267,43 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
               </TooltipTrigger>
               <TooltipContent side="top">Calculated risk score based on vulnerabilities, secrets, and code findings.</TooltipContent>
             </Tooltip>
-            {typeof projectsCount === 'number' && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="flex items-center gap-1 text-[11px] text-muted-foreground cursor-default">
-                    <Folder className="h-3.5 w-3.5 flex-shrink-0" />
-                    {projectsCount}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="top">{projectsCount} project{projectsCount === 1 ? '' : 's'}</TooltipContent>
-              </Tooltip>
-            )}
-            {typeof membersCount === 'number' && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="flex items-center gap-1 text-[11px] text-muted-foreground cursor-default">
-                    <Users className="h-3.5 w-3.5 flex-shrink-0" />
-                    {membersCount}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="top">{membersCount} member{membersCount === 1 ? '' : 's'}</TooltipContent>
-              </Tooltip>
-            )}
           </div>
         </div>
       ) : isOverviewProjectCard ? (
-        <div className="relative flex h-full w-full min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-background-card-header shadow-lg shadow-slate-500/5 cursor-pointer box-border hover:border-border/80 transition-all">
-          {/* Match org / team: project scope pill in top-right (FolderKanban) */}
-          <div className="pointer-events-auto absolute top-2 right-2 z-[2] flex items-center">
-            <GraphScopePill type="project" />
-          </div>
-          {/* Top: icon + name (status lives in footer, like team cards) */}
-          <div className="flex items-center gap-1 pl-[6px] pr-10 pt-2 pb-2">
-            {frameworkIdForIcon ? (
-              <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center [&_svg]:text-white">
-                <FrameworkIcon frameworkId={frameworkIdForIcon} size={18} className="text-white" />
-              </span>
-            ) : (
-              <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center text-white">
-                <Folder className="h-4 w-4" strokeWidth={1.75} />
-              </span>
-            )}
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-foreground truncate leading-tight" title={projectName}>
-                {projectName}
-              </p>
-            </div>
-          </div>
-          {/* Bottom: status strip (team card parity) */}
-          <div className="mt-auto flex shrink-0 items-center bg-background-card-header/95 px-3 pt-2 pb-3">
+        <>
+          {/* Compact icon-only node. Project name (and status) render below the
+              card, outside the clipping box, n8n / Tines style. */}
+          <div className="relative h-full w-full rounded-xl border border-border bg-background-card-header shadow-lg shadow-slate-500/5 cursor-pointer flex items-center justify-center hover:border-border/80 transition-colors">
             {isInitialExtracting ? (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border bg-foreground-secondary/20 text-foreground-secondary border-foreground-secondary/40 text-[10px] font-medium">
-                <Loader2 className="h-2.5 w-2.5 shrink-0 animate-spin" aria-hidden />
-                Creating
-              </span>
+              <Loader2 className="h-6 w-6 text-muted-foreground animate-spin" aria-hidden />
+            ) : frameworkIdForIcon ? (
+              <FrameworkIcon frameworkId={frameworkIdForIcon} size={30} className="text-white" />
+            ) : (
+              <Folder className="h-7 w-7 text-white" strokeWidth={1.5} />
+            )}
+          </div>
+          {/* Label stack positioned below the card; overflow escapes the 84x84 node box. */}
+          <div
+            className="absolute left-1/2 top-full -translate-x-1/2 mt-2 flex flex-col items-center text-center select-none"
+            style={{ width: 160 }}
+          >
+            <p className="text-[12px] font-medium text-foreground leading-tight truncate max-w-full">
+              {projectName}
+            </p>
+            {isInitialExtracting ? (
+              <span className="text-[10px] text-muted-foreground mt-0.5">Creating</span>
             ) : isInitialExtractionFailed ? (
-              <span className="inline-flex items-center rounded-md border border-destructive/40 bg-destructive/15 px-2 py-0.5 text-[10px] font-medium text-destructive/80">
-                Failed
-              </span>
+              <span className="text-[10px] text-destructive/80 mt-0.5">Failed</span>
             ) : showStatusBadge ? (
               <span
-                className="inline-flex max-w-full items-center truncate rounded-md border px-2 py-0.5 text-[10px] font-medium"
-                style={effectiveStatusColor
-                  ? { backgroundColor: `${effectiveStatusColor}20`, color: effectiveStatusColor, borderColor: `${effectiveStatusColor}40` }
-                  : { backgroundColor: 'transparent', color: 'var(--muted-foreground)', borderColor: 'rgba(255,255,255,0.2)' }
-                }
+                className="mt-0.5 text-[10px] font-medium truncate max-w-full"
+                style={{ color: effectiveStatusColor ?? undefined }}
               >
                 {statusBadge}
               </span>
-            ) : (
-              <span className="text-[10px] text-muted-foreground">No status</span>
-            )}
+            ) : null}
           </div>
-        </div>
+        </>
       ) : showCardTooltip ? (
         <Tooltip>
           <TooltipTrigger asChild>

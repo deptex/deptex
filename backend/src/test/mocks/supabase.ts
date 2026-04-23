@@ -6,6 +6,8 @@ export type TableRegistry = Record<string, {
   maybeSingle?: { data: any; error: any };
 }>;
 
+export type RpcRegistry = Record<string, { data: any; error: any }>;
+
 function consumeSingle(registry: TableRegistry, table: string): { data: any; error: any } | undefined {
   const entry = registry[table]?.single;
   if (entry === undefined) return undefined;
@@ -24,7 +26,7 @@ function consumeSingle(registry: TableRegistry, table: string): { data: any; err
   return entry as { data: any; error: any };
 }
 
-export const createMockSupabase = (registry: TableRegistry = {}) => {
+export const createMockSupabase = (registry: TableRegistry = {}, rpcRegistry: RpcRegistry = {}) => {
   const queryBuilder: any = {
     _table: '' as string,
     select: jest.fn().mockReturnThis(),
@@ -67,6 +69,11 @@ export const createMockSupabase = (registry: TableRegistry = {}) => {
     from: jest.fn().mockImplementation((table: string) => {
       queryBuilder._table = table;
       return queryBuilder;
+    }),
+    rpc: jest.fn().mockImplementation((name: string) => {
+      const r = rpcRegistry[name];
+      if (r !== undefined) return Promise.resolve(r);
+      return Promise.resolve({ data: null, error: null });
     }),
   };
 

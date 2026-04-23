@@ -10,19 +10,21 @@ const SCOPE = {
 export type GraphScopeType = keyof typeof SCOPE;
 
 /** Compact scope label for org overview graph nodes (top-right). */
-export function GraphScopePill({ type, className = '' }: { type: GraphScopeType; className?: string }) {
+export function GraphScopePill({ type, className = '', noTooltip = false }: { type: GraphScopeType; className?: string; noTooltip?: boolean }) {
   const { label, Icon } = SCOPE[type];
+  const pill = (
+    <span
+      className={`inline-flex items-center justify-center rounded-md border border-border/90 bg-muted/30 px-1.5 py-0.5 text-muted-foreground shadow-sm cursor-default select-none ${className}`}
+      aria-label={label}
+    >
+      <Icon className="h-3 w-3 shrink-0 opacity-90" aria-hidden />
+      <span className="sr-only">{label}</span>
+    </span>
+  );
+  if (noTooltip) return pill;
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          className={`inline-flex items-center justify-center rounded-md border border-border/90 bg-muted/30 px-1.5 py-0.5 text-muted-foreground shadow-sm cursor-default select-none ${className}`}
-          aria-label={label}
-        >
-          <Icon className="h-3 w-3 shrink-0 opacity-90" aria-hidden />
-          <span className="sr-only">{label}</span>
-        </span>
-      </TooltipTrigger>
+      <TooltipTrigger asChild>{pill}</TooltipTrigger>
       <TooltipContent side="bottom" sideOffset={6}>
         {label}
       </TooltipContent>
