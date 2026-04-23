@@ -14,8 +14,9 @@ import { extractUsage, type SupportedEcosystem } from './tree-sitter-extractor';
 import { storeUsageExtractionResults } from './tree-sitter-extractor/storage';
 import { storeEntryPoints } from './framework-rules/storage';
 import { ExtractionLogger } from './logger';
-import { parsePurl, resolvePurlToDependencyId } from './purl';
+import { parsePurl, resolvePurlToDependencyId, buildPurl } from './purl';
 import { parseReachableFlows, parseUsageSlices, parseLlmPrompts, updateReachabilityLevels, computeImportCountsFromUsageSlices } from './reachability';
+import { loadAllRules, selectRulesForCves, runReachabilityRules } from './reachability-rules';
 import { updateJobPayloadCommit, updateJobStatus } from './job-db';
 import { applyEpdScoringFallback, EpdBudgetExceededError } from './epd';
 import { withTimeout, logStepError, classifyError } from './with-timeout';
@@ -1354,6 +1355,212 @@ export async function runPipeline(
 
     } catch (atomStepErr: any) {
       if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] reachability step failed: ${atomStepErr.message}`);
+    }
+
+    // === STEP: Reachability rules (Semgrep taint) ===
+    // Per-CVE hand-authored Semgrep taint rules that upgrade matching vulns
+    // from heuristic reachability (module/function/data_flow) to `confirmed`.
+    // Runs between atom's reachable flows and updateReachabilityLevels so the
+    // level classifier can see both atom-derived and semgrep-derived flows in
+    // the same fetch.
+    if (!(checkCancelled && await checkCancelled())) {
+      if (!binaryAvailable('semgrep')) {
+        await log.warn('reachability_rules', INSTALL_HINTS.semgrep);
+      } else {
+        const reachStart = Date.now();
+        try {
+          // reachability-rules/ sits at the worker package root. Resolve
+          // relative to this file so both tsx (src/) and compiled (dist/)
+          // layouts find it.
+          const reachabilityRulesDir = path.resolve(__dirname, '..', 'reachability-rules');
+          const allRules = await loadAllRules(reachabilityRulesDir);
+
+          if (allRules.length > 0) {
+            const { data: cveRows } = await supabase
+              .from('project_dependency_vulnerabilities')
+              .select('osv_id')
+              .eq('project_id', projectId)
+              .eq('extraction_run_id', runId);
+            const detectedCves = new Set<string>(
+              ((cveRows ?? []) as Array<{ osv_id?: string | null }>)
+                .map((r) => r.osv_id)
+                .filter((id): id is string => typeof id === 'string' && id.startsWith('CVE-')),
+            );
+
+            const selected = selectRulesForCves(allRules, detectedCves);
+
+            if (selected.length === 0) {
+              if (detectedCves.size > 0) {
+                await log.info(
+                  'reachability_rules',
+                  `No matching rules for ${detectedCves.size} detected CVE(s)`,
+                );
+              }
+            } else {
+              await log.info(
+                'reachability_rules',
+                `Running ${selected.length} rule(s) against detected CVEs`,
+              );
+
+              const findings = await withTimeout(
+                async (signal) =>
+                  runReachabilityRules({
+                    workspaceRoot,
+                    rules: selected,
+                    signal,
+                    timeoutMs: 15 * 60_000,
+                    runId,
+                  }),
+                15 * 60_000,
+                'reachability_rules',
+              );
+
+              // Resolve each rule's package back to (purl, dependency_id)
+              // tuples for this run. A rule may match multiple project_deps
+              // (monorepo with duplicate copies at different versions); emit
+              // one flow row per match. Skip findings whose package isn't
+              // actually installed in this run — we'd otherwise orphan rows
+              // that no PDV lookup could ever attach to.
+              type PackageMatch = { purl: string; dependencyId: string | null };
+              const packageCache = new Map<string, PackageMatch[]>();
+              const resolvePackage = async (
+                pkg: string,
+                ecosystem: string,
+              ): Promise<PackageMatch[]> => {
+                const key = `${ecosystem}::${pkg}`;
+                const cached = packageCache.get(key);
+                if (cached) return cached;
+
+                const { data: pdRows } = await supabase
+                  .from('project_dependencies')
+                  .select('name, version, namespace, dependency_id')
+                  .eq('project_id', projectId)
+                  .eq('last_seen_extraction_run_id', runId)
+                  .eq('name', pkg);
+
+                const pds = (pdRows ?? []) as Array<{
+                  name: string;
+                  version: string | null;
+                  namespace: string | null;
+                  dependency_id: string | null;
+                }>;
+                const depIds = Array.from(
+                  new Set(pds.map((r) => r.dependency_id).filter((x): x is string => !!x)),
+                );
+
+                let ecoById = new Map<string, string>();
+                if (depIds.length > 0) {
+                  const { data: depRows } = await supabase
+                    .from('dependencies')
+                    .select('id, ecosystem')
+                    .in('id', depIds);
+                  ecoById = new Map(
+                    ((depRows ?? []) as Array<{ id: string; ecosystem: string }>).map(
+                      (d) => [d.id, d.ecosystem],
+                    ),
+                  );
+                }
+
+                const matches: PackageMatch[] = [];
+                for (const row of pds) {
+                  const rowEco = row.dependency_id ? ecoById.get(row.dependency_id) : '';
+                  if (rowEco !== ecosystem) continue;
+                  const purl = buildPurl(rowEco, row.name, row.version ?? null);
+                  if (!purl) continue;
+                  matches.push({ purl, dependencyId: row.dependency_id });
+                }
+                packageCache.set(key, matches);
+                return matches;
+              };
+
+              const rulesById = new Map(selected.map((r) => [r.ruleId, r] as const));
+              const rows: any[] = [];
+
+              for (const finding of findings) {
+                const rule = rulesById.get(finding.ruleId);
+                if (!rule) continue;
+                const matches = await resolvePackage(
+                  rule.metadata.package,
+                  rule.metadata.ecosystem,
+                );
+                if (matches.length === 0) continue;
+
+                // flow_nodes mirrors the atom shape enough for consumers to
+                // render a source -> ... -> sink chain without knowing which
+                // engine produced the flow.
+                const flowNodes = [
+                  { file: finding.filePath, line: finding.sourceLine, content: finding.sourceContent ?? '' },
+                  ...finding.flowSteps,
+                  { file: finding.filePath, line: finding.sinkLine, content: finding.sinkContent ?? '' },
+                ];
+
+                for (const match of matches) {
+                  rows.push({
+                    project_id: projectId,
+                    extraction_run_id: runId,
+                    purl: match.purl,
+                    dependency_id: match.dependencyId,
+                    reachability_source: 'semgrep_taint',
+                    osv_id: finding.cve,
+                    rule_id: finding.ruleId,
+                    flow_nodes: flowNodes,
+                    entry_point_file: finding.filePath,
+                    entry_point_method: null,
+                    entry_point_line: finding.sourceLine,
+                    entry_point_tag: null,
+                    sink_file: finding.filePath,
+                    sink_method: finding.sinkMethod,
+                    sink_line: finding.sinkLine,
+                    sink_is_external: true,
+                    flow_length: flowNodes.length,
+                    llm_prompt: null,
+                  });
+                }
+              }
+
+              if (rows.length > 0) {
+                for (let i = 0; i < rows.length; i += 100) {
+                  const chunk = rows.slice(i, i + 100);
+                  const { error: upsertErr } = await supabase
+                    .from('project_reachable_flows')
+                    .upsert(chunk, {
+                      onConflict:
+                        'project_id,extraction_run_id,purl,entry_point_file,entry_point_line,sink_method',
+                      ignoreDuplicates: true,
+                    });
+                  if (upsertErr) {
+                    await log.warn(
+                      'reachability_rules',
+                      `Failed to write chunk: ${upsertErr.message}`,
+                    );
+                  }
+                }
+              }
+
+              await log.success(
+                'reachability_rules',
+                `${findings.length} taint finding(s) from ${selected.length} rule(s) → ${rows.length} flow row(s)`,
+                Date.now() - reachStart,
+              );
+            }
+          }
+        } catch (e: any) {
+          if (job.jobId) {
+            const { code, message, stack } = classifyError(e);
+            await logStepError(supabase, {
+              jobId: job.jobId,
+              projectId,
+              step: 'reachability_rules',
+              code,
+              message,
+              stack,
+              durationMs: Date.now() - reachStart,
+              severity: 'warn',
+            });
+          }
+          await log.warn('reachability_rules', `Step failed: ${e.message ?? String(e)}`);
+        }
+      }
     }
 
     // Reachability classification runs for every ecosystem — it consumes
