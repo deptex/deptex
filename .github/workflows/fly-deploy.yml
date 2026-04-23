@@ -1,0 +1,57 @@
+name: Deploy to Fly
+
+on:
+  push:
+    branches: [prod]
+  workflow_dispatch:
+
+jobs:
+  changes:
+    name: Detect changed workers
+    runs-on: ubuntu-latest
+    outputs:
+      extraction: ${{ steps.filter.outputs.extraction }}
+      aider: ${{ steps.filter.outputs.aider }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            extraction:
+              - 'backend/extraction-worker/**'
+            aider:
+              - 'backend/aider-worker/**'
+
+  deploy-extraction:
+    name: Deploy extraction-worker
+    needs: changes
+    if: needs.changes.outputs.extraction == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-extraction-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only
+        working-directory: backend/extraction-worker
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  deploy-aider:
+    name: Deploy aider-worker
+    needs: changes
+    if: needs.changes.outputs.aider == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-aider-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only
+        working-directory: backend/aider-worker
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
