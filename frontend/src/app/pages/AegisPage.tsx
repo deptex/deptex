@@ -4,7 +4,6 @@ import { aegisApi, type AegisThread } from '../../lib/aegis-api';
 import type { Organization } from '../../lib/api';
 import { ThreadList } from '../../components/aegis/ThreadList';
 import { ChatPane } from '../../components/aegis/ChatPane';
-import { JoinByCodeModal } from '../../components/aegis/JoinByCodeModal';
 import { SearchChatsModal } from '../../components/aegis/SearchChatsModal';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
@@ -30,7 +29,6 @@ export default function AegisPage() {
 
   const [threads, setThreads] = useState<AegisThread[]>([]);
   const [loading, setLoading] = useState(true);
-  const [joinByCodeOpen, setJoinByCodeOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [pendingTitleThreadId, setPendingTitleThreadId] = useState<string | null>(null);
   const pendingTitleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -51,11 +49,6 @@ export default function AegisPage() {
     setChatKey(activeThreadId ?? `new-${Date.now()}`);
   }, [activeThreadId]);
 
-  const activeThread = useMemo(
-    () => threads.find((t) => t.id === activeThreadId) ?? null,
-    [threads, activeThreadId],
-  );
-
   const canUseAegis = organization?.permissions?.interact_with_aegis === true;
 
   const refreshThreads = useCallback(async () => {
@@ -70,10 +63,6 @@ export default function AegisPage() {
     }
   }, [orgId, toast]);
 
-  const autoNavigatedRef = useRef(false);
-  const activeThreadIdRef = useRef(activeThreadId);
-  activeThreadIdRef.current = activeThreadId;
-
   useEffect(() => {
     if (!orgId || !canUseAegis) {
       setLoading(false);
@@ -81,16 +70,9 @@ export default function AegisPage() {
     }
     let cancelled = false;
     setLoading(true);
-    refreshThreads().then((list) => {
+    refreshThreads().then(() => {
       if (cancelled) return;
       setLoading(false);
-      if (!autoNavigatedRef.current && !activeThreadIdRef.current && list && list.length > 0) {
-        autoNavigatedRef.current = true;
-        const firstVisible = list.find((t) => !t.archivedAt);
-        if (firstVisible) {
-          navigate(`/organizations/${orgId}/aegis/${firstVisible.id}`, { replace: true });
-        }
-      }
     });
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -136,9 +118,9 @@ export default function AegisPage() {
     navigate(`/organizations/${orgId}/aegis/${threadId}`, { replace: true });
   }, [orgId, user, navigate]);
 
-  const handleThreadUpdated = useCallback(() => {
-    void refreshThreads();
+  const handleThreadUpdated = useCallback(async () => {
     if (pendingTitleTimeoutRef.current) clearTimeout(pendingTitleTimeoutRef.current);
+    await refreshThreads();
     setPendingTitleThreadId(null);
   }, [refreshThreads]);
 
@@ -191,30 +173,6 @@ export default function AegisPage() {
     }
   }, [activeThreadId, orgId, navigate, toast]);
 
-  const handleLeave = useCallback(async (threadId: string) => {
-    if (!user) return;
-    let snapshot: AegisThread[] = [];
-    setThreads((prev) => {
-      snapshot = prev;
-      return prev.filter((t) => t.id !== threadId);
-    });
-    if (activeThreadId === threadId && orgId) {
-      navigate(`/organizations/${orgId}/aegis`, { replace: true });
-    }
-    try {
-      await aegisApi.removeParticipant(threadId, user.id);
-    } catch (err: any) {
-      setThreads(snapshot);
-      toast({ title: 'Leave failed', description: err?.message, variant: 'destructive' });
-    }
-  }, [activeThreadId, orgId, navigate, toast, user]);
-
-  const handleJoined = useCallback((threadId: string) => {
-    if (!orgId) return;
-    refreshThreads();
-    navigate(`/organizations/${orgId}/aegis/${threadId}`);
-  }, [orgId, navigate, refreshThreads]);
-
   const handleDelete = useCallback(async (threadId: string) => {
     let snapshot: AegisThread[] = [];
     setThreads((prev) => {
@@ -260,8 +218,6 @@ export default function AegisPage() {
           onDelete={handleDelete}
           onSetPinned={handleSetPinned}
           onSetArchived={handleSetArchived}
-          onLeave={handleLeave}
-          onOpenJoinByCode={() => setJoinByCodeOpen(true)}
           onOpenSearch={() => setSearchOpen(true)}
         />
       </aside>
@@ -270,19 +226,12 @@ export default function AegisPage() {
           key={chatKey}
           organizationId={orgId}
           threadId={activeThreadId}
-          thread={activeThread ?? undefined}
           currentUserId={user?.id ?? ''}
           displayName={displayName}
           onThreadCreated={handleThreadCreated}
           onThreadUpdated={handleThreadUpdated}
         />
       </main>
-
-      <JoinByCodeModal
-        open={joinByCodeOpen}
-        onOpenChange={setJoinByCodeOpen}
-        onJoined={handleJoined}
-      />
 
       <SearchChatsModal
         open={searchOpen}
