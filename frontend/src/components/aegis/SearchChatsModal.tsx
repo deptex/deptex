@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type KeyboardEvent } from 'react';
 import { Dialog, DialogContent } from '../ui/dialog';
-import { Search, MessageCircle, Users, X } from 'lucide-react';
+import { Search, MessageCircle, Users, X, Archive } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import type { AegisThread } from '../../lib/aegis-api';
 
@@ -23,26 +23,37 @@ function monthLabel(iso: string): string {
 export function SearchChatsModal({ open, onOpenChange, threads, onSelect }: SearchChatsModalProps) {
   const [query, setQuery] = useState('');
 
-  const groups = useMemo(() => {
+  const { groups, flatResults } = useMemo(() => {
     const q = query.trim().toLowerCase();
     const filtered = threads.filter((t) => !q || t.title.toLowerCase().includes(q));
-    filtered.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    filtered.sort((a, b) => {
+      // Non-archived first, then by date
+      if (!!a.archivedAt !== !!b.archivedAt) return a.archivedAt ? 1 : -1;
+      return b.updatedAt.localeCompare(a.updatedAt);
+    });
 
     const map = new Map<string, AegisThread[]>();
     for (const t of filtered) {
-      const label = monthLabel(t.updatedAt);
+      const label = t.archivedAt ? 'Archived' : monthLabel(t.updatedAt);
       if (!map.has(label)) map.set(label, []);
       map.get(label)!.push(t);
     }
-    return Array.from(map.entries()).map(([label, items]) => ({ label, items }));
+    const groups = Array.from(map.entries()).map(([label, items]) => ({ label, items }));
+    return { groups, flatResults: filtered };
   }, [threads, query]);
 
-  const total = groups.reduce((sum, g) => sum + g.items.length, 0);
+  const total = flatResults.length;
 
   const handleSelect = (id: string) => {
     onSelect(id);
     onOpenChange(false);
     setQuery('');
+  };
+
+  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && flatResults.length > 0) {
+      handleSelect(flatResults[0].id);
+    }
   };
 
   return (
@@ -55,6 +66,7 @@ export function SearchChatsModal({ open, onOpenChange, threads, onSelect }: Sear
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={onKeyDown}
             placeholder="Search chats..."
             className="w-full bg-transparent border-0 pl-11 pr-10 py-4 text-sm text-foreground placeholder:text-foreground/40 outline-none focus:outline-none focus:ring-0"
             autoFocus
@@ -80,7 +92,8 @@ export function SearchChatsModal({ open, onOpenChange, threads, onSelect }: Sear
           )}
           {groups.map(({ label, items }) => (
             <div key={label}>
-              <div className="px-3 pt-3 pb-1 text-xs text-foreground/40">
+              <div className="px-3 pt-3 pb-1 text-xs text-foreground/40 flex items-center gap-1.5">
+                {label === 'Archived' && <Archive className="h-3 w-3" />}
                 {label}
               </div>
               <div className="space-y-0.5">
@@ -91,7 +104,7 @@ export function SearchChatsModal({ open, onOpenChange, threads, onSelect }: Sear
                     onClick={() => handleSelect(t.id)}
                     className={cn(
                       'w-full flex items-center gap-2.5 rounded-md px-3 py-2 text-sm text-left hover:bg-background-subtle/60',
-                      t.archivedAt ? 'text-foreground/50' : 'text-foreground/90',
+                      t.archivedAt ? 'text-foreground/40' : 'text-foreground/90',
                     )}
                   >
                     <MessageCircle className="h-4 w-4 flex-shrink-0 text-foreground/30" />
