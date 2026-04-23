@@ -13,10 +13,29 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// Read the cached Supabase session from localStorage synchronously.
+// Returns the user regardless of token expiry — INITIAL_SESSION confirms/refreshes.
+// Returns null only when there is genuinely no stored session at all.
+function getCachedUser(): User | null {
+  try {
+    const key = Object.keys(localStorage).find(
+      (k) => k.startsWith('sb-') && k.endsWith('-auth-token')
+    );
+    if (!key) return null;
+    const stored = JSON.parse(localStorage.getItem(key) ?? 'null');
+    return (stored?.user as User) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(getCachedUser);
   const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState(true);
+  // loading=true only when there is no cached session — meaning we don't yet know
+  // if the user is authenticated and ProtectedRoute must wait before redirecting.
+  // When there IS a cached user, we already know the state; loading stays false.
+  const [loading, setLoading] = useState(() => getCachedUser() === null);
 
   // Check and restore avatar if missing from profile but exists in storage or OAuth metadata
   const checkAndRestoreAvatar = useCallback(async (user: User | null) => {
@@ -140,6 +159,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
+    localStorage.removeItem('deptex_default_org');
     const { error } = await supabase.auth.signOut();
     if (error) {
       console.error('Error signing out:', error);

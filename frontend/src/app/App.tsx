@@ -1,26 +1,29 @@
 import { useEffect } from "react";
-import { Outlet, useLocation } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import NavBar from "../components/NavBar/NavBar";
 import Footer from "../components/Footer";
 import { Toaster } from "../components/ui/toaster";
 import { useAuth } from "../contexts/AuthContext";
 import "./Main.css";
 
-/**
- * When we're on the exact index path "/" and auth is still loading, we show
- * a single full-screen loader instead of the marketing layout (NavBar + Outlet).
- * This prevents logged-in users from briefly seeing the "onboarding" / marketing
- * header before PublicRoute redirects them to /organizations.
- */
 export default function App() {
   const location = useLocation();
-  const { loading } = useAuth();
+  const navigate = useNavigate();
+  const { user } = useAuth();
   const isIndexRoute = location.pathname === "/";
 
+  // Redirect authenticated users away from marketing pages without a visible flash.
+  // <Navigate> fires one render too late (its navigate() runs in useEffect); doing it
+  // here keeps the spinner on screen until the router transition completes.
   useEffect(() => {
-    // Ensure dark mode is always enabled
+    if (isIndexRoute && user) {
+      navigate("/organizations", { replace: true });
+    }
+  }, [isIndexRoute, user, navigate]);
+
+  useEffect(() => {
     document.documentElement.classList.add("dark");
-    
+
     if (location.hash) {
       const id = location.hash.replace("#", "");
       const element = document.getElementById(id);
@@ -28,12 +31,13 @@ export default function App() {
         element.scrollIntoView();
       }
     } else {
-      // Scroll to top on route change (unless there's a hash)
       window.scrollTo(0, 0);
     }
   }, [location]);
 
-  if (isIndexRoute && loading) {
+  // Hold the spinner on "/" only while we're about to redirect an authenticated
+  // user. Prevents the NavBar from painting for one frame before the navigate fires.
+  if (isIndexRoute && user) {
     return (
       <>
         <div className="bg-background text-foreground min-h-screen flex items-center justify-center">
