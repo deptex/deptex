@@ -44,10 +44,56 @@ jobs:
             echo "schema_touched=no" >> $GITHUB_OUTPUT
           fi
 
-      - name: Fail if migration added without schema.sql refresh
+      - name: Verify schema.sql already reflects the migration (rebase fallback)
+        id: reflect
         if: steps.diff.outputs.migrations_touched != '' && steps.diff.outputs.schema_touched == 'no'
         run: |
-          echo "::error::This PR touches backend/database/*.sql migration files but does NOT update backend/database/schema.sql."
+          # Edge case: a migration in this PR was applied to the live DB
+          # before someone on main ran `npm run schema:dump`. When this PR is
+          # rebased, its schema.sql changes are no longer a content-diff
+          # against main (main already has them), so schema.sql drops out
+          # of the PR file list even though the schema is fully in sync.
+          #
+          # Fallback check: for each migration the PR touches, extract the
+          # identifiers it introduces (ADD COLUMN, CREATE INDEX/TABLE/FUNCTION,
+          # ADD CONSTRAINT) and verify each one already appears in
+          # backend/database/schema.sql at HEAD. If every new identifier is
+          # present, the schema is already reflected — PR is valid.
+          ALL_REFLECTED=yes
+          while IFS= read -r mig; do
+            [ -z "$mig" ] && continue
+            echo "Inspecting $mig..."
+            # Strip comments, then pull the identifier that appears after the
+            # common DDL create/alter verbs. awk grabs the first non-DDL token
+            # on the matching line.
+            IDS=$(sed 's/--.*$//' "$mig" \
+              | grep -oEi '(ADD COLUMN( IF NOT EXISTS)?|ADD CONSTRAINT|CREATE( OR REPLACE)? FUNCTION|CREATE( UNIQUE)? INDEX( IF NOT EXISTS)?|CREATE TABLE( IF NOT EXISTS)?)[[:space:]]+[A-Za-z_][A-Za-z0-9_.]*' \
+              | awk '{print $NF}' \
+              | sort -u)
+            if [ -z "$IDS" ]; then
+              echo "  (no DDL identifiers parsed — treating as non-reflecting)"
+              ALL_REFLECTED=no
+              continue
+            fi
+            for id in $IDS; do
+              # Strip possible schema qualifier (public.foo -> foo) for the grep;
+              # schema.sql sometimes carries the qualifier, sometimes not.
+              bare="${id##*.}"
+              if grep -qE "[^A-Za-z0-9_]($id|$bare)([^A-Za-z0-9_]|$)" backend/database/schema.sql; then
+                echo "  ok: $id"
+              else
+                echo "  MISSING: $id (not found in schema.sql at HEAD)"
+                ALL_REFLECTED=no
+              fi
+            done
+          done <<< "${{ steps.diff.outputs.migrations_touched }}"
+
+          echo "all_reflected=$ALL_REFLECTED" >> $GITHUB_OUTPUT
+
+      - name: Fail if migration added without schema.sql refresh
+        if: steps.diff.outputs.migrations_touched != '' && steps.diff.outputs.schema_touched == 'no' && steps.reflect.outputs.all_reflected != 'yes'
+        run: |
+          echo "::error::This PR touches backend/database/*.sql migration files but does NOT update backend/database/schema.sql, and at least one new identifier from the migration is missing from schema.sql at HEAD."
           echo ""
           echo "Run \`npm run schema:dump\` in backend/extraction-worker/ after applying your migration to Supabase, then commit the regenerated schema.sql."
           echo ""
@@ -59,6 +105,8 @@ jobs:
         run: |
           if [ -z "${{ steps.diff.outputs.migrations_touched }}" ]; then
             echo "No migration changes — schema.sql check skipped."
-          else
+          elif [ "${{ steps.diff.outputs.schema_touched }}" = "yes" ]; then
             echo "Migrations changed AND schema.sql updated — OK."
+          else
+            echo "Migrations changed, schema.sql not in PR diff, but all new identifiers already reflected in schema.sql — OK (rebase fallback)."
           fi
