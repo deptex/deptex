@@ -18,6 +18,7 @@ export function projectStatusLabel(project: Project): {
       sbom: 'Creating',
       deps_synced: 'Creating',
       usage_extraction: 'Creating',
+      framework_detection: 'Creating',
       scanning: 'Creating',
       uploading: 'Creating',
       completed: 'Creating',

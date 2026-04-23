@@ -616,12 +616,15 @@ function usageMatchesDep(
 }
 
 /**
- * Compute files_importing_count for all direct project dependencies using
- * atom usage slices data. This works for ALL ecosystems (Java, Python, Go,
- * Rust, Ruby, PHP) — not just npm/JS/TS like the oxc-parser AST analysis.
+ * Supplemental file-count pass that runs after the tree-sitter extractor has
+ * already populated `project_dependencies.files_importing_count` and written
+ * `project_usage_slices`. This re-reads the slices with looser name-matching
+ * (package-name variants, PyPI distribution↔module aliases) so transitive
+ * usages the extractor couldn't map directly still get counted.
  *
- * For npm projects where the oxc-parser already ran, this supplements with
- * any additional data from atom. For non-npm, this is the primary source.
+ * For npm we treat the tree-sitter count as the floor and only bump upward;
+ * for other ecosystems we overwrite with the looser count (or NULL if no
+ * slices exist) since the extractor may not have resolved the full import set.
  */
 export async function computeImportCountsFromUsageSlices(
   projectId: string,
@@ -630,7 +633,9 @@ export async function computeImportCountsFromUsageSlices(
   supabase: Storage,
   logger: LogLike,
 ): Promise<void> {
-  // For npm, the oxc-parser AST analysis is more precise — only supplement if it found nothing
+  // npm gets special treatment: tree-sitter extractor already ran the precise
+  // AST pass, so we never downgrade its count — only bump it upward if this
+  // looser matcher finds more files.
   const isNpm = ecosystem === 'npm';
 
   // Fetch all direct project dependencies for this run only
@@ -651,8 +656,8 @@ export async function computeImportCountsFromUsageSlices(
     .eq('extraction_run_id', runId);
 
   if (!usages || usages.length === 0) {
-    // No usage data — for non-npm, explicitly set null to indicate "not analyzed"
-    // (For npm, the oxc-parser may have already set the count, so don't overwrite)
+    // No usage data — for non-npm, explicitly set null to indicate "not analyzed".
+    // For npm, the tree-sitter extractor's count is authoritative, so don't overwrite.
     if (!isNpm) {
       for (const pd of projectDeps) {
         if (pd.files_importing_count === 0) {
@@ -701,7 +706,7 @@ export async function computeImportCountsFromUsageSlices(
     const newCount = fileSet ? fileSet.size : 0;
 
     if (isNpm) {
-      // For npm: only update if atom found MORE files than oxc-parser (supplement, don't downgrade)
+      // npm: only bump upward — never downgrade the tree-sitter extractor's count.
       if (newCount > dep.existingCount) {
         await supabase
           .from('project_dependencies')
@@ -710,7 +715,7 @@ export async function computeImportCountsFromUsageSlices(
         updatedCount++;
       }
     } else {
-      // For non-npm: atom is the primary source — set the count directly
+      // Non-npm: set the count directly — the looser matcher is authoritative.
       await supabase
         .from('project_dependencies')
         .update({ files_importing_count: newCount > 0 ? newCount : null })
@@ -730,126 +735,3 @@ export async function computeImportCountsFromUsageSlices(
   // Internal metric — not shown in user-facing logs
 }
 
-// ---------------------------------------------------------------------------
-// Go source import parser — fallback when atom produces no usage slices
-// ---------------------------------------------------------------------------
-
-/**
- * Parse Go import statements from .go source files in the workspace.
- * Go imports are explicit module paths (e.g. "golang.org/x/text/language")
- * that can be matched directly against go.mod dependency module paths.
- *
- * Writes results to project_usage_slices so the rest of the pipeline
- * (updateReachabilityLevels, computeImportCountsFromUsageSlices) works normally.
- */
-export async function parseGoImportsFromSource(
-  workspaceRoot: string,
-  projectId: string,
-  runId: string,
-  supabase: Storage,
-  logger: LogLike,
-): Promise<number> {
-  const goFiles = findGoFiles(workspaceRoot);
-  if (goFiles.length === 0) return 0;
-
-  const batch: any[] = [];
-
-  for (const filePath of goFiles) {
-    const relPath = path.relative(workspaceRoot, filePath).replace(/\\/g, '/');
-    let content: string;
-    try {
-      content = fs.readFileSync(filePath, 'utf8');
-    } catch { continue; }
-
-    const imports = extractGoImports(content);
-    for (const imp of imports) {
-      batch.push({
-        project_id: projectId,
-        extraction_run_id: runId,
-        file_path: relPath,
-        line_number: imp.line,
-        containing_method: null,
-        target_name: imp.alias || imp.path.split('/').pop() || imp.path,
-        target_type: imp.path,
-        resolved_method: imp.path,
-        usage_label: 'go_import',
-        ecosystem: 'golang',
-      });
-    }
-  }
-
-  if (batch.length === 0) return 0;
-
-  // Write to project_usage_slices in chunks
-  for (let i = 0; i < batch.length; i += 100) {
-    const chunk = batch.slice(i, i + 100);
-    await supabase.from('project_usage_slices').upsert(chunk, {
-      onConflict: 'project_id,file_path,line_number,target_name,extraction_run_id',
-    });
-  }
-
-  if (process.env.DEPTEX_CLI_MODE !== '1') {
-    console.log(`[go-imports] Parsed ${batch.length} imports from ${goFiles.length} .go files`);
-  }
-  return batch.length;
-}
-
-/** Recursively find all .go files, skipping vendor/ and testdata/. */
-function findGoFiles(dir: string, results: string[] = []): string[] {
-  let entries: fs.Dirent[];
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return results; }
-
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === 'vendor' || entry.name === 'testdata' || entry.name === '.git' || entry.name === 'node_modules') continue;
-      findGoFiles(full, results);
-    } else if (entry.isFile() && entry.name.endsWith('.go')) {
-      results.push(full);
-    }
-  }
-  return results;
-}
-
-/** Extract import paths and line numbers from a Go source file. */
-function extractGoImports(source: string): Array<{ path: string; alias: string | null; line: number }> {
-  const imports: Array<{ path: string; alias: string | null; line: number }> = [];
-  const lines = source.split(/\r?\n/);
-
-  let inBlock = false;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trim();
-
-    // Single import: import "fmt" or import alias "path"
-    const single = trimmed.match(/^import\s+(?:(\w+)\s+)?"([^"]+)"/);
-    if (single) {
-      imports.push({ path: single[2], alias: single[1] || null, line: i + 1 });
-      continue;
-    }
-
-    // Start of import block: import (
-    if (trimmed.match(/^import\s*\(/)) {
-      inBlock = true;
-      continue;
-    }
-
-    // End of import block
-    if (inBlock && trimmed === ')') {
-      inBlock = false;
-      continue;
-    }
-
-    // Line inside import block: "path" or alias "path" or . "path"
-    if (inBlock) {
-      const blockLine = trimmed.match(/^(?:(\w+|\.)\s+)?"([^"]+)"/);
-      if (blockLine) {
-        imports.push({ path: blockLine[2], alias: blockLine[1] || null, line: i + 1 });
-      }
-    }
-  }
-
-  // Filter out stdlib imports (no dot in path = stdlib like "fmt", "os", "strings")
-  return imports.filter(imp => imp.path.includes('.'));
-}

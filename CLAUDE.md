@@ -32,7 +32,7 @@ Deptex is an AI-powered open-core dependency security platform. It combines depe
 | Code editor | Monaco Editor (policy code) |
 | Workers | 2 workers on Fly.io: extraction-worker, aider-worker (Python) |
 | SBOM | cdxgen (CycloneDX). dep-scan (VDR, reachability). Semgrep, TruffleHog |
-| AST parsing | oxc-parser (JS/TS import extraction) |
+| AST parsing | web-tree-sitter (WASM) — 8 languages (JS/TS, Python, Java, Go, Ruby, PHP, Rust, C#), 34 framework detectors |
 | Queues | Upstash QStash (async jobs, cron schedules) |
 | Cache | Upstash Redis |
 | AI - Tier 1 | Google Gemini Flash (platform features, we pay). `getPlatformProvider()` in `backend/src/lib/ai/provider.ts` |
@@ -51,7 +51,7 @@ backend/
     routes/               API route handlers (orgs, teams, projects, aegis, workers, webhooks, etc.)
     lib/                  Shared libraries (ai/, aegis/, learning/, github, policy-engine, etc.)
     middleware/            auth.ts (JWT), ip-allowlist.ts
-  extraction-worker/      Clone + cdxgen + dep-scan + AST (oxc-parser) + Semgrep + TruffleHog (Fly.io scale-to-zero)
+  extraction-worker/      Clone + cdxgen + dep-scan + tree-sitter extractor + framework detection + Semgrep + TruffleHog (Fly.io scale-to-zero)
   aider-worker/           AI-powered fix worker (Aider/Python on Fly.io)
   database/               ~140 SQL migration files
 
@@ -101,7 +101,7 @@ frontend/src/
 ```
 Connect repo -> queueExtractionJob() inserts extraction_jobs, starts Fly.io machine
   -> Worker claims via claim_extraction_job RPC (atomic, FOR UPDATE SKIP LOCKED)
-  -> Clone -> cdxgen SBOM -> parse deps -> upsert -> AST analysis -> dep-scan -> Semgrep -> TruffleHog
+  -> Clone -> cdxgen SBOM -> parse deps -> upsert -> tree-sitter usage extraction + framework entry points -> dep-scan -> Semgrep -> TruffleHog
   -> Logs stream to extraction_logs (Supabase Realtime)
   -> QStash: populate-dependencies (registry + GHSA + OpenSSF + policy eval + health score)
   -> QStash: backfill-dependency-trees (transitive edges via pacote)

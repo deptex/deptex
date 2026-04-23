@@ -125,6 +125,8 @@ const ECOSYSTEM_ICONS: Record<string, string> = {
   golang: '/images/go_icon.png',
   go: '/images/go_icon.png',
   cargo: '/images/cargo_icon.png',
+  gem: '/images/frameworks/ruby.png',
+  composer: '/images/frameworks/php.png',
 };
 
 function EcosystemIcon({ ecosystem, className }: { ecosystem?: string | null; className?: string }) {
@@ -202,6 +204,7 @@ function extractionStepLabel(step: string | null | undefined): string {
     sbom: 'Building SBOM...',
     deps_synced: 'Syncing dependencies...',
     usage_extraction: 'Analyzing imports...',
+    framework_detection: 'Detecting entry points...',
     scanning: 'Scanning for vulnerabilities...',
     uploading: 'Uploading results...',
     completed: 'Finishing up...',

@@ -114,10 +114,14 @@ export async function storeUsageExtractionResults(
     }
 
     for (const [depId, set] of filesByDep) {
+      // Guard against zombie writes: if this run has been superseded (withTimeout
+      // fired but the inner promise keeps running), the dep's last_seen_extraction_run_id
+      // has already been advanced by the newer run, and this UPDATE must no-op.
       const { error: updateError } = await supabase
         .from('project_dependencies')
         .update({ files_importing_count: set.size })
-        .eq('id', depId);
+        .eq('id', depId)
+        .eq('last_seen_extraction_run_id', runId);
       if (updateError) console.error(`Failed to update files_importing_count for ${depId}:`, updateError.message);
     }
 

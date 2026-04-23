@@ -15,7 +15,7 @@ import { storeUsageExtractionResults } from './tree-sitter-extractor/storage';
 import { storeEntryPoints } from './framework-rules/storage';
 import { ExtractionLogger } from './logger';
 import { parsePurl, resolvePurlToDependencyId } from './purl';
-import { parseReachableFlows, parseUsageSlices, parseLlmPrompts, updateReachabilityLevels, computeImportCountsFromUsageSlices, parseGoImportsFromSource } from './reachability';
+import { parseReachableFlows, parseUsageSlices, parseLlmPrompts, updateReachabilityLevels, computeImportCountsFromUsageSlices } from './reachability';
 import { updateJobPayloadCommit, updateJobStatus } from './job-db';
 import { applyEpdScoringFallback, EpdBudgetExceededError } from './epd';
 import { withTimeout, logStepError, classifyError } from './with-timeout';
@@ -794,11 +794,15 @@ export async function runPipeline(
         await withTimeout(async () => {
           const deps: Array<{ name: string; namespace: string | null }> = [];
           {
-            const { data: depRows } = await supabase
+            const { data: depRows, error: depFetchErr } = await supabase
               .from('project_dependencies')
               .select('name, namespace')
               .eq('project_id', projectId)
               .eq('last_seen_extraction_run_id', runId);
+            if (depFetchErr) {
+              await log.warn('usage_extraction', `Failed to load dependency list for import resolution: ${depFetchErr.message}`);
+              throw depFetchErr;
+            }
             for (const row of (depRows ?? []) as Array<{ name: string; namespace: string | null }>) {
               if (row.name) deps.push({ name: row.name, namespace: row.namespace ?? null });
             }
@@ -812,14 +816,25 @@ export async function runPipeline(
             return;
           }
 
+          let perFileErrorCount = 0;
           const result = await extractUsage({
             workspaceRoot,
             ecosystem: jobEcosystem as SupportedEcosystem,
             deps,
+            onFileError: (filePath, fileErr) => {
+              perFileErrorCount++;
+              if (perFileErrorCount <= 5) {
+                log.warn('usage_extraction', `Failed to parse ${filePath}: ${fileErr.message}`).catch(() => {});
+              }
+            },
           });
 
           if (result.files.length === 0) {
-            astParsedSuccessfully = true;
+            if (perFileErrorCount > 0) {
+              await log.warn('usage_extraction', `Extractor returned zero files but encountered ${perFileErrorCount} per-file error(s) — treating as soft failure`);
+            } else {
+              astParsedSuccessfully = true;
+            }
             return;
           }
 
@@ -831,7 +846,11 @@ export async function runPipeline(
             jobEcosystem,
             result
           );
-          if (storeResult.success) astParsedSuccessfully = true;
+          if (storeResult.success) {
+            astParsedSuccessfully = true;
+          } else if (storeResult.error) {
+            await log.warn('usage_extraction', `Usage-extraction write failed: ${storeResult.error}`);
+          }
 
           // Framework entry-point detection. Each language module already ran
           // its registered detectors during extraction (output attached to

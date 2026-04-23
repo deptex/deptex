@@ -132,6 +132,8 @@ const ECOSYSTEM_ICON_SRCS: Record<string, string> = {
   golang: '/images/go_icon.png',
   go: '/images/go_icon.png',
   cargo: '/images/cargo_icon.png',
+  gem: '/images/frameworks/ruby.png',
+  composer: '/images/frameworks/php.png',
 };
 
 function ecosystemIconNode(ecosystem: string | null | undefined): React.ReactNode {
@@ -159,8 +161,11 @@ const getRegistryLink = (name: string, ecosystem?: string | null): { url: string
       return { url: `https://crates.io/crates/${name}`, label: 'crates.io', icon: ecosystemIconNode(ecosystem) };
     case 'nuget':
       return { url: `https://www.nuget.org/packages/${name}`, label: 'NuGet', icon: ecosystemIconNode(ecosystem) };
+    case 'gem':
     case 'rubygems':
-      return { url: `https://rubygems.org/gems/${name}`, label: 'RubyGems', icon: ecosystemIconNode(ecosystem) };
+      return { url: `https://rubygems.org/gems/${name}`, label: 'RubyGems', icon: ecosystemIconNode('gem') };
+    case 'composer':
+      return { url: `https://packagist.org/packages/${name}`, label: 'Packagist', icon: ecosystemIconNode('composer') };
     default:
       return { url: `https://www.npmjs.com/package/${name}`, label: 'npm', icon: ecosystemIconNode('npm') };
   }
