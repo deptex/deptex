@@ -1,0 +1,12 @@
+{
+  "schema_version": "deptex-local-v1",
+  "project_name": "test-go",
+  "ecosystem": "golang",
+  "dependencies_count": 4,
+  "vulnerabilities_count": 21,
+  "semgrep_count": 1,
+  "secrets_count": 0,
+  "reachable_flows_count": 0,
+  "entry_points_count": 2,
+  "finalize_summary": null
+}

@@ -53,8 +53,15 @@ const TIER_WEIGHT: Record<AssetTier, number> = {
   NON_PRODUCTION: 0.6,
 };
 
-/** Unreachable vulns are heavily discounted (not used in code). Same for all tiers. */
-const REACHABILITY_WEIGHT_UNREACHABLE = 0.2;
+/** Explicit `reachabilityLevel === 'unreachable'` — the extractor confirmed
+ * the dep is transitive AND no source file imports it. Drops out of the
+ * depscore ranking entirely (still visible in the UI). */
+const REACHABILITY_WEIGHT_UNREACHABLE = 0.0;
+
+/** Legacy `isReachable === false` — pre-Phase-2 callers and vuln rows that
+ * predate the extractor. Mild dampening; we haven't confirmed anything, we
+ * just didn't detect a reachable path. */
+const REACHABILITY_WEIGHT_LEGACY_UNREACHED = 0.2;
 
 function packageReputationWeight(score: number | null | undefined): number {
   if (score == null) return 1.0;
@@ -98,10 +105,12 @@ export function calculateDepscore(ctx: DepscoreContext): number {
   const { baseImpact, threatMultiplier, dependencyContextMultiplier, tierWeight } = computeBaseImpactAndMultipliers(ctx);
 
   let reachabilityWeight: number;
-  if (ctx.reachabilityLevel && ctx.reachabilityLevel !== 'unreachable') {
-    reachabilityWeight = REACHABILITY_LEVEL_WEIGHTS[ctx.reachabilityLevel] ?? 0.5;
-  } else if (ctx.reachabilityLevel === 'unreachable' || !ctx.isReachable) {
+  if (ctx.reachabilityLevel === 'unreachable') {
     reachabilityWeight = REACHABILITY_WEIGHT_UNREACHABLE;
+  } else if (ctx.reachabilityLevel) {
+    reachabilityWeight = REACHABILITY_LEVEL_WEIGHTS[ctx.reachabilityLevel] ?? 0.5;
+  } else if (!ctx.isReachable) {
+    reachabilityWeight = REACHABILITY_WEIGHT_LEGACY_UNREACHED;
   } else {
     reachabilityWeight = 1.0;
   }

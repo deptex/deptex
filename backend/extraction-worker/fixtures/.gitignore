@@ -7,9 +7,12 @@ target/
 .buckets/
 depscan-reports/
 sbom*.json
+sbom*.json.map
+*.slices.json
 dep-scan.json
 semgrep.json
 trufflehog.json
+.deptex-trufflehog-excludes
 
 # Lockfiles (package-lock.json, go.sum, etc.) ARE committed intentionally —
 # deterministic dependency resolution is required for snapshot stability.

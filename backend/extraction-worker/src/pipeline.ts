@@ -10,11 +10,12 @@ import type { Storage } from './storage';
 import { cloneRepository, cleanupRepository, cloneByProvider } from './clone';
 import { parseSbom, getBomRefToNameVersion, patchDevDependencies, type ParsedSbomDep, type ParsedSbomRelationship } from './sbom';
 import { calculateBaseDepscoreNoReachability, calculateDepscore, calculateSecretDepscore, calculateSemgrepDepscore, SEVERITY_TO_CVSS, type AssetTier } from './depscore';
-import { analyzeRepository } from './ast-parser';
-import { storeAstAnalysisResults } from './ast-storage';
+import { extractUsage, type SupportedEcosystem } from './tree-sitter-extractor';
+import { storeUsageExtractionResults } from './tree-sitter-extractor/storage';
+import { storeEntryPoints } from './framework-rules/storage';
 import { ExtractionLogger } from './logger';
 import { parsePurl, resolvePurlToDependencyId } from './purl';
-import { parseReachableFlows, parseUsageSlices, parseLlmPrompts, updateReachabilityLevels, computeImportCountsFromUsageSlices, parseGoImportsFromSource } from './reachability';
+import { parseReachableFlows, parseUsageSlices, parseLlmPrompts, updateReachabilityLevels, computeImportCountsFromUsageSlices } from './reachability';
 import { updateJobPayloadCommit, updateJobStatus } from './job-db';
 import { applyEpdScoringFallback, EpdBudgetExceededError } from './epd';
 import { withTimeout, logStepError, classifyError } from './with-timeout';
@@ -704,6 +705,7 @@ export async function runPipeline(
         dependency_version_id: keyToVersionId.get(key) ?? null,
         name: d.name,
         version: d.version,
+        namespace: d.namespace,
         is_direct: d.is_direct,
         source: d.source,
         environment: d.source === 'dependencies' ? 'prod' : d.source === 'devDependencies' ? 'dev' : null,
@@ -779,40 +781,105 @@ export async function runPipeline(
       throw depsSyncErr;
     }
 
-    // === AST import analysis (npm/JS/TS only — other ecosystems use different import mechanisms) ===
+    // === Usage extraction (tree-sitter) ===
+    // Replaces the old oxc-based npm-only AST pass. Language modules land
+    // across Phase 2 milestones; unsupported ecosystems silently produce an
+    // empty result and the step still succeeds.
     if (checkCancelled && await checkCancelled()) return;
     let astParsedSuccessfully = false;
-    await updateStep(supabase, projectId, 'ast_parsing');
-    if (jobEcosystem === 'npm') {
-      const astStart = Date.now();
+    await updateStep(supabase, projectId, 'usage_extraction');
+    {
+      const extractStart = Date.now();
       try {
         await withTimeout(async () => {
-          const analysisResults = analyzeRepository(workspaceRoot);
-          if (analysisResults.length > 0) {
-            const storeResult = await storeAstAnalysisResults(supabase, projectId, organizationId, runId, analysisResults);
-            if (storeResult.success) astParsedSuccessfully = true;
-          } else {
-            astParsedSuccessfully = true;
+          const deps: Array<{ name: string; namespace: string | null }> = [];
+          {
+            const { data: depRows, error: depFetchErr } = await supabase
+              .from('project_dependencies')
+              .select('name, namespace')
+              .eq('project_id', projectId)
+              .eq('last_seen_extraction_run_id', runId);
+            if (depFetchErr) {
+              await log.warn('usage_extraction', `Failed to load dependency list for import resolution: ${depFetchErr.message}`);
+              throw depFetchErr;
+            }
+            for (const row of (depRows ?? []) as Array<{ name: string; namespace: string | null }>) {
+              if (row.name) deps.push({ name: row.name, namespace: row.namespace ?? null });
+            }
           }
-        }, 5 * 60_000, 'ast_import');
-      } catch (astErr: any) {
+
+          const supportedEcosystems: readonly SupportedEcosystem[] = [
+            'npm', 'pypi', 'maven', 'golang', 'gem', 'composer', 'cargo', 'nuget',
+          ];
+          if (!supportedEcosystems.includes(jobEcosystem as SupportedEcosystem)) {
+            astParsedSuccessfully = true;
+            return;
+          }
+
+          let perFileErrorCount = 0;
+          const result = await extractUsage({
+            workspaceRoot,
+            ecosystem: jobEcosystem as SupportedEcosystem,
+            deps,
+            onFileError: (filePath, fileErr) => {
+              perFileErrorCount++;
+              if (perFileErrorCount <= 5) {
+                log.warn('usage_extraction', `Failed to parse ${filePath}: ${fileErr.message}`).catch(() => {});
+              }
+            },
+          });
+
+          if (result.files.length === 0) {
+            if (perFileErrorCount > 0) {
+              await log.warn('usage_extraction', `Extractor returned zero files but encountered ${perFileErrorCount} per-file error(s) — treating as soft failure`);
+            } else {
+              astParsedSuccessfully = true;
+            }
+            return;
+          }
+
+          const storeResult = await storeUsageExtractionResults(
+            supabase,
+            projectId,
+            organizationId,
+            runId,
+            jobEcosystem,
+            result
+          );
+          if (storeResult.success) {
+            astParsedSuccessfully = true;
+          } else if (storeResult.error) {
+            await log.warn('usage_extraction', `Usage-extraction write failed: ${storeResult.error}`);
+          }
+
+          // Framework entry-point detection. Each language module already ran
+          // its registered detectors during extraction (output attached to
+          // ExtractedFile.entryPoints); here we just persist them. The step
+          // is logged separately so users see the attribution in CLI output.
+          await updateStep(supabase, projectId, 'framework_detection');
+          const entryResult = await storeEntryPoints(supabase, projectId, runId, result.files);
+          if (!entryResult.success && entryResult.error) {
+            await log.warn('framework_detection', `Entry-point write failed: ${entryResult.error}`);
+          } else if (entryResult.count > 0) {
+            await log.info('framework_detection', `Detected ${entryResult.count} framework entry point(s)`);
+          }
+        }, 5 * 60_000, 'usage_extraction');
+      } catch (err: any) {
         if (job.jobId) {
-          const { code, message, stack } = classifyError(astErr);
+          const { code, message, stack } = classifyError(err);
           await logStepError(supabase, {
             jobId: job.jobId,
             projectId,
-            step: 'ast_import',
+            step: 'usage_extraction',
             code,
             message,
             stack,
-            durationMs: Date.now() - astStart,
+            durationMs: Date.now() - extractStart,
             severity: 'warn',
           });
         }
         /* non-fatal */
       }
-    } else {
-      astParsedSuccessfully = true;
     }
 
     // Fetch asset tier for depscore calculations (used by vuln scan, semgrep, and trufflehog)
@@ -1232,24 +1299,17 @@ export async function runPipeline(
       await log.warn('vuln_scan', 'No vulnerability scan results available');
     }
 
-    // --- Sub-step: Atom reachability analysis ---
-    try {
-      const atomLangMap: Record<string, string> = {
-        npm: 'javascript', maven: 'java', golang: 'go', pypi: 'python',
-        cargo: 'rust', gem: 'ruby', composer: 'php', nuget: 'csharp',
-      };
-      const atomLang = atomLangMap[jobEcosystem] || 'javascript';
-
-      // For Go projects, atom must analyze the module root (where go.mod is), not src/
-      // For Java, source is typically in src/. For others, try src/ first then root.
-      let srcDir: string;
-      if (jobEcosystem === 'golang' || jobEcosystem === 'go') {
-        srcDir = workspaceRoot;
-      } else {
-        srcDir = fs.existsSync(path.join(workspaceRoot, 'src'))
-          ? path.join(workspaceRoot, 'src')
-          : workspaceRoot;
-      }
+    // --- Sub-step: Atom reachability analysis (Java-only) ---
+    // Tree-sitter now covers usage extraction for all MVP ecosystems. Atom
+    // remains the source of truth for full data-flow reachable slices on
+    // Java — its Java CPG is materially better than anything we can
+    // produce from tree-sitter alone — so we keep it running for Maven
+    // projects and skip it everywhere else.
+    if (jobEcosystem === 'maven') try {
+      const atomLang = 'java';
+      const srcDir = fs.existsSync(path.join(workspaceRoot, 'src'))
+        ? path.join(workspaceRoot, 'src')
+        : workspaceRoot;
 
       // Log what dep-scan produced so we can diagnose ecosystem-specific gaps
       const depScanFiles = fs.readdirSync(reportsDir).filter(f => f.endsWith('.json'));
@@ -1292,17 +1352,17 @@ export async function runPipeline(
         await parseUsageSlices(reportsDir, projectId, runId, jobEcosystem, supabase, log);
       }
 
-      // Fallback: if atom produced no usage slices for Go, parse .go imports directly
-      if (!hasUsageSlices && (jobEcosystem === 'golang' || jobEcosystem === 'go')) {
-        const goImportCount = await parseGoImportsFromSource(workspaceRoot, projectId, runId, supabase, log);
-        if (goImportCount > 0) hasUsageSlices = true;
-      }
-
-      await updateReachabilityLevels(projectId, runId, supabase, log, workspaceRoot);
-      // Compute files_importing_count from atom usage slices (all ecosystems)
-      await computeImportCountsFromUsageSlices(projectId, runId, jobEcosystem, supabase, log);
     } catch (atomStepErr: any) {
       if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] reachability step failed: ${atomStepErr.message}`);
+    }
+
+    // Reachability classification runs for every ecosystem — it consumes
+    // tree-sitter's usage_slices (non-Java) or atom's slices + usages
+    // (Java). files_importing_count is authoritative from the tree-sitter
+    // storage write for non-Java; for Java we recompute from atom output.
+    await updateReachabilityLevels(projectId, runId, supabase, log, workspaceRoot);
+    if (jobEcosystem === 'maven') {
+      await computeImportCountsFromUsageSlices(projectId, runId, jobEcosystem, supabase, log);
     }
 
     // --- Sub-step: Recalculate depscores with updated reachability ---
@@ -1491,10 +1551,32 @@ export async function runPipeline(
       const trufflehogOut = path.join(workspaceRoot, 'trufflehog.json');
       const wsPrefix = workspaceRoot.endsWith('/') ? workspaceRoot : workspaceRoot + '/';
 
+      // Upstream tools (cdxgen, dep-scan, Semgrep, TruffleHog itself) all
+      // drop their raw outputs into the workspace before TruffleHog runs, so
+      // a naive scan picks up URLs + tokens from our own intermediates. Ship
+      // an exclude file scoped to those known paths — relative matchers that
+      // work regardless of the workspace's absolute location.
+      const excludeFile = path.join(workspaceRoot, '.deptex-trufflehog-excludes');
+      fs.writeFileSync(
+        excludeFile,
+        [
+          'trufflehog.json',
+          'semgrep.json',
+          'sbom.json',
+          'sbom.json.map',
+          'deps.slices.json',
+          'depscan-reports/',
+          '.results/',
+          '.buckets/',
+          '.pglite-buckets/',
+        ].join('\n') + '\n',
+        'utf8',
+      );
+
       // Run TruffleHog with spawnSync to capture stdout/stderr separately
       const thResult = require('child_process').spawnSync(
         'trufflehog',
-        ['filesystem', workspaceRoot, '--json', '--no-update'],
+        ['filesystem', workspaceRoot, '--json', '--no-update', `--exclude-paths=${excludeFile}`],
         { encoding: 'utf8', timeout: 120000, maxBuffer: 10 * 1024 * 1024 }
       );
       const stdout = thResult.stdout ?? '';
@@ -1568,6 +1650,21 @@ export async function runPipeline(
             .filter((f: any) => f.detector_type !== 'Unknown' || f.file_path !== 'unknown')
             // Filter out .git/ internals — these are clone credentials, not user code secrets
             .filter((f: any) => !f.file_path.startsWith('.git/') && !f.file_path.startsWith('.git\\'));
+
+            // TruffleHog can emit the same (detector_type, file_path, start_line)
+            // tuple more than once per scan (e.g. when the same value matches
+            // multiple chunks of a big file). Postgres' ON CONFLICT DO UPDATE
+            // rejects a statement that targets the same conflict-key row twice,
+            // so an unfiltered batch crashes the whole upsert and we lose every
+            // secret for the run. Dedupe on the upsert conflict key.
+            const dedupeKey = (f: any): string =>
+              `${f.detector_type}\x00${f.file_path}\x00${f.start_line ?? ''}`;
+            const seen = new Set<string>();
+            for (let i = findings.length - 1; i >= 0; i--) {
+              const key = dedupeKey(findings[i]);
+              if (seen.has(key)) findings.splice(i, 1);
+              else seen.add(key);
+            }
 
             secretCount = findings.length;
 

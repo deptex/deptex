@@ -1,0 +1,34 @@
+[
+  {
+    "file_path": "/workspace/main.go",
+    "line_number": 36,
+    "framework": "gin",
+    "handler_name": "(anonymous)",
+    "http_method": "GET",
+    "route_pattern": "/parse/:lang",
+    "entry_point_type": "http_route",
+    "classification": "PUBLIC_UNAUTH",
+    "authenticated": false,
+    "auth_mechanism": null,
+    "middleware_chain": null,
+    "metadata": {
+      "method": "GET"
+    }
+  },
+  {
+    "file_path": "/workspace/main.go",
+    "line_number": 40,
+    "framework": "gin",
+    "handler_name": "(anonymous)",
+    "http_method": "POST",
+    "route_pattern": "/html",
+    "entry_point_type": "http_route",
+    "classification": "PUBLIC_UNAUTH",
+    "authenticated": false,
+    "auth_mechanism": null,
+    "middleware_chain": null,
+    "metadata": {
+      "method": "POST"
+    }
+  }
+]

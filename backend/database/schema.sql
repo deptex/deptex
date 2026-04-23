@@ -30,6 +30,27 @@ CREATE TABLE IF NOT EXISTS public.activities (
   metadata jsonb DEFAULT '{}'::jsonb,
   created_at timestamp with time zone DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS public.aegis_chat_invite_codes (
+  thread_id uuid NOT NULL,
+  code text NOT NULL,
+  created_by uuid NOT NULL,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  revoked_at timestamp with time zone
+);
+CREATE TABLE IF NOT EXISTS public.aegis_chat_messages (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  thread_id uuid NOT NULL,
+  role text NOT NULL,
+  content text NOT NULL,
+  metadata jsonb DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone DEFAULT now(),
+  user_id uuid
+);
+CREATE TABLE IF NOT EXISTS public.aegis_chat_participants (
+  thread_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  joined_at timestamp with time zone NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS public.aegis_chat_threads (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL,
@@ -40,7 +61,15 @@ CREATE TABLE IF NOT EXISTS public.aegis_chat_threads (
   project_id uuid,
   context_type text,
   context_id text,
-  total_tokens_used integer DEFAULT 0
+  total_tokens_used integer DEFAULT 0,
+  created_by uuid NOT NULL,
+  active_stream_until timestamp with time zone
+);
+CREATE TABLE IF NOT EXISTS public.aegis_chat_user_state (
+  thread_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  pinned_at timestamp with time zone,
+  archived_at timestamp with time zone
 );
 CREATE TABLE IF NOT EXISTS public.aegis_event_triggers (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -628,7 +657,8 @@ CREATE TABLE IF NOT EXISTS public.organizations (
   max_session_duration_hours integer DEFAULT 168,
   require_reauth_for_sensitive boolean DEFAULT false,
   ip_allowlist_enabled boolean DEFAULT false,
-  allow_autonomous_containment boolean DEFAULT false
+  allow_autonomous_containment boolean DEFAULT false,
+  canvas_cursors_enabled boolean DEFAULT true
 );
 CREATE TABLE IF NOT EXISTS public.package_anomalies (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -744,7 +774,8 @@ CREATE TABLE IF NOT EXISTS public.project_dependencies (
   versions_behind integer DEFAULT 0,
   policy_result jsonb,
   removed_at timestamp with time zone,
-  last_seen_extraction_run_id text
+  last_seen_extraction_run_id text,
+  namespace text
 );
 CREATE TABLE IF NOT EXISTS public.project_dependency_files (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -814,6 +845,24 @@ CREATE TABLE IF NOT EXISTS public.project_dependency_vulnerabilities (
   extraction_run_id text,
   re_review_triggered_at timestamp with time zone,
   re_review_reasons jsonb
+);
+CREATE TABLE IF NOT EXISTS public.project_entry_points (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL,
+  extraction_run_id text NOT NULL,
+  file_path text NOT NULL,
+  line_number integer NOT NULL,
+  framework text NOT NULL,
+  handler_name text,
+  http_method text,
+  route_pattern text,
+  entry_point_type text NOT NULL,
+  classification text NOT NULL DEFAULT 'UNKNOWN'::text,
+  authenticated boolean,
+  auth_mechanism text,
+  middleware_chain text[],
+  metadata jsonb,
+  created_at timestamp with time zone DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS public.project_integrations (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1111,19 +1160,10 @@ CREATE TABLE IF NOT EXISTS public.project_vulnerability_events (
   osv_id text NOT NULL,
   event_type text NOT NULL,
   metadata jsonb,
+  created_at timestamp with time zone DEFAULT now(),
   extraction_run_id text,
-  project_dependency_id uuid,
-  created_at timestamp with time zone DEFAULT now()
+  project_dependency_id uuid
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_pve_unique_per_run
-  ON public.project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
-  WHERE extraction_run_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_pve_extraction_run_id
-  ON public.project_vulnerability_events (extraction_run_id)
-  WHERE extraction_run_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_pve_project_dependency_id
-  ON public.project_vulnerability_events (project_dependency_id)
-  WHERE project_dependency_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS public.project_watchlist (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   project_id uuid NOT NULL,
@@ -1403,7 +1443,11 @@ CREATE TABLE IF NOT EXISTS public.webhook_deliveries (
 -- CONSTRAINTS (PK, UNIQUE, CHECK, FK — in that order)
 -- ============================================
 ALTER TABLE public.activities ADD CONSTRAINT activities_pkey PRIMARY KEY (id);
+ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_pkey PRIMARY KEY (thread_id);
+ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_pkey PRIMARY KEY (id);
+ALTER TABLE public.aegis_chat_participants ADD CONSTRAINT aegis_chat_participants_pkey PRIMARY KEY (thread_id, user_id);
 ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_pkey PRIMARY KEY (id);
+ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_pkey PRIMARY KEY (thread_id, user_id);
 ALTER TABLE public.aegis_event_triggers ADD CONSTRAINT aegis_event_triggers_pkey PRIMARY KEY (id);
 ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_pkey PRIMARY KEY (id);
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_pkey PRIMARY KEY (id);
@@ -1462,6 +1506,7 @@ ALTER TABLE public.project_dependencies ADD CONSTRAINT project_dependencies_pkey
 ALTER TABLE public.project_dependency_files ADD CONSTRAINT project_dependency_files_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_integrations ADD CONSTRAINT project_integrations_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_notification_rules ADD CONSTRAINT project_notification_rules_pkey PRIMARY KEY (id);
@@ -1501,6 +1546,7 @@ ALTER TABLE public.user_sessions ADD CONSTRAINT user_sessions_pkey PRIMARY KEY (
 ALTER TABLE public.watched_packages ADD CONSTRAINT watched_packages_pkey PRIMARY KEY (id);
 ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_pkey PRIMARY KEY (id);
 ALTER TABLE public.webhook_deliveries ADD CONSTRAINT webhook_deliveries_pkey PRIMARY KEY (id);
+ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_code_key UNIQUE (code);
 ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_organization_id_key UNIQUE (organization_id);
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_token_hash_key UNIQUE (token_hash);
 ALTER TABLE public.dependencies ADD CONSTRAINT dependencies_new_name_key UNIQUE (name);
@@ -1537,6 +1583,7 @@ ALTER TABLE public.project_dependencies ADD CONSTRAINT project_dependencies_proj
 ALTER TABLE public.project_dependency_files ADD CONSTRAINT pdf_extraction_run_unique UNIQUE (project_dependency_id, file_path, extraction_run_id);
 ALTER TABLE public.project_dependency_functions ADD CONSTRAINT pdfn_extraction_run_unique UNIQUE (project_dependency_id, function_name, extraction_run_id);
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT pdv_extraction_run_unique UNIQUE (project_id, project_dependency_id, osv_id, extraction_run_id);
+ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_extraction_run_id_file_path_key UNIQUE (project_id, extraction_run_id, file_path, line_number, framework, handler_name);
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_project_id_user_id_key UNIQUE (project_id, user_id);
 ALTER TABLE public.project_pr_guardrails ADD CONSTRAINT project_pr_guardrails_project_id_key UNIQUE (project_id);
 ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_project_id_extraction_run_id_purl_e_key UNIQUE (project_id, extraction_run_id, purl, entry_point_file, entry_point_line, sink_method);
@@ -1560,6 +1607,7 @@ ALTER TABLE public.user_notification_preferences ADD CONSTRAINT user_notificatio
 ALTER TABLE public.user_profiles ADD CONSTRAINT user_profiles_user_id_key UNIQUE (user_id);
 ALTER TABLE public.user_sessions ADD CONSTRAINT user_sessions_session_id_key UNIQUE (session_id);
 ALTER TABLE public.watched_packages ADD CONSTRAINT watched_packages_dependency_id_key UNIQUE (dependency_id);
+ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_role_check CHECK ((role = ANY (ARRAY['user'::text, 'assistant'::text])));
 ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_type_check CHECK ((type = ANY (ARRAY['bump'::text, 'decrease'::text, 'remove'::text])));
 ALTER TABLE public.extraction_jobs ADD CONSTRAINT extraction_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])));
 ALTER TABLE public.extraction_logs ADD CONSTRAINT extraction_logs_level_check CHECK ((level = ANY (ARRAY['info'::text, 'success'::text, 'warning'::text, 'error'::text])));
@@ -1601,9 +1649,18 @@ ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_job_type_check
 ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text])));
 ALTER TABLE public.activities ADD CONSTRAINT activities_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.activities ADD CONSTRAINT activities_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
+ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+ALTER TABLE public.aegis_chat_participants ADD CONSTRAINT aegis_chat_participants_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_chat_participants ADD CONSTRAINT aegis_chat_participants_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
 ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL;
 ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_event_triggers ADD CONSTRAINT aegis_event_triggers_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
@@ -1699,6 +1756,7 @@ ALTER TABLE public.project_dependency_files ADD CONSTRAINT project_dependency_fi
 ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_integrations ADD CONSTRAINT project_integrations_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_role_id_fkey FOREIGN KEY (role_id) REFERENCES project_roles(id) ON DELETE RESTRICT;
@@ -1729,6 +1787,7 @@ ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_project_id_fkey FO
 ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
 ALTER TABLE public.project_usage_slices ADD CONSTRAINT project_usage_slices_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_version_candidates ADD CONSTRAINT project_version_candidates_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_vulnerability_events ADD CONSTRAINT project_vulnerability_events_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE SET NULL;
 ALTER TABLE public.project_vulnerability_events ADD CONSTRAINT project_vulnerability_events_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_organization_watchlist_id_fkey FOREIGN KEY (organization_watchlist_id) REFERENCES organization_watchlist(id) ON DELETE CASCADE;
 ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
@@ -1781,9 +1840,14 @@ CREATE INDEX idx_activities_metadata ON public.activities USING gin (metadata);
 CREATE INDEX idx_activities_org_type_date ON public.activities USING btree (organization_id, activity_type, created_at DESC);
 CREATE INDEX idx_activities_organization_id ON public.activities USING btree (organization_id);
 CREATE INDEX idx_activities_user_id ON public.activities USING btree (user_id);
+CREATE INDEX idx_aegis_chat_invite_codes_active_code ON public.aegis_chat_invite_codes USING btree (code) WHERE (revoked_at IS NULL);
+CREATE INDEX idx_aegis_chat_messages_created_at ON public.aegis_chat_messages USING btree (created_at DESC);
+CREATE INDEX idx_aegis_chat_messages_thread_id ON public.aegis_chat_messages USING btree (thread_id);
+CREATE INDEX idx_aegis_chat_participants_user_id ON public.aegis_chat_participants USING btree (user_id);
 CREATE INDEX idx_aegis_chat_threads_organization_id ON public.aegis_chat_threads USING btree (organization_id);
 CREATE INDEX idx_aegis_chat_threads_updated_at ON public.aegis_chat_threads USING btree (updated_at DESC);
 CREATE INDEX idx_aegis_chat_threads_user_id ON public.aegis_chat_threads USING btree (user_id);
+CREATE INDEX idx_aegis_chat_user_state_user_id ON public.aegis_chat_user_state USING btree (user_id);
 CREATE INDEX idx_aegis_event_triggers_event ON public.aegis_event_triggers USING btree (event_type) WHERE (enabled = true);
 CREATE INDEX idx_aegis_event_triggers_org ON public.aegis_event_triggers USING btree (organization_id);
 CREATE INDEX idx_api_tokens_hash ON public.api_tokens USING btree (token_hash) WHERE (revoked_at IS NULL);
@@ -1887,6 +1951,7 @@ CREATE INDEX idx_package_commits_watched_package_id ON public.package_commits US
 CREATE INDEX idx_package_contributors_author_email ON public.package_contributors USING btree (author_email);
 CREATE INDEX idx_package_contributors_total_commits ON public.package_contributors USING btree (total_commits DESC);
 CREATE INDEX idx_package_contributors_watched_package_id ON public.package_contributors USING btree (watched_package_id);
+CREATE INDEX idx_pd_namespace ON public.project_dependencies USING btree (namespace) WHERE (namespace IS NOT NULL);
 CREATE INDEX idx_pdf_dep_extraction_run ON public.project_dependency_files USING btree (project_dependency_id, extraction_run_id);
 CREATE INDEX idx_pdfn_dep_extraction_run ON public.project_dependency_functions USING btree (project_dependency_id, extraction_run_id);
 CREATE INDEX idx_pdv_project_epd_confidence ON public.project_dependency_vulnerabilities USING btree (project_id, epd_confidence_tier);
@@ -1897,6 +1962,11 @@ CREATE INDEX idx_pdv_sla_deadline ON public.project_dependency_vulnerabilities U
 CREATE INDEX idx_pdv_sla_status ON public.project_dependency_vulnerabilities USING btree (sla_status) WHERE (sla_status IS NOT NULL);
 CREATE INDEX idx_pdv_sla_warning_at ON public.project_dependency_vulnerabilities USING btree (sla_warning_at) WHERE ((sla_status = 'on_track'::text) AND (sla_warning_at IS NOT NULL));
 CREATE INDEX idx_pdv_status ON public.project_dependency_vulnerabilities USING btree (status);
+CREATE INDEX idx_pep_classification ON public.project_entry_points USING btree (classification);
+CREATE INDEX idx_pep_framework ON public.project_entry_points USING btree (framework);
+CREATE INDEX idx_pep_project ON public.project_entry_points USING btree (project_id);
+CREATE INDEX idx_pep_project_run ON public.project_entry_points USING btree (project_id, extraction_run_id);
+CREATE INDEX idx_pep_run ON public.project_entry_points USING btree (extraction_run_id);
 CREATE INDEX idx_policy_eval_jobs_org ON public.policy_evaluation_jobs USING btree (organization_id);
 CREATE INDEX idx_policy_eval_jobs_status ON public.policy_evaluation_jobs USING btree (organization_id, status);
 CREATE INDEX idx_prf_project_dep ON public.project_reachable_flows USING btree (project_id, dependency_id);
@@ -1949,6 +2019,7 @@ CREATE INDEX idx_project_teams_team_id ON public.project_teams USING btree (team
 CREATE INDEX idx_project_watchlist_project ON public.project_watchlist USING btree (project_id);
 CREATE INDEX idx_project_watchlist_watchlist ON public.project_watchlist USING btree (organization_watchlist_id);
 CREATE INDEX idx_projects_asset_tier_id ON public.projects USING btree (asset_tier_id);
+CREATE INDEX idx_projects_canvas_position_updated_by ON public.projects USING btree (canvas_position_updated_by) WHERE (canvas_position_updated_by IS NOT NULL);
 CREATE INDEX idx_projects_framework ON public.projects USING btree (framework);
 CREATE INDEX idx_projects_is_compliant ON public.projects USING btree (is_compliant);
 CREATE INDEX idx_projects_organization_id ON public.projects USING btree (organization_id);
@@ -1976,7 +2047,9 @@ CREATE INDEX idx_pus_run ON public.project_usage_slices USING btree (extraction_
 CREATE INDEX idx_pvc_project_package ON public.project_version_candidates USING btree (project_id, package_name, ecosystem);
 CREATE INDEX idx_pve_created_at ON public.project_vulnerability_events USING btree (created_at DESC);
 CREATE INDEX idx_pve_event_type ON public.project_vulnerability_events USING btree (event_type);
+CREATE INDEX idx_pve_extraction_run_id ON public.project_vulnerability_events USING btree (extraction_run_id) WHERE (extraction_run_id IS NOT NULL);
 CREATE INDEX idx_pve_osv_id ON public.project_vulnerability_events USING btree (osv_id);
+CREATE INDEX idx_pve_project_dependency_id ON public.project_vulnerability_events USING btree (project_dependency_id) WHERE (project_dependency_id IS NOT NULL);
 CREATE INDEX idx_pve_project_id ON public.project_vulnerability_events USING btree (project_id);
 CREATE INDEX idx_reputation_scores_dep ON public.package_reputation_scores USING btree (dependency_id);
 CREATE INDEX idx_reputation_scores_score ON public.package_reputation_scores USING btree (score);
@@ -2002,6 +2075,7 @@ CREATE INDEX idx_team_members_user_id ON public.team_members USING btree (user_i
 CREATE INDEX idx_team_notification_rules_team_id ON public.team_notification_rules USING btree (team_id);
 CREATE INDEX idx_team_roles_display_order ON public.team_roles USING btree (team_id, display_order);
 CREATE INDEX idx_team_roles_team_id ON public.team_roles USING btree (team_id);
+CREATE INDEX idx_teams_canvas_position_updated_by ON public.teams USING btree (canvas_position_updated_by) WHERE (canvas_position_updated_by IS NOT NULL);
 CREATE INDEX idx_teams_organization_id ON public.teams USING btree (organization_id);
 CREATE INDEX idx_user_integrations_provider ON public.user_integrations USING btree (provider);
 CREATE INDEX idx_user_integrations_user_id ON public.user_integrations USING btree (user_id);
@@ -2027,6 +2101,7 @@ CREATE UNIQUE INDEX idx_project_commits_project_sha ON public.project_commits US
 CREATE UNIQUE INDEX idx_project_prs_project_pr ON public.project_pull_requests USING btree (project_id, pr_number, provider);
 CREATE UNIQUE INDEX idx_project_repositories_repo_full_name_package_json_path ON public.project_repositories USING btree (repo_full_name, package_json_path);
 CREATE UNIQUE INDEX idx_project_teams_single_owner ON public.project_teams USING btree (project_id) WHERE (is_owner = true);
+CREATE UNIQUE INDEX idx_pve_unique_per_run ON public.project_vulnerability_events USING btree (project_id, osv_id, event_type, extraction_run_id, project_dependency_id) WHERE (extraction_run_id IS NOT NULL);
 CREATE UNIQUE INDEX organization_deprecations_organization_id_dependency_id_key ON public.organization_deprecations USING btree (organization_id, dependency_id);
 CREATE UNIQUE INDEX organization_watchlist_cleared_commits_org_dependency_id_commit ON public.organization_watchlist_cleared_commits USING btree (organization_id, dependency_id, commit_sha);
 CREATE UNIQUE INDEX team_banned_versions_team_id_dependency_id_banned_version_key ON public.team_banned_versions USING btree (team_id, dependency_id, banned_version);
@@ -2255,6 +2330,109 @@ CREATE OR REPLACE FUNCTION public.binary_quantize(vector)
 AS '$libdir/vector', $function$binary_quantize$function$
 ;
 
+CREATE OR REPLACE FUNCTION public.can_access_org_canvas_topic(_topic text, _user_id uuid, _mode text)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  _parts text[];
+  _org_id uuid;
+  _scope text;
+  _scope_id text;
+  _is_org_member boolean;
+  _is_admin boolean;
+  _cursors_enabled boolean;
+begin
+  if _topic is null or _user_id is null then
+    return false;
+  end if;
+
+  _parts := string_to_array(_topic, ':');
+  if array_length(_parts, 1) < 3 or _parts[1] <> 'org-canvas' then
+    return false;
+  end if;
+
+  begin
+    _org_id := _parts[2]::uuid;
+  exception when others then
+    return false;
+  end;
+  _scope := _parts[3];
+
+  -- Must be a member of the org, full stop.
+  select exists (
+    select 1 from public.organization_members
+    where organization_id = _org_id and user_id = _user_id
+  ) into _is_org_member;
+  if not _is_org_member then
+    return false;
+  end if;
+
+  -- Org-wide kill switch. When disabled, deny every realtime path for this
+  -- org. Default TRUE so rows missing the column still work.
+  select coalesce(canvas_cursors_enabled, true)
+    into _cursors_enabled
+    from public.organizations
+    where id = _org_id;
+  if not coalesce(_cursors_enabled, true) then
+    return false;
+  end if;
+
+  -- Admin check: owner role OR manage_teams_and_projects permission.
+  select
+    (om.role = 'owner')
+    or coalesce((roles.permissions->>'manage_teams_and_projects')::boolean, false)
+  into _is_admin
+  from public.organization_members om
+  left join public.organization_roles roles
+    on roles.organization_id = om.organization_id and roles.name = om.role
+  where om.organization_id = _org_id and om.user_id = _user_id
+  limit 1;
+  _is_admin := coalesce(_is_admin, false);
+
+  -- Org-wide channel: all org members read; admins write.
+  if _scope = 'org' then
+    if _mode = 'read'  then return true; end if;
+    if _mode = 'write' then return _is_admin; end if;
+    return false;
+  end if;
+
+  -- Admin-only channel: admin read + admin write.
+  if _scope = 'admins' then
+    return _is_admin;
+  end if;
+
+  -- Team channel: team members (of a team that actually belongs to this org)
+  -- or admins. The teams.organization_id join is the cross-org guard.
+  if _scope = 'team' and array_length(_parts, 1) >= 4 then
+    _scope_id := _parts[4];
+    if _is_admin then
+      return exists (
+        select 1 from public.teams t
+        where t.id::text = _scope_id and t.organization_id = _org_id
+      );
+    end if;
+    begin
+      return exists (
+        select 1
+        from public.team_members tm
+        join public.teams t on t.id = tm.team_id
+        where tm.team_id = _scope_id::uuid
+          and tm.user_id = _user_id
+          and t.organization_id = _org_id
+      );
+    exception when others then
+      return false;
+    end;
+  end if;
+
+  return false;
+end;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.claim_extraction_job(p_machine_id text)
  RETURNS SETOF extraction_jobs
  LANGUAGE sql
@@ -2401,12 +2579,14 @@ BEGIN
   v_enabled := COALESCE((v_rereview_settings->>'enabled')::boolean, true);
   v_triggers := COALESCE(v_rereview_settings->'triggers', '{}'::jsonb);
 
+  -- Phase 22: namespace is now included in typedef/INSERT/DO UPDATE SET.
   WITH input_deps AS (
     SELECT * FROM jsonb_to_recordset(p_dependencies) AS d(
       name TEXT, version TEXT, is_direct BOOLEAN, source TEXT,
       environment TEXT, license TEXT, dependency_id UUID,
       files_importing_count INTEGER, is_outdated BOOLEAN, versions_behind INTEGER,
-      policy_result JSONB, dependency_version_id UUID
+      policy_result JSONB, dependency_version_id UUID,
+      namespace TEXT
     )
   ),
   upserted AS (
@@ -2414,7 +2594,7 @@ BEGIN
       project_id, name, version, is_direct, source,
       environment, license, dependency_id,
       files_importing_count, is_outdated, versions_behind,
-      policy_result, dependency_version_id,
+      policy_result, dependency_version_id, namespace,
       last_seen_extraction_run_id, removed_at, created_at
     )
     SELECT
@@ -2423,7 +2603,7 @@ BEGIN
       COALESCE(d.files_importing_count, 0),
       COALESCE(d.is_outdated, false),
       COALESCE(d.versions_behind, 0),
-      d.policy_result, d.dependency_version_id,
+      d.policy_result, d.dependency_version_id, d.namespace,
       p_extraction_run_id, NULL, v_now
     FROM input_deps d
     ON CONFLICT (project_id, name, version, is_direct, source) DO UPDATE SET
@@ -2435,6 +2615,7 @@ BEGIN
       versions_behind = EXCLUDED.versions_behind,
       policy_result = EXCLUDED.policy_result,
       dependency_version_id = EXCLUDED.dependency_version_id,
+      namespace = EXCLUDED.namespace,
       last_seen_extraction_run_id = p_extraction_run_id,
       removed_at = NULL
     RETURNING (xmax = 0) AS was_inserted
@@ -3953,6 +4134,43 @@ CREATE OR REPLACE FUNCTION public.hamming_distance(bit, bit)
 AS '$libdir/vector', $function$hamming_distance$function$
 ;
 
+CREATE OR REPLACE FUNCTION public.handle_aegis_creator_leaves_org()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  t RECORD;
+  new_owner UUID;
+BEGIN
+  FOR t IN
+    SELECT id FROM aegis_chat_threads
+    WHERE organization_id = OLD.organization_id
+      AND user_id = OLD.user_id
+  LOOP
+    -- Drop the leaving user from participants first
+    DELETE FROM aegis_chat_participants
+    WHERE thread_id = t.id AND user_id = OLD.user_id;
+
+    -- Find oldest remaining participant
+    SELECT user_id INTO new_owner
+    FROM aegis_chat_participants
+    WHERE thread_id = t.id
+    ORDER BY joined_at ASC
+    LIMIT 1;
+
+    IF new_owner IS NULL THEN
+      DELETE FROM aegis_chat_threads WHERE id = t.id;
+    ELSE
+      UPDATE aegis_chat_threads SET user_id = new_owner WHERE id = t.id;
+    END IF;
+  END LOOP;
+  RETURN OLD;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.hnsw_bit_support(internal)
  RETURNS internal
  LANGUAGE c
@@ -4269,6 +4487,7 @@ DECLARE
   v_slices_deleted INTEGER := 0;
   v_files_deleted INTEGER := 0;
   v_fns_deleted INTEGER := 0;
+  v_entry_points_deleted INTEGER := 0;
 BEGIN
   SELECT active_extraction_run_id, previous_extraction_run_id
     INTO v_active, v_previous
@@ -4331,6 +4550,13 @@ BEGIN
     AND (v_previous IS NULL OR pdfn.extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_fns_deleted = ROW_COUNT;
 
+  DELETE FROM project_entry_points
+  WHERE project_id = p_project_id
+    AND extraction_run_id IS NOT NULL
+    AND extraction_run_id <> v_active
+    AND (v_previous IS NULL OR extraction_run_id <> v_previous);
+  GET DIAGNOSTICS v_entry_points_deleted = ROW_COUNT;
+
   RETURN jsonb_build_object(
     'project_id', p_project_id,
     'active', v_active,
@@ -4341,7 +4567,8 @@ BEGIN
     'flows_deleted', v_flows_deleted,
     'slices_deleted', v_slices_deleted,
     'dep_files_deleted', v_files_deleted,
-    'dep_functions_deleted', v_fns_deleted
+    'dep_functions_deleted', v_fns_deleted,
+    'entry_points_deleted', v_entry_points_deleted
   );
 END;
 $function$
@@ -4364,6 +4591,7 @@ DECLARE
   v_files_deleted INTEGER := 0;
   v_fns_deleted INTEGER := 0;
   v_events_deleted INTEGER := 0;
+  v_entry_points_deleted INTEGER := 0;
   v_temp INTEGER;
   v_orphan_runs JSONB := '[]'::JSONB;
 BEGIN
@@ -4381,34 +4609,56 @@ BEGIN
           AND ej2.status IN ('queued', 'processing')
       )
   LOOP
-    DELETE FROM project_dependency_files WHERE extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT; v_files_deleted := v_files_deleted + v_temp;
+    DELETE FROM project_dependency_files
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_files_deleted := v_files_deleted + v_temp;
 
-    DELETE FROM project_dependency_functions WHERE extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT; v_fns_deleted := v_fns_deleted + v_temp;
+    DELETE FROM project_dependency_functions
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_fns_deleted := v_fns_deleted + v_temp;
 
-    DELETE FROM project_dependency_vulnerabilities WHERE extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT; v_pdv_deleted := v_pdv_deleted + v_temp;
+    DELETE FROM project_dependency_vulnerabilities
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_pdv_deleted := v_pdv_deleted + v_temp;
 
-    DELETE FROM project_semgrep_findings WHERE extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT; v_semgrep_deleted := v_semgrep_deleted + v_temp;
+    DELETE FROM project_semgrep_findings
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_semgrep_deleted := v_semgrep_deleted + v_temp;
 
-    DELETE FROM project_secret_findings WHERE extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT; v_secret_deleted := v_secret_deleted + v_temp;
+    DELETE FROM project_secret_findings
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_secret_deleted := v_secret_deleted + v_temp;
 
-    DELETE FROM project_reachable_flows WHERE extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT; v_flows_deleted := v_flows_deleted + v_temp;
+    DELETE FROM project_reachable_flows
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_flows_deleted := v_flows_deleted + v_temp;
 
-    DELETE FROM project_usage_slices WHERE extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT; v_slices_deleted := v_slices_deleted + v_temp;
+    DELETE FROM project_usage_slices
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_slices_deleted := v_slices_deleted + v_temp;
 
-    DELETE FROM project_vulnerability_events WHERE extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT; v_events_deleted := v_events_deleted + v_temp;
+    DELETE FROM project_vulnerability_events
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_events_deleted := v_events_deleted + v_temp;
+
+    DELETE FROM project_entry_points
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_entry_points_deleted := v_entry_points_deleted + v_temp;
 
     DELETE FROM project_dependencies
     WHERE project_id = v_orphan.project_id
       AND last_seen_extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT; v_pd_deleted := v_pd_deleted + v_temp;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_pd_deleted := v_pd_deleted + v_temp;
 
     v_orphan_runs := v_orphan_runs || jsonb_build_object(
       'project_id', v_orphan.project_id,
@@ -4429,6 +4679,7 @@ BEGIN
     'files_deleted', v_files_deleted,
     'fns_deleted', v_fns_deleted,
     'events_deleted', v_events_deleted,
+    'entry_points_deleted', v_entry_points_deleted,
     'orphan_runs', v_orphan_runs
   );
 END;
@@ -4665,6 +4916,100 @@ BEGIN
   NEW.updated_at = NOW();
   RETURN NEW;
 END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.update_canvas_positions_batch(_org_id uuid, _user_id uuid, _teams jsonb, _projects jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  _now timestamptz := now();
+  _expected_teams int := coalesce(jsonb_array_length(_teams), 0);
+  _expected_projects int := coalesce(jsonb_array_length(_projects), 0);
+  _updated_teams jsonb := '[]'::jsonb;
+  _updated_projects jsonb := '[]'::jsonb;
+  _team_count int := 0;
+  _project_count int := 0;
+begin
+  if _expected_teams > 0 then
+    with
+      team_input as (
+        select
+          (elem->>'id')::uuid as id,
+          (elem->>'x')::numeric as x,
+          (elem->>'y')::numeric as y
+        from jsonb_array_elements(_teams) elem
+      ),
+      team_updates as (
+        update public.teams t
+        set
+          canvas_position_x = ti.x,
+          canvas_position_y = ti.y,
+          canvas_position_updated_at = _now,
+          canvas_position_updated_by = _user_id
+        from team_input ti
+        where t.id = ti.id and t.organization_id = _org_id
+        returning
+          t.id,
+          t.canvas_position_x,
+          t.canvas_position_y,
+          t.canvas_position_updated_at
+      )
+    select
+      coalesce(jsonb_agg(to_jsonb(tu.*)), '[]'::jsonb),
+      count(*)
+    into _updated_teams, _team_count
+    from team_updates tu;
+
+    if _team_count <> _expected_teams then
+      raise exception using
+        errcode = 'P0001',
+        message = 'one or more teams not found in this organization';
+    end if;
+  end if;
+
+  if _expected_projects > 0 then
+    with
+      project_input as (
+        select
+          (elem->>'id')::uuid as id,
+          (elem->>'x')::numeric as x,
+          (elem->>'y')::numeric as y
+        from jsonb_array_elements(_projects) elem
+      ),
+      project_updates as (
+        update public.projects p
+        set
+          canvas_position_x = pi.x,
+          canvas_position_y = pi.y,
+          canvas_position_updated_at = _now,
+          canvas_position_updated_by = _user_id
+        from project_input pi
+        where p.id = pi.id and p.organization_id = _org_id
+        returning
+          p.id,
+          p.canvas_position_x,
+          p.canvas_position_y,
+          p.canvas_position_updated_at
+      )
+    select
+      coalesce(jsonb_agg(to_jsonb(pu.*)), '[]'::jsonb),
+      count(*)
+    into _updated_projects, _project_count
+    from project_updates pu;
+
+    if _project_count <> _expected_projects then
+      raise exception using
+        errcode = 'P0001',
+        message = 'one or more projects not found in this organization';
+    end if;
+  end if;
+
+  return jsonb_build_object('teams', _updated_teams, 'projects', _updated_projects);
+end;
 $function$
 ;
 
@@ -4986,6 +5331,7 @@ AS '$libdir/vector', $function$vector$function$
 -- TRIGGERS
 -- ============================================
 CREATE TRIGGER add_project_creator_trigger AFTER INSERT ON public.projects FOR EACH ROW EXECUTE FUNCTION add_project_creator_as_owner();
+CREATE TRIGGER aegis_creator_leaves_org AFTER DELETE ON public.organization_members FOR EACH ROW EXECUTE FUNCTION handle_aegis_creator_leaves_org();
 CREATE TRIGGER create_project_roles_trigger AFTER INSERT ON public.projects FOR EACH ROW EXECUTE FUNCTION create_default_project_roles();
 CREATE TRIGGER create_team_roles_trigger AFTER INSERT ON public.teams FOR EACH ROW EXECUTE FUNCTION create_default_team_roles();
 CREATE TRIGGER organization_integrations_updated_at BEFORE UPDATE ON public.organization_integrations FOR EACH ROW EXECUTE FUNCTION update_organization_integrations_updated_at();

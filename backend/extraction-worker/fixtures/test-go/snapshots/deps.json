@@ -1,0 +1,58 @@
+[
+  {
+    "name": "github.com/gin-gonic/gin",
+    "version": "v1.7.7",
+    "is_direct": true,
+    "source": "dependencies",
+    "files_importing_count": 1,
+    "ai_usage_summary": null,
+    "ai_usage_analyzed_at": null,
+    "environment": "prod",
+    "is_outdated": false,
+    "versions_behind": 0,
+    "policy_result": null,
+    "namespace": ""
+  },
+  {
+    "name": "golang.org/x/crypto",
+    "version": "v0.0.0-20211108221036-ceb1ce70b4fa",
+    "is_direct": true,
+    "source": "dependencies",
+    "files_importing_count": 1,
+    "ai_usage_summary": null,
+    "ai_usage_analyzed_at": null,
+    "environment": "prod",
+    "is_outdated": false,
+    "versions_behind": 0,
+    "policy_result": null,
+    "namespace": ""
+  },
+  {
+    "name": "golang.org/x/net",
+    "version": "v0.0.0-20211112202133-69e39bad7dc2",
+    "is_direct": true,
+    "source": "dependencies",
+    "files_importing_count": 1,
+    "ai_usage_summary": null,
+    "ai_usage_analyzed_at": null,
+    "environment": "prod",
+    "is_outdated": false,
+    "versions_behind": 0,
+    "policy_result": null,
+    "namespace": ""
+  },
+  {
+    "name": "golang.org/x/text",
+    "version": "v0.3.7",
+    "is_direct": true,
+    "source": "dependencies",
+    "files_importing_count": 1,
+    "ai_usage_summary": null,
+    "ai_usage_analyzed_at": null,
+    "environment": "prod",
+    "is_outdated": false,
+    "versions_behind": 0,
+    "policy_result": null,
+    "namespace": ""
+  }
+]

@@ -72,12 +72,12 @@ jest.mock('child_process', () => ({
   spawn: (...args: unknown[]) => mockSpawn(...args),
 }));
 
-jest.mock('../ast-parser', () => ({
-  analyzeRepository: jest.fn().mockReturnValue([]),
+jest.mock('../tree-sitter-extractor', () => ({
+  extractUsage: jest.fn().mockResolvedValue({ files: [], filesImportingByDep: {} }),
 }));
 
-jest.mock('../ast-storage', () => ({
-  storeAstAnalysisResults: jest.fn().mockResolvedValue({ success: true }),
+jest.mock('../tree-sitter-extractor/storage', () => ({
+  storeUsageExtractionResults: jest.fn().mockResolvedValue({ success: true }),
 }));
 
 const SBOM_WITH_DEPS = JSON.stringify({
@@ -144,6 +144,10 @@ describe('runPipeline', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (global as any).fetch = jest.fn().mockResolvedValue({ ok: true });
+    // binaryAvailable() uses spawnSync(which/where, [name]) and checks
+    // .status === 0. Default the mock to "installed" so the semgrep /
+    // trufflehog steps run their logic; individual tests can override.
+    mockSpawnSync.mockReturnValue({ status: 0, stdout: '', stderr: '' });
   });
 
   it('clone auth failure (401/403) -> pipeline throws, error message contains "Authentication failed"', async () => {

@@ -1,0 +1,1289 @@
+[
+  {
+    "osv_id": "CVE-2021-45105",
+    "severity": "high",
+    "summary": "Apache Log4j2 vulnerable to Improper Input Validation and Uncontrolled Recursion",
+    "aliases": null,
+    "fixed_versions": [
+      "2.17.0"
+    ],
+    "is_reachable": true,
+    "epss_score": "0.7043",
+    "published_at": "2021-12-18T18:00:07.000Z",
+    "cvss_score": "8.6",
+    "cisa_kev": false,
+    "depscore": 73,
+    "suppressed": false,
+    "suppressed_by": null,
+    "suppressed_at": null,
+    "risk_accepted": false,
+    "risk_accepted_by": null,
+    "risk_accepted_at": null,
+    "risk_accepted_reason": null,
+    "reachability_level": "function",
+    "reachability_details": {
+      "files": [
+        "main/java/com/deptex/App.java"
+      ],
+      "locations": [
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 9,
+          "method": null,
+          "code_snippet": "     4 │ import org.apache.commons.text.StringSubstitutor;\n     5 │ import org.apache.logging.log4j.LogManager;\n     6 │ import org.apache.logging.log4j.Logger;\n     7 │ \n     8 │ public class App {\n→    9 │     private static final Logger logger = LogManager.getLogger(App.class);\n    10 │ \n    11 │     public static void processInput(String userInput) {\n    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);"
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 11,
+          "method": "org.apache.logging.log4j.Logger.info:void(java.lang.String,java.lang.Object)",
+          "code_snippet": "     6 │ import org.apache.logging.log4j.Logger;\n     7 │ \n     8 │ public class App {\n     9 │     private static final Logger logger = LogManager.getLogger(App.class);\n    10 │ \n→   11 │     public static void processInput(String userInput) {\n    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ "
+        }
+      ],
+      "usage_count": 2,
+      "impacted_paths": 2,
+      "methods_called": [
+        "org.apache.logging.log4j.Logger.info:void(java.lang.String,java.lang.Object)"
+      ]
+    },
+    "sla_deadline_at": null,
+    "sla_warning_at": null,
+    "sla_status": null,
+    "sla_breached_at": null,
+    "sla_met_at": null,
+    "sla_exempt_reason": null,
+    "sla_warning_notified_at": null,
+    "sla_breach_notified_at": null,
+    "base_depscore_no_reachability": "100.00",
+    "epd_factor": null,
+    "contextual_depscore": null,
+    "reachability_status": "unreachable",
+    "entry_point_classification": null,
+    "entry_point_weight": null,
+    "epd_depth": null,
+    "epd_alpha": "0.850",
+    "sink_precondition": null,
+    "sanitization_postcondition": null,
+    "is_sanitized": false,
+    "epd_confidence_tier": null,
+    "epd_model": null,
+    "epd_schema_version": "epd-v1",
+    "epd_prompt_version": "epd-v1",
+    "epd_status": "pending",
+    "status": "open",
+    "re_review_triggered_at": null,
+    "re_review_reasons": null
+  },
+  {
+    "osv_id": "CVE-2022-42889",
+    "severity": "critical",
+    "summary": "Arbitrary code execution in Apache Commons Text",
+    "aliases": null,
+    "fixed_versions": [
+      "1.10.0"
+    ],
+    "is_reachable": true,
+    "epss_score": "0.9425",
+    "published_at": "2022-10-13T19:00:17.000Z",
+    "cvss_score": "9.8",
+    "cisa_kev": false,
+    "depscore": 89,
+    "suppressed": false,
+    "suppressed_by": null,
+    "suppressed_at": null,
+    "risk_accepted": false,
+    "risk_accepted_by": null,
+    "risk_accepted_at": null,
+    "risk_accepted_reason": null,
+    "reachability_level": "function",
+    "reachability_details": {
+      "files": [
+        "main/java/com/deptex/App.java"
+      ],
+      "locations": [
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 24,
+          "method": "org.apache.commons.text.StringSubstitutor.replace:java.lang.String(java.lang.String)",
+          "code_snippet": "    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ \n→   24 │     public static String interpolate(String template) {\n    25 │         // Text4Shell CVE-2022-42889.\n    26 │         StringSubstitutor sub = StringSubstitutor.createInterpolator();\n    27 │         return sub.replace(template);\n    28 │     }\n    29 │ "
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 26,
+          "method": null,
+          "code_snippet": "    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ \n    24 │     public static String interpolate(String template) {\n    25 │         // Text4Shell CVE-2022-42889.\n→   26 │         StringSubstitutor sub = StringSubstitutor.createInterpolator();\n    27 │         return sub.replace(template);\n    28 │     }\n    29 │ \n    30 │     public static void main(String[] args) throws Exception {\n    31 │         String input = args.length > 0 ? args[0] : \"test\";"
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 26,
+          "method": null,
+          "code_snippet": "    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ \n    24 │     public static String interpolate(String template) {\n    25 │         // Text4Shell CVE-2022-42889.\n→   26 │         StringSubstitutor sub = StringSubstitutor.createInterpolator();\n    27 │         return sub.replace(template);\n    28 │     }\n    29 │ \n    30 │     public static void main(String[] args) throws Exception {\n    31 │         String input = args.length > 0 ? args[0] : \"test\";"
+        }
+      ],
+      "usage_count": 3,
+      "impacted_paths": 3,
+      "methods_called": [
+        "org.apache.commons.text.StringSubstitutor.replace:java.lang.String(java.lang.String)"
+      ]
+    },
+    "sla_deadline_at": null,
+    "sla_warning_at": null,
+    "sla_status": null,
+    "sla_breached_at": null,
+    "sla_met_at": null,
+    "sla_exempt_reason": null,
+    "sla_warning_notified_at": null,
+    "sla_breach_notified_at": null,
+    "base_depscore_no_reachability": "100.00",
+    "epd_factor": null,
+    "contextual_depscore": null,
+    "reachability_status": "unreachable",
+    "entry_point_classification": null,
+    "entry_point_weight": null,
+    "epd_depth": null,
+    "epd_alpha": "0.850",
+    "sink_precondition": null,
+    "sanitization_postcondition": null,
+    "is_sanitized": false,
+    "epd_confidence_tier": null,
+    "epd_model": null,
+    "epd_schema_version": "epd-v1",
+    "epd_prompt_version": "epd-v1",
+    "epd_status": "pending",
+    "status": "open",
+    "re_review_triggered_at": null,
+    "re_review_reasons": null
+  },
+  {
+    "osv_id": "CVE-2021-44228",
+    "severity": "critical",
+    "summary": "Remote code injection in Log4j",
+    "aliases": null,
+    "fixed_versions": [
+      "2.15.0"
+    ],
+    "is_reachable": true,
+    "epss_score": "0.9447",
+    "published_at": "2021-12-10T00:40:56.000Z",
+    "cvss_score": "10.0",
+    "cisa_kev": true,
+    "depscore": 92,
+    "suppressed": false,
+    "suppressed_by": null,
+    "suppressed_at": null,
+    "risk_accepted": false,
+    "risk_accepted_by": null,
+    "risk_accepted_at": null,
+    "risk_accepted_reason": null,
+    "reachability_level": "function",
+    "reachability_details": {
+      "files": [
+        "main/java/com/deptex/App.java"
+      ],
+      "locations": [
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 9,
+          "method": null,
+          "code_snippet": "     4 │ import org.apache.commons.text.StringSubstitutor;\n     5 │ import org.apache.logging.log4j.LogManager;\n     6 │ import org.apache.logging.log4j.Logger;\n     7 │ \n     8 │ public class App {\n→    9 │     private static final Logger logger = LogManager.getLogger(App.class);\n    10 │ \n    11 │     public static void processInput(String userInput) {\n    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);"
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 11,
+          "method": "org.apache.logging.log4j.Logger.info:void(java.lang.String,java.lang.Object)",
+          "code_snippet": "     6 │ import org.apache.logging.log4j.Logger;\n     7 │ \n     8 │ public class App {\n     9 │     private static final Logger logger = LogManager.getLogger(App.class);\n    10 │ \n→   11 │     public static void processInput(String userInput) {\n    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ "
+        }
+      ],
+      "usage_count": 2,
+      "impacted_paths": 2,
+      "methods_called": [
+        "org.apache.logging.log4j.Logger.info:void(java.lang.String,java.lang.Object)"
+      ]
+    },
+    "sla_deadline_at": null,
+    "sla_warning_at": null,
+    "sla_status": null,
+    "sla_breached_at": null,
+    "sla_met_at": null,
+    "sla_exempt_reason": null,
+    "sla_warning_notified_at": null,
+    "sla_breach_notified_at": null,
+    "base_depscore_no_reachability": "100.00",
+    "epd_factor": null,
+    "contextual_depscore": null,
+    "reachability_status": "unreachable",
+    "entry_point_classification": null,
+    "entry_point_weight": null,
+    "epd_depth": null,
+    "epd_alpha": "0.850",
+    "sink_precondition": null,
+    "sanitization_postcondition": null,
+    "is_sanitized": false,
+    "epd_confidence_tier": null,
+    "epd_model": null,
+    "epd_schema_version": "epd-v1",
+    "epd_prompt_version": "epd-v1",
+    "epd_status": "pending",
+    "status": "open",
+    "re_review_triggered_at": null,
+    "re_review_reasons": null
+  },
+  {
+    "osv_id": "CVE-2021-45046",
+    "severity": "critical",
+    "summary": "Incomplete fix for Apache Log4j vulnerability",
+    "aliases": null,
+    "fixed_versions": [
+      "2.16.0"
+    ],
+    "is_reachable": true,
+    "epss_score": "0.9434",
+    "published_at": "2021-12-14T18:01:28.000Z",
+    "cvss_score": "9.0",
+    "cisa_kev": true,
+    "depscore": 83,
+    "suppressed": false,
+    "suppressed_by": null,
+    "suppressed_at": null,
+    "risk_accepted": false,
+    "risk_accepted_by": null,
+    "risk_accepted_at": null,
+    "risk_accepted_reason": null,
+    "reachability_level": "function",
+    "reachability_details": {
+      "files": [
+        "main/java/com/deptex/App.java"
+      ],
+      "locations": [
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 9,
+          "method": null,
+          "code_snippet": "     4 │ import org.apache.commons.text.StringSubstitutor;\n     5 │ import org.apache.logging.log4j.LogManager;\n     6 │ import org.apache.logging.log4j.Logger;\n     7 │ \n     8 │ public class App {\n→    9 │     private static final Logger logger = LogManager.getLogger(App.class);\n    10 │ \n    11 │     public static void processInput(String userInput) {\n    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);"
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 11,
+          "method": "org.apache.logging.log4j.Logger.info:void(java.lang.String,java.lang.Object)",
+          "code_snippet": "     6 │ import org.apache.logging.log4j.Logger;\n     7 │ \n     8 │ public class App {\n     9 │     private static final Logger logger = LogManager.getLogger(App.class);\n    10 │ \n→   11 │     public static void processInput(String userInput) {\n    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ "
+        }
+      ],
+      "usage_count": 2,
+      "impacted_paths": 2,
+      "methods_called": [
+        "org.apache.logging.log4j.Logger.info:void(java.lang.String,java.lang.Object)"
+      ]
+    },
+    "sla_deadline_at": null,
+    "sla_warning_at": null,
+    "sla_status": null,
+    "sla_breached_at": null,
+    "sla_met_at": null,
+    "sla_exempt_reason": null,
+    "sla_warning_notified_at": null,
+    "sla_breach_notified_at": null,
+    "base_depscore_no_reachability": "100.00",
+    "epd_factor": null,
+    "contextual_depscore": null,
+    "reachability_status": "unreachable",
+    "entry_point_classification": null,
+    "entry_point_weight": null,
+    "epd_depth": null,
+    "epd_alpha": "0.850",
+    "sink_precondition": null,
+    "sanitization_postcondition": null,
+    "is_sanitized": false,
+    "epd_confidence_tier": null,
+    "epd_model": null,
+    "epd_schema_version": "epd-v1",
+    "epd_prompt_version": "epd-v1",
+    "epd_status": "pending",
+    "status": "open",
+    "re_review_triggered_at": null,
+    "re_review_reasons": null
+  },
+  {
+    "osv_id": "CVE-2025-49128",
+    "severity": "medium",
+    "summary": "Jackson-core Vulnerable to Memory Disclosure via Source Snippet in JsonLocation",
+    "aliases": null,
+    "fixed_versions": [
+      "2.13.0"
+    ],
+    "is_reachable": true,
+    "epss_score": "0.0003",
+    "published_at": "2025-06-07T00:10:42.000Z",
+    "cvss_score": "4.0",
+    "cisa_kev": false,
+    "depscore": 19,
+    "suppressed": false,
+    "suppressed_by": null,
+    "suppressed_at": null,
+    "risk_accepted": false,
+    "risk_accepted_by": null,
+    "risk_accepted_at": null,
+    "risk_accepted_reason": null,
+    "reachability_level": "function",
+    "reachability_details": {
+      "files": [
+        "main/java/com/deptex/App.java"
+      ],
+      "locations": [
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 20,
+          "method": null,
+          "code_snippet": "    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n    18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n→   20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ \n    24 │     public static String interpolate(String template) {\n    25 │         // Text4Shell CVE-2022-42889."
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 18,
+          "method": "com.fasterxml.jackson.databind.ObjectMapper",
+          "code_snippet": "    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n→   18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ "
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 18,
+          "method": null,
+          "code_snippet": "    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n→   18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ "
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 17,
+          "method": "com.fasterxml.jackson.databind.ObjectMapper.readValue:java.lang.Object(java.lang.String,java.lang.Class)",
+          "code_snippet": "    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n→   17 │     public static Object deserialize(String json) throws Exception {\n    18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }"
+        }
+      ],
+      "usage_count": 4,
+      "impacted_paths": 4,
+      "methods_called": [
+        "com.fasterxml.jackson.databind.ObjectMapper",
+        "com.fasterxml.jackson.databind.ObjectMapper.readValue:java.lang.Object(java.lang.String,java.lang.Class)"
+      ]
+    },
+    "sla_deadline_at": null,
+    "sla_warning_at": null,
+    "sla_status": null,
+    "sla_breached_at": null,
+    "sla_met_at": null,
+    "sla_exempt_reason": null,
+    "sla_warning_notified_at": null,
+    "sla_breach_notified_at": null,
+    "base_depscore_no_reachability": "27.00",
+    "epd_factor": null,
+    "contextual_depscore": null,
+    "reachability_status": "unreachable",
+    "entry_point_classification": null,
+    "entry_point_weight": null,
+    "epd_depth": null,
+    "epd_alpha": "0.850",
+    "sink_precondition": null,
+    "sanitization_postcondition": null,
+    "is_sanitized": false,
+    "epd_confidence_tier": null,
+    "epd_model": null,
+    "epd_schema_version": "epd-v1",
+    "epd_prompt_version": "epd-v1",
+    "epd_status": "pending",
+    "status": "open",
+    "re_review_triggered_at": null,
+    "re_review_reasons": null
+  },
+  {
+    "osv_id": "CVE-2025-68161",
+    "severity": "medium",
+    "summary": "Apache Log4j does not verify the TLS hostname in its Socket Appender",
+    "aliases": null,
+    "fixed_versions": [
+      "2.25.3"
+    ],
+    "is_reachable": true,
+    "epss_score": "0.0003",
+    "published_at": "2025-12-18T21:31:44.000Z",
+    "cvss_score": "6.3",
+    "cisa_kev": false,
+    "depscore": 30,
+    "suppressed": false,
+    "suppressed_by": null,
+    "suppressed_at": null,
+    "risk_accepted": false,
+    "risk_accepted_by": null,
+    "risk_accepted_at": null,
+    "risk_accepted_reason": null,
+    "reachability_level": "function",
+    "reachability_details": {
+      "files": [
+        "main/java/com/deptex/App.java"
+      ],
+      "locations": [
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 9,
+          "method": null,
+          "code_snippet": "     4 │ import org.apache.commons.text.StringSubstitutor;\n     5 │ import org.apache.logging.log4j.LogManager;\n     6 │ import org.apache.logging.log4j.Logger;\n     7 │ \n     8 │ public class App {\n→    9 │     private static final Logger logger = LogManager.getLogger(App.class);\n    10 │ \n    11 │     public static void processInput(String userInput) {\n    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);"
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 11,
+          "method": "org.apache.logging.log4j.Logger.info:void(java.lang.String,java.lang.Object)",
+          "code_snippet": "     6 │ import org.apache.logging.log4j.Logger;\n     7 │ \n     8 │ public class App {\n     9 │     private static final Logger logger = LogManager.getLogger(App.class);\n    10 │ \n→   11 │     public static void processInput(String userInput) {\n    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ "
+        }
+      ],
+      "usage_count": 2,
+      "impacted_paths": 2,
+      "methods_called": [
+        "org.apache.logging.log4j.Logger.info:void(java.lang.String,java.lang.Object)"
+      ]
+    },
+    "sla_deadline_at": null,
+    "sla_warning_at": null,
+    "sla_status": null,
+    "sla_breached_at": null,
+    "sla_met_at": null,
+    "sla_exempt_reason": null,
+    "sla_warning_notified_at": null,
+    "sla_breach_notified_at": null,
+    "base_depscore_no_reachability": "42.00",
+    "epd_factor": null,
+    "contextual_depscore": null,
+    "reachability_status": "unreachable",
+    "entry_point_classification": null,
+    "entry_point_weight": null,
+    "epd_depth": null,
+    "epd_alpha": "0.850",
+    "sink_precondition": null,
+    "sanitization_postcondition": null,
+    "is_sanitized": false,
+    "epd_confidence_tier": null,
+    "epd_model": null,
+    "epd_schema_version": "epd-v1",
+    "epd_prompt_version": "epd-v1",
+    "epd_status": "pending",
+    "status": "open",
+    "re_review_triggered_at": null,
+    "re_review_reasons": null
+  },
+  {
+    "osv_id": "CVE-2026-34477",
+    "severity": "medium",
+    "summary": "Apache Log4j Core: `verifyHostName` attribute silently ignored in TLS configuration",
+    "aliases": null,
+    "fixed_versions": [
+      "2.25.4"
+    ],
+    "is_reachable": true,
+    "epss_score": "0.0014",
+    "published_at": "2026-04-10T18:31:17.000Z",
+    "cvss_score": "6.3",
+    "cisa_kev": false,
+    "depscore": 30,
+    "suppressed": false,
+    "suppressed_by": null,
+    "suppressed_at": null,
+    "risk_accepted": false,
+    "risk_accepted_by": null,
+    "risk_accepted_at": null,
+    "risk_accepted_reason": null,
+    "reachability_level": "function",
+    "reachability_details": {
+      "files": [
+        "main/java/com/deptex/App.java"
+      ],
+      "locations": [
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 9,
+          "method": null,
+          "code_snippet": "     4 │ import org.apache.commons.text.StringSubstitutor;\n     5 │ import org.apache.logging.log4j.LogManager;\n     6 │ import org.apache.logging.log4j.Logger;\n     7 │ \n     8 │ public class App {\n→    9 │     private static final Logger logger = LogManager.getLogger(App.class);\n    10 │ \n    11 │     public static void processInput(String userInput) {\n    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);"
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 11,
+          "method": "org.apache.logging.log4j.Logger.info:void(java.lang.String,java.lang.Object)",
+          "code_snippet": "     6 │ import org.apache.logging.log4j.Logger;\n     7 │ \n     8 │ public class App {\n     9 │     private static final Logger logger = LogManager.getLogger(App.class);\n    10 │ \n→   11 │     public static void processInput(String userInput) {\n    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ "
+        }
+      ],
+      "usage_count": 2,
+      "impacted_paths": 2,
+      "methods_called": [
+        "org.apache.logging.log4j.Logger.info:void(java.lang.String,java.lang.Object)"
+      ]
+    },
+    "sla_deadline_at": null,
+    "sla_warning_at": null,
+    "sla_status": null,
+    "sla_breached_at": null,
+    "sla_met_at": null,
+    "sla_exempt_reason": null,
+    "sla_warning_notified_at": null,
+    "sla_breach_notified_at": null,
+    "base_depscore_no_reachability": "43.00",
+    "epd_factor": null,
+    "contextual_depscore": null,
+    "reachability_status": "unreachable",
+    "entry_point_classification": null,
+    "entry_point_weight": null,
+    "epd_depth": null,
+    "epd_alpha": "0.850",
+    "sink_precondition": null,
+    "sanitization_postcondition": null,
+    "is_sanitized": false,
+    "epd_confidence_tier": null,
+    "epd_model": null,
+    "epd_schema_version": "epd-v1",
+    "epd_prompt_version": "epd-v1",
+    "epd_status": "pending",
+    "status": "open",
+    "re_review_triggered_at": null,
+    "re_review_reasons": null
+  },
+  {
+    "osv_id": "CVE-2025-48924",
+    "severity": "medium",
+    "summary": "Apache Commons Lang is vulnerable to Uncontrolled Recursion when processing long inputs",
+    "aliases": null,
+    "fixed_versions": [
+      "3.18.0"
+    ],
+    "is_reachable": true,
+    "epss_score": "0.0004",
+    "published_at": "2025-07-11T15:31:37.000Z",
+    "cvss_score": "6.5",
+    "cisa_kev": false,
+    "depscore": 31,
+    "suppressed": false,
+    "suppressed_by": null,
+    "suppressed_at": null,
+    "risk_accepted": false,
+    "risk_accepted_by": null,
+    "risk_accepted_at": null,
+    "risk_accepted_reason": null,
+    "reachability_level": "function",
+    "reachability_details": {
+      "files": [
+        "main/java/com/deptex/App.java"
+      ],
+      "locations": [
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 24,
+          "method": "org.apache.commons.text.StringSubstitutor.replace:java.lang.String(java.lang.String)",
+          "code_snippet": "    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ \n→   24 │     public static String interpolate(String template) {\n    25 │         // Text4Shell CVE-2022-42889.\n    26 │         StringSubstitutor sub = StringSubstitutor.createInterpolator();\n    27 │         return sub.replace(template);\n    28 │     }\n    29 │ "
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 26,
+          "method": null,
+          "code_snippet": "    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ \n    24 │     public static String interpolate(String template) {\n    25 │         // Text4Shell CVE-2022-42889.\n→   26 │         StringSubstitutor sub = StringSubstitutor.createInterpolator();\n    27 │         return sub.replace(template);\n    28 │     }\n    29 │ \n    30 │     public static void main(String[] args) throws Exception {\n    31 │         String input = args.length > 0 ? args[0] : \"test\";"
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 26,
+          "method": null,
+          "code_snippet": "    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ \n    24 │     public static String interpolate(String template) {\n    25 │         // Text4Shell CVE-2022-42889.\n→   26 │         StringSubstitutor sub = StringSubstitutor.createInterpolator();\n    27 │         return sub.replace(template);\n    28 │     }\n    29 │ \n    30 │     public static void main(String[] args) throws Exception {\n    31 │         String input = args.length > 0 ? args[0] : \"test\";"
+        }
+      ],
+      "usage_count": 3,
+      "impacted_paths": 3,
+      "methods_called": [
+        "org.apache.commons.text.StringSubstitutor.replace:java.lang.String(java.lang.String)"
+      ]
+    },
+    "sla_deadline_at": null,
+    "sla_warning_at": null,
+    "sla_status": null,
+    "sla_breached_at": null,
+    "sla_met_at": null,
+    "sla_exempt_reason": null,
+    "sla_warning_notified_at": null,
+    "sla_breach_notified_at": null,
+    "base_depscore_no_reachability": "44.00",
+    "epd_factor": null,
+    "contextual_depscore": null,
+    "reachability_status": "unreachable",
+    "entry_point_classification": null,
+    "entry_point_weight": null,
+    "epd_depth": null,
+    "epd_alpha": "0.850",
+    "sink_precondition": null,
+    "sanitization_postcondition": null,
+    "is_sanitized": false,
+    "epd_confidence_tier": null,
+    "epd_model": null,
+    "epd_schema_version": "epd-v1",
+    "epd_prompt_version": "epd-v1",
+    "epd_status": "pending",
+    "status": "open",
+    "re_review_triggered_at": null,
+    "re_review_reasons": null
+  },
+  {
+    "osv_id": "GHSA-72hv-8253-57qq",
+    "severity": "medium",
+    "summary": "",
+    "aliases": null,
+    "fixed_versions": [
+      "2.18.6"
+    ],
+    "is_reachable": true,
+    "epss_score": null,
+    "published_at": "2026-02-28T02:01:05.000Z",
+    "cvss_score": "6.9",
+    "cisa_kev": false,
+    "depscore": 32,
+    "suppressed": false,
+    "suppressed_by": null,
+    "suppressed_at": null,
+    "risk_accepted": false,
+    "risk_accepted_by": null,
+    "risk_accepted_at": null,
+    "risk_accepted_reason": null,
+    "reachability_level": "function",
+    "reachability_details": {
+      "files": [
+        "main/java/com/deptex/App.java"
+      ],
+      "locations": [
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 20,
+          "method": null,
+          "code_snippet": "    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n    18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n→   20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ \n    24 │     public static String interpolate(String template) {\n    25 │         // Text4Shell CVE-2022-42889."
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 18,
+          "method": "com.fasterxml.jackson.databind.ObjectMapper",
+          "code_snippet": "    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n→   18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ "
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 18,
+          "method": null,
+          "code_snippet": "    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n→   18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ "
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 17,
+          "method": "com.fasterxml.jackson.databind.ObjectMapper.readValue:java.lang.Object(java.lang.String,java.lang.Class)",
+          "code_snippet": "    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n→   17 │     public static Object deserialize(String json) throws Exception {\n    18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }"
+        }
+      ],
+      "usage_count": 4,
+      "impacted_paths": 4,
+      "methods_called": [
+        "com.fasterxml.jackson.databind.ObjectMapper",
+        "com.fasterxml.jackson.databind.ObjectMapper.readValue:java.lang.Object(java.lang.String,java.lang.Class)"
+      ]
+    },
+    "sla_deadline_at": null,
+    "sla_warning_at": null,
+    "sla_status": null,
+    "sla_breached_at": null,
+    "sla_met_at": null,
+    "sla_exempt_reason": null,
+    "sla_warning_notified_at": null,
+    "sla_breach_notified_at": null,
+    "base_depscore_no_reachability": "46.00",
+    "epd_factor": null,
+    "contextual_depscore": null,
+    "reachability_status": "unreachable",
+    "entry_point_classification": null,
+    "entry_point_weight": null,
+    "epd_depth": null,
+    "epd_alpha": "0.850",
+    "sink_precondition": null,
+    "sanitization_postcondition": null,
+    "is_sanitized": false,
+    "epd_confidence_tier": null,
+    "epd_model": null,
+    "epd_schema_version": "epd-v1",
+    "epd_prompt_version": "epd-v1",
+    "epd_status": "pending",
+    "status": "open",
+    "re_review_triggered_at": null,
+    "re_review_reasons": null
+  },
+  {
+    "osv_id": "CVE-2026-34480",
+    "severity": "medium",
+    "summary": "Apache Log4j Core: Silent log event loss in XmlLayout due to unescaped XML 1.0 forbidden characters",
+    "aliases": null,
+    "fixed_versions": [
+      "2.25.4"
+    ],
+    "is_reachable": true,
+    "epss_score": "0.0016",
+    "published_at": "2026-04-10T18:31:17.000Z",
+    "cvss_score": "6.9",
+    "cisa_kev": false,
+    "depscore": 33,
+    "suppressed": false,
+    "suppressed_by": null,
+    "suppressed_at": null,
+    "risk_accepted": false,
+    "risk_accepted_by": null,
+    "risk_accepted_at": null,
+    "risk_accepted_reason": null,
+    "reachability_level": "function",
+    "reachability_details": {
+      "files": [
+        "main/java/com/deptex/App.java"
+      ],
+      "locations": [
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 9,
+          "method": null,
+          "code_snippet": "     4 │ import org.apache.commons.text.StringSubstitutor;\n     5 │ import org.apache.logging.log4j.LogManager;\n     6 │ import org.apache.logging.log4j.Logger;\n     7 │ \n     8 │ public class App {\n→    9 │     private static final Logger logger = LogManager.getLogger(App.class);\n    10 │ \n    11 │     public static void processInput(String userInput) {\n    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);"
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 11,
+          "method": "org.apache.logging.log4j.Logger.info:void(java.lang.String,java.lang.Object)",
+          "code_snippet": "     6 │ import org.apache.logging.log4j.Logger;\n     7 │ \n     8 │ public class App {\n     9 │     private static final Logger logger = LogManager.getLogger(App.class);\n    10 │ \n→   11 │     public static void processInput(String userInput) {\n    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ "
+        }
+      ],
+      "usage_count": 2,
+      "impacted_paths": 2,
+      "methods_called": [
+        "org.apache.logging.log4j.Logger.info:void(java.lang.String,java.lang.Object)"
+      ]
+    },
+    "sla_deadline_at": null,
+    "sla_warning_at": null,
+    "sla_status": null,
+    "sla_breached_at": null,
+    "sla_met_at": null,
+    "sla_exempt_reason": null,
+    "sla_warning_notified_at": null,
+    "sla_breach_notified_at": null,
+    "base_depscore_no_reachability": "47.00",
+    "epd_factor": null,
+    "contextual_depscore": null,
+    "reachability_status": "unreachable",
+    "entry_point_classification": null,
+    "entry_point_weight": null,
+    "epd_depth": null,
+    "epd_alpha": "0.850",
+    "sink_precondition": null,
+    "sanitization_postcondition": null,
+    "is_sanitized": false,
+    "epd_confidence_tier": null,
+    "epd_model": null,
+    "epd_schema_version": "epd-v1",
+    "epd_prompt_version": "epd-v1",
+    "epd_status": "pending",
+    "status": "open",
+    "re_review_triggered_at": null,
+    "re_review_reasons": null
+  },
+  {
+    "osv_id": "CVE-2021-46877",
+    "severity": "high",
+    "summary": "jackson-databind possible Denial of Service if using JDK serialization to serialize JsonNode",
+    "aliases": null,
+    "fixed_versions": [
+      "2.12.6"
+    ],
+    "is_reachable": true,
+    "epss_score": "0.0029",
+    "published_at": "2023-03-19T00:30:25.000Z",
+    "cvss_score": "7.5",
+    "cisa_kev": false,
+    "depscore": 37,
+    "suppressed": false,
+    "suppressed_by": null,
+    "suppressed_at": null,
+    "risk_accepted": false,
+    "risk_accepted_by": null,
+    "risk_accepted_at": null,
+    "risk_accepted_reason": null,
+    "reachability_level": "function",
+    "reachability_details": {
+      "files": [
+        "main/java/com/deptex/App.java"
+      ],
+      "locations": [
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 20,
+          "method": null,
+          "code_snippet": "    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n    18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n→   20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ \n    24 │     public static String interpolate(String template) {\n    25 │         // Text4Shell CVE-2022-42889."
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 18,
+          "method": "com.fasterxml.jackson.databind.ObjectMapper",
+          "code_snippet": "    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n→   18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ "
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 18,
+          "method": null,
+          "code_snippet": "    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n→   18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ "
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 17,
+          "method": "com.fasterxml.jackson.databind.ObjectMapper.readValue:java.lang.Object(java.lang.String,java.lang.Class)",
+          "code_snippet": "    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n→   17 │     public static Object deserialize(String json) throws Exception {\n    18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }"
+        }
+      ],
+      "usage_count": 4,
+      "impacted_paths": 4,
+      "methods_called": [
+        "com.fasterxml.jackson.databind.ObjectMapper",
+        "com.fasterxml.jackson.databind.ObjectMapper.readValue:java.lang.Object(java.lang.String,java.lang.Class)"
+      ]
+    },
+    "sla_deadline_at": null,
+    "sla_warning_at": null,
+    "sla_status": null,
+    "sla_breached_at": null,
+    "sla_met_at": null,
+    "sla_exempt_reason": null,
+    "sla_warning_notified_at": null,
+    "sla_breach_notified_at": null,
+    "base_depscore_no_reachability": "52.00",
+    "epd_factor": null,
+    "contextual_depscore": null,
+    "reachability_status": "unreachable",
+    "entry_point_classification": null,
+    "entry_point_weight": null,
+    "epd_depth": null,
+    "epd_alpha": "0.850",
+    "sink_precondition": null,
+    "sanitization_postcondition": null,
+    "is_sanitized": false,
+    "epd_confidence_tier": null,
+    "epd_model": null,
+    "epd_schema_version": "epd-v1",
+    "epd_prompt_version": "epd-v1",
+    "epd_status": "pending",
+    "status": "open",
+    "re_review_triggered_at": null,
+    "re_review_reasons": null
+  },
+  {
+    "osv_id": "CVE-2022-42003",
+    "severity": "high",
+    "summary": "Uncontrolled Resource Consumption in Jackson-databind",
+    "aliases": null,
+    "fixed_versions": [
+      "2.12.7.1"
+    ],
+    "is_reachable": true,
+    "epss_score": "0.0035",
+    "published_at": "2022-10-03T00:00:31.000Z",
+    "cvss_score": "7.5",
+    "cisa_kev": false,
+    "depscore": 37,
+    "suppressed": false,
+    "suppressed_by": null,
+    "suppressed_at": null,
+    "risk_accepted": false,
+    "risk_accepted_by": null,
+    "risk_accepted_at": null,
+    "risk_accepted_reason": null,
+    "reachability_level": "function",
+    "reachability_details": {
+      "files": [
+        "main/java/com/deptex/App.java"
+      ],
+      "locations": [
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 20,
+          "method": null,
+          "code_snippet": "    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n    18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n→   20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ \n    24 │     public static String interpolate(String template) {\n    25 │         // Text4Shell CVE-2022-42889."
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 18,
+          "method": "com.fasterxml.jackson.databind.ObjectMapper",
+          "code_snippet": "    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n→   18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ "
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 18,
+          "method": null,
+          "code_snippet": "    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n→   18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ "
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 17,
+          "method": "com.fasterxml.jackson.databind.ObjectMapper.readValue:java.lang.Object(java.lang.String,java.lang.Class)",
+          "code_snippet": "    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n→   17 │     public static Object deserialize(String json) throws Exception {\n    18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }"
+        }
+      ],
+      "usage_count": 4,
+      "impacted_paths": 4,
+      "methods_called": [
+        "com.fasterxml.jackson.databind.ObjectMapper",
+        "com.fasterxml.jackson.databind.ObjectMapper.readValue:java.lang.Object(java.lang.String,java.lang.Class)"
+      ]
+    },
+    "sla_deadline_at": null,
+    "sla_warning_at": null,
+    "sla_status": null,
+    "sla_breached_at": null,
+    "sla_met_at": null,
+    "sla_exempt_reason": null,
+    "sla_warning_notified_at": null,
+    "sla_breach_notified_at": null,
+    "base_depscore_no_reachability": "52.00",
+    "epd_factor": null,
+    "contextual_depscore": null,
+    "reachability_status": "unreachable",
+    "entry_point_classification": null,
+    "entry_point_weight": null,
+    "epd_depth": null,
+    "epd_alpha": "0.850",
+    "sink_precondition": null,
+    "sanitization_postcondition": null,
+    "is_sanitized": false,
+    "epd_confidence_tier": null,
+    "epd_model": null,
+    "epd_schema_version": "epd-v1",
+    "epd_prompt_version": "epd-v1",
+    "epd_status": "pending",
+    "status": "open",
+    "re_review_triggered_at": null,
+    "re_review_reasons": null
+  },
+  {
+    "osv_id": "CVE-2020-36518",
+    "severity": "high",
+    "summary": "Deeply nested json in jackson-databind",
+    "aliases": null,
+    "fixed_versions": [
+      "2.12.6.1"
+    ],
+    "is_reachable": true,
+    "epss_score": "0.0051",
+    "published_at": "2022-03-12T00:00:36.000Z",
+    "cvss_score": "7.5",
+    "cisa_kev": false,
+    "depscore": 37,
+    "suppressed": false,
+    "suppressed_by": null,
+    "suppressed_at": null,
+    "risk_accepted": false,
+    "risk_accepted_by": null,
+    "risk_accepted_at": null,
+    "risk_accepted_reason": null,
+    "reachability_level": "function",
+    "reachability_details": {
+      "files": [
+        "main/java/com/deptex/App.java"
+      ],
+      "locations": [
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 20,
+          "method": null,
+          "code_snippet": "    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n    18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n→   20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ \n    24 │     public static String interpolate(String template) {\n    25 │         // Text4Shell CVE-2022-42889."
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 18,
+          "method": "com.fasterxml.jackson.databind.ObjectMapper",
+          "code_snippet": "    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n→   18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ "
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 18,
+          "method": null,
+          "code_snippet": "    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n→   18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ "
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 17,
+          "method": "com.fasterxml.jackson.databind.ObjectMapper.readValue:java.lang.Object(java.lang.String,java.lang.Class)",
+          "code_snippet": "    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n→   17 │     public static Object deserialize(String json) throws Exception {\n    18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }"
+        }
+      ],
+      "usage_count": 4,
+      "impacted_paths": 4,
+      "methods_called": [
+        "com.fasterxml.jackson.databind.ObjectMapper",
+        "com.fasterxml.jackson.databind.ObjectMapper.readValue:java.lang.Object(java.lang.String,java.lang.Class)"
+      ]
+    },
+    "sla_deadline_at": null,
+    "sla_warning_at": null,
+    "sla_status": null,
+    "sla_breached_at": null,
+    "sla_met_at": null,
+    "sla_exempt_reason": null,
+    "sla_warning_notified_at": null,
+    "sla_breach_notified_at": null,
+    "base_depscore_no_reachability": "53.00",
+    "epd_factor": null,
+    "contextual_depscore": null,
+    "reachability_status": "unreachable",
+    "entry_point_classification": null,
+    "entry_point_weight": null,
+    "epd_depth": null,
+    "epd_alpha": "0.850",
+    "sink_precondition": null,
+    "sanitization_postcondition": null,
+    "is_sanitized": false,
+    "epd_confidence_tier": null,
+    "epd_model": null,
+    "epd_schema_version": "epd-v1",
+    "epd_prompt_version": "epd-v1",
+    "epd_status": "pending",
+    "status": "open",
+    "re_review_triggered_at": null,
+    "re_review_reasons": null
+  },
+  {
+    "osv_id": "CVE-2022-42004",
+    "severity": "high",
+    "summary": "Uncontrolled Resource Consumption in FasterXML jackson-databind",
+    "aliases": null,
+    "fixed_versions": [
+      "2.12.7.1"
+    ],
+    "is_reachable": true,
+    "epss_score": "0.0027",
+    "published_at": "2022-10-03T00:00:31.000Z",
+    "cvss_score": "8.2",
+    "cisa_kev": false,
+    "depscore": 40,
+    "suppressed": false,
+    "suppressed_by": null,
+    "suppressed_at": null,
+    "risk_accepted": false,
+    "risk_accepted_by": null,
+    "risk_accepted_at": null,
+    "risk_accepted_reason": null,
+    "reachability_level": "function",
+    "reachability_details": {
+      "files": [
+        "main/java/com/deptex/App.java"
+      ],
+      "locations": [
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 20,
+          "method": null,
+          "code_snippet": "    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n    18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n→   20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ \n    24 │     public static String interpolate(String template) {\n    25 │         // Text4Shell CVE-2022-42889."
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 18,
+          "method": "com.fasterxml.jackson.databind.ObjectMapper",
+          "code_snippet": "    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n→   18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ "
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 18,
+          "method": null,
+          "code_snippet": "    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n→   18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ "
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 17,
+          "method": "com.fasterxml.jackson.databind.ObjectMapper.readValue:java.lang.Object(java.lang.String,java.lang.Class)",
+          "code_snippet": "    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n→   17 │     public static Object deserialize(String json) throws Exception {\n    18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }"
+        }
+      ],
+      "usage_count": 4,
+      "impacted_paths": 4,
+      "methods_called": [
+        "com.fasterxml.jackson.databind.ObjectMapper",
+        "com.fasterxml.jackson.databind.ObjectMapper.readValue:java.lang.Object(java.lang.String,java.lang.Class)"
+      ]
+    },
+    "sla_deadline_at": null,
+    "sla_warning_at": null,
+    "sla_status": null,
+    "sla_breached_at": null,
+    "sla_met_at": null,
+    "sla_exempt_reason": null,
+    "sla_warning_notified_at": null,
+    "sla_breach_notified_at": null,
+    "base_depscore_no_reachability": "57.00",
+    "epd_factor": null,
+    "contextual_depscore": null,
+    "reachability_status": "unreachable",
+    "entry_point_classification": null,
+    "entry_point_weight": null,
+    "epd_depth": null,
+    "epd_alpha": "0.850",
+    "sink_precondition": null,
+    "sanitization_postcondition": null,
+    "is_sanitized": false,
+    "epd_confidence_tier": null,
+    "epd_model": null,
+    "epd_schema_version": "epd-v1",
+    "epd_prompt_version": "epd-v1",
+    "epd_status": "pending",
+    "status": "open",
+    "re_review_triggered_at": null,
+    "re_review_reasons": null
+  },
+  {
+    "osv_id": "CVE-2025-52999",
+    "severity": "high",
+    "summary": "jackson-core can throw a StackoverflowError when processing deeply nested data",
+    "aliases": null,
+    "fixed_versions": [
+      "2.15.0"
+    ],
+    "is_reachable": true,
+    "epss_score": "0.0021",
+    "published_at": "2025-06-27T15:22:22.000Z",
+    "cvss_score": "8.7",
+    "cisa_kev": false,
+    "depscore": 42,
+    "suppressed": false,
+    "suppressed_by": null,
+    "suppressed_at": null,
+    "risk_accepted": false,
+    "risk_accepted_by": null,
+    "risk_accepted_at": null,
+    "risk_accepted_reason": null,
+    "reachability_level": "function",
+    "reachability_details": {
+      "files": [
+        "main/java/com/deptex/App.java"
+      ],
+      "locations": [
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 20,
+          "method": null,
+          "code_snippet": "    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n    18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n→   20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ \n    24 │     public static String interpolate(String template) {\n    25 │         // Text4Shell CVE-2022-42889."
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 18,
+          "method": "com.fasterxml.jackson.databind.ObjectMapper",
+          "code_snippet": "    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n→   18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ "
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 18,
+          "method": null,
+          "code_snippet": "    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n    17 │     public static Object deserialize(String json) throws Exception {\n→   18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }\n    23 │ "
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 17,
+          "method": "com.fasterxml.jackson.databind.ObjectMapper.readValue:java.lang.Object(java.lang.String,java.lang.Class)",
+          "code_snippet": "    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ \n→   17 │     public static Object deserialize(String json) throws Exception {\n    18 │         ObjectMapper mapper = new ObjectMapper();\n    19 │         // Jackson default-typing enablement — surface for polymorphic deserialization CVEs.\n    20 │         mapper.enableDefaultTyping();\n    21 │         return mapper.readValue(json, Object.class);\n    22 │     }"
+        }
+      ],
+      "usage_count": 4,
+      "impacted_paths": 4,
+      "methods_called": [
+        "com.fasterxml.jackson.databind.ObjectMapper",
+        "com.fasterxml.jackson.databind.ObjectMapper.readValue:java.lang.Object(java.lang.String,java.lang.Class)"
+      ]
+    },
+    "sla_deadline_at": null,
+    "sla_warning_at": null,
+    "sla_status": null,
+    "sla_breached_at": null,
+    "sla_met_at": null,
+    "sla_exempt_reason": null,
+    "sla_warning_notified_at": null,
+    "sla_breach_notified_at": null,
+    "base_depscore_no_reachability": "60.00",
+    "epd_factor": null,
+    "contextual_depscore": null,
+    "reachability_status": "unreachable",
+    "entry_point_classification": null,
+    "entry_point_weight": null,
+    "epd_depth": null,
+    "epd_alpha": "0.850",
+    "sink_precondition": null,
+    "sanitization_postcondition": null,
+    "is_sanitized": false,
+    "epd_confidence_tier": null,
+    "epd_model": null,
+    "epd_schema_version": "epd-v1",
+    "epd_prompt_version": "epd-v1",
+    "epd_status": "pending",
+    "status": "open",
+    "re_review_triggered_at": null,
+    "re_review_reasons": null
+  },
+  {
+    "osv_id": "CVE-2021-44832",
+    "severity": "medium",
+    "summary": "Improper Input Validation and Injection in Apache Log4j2",
+    "aliases": null,
+    "fixed_versions": [
+      "2.17.1"
+    ],
+    "is_reachable": true,
+    "epss_score": "0.5365",
+    "published_at": "2022-01-04T16:14:20.000Z",
+    "cvss_score": "6.6",
+    "cisa_kev": false,
+    "depscore": 53,
+    "suppressed": false,
+    "suppressed_by": null,
+    "suppressed_at": null,
+    "risk_accepted": false,
+    "risk_accepted_by": null,
+    "risk_accepted_at": null,
+    "risk_accepted_reason": null,
+    "reachability_level": "function",
+    "reachability_details": {
+      "files": [
+        "main/java/com/deptex/App.java"
+      ],
+      "locations": [
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 9,
+          "method": null,
+          "code_snippet": "     4 │ import org.apache.commons.text.StringSubstitutor;\n     5 │ import org.apache.logging.log4j.LogManager;\n     6 │ import org.apache.logging.log4j.Logger;\n     7 │ \n     8 │ public class App {\n→    9 │     private static final Logger logger = LogManager.getLogger(App.class);\n    10 │ \n    11 │     public static void processInput(String userInput) {\n    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);"
+        },
+        {
+          "file": "main/java/com/deptex/App.java",
+          "line": 11,
+          "method": "org.apache.logging.log4j.Logger.info:void(java.lang.String,java.lang.Object)",
+          "code_snippet": "     6 │ import org.apache.logging.log4j.Logger;\n     7 │ \n     8 │ public class App {\n     9 │     private static final Logger logger = LogManager.getLogger(App.class);\n    10 │ \n→   11 │     public static void processInput(String userInput) {\n    12 │         // Log4Shell CVE-2021-44228 reachability target.\n    13 │         logger.info(\"Processing: {}\", userInput);\n    14 │         logger.error(\"Error for: \" + userInput);\n    15 │     }\n    16 │ "
+        }
+      ],
+      "usage_count": 2,
+      "impacted_paths": 2,
+      "methods_called": [
+        "org.apache.logging.log4j.Logger.info:void(java.lang.String,java.lang.Object)"
+      ]
+    },
+    "sla_deadline_at": null,
+    "sla_warning_at": null,
+    "sla_status": null,
+    "sla_breached_at": null,
+    "sla_met_at": null,
+    "sla_exempt_reason": null,
+    "sla_warning_notified_at": null,
+    "sla_breach_notified_at": null,
+    "base_depscore_no_reachability": "75.00",
+    "epd_factor": null,
+    "contextual_depscore": null,
+    "reachability_status": "unreachable",
+    "entry_point_classification": null,
+    "entry_point_weight": null,
+    "epd_depth": null,
+    "epd_alpha": "0.850",
+    "sink_precondition": null,
+    "sanitization_postcondition": null,
+    "is_sanitized": false,
+    "epd_confidence_tier": null,
+    "epd_model": null,
+    "epd_schema_version": "epd-v1",
+    "epd_prompt_version": "epd-v1",
+    "epd_status": "pending",
+    "status": "open",
+    "re_review_triggered_at": null,
+    "re_review_reasons": null
+  }
+]

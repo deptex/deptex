@@ -35,6 +35,7 @@ export interface RunSummary {
   semgrep_count: number;
   secrets_count: number;
   reachable_flows_count: number;
+  entry_points_count: number;
   finalize_summary?: unknown;
 }
 
@@ -64,12 +65,13 @@ export async function writeOutputs(
 ): Promise<WriteOutputsResult> {
   fs.mkdirSync(opts.outputDir, { recursive: true });
 
-  const [depsRaw, vulnsRaw, semgrepRaw, secretsRaw, flowsRaw] = await Promise.all([
+  const [depsRaw, vulnsRaw, semgrepRaw, secretsRaw, flowsRaw, entryPointsRaw] = await Promise.all([
     fetchRows(storage, 'project_dependencies', 'project_id', opts.projectId),
     fetchRows(storage, 'project_dependency_vulnerabilities', 'project_id', opts.projectId),
     fetchRows(storage, 'project_semgrep_findings', 'project_id', opts.projectId),
     fetchRows(storage, 'project_secret_findings', 'project_id', opts.projectId),
     fetchRows(storage, 'project_reachable_flows', 'project_id', opts.projectId),
+    fetchRows(storage, 'project_entry_points', 'project_id', opts.projectId),
   ]);
 
   const vulns = opts.severityFilter
@@ -91,6 +93,7 @@ export async function writeOutputs(
     semgrep_count: semgrepRaw.length,
     secrets_count: secretsRaw.length,
     reachable_flows_count: flowsRaw.length,
+    entry_points_count: entryPointsRaw.length,
     finalize_summary: opts.finalizeSummary ?? null,
   };
 
@@ -100,6 +103,7 @@ export async function writeOutputs(
   writeJson(path.join(opts.outputDir, 'semgrep.json'), sortRows(semgrepRaw));
   writeJson(path.join(opts.outputDir, 'secrets.json'), sortRows(secretsRaw));
   writeJson(path.join(opts.outputDir, 'reachable_flows.json'), sortRows(flowsRaw));
+  writeJson(path.join(opts.outputDir, 'entry_points.json'), sortRows(entryPointsRaw));
 
   return { summary, vulns, deps: depsRaw, semgrep: semgrepRaw, secrets: secretsRaw };
 }

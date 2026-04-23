@@ -33,7 +33,8 @@ export type LogStep =
   | 'uploading'
   | 'finalize'
   | 'complete'
-  | 'ast_parsing'
+  | 'usage_extraction'
+  | 'framework_detection'
   | 'populate'
   | 'api';
 
@@ -48,7 +49,8 @@ const CLI_STEP_LABELS: Record<string, string> = {
   trufflehog: 'secrets',
   vuln_scan: 'vulns',
   depscan: 'vulns',
-  ast_parsing: 'ast',
+  usage_extraction: 'imports',
+  framework_detection: 'frameworks',
   deps_sync: 'deps',
   clone: 'clone',
   cloning: 'clone',

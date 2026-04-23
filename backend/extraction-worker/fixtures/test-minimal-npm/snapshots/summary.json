@@ -7,5 +7,6 @@
   "semgrep_count": 0,
   "secrets_count": 0,
   "reachable_flows_count": 0,
+  "entry_points_count": 0,
   "finalize_summary": null
 }

@@ -1,0 +1,12 @@
+{
+  "schema_version": "deptex-local-v1",
+  "project_name": "test-java",
+  "ecosystem": "maven",
+  "dependencies_count": 7,
+  "vulnerabilities_count": 16,
+  "semgrep_count": 1,
+  "secrets_count": 0,
+  "reachable_flows_count": 0,
+  "entry_points_count": 0,
+  "finalize_summary": null
+}
