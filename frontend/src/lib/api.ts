@@ -20,6 +20,7 @@ export interface Organization {
   avatar_url?: string | null;
   github_installation_id?: string | null;
   get_started_dismissed?: boolean;
+  canvas_cursors_enabled?: boolean;
 }
 
 export interface RolePermissions {
@@ -640,6 +641,48 @@ export const api = {
 
   async dismissGetStarted(organizationId: string): Promise<void> {
     await fetchWithAuth(`/api/organizations/${organizationId}/dismiss-get-started`, { method: 'POST' });
+  },
+
+  async updateTeamCanvasPosition(organizationId: string, teamId: string, position: { x: number; y: number }): Promise<{ id: string; canvas_position_x: number; canvas_position_y: number; canvas_position_updated_at: string }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/canvas/teams/${teamId}/position`, {
+      method: 'PATCH',
+      body: JSON.stringify({ canvas_position_x: position.x, canvas_position_y: position.y }),
+    });
+  },
+
+  async updateProjectCanvasPosition(organizationId: string, projectId: string, position: { x: number; y: number }): Promise<{ id: string; canvas_position_x: number; canvas_position_y: number; canvas_position_updated_at: string }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/canvas/projects/${projectId}/position`, {
+      method: 'PATCH',
+      body: JSON.stringify({ canvas_position_x: position.x, canvas_position_y: position.y }),
+    });
+  },
+
+  async updateCanvasPositionsBatch(
+    organizationId: string,
+    updates: {
+      teams?: Array<{ id: string; x: number; y: number }>;
+      projects?: Array<{ id: string; x: number; y: number }>;
+    },
+  ): Promise<{
+    teams: Array<{ id: string; canvas_position_x: number; canvas_position_y: number; canvas_position_updated_at: string }>;
+    projects: Array<{ id: string; canvas_position_x: number; canvas_position_y: number; canvas_position_updated_at: string }>;
+  }> {
+    const toPayload = (arr: Array<{ id: string; x: number; y: number }> | undefined) =>
+      (arr ?? []).map((i) => ({ id: i.id, canvas_position_x: i.x, canvas_position_y: i.y }));
+    return fetchWithAuth(`/api/organizations/${organizationId}/canvas/batch`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        teams: toPayload(updates.teams),
+        projects: toPayload(updates.projects),
+      }),
+    });
+  },
+
+  async updateCanvasSettings(organizationId: string, settings: { canvas_cursors_enabled: boolean }): Promise<void> {
+    await fetchWithAuth(`/api/organizations/${organizationId}/canvas-settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(settings),
+    });
   },
 
   async getOrganizationIntegrations(organizationId: string): Promise<OrganizationIntegration[]> {
@@ -2680,6 +2723,8 @@ export interface Team {
   member_count?: number;
   project_count?: number;
   notifications_paused_until?: string | null;
+  canvas_position_x?: number | null;
+  canvas_position_y?: number | null;
 }
 
 export interface TeamPermissions {
@@ -2771,6 +2816,8 @@ export interface Project {
   policy_evaluated_at?: string | null;
   /** Percent of dependencies with passing licenses/policy (0–100). Used on org Compliance tab. */
   compliance_score_pct?: number | null;
+  canvas_position_x?: number | null;
+  canvas_position_y?: number | null;
 }
 
 export interface ProjectRepository {
