@@ -34,6 +34,7 @@ import { useToast } from '../../hooks/use-toast';
 import {
   useOrganizationOverviewGraphLayout,
   ORG_CENTER_ID,
+  getTeamProjectHandles,
   type OverviewTeamWithProjects,
   type OverviewProjectItem,
 } from '../../components/vulnerabilities-graph/useOrganizationVulnerabilitiesGraphLayout';
@@ -41,6 +42,10 @@ import {
   ORG_OVERVIEW_EDGE_STROKE,
   ORG_OVERVIEW_ORG_WIDTH,
   ORG_OVERVIEW_ORG_HEIGHT,
+  ORG_OVERVIEW_TEAM_WIDTH,
+  ORG_OVERVIEW_TEAM_HEIGHT,
+  computeOrgOverviewEdgeRouting,
+  getOrgToSatelliteHandles,
 } from '../../components/vulnerabilities-graph/overviewOrgLayout';
 import { GroupCenterNode } from '../../components/vulnerabilities-graph/GroupCenterNode';
 import { SkeletonGroupCenterNode } from '../../components/vulnerabilities-graph/SkeletonGroupCenterNode';
@@ -246,6 +251,57 @@ function OrgProjectVulnerabilitiesTableSkeleton({ rowCount = 6 }: { rowCount?: n
       </table>
     </div>
   );
+}
+
+/**
+ * Recomputes org→satellite and team→project edge handles based on current node
+ * positions. Used to keep edge routing correct after remote drag moves/stops,
+ * where the layout hook does not re-run (only the local user's drag stop triggers
+ * an optimistic rawTeamsWithProjects update that re-runs the layout).
+ */
+function recomputeOrgCanvasEdges(edges: Edge[], nodes: Node[]): Edge[] {
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  const orgNode = nodeById.get(ORG_CENTER_ID);
+  if (!orgNode) return edges;
+
+  const orgCX = orgNode.position.x + ORG_OVERVIEW_ORG_WIDTH / 2;
+  const orgCY = orgNode.position.y + ORG_OVERVIEW_ORG_HEIGHT / 2;
+
+  // Collect all org→satellite targets to compute slot-spread routing in one pass.
+  const orgLinkItems: Array<{ targetId: string; cx: number; cy: number }> = [];
+  for (const edge of edges) {
+    if (edge.source !== ORG_CENTER_ID) continue;
+    const tgt = nodeById.get(edge.target);
+    if (!tgt) continue;
+    const tw = tgt.width ?? ORG_OVERVIEW_TEAM_WIDTH;
+    const th = tgt.height ?? ORG_OVERVIEW_TEAM_HEIGHT;
+    orgLinkItems.push({
+      targetId: edge.target,
+      cx: tgt.position.x + tw / 2 - orgCX,
+      cy: tgt.position.y + th / 2 - orgCY,
+    });
+  }
+  const orgRouting = computeOrgOverviewEdgeRouting(orgLinkItems);
+
+  return edges.map((edge) => {
+    if (edge.source === ORG_CENTER_ID) {
+      const route = orgRouting.get(edge.target);
+      if (!route) return edge;
+      return { ...edge, sourceHandle: route.sourceHandle, targetHandle: route.targetHandle, pathOptions: route.pathOptions } as Edge;
+    }
+
+    if (edge.source.startsWith('team-') && edge.target.startsWith('project-')) {
+      const src = nodeById.get(edge.source);
+      const tgt = nodeById.get(edge.target);
+      if (!src || !tgt) return edge;
+      const dx = (tgt.position.x + (tgt.width ?? OVERVIEW_PROJECT_NODE_WIDTH) / 2) - (src.position.x + (src.width ?? ORG_OVERVIEW_TEAM_WIDTH) / 2);
+      const dy = (tgt.position.y + (tgt.height ?? OVERVIEW_PROJECT_NODE_HEIGHT) / 2) - (src.position.y + (src.height ?? ORG_OVERVIEW_TEAM_HEIGHT) / 2);
+      const { sourceHandle, targetHandle } = getTeamProjectHandles(Math.atan2(dy, dx));
+      return { ...edge, sourceHandle, targetHandle };
+    }
+
+    return edge;
+  });
 }
 
 export default function OrganizationVulnerabilitiesPage() {
@@ -1125,7 +1181,14 @@ export default function OrganizationVulnerabilitiesPage() {
         return { ...n, position: { x: m.x, y: m.y } };
       }),
     );
-  }, [setGraphNodes]);
+    // Recompute edge handle routing with the updated positions so edges
+    // always exit/enter from the closest face, not the stale baked-in handles.
+    const updatedNodes = graphNodesRef.current.map((n) => {
+      const m = byId.get(n.id);
+      return m ? { ...n, position: { x: m.x, y: m.y } } : n;
+    });
+    setGraphEdges((edges) => recomputeOrgCanvasEdges(edges, updatedNodes));
+  }, [setGraphNodes, setGraphEdges]);
 
   const handleRemoteDragStop = useCallback((msg: RemoteDragStopMessage) => {
     const draggerId = msg.sessionId || msg.userId;
@@ -1151,7 +1214,9 @@ export default function OrganizationVulnerabilitiesPage() {
       const childIds = (team?.projects ?? []).map((p) => `project-${p.projectId}`);
       if (childIds.length > 0) tagNodeClass(new Set(childIds), 'remote-drag-child', false);
     }
-  }, [tagNodeClass]);
+    // Recompute edge routing from final node positions after the remote drag settles.
+    setGraphEdges((edges) => recomputeOrgCanvasEdges(edges, graphNodesRef.current));
+  }, [tagNodeClass, setGraphEdges]);
 
   // Sweep: if a remote drag hasn't heartbeated in 5s, synthesize a stop.
   // Covers the sender crashing / tab closing mid-drag so nodes don't get

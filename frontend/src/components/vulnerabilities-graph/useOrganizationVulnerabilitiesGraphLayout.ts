@@ -397,7 +397,7 @@ interface OverviewOrgGridCell {
 }
 
 /** Pick cardinal source/target handles for a team→project edge based on angle. */
-function getTeamProjectHandles(angle: number): {
+export function getTeamProjectHandles(angle: number): {
   sourceHandle: string;
   targetHandle: string;
   targetEdge: OrgSatelliteTargetEdge;
