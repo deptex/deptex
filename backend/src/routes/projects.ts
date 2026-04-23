@@ -1041,6 +1041,8 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
         compliance_score_pct: compliancePctByProject[project.id] ?? null,
         policy_evaluated_at: project.policy_evaluated_at ?? null,
         status_violations: project.status_violations ?? [],
+        canvas_position_x: project.canvas_position_x ?? null,
+        canvas_position_y: project.canvas_position_y ?? null,
       };
     });
 

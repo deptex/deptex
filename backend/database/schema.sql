@@ -1000,7 +1000,10 @@ CREATE TABLE IF NOT EXISTS public.project_reachable_flows (
   sink_is_external boolean DEFAULT true,
   flow_length integer,
   llm_prompt text,
-  created_at timestamp with time zone DEFAULT now()
+  created_at timestamp with time zone DEFAULT now(),
+  reachability_source text NOT NULL DEFAULT 'atom'::text,
+  osv_id text,
+  rule_id text
 );
 CREATE TABLE IF NOT EXISTS public.project_repositories (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1639,6 +1642,7 @@ ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_excep
 ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_slsa_enforcement_check CHECK (((slsa_enforcement IS NULL) OR (slsa_enforcement = ANY (ARRAY['none'::text, 'recommended'::text, 'require_provenance'::text, 'require_attestations'::text, 'require_signed'::text]))));
 ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_slsa_level_check CHECK (((slsa_level IS NULL) OR ((slsa_level >= 1) AND (slsa_level <= 4))));
 ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'accepted'::text, 'rejected'::text, 'revoked'::text])));
+ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_source_chk CHECK ((reachability_source = ANY (ARRAY['atom'::text, 'semgrep_taint'::text])));
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_fix_type_check CHECK ((fix_type = ANY (ARRAY['vulnerability'::text, 'semgrep'::text, 'secret'::text])));
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'completed'::text, 'failed'::text, 'cancelled'::text, 'pr_closed'::text, 'merged'::text, 'superseded'::text])));
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_strategy_check CHECK ((strategy = ANY (ARRAY['bump_version'::text, 'code_patch'::text, 'add_wrapper'::text, 'pin_transitive'::text, 'remove_unused'::text, 'fix_semgrep'::text, 'remediate_secret'::text])));
@@ -1973,7 +1977,9 @@ CREATE INDEX idx_prf_project_dep ON public.project_reachable_flows USING btree (
 CREATE INDEX idx_prf_project_entry ON public.project_reachable_flows USING btree (project_id, entry_point_file);
 CREATE INDEX idx_prf_project_extraction_run ON public.project_reachable_flows USING btree (project_id, extraction_run_id);
 CREATE INDEX idx_prf_project_purl ON public.project_reachable_flows USING btree (project_id, purl);
+CREATE INDEX idx_prf_project_run_osv ON public.project_reachable_flows USING btree (project_id, extraction_run_id, osv_id) WHERE (osv_id IS NOT NULL);
 CREATE INDEX idx_prf_run ON public.project_reachable_flows USING btree (extraction_run_id);
+CREATE INDEX idx_prf_run_source ON public.project_reachable_flows USING btree (extraction_run_id, reachability_source);
 CREATE INDEX idx_project_commits_project_id ON public.project_commits USING btree (project_id);
 CREATE INDEX idx_project_commits_sha ON public.project_commits USING btree (sha);
 CREATE INDEX idx_project_dependencies_active ON public.project_dependencies USING btree (project_id) WHERE (removed_at IS NULL);
@@ -2579,7 +2585,6 @@ BEGIN
   v_enabled := COALESCE((v_rereview_settings->>'enabled')::boolean, true);
   v_triggers := COALESCE(v_rereview_settings->'triggers', '{}'::jsonb);
 
-  -- Phase 22: namespace is now included in typedef/INSERT/DO UPDATE SET.
   WITH input_deps AS (
     SELECT * FROM jsonb_to_recordset(p_dependencies) AS d(
       name TEXT, version TEXT, is_direct BOOLEAN, source TEXT,
@@ -2704,21 +2709,25 @@ BEGIN
   );
   GET DIAGNOSTICS v_secret_inserted = ROW_COUNT;
 
+  -- Phase 23: extend p_reachable_flows typedef with reachability_source/osv_id/rule_id
   INSERT INTO project_reachable_flows (
     project_id, extraction_run_id, purl, dependency_id, flow_nodes,
     entry_point_file, entry_point_method, entry_point_line, entry_point_tag,
-    sink_file, sink_method, sink_line, sink_is_external, flow_length, llm_prompt, created_at
+    sink_file, sink_method, sink_line, sink_is_external, flow_length, llm_prompt,
+    reachability_source, osv_id, rule_id, created_at
   )
   SELECT
     p_project_id, p_extraction_run_id, rf.purl, rf.dependency_id, rf.flow_nodes,
     rf.entry_point_file, rf.entry_point_method, rf.entry_point_line, rf.entry_point_tag,
     rf.sink_file, rf.sink_method, rf.sink_line,
-    COALESCE(rf.sink_is_external, true), rf.flow_length, rf.llm_prompt, v_now
+    COALESCE(rf.sink_is_external, true), rf.flow_length, rf.llm_prompt,
+    COALESCE(rf.reachability_source, 'atom'), rf.osv_id, rf.rule_id, v_now
   FROM jsonb_to_recordset(p_reachable_flows) AS rf(
     purl TEXT, dependency_id UUID, flow_nodes JSONB,
     entry_point_file TEXT, entry_point_method TEXT, entry_point_line INTEGER, entry_point_tag TEXT,
     sink_file TEXT, sink_method TEXT, sink_line INTEGER, sink_is_external BOOLEAN,
-    flow_length INTEGER, llm_prompt TEXT
+    flow_length INTEGER, llm_prompt TEXT,
+    reachability_source TEXT, osv_id TEXT, rule_id TEXT
   );
 
   INSERT INTO project_usage_slices (
