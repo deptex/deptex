@@ -364,6 +364,10 @@ export default function OrganizationLayout() {
         });
       }
 
+      // Clear cached default so OrganizationsLanding doesn't redirect back here
+      if (status === 404 || status === 403) {
+        localStorage.removeItem('deptex_default_org');
+      }
       // Redirect to organizations list
       navigate('/organizations', { replace: true });
     } finally {

@@ -14,8 +14,12 @@ import { Loader2 } from 'lucide-react';
  */
 export default function OrganizationsLanding() {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [defaultOrgId, setDefaultOrgId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [defaultOrgId, setDefaultOrgId] = useState<string | null>(
+    () => localStorage.getItem('deptex_default_org')
+  );
+  const [loading, setLoading] = useState(
+    () => localStorage.getItem('deptex_default_org') === null
+  );
   const [invitations, setInvitations] = useState<OrganizationInvitation[]>([]);
   const [createName, setCreateName] = useState('');
   const [creating, setCreating] = useState(false);
@@ -52,6 +56,7 @@ export default function OrganizationsLanding() {
             : orgsData[0].id;
 
         setDefaultOrgId(validDefault);
+        localStorage.setItem('deptex_default_org', validDefault);
 
         orgsData.forEach((org) => {
           if (org.id && org.role) {
@@ -87,6 +92,7 @@ export default function OrganizationsLanding() {
     setCreating(true);
     try {
       const org = await api.createOrganization(createName.trim());
+      localStorage.setItem('deptex_default_org', org.id);
       try {
         await api.updateUserProfile({ default_organization_id: org.id });
       } catch {
@@ -130,7 +136,7 @@ export default function OrganizationsLanding() {
     );
   }
 
-  if (organizations.length >= 1 && defaultOrgId) {
+  if (defaultOrgId) {
     return <Navigate to={`/organizations/${defaultOrgId}`} replace />;
   }
 
