@@ -56,6 +56,29 @@ Keep fixtures minimal:
   meaningful way (e.g. fixed template string, sanitizer call, non-tainted
   source). Anything else is noise that makes test failures harder to read.
 
+## Rule IDs
+
+Use the convention `deptex.<package-short>.<slug>` (e.g. `deptex.lodash.template-injection`,
+`deptex.log4j.log4shell`). The invoker loads every rule into a single Semgrep
+config dir per run, so rule IDs **must be unique across the whole library** —
+`runReachabilityRules` enforces this up front with a clear error rather than
+letting Semgrep fail later.
+
+## Authoring gotchas
+
+- **Quote brace-shaped patterns.** Semgrep patterns that contain `{ ... }` —
+  e.g. `axios.request({ url: $URL, ... })` or `&ssh.ClientConfig{User: $SRC, ...}` —
+  must be wrapped in quotes. Unquoted, YAML parses them as flow-style maps
+  and rejects the file; the loader then skips the whole rule pack with
+  `YAML parse failed`. When in doubt, quote.
+- **One rule per `rules:` array.** The loader rejects rule files that
+  declare more than one rule. Split multi-mode rules into separate
+  CVE-folder subdirs so `metadata.cve` selection stays 1:1 with files.
+- **Metadata is load-bearing.** `cve`, `package`, and `ecosystem` are the
+  only required fields; rules missing any of them are silently skipped at
+  load time. The test harness will *not* tell you the rule didn't fire —
+  it was never loaded. Run the validator (below) to be sure.
+
 ## Adding a new rule
 
 1. Pick a CVE that's already detected by OSV (otherwise the rule will never
@@ -64,7 +87,18 @@ Keep fixtures minimal:
 3. Create `CVE-YYYY-NNNNN-<slug>/rule.yml` using one of the existing rules
    as a template.
 4. Write `__fixtures__/vulnerable.<ext>` and `__fixtures__/safe.<ext>`.
-5. Validate locally:
+5. Run the bundled validator to prove the loader accepts the new pack:
+
+   ```bash
+   cd backend/extraction-worker
+   npx tsx scripts/validate-reachability-rules.ts
+   ```
+
+   You should see your CVE listed with the rule id, package, ecosystem,
+   and confidence. Any YAML/metadata problem surfaces here.
+
+6. If `semgrep` is on PATH locally, verify the rule matches the right
+   fixture:
 
    ```bash
    semgrep --validate --config reachability-rules/CVE-YYYY-NNNNN-<slug>/rule.yml
@@ -72,13 +106,28 @@ Keep fixtures minimal:
            reachability-rules/CVE-YYYY-NNNNN-<slug>/__fixtures__/
    ```
 
-   Vulnerable should match; safe should not.
+   Vulnerable should produce >=1 finding; safe should produce 0.
 
-6. Run the rule-fixture test suite:
+7. Run the Jest suite — the live-Semgrep block auto-runs in CI/Docker, so a
+   rule that loads but fails its own fixture will be caught there:
 
    ```bash
-   npm test -- reachability-rules
+   cd backend
+   npm test -- --testPathPatterns=reachability-rules
    ```
+
+8. If you're changing level-classification behaviour (vs. just adding a
+   rule), also run the PGLite end-to-end smoke:
+
+   ```bash
+   cd backend/extraction-worker
+   npm run test:reachability-rules-e2e
+   ```
+
+   It seeds a project + dep + two PDVs, writes one atom flow and one
+   semgrep-taint flow, then runs `updateReachabilityLevels` against a real
+   Postgres-shaped store and asserts the taint PDV lands on `confirmed`
+   while the unrelated PDV falls through to `data_flow`.
 
 ## How rule selection works
 
