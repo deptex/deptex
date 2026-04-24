@@ -69,6 +69,21 @@ export interface RunReachabilityRulesArgs {
   runId?: string;
 }
 
+export interface SkippedRule {
+  folder: string;
+  reason: string;
+}
+
+export interface LoadAllRulesResult {
+  loaded: LoadedRule[];
+  skipped: SkippedRule[];
+}
+
+/** Truncate flow content strings to cap project_reachable_flows row size. */
+const MAX_CONTENT_BYTES = 2 * 1024;
+/** Cap intermediate dataflow steps per finding to avoid pathological traces. */
+const MAX_INTERMEDIATE_STEPS = 50;
+
 // -----------------------------------------------------------------------------
 // loadAllRules
 // -----------------------------------------------------------------------------
@@ -76,17 +91,23 @@ export interface RunReachabilityRulesArgs {
 /**
  * Scan `rulesDir` for per-CVE rule folders and load each `rule.yml` that has
  * the required metadata (`cve`, `package`, `ecosystem`). Invalid rule files
- * are skipped with a `console.warn` — we never fail the whole step because
- * one rule pack is malformed.
+ * are skipped and returned in `skipped` so the caller can surface them to
+ * `extraction_logs`. We never fail the whole step because one rule pack is
+ * malformed, but skips must not be silent — the caller is responsible for
+ * logging them.
  *
  * Returns one LoadedRule per valid `rules[0]` entry. Multi-rule files are
  * rejected (we require one rule per CVE folder to keep selection tractable).
+ *
+ * Back-compat wrapper `loadAllRules` returns just the `loaded` array; new
+ * callers should prefer `loadAllRulesWithSkipped` so drops are observable.
  */
-export async function loadAllRules(rulesDir: string): Promise<LoadedRule[]> {
-  if (!fs.existsSync(rulesDir)) return [];
+export async function loadAllRulesWithSkipped(rulesDir: string): Promise<LoadAllRulesResult> {
+  if (!fs.existsSync(rulesDir)) return { loaded: [], skipped: [] };
 
   const entries = fs.readdirSync(rulesDir, { withFileTypes: true });
   const loaded: LoadedRule[] = [];
+  const skipped: SkippedRule[] = [];
 
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
@@ -95,39 +116,51 @@ export async function loadAllRules(rulesDir: string): Promise<LoadedRule[]> {
 
     const rulePath = path.join(rulesDir, entry.name, 'rule.yml');
     if (!fs.existsSync(rulePath)) {
-      console.warn(`[reachability-rules] ${entry.name}: rule.yml missing, skipping`);
+      skipped.push({ folder: entry.name, reason: 'rule.yml missing' });
       continue;
     }
 
     let parsed: unknown;
     try {
       parsed = yaml.load(fs.readFileSync(rulePath, 'utf8'));
-    } catch (err: any) {
-      console.warn(`[reachability-rules] ${entry.name}: YAML parse failed — ${err.message}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      skipped.push({ folder: entry.name, reason: `YAML parse failed: ${msg}` });
       continue;
     }
 
     const doc = parsed as { rules?: unknown };
     if (!doc || typeof doc !== 'object' || !Array.isArray(doc.rules) || doc.rules.length !== 1) {
-      console.warn(`[reachability-rules] ${entry.name}: expected exactly one rule in 'rules:', skipping`);
+      skipped.push({ folder: entry.name, reason: "expected exactly one rule in 'rules:'" });
       continue;
     }
 
-    const rule = doc.rules[0] as { id?: unknown; metadata?: unknown };
+    const firstRule = doc.rules[0];
+    if (!firstRule || typeof firstRule !== 'object') {
+      skipped.push({ folder: entry.name, reason: 'rules[0] is not an object' });
+      continue;
+    }
+    const rule = firstRule as { id?: unknown; metadata?: unknown };
     if (typeof rule.id !== 'string' || !rule.id) {
-      console.warn(`[reachability-rules] ${entry.name}: rule.id missing, skipping`);
+      skipped.push({ folder: entry.name, reason: 'rule.id missing' });
       continue;
     }
 
     const metadata = normaliseMetadata(rule.metadata);
     if (!metadata) {
-      console.warn(`[reachability-rules] ${entry.name}: metadata missing required cve/package/ecosystem, skipping`);
+      skipped.push({ folder: entry.name, reason: 'metadata missing cve/package/ecosystem' });
       continue;
     }
 
     loaded.push({ rulePath, ruleId: rule.id, metadata });
   }
 
+  return { loaded, skipped };
+}
+
+/** Back-compat: returns the loaded rules only. Prefer loadAllRulesWithSkipped. */
+export async function loadAllRules(rulesDir: string): Promise<LoadedRule[]> {
+  const { loaded } = await loadAllRulesWithSkipped(rulesDir);
   return loaded;
 }
 
@@ -191,21 +224,28 @@ export async function runReachabilityRules(
 ): Promise<TaintFinding[]> {
   if (args.rules.length === 0) return [];
 
-  const runId = args.runId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const tmpDir = path.join(os.tmpdir(), `deptex-reach-rules-${runId}`);
-  fs.mkdirSync(tmpDir, { recursive: true });
+  // mkdtempSync is atomic and guarantees a unique directory — a predictable
+  // name could race with a pre-created symlink on a shared host, and plain
+  // Math.random doesn't guard against that on paper.
+  const prefix = args.runId
+    ? `deptex-reach-rules-${args.runId}-`
+    : 'deptex-reach-rules-';
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 
   try {
     // Semgrep requires globally-unique rule IDs within a single invocation.
     // Our ID convention is `deptex.<package>.<short>` so collisions shouldn't
-    // happen, but detect them early with a clear error instead of a cryptic
-    // Semgrep failure.
-    const seen = new Set<string>();
+    // happen, but detect them early with a clear error that names both
+    // colliding folders so the author knows where to look.
+    const seenById = new Map<string, LoadedRule>();
     for (const rule of args.rules) {
-      if (seen.has(rule.ruleId)) {
-        throw new Error(`Duplicate Semgrep rule id across selected rules: ${rule.ruleId}`);
+      const prior = seenById.get(rule.ruleId);
+      if (prior) {
+        throw new Error(
+          `Duplicate Semgrep rule id ${rule.ruleId} in ${prior.rulePath} and ${rule.rulePath}`,
+        );
       }
-      seen.add(rule.ruleId);
+      seenById.set(rule.ruleId, rule);
       // Use CVE + package as filename so concurrent runs on the same host
       // (dev + test, e2e + smoke) don't clobber each other's temp files.
       const safeSlug = `${rule.metadata.cve}-${rule.metadata.package}`.replace(/[^A-Za-z0-9._-]/g, '_');
@@ -240,8 +280,34 @@ interface InvokeSemgrepArgs {
   timeoutMs: number;
 }
 
+/** Semgrep JSON for a handful of rules across a user repo is routinely a few
+ * MB. Guard against runaway output pinning the worker's heap — 128 MB is
+ * generous but finite. */
+const MAX_STDOUT = 128 * 1024 * 1024;
+/** Stderr is only used for error-message formatting (first ~4KB). Cap so a
+ * verbose semgrep run (per-file parse warnings) can't OOM the worker. */
+const MAX_STDERR = 64 * 1024;
+/** After SIGTERM, escalate to SIGKILL if the process hasn't exited. */
+const SIGKILL_GRACE_MS = 10_000;
+
+/** Redact absolute container paths from a stderr excerpt before it lands in
+ * user-visible extraction_logs. Keeps filenames/line numbers but strips the
+ * internal mount-point prefix. */
+function sanitizeStderr(raw: string): string {
+  return raw
+    .replace(/\/app\/[^\s:]+/g, '<app>')
+    .replace(/\/home\/[^/\s:]+\/[^\s:]+/g, '<home>')
+    .replace(/\/tmp\/deptex-[^\s:]+/g, '<tmp>');
+}
+
 async function invokeSemgrep(args: InvokeSemgrepArgs): Promise<unknown> {
   return await new Promise<unknown>((resolve, reject) => {
+    // detached:true on POSIX puts the child in its own process group so we
+    // can signal the whole group (process.kill(-pid, ...)) — pysemgrep forks
+    // per-language engines and a bare kill() only hits the parent. Windows
+    // doesn't support process groups the same way; behaviour is unchanged
+    // there (bare kill still works because Semgrep Windows uses a single
+    // process).
     const child = spawn(
       args.semgrepBin,
       [
@@ -255,41 +321,82 @@ async function invokeSemgrep(args: InvokeSemgrepArgs): Promise<unknown> {
         '--quiet',
         args.workspaceRoot,
       ],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
+      {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32',
+      },
     );
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let stdoutLen = 0;
-    // Semgrep JSON for a handful of rules across a user repo is routinely
-    // a few MB. Guard against runaway output pinning the worker's heap —
-    // 128 MB is generous but finite.
-    const MAX_STDOUT = 128 * 1024 * 1024;
+    let stderrLen = 0;
     let truncated = false;
+    let sigkillTimer: NodeJS.Timeout | undefined;
+
+    /** Try to kill the whole process group on POSIX (so pysemgrep workers die
+     * with their parent). Falls back to a direct child.kill on Windows or on
+     * any error. Schedules a SIGKILL grace so a semgrep that ignores SIGTERM
+     * cannot hang the worker forever. */
+    const killTree = () => {
+      try {
+        if (child.pid && process.platform !== 'win32') {
+          try {
+            process.kill(-child.pid, 'SIGTERM');
+          } catch {
+            child.kill('SIGTERM');
+          }
+        } else {
+          child.kill('SIGTERM');
+        }
+      } catch {
+        /* child already exited */
+      }
+      if (!sigkillTimer) {
+        sigkillTimer = setTimeout(() => {
+          try {
+            if (child.pid && process.platform !== 'win32') {
+              try {
+                process.kill(-child.pid, 'SIGKILL');
+              } catch {
+                child.kill('SIGKILL');
+              }
+            } else {
+              child.kill('SIGKILL');
+            }
+          } catch {
+            /* already gone */
+          }
+        }, SIGKILL_GRACE_MS);
+        // Don't keep the event loop alive for the grace timer.
+        sigkillTimer.unref?.();
+      }
+    };
 
     child.stdout.on('data', (chunk: Buffer) => {
       if (truncated) return;
       stdoutLen += chunk.length;
       if (stdoutLen > MAX_STDOUT) {
         truncated = true;
-        try {
-          child.kill('SIGTERM');
-        } catch {
-          /* swallow */
-        }
+        // Free the buffered output immediately — we've decided to reject, no
+        // reason to keep 128 MB pinned while we wait for the child to exit.
+        stdoutChunks.length = 0;
+        stdoutLen = 0;
+        killTree();
         return;
       }
       stdoutChunks.push(chunk);
     });
-    child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
 
-    const onAbort = () => {
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        /* swallow */
-      }
-    };
+    child.stderr.on('data', (chunk: Buffer) => {
+      if (stderrLen >= MAX_STDERR) return;
+      const room = MAX_STDERR - stderrLen;
+      const slice = chunk.length <= room ? chunk : chunk.subarray(0, room);
+      stderrChunks.push(slice);
+      stderrLen += slice.length;
+    });
+
+    const onAbort = () => killTree();
     if (args.signal) {
       if (args.signal.aborted) {
         onAbort();
@@ -298,13 +405,21 @@ async function invokeSemgrep(args: InvokeSemgrepArgs): Promise<unknown> {
       }
     }
 
-    child.on('error', (err) => {
+    const cleanup = () => {
       if (args.signal) args.signal.removeEventListener('abort', onAbort);
+      if (sigkillTimer) {
+        clearTimeout(sigkillTimer);
+        sigkillTimer = undefined;
+      }
+    };
+
+    child.on('error', (err) => {
+      cleanup();
       reject(err);
     });
 
     child.on('close', (code) => {
-      if (args.signal) args.signal.removeEventListener('abort', onAbort);
+      cleanup();
       if (truncated) {
         reject(new Error(`Semgrep reachability output exceeded ${MAX_STDOUT} bytes, aborting`));
         return;
@@ -313,7 +428,9 @@ async function invokeSemgrep(args: InvokeSemgrepArgs): Promise<unknown> {
       // about exit 0 (no matches) and exit 1 (matches found). Anything else
       // is a real failure (bad config, crashed engine, killed).
       if (code !== 0 && code !== 1) {
-        const stderr = Buffer.concat(stderrChunks).toString('utf8').slice(0, 4000);
+        const stderr = sanitizeStderr(
+          Buffer.concat(stderrChunks).toString('utf8').slice(0, 4000),
+        );
         reject(
           new Error(
             `Semgrep exited with code ${code}${stderr ? ` — ${stderr}` : ''}`,
@@ -324,8 +441,9 @@ async function invokeSemgrep(args: InvokeSemgrepArgs): Promise<unknown> {
       try {
         const body = Buffer.concat(stdoutChunks).toString('utf8');
         resolve(body.length === 0 ? { results: [] } : JSON.parse(body));
-      } catch (err: any) {
-        reject(new Error(`Failed to parse Semgrep JSON: ${err.message}`));
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        reject(new Error(`Failed to parse Semgrep JSON: ${msg}`));
       }
     });
   });
@@ -341,54 +459,95 @@ async function invokeSemgrep(args: InvokeSemgrepArgs): Promise<unknown> {
  * is dropped silently — that usually means the user's workspace had another
  * semgrep config checked in and our subprocess picked it up; not our concern.
  */
+export interface ParseTaintOutputResult {
+  findings: TaintFinding[];
+  /** Rule IDs Semgrep emitted that we didn't load — usually an external
+   * .semgrep config on the user's workspace bled into our subprocess, or
+   * Semgrep changed its check_id formatting. Surface so drops aren't silent. */
+  unknownRuleIds: string[];
+}
+
 export function parseTaintOutput(
   semgrepJson: unknown,
   rulesById: Map<string, LoadedRule>,
 ): TaintFinding[] {
-  if (!semgrepJson || typeof semgrepJson !== 'object') return [];
+  return parseTaintOutputWithDrops(semgrepJson, rulesById).findings;
+}
+
+export function parseTaintOutputWithDrops(
+  semgrepJson: unknown,
+  rulesById: Map<string, LoadedRule>,
+): ParseTaintOutputResult {
+  if (!semgrepJson || typeof semgrepJson !== 'object') {
+    return { findings: [], unknownRuleIds: [] };
+  }
   const results = (semgrepJson as { results?: unknown }).results;
-  if (!Array.isArray(results)) return [];
+  if (!Array.isArray(results)) {
+    return { findings: [], unknownRuleIds: [] };
+  }
 
   const findings: TaintFinding[] = [];
+  const unknownIds = new Set<string>();
   for (const raw of results) {
-    const finding = normaliseOneFinding(raw, rulesById);
-    if (finding) findings.push(finding);
+    const outcome = normaliseOneFinding(raw, rulesById);
+    if (outcome.kind === 'finding') {
+      findings.push(outcome.finding);
+    } else if (outcome.kind === 'unknown_rule') {
+      unknownIds.add(outcome.ruleId);
+    }
+    // 'malformed' entries are dropped silently — they're not addressable via
+    // rule-author action, and surfacing them would just be noise.
   }
-  return findings;
+  return { findings, unknownRuleIds: [...unknownIds] };
 }
+
+/** Truncate a content string to MAX_CONTENT_BYTES with a visible suffix. */
+function clampContent(raw: string): string {
+  if (raw.length <= MAX_CONTENT_BYTES) return raw;
+  return raw.slice(0, MAX_CONTENT_BYTES) + '…[truncated]';
+}
+
+type NormaliseOutcome =
+  | { kind: 'finding'; finding: TaintFinding }
+  | { kind: 'unknown_rule'; ruleId: string }
+  | { kind: 'malformed' };
 
 function normaliseOneFinding(
   raw: unknown,
   rulesById: Map<string, LoadedRule>,
-): TaintFinding | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const r = raw as Record<string, any>;
+): NormaliseOutcome {
+  if (!raw || typeof raw !== 'object') return { kind: 'malformed' };
+  const r = raw as Record<string, unknown>;
 
   const ruleId = typeof r.check_id === 'string' ? r.check_id : null;
-  if (!ruleId) return null;
+  if (!ruleId) return { kind: 'malformed' };
   const rule = rulesById.get(ruleId);
-  if (!rule) return null;
+  if (!rule) return { kind: 'unknown_rule', ruleId };
 
   const filePath = typeof r.path === 'string' ? r.path : null;
-  if (!filePath) return null;
+  if (!filePath) return { kind: 'malformed' };
 
-  const sinkLine = toInt(r.start?.line);
-  if (sinkLine === null) return null;
+  const start = (r.start ?? null) as { line?: unknown } | null;
+  const sinkLine = toInt(start?.line);
+  if (sinkLine === null) return { kind: 'malformed' };
 
-  const sinkContent = typeof r.extra?.lines === 'string' ? r.extra.lines : null;
+  const extra = (r.extra ?? null) as { lines?: unknown; dataflow_trace?: unknown } | null;
+  const sinkContent = typeof extra?.lines === 'string' ? clampContent(extra.lines) : null;
 
   // Semgrep's --dataflow-traces emits taint_source/intermediate_vars/taint_sink
   // inside extra.dataflow_trace. Source CAN be missing if Semgrep widens a
   // non-taint pattern into the sink, but for `mode: taint` rules it should
   // always be populated. Fall back to the sink location so we never lose the
   // finding.
-  const trace = r.extra?.dataflow_trace as
-    | {
-        taint_source?: unknown;
-        intermediate_vars?: unknown[];
-        taint_sink?: unknown;
-      }
-    | undefined;
+  const rawTrace = extra?.dataflow_trace;
+  const trace =
+    rawTrace && typeof rawTrace === 'object'
+      ? (rawTrace as {
+          taint_source?: unknown;
+          intermediate_vars?: unknown;
+          taint_sink?: unknown;
+        })
+      : undefined;
 
   const source = extractTraceStep(trace?.taint_source) ?? {
     file: filePath,
@@ -399,7 +558,8 @@ function normaliseOneFinding(
 
   const intermediate: TaintFlowStep[] = [];
   if (Array.isArray(trace?.intermediate_vars)) {
-    for (const step of trace!.intermediate_vars!) {
+    for (const step of trace!.intermediate_vars as unknown[]) {
+      if (intermediate.length >= MAX_INTERMEDIATE_STEPS) break;
       const normalised = extractTraceStep(step);
       if (normalised) intermediate.push(normalised);
     }
@@ -410,16 +570,19 @@ function normaliseOneFinding(
   const sinkMethod = sinkStep?.content ? extractCalleeName(sinkStep.content) : extractCalleeName(sinkContent ?? '');
 
   return {
-    cve: rule.metadata.cve,
-    ruleId,
-    filePath,
-    sourceLine: source.line,
-    sourceContent: source.content || null,
-    sinkLine,
-    sinkMethod,
-    sinkContent,
-    flowSteps: intermediate,
-    rawSemgrepResult: raw,
+    kind: 'finding',
+    finding: {
+      cve: rule.metadata.cve,
+      ruleId,
+      filePath,
+      sourceLine: source.line,
+      sourceContent: source.content || null,
+      sinkLine,
+      sinkMethod,
+      sinkContent,
+      flowSteps: intermediate,
+      rawSemgrepResult: raw,
+    },
   };
 }
 
@@ -429,19 +592,26 @@ function extractTraceStep(raw: unknown): TaintFlowStep | null {
   //   [{ "location": { "path": "...", "start": { "line": N }, "end": ... } }, "content..."]
   // or { location: {...}, content: "..." } — normalise both shapes.
   if (Array.isArray(raw)) {
-    const loc = raw[0]?.location;
-    const content = typeof raw[1] === 'string' ? raw[1] : '';
-    const line = toInt(loc?.start?.line);
-    const file = typeof loc?.path === 'string' ? loc.path : null;
+    const head = raw[0];
+    if (!head || typeof head !== 'object') return null;
+    const loc = (head as { location?: unknown }).location as
+      | { path?: unknown; start?: { line?: unknown } }
+      | undefined;
+    if (!loc) return null;
+    const content = typeof raw[1] === 'string' ? clampContent(raw[1]) : '';
+    const line = toInt(loc.start?.line);
+    const file = typeof loc.path === 'string' ? loc.path : null;
     if (line === null || !file) return null;
     return { file, line, content };
   }
   if (typeof raw === 'object') {
-    const o = raw as Record<string, any>;
-    const loc = o.location ?? o;
-    const line = toInt(loc?.start?.line);
-    const file = typeof loc?.path === 'string' ? loc.path : null;
-    const content = typeof o.content === 'string' ? o.content : '';
+    const o = raw as Record<string, unknown>;
+    const locAny = (o.location ?? o) as Record<string, unknown> | undefined;
+    if (!locAny || typeof locAny !== 'object') return null;
+    const start = locAny.start as { line?: unknown } | undefined;
+    const line = toInt(start?.line);
+    const file = typeof locAny.path === 'string' ? locAny.path : null;
+    const content = typeof o.content === 'string' ? clampContent(o.content) : '';
     if (line === null || !file) return null;
     return { file, line, content };
   }
@@ -454,16 +624,27 @@ function toInt(v: unknown): number | null {
   return null;
 }
 
+/** Identifiers that precede real call sites but aren't themselves the callee. */
+const CALLEE_SKIP_PREFIXES = new Set(['await', 'new', 'return', 'yield', 'throw', 'typeof', 'void']);
+
 /**
  * Best-effort: extract the callee name from a highlighted source line. The
  * rule's `pattern-sinks` already encodes which call we matched, but Semgrep
  * doesn't thread that identifier through the JSON output — we scrape it back
  * out of the line text so the DB row has a meaningful `sink_method`.
+ *
+ * Skips leading prefix keywords (`await foo()` → `foo`, `new Class()` → `Class`)
+ * by retrying after stripping the first matched token if it's a JS/TS keyword.
  */
 function extractCalleeName(line: string): string | null {
   if (!line) return null;
-  const match = line.match(/([A-Za-z_][\w.]*?)\s*\(/);
-  return match ? match[1] : null;
+  const regex = /([A-Za-z_][\w.]*?)\s*\(/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(line)) !== null) {
+    const name = match[1];
+    if (!CALLEE_SKIP_PREFIXES.has(name)) return name;
+  }
+  return null;
 }
 
 // -----------------------------------------------------------------------------
