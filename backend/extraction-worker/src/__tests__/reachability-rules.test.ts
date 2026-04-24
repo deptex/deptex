@@ -4,11 +4,22 @@ import * as path from 'path';
 import { spawnSync } from 'child_process';
 import {
   loadAllRules,
+  loadAllRulesWithSkipped,
   selectRulesForCves,
   runReachabilityRules,
   parseTaintOutput,
+  parseTaintOutputWithDrops,
   LoadedRule,
 } from '../reachability-rules';
+
+const ECOSYSTEM_FIXTURE_EXTS: Record<string, string> = {
+  npm: 'js',
+  pypi: 'py',
+  maven: 'java',
+  golang: 'go',
+  gem: 'rb',
+  composer: 'php',
+};
 
 const RULES_DIR = path.resolve(__dirname, '../../reachability-rules');
 const LODASH_DIR = path.join(RULES_DIR, 'CVE-2021-23337-lodash-template');
@@ -230,6 +241,139 @@ describe('parseTaintOutput', () => {
     );
     expect(findings).toEqual([]);
   });
+
+  it('parseTaintOutputWithDrops surfaces unknown rule ids as a de-duped list', () => {
+    const result = parseTaintOutputWithDrops(
+      {
+        results: [
+          { check_id: 'external.rule.a', path: 'x.js', start: { line: 1 }, extra: { lines: 'x' } },
+          { check_id: 'external.rule.a', path: 'y.js', start: { line: 2 }, extra: { lines: 'y' } },
+          { check_id: 'external.rule.b', path: 'z.js', start: { line: 3 }, extra: { lines: 'z' } },
+        ],
+      },
+      rulesById,
+    );
+    expect(result.findings).toEqual([]);
+    expect(result.unknownRuleIds.sort()).toEqual(['external.rule.a', 'external.rule.b']);
+  });
+
+  it('truncates huge content strings so a single finding cannot blow row size', () => {
+    const huge = 'x'.repeat(10_000);
+    const findings = parseTaintOutput(
+      {
+        results: [
+          {
+            check_id: 'deptex.lodash.template-injection',
+            path: 'x.js',
+            start: { line: 1 },
+            extra: {
+              lines: huge,
+              dataflow_trace: {
+                taint_source: [
+                  { location: { path: 'x.js', start: { line: 1 } } },
+                  huge,
+                ],
+                intermediate_vars: [],
+              },
+            },
+          },
+        ],
+      },
+      rulesById,
+    );
+    expect(findings).toHaveLength(1);
+    // Each content field must be clamped to 2KB + truncation suffix.
+    expect(findings[0].sinkContent!.length).toBeLessThan(3_000);
+    expect(findings[0].sourceContent!.length).toBeLessThan(3_000);
+    expect(findings[0].sinkContent).toMatch(/truncated/);
+  });
+
+  it('caps intermediate_vars at MAX_INTERMEDIATE_STEPS', () => {
+    const steps = Array.from({ length: 200 }, (_, i) => [
+      { location: { path: 'x.js', start: { line: i + 1 } } },
+      `step${i}`,
+    ]);
+    const findings = parseTaintOutput(
+      {
+        results: [
+          {
+            check_id: 'deptex.lodash.template-injection',
+            path: 'x.js',
+            start: { line: 300 },
+            extra: { lines: 'sink', dataflow_trace: { intermediate_vars: steps } },
+          },
+        ],
+      },
+      rulesById,
+    );
+    expect(findings).toHaveLength(1);
+    // 200 in, 50 out — the cap.
+    expect(findings[0].flowSteps.length).toBe(50);
+  });
+
+  it('extractCalleeName skips leading prefix keywords (await, new)', () => {
+    // Indirect assertion via a normalised finding: the sink line "await foo(x)"
+    // should produce sinkMethod='foo', not 'await'.
+    const findings = parseTaintOutput(
+      {
+        results: [
+          {
+            check_id: 'deptex.lodash.template-injection',
+            path: 'x.js',
+            start: { line: 1 },
+            extra: { lines: 'await foo(tainted)' },
+          },
+        ],
+      },
+      rulesById,
+    );
+    expect(findings[0].sinkMethod).toBe('foo');
+  });
+
+  it('does not crash when rules[0] is null (pathological YAML)', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'deptex-null-rule-'));
+    try {
+      const dir = path.join(tmp, 'CVE-9999-0005-null');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'rule.yml'), 'rules:\n  - null\n');
+      const { loaded, skipped } = await loadAllRulesWithSkipped(tmp);
+      expect(loaded).toEqual([]);
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0].folder).toBe('CVE-9999-0005-null');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('loadAllRulesWithSkipped', () => {
+  it('returns structured skipped entries so caller can log them', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'deptex-skipped-'));
+    try {
+      // Missing metadata
+      const d1 = path.join(tmp, 'CVE-9999-1001-nometa');
+      fs.mkdirSync(d1, { recursive: true });
+      fs.writeFileSync(
+        path.join(d1, 'rule.yml'),
+        'rules:\n  - id: deptex.x\n    languages: [javascript]\n    severity: ERROR\n    mode: taint\n    message: x\n    pattern-sources: [{pattern: $X}]\n    pattern-sinks: [{pattern: sink($Y)}]\n',
+      );
+      // Malformed YAML
+      const d2 = path.join(tmp, 'CVE-9999-1002-bad');
+      fs.mkdirSync(d2, { recursive: true });
+      fs.writeFileSync(path.join(d2, 'rule.yml'), 'rules: [\n  unclosed');
+
+      const { loaded, skipped } = await loadAllRulesWithSkipped(tmp);
+      expect(loaded).toEqual([]);
+      expect(skipped.map((s) => s.folder).sort()).toEqual([
+        'CVE-9999-1001-nometa',
+        'CVE-9999-1002-bad',
+      ]);
+      expect(skipped.find((s) => s.folder === 'CVE-9999-1001-nometa')!.reason).toMatch(/metadata/);
+      expect(skipped.find((s) => s.folder === 'CVE-9999-1002-bad')!.reason).toMatch(/parse/);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 semgrepDescribe('runReachabilityRules (live semgrep)', () => {
@@ -264,4 +408,34 @@ semgrepDescribe('runReachabilityRules (live semgrep)', () => {
     expect(vulnFinding!.cve).toBe('CVE-2021-23337');
     expect(vulnFinding!.ruleId).toBe('deptex.lodash.template-injection');
   }, 90_000);
+
+  // Parameterised smoke: every bundled rule pack must match its own
+  // __fixtures__/vulnerable.<ext> and NOT match its own safe.<ext>.
+  // Catches YAML/pattern regressions that would otherwise silently ship
+  // (a rule that loads but no longer matches is the same failure mode
+  // as a broken rule from the user's perspective).
+  const allBundled = SEMGREP_PRESENT ? fs.readdirSync(RULES_DIR, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && e.name.startsWith('CVE-'))
+    .map((e) => e.name) : [];
+
+  it.each(allBundled)('rule %s matches vulnerable fixture and not safe fixture', async (folder) => {
+    const rules = await loadAllRules(RULES_DIR);
+    const rule = rules.find((r) => r.rulePath.includes(folder));
+    if (!rule) throw new Error(`Rule not loaded for folder ${folder}`);
+
+    const ext = ECOSYSTEM_FIXTURE_EXTS[rule.metadata.ecosystem];
+    const fixturesDir = path.join(RULES_DIR, folder, '__fixtures__');
+    if (!fs.existsSync(fixturesDir)) throw new Error(`Missing __fixtures__ for ${folder}`);
+
+    const findings = await runReachabilityRules({
+      workspaceRoot: fixturesDir,
+      rules: [rule],
+      timeoutMs: 120_000,
+    });
+
+    const vulnHits = findings.filter((f) => f.filePath.endsWith(`vulnerable.${ext}`)).length;
+    const safeHits = findings.filter((f) => f.filePath.endsWith(`safe.${ext}`)).length;
+    expect(vulnHits).toBeGreaterThanOrEqual(1);
+    expect(safeHits).toBe(0);
+  }, 180_000);
 });
