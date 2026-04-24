@@ -3751,6 +3751,9 @@ export interface VulnerabilityDetail {
         code_snippet?: string | null;
       }>;
       usage_count?: number;
+      /** Populated when reachability_level === 'confirmed' — the Semgrep
+       * taint rule IDs that fired for this (dep, CVE). Phase 23+. */
+      rule_ids?: string[];
     };
     sla_status?: string | null;
     sla_deadline_at?: string | null;

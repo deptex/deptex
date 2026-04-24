@@ -27,6 +27,7 @@ export type LogStep =
   | 'vuln_scan'
   | 'depscan'
   | 'reachability'
+  | 'reachability_rules'
   | 'epd'
   | 'semgrep'
   | 'trufflehog'
