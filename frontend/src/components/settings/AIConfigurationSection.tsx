@@ -5,7 +5,7 @@ import {
   ChevronRight, Eye, EyeOff, Radio, Plus, SlidersHorizontal,
 } from 'lucide-react';
 import { SiOpenai, SiAnthropic, SiGoogle } from '@icons-pack/react-simple-icons';
-import { api, AIProviderConfig, AIUsageSummary } from '../../lib/api';
+import { api, AIProviderConfig, AIUsageSummary, OrgAISettings } from '../../lib/api';
 import { Button } from '../ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../ui/dialog';
 import { Label } from '../ui/label';
@@ -123,6 +123,12 @@ export default function AIConfigurationSection({ organizationId }: AIConfigurati
   const [updatingModelId, setUpdatingModelId] = useState<string | null>(null);
   const [aiConfigSubTab, setAiConfigSubTab] = useState<'providers' | 'usage'>('providers');
 
+  // EPD reachability AI verification settings (Phase 4). NULL values on either
+  // field mean "inherit the worker env defaults" — shown as placeholder text.
+  const [epdSettings, setEpdSettings] = useState<OrgAISettings | null>(null);
+  const [epdCapInput, setEpdCapInput] = useState<string>('');
+  const [savingEpd, setSavingEpd] = useState(false);
+
   const loadProviders = useCallback(async () => {
     try {
       const data = await api.getAIProviders(organizationId);
@@ -158,9 +164,20 @@ export default function AIConfigurationSection({ organizationId }: AIConfigurati
     }
   }, [organizationId]);
 
+  const loadEpdSettings = useCallback(async () => {
+    try {
+      const data = await api.getOrgAISettings(organizationId);
+      setEpdSettings(data);
+      setEpdCapInput(data.epd_max_run_cost_usd != null ? String(data.epd_max_run_cost_usd) : '');
+    } catch {
+      /* best-effort; user can still tune via env */
+    }
+  }, [organizationId]);
+
   useEffect(() => { loadProviders(); }, [loadProviders]);
   useEffect(() => { loadUsage(); }, [loadUsage]);
   useEffect(() => { loadLogs(logsPage); }, [loadLogs, logsPage]);
+  useEffect(() => { loadEpdSettings(); }, [loadEpdSettings]);
 
   const providerMap = useMemo(() => {
     const map: Partial<Record<ProviderKey, AIProviderConfig>> = {};
@@ -299,6 +316,50 @@ export default function AIConfigurationSection({ organizationId }: AIConfigurati
     }
   };
 
+  const anthropicConnected = !!providerMap.anthropic?.connected;
+
+  const handleEpdCapBlur = async () => {
+    const raw = epdCapInput.trim();
+    // Empty input = "inherit env default" → persist NULL.
+    let nextValue: number | null = null;
+    if (raw !== '') {
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed)) {
+        toast({ title: 'Enter a number between 0.10 and 20.00', variant: 'destructive' });
+        setEpdCapInput(epdSettings?.epd_max_run_cost_usd != null ? String(epdSettings.epd_max_run_cost_usd) : '');
+        return;
+      }
+      nextValue = Math.min(20, Math.max(0.1, parsed));
+    }
+    if (nextValue === (epdSettings?.epd_max_run_cost_usd ?? null)) return;
+    setSavingEpd(true);
+    try {
+      const data = await api.updateOrgAISettings(organizationId, { epd_max_run_cost_usd: nextValue });
+      setEpdSettings(data);
+      setEpdCapInput(data.epd_max_run_cost_usd != null ? String(data.epd_max_run_cost_usd) : '');
+      toast({ title: 'Reachability AI cost cap saved' });
+    } catch (err: any) {
+      toast({ title: 'Failed to save cost cap', description: err?.message, variant: 'destructive' });
+    } finally {
+      setSavingEpd(false);
+    }
+  };
+
+  const handleEpdBehaviorChange = async (value: string) => {
+    const next = value === '' ? null : (value as 'fail_job' | 'continue_with_fallback');
+    if (next === (epdSettings?.epd_budget_exceeded_behavior ?? null)) return;
+    setSavingEpd(true);
+    try {
+      const data = await api.updateOrgAISettings(organizationId, { epd_budget_exceeded_behavior: next });
+      setEpdSettings(data);
+      toast({ title: 'Budget-exceeded behavior saved' });
+    } catch (err: any) {
+      toast({ title: 'Failed to save setting', description: err?.message, variant: 'destructive' });
+    } finally {
+      setSavingEpd(false);
+    }
+  };
+
   const costCapPercent = usage
     ? Math.min(100, (usage.totalEstimatedCost / (usage.monthlyCostCap || 1)) * 100)
     : 0;
@@ -426,6 +487,55 @@ export default function AIConfigurationSection({ organizationId }: AIConfigurati
                     </>
                   )}
                 </Button>
+              </div>
+            </div>
+          </div>
+
+          {/* Reachability AI verification (EPD) */}
+          <div>
+            <h3 className="text-lg font-semibold text-foreground mb-4">Reachability AI verification</h3>
+            <p className="text-sm text-foreground-secondary mb-4">
+              EPD (Exploitable Path Dominance) uses your Anthropic BYOK to classify how each
+              reachable vulnerability is reached — public unauthenticated endpoint, authenticated
+              route, or background worker — and adjusts its contextual depscore accordingly.
+            </p>
+            <div className="rounded-xl border border-border bg-background-card/80 p-5 space-y-5">
+              <div className="grid gap-2">
+                <Label htmlFor="epd-cap">Per-extraction cost cap (USD)</Label>
+                <Input
+                  id="epd-cap"
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  max="20"
+                  value={epdCapInput}
+                  onChange={(e) => setEpdCapInput(e.target.value)}
+                  onBlur={handleEpdCapBlur}
+                  placeholder={anthropicConnected ? 'Default $3.00' : 'Connect Anthropic BYOK'}
+                  disabled={!anthropicConnected || savingEpd}
+                  className="max-w-[200px]"
+                />
+                <p className="text-xs text-foreground-secondary">
+                  Maximum AI spend per repository scan. Range $0.10&ndash;$20.00. Lower = cheaper but
+                  less precise classification. Leave blank to inherit the worker default.
+                </p>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="epd-budget-exceeded">When the budget is exceeded mid-scan</Label>
+                <select
+                  id="epd-budget-exceeded"
+                  value={epdSettings?.epd_budget_exceeded_behavior ?? ''}
+                  onChange={(e) => handleEpdBehaviorChange(e.target.value)}
+                  disabled={!anthropicConnected || savingEpd}
+                  className="h-9 px-2 pr-6 bg-background border border-border rounded-md text-sm text-foreground focus:ring-2 focus:ring-primary/50 focus:border-primary outline-none max-w-[280px] disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <option value="">Inherit worker default</option>
+                  <option value="continue_with_fallback">Continue with heuristic fallback</option>
+                  <option value="fail_job">Fail the extraction</option>
+                </select>
+                <p className="text-xs text-foreground-secondary">
+                  Recommend &ldquo;continue with heuristic fallback&rdquo; so a cap doesn&apos;t fail an entire scan.
+                </p>
               </div>
             </div>
           </div>
