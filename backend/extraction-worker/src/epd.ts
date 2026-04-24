@@ -447,8 +447,29 @@ export async function applyEpdScoringFallback(
   let hasAnthropicByok = false;
   let decryptedApiKey: string | null = null;
   let anthropicModel = DEFAULT_ANTHROPIC_MODEL;
+  let orgRunBudgetCapUsd: number | null = null;
+  let orgBudgetExceededBehavior: 'fail_job' | 'continue_with_fallback' | null = null;
   const organizationId = (projectRow as { organization_id?: string } | null)?.organization_id;
   if (organizationId) {
+    // Read BYOK provider + EPD per-org settings together. Both live on
+    // the org, and the scorer needs both before the first AI call.
+    const { data: orgRow } = await supabase
+      .from('organizations')
+      .select('epd_max_run_cost_usd, epd_budget_exceeded_behavior')
+      .eq('id', organizationId)
+      .maybeSingle();
+    if (orgRow) {
+      const capRaw = (orgRow as { epd_max_run_cost_usd?: number | string | null }).epd_max_run_cost_usd;
+      if (capRaw != null) {
+        const parsed = Number(capRaw);
+        if (Number.isFinite(parsed) && parsed > 0) orgRunBudgetCapUsd = parsed;
+      }
+      const behaviorRaw = (orgRow as { epd_budget_exceeded_behavior?: string | null }).epd_budget_exceeded_behavior;
+      if (behaviorRaw === 'fail_job' || behaviorRaw === 'continue_with_fallback') {
+        orgBudgetExceededBehavior = behaviorRaw;
+      }
+    }
+
     const { data: providerRow } = await supabase
       .from('organization_ai_providers')
       .select('id, provider, encrypted_api_key, encryption_key_version, model_preference')
@@ -560,7 +581,9 @@ export async function applyEpdScoringFallback(
   }
 
   const maxVulns = Number(process.env.EPD_MAX_VULNS_PER_RUN || DEFAULT_MAX_VULNS_PER_RUN);
-  const runBudgetCap = getRunBudgetCapUsd();
+  // Org setting wins when present; NULL means "inherit env var / built-in default".
+  // Keeps the single-tenant self-host path untouched (no DB write needed).
+  const runBudgetCap = orgRunBudgetCapUsd ?? getRunBudgetCapUsd();
   let runSpendUsd = 0;
   let budgetExceededTriggered = false;
 
@@ -782,7 +805,10 @@ ${sourceContext || 'none'}`;
     max_vulns_ai: maxVulns,
   });
 
-  const onBudgetExceeded = (process.env.EPD_BUDGET_EXCEEDED_BEHAVIOR || 'fail_job').toLowerCase();
+  // Org setting wins; NULL falls back to env; env default is `fail_job`
+  // so existing worker deployments stay on the strict path.
+  const onBudgetExceeded =
+    orgBudgetExceededBehavior ?? (process.env.EPD_BUDGET_EXCEEDED_BEHAVIOR || 'fail_job').toLowerCase();
   if (budgetExceededTriggered && onBudgetExceeded === 'fail_job') {
     throw new EpdBudgetExceededError(`EPD AI run budget exceeded ($${runBudgetCap.toFixed(2)} cap)`);
   }
