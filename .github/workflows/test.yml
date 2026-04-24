@@ -39,10 +39,37 @@ jobs:
           cache: 'npm'
           cache-dependency-path: backend/package-lock.json
 
+      - name: Setup Python (for Semgrep)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Semgrep
+        # Pinned to match extraction-worker/Dockerfile so CI rule-fixture runs
+        # match what ships in the worker image. Without this, the live-semgrep
+        # Jest block at __tests__/reachability-rules.test.ts is describe.skip'd
+        # in CI and rule-pack regressions merge green.
+        run: pip install --no-cache-dir semgrep==1.160.0
+
       - name: Install backend dependencies
         working-directory: backend
         run: npm ci
 
+      - name: Validate reachability rule packs
+        # Fails CI if any bundled rule.yml is malformed, missing required
+        # metadata, or has a duplicate rule id. Also runs locally via
+        # `npx tsx scripts/validate-reachability-rules.ts`.
+        working-directory: backend/extraction-worker
+        run: npx tsx scripts/validate-reachability-rules.ts
+
       - name: Run backend tests
         working-directory: backend
         run: npm test
+
+      - name: Run reachability e2e (PGLite)
+        # Proves the polymorphic-source schema (atom vs semgrep_taint) plus
+        # the confirmed-promotion classifier against a real Postgres-shaped
+        # store, not a Supabase mock. Jest doesn't pick this up because it
+        # lives outside the `roots` tree; run it explicitly.
+        working-directory: backend/extraction-worker
+        run: npm run test:reachability-rules-e2e
