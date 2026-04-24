@@ -136,8 +136,11 @@ export async function parseReachableFlows(
 
     for (let i = 0; i < batch.length; i += 100) {
       const chunk = batch.slice(i, i + 100);
+      // Must match phase23.4's source-aware UNIQUE exactly. Atom rows carry
+      // NULL osv_id / NULL rule_id; under NULLS NOT DISTINCT they dedup on
+      // coords alone, which preserves the original atom-vs-atom semantics.
       await supabase.from('project_reachable_flows').upsert(chunk, {
-        onConflict: 'project_id,extraction_run_id,purl,entry_point_file,entry_point_line,sink_method',
+        onConflict: 'project_id,extraction_run_id,purl,entry_point_file,entry_point_line,sink_method,osv_id,rule_id',
       });
     }
   }
@@ -388,19 +391,25 @@ export async function updateReachabilityLevels(
   logger: LogLike,
   workspaceRoot?: string,
 ): Promise<void> {
-  const { data: pdvs } = await supabase
+  const { data: pdvs, error: pdvErr } = await supabase
     .from('project_dependency_vulnerabilities')
     .select('id, project_dependency_id, osv_id')
     .eq('project_id', projectId)
     .eq('extraction_run_id', runId);
 
+  if (pdvErr) {
+    throw new Error(`updateReachabilityLevels: failed to fetch PDVs: ${pdvErr.message}`);
+  }
   if (!pdvs || pdvs.length === 0) return;
 
-  const { data: pds } = await supabase
+  const { data: pds, error: pdErr } = await supabase
     .from('project_dependencies')
     .select('id, dependency_id, is_direct, files_importing_count')
     .eq('project_id', projectId)
     .eq('last_seen_extraction_run_id', runId);
+  if (pdErr) {
+    throw new Error(`updateReachabilityLevels: failed to fetch project_dependencies: ${pdErr.message}`);
+  }
 
   const depIdMap = new Map(pds?.map((pd: any) => [pd.id, pd.dependency_id]) ?? []);
   const pdMetaMap = new Map<string, { isDirect: boolean; filesImporting: number }>(
@@ -410,11 +419,56 @@ export async function updateReachabilityLevels(
     ]) ?? []
   );
 
-  const { data: flows } = await supabase
-    .from('project_reachable_flows')
-    .select('dependency_id, reachability_source, osv_id, rule_id, entry_point_file, entry_point_line, entry_point_tag, sink_method')
-    .eq('project_id', projectId)
-    .eq('extraction_run_id', runId);
+  // Try the full phase23 column list first. On pre-migration schemas the
+  // select returns `42703 undefined_column` — fall back to the pre-phase23
+  // column list (which still produces atom-based module/function/data_flow
+  // classification) rather than silently collapsing every PDV to `module`
+  // with no log. Any other error is a real failure and must surface.
+  let flows: Array<{
+    dependency_id: string | null;
+    reachability_source?: string | null;
+    osv_id?: string | null;
+    rule_id?: string | null;
+    entry_point_file: string | null;
+    entry_point_line: number | null;
+    entry_point_tag: string | null;
+    sink_method: string | null;
+  }> = [];
+  {
+    const { data, error } = await supabase
+      .from('project_reachable_flows')
+      .select('dependency_id, reachability_source, osv_id, rule_id, entry_point_file, entry_point_line, entry_point_tag, sink_method')
+      .eq('project_id', projectId)
+      .eq('extraction_run_id', runId);
+
+    if (error) {
+      const code = (error as { code?: string }).code ?? '';
+      const msg = error.message ?? '';
+      const isMissingColumn = code === '42703' || /reachability_source|osv_id|rule_id/.test(msg);
+      if (!isMissingColumn) {
+        throw new Error(`updateReachabilityLevels: failed to fetch flows: ${msg}`);
+      }
+      // Phase23 not applied to this DB — retry with the pre-phase23 shape so
+      // atom-only classification still works. Confirmed promotions are
+      // impossible until the migration lands; log it once so operators see
+      // the degradation instead of silent 'no confirmed levels ever'.
+      await logger.warn(
+        'reachability',
+        'project_reachable_flows missing phase23 columns; taint classification disabled until migration lands',
+      );
+      const { data: baseData, error: baseErr } = await supabase
+        .from('project_reachable_flows')
+        .select('dependency_id, entry_point_file, entry_point_line, entry_point_tag, sink_method')
+        .eq('project_id', projectId)
+        .eq('extraction_run_id', runId);
+      if (baseErr) {
+        throw new Error(`updateReachabilityLevels: pre-phase23 fallback select failed: ${baseErr.message}`);
+      }
+      flows = (baseData ?? []) as typeof flows;
+    } else {
+      flows = (data ?? []) as typeof flows;
+    }
+  }
 
   // Flows are polymorphic over their source (Phase 23). `flowsByDep` preserves
   // the original "any flow for this dep" semantics used by the data_flow
@@ -425,9 +479,10 @@ export async function updateReachabilityLevels(
   // a match requires not just the right dep but the specific CVE the taint
   // rule was authored for, so a semgrep hit on CVE-A can't promote a PDV
   // for CVE-B on the same package.
-  const flowsByDep = new Map<string, any[]>();
-  const taintByDepOsv = new Map<string, any[]>();
-  for (const flow of flows ?? []) {
+  type StoredFlow = (typeof flows)[number];
+  const flowsByDep = new Map<string, StoredFlow[]>();
+  const taintByDepOsv = new Map<string, StoredFlow[]>();
+  for (const flow of flows) {
     if (!flow.dependency_id) continue;
     const existing = flowsByDep.get(flow.dependency_id) ?? [];
     existing.push(flow);
@@ -441,11 +496,14 @@ export async function updateReachabilityLevels(
     }
   }
 
-  const { data: usages } = await supabase
+  const { data: usages, error: usagesErr } = await supabase
     .from('project_usage_slices')
     .select('target_type, resolved_method, file_path, line_number')
     .eq('project_id', projectId)
     .eq('extraction_run_id', runId);
+  if (usagesErr) {
+    throw new Error(`updateReachabilityLevels: failed to fetch usages: ${usagesErr.message}`);
+  }
 
   // Collect all type/method strings from usage slices for fuzzy matching
   const allUsageStrings: string[] = [];
@@ -474,6 +532,13 @@ export async function updateReachabilityLevels(
   const depNameCache = new Map<string, string>();
   let updatedCount = 0;
   let detailsSetCount = 0;
+  const levelCounts: Record<string, number> = {
+    confirmed: 0,
+    data_flow: 0,
+    function: 0,
+    module: 0,
+    unreachable: 0,
+  };
 
   for (const pdv of pdvs) {
     const dependencyId = depIdMap.get(pdv.project_dependency_id);
@@ -493,18 +558,18 @@ export async function updateReachabilityLevels(
       // Trumps the heuristic ladder below regardless of what atom thinks.
       level = 'confirmed';
       details = {
-        rule_ids: [...new Set(taintMatches.map((f: any) => f.rule_id).filter(Boolean))],
+        rule_ids: [...new Set(taintMatches.map((f) => f.rule_id).filter((x): x is string => !!x))],
         flow_count: taintMatches.length,
-        entry_points: taintMatches.map((f: any) => `${f.entry_point_file}:${f.entry_point_line}`),
-        sink_methods: [...new Set(taintMatches.map((f: any) => f.sink_method).filter(Boolean))],
+        entry_points: taintMatches.map((f) => `${f.entry_point_file}:${f.entry_point_line}`),
+        sink_methods: [...new Set(taintMatches.map((f) => f.sink_method).filter((x): x is string => !!x))],
       };
     } else if (matchingFlows.length > 0) {
       level = 'data_flow';
       details = {
         flow_count: matchingFlows.length,
-        entry_points: matchingFlows.map((f: any) => `${f.entry_point_file}:${f.entry_point_line}`),
-        sink_methods: [...new Set(matchingFlows.map((f: any) => f.sink_method).filter(Boolean))],
-        tags: [...new Set(matchingFlows.map((f: any) => f.entry_point_tag).filter(Boolean))],
+        entry_points: matchingFlows.map((f) => `${f.entry_point_file}:${f.entry_point_line}`),
+        sink_methods: [...new Set(matchingFlows.map((f) => f.sink_method).filter((x): x is string => !!x))],
+        tags: [...new Set(matchingFlows.map((f) => f.entry_point_tag).filter((x): x is string => !!x))],
       };
     } else {
       let depName = depNameCache.get(dependencyId);
@@ -579,7 +644,16 @@ export async function updateReachabilityLevels(
     }
     if (details) detailsSetCount++;
     updatedCount++;
+    if (level in levelCounts) levelCounts[level]++;
   }
+
+  // Surface per-level counts so on-call can answer "did any vuln actually get
+  // promoted to confirmed in this run?" without running ad-hoc SQL.
+  const summary =
+    `confirmed=${levelCounts.confirmed} data_flow=${levelCounts.data_flow} ` +
+    `function=${levelCounts.function} module=${levelCounts.module} ` +
+    `unreachable=${levelCounts.unreachable}`;
+  await logger.info('reachability', `Classified ${updatedCount} vuln(s): ${summary}`);
 
   if (process.env.DEPTEX_CLI_MODE !== '1') {
     console.log(`[REACHABILITY] Updated ${updatedCount} vulns, ${detailsSetCount} with details, ${allUsageStrings.length} usage strings available`);

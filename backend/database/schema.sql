@@ -1589,7 +1589,7 @@ ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT pdv_extract
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_extraction_run_id_file_path_key UNIQUE (project_id, extraction_run_id, file_path, line_number, framework, handler_name);
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_project_id_user_id_key UNIQUE (project_id, user_id);
 ALTER TABLE public.project_pr_guardrails ADD CONSTRAINT project_pr_guardrails_project_id_key UNIQUE (project_id);
-ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_project_id_extraction_run_id_purl_e_key UNIQUE (project_id, extraction_run_id, purl, entry_point_file, entry_point_line, sink_method);
+ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_source_dedup_key UNIQUE NULLS NOT DISTINCT (project_id, extraction_run_id, purl, entry_point_file, entry_point_line, sink_method, osv_id, rule_id);
 ALTER TABLE public.project_repositories ADD CONSTRAINT project_repositories_project_id_key UNIQUE (project_id);
 ALTER TABLE public.project_roles ADD CONSTRAINT project_roles_project_id_name_key UNIQUE (project_id, name);
 ALTER TABLE public.project_secret_findings ADD CONSTRAINT psecf_extraction_run_unique UNIQUE (project_id, detector_type, file_path, start_line, extraction_run_id);
@@ -3835,7 +3835,7 @@ $function$
 ;
 
 CREATE OR REPLACE FUNCTION public.get_project_vulnerabilities_from_pdv(p_project_id uuid)
- RETURNS TABLE(id uuid, dependency_id uuid, osv_id text, severity text, summary text, details text, aliases text[], fixed_versions text[], published_at timestamp with time zone, modified_at timestamp with time zone, created_at timestamp with time zone, dependency_name text, dependency_version text, is_reachable boolean, epss_score numeric, cvss_score numeric, cisa_kev boolean, depscore integer, sla_status text, sla_deadline_at timestamp with time zone)
+ RETURNS TABLE(id uuid, dependency_id uuid, osv_id text, severity text, summary text, details text, aliases text[], fixed_versions text[], published_at timestamp with time zone, modified_at timestamp with time zone, created_at timestamp with time zone, dependency_name text, dependency_version text, is_reachable boolean, reachability_level text, reachability_details jsonb, epss_score numeric, cvss_score numeric, cisa_kev boolean, depscore integer, contextual_depscore numeric, sla_status text, sla_deadline_at timestamp with time zone)
  LANGUAGE sql
  STABLE
 AS $function$
@@ -3854,10 +3854,13 @@ AS $function$
     pd.name AS dependency_name,
     pd.version AS dependency_version,
     pdv.is_reachable,
+    pdv.reachability_level,
+    pdv.reachability_details,
     pdv.epss_score,
     pdv.cvss_score,
     pdv.cisa_kev,
     pdv.depscore,
+    pdv.contextual_depscore,
     pdv.sla_status,
     pdv.sla_deadline_at
   FROM project_dependency_vulnerabilities pdv

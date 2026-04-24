@@ -551,6 +551,7 @@ export async function buildNotificationContext(
             cvss_score: v.cvss_score ?? 0,
             depscore: 0,
             is_reachable: false,
+            reachability_level: v.reachability_level ?? null,
             cisa_kev: v.cisa_kev ?? false,
           })),
         };
@@ -578,6 +579,7 @@ export async function buildNotificationContext(
         epss_score: event.payload.epss_score ?? 0,
         depscore: event.payload.depscore ?? 0,
         is_reachable: event.payload.is_reachable ?? false,
+        reachability_level: event.payload.reachability_level ?? null,
         cisa_kev: event.payload.cisa_kev ?? false,
         fixed_versions: vuln?.fixed_versions || event.payload.fixed_versions || [],
         summary: vuln?.summary || event.payload.summary || '',
