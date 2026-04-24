@@ -377,13 +377,33 @@ ${dataFlowContext}`,
 
 function classifyFallbackEntryPoint(tag: string | null): { classification: EntryPointClassification; weight: number } {
   const normalized = (tag ?? '').toLowerCase();
+
+  // Explicit class assertion from reachability-rules tags
+  // (e.g. `framework-input:public_unauth`). Phase 4 wires these from
+  // `RuleMetadata.entryPointClass` so authors can pin a rule's class
+  // without us having to interpret heterogeneous Semgrep pattern-source
+  // syntax. Match these BEFORE the heuristic substrings so a tag like
+  // `framework-input:auth_internal` doesn't get pulled to PUBLIC_UNAUTH
+  // by the `framework-input` substring fallback below.
+  if (normalized.includes('public_unauth')) {
+    return { classification: 'PUBLIC_UNAUTH', weight: ENTRY_WEIGHT_BY_CLASS.PUBLIC_UNAUTH };
+  }
+  if (normalized.includes('auth_internal')) {
+    return { classification: 'AUTH_INTERNAL', weight: ENTRY_WEIGHT_BY_CLASS.AUTH_INTERNAL };
+  }
+  if (normalized.includes('offline_worker')) {
+    return { classification: 'OFFLINE_WORKER', weight: ENTRY_WEIGHT_BY_CLASS.OFFLINE_WORKER };
+  }
+
+  // Heuristic substring routing for atom-derived flows whose tags come
+  // from atom's per-language source lists, not from our rule metadata.
   if (normalized.includes('worker') || normalized.includes('cron') || normalized.includes('batch') || normalized.includes('queue')) {
     return { classification: 'OFFLINE_WORKER', weight: ENTRY_WEIGHT_BY_CLASS.OFFLINE_WORKER };
   }
   if (normalized.includes('framework-input') || normalized.includes('http') || normalized.includes('route') || normalized.includes('controller')) {
-    return { classification: 'PUBLIC_UNAUTH', weight: 1.0 };
+    return { classification: 'PUBLIC_UNAUTH', weight: ENTRY_WEIGHT_BY_CLASS.PUBLIC_UNAUTH };
   }
-  return { classification: 'AUTH_INTERNAL', weight: 0.5 };
+  return { classification: 'AUTH_INTERNAL', weight: ENTRY_WEIGHT_BY_CLASS.AUTH_INTERNAL };
 }
 
 function fallbackDepthFromLevel(level: string | null): number {
@@ -593,7 +613,15 @@ export async function applyEpdScoringFallback(
     let modelUsed: string | null = null;
     let epdStatus = hasAnthropicByok ? 'fallback_no_ai' : 'byok_missing';
 
-    const aiEligible = reachabilityStatus === 'reachable' && hasAnthropicByok && decryptedApiKey && idx < maxVulns;
+    // Phase 4: only spend AI on the levels where we have a real taint
+    // trace (confirmed) or atom-derived data-flow path (data_flow).
+    // Function/module-level reachable vulns get heuristic-only scoring
+    // — the entry-point context for those is too unreliable to justify
+    // the per-call cost on Anthropic Sonnet. They still receive a
+    // contextual_depscore via the heuristic path (entry tag + decay).
+    const reachabilityLevel = (row.reachability_level as string | null) ?? null;
+    const aiEligibleLevel = reachabilityLevel === 'confirmed' || reachabilityLevel === 'data_flow';
+    const aiEligible = reachabilityStatus === 'reachable' && aiEligibleLevel && hasAnthropicByok && decryptedApiKey && idx < maxVulns;
     if (aiEligible) {
       const flowText = perDepFlows.map((f, i) =>
         `Flow ${i + 1}: depth=${Math.max(0, f.flowLength - 1)}, entryTag=${f.entryTag ?? 'unknown'}, entryFile=${f.entryFile ?? 'unknown'}, sinkMethod=${f.sinkMethod ?? 'unknown'}, sinkFile=${f.sinkFile ?? 'unknown'}`
