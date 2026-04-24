@@ -4,7 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import { Filter, X, Flame, Shield, CheckCircle } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
-export type ReachabilityFilterLevel = 'all' | 'data_flow' | 'function' | 'module' | 'unreachable';
+export type ReachabilityFilterLevel = 'all' | 'confirmed' | 'data_flow' | 'function' | 'module' | 'unreachable';
 
 /** SLA status filter for vulnerability list/graph. */
 export type SlaStatusFilter = 'all' | 'on_track' | 'warning' | 'breached' | 'exempt';
@@ -182,6 +182,7 @@ function SecurityFilterBar({ filters, onFiltersChange }: SecurityFilterBarProps)
         <div className="flex gap-2 flex-wrap">
           {([
             { value: 'all', label: 'All', color: 'primary' },
+            { value: 'confirmed', label: 'Confirmed', color: 'red' },
             { value: 'data_flow', label: 'Data flow', color: 'orange' },
             { value: 'function', label: 'Function', color: 'yellow' },
             { value: 'module', label: 'Module', color: 'zinc' },
@@ -193,7 +194,8 @@ function SecurityFilterBar({ filters, onFiltersChange }: SecurityFilterBarProps)
               className={cn(
                 'px-2 py-1 rounded text-xs transition-colors border',
                 filters.reachabilityLevel === value
-                  ? color === 'orange' ? 'border-orange-500/30 bg-orange-500/10 text-orange-400'
+                  ? color === 'red' ? 'border-red-500/30 bg-red-500/10 text-red-400'
+                    : color === 'orange' ? 'border-orange-500/30 bg-orange-500/10 text-orange-400'
                     : color === 'yellow' ? 'border-yellow-500/30 bg-yellow-500/10 text-yellow-400'
                     : color === 'green' ? 'border-green-500/30 bg-green-500/10 text-green-400'
                     : color === 'zinc' ? 'border-zinc-500/30 bg-zinc-500/10 text-zinc-400'

@@ -16,7 +16,7 @@ import { storeEntryPoints } from './framework-rules/storage';
 import { ExtractionLogger } from './logger';
 import { parsePurl, resolvePurlToDependencyId, buildPurl } from './purl';
 import { parseReachableFlows, parseUsageSlices, parseLlmPrompts, updateReachabilityLevels, computeImportCountsFromUsageSlices } from './reachability';
-import { loadAllRules, selectRulesForCves, runReachabilityRules } from './reachability-rules';
+import { loadAllRulesWithSkipped, selectRulesForCves, runReachabilityRules } from './reachability-rules';
 import { updateJobPayloadCommit, updateJobStatus } from './job-db';
 import { applyEpdScoringFallback, EpdBudgetExceededError } from './epd';
 import { withTimeout, logStepError, classifyError } from './with-timeout';
@@ -1369,39 +1369,89 @@ export async function runPipeline(
       } else {
         const reachStart = Date.now();
         try {
+          // Startup probe: confirm the phase23 migration is applied before we
+          // attempt to write semgrep_taint rows. If the column doesn't exist
+          // (operator forgot the MCP migration step before promoting to prod)
+          // we bail cleanly with an explicit error log instead of letting
+          // every chunk upsert fail with a warn-only message.
+          const { error: probeErr } = await supabase
+            .from('project_reachable_flows')
+            .select('reachability_source')
+            .limit(1);
+          if (probeErr) {
+            const code = (probeErr as { code?: string }).code ?? '';
+            if (code === '42703' || /reachability_source/.test(probeErr.message ?? '')) {
+              await log.error(
+                'reachability_rules',
+                'phase23 migration not applied (reachability_source column missing); skipping taint rules',
+              );
+              // Fall through to updateReachabilityLevels below.
+              throw new Error('phase23_migration_missing');
+            }
+            // Any other probe error — surface and bail the step.
+            throw new Error(`probe failed: ${probeErr.message}`);
+          }
+
           // reachability-rules/ sits at the worker package root. Resolve
           // relative to this file so both tsx (src/) and compiled (dist/)
           // layouts find it.
           const reachabilityRulesDir = path.resolve(__dirname, '..', 'reachability-rules');
-          const allRules = await loadAllRules(reachabilityRulesDir);
+          const { loaded: allRules, skipped } = await loadAllRulesWithSkipped(reachabilityRulesDir);
 
-          if (allRules.length > 0) {
-            const { data: cveRows } = await supabase
+          if (skipped.length > 0) {
+            // Surface so a broken rule pack doesn't ship silently. One
+            // aggregated line keeps the log readable even with many packs.
+            await log.warn(
+              'reachability_rules',
+              `Skipped ${skipped.length} rule(s): ${skipped.map((s) => `${s.folder} (${s.reason})`).join('; ')}`,
+            );
+          }
+
+          if (allRules.length === 0) {
+            // Zero rules discovered is normally only possible if the rules
+            // directory is missing from the deployed image — Dockerfile
+            // regression, pruned volume, etc. Make it loud so it's caught
+            // by alerting rather than silently producing zero confirmed
+            // promotions forever.
+            await log.warn(
+              'reachability_rules',
+              `No rules loaded from ${reachabilityRulesDir}; skipping step`,
+            );
+          } else {
+            const { data: cveRows, error: cveErr } = await supabase
               .from('project_dependency_vulnerabilities')
-              .select('osv_id')
+              .select('osv_id, aliases')
               .eq('project_id', projectId)
               .eq('extraction_run_id', runId);
-            const detectedCves = new Set<string>(
-              ((cveRows ?? []) as Array<{ osv_id?: string | null }>)
-                .map((r) => r.osv_id)
-                .filter((id): id is string => typeof id === 'string' && id.startsWith('CVE-')),
-            );
+            if (cveErr) throw new Error(`CVE fetch failed: ${cveErr.message}`);
+
+            // detectedCves = primary CVE-shaped osv_ids + any CVE-shaped
+            // aliases. Some advisories (log4shell) arrive with GHSA as the
+            // primary id; without alias expansion, the matching rule would
+            // never fire. Anything that isn't CVE-shaped is ignored.
+            const detectedCves = new Set<string>();
+            for (const row of (cveRows ?? []) as Array<{ osv_id?: string | null; aliases?: string[] | null }>) {
+              if (typeof row.osv_id === 'string' && row.osv_id.startsWith('CVE-')) {
+                detectedCves.add(row.osv_id);
+              }
+              if (Array.isArray(row.aliases)) {
+                for (const a of row.aliases) {
+                  if (typeof a === 'string' && a.startsWith('CVE-')) detectedCves.add(a);
+                }
+              }
+            }
 
             const selected = selectRulesForCves(allRules, detectedCves);
 
-            if (selected.length === 0) {
-              if (detectedCves.size > 0) {
-                await log.info(
-                  'reachability_rules',
-                  `No matching rules for ${detectedCves.size} detected CVE(s)`,
-                );
-              }
-            } else {
-              await log.info(
-                'reachability_rules',
-                `Running ${selected.length} rule(s) against detected CVEs`,
-              );
+            // Breadcrumb at step entry so every run has at least one log
+            // line regardless of outcome. Makes "did the step run?" a
+            // one-query answer.
+            await log.info(
+              'reachability_rules',
+              `Loaded ${allRules.length} rule(s); detected ${detectedCves.size} CVE(s); selected ${selected.length}`,
+            );
 
+            if (selected.length > 0) {
               const findings = await withTimeout(
                 async (signal) =>
                   runReachabilityRules({
@@ -1431,12 +1481,13 @@ export async function runPipeline(
                 const cached = packageCache.get(key);
                 if (cached) return cached;
 
-                const { data: pdRows } = await supabase
+                const { data: pdRows, error: pdErr } = await supabase
                   .from('project_dependencies')
                   .select('name, version, namespace, dependency_id')
                   .eq('project_id', projectId)
                   .eq('last_seen_extraction_run_id', runId)
                   .eq('name', pkg);
+                if (pdErr) throw new Error(`project_dependencies lookup failed: ${pdErr.message}`);
 
                 const pds = (pdRows ?? []) as Array<{
                   name: string;
@@ -1450,10 +1501,11 @@ export async function runPipeline(
 
                 let ecoById = new Map<string, string>();
                 if (depIds.length > 0) {
-                  const { data: depRows } = await supabase
+                  const { data: depRows, error: depErr } = await supabase
                     .from('dependencies')
                     .select('id, ecosystem')
                     .in('id', depIds);
+                  if (depErr) throw new Error(`dependencies lookup failed: ${depErr.message}`);
                   ecoById = new Map(
                     ((depRows ?? []) as Array<{ id: string; ecosystem: string }>).map(
                       (d) => [d.id, d.ecosystem],
@@ -1474,7 +1526,28 @@ export async function runPipeline(
               };
 
               const rulesById = new Map(selected.map((r) => [r.ruleId, r] as const));
-              const rows: any[] = [];
+              type ReachableFlowRow = {
+                project_id: string;
+                extraction_run_id: string;
+                purl: string;
+                dependency_id: string | null;
+                reachability_source: 'semgrep_taint';
+                osv_id: string;
+                rule_id: string;
+                flow_nodes: Array<{ file: string; line: number; content: string }>;
+                entry_point_file: string;
+                entry_point_method: string | null;
+                entry_point_line: number;
+                entry_point_tag: string | null;
+                sink_file: string;
+                sink_method: string | null;
+                sink_line: number;
+                sink_is_external: boolean;
+                flow_length: number;
+                llm_prompt: string | null;
+              };
+              const rows: ReachableFlowRow[] = [];
+              let droppedNoPackage = 0;
 
               for (const finding of findings) {
                 const rule = rulesById.get(finding.ruleId);
@@ -1483,7 +1556,10 @@ export async function runPipeline(
                   rule.metadata.package,
                   rule.metadata.ecosystem,
                 );
-                if (matches.length === 0) continue;
+                if (matches.length === 0) {
+                  droppedNoPackage++;
+                  continue;
+                }
 
                 // flow_nodes mirrors the atom shape enough for consumers to
                 // render a source -> ... -> sink chain without knowing which
@@ -1518,47 +1594,78 @@ export async function runPipeline(
                 }
               }
 
+              let chunkFailures = 0;
               if (rows.length > 0) {
+                // Must match phase23.4's NULLS NOT DISTINCT UNIQUE keyed on
+                //   (project_id, extraction_run_id, purl,
+                //    entry_point_file, entry_point_line, sink_method,
+                //    osv_id, rule_id).
+                // Atom rows carry NULL osv_id/rule_id and dedup on coords
+                // alone; taint rows carry CVE+rule and dedup independently.
+                // Atom-vs-taint at same coords coexist — the classifier
+                // reads them separately via flowsByDep vs taintByDepOsv.
+                const TAINT_CONFLICT =
+                  'project_id,extraction_run_id,purl,entry_point_file,entry_point_line,sink_method,osv_id,rule_id';
                 for (let i = 0; i < rows.length; i += 100) {
                   const chunk = rows.slice(i, i + 100);
                   const { error: upsertErr } = await supabase
                     .from('project_reachable_flows')
                     .upsert(chunk, {
-                      onConflict:
-                        'project_id,extraction_run_id,purl,entry_point_file,entry_point_line,sink_method',
+                      onConflict: TAINT_CONFLICT,
                       ignoreDuplicates: true,
                     });
                   if (upsertErr) {
+                    chunkFailures++;
                     await log.warn(
                       'reachability_rules',
-                      `Failed to write chunk: ${upsertErr.message}`,
+                      `Failed to write chunk ${Math.floor(i / 100)}: ${upsertErr.message}`,
                     );
+                    if (job.jobId) {
+                      await logStepError(supabase, {
+                        jobId: job.jobId,
+                        projectId,
+                        step: 'reachability_rules',
+                        code: 'db_error',
+                        message: `Chunk upsert failed: ${upsertErr.message}`,
+                        severity: 'warn',
+                      });
+                    }
                   }
                 }
               }
 
+              const dropNote = droppedNoPackage > 0 ? ` (${droppedNoPackage} dropped: package not installed)` : '';
+              const chunkNote = chunkFailures > 0 ? `, ${chunkFailures} chunk(s) failed` : '';
               await log.success(
                 'reachability_rules',
-                `${findings.length} taint finding(s) from ${selected.length} rule(s) → ${rows.length} flow row(s)`,
+                `${findings.length} taint finding(s) from ${selected.length} rule(s) → ${rows.length} flow row(s)${dropNote}${chunkNote}`,
                 Date.now() - reachStart,
               );
             }
           }
-        } catch (e: any) {
-          if (job.jobId) {
-            const { code, message, stack } = classifyError(e);
-            await logStepError(supabase, {
-              jobId: job.jobId,
-              projectId,
-              step: 'reachability_rules',
-              code,
-              message,
-              stack,
-              durationMs: Date.now() - reachStart,
-              severity: 'warn',
-            });
+        } catch (e: unknown) {
+          // phase23_migration_missing is an expected-but-serious bail — we
+          // already emitted a log.error above, and the rest of the pipeline
+          // should continue. Don't double-log or record a step error.
+          const msg = e instanceof Error ? e.message : String(e);
+          if (msg === 'phase23_migration_missing') {
+            // no-op; already logged
+          } else {
+            if (job.jobId) {
+              const { code, message, stack } = classifyError(e);
+              await logStepError(supabase, {
+                jobId: job.jobId,
+                projectId,
+                step: 'reachability_rules',
+                code,
+                message,
+                stack,
+                durationMs: Date.now() - reachStart,
+                severity: 'warn',
+              });
+            }
+            await log.warn('reachability_rules', `Step failed: ${msg}`);
           }
-          await log.warn('reachability_rules', `Step failed: ${e.message ?? String(e)}`);
         }
       }
     }
