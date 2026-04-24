@@ -35,6 +35,7 @@ See [DEVELOPERS.md](./DEVELOPERS.md) for setup and where to add new routes or li
 - **API routes:** `backend/src/routes/` — register in `backend/src/index.ts`
 - **Shared logic:** `backend/src/lib/`
 - **Workers / extraction:** `backend/extraction-worker/` and related packages
+- **CVE reachability rule packs:** `backend/extraction-worker/reachability-rules/` — see that directory's README for authoring conventions (one Semgrep `mode: taint` rule per CVE folder, plus vulnerable/safe fixtures). CI validates the full catalog on every PR.
 
 See `.cursor/skills/add-new-features/SKILL.md` for placement and patterns.
 
