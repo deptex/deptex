@@ -45,10 +45,31 @@ export async function withTimeout<T>(
     }, timeoutMs);
   });
 
+  // Hold a reference to the wrapped promise so we can await it in finally.
+  // Without this, Promise.race returning on timeout leaves the wrapped
+  // promise orphaned — any later rejection becomes an UnhandledPromiseRejection
+  // and any finally-block cleanup (temp dirs, handles) can race with callers
+  // that assume the step is fully settled.
+  const wrapped = fn(controller.signal);
+  // Swallow rejections on the orphaned path — the race result is the real
+  // return value; this only exists so we can await completion in finally.
+  wrapped.catch(() => {});
+
   try {
-    return await Promise.race([fn(controller.signal), timeoutPromise]);
+    return await Promise.race([wrapped, timeoutPromise]);
   } finally {
     if (timer) clearTimeout(timer);
+    // Best-effort: let the wrapped promise settle (subprocess exit, cleanup)
+    // before returning control to the caller, even when timeout won the race.
+    // Capped so a truly hung subprocess doesn't block the caller forever.
+    // Clear the cap timer as soon as `wrapped` settles so fast-path callers
+    // don't leak a pending setTimeout into the event loop.
+    let capTimer: NodeJS.Timeout | undefined;
+    const capPromise = new Promise<void>((r) => {
+      capTimer = setTimeout(r, 15_000);
+    });
+    await Promise.race([wrapped.catch(() => {}), capPromise]);
+    if (capTimer) clearTimeout(capTimer);
   }
 }
 
