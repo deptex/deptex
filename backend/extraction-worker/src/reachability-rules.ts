@@ -24,6 +24,17 @@ import { StepTimeoutError } from './with-timeout';
 // Public types
 // -----------------------------------------------------------------------------
 
+/**
+ * One of the EPD entry-point classes the reachability rule's source is
+ * meant to model. Mirrors `EntryPointClassification` in `epd.ts`. Optional
+ * — defaults to `PUBLIC_UNAUTH` because every shipped Phase 3 rule pack
+ * traces HTTP-request input or env-var-as-attacker-input, which both
+ * conservatively map to a public unauthenticated entry point. Override
+ * in rule.yml as `metadata.entry_point_class: OFFLINE_WORKER` for rules
+ * whose taint sources are background-job-only (e.g. cron payloads).
+ */
+export type RuleEntryPointClass = 'PUBLIC_UNAUTH' | 'AUTH_INTERNAL' | 'OFFLINE_WORKER';
+
 export interface RuleMetadata {
   cve: string;
   package: string;
@@ -31,6 +42,7 @@ export interface RuleMetadata {
   affectedVersions?: string;
   confidence?: 'HIGH' | 'MEDIUM' | 'LOW';
   cwe?: string[];
+  entryPointClass?: RuleEntryPointClass;
 }
 
 export interface LoadedRule {
@@ -182,6 +194,9 @@ function normaliseMetadata(raw: unknown): RuleMetadata | null {
   }
   if (Array.isArray(m.cwe)) {
     out.cwe = m.cwe.filter((x): x is string => typeof x === 'string');
+  }
+  if (m.entry_point_class === 'PUBLIC_UNAUTH' || m.entry_point_class === 'AUTH_INTERNAL' || m.entry_point_class === 'OFFLINE_WORKER') {
+    out.entryPointClass = m.entry_point_class;
   }
   return out;
 }
