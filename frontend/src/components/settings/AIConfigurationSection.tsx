@@ -501,7 +501,7 @@ export default function AIConfigurationSection({ organizationId }: AIConfigurati
             </p>
             <div className="rounded-xl border border-border bg-background-card/80 p-5 space-y-5">
               <div className="grid gap-2">
-                <Label htmlFor="epd-cap">Per-extraction cost cap (USD)</Label>
+                <Label htmlFor="epd-cap">Cost cap per extraction (USD)</Label>
                 <Input
                   id="epd-cap"
                   type="number"
@@ -514,10 +514,12 @@ export default function AIConfigurationSection({ organizationId }: AIConfigurati
                   placeholder={anthropicConnected ? 'Default $3.00' : 'Connect Anthropic BYOK'}
                   disabled={!anthropicConnected || savingEpd}
                   className="max-w-[200px]"
+                  aria-describedby="epd-cap-hint"
                 />
-                <p className="text-xs text-foreground-secondary">
-                  Maximum AI spend per repository scan. Range $0.10&ndash;$20.00. Lower = cheaper but
-                  less precise classification. Leave blank to inherit the worker default.
+                <p id="epd-cap-hint" className="text-xs text-foreground-secondary">
+                  Maximum AI spend per individual extraction run. Range $0.10&ndash;$20.00. Concurrent
+                  extractions each get their own budget — there is no org-wide monthly ceiling.
+                  Leave blank to inherit the worker default.
                 </p>
               </div>
               <div className="grid gap-2">
@@ -528,13 +530,17 @@ export default function AIConfigurationSection({ organizationId }: AIConfigurati
                   onChange={(e) => handleEpdBehaviorChange(e.target.value)}
                   disabled={!anthropicConnected || savingEpd}
                   className="h-9 px-2 pr-6 bg-background border border-border rounded-md text-sm text-foreground focus:ring-2 focus:ring-primary/50 focus:border-primary outline-none max-w-[280px] disabled:opacity-60 disabled:cursor-not-allowed"
+                  aria-describedby="epd-budget-exceeded-hint"
                 >
                   <option value="">Inherit worker default</option>
                   <option value="continue_with_fallback">Continue with heuristic fallback</option>
                   <option value="fail_job">Fail the extraction</option>
                 </select>
-                <p className="text-xs text-foreground-secondary">
-                  Recommend &ldquo;continue with heuristic fallback&rdquo; so a cap doesn&apos;t fail an entire scan.
+                <p id="epd-budget-exceeded-hint" className="text-xs text-foreground-secondary">
+                  Recommended: <strong>continue with heuristic fallback</strong> — remaining vulns
+                  get heuristic-only EPD scoring and the rest of the scan finalizes normally.
+                  &ldquo;Fail the extraction&rdquo; throws on cap overrun and discards the entire run
+                  (SBOM, vulnerabilities, secrets, semgrep findings) — strict but destructive.
                 </p>
               </div>
             </div>
