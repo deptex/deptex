@@ -44,6 +44,8 @@ import learningRouter from './routes/learning';
 import incidentsRouter from './routes/incidents';
 import gitlabWebhooksRouter from './routes/gitlab-webhooks';
 import bitbucketWebhooksRouter from './routes/bitbucket-webhooks';
+import reachabilitySettingsRouter from './routes/reachability-settings';
+import generatedRulesRouter from './routes/generated-rules';
 
 const app = express();
 app.set('trust proxy', true);
@@ -128,6 +130,8 @@ app.use('/api/organizations', teamsRouter);
 app.use('/api/organizations', projectsRouter);
 app.use('/api/organizations', organizationCanvasRouter);
 app.use('/api/organizations', activitiesRouter);
+app.use('/api/organizations', reachabilitySettingsRouter);
+app.use('/api/organizations', generatedRulesRouter);
 app.use('/api/integrations', integrationsRouter);
 app.use('/api/invitations', invitationsRouter);
 app.use('/api/aegis', aegisRouter);
