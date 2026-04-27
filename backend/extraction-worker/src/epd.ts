@@ -493,6 +493,22 @@ export async function applyEpdScoringFallback(
     }
   }
 
+  // Local CLI / self-host escape: the cloud path expects an encrypted
+  // BYOK row keyed by AI_ENCRYPTION_KEY, which the local PGLite scan
+  // doesn't set up. When ANTHROPIC_API_KEY is present in the env and
+  // we don't already have a decrypted key from the DB, use it directly.
+  // ANTHROPIC_MODEL overrides the model_preference (defaults still apply
+  // to costing). Keys are never persisted — only used for this run.
+  if (!decryptedApiKey && process.env.ANTHROPIC_API_KEY) {
+    decryptedApiKey = process.env.ANTHROPIC_API_KEY;
+    hasAnthropicByok = true;
+    if (process.env.ANTHROPIC_MODEL) anthropicModel = process.env.ANTHROPIC_MODEL;
+    await logger.info('epd', 'Using ANTHROPIC_API_KEY env var (local CLI / self-host path)', {
+      epd_phase: 'byok_env',
+      anthropic_model: anthropicModel,
+    });
+  }
+
   const { data: pdvRows, error: pdvErr } = await supabase
     .from('project_dependency_vulnerabilities')
     .select('id, project_dependency_id, is_reachable, reachability_level, depscore, base_depscore_no_reachability, severity, summary')
