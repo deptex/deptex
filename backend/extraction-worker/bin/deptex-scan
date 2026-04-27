@@ -123,7 +123,41 @@ if [ "$(uname)" = "Linux" ]; then
   USER_FLAG=(--user "$(id -u):$(id -g)")
 fi
 
-exec docker run --rm -i "${TTY_FLAG[@]}" "${USER_FLAG[@]}" \
+# Forward AI-provider env vars when set on the host. ANTHROPIC_API_KEY
+# triggers EPD's local-CLI escape (epd.ts) so the AI verification path
+# runs without seeding an encrypted BYOK row in the local PGLite DB.
+# ANTHROPIC_MODEL is optional — pin a cheaper model (e.g. Haiku) for
+# testing. Both vars are read from the host shell; nothing is persisted.
+#
+# DEPTEX_LOCAL_CLI=1 is set by this wrapper unconditionally so epd.ts
+# can distinguish a local CLI invocation from a cloud worker that
+# happens to have ANTHROPIC_API_KEY in its env. Without that gate, a
+# customer org's failed BYOK decryption could silently fall back to
+# the cloud operator's key.
+#
+# For ANTHROPIC_API_KEY we use the `-e VAR` (no =value) form so the
+# secret is forwarded from this script's env into docker without
+# landing on docker's argv (which is visible via `ps -ef` and any
+# host-level process audit).
+ENV_FLAGS=(-e "DEPTEX_LOCAL_CLI=1")
+if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+  export ANTHROPIC_API_KEY
+  ENV_FLAGS+=(-e ANTHROPIC_API_KEY)
+fi
+if [ -n "${ANTHROPIC_MODEL:-}" ]; then
+  ENV_FLAGS+=(-e "ANTHROPIC_MODEL=$ANTHROPIC_MODEL")
+fi
+if [ -n "${EPD_MAX_RUN_COST_USD:-}" ]; then
+  ENV_FLAGS+=(-e "EPD_MAX_RUN_COST_USD=$EPD_MAX_RUN_COST_USD")
+fi
+if [ -n "${EPD_BUDGET_EXCEEDED_BEHAVIOR:-}" ]; then
+  ENV_FLAGS+=(-e "EPD_BUDGET_EXCEEDED_BEHAVIOR=$EPD_BUDGET_EXCEEDED_BEHAVIOR")
+fi
+if [ -n "${EPD_MAX_VULNS_PER_RUN:-}" ]; then
+  ENV_FLAGS+=(-e "EPD_MAX_VULNS_PER_RUN=$EPD_MAX_VULNS_PER_RUN")
+fi
+
+exec docker run --rm -i "${TTY_FLAG[@]}" "${USER_FLAG[@]}" "${ENV_FLAGS[@]}" \
   -v "$ABS_WS:/workspace" \
   -v "$ABS_OUT:/output" \
   "$IMAGE" \

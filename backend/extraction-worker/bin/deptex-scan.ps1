@@ -90,7 +90,20 @@ if (-not (Test-Path $OutputDir)) {
 }
 $AbsOut = (Resolve-Path $OutputDir).Path
 
+# Mirror bin/deptex-scan env-var forwarding. DEPTEX_LOCAL_CLI=1 is the
+# gate epd.ts uses to allow ANTHROPIC_API_KEY to be picked up from the
+# environment instead of an encrypted BYOK row. ANTHROPIC_API_KEY uses
+# the `-e VAR` (no =value) form so the secret never lands on docker's
+# argv (visible via process listings and audit logs).
+$EnvFlags = @('-e', 'DEPTEX_LOCAL_CLI=1')
+if ($env:ANTHROPIC_API_KEY) { $EnvFlags += @('-e', 'ANTHROPIC_API_KEY') }
+if ($env:ANTHROPIC_MODEL) { $EnvFlags += @('-e', "ANTHROPIC_MODEL=$($env:ANTHROPIC_MODEL)") }
+if ($env:EPD_MAX_RUN_COST_USD) { $EnvFlags += @('-e', "EPD_MAX_RUN_COST_USD=$($env:EPD_MAX_RUN_COST_USD)") }
+if ($env:EPD_BUDGET_EXCEEDED_BEHAVIOR) { $EnvFlags += @('-e', "EPD_BUDGET_EXCEEDED_BEHAVIOR=$($env:EPD_BUDGET_EXCEEDED_BEHAVIOR)") }
+if ($env:EPD_MAX_VULNS_PER_RUN) { $EnvFlags += @('-e', "EPD_MAX_VULNS_PER_RUN=$($env:EPD_MAX_VULNS_PER_RUN)") }
+
 docker run --rm -i `
+  @EnvFlags `
   -v "${AbsWs}:/workspace" `
   -v "${AbsOut}:/output" `
   $Image `

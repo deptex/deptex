@@ -24,6 +24,17 @@ import { StepTimeoutError } from './with-timeout';
 // Public types
 // -----------------------------------------------------------------------------
 
+/**
+ * One of the EPD entry-point classes the reachability rule's source is
+ * meant to model. Mirrors `EntryPointClassification` in `epd.ts`. Optional
+ * — defaults to `PUBLIC_UNAUTH` because every shipped Phase 3 rule pack
+ * traces HTTP-request input or env-var-as-attacker-input, which both
+ * conservatively map to a public unauthenticated entry point. Override
+ * in rule.yml as `metadata.entry_point_class: OFFLINE_WORKER` for rules
+ * whose taint sources are background-job-only (e.g. cron payloads).
+ */
+export type RuleEntryPointClass = 'PUBLIC_UNAUTH' | 'AUTH_INTERNAL' | 'OFFLINE_WORKER';
+
 export interface RuleMetadata {
   cve: string;
   package: string;
@@ -31,6 +42,7 @@ export interface RuleMetadata {
   affectedVersions?: string;
   confidence?: 'HIGH' | 'MEDIUM' | 'LOW';
   cwe?: string[];
+  entryPointClass?: RuleEntryPointClass;
 }
 
 export interface LoadedRule {
@@ -182,6 +194,9 @@ function normaliseMetadata(raw: unknown): RuleMetadata | null {
   }
   if (Array.isArray(m.cwe)) {
     out.cwe = m.cwe.filter((x): x is string => typeof x === 'string');
+  }
+  if (m.entry_point_class === 'PUBLIC_UNAUTH' || m.entry_point_class === 'AUTH_INTERNAL' || m.entry_point_class === 'OFFLINE_WORKER') {
+    out.entryPointClass = m.entry_point_class;
   }
   return out;
 }
@@ -521,7 +536,23 @@ function normaliseOneFinding(
 
   const ruleId = typeof r.check_id === 'string' ? r.check_id : null;
   if (!ruleId) return { kind: 'malformed' };
-  const rule = rulesById.get(ruleId);
+  // When `--config` points at a directory, semgrep prefixes check_id with
+  // the rule-file's basename (e.g. `tmp.tmp.aBc.deptex.lodash.template-injection`).
+  // When `--config` points at a single file, the prefix encodes the path
+  // (e.g. `reachability-rules.CVE-2021-23337-lodash-template.deptex...`).
+  // Our rulesById keys are the bare ids from rule.yml (`deptex.<pkg>.<x>`),
+  // so direct lookup misses every finding. Fall back to a suffix match
+  // anchored by the full ruleId — short of an exact collision in the
+  // tail, this is unambiguous.
+  let rule = rulesById.get(ruleId);
+  if (!rule) {
+    for (const [knownId, candidate] of rulesById) {
+      if (ruleId === knownId || ruleId.endsWith(`.${knownId}`)) {
+        rule = candidate;
+        break;
+      }
+    }
+  }
   if (!rule) return { kind: 'unknown_rule', ruleId };
 
   const filePath = typeof r.path === 'string' ? r.path : null;
@@ -573,7 +604,10 @@ function normaliseOneFinding(
     kind: 'finding',
     finding: {
       cve: rule.metadata.cve,
-      ruleId,
+      // Emit the canonical bare id from rule.yml, not whatever prefix
+      // semgrep stamped onto check_id. Downstream consumers (pipeline.ts
+      // resolves rule metadata back via this id) need a stable key.
+      ruleId: rule.ruleId,
       filePath,
       sourceLine: source.line,
       sourceContent: source.content || null,
