@@ -17,6 +17,11 @@
   --vercel-text-muted: #71717a;
 }
 
+@keyframes aegis-thinking {
+  0%, 100% { transform: scale(0.9); opacity: 0.65; }
+  50%       { transform: scale(1.1); opacity: 0.9; }
+}
+
 @layer utilities {
   /* Get Demo page: inputs use Vercel palette */
   .demo-page-input,
@@ -604,6 +609,16 @@
 .policy-diff-viewer .policy-diff-line-syntax .token.important {
   color: #d4d4d4;
   font-weight: bold;
+}
+
+/* Markdown renderer tables: transparent backgrounds, no hover */
+.markdown-table table thead,
+.markdown-table table thead tr,
+.markdown-table table tbody tr {
+  background-color: transparent !important;
+}
+.markdown-table table tbody tr:hover:not([aria-expanded="true"]):not([data-expanded-content]) {
+  background-color: transparent !important;
 }
 
 /* ---------------------------------------------------------------------------

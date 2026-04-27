@@ -35,6 +35,7 @@ import OrganizationVulnerabilitiesPage from "./pages/OrganizationVulnerabilities
 import AegisPage from "./pages/AegisPage";
 import AdminGate from "../components/AdminGate";
 import ExtractionFailuresPage from "./pages/admin/ExtractionFailuresPage";
+
 // Redirect /settings to /settings/general while preserving search params (for OAuth callbacks)
 function SettingsRedirect() {
   const { search } = useLocation();

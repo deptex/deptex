@@ -186,7 +186,7 @@ export interface OrganizationMember {
   teams?: Array<{ id: string; name: string }>;
 }
 
-async function getAuthToken(): Promise<string | null> {
+export async function getAuthToken(): Promise<string | null> {
   const { data: { session }, error } = await supabase.auth.getSession();
 
   if (error) {
@@ -212,7 +212,7 @@ async function getAuthToken(): Promise<string | null> {
   return null;
 }
 
-async function fetchWithAuth(url: string, options: RequestInit = {}) {
+export async function fetchWithAuth(url: string, options: RequestInit = {}) {
   const token = await getAuthToken();
 
   if (!token) {
