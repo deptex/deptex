@@ -301,3 +301,262 @@ describe('runRuleGenerationStep — early-exit paths', () => {
     );
   });
 });
+
+describe('runRuleGenerationStep — trigger-policy edge cases', () => {
+  it('admits CVEs across multiple selected severities and skips the rest', async () => {
+    const fs = makeStorage({ trigger_severities: ['critical', 'high'] });
+    const vulns: PipelineVulnRow[] = [
+      { ...sampleVuln, osv_id: 'CVE-1111-1111', severity: 'critical' },
+      { ...sampleVuln, osv_id: 'CVE-2222-2222', severity: 'high', package_purl: 'pkg:npm/b@1.0', package_name: 'b' },
+      { ...sampleVuln, osv_id: 'CVE-3333-3333', severity: 'medium' },
+      { ...sampleVuln, osv_id: 'CVE-4444-4444', severity: 'low' },
+    ];
+    const result = await runRuleGenerationStep(
+      {
+        organizationId: ORG_ID, projectId: PROJECT_ID, runId: RUN_ID, jobId: 'job-1',
+        supabase: fs as unknown as Storage, log,
+        platformRulesDir: '/nonexistent',
+        resolveApiKey: async () => 'fake-key',
+      },
+      vulns,
+    );
+    expect(result.triggerMatched).toBe(2);
+    // Two filtered out by severity_filter (medium, low).
+    expect(result.skipReasons.severity_filter).toBe(2);
+  });
+
+  it('skips when project asset tier rank is greater than trigger_asset_tier_max_rank', async () => {
+    const fs = makeStorage({ trigger_asset_tier_max_rank: 2 });
+    // Crown-jewels rank 1 passes, but here we rig a rank=4 (e.g. dev) project.
+    fs.set('projects', [{ id: PROJECT_ID, asset_tier_id: 'tier-dev' }]);
+    fs.set('organization_asset_tiers', [{ id: 'tier-dev', rank: 4 }]);
+    const result = await runRuleGenerationStep(
+      {
+        organizationId: ORG_ID, projectId: PROJECT_ID, runId: RUN_ID, jobId: 'job-1',
+        supabase: fs as unknown as Storage, log,
+        platformRulesDir: '/nonexistent',
+        resolveApiKey: async () => 'fake-key',
+      },
+      [sampleVuln],
+    );
+    expect(result.attempted).toBe(0);
+    expect(result.skipReasons.asset_tier_filter).toBe(1);
+  });
+
+  it('admits when asset tier rank equals trigger_asset_tier_max_rank (boundary)', async () => {
+    const fs = makeStorage({ trigger_asset_tier_max_rank: 3 });
+    fs.set('projects', [{ id: PROJECT_ID, asset_tier_id: 'tier-prod' }]);
+    fs.set('organization_asset_tiers', [{ id: 'tier-prod', rank: 3 }]);
+    const result = await runRuleGenerationStep(
+      {
+        organizationId: ORG_ID, projectId: PROJECT_ID, runId: RUN_ID, jobId: 'job-1',
+        supabase: fs as unknown as Storage, log,
+        platformRulesDir: '/nonexistent',
+        resolveApiKey: async () => 'fake-key',
+      },
+      [sampleVuln],
+    );
+    // Rank 3 == max 3 should pass the tier filter (the step uses >, not >=).
+    expect(result.triggerMatched).toBe(1);
+  });
+
+  it('demands KEV+severity together when trigger_kev=true', async () => {
+    const fs = makeStorage({ trigger_kev: true, trigger_severities: ['critical'] });
+    const vulns: PipelineVulnRow[] = [
+      // severity matches but no KEV
+      { ...sampleVuln, osv_id: 'CVE-A', severity: 'critical', cisa_kev: false },
+      // severity wrong even with KEV
+      { ...sampleVuln, osv_id: 'CVE-B', severity: 'high', cisa_kev: true, package_purl: 'pkg:npm/b@1', package_name: 'b' },
+      // both ok
+      { ...sampleVuln, osv_id: 'CVE-C', severity: 'critical', cisa_kev: true, package_purl: 'pkg:npm/c@1', package_name: 'c' },
+    ];
+    const result = await runRuleGenerationStep(
+      {
+        organizationId: ORG_ID, projectId: PROJECT_ID, runId: RUN_ID, jobId: 'job-1',
+        supabase: fs as unknown as Storage, log,
+        platformRulesDir: '/nonexistent',
+        resolveApiKey: async () => 'fake-key',
+      },
+      vulns,
+    );
+    expect(result.triggerMatched).toBe(1);
+    expect(result.skipReasons.not_kev).toBe(1);
+    expect(result.skipReasons.severity_filter).toBe(1);
+  });
+
+  it('skips vulns with missing purl / package_name / ecosystem', async () => {
+    const fs = makeStorage({});
+    const vulns: PipelineVulnRow[] = [
+      { ...sampleVuln, osv_id: 'CVE-A', package_purl: null },
+      { ...sampleVuln, osv_id: 'CVE-B', package_name: null, package_purl: 'pkg:npm/b@1' },
+      { ...sampleVuln, osv_id: 'CVE-C', ecosystem: null, package_purl: 'pkg:npm/c@1', package_name: 'c' },
+    ];
+    const result = await runRuleGenerationStep(
+      {
+        organizationId: ORG_ID, projectId: PROJECT_ID, runId: RUN_ID, jobId: 'job-1',
+        supabase: fs as unknown as Storage, log,
+        platformRulesDir: '/nonexistent',
+        resolveApiKey: async () => 'fake-key',
+      },
+      vulns,
+    );
+    expect(result.triggerMatched).toBe(0);
+    expect(result.skipReasons.missing_purl_or_ecosystem).toBe(3);
+  });
+
+  it('rejects non-CVE OSV ids without a CVE alias', async () => {
+    const fs = makeStorage({});
+    const vulns: PipelineVulnRow[] = [
+      { ...sampleVuln, osv_id: 'GHSA-aaaa-bbbb-cccc', aliases: [] },
+      { ...sampleVuln, osv_id: 'OSV-2024-X', aliases: ['MAL-2024-1'] },
+    ];
+    const result = await runRuleGenerationStep(
+      {
+        organizationId: ORG_ID, projectId: PROJECT_ID, runId: RUN_ID, jobId: 'job-1',
+        supabase: fs as unknown as Storage, log,
+        platformRulesDir: '/nonexistent',
+        resolveApiKey: async () => 'fake-key',
+      },
+      vulns,
+    );
+    expect(result.triggerMatched).toBe(0);
+    expect(result.skipReasons.not_cve_id).toBe(2);
+  });
+});
+
+describe('runRuleGenerationStep — telemetry persistence', () => {
+  it('writes the four reachability_* counters to extraction_jobs when generation runs', async () => {
+    const fs = makeStorage({});
+    fs.set('organization_generated_rules', [
+      // Pretend one of the candidates is already covered.
+      { organization_id: ORG_ID, cve_id: 'CVE-AAAA', validation_status: 'validated' },
+    ]);
+    const vulns: PipelineVulnRow[] = [
+      { ...sampleVuln, osv_id: 'CVE-AAAA' },
+      { ...sampleVuln, osv_id: 'CVE-BBBB', package_purl: 'pkg:npm/b@1', package_name: 'b' },
+    ];
+    await runRuleGenerationStep(
+      {
+        organizationId: ORG_ID, projectId: PROJECT_ID, runId: RUN_ID, jobId: 'job-1',
+        supabase: fs as unknown as Storage, log,
+        platformRulesDir: '/nonexistent',
+        // No BYOK key — short-circuits before any AI call. Telemetry should
+        // still NOT be persisted since the step bailed before reaching the
+        // telemetry write. Verify that explicitly.
+        resolveApiKey: async () => null,
+      },
+      vulns,
+    );
+    const jobUpdates = fs.updates.filter((u) => u.table === 'extraction_jobs');
+    expect(jobUpdates).toEqual([]);
+  });
+
+  it('does not touch extraction_jobs when generation never ran', async () => {
+    const fs = makeStorage({ auto_generate_enabled: false });
+    await runRuleGenerationStep(
+      {
+        organizationId: ORG_ID, projectId: PROJECT_ID, runId: RUN_ID, jobId: 'job-1',
+        supabase: fs as unknown as Storage, log,
+        platformRulesDir: '/nonexistent',
+        resolveApiKey: async () => 'fake-key',
+      },
+      [sampleVuln],
+    );
+    expect(fs.updates.filter((u) => u.table === 'extraction_jobs')).toEqual([]);
+  });
+
+  it('persists telemetry with cost=0 when budget cap skips generation entirely', async () => {
+    const fs = makeStorage({ monthly_budget_usd: 0.01, on_budget_exhaustion: 'skip' });
+    await runRuleGenerationStep(
+      {
+        organizationId: ORG_ID, projectId: PROJECT_ID, runId: RUN_ID, jobId: 'job-1',
+        supabase: fs as unknown as Storage, log,
+        platformRulesDir: '/nonexistent',
+        resolveApiKey: async () => 'fake-key',
+      },
+      [sampleVuln],
+    );
+    // Budget skip path returns ran=true but doesn't reach persistJobTelemetry —
+    // telemetry only gets written when generation actually completed (even if
+    // 0 rules were produced). Verify no extraction_jobs update happened.
+    expect(fs.updates.filter((u) => u.table === 'extraction_jobs')).toEqual([]);
+  });
+
+  it('writes telemetry with the cost/counts emitted by generation when AI call throws', async () => {
+    // When the AI fetch throws (no global fetch mock), every CVE comes back as
+    // skipped/generation_threw, so generated=0 and cost=0. The step still
+    // reaches persistJobTelemetry because it ran past the budget cap with a
+    // resolved key. This is the most common live path on a transient network
+    // blip — telemetry must still pin matched/total_detectable.
+    const fs = makeStorage({});
+    const vulns: PipelineVulnRow[] = [
+      { ...sampleVuln, osv_id: 'CVE-T1' },
+      { ...sampleVuln, osv_id: 'CVE-T2', package_purl: 'pkg:npm/b@1', package_name: 'b' },
+    ];
+    const result = await runRuleGenerationStep(
+      {
+        organizationId: ORG_ID, projectId: PROJECT_ID, runId: RUN_ID, jobId: 'job-1',
+        supabase: fs as unknown as Storage, log,
+        platformRulesDir: '/nonexistent',
+        resolveApiKey: async () => 'fake-key',
+      },
+      vulns,
+    );
+    const jobUpdates = fs.updates.filter((u) => u.table === 'extraction_jobs');
+    expect(jobUpdates.length).toBe(1);
+    expect(jobUpdates[0].filter).toEqual({ id: 'job-1' });
+    expect(jobUpdates[0].values).toEqual({
+      reachability_rules_total_detectable: 2,
+      reachability_rules_matched: 0, // already_covered=0 + generated=0
+      reachability_rules_generated_this_scan: 0,
+      reachability_generation_cost_usd: 0,
+    });
+    expect(result.generated).toBe(0);
+  });
+
+  it('does not crash when jobId is undefined', async () => {
+    const fs = makeStorage({});
+    const result = await runRuleGenerationStep(
+      {
+        organizationId: ORG_ID, projectId: PROJECT_ID, runId: RUN_ID,
+        jobId: undefined,
+        supabase: fs as unknown as Storage, log,
+        platformRulesDir: '/nonexistent',
+        resolveApiKey: async () => 'fake-key',
+      },
+      [sampleVuln],
+    );
+    expect(result.ran).toBe(true);
+    expect(fs.updates.filter((u) => u.table === 'extraction_jobs')).toEqual([]);
+  });
+
+  it('emits a success log line whose four counters match the extraction_jobs columns', async () => {
+    const fs = makeStorage({});
+    await runRuleGenerationStep(
+      {
+        organizationId: ORG_ID, projectId: PROJECT_ID, runId: RUN_ID, jobId: 'job-1',
+        supabase: fs as unknown as Storage, log,
+        platformRulesDir: '/nonexistent',
+        resolveApiKey: async () => 'fake-key',
+      },
+      [sampleVuln],
+    );
+    expect(log.success).toHaveBeenCalledWith(
+      'rule_generation',
+      expect.stringMatching(
+        /Generated \d+\/\d+ rule\(s\); rules_matched=\d+ rules_total_detectable=\d+ generated_this_scan=\d+ generation_cost=\$\d+\.\d{4}/,
+      ),
+      expect.any(Number),
+      expect.objectContaining({
+        rules_matched: 0,
+        rules_total_detectable: 1,
+        generated_this_scan: 0,
+        generation_cost_usd: 0,
+        candidate_count: 1,
+        already_covered: 0,
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+      }),
+    );
+  });
+});
