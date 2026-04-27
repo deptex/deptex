@@ -9,8 +9,15 @@
  *
  * Returns null when the classification is missing or UNKNOWN so the
  * UI quietly absents the badge instead of rendering a placeholder.
+ *
+ * Wrapped in a <button> rather than a <span> so the Radix tooltip is
+ * keyboard-reachable (a non-focusable trigger leaves the disambiguating
+ * tooltip text invisible to keyboard-only and screen-reader users —
+ * WCAG 2.1 SC 2.1.1 / SC 1.4.13). The TooltipProvider lives at the app
+ * root (main.tsx); we don't re-mount one per badge instance.
  */
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
+import { memo } from 'react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { cn } from '../../lib/utils';
 import type { EpdEntryPointClassification, EpdStatus } from '../../lib/api';
 
@@ -37,32 +44,36 @@ interface EntryPointBadgeProps {
   compact?: boolean;
 }
 
-export function EntryPointBadge({ classification, status, compact = false }: EntryPointBadgeProps) {
+function EntryPointBadgeBase({ classification, status, compact = false }: EntryPointBadgeProps) {
   if (!classification || classification === 'UNKNOWN') return null;
   const style = STYLES[classification];
   if (!style) return null;
   const hint = status ? STATUS_HINT[status] : null;
+  const ariaLabel = `Entry point: ${style.label}${hint ? '. ' + hint : ''}`;
 
   return (
-    <TooltipProvider delayDuration={150}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span
-            className={cn(
-              'inline-flex items-center gap-1 rounded border font-medium',
-              compact ? 'px-1 py-0 text-[9px]' : 'px-1.5 py-0.5 text-[10px]',
-              style.cls,
-            )}
-          >
-            <span aria-hidden>{style.emoji}</span>
-            {style.label}
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="top" className="max-w-xs space-y-1">
-          <p className="font-medium">Entry point: {style.label}</p>
-          {hint && <p className="text-foreground-secondary">{hint}</p>}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <Tooltip delayDuration={150}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={ariaLabel}
+          className={cn(
+            'inline-flex items-center gap-1 rounded border font-medium text-[10px]',
+            compact ? 'px-1 py-0' : 'px-1.5 py-0.5',
+            'outline-none focus-visible:ring-2 focus-visible:ring-primary/60',
+            style.cls,
+          )}
+        >
+          <span aria-hidden>{style.emoji}</span>
+          {style.label}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs space-y-1">
+        <p className="font-medium">Entry point: {style.label}</p>
+        {hint && <p className="text-foreground-secondary">{hint}</p>}
+      </TooltipContent>
+    </Tooltip>
   );
 }
+
+export const EntryPointBadge = memo(EntryPointBadgeBase);
