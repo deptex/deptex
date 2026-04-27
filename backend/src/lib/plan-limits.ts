@@ -223,7 +223,7 @@ async function getResourceCounts(organizationId: string): Promise<number[]> {
     count('teams', 'organization_id'),
     count('organization_notification_rules', 'organization_id'),
     count('organization_integrations', 'organization_id'),
-    count('aegis_automations', 'organization_id'),
+    Promise.resolve(0),
   ]);
 
   return [projects, members, teams, notification_rules, integrations, automations];
