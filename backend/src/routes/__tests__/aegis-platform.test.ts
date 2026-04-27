@@ -79,10 +79,12 @@ function setupSupabaseForOrgMember() {
 import express from 'express';
 import request from 'supertest';
 import aegisRouter from '../aegis';
+import aegisV3Router from '../aegis-v3';
 
 const app = express();
 app.use(express.json());
 app.use('/api/aegis', aegisRouter);
+app.use('/api/aegis/v3', aegisV3Router);
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -95,7 +97,7 @@ describe('Aegis Autonomous Security Platform', () => {
   describe('Permissions (7B-P) — plan tests 61–66', () => {
     it('61: returns 401 when no user (missing X-Test-User-Id)', async () => {
       const res = await request(app)
-        .post('/api/aegis/v2/stream')
+        .post('/api/aegis/v3/stream')
         .send({ organizationId: ORG_ID, message: 'hi' });
 
       expect(res.status).toBe(401);
@@ -108,7 +110,7 @@ describe('Aegis Autonomous Security Platform', () => {
       setupSupabaseForOrgMember();
 
       const res = await request(app)
-        .post('/api/aegis/v2/stream')
+        .post('/api/aegis/v3/stream')
         .set('X-Test-User-Id', USER_NO_AGENT)
         .send({ organizationId: ORG_ID, message: 'hi' });
 
