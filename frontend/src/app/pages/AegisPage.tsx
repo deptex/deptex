@@ -249,7 +249,7 @@ export default function AegisPage() {
   const transport = useMemo(() => {
     if (!organizationId) return undefined;
     return new DefaultChatTransport({
-      api: `${API_BASE_URL}/api/aegis/v2/stream`,
+      api: `${API_BASE_URL}/api/aegis/v3/stream`,
       headers: async () => {
         const { data: { session } } = await supabase.auth.getSession();
         return { Authorization: `Bearer ${session?.access_token}` };
