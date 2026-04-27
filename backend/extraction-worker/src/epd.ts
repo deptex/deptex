@@ -499,7 +499,19 @@ export async function applyEpdScoringFallback(
   // we don't already have a decrypted key from the DB, use it directly.
   // ANTHROPIC_MODEL overrides the model_preference (defaults still apply
   // to costing). Keys are never persisted — only used for this run.
-  if (!decryptedApiKey && process.env.ANTHROPIC_API_KEY) {
+  //
+  // The `DEPTEX_LOCAL_CLI=1` gate ensures this only fires when invoked
+  // through bin/deptex-scan (which sets it explicitly). A cloud worker
+  // that happens to have ANTHROPIC_API_KEY in its environment will NOT
+  // silently fall back to it on a customer BYOK decryption failure —
+  // the customer instead gets `byok_missing` until they re-add their key.
+  // Self-hosters who deploy this worker in their own cloud and want the
+  // env-var path can opt in by setting DEPTEX_LOCAL_CLI=1 themselves.
+  if (
+    !decryptedApiKey
+    && process.env.DEPTEX_LOCAL_CLI === '1'
+    && process.env.ANTHROPIC_API_KEY
+  ) {
     decryptedApiKey = process.env.ANTHROPIC_API_KEY;
     hasAnthropicByok = true;
     if (process.env.ANTHROPIC_MODEL) anthropicModel = process.env.ANTHROPIC_MODEL;
