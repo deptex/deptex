@@ -45,13 +45,17 @@ describe('aegis-v3 helpers', () => {
     });
   });
 
-  describe('tool registry stub', () => {
-    it('starts empty in Phase 0', () => {
-      expect(ALL_AEGIS_TOOLS).toEqual([]);
+  describe('tool registry', () => {
+    it('aggregates the per-category tool arrays', () => {
+      const names = ALL_AEGIS_TOOLS.map((t) => t.name);
+      expect(names).toContain('list_projects');
+      expect(names).toContain('list_policies');
+      expect(ALL_AEGIS_TOOLS.length).toBeGreaterThan(0);
     });
 
-    it('builds an empty tool set when registry is empty', () => {
-      expect(buildToolSet(makeCtx())).toEqual({});
+    it('buildToolSet returns a record keyed by tool name', () => {
+      const set = buildToolSet(makeCtx());
+      expect(Object.keys(set).sort()).toEqual(ALL_AEGIS_TOOLS.map((t) => t.name).sort());
     });
 
     it('buildSDKTool produces a Tool with description and inputSchema', () => {
