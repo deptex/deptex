@@ -6541,6 +6541,15 @@ router.patch('/:id/ai-settings', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'No valid fields to update' });
     }
 
+    // Capture prior state for the audit log diff. Mirrors the
+    // canvas-settings pattern at line ~8067 — fetch before update so
+    // we can record the actual change in organization_activities.
+    const { data: priorOrg } = await supabase
+      .from('organizations')
+      .select('epd_max_run_cost_usd, epd_budget_exceeded_behavior')
+      .eq('id', orgId)
+      .single();
+
     const { data, error } = await supabase
       .from('organizations')
       .update(updates)
@@ -6548,6 +6557,32 @@ router.patch('/:id/ai-settings', async (req: AuthRequest, res) => {
       .select('epd_max_run_cost_usd, epd_budget_exceeded_behavior')
       .single();
     if (error) throw error;
+
+    // Audit log: only emit when at least one field actually changed.
+    // Org-wide AI spending knobs are sensitive enough that
+    // forensics/compliance need {actor, before, after, timestamp}.
+    const capChanged =
+      'epd_max_run_cost_usd' in updates
+      && priorOrg?.epd_max_run_cost_usd !== data.epd_max_run_cost_usd;
+    const behaviorChanged =
+      'epd_budget_exceeded_behavior' in updates
+      && priorOrg?.epd_budget_exceeded_behavior !== data.epd_budget_exceeded_behavior;
+    if (capChanged || behaviorChanged) {
+      await createActivity({
+        organization_id: orgId,
+        user_id: userId,
+        activity_type: 'changed_ai_settings',
+        description: 'updated reachability AI verification settings',
+        metadata: {
+          old_value: {
+            epd_max_run_cost_usd: priorOrg?.epd_max_run_cost_usd ?? null,
+            epd_budget_exceeded_behavior: priorOrg?.epd_budget_exceeded_behavior ?? null,
+          },
+          new_value: data,
+        },
+      });
+    }
+
     res.json(data);
   } catch (error: any) {
     console.error('Error updating AI settings:', error);
