@@ -1235,6 +1235,71 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/ai-usage/logs${qs ? `?${qs}` : ''}`);
   },
 
+  // ============================================================
+  // Reachability rule generation (Phase 5)
+  // ============================================================
+
+  async getReachabilitySettings(orgId: string): Promise<ReachabilitySettings> {
+    return fetchWithAuth(`/api/organizations/${orgId}/reachability-settings`);
+  },
+
+  async updateReachabilitySettings(
+    orgId: string,
+    patch: Partial<ReachabilitySettings>,
+  ): Promise<ReachabilitySettings> {
+    return fetchWithAuth(`/api/organizations/${orgId}/reachability-settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+  },
+
+  async listGeneratedRules(
+    orgId: string,
+    opts?: { page?: number; perPage?: number; status?: GeneratedRuleStatus; enabled?: boolean; search?: string },
+  ): Promise<{
+    rules: GeneratedRuleSummary[];
+    pagination: { page: number; per_page: number; total: number; total_pages: number };
+  }> {
+    const params = new URLSearchParams();
+    if (opts?.page) params.set('page', String(opts.page));
+    if (opts?.perPage) params.set('per_page', String(opts.perPage));
+    if (opts?.status) params.set('status', opts.status);
+    if (opts?.enabled != null) params.set('enabled', String(opts.enabled));
+    if (opts?.search) params.set('search', opts.search);
+    const qs = params.toString();
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules${qs ? `?${qs}` : ''}`);
+  },
+
+  async getGeneratedRule(orgId: string, ruleId: string): Promise<GeneratedRuleDetail> {
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules/${ruleId}`);
+  },
+
+  async updateGeneratedRule(
+    orgId: string,
+    ruleId: string,
+    patch: { enabled?: boolean; validation_status?: 'manual_override' },
+  ): Promise<GeneratedRuleDetail> {
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules/${ruleId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+  },
+
+  async deleteGeneratedRule(orgId: string, ruleId: string): Promise<void> {
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules/${ruleId}`, { method: 'DELETE' });
+  },
+
+  async regenerateGeneratedRule(
+    orgId: string,
+    ruleId: string,
+    body: { provider: 'anthropic' | 'openai' | 'google'; model: string },
+  ): Promise<{ rule: GeneratedRuleDetail; message: string }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules/${ruleId}/regenerate`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+
   async streamAegisMessage(
     orgId: string,
     threadId: string | null,
@@ -3930,6 +3995,67 @@ export type EpdStatus =
 export interface OrgAISettings {
   epd_max_run_cost_usd: number | null;
   epd_budget_exceeded_behavior: 'fail_job' | 'continue_with_fallback' | null;
+}
+
+/** Per-org reachability rule generation policy (Phase 5). */
+export interface ReachabilitySettings {
+  organization_id: string;
+  auto_generate_enabled: boolean;
+  trigger_severities: Array<'critical' | 'high' | 'medium' | 'low'>;
+  trigger_kev: boolean;
+  trigger_asset_tier_max_rank: number;
+  trigger_newly_discovered: boolean;
+  trigger_reevaluate_existing: boolean;
+  ai_provider: 'anthropic' | 'openai' | 'google';
+  ai_model: string;
+  monthly_budget_usd: number;
+  on_budget_exhaustion: 'skip' | 'fall_back_to_haiku';
+  max_wait_seconds: number;
+  updated_at?: string;
+  updated_by?: string | null;
+}
+
+export type GeneratedRuleStatus = 'pending' | 'validated' | 'failed_validation' | 'manual_override';
+
+export interface GeneratedRuleSummary {
+  id: string;
+  organization_id: string;
+  cve_id: string;
+  package_purl: string;
+  ecosystem: string;
+  affected_version_range: string | null;
+  reachability_level: string;
+  entry_point_class: string | null;
+  generated_with_provider: string;
+  generated_with_model: string;
+  generation_cost_usd: number;
+  validation_status: GeneratedRuleStatus;
+  enabled: boolean;
+  generated_at: string;
+  last_used_at: string | null;
+  use_count: number;
+}
+
+export interface GeneratedRulePreviousVersion {
+  rule_yaml: string;
+  vulnerable_fixture: string;
+  safe_fixture: string;
+  generated_with_provider: string;
+  generated_with_model: string;
+  generation_cost_usd: number;
+  validation_status: GeneratedRuleStatus;
+  validation_log: Record<string, unknown> | null;
+  generated_at: string;
+  replaced_at: string;
+  replaced_by_user_id: string | null;
+}
+
+export interface GeneratedRuleDetail extends GeneratedRuleSummary {
+  rule_yaml: string;
+  vulnerable_fixture: string;
+  safe_fixture: string;
+  validation_log: Record<string, unknown> | null;
+  previous_versions: GeneratedRulePreviousVersion[];
 }
 
 // PR & Commit tracking types
