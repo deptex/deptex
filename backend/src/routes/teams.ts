@@ -2332,7 +2332,7 @@ router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) =
     let dataQuery = supabase
       .from('project_dependency_vulnerabilities')
       .select(
-        'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, sla_status, sla_deadline_at, reachability_level, status'
+        'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, entry_point_classification, epd_status, sla_status, sla_deadline_at, reachability_level, status'
       )
       .in('project_id', projectIds)
       .in('extraction_run_id', activeRunIds)
@@ -2403,6 +2403,8 @@ router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) =
         cisa_kev: r.cisa_kev ?? false,
         depscore: r.depscore ?? null,
         contextual_depscore: r.contextual_depscore ?? null,
+        entry_point_classification: r.entry_point_classification ?? null,
+        epd_status: r.epd_status ?? null,
         sla_status: r.sla_status ?? null,
         sla_deadline_at: r.sla_deadline_at ?? null,
         reachability_level: r.reachability_level ?? null,

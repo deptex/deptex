@@ -71,6 +71,8 @@ async function fetchPdvScoresByOsvForDependency(
       osv_id: string;
       depscore: number | null;
       contextual_depscore: number | null;
+      entry_point_classification: string | null;
+      epd_status: string | null;
       epss_score: number | null;
       cvss_score: number | null;
       cisa_kev: boolean | null;
@@ -80,7 +82,7 @@ async function fetchPdvScoresByOsvForDependency(
 > {
   const { data, error } = await supabase
     .from('project_dependency_vulnerabilities')
-    .select('osv_id, depscore, contextual_depscore, epss_score, cvss_score, cisa_kev, is_reachable')
+    .select('osv_id, depscore, contextual_depscore, entry_point_classification, epd_status, epss_score, cvss_score, cisa_kev, is_reachable')
     .eq('project_id', projectId)
     .eq('project_dependency_id', projectDependencyId)
     .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
@@ -108,6 +110,8 @@ function mergePdvIntoVulnerabilities(
       ...v,
       depscore: p.depscore ?? null,
       contextual_depscore: p.contextual_depscore ?? null,
+      entry_point_classification: p.entry_point_classification ?? null,
+      epd_status: p.epd_status ?? null,
       epss_score: p.epss_score ?? null,
       cvss_score: p.cvss_score ?? null,
       cisa_kev: p.cisa_kev ?? false,
@@ -7062,6 +7066,8 @@ router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, 
         cisa_kev: vuln.cisa_kev ?? false,
         depscore: vuln.depscore ?? null,
         contextual_depscore: vuln.contextual_depscore ?? null,
+        entry_point_classification: vuln.entry_point_classification ?? null,
+        epd_status: vuln.epd_status ?? null,
       }),
     }));
 
@@ -10201,7 +10207,7 @@ router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
     let dataQuery = supabase
       .from('project_dependency_vulnerabilities')
       .select(
-        'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, sla_status, sla_deadline_at, reachability_level'
+        'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, entry_point_classification, epd_status, sla_status, sla_deadline_at, reachability_level'
       )
       .in('project_id', accessibleProjectIds)
       .in('extraction_run_id', activeRunIds)
@@ -10271,6 +10277,8 @@ router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
         cisa_kev: r.cisa_kev ?? false,
         depscore: r.depscore ?? null,
         contextual_depscore: r.contextual_depscore ?? null,
+        entry_point_classification: r.entry_point_classification ?? null,
+        epd_status: r.epd_status ?? null,
         sla_status: r.sla_status ?? null,
         sla_deadline_at: r.sla_deadline_at ?? null,
         reachability_level: r.reachability_level ?? null,

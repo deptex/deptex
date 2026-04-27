@@ -1570,6 +1570,16 @@ export async function runPipeline(
                   { file: finding.filePath, line: finding.sinkLine, content: finding.sinkContent ?? '' },
                 ];
 
+                // entry_point_tag feeds EPD's heuristic classifier in
+                // epd.ts:classifyFallbackEntryPoint. Default PUBLIC_UNAUTH
+                // because every shipped Phase 3 rule traces HTTP-request /
+                // env-var input — both attacker-reachable. Authors can
+                // override via `metadata.entry_point_class` in rule.yml.
+                // Format `framework-input:<class>` is matched by the
+                // classifier's substring routing (lowercased).
+                const entryClass = rule.metadata.entryPointClass ?? 'PUBLIC_UNAUTH';
+                const entryTag = `framework-input:${entryClass}`;
+
                 for (const match of matches) {
                   rows.push({
                     project_id: projectId,
@@ -1583,7 +1593,7 @@ export async function runPipeline(
                     entry_point_file: finding.filePath,
                     entry_point_method: null,
                     entry_point_line: finding.sourceLine,
-                    entry_point_tag: null,
+                    entry_point_tag: entryTag,
                     sink_file: finding.filePath,
                     sink_method: finding.sinkMethod,
                     sink_line: finding.sinkLine,
@@ -1717,16 +1727,35 @@ export async function runPipeline(
       }
     } catch { /* non-fatal */ }
 
-    // --- EPD contextual scoring: DISABLED ---
-    // EPD requires real data-flow paths from atom reachable flows to be meaningful.
-    // Without actual path depth and entry point data, it just applies arbitrary decay
-    // factors. Re-enable when we have real call path analysis (atom web framework
-    // support, CodeQL integration, or custom call path tracing).
-    // try {
-    //   await applyEpdScoringFallback(supabase, projectId, workspaceRoot, log);
-    // } catch (epdErr: any) {
-    //   if (epdErr instanceof EpdBudgetExceededError) throw epdErr;
-    // }
+    // --- EPD contextual scoring (Phase 4) ---
+    // Wired now that Phase 3 produces taint flows with framework-input
+    // entry-point tags and the tree-sitter framework detectors populate
+    // project_entry_points. EPD adds entry_point_classification +
+    // contextual_depscore on confirmed/data_flow vulns; heuristic-only
+    // (no AI call) for function/module per epd.ts:aiEligible. Failures
+    // are warn-level — the extraction completes with base depscore.
+    // EpdBudgetExceededError is intentionally allowed to propagate so
+    // the env / per-org `fail_job` behavior can hard-fail when chosen.
+    const epdStart = Date.now();
+    try {
+      await applyEpdScoringFallback(supabase, projectId, workspaceRoot, log);
+    } catch (epdErr: any) {
+      if (epdErr instanceof EpdBudgetExceededError) throw epdErr;
+      if (job.jobId) {
+        const { code, message, stack } = classifyError(epdErr);
+        await logStepError(supabase, {
+          jobId: job.jobId,
+          projectId,
+          step: 'epd',
+          code,
+          message,
+          stack,
+          durationMs: Date.now() - epdStart,
+          severity: 'warn',
+        });
+      }
+      await log.warn('epd', `EPD scoring failed (continuing with base depscore): ${epdErr?.message ?? epdErr}`);
+    }
 
     // --- Final vuln scan summary ---
     await log.success('vuln_scan', 'Vulnerability scan complete', Date.now() - scanStart);

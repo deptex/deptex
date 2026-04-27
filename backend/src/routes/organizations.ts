@@ -6463,6 +6463,134 @@ router.patch('/:id/ai-providers/:providerId/default', async (req: AuthRequest, r
 });
 
 // ============================================================
+// EPD (reachability AI verification) org settings
+// ============================================================
+
+async function hasOrgPermission(orgId: string, userId: string, perm: string): Promise<boolean> {
+  const { data: membership } = await supabase
+    .from('organization_members')
+    .select('role')
+    .eq('organization_id', orgId)
+    .eq('user_id', userId)
+    .single();
+  if (!membership) return false;
+
+  const { data: role } = await supabase
+    .from('organization_roles')
+    .select('permissions')
+    .eq('organization_id', orgId)
+    .eq('name', membership.role)
+    .single();
+
+  return role?.permissions?.[perm] === true;
+}
+
+// GET /api/organizations/:id/ai-settings -- EPD contextual scoring knobs
+router.get('/:id/ai-settings', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasOrgPermission(orgId, userId, 'view_ai_spending'))) {
+      return res.status(403).json({ error: 'You do not have permission to view AI settings' });
+    }
+
+    const { data, error } = await supabase
+      .from('organizations')
+      .select('epd_max_run_cost_usd, epd_budget_exceeded_behavior')
+      .eq('id', orgId)
+      .single();
+    if (error) throw error;
+    res.json(data ?? { epd_max_run_cost_usd: null, epd_budget_exceeded_behavior: null });
+  } catch (error: any) {
+    console.error('Error fetching AI settings:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch AI settings' });
+  }
+});
+
+// PATCH /api/organizations/:id/ai-settings -- update EPD knobs (clamped)
+router.patch('/:id/ai-settings', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasOrgPermission(orgId, userId, 'manage_organization_settings'))) {
+      return res.status(403).json({ error: 'You do not have permission to manage organization settings' });
+    }
+
+    const updates: Record<string, unknown> = {};
+
+    if (Object.prototype.hasOwnProperty.call(req.body, 'epd_max_run_cost_usd')) {
+      const v = req.body.epd_max_run_cost_usd;
+      if (v === null) {
+        updates.epd_max_run_cost_usd = null;
+      } else if (typeof v !== 'number' || !Number.isFinite(v)) {
+        return res.status(400).json({ error: 'epd_max_run_cost_usd must be a number or null' });
+      } else {
+        updates.epd_max_run_cost_usd = Math.min(20, Math.max(0.1, v));
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body, 'epd_budget_exceeded_behavior')) {
+      const v = req.body.epd_budget_exceeded_behavior;
+      if (v !== null && v !== 'fail_job' && v !== 'continue_with_fallback') {
+        return res.status(400).json({ error: 'epd_budget_exceeded_behavior must be fail_job | continue_with_fallback | null' });
+      }
+      updates.epd_budget_exceeded_behavior = v;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'No valid fields to update' });
+    }
+
+    // Capture prior state for the audit log diff. Mirrors the
+    // canvas-settings pattern at line ~8067 — fetch before update so
+    // we can record the actual change in organization_activities.
+    const { data: priorOrg } = await supabase
+      .from('organizations')
+      .select('epd_max_run_cost_usd, epd_budget_exceeded_behavior')
+      .eq('id', orgId)
+      .single();
+
+    const { data, error } = await supabase
+      .from('organizations')
+      .update(updates)
+      .eq('id', orgId)
+      .select('epd_max_run_cost_usd, epd_budget_exceeded_behavior')
+      .single();
+    if (error) throw error;
+
+    // Audit log: only emit when at least one field actually changed.
+    // Org-wide AI spending knobs are sensitive enough that
+    // forensics/compliance need {actor, before, after, timestamp}.
+    const capChanged =
+      'epd_max_run_cost_usd' in updates
+      && priorOrg?.epd_max_run_cost_usd !== data.epd_max_run_cost_usd;
+    const behaviorChanged =
+      'epd_budget_exceeded_behavior' in updates
+      && priorOrg?.epd_budget_exceeded_behavior !== data.epd_budget_exceeded_behavior;
+    if (capChanged || behaviorChanged) {
+      await createActivity({
+        organization_id: orgId,
+        user_id: userId,
+        activity_type: 'changed_ai_settings',
+        description: 'updated reachability AI verification settings',
+        metadata: {
+          old_value: {
+            epd_max_run_cost_usd: priorOrg?.epd_max_run_cost_usd ?? null,
+            epd_budget_exceeded_behavior: priorOrg?.epd_budget_exceeded_behavior ?? null,
+          },
+          new_value: data,
+        },
+      });
+    }
+
+    res.json(data);
+  } catch (error: any) {
+    console.error('Error updating AI settings:', error);
+    res.status(500).json({ error: error.message || 'Failed to update AI settings' });
+  }
+});
+
+// ============================================================
 // AI Usage Dashboard
 // ============================================================
 

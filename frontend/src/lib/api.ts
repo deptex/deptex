@@ -1211,6 +1211,17 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/ai-providers/${providerId}/default`, { method: 'PATCH' });
   },
 
+  async getOrgAISettings(orgId: string): Promise<OrgAISettings> {
+    return fetchWithAuth(`/api/organizations/${orgId}/ai-settings`);
+  },
+
+  async updateOrgAISettings(orgId: string, patch: Partial<OrgAISettings>): Promise<OrgAISettings> {
+    return fetchWithAuth(`/api/organizations/${orgId}/ai-settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+  },
+
   async getAIUsage(orgId: string, period?: string): Promise<AIUsageSummary> {
     const params = period ? `?period=${period}` : '';
     return fetchWithAuth(`/api/organizations/${orgId}/ai-usage${params}`);
@@ -2938,6 +2949,10 @@ export interface DependencyVersionVulnerability {
   depscore?: number | null;
   /** contextual score (base × EPD factor) when EPD has run for this project. */
   contextual_depscore?: number | null;
+  /** EPD entry-point classification when computed. Null for unreached vulns and for levels below data_flow (EPD only runs on confirmed + data_flow). */
+  entry_point_classification?: EpdEntryPointClassification | null;
+  /** EPD scoring lifecycle state. Drives the badge tooltip. */
+  epd_status?: EpdStatus | null;
   cvss_score?: number | null;
   epss_score?: number | null;
   cisa_kev?: boolean;
@@ -3159,6 +3174,10 @@ export interface ProjectVulnerability {
   depscore?: number;
   /** EPD-weighted score when present; prefer for prioritization over raw depscore. */
   contextual_depscore?: number | null;
+  /** EPD entry-point classification. Drives the Public/Authenticated/Background badge. */
+  entry_point_classification?: EpdEntryPointClassification | null;
+  /** EPD scoring lifecycle state (ai_verified / byok_missing / fallback_no_ai / ai_error_fallback / budget_exceeded). */
+  epd_status?: EpdStatus | null;
   /** SLA status (on_track, warning, breached, met, resolved_late, exempt). */
   sla_status?: string | null;
   sla_deadline_at?: string | null;
@@ -3895,6 +3914,23 @@ export interface CodeContext {
 }
 
 export type ReachabilityLevel = 'unreachable' | 'module' | 'function' | 'data_flow' | 'confirmed' | null;
+
+/** EPD entry-point class. Drives the per-vuln badge in the security tables. */
+export type EpdEntryPointClassification = 'PUBLIC_UNAUTH' | 'AUTH_INTERNAL' | 'OFFLINE_WORKER' | 'UNKNOWN';
+
+/** EPD scoring lifecycle. `ai_verified` when BYOK ran end-to-end; other values drive the badge tooltip explanation. */
+export type EpdStatus =
+  | 'ai_verified'
+  | 'byok_missing'
+  | 'fallback_no_ai'
+  | 'ai_error_fallback'
+  | 'budget_exceeded';
+
+/** Org-level EPD knobs. Both NULL means "inherit the worker's env var defaults". */
+export interface OrgAISettings {
+  epd_max_run_cost_usd: number | null;
+  epd_budget_exceeded_behavior: 'fail_job' | 'continue_with_fallback' | null;
+}
 
 // PR & Commit tracking types
 
