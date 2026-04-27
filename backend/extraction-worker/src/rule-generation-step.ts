@@ -345,14 +345,23 @@ export async function runRuleGenerationStep(
   }
 
   const tookMs = Date.now() - stepStart;
+  // Surface the same four counters we persist to extraction_jobs so a single
+  // grep on the extraction log confirms the funnel: total_detectable → matched
+  // → generated_this_scan → generation_cost. Names match the column names so
+  // the log line and DB row are interchangeable.
+  const rulesTotalDetectable = triggerMatchedVulns.length;
+  const rulesMatched = alreadyCovered + generatedCount;
   await log.success(
     STEP_NAME,
-    `Generated ${generatedCount}/${candidates.length} rule(s); cost=$${totalCost.toFixed(4)}`,
+    `Generated ${generatedCount}/${candidates.length} rule(s); rules_matched=${rulesMatched} rules_total_detectable=${rulesTotalDetectable} generated_this_scan=${generatedCount} generation_cost=$${totalCost.toFixed(4)}`,
     tookMs,
     {
+      rules_matched: rulesMatched,
+      rules_total_detectable: rulesTotalDetectable,
+      generated_this_scan: generatedCount,
+      generation_cost_usd: totalCost,
       candidate_count: candidates.length,
-      generated_count: generatedCount,
-      cost_usd: totalCost,
+      already_covered: alreadyCovered,
       provider: settings.ai_provider,
       model: effectiveModel,
       skip_reasons: skipReasons,
