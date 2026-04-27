@@ -6226,6 +6226,413 @@ async function hasManageIntegrations(orgId: string, userId: string): Promise<boo
   return role?.permissions?.manage_integrations === true;
 }
 
+// POST /api/organizations/:id/ai-providers -- add or update provider
+router.post('/:id/ai-providers', async (req: AuthRequest, res) => {
+  try {
+    const { encryptApiKey, isEncryptionConfigured } = await import('../lib/ai/encryption');
+    if (!isEncryptionConfigured()) {
+      return res.status(503).json({ error: 'AI encryption not configured. Contact your administrator.' });
+    }
+
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasManageIntegrations(orgId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+    }
+
+    const { provider, api_key, model_preference, monthly_cost_cap, display_name, api_base_url } = req.body;
+    if (!provider || !api_key) {
+      return res.status(400).json({ error: 'provider and api_key are required' });
+    }
+    if (!['openai', 'anthropic', 'google', 'custom'].includes(provider)) {
+      return res.status(400).json({ error: 'Invalid provider. Must be openai, anthropic, google, or custom' });
+    }
+    if (provider === 'custom' && (!display_name || typeof display_name !== 'string' || !display_name.trim())) {
+      return res.status(400).json({ error: 'display_name is required for custom provider' });
+    }
+    if (provider === 'custom' && (!api_base_url || typeof api_base_url !== 'string' || !api_base_url.trim())) {
+      return res.status(400).json({ error: 'api_base_url is required for custom provider' });
+    }
+
+    const { encrypted, version } = encryptApiKey(api_key);
+
+    const { data: existing } = await supabase
+      .from('organization_ai_providers')
+      .select('id')
+      .eq('organization_id', orgId);
+
+    const isOnlyProvider = !existing || existing.length === 0;
+
+    if (provider === 'custom') {
+      const { data, error } = await supabase
+        .from('organization_ai_providers')
+        .insert({
+          organization_id: orgId,
+          provider: 'custom',
+          encrypted_api_key: encrypted,
+          encryption_key_version: version,
+          display_name: (display_name || '').trim(),
+          api_base_url: (api_base_url || '').trim().replace(/\/$/, ''),
+          model_preference: model_preference || null,
+          monthly_cost_cap: monthly_cost_cap ?? 100,
+          is_default: isOnlyProvider,
+          updated_at: new Date().toISOString(),
+        })
+        .select('id, provider, model_preference, is_default, monthly_cost_cap, display_name, api_base_url, created_at, updated_at')
+        .single();
+      if (error) throw error;
+      return res.json({ ...data, connected: true });
+    }
+
+    const { data, error } = await supabase
+      .from('organization_ai_providers')
+      .upsert({
+        organization_id: orgId,
+        provider,
+        encrypted_api_key: encrypted,
+        encryption_key_version: version,
+        model_preference: model_preference || null,
+        monthly_cost_cap: monthly_cost_cap ?? 100,
+        is_default: isOnlyProvider ? true : undefined,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'organization_id,provider' })
+      .select('id, provider, model_preference, is_default, monthly_cost_cap, display_name, api_base_url, created_at, updated_at')
+      .single();
+
+    if (error) throw error;
+    res.json({ ...data, connected: true });
+  } catch (error: any) {
+    console.error('Error adding AI provider:', error);
+    res.status(500).json({ error: error.message || 'Failed to add AI provider' });
+  }
+});
+
+// GET /api/organizations/:id/ai-providers -- list providers (no keys)
+router.get('/:id/ai-providers', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasManageIntegrations(orgId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+    }
+
+    const { data, error } = await supabase
+      .from('organization_ai_providers')
+      .select('id, provider, model_preference, is_default, monthly_cost_cap, display_name, api_base_url, created_at, updated_at')
+      .eq('organization_id', orgId);
+
+    if (error) throw error;
+    res.json((data || []).map((p: any) => ({ ...p, connected: true })));
+  } catch (error: any) {
+    console.error('Error listing AI providers:', error);
+    res.status(500).json({ error: error.message || 'Failed to list AI providers' });
+  }
+});
+
+// DELETE /api/organizations/:id/ai-providers/:providerId
+router.delete('/:id/ai-providers/:providerId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasManageIntegrations(orgId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+    }
+
+    const { providerId } = req.params;
+
+    const { data: activeThreads } = await supabase
+      .from('aegis_chat_threads')
+      .select('id')
+      .eq('organization_id', orgId)
+      .gte('updated_at', new Date(Date.now() - 5 * 60 * 1000).toISOString())
+      .limit(1);
+
+    let warning: string | undefined;
+    if (activeThreads?.length) {
+      warning = 'There are active Aegis conversations using this provider. They may be affected.';
+    }
+
+    const { error } = await supabase
+      .from('organization_ai_providers')
+      .delete()
+      .eq('id', providerId)
+      .eq('organization_id', orgId);
+
+    if (error) throw error;
+    res.json({ message: 'Provider deleted', ...(warning ? { warning } : {}) });
+  } catch (error: any) {
+    console.error('Error deleting AI provider:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete AI provider' });
+  }
+});
+
+// POST /api/organizations/:id/ai-providers/test -- test connection (dry-run)
+router.post('/:id/ai-providers/test', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+
+    const { checkRateLimit } = await import('../lib/rate-limit');
+    const rl = await checkRateLimit(`ai:test:${userId}`, 5, 60);
+    if (!rl.allowed) {
+      return res.status(429).json({ error: 'Too many test requests. Try again in a minute.' });
+    }
+
+    const { provider, api_key, model, api_base_url } = req.body;
+    if (!provider || !api_key) {
+      return res.status(400).json({ error: 'provider and api_key are required' });
+    }
+
+    const { createProviderFromKey } = await import('../lib/ai/provider');
+    const baseURL = provider === 'custom' ? (api_base_url || '').trim().replace(/\/$/, '') : undefined;
+    const aiProvider = createProviderFromKey(provider, api_key, model, baseURL);
+
+    const result = await aiProvider.chat([
+      { role: 'user', content: 'Say hello in exactly one word.' }
+    ], { maxTokens: 10 });
+
+    res.json({ success: true, model: result.model, response: result.content.slice(0, 100) });
+  } catch (error: any) {
+    const { AIProviderError } = await import('../lib/ai/types');
+    if (error instanceof AIProviderError) {
+      return res.json({ success: false, error: error.message, code: error.code });
+    }
+    res.json({ success: false, error: error.message || 'Connection test failed' });
+  }
+});
+
+// PATCH /api/organizations/:id/ai-providers/:providerId -- update model_preference, or (custom) display_name, api_base_url
+router.patch('/:id/ai-providers/:providerId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    const providerId = req.params.providerId;
+    if (!(await hasManageIntegrations(orgId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+    }
+
+    const { model_preference, display_name, api_base_url } = req.body;
+    const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (model_preference !== undefined) updates.model_preference = model_preference === '' ? null : model_preference;
+    if (display_name !== undefined) updates.display_name = display_name === '' ? null : (display_name || '').trim();
+    if (api_base_url !== undefined) updates.api_base_url = api_base_url === '' ? null : (api_base_url || '').trim().replace(/\/$/, '');
+
+    const { data, error } = await supabase
+      .from('organization_ai_providers')
+      .update(updates)
+      .eq('id', providerId)
+      .eq('organization_id', orgId)
+      .select('id, provider, model_preference, is_default, monthly_cost_cap, display_name, api_base_url, updated_at')
+      .single();
+
+    if (error) throw error;
+    res.json({ ...data, connected: true });
+  } catch (error: any) {
+    console.error('Error updating AI provider:', error);
+    res.status(500).json({ error: error.message || 'Failed to update provider' });
+  }
+});
+
+// PATCH /api/organizations/:id/ai-providers/:providerId/default
+router.patch('/:id/ai-providers/:providerId/default', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasManageIntegrations(orgId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+    }
+
+    const { providerId } = req.params;
+
+    await supabase
+      .from('organization_ai_providers')
+      .update({ is_default: false, updated_at: new Date().toISOString() })
+      .eq('organization_id', orgId);
+
+    const { error } = await supabase
+      .from('organization_ai_providers')
+      .update({ is_default: true, updated_at: new Date().toISOString() })
+      .eq('id', providerId)
+      .eq('organization_id', orgId);
+
+    if (error) throw error;
+    res.json({ message: 'Default provider updated' });
+  } catch (error: any) {
+    console.error('Error setting default AI provider:', error);
+    res.status(500).json({ error: error.message || 'Failed to set default provider' });
+  }
+});
+
+// ============================================================
+// EPD (reachability AI verification) org settings
+// ============================================================
+
+async function hasOrgPermission(orgId: string, userId: string, perm: string): Promise<boolean> {
+  const { data: membership } = await supabase
+    .from('organization_members')
+    .select('role')
+    .eq('organization_id', orgId)
+    .eq('user_id', userId)
+    .single();
+  if (!membership) return false;
+
+  const { data: role } = await supabase
+    .from('organization_roles')
+    .select('permissions')
+    .eq('organization_id', orgId)
+    .eq('name', membership.role)
+    .single();
+
+  return role?.permissions?.[perm] === true;
+}
+
+// GET /api/organizations/:id/ai-settings -- EPD contextual scoring knobs
+router.get('/:id/ai-settings', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasOrgPermission(orgId, userId, 'view_ai_spending'))) {
+      return res.status(403).json({ error: 'You do not have permission to view AI settings' });
+    }
+
+    const { data, error } = await supabase
+      .from('organizations')
+      .select('epd_max_run_cost_usd, epd_budget_exceeded_behavior')
+      .eq('id', orgId)
+      .single();
+    if (error) throw error;
+    res.json(data ?? { epd_max_run_cost_usd: null, epd_budget_exceeded_behavior: null });
+  } catch (error: any) {
+    console.error('Error fetching AI settings:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch AI settings' });
+  }
+});
+
+// PATCH /api/organizations/:id/ai-settings -- update EPD knobs (clamped)
+router.patch('/:id/ai-settings', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasOrgPermission(orgId, userId, 'manage_organization_settings'))) {
+      return res.status(403).json({ error: 'You do not have permission to manage organization settings' });
+    }
+
+    const updates: Record<string, unknown> = {};
+
+    if (Object.prototype.hasOwnProperty.call(req.body, 'epd_max_run_cost_usd')) {
+      const v = req.body.epd_max_run_cost_usd;
+      if (v === null) {
+        updates.epd_max_run_cost_usd = null;
+      } else if (typeof v !== 'number' || !Number.isFinite(v)) {
+        return res.status(400).json({ error: 'epd_max_run_cost_usd must be a number or null' });
+      } else {
+        updates.epd_max_run_cost_usd = Math.min(20, Math.max(0.1, v));
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body, 'epd_budget_exceeded_behavior')) {
+      const v = req.body.epd_budget_exceeded_behavior;
+      if (v !== null && v !== 'fail_job' && v !== 'continue_with_fallback') {
+        return res.status(400).json({ error: 'epd_budget_exceeded_behavior must be fail_job | continue_with_fallback | null' });
+      }
+      updates.epd_budget_exceeded_behavior = v;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'No valid fields to update' });
+    }
+
+    // Capture prior state for the audit log diff. Mirrors the
+    // canvas-settings pattern at line ~8067 — fetch before update so
+    // we can record the actual change in organization_activities.
+    const { data: priorOrg } = await supabase
+      .from('organizations')
+      .select('epd_max_run_cost_usd, epd_budget_exceeded_behavior')
+      .eq('id', orgId)
+      .single();
+
+    const { data, error } = await supabase
+      .from('organizations')
+      .update(updates)
+      .eq('id', orgId)
+      .select('epd_max_run_cost_usd, epd_budget_exceeded_behavior')
+      .single();
+    if (error) throw error;
+
+    // Audit log: only emit when at least one field actually changed.
+    // Org-wide AI spending knobs are sensitive enough that
+    // forensics/compliance need {actor, before, after, timestamp}.
+    const capChanged =
+      'epd_max_run_cost_usd' in updates
+      && priorOrg?.epd_max_run_cost_usd !== data.epd_max_run_cost_usd;
+    const behaviorChanged =
+      'epd_budget_exceeded_behavior' in updates
+      && priorOrg?.epd_budget_exceeded_behavior !== data.epd_budget_exceeded_behavior;
+    if (capChanged || behaviorChanged) {
+      await createActivity({
+        organization_id: orgId,
+        user_id: userId,
+        activity_type: 'changed_ai_settings',
+        description: 'updated reachability AI verification settings',
+        metadata: {
+          old_value: {
+            epd_max_run_cost_usd: priorOrg?.epd_max_run_cost_usd ?? null,
+            epd_budget_exceeded_behavior: priorOrg?.epd_budget_exceeded_behavior ?? null,
+          },
+          new_value: data,
+        },
+      });
+    }
+
+    res.json(data);
+  } catch (error: any) {
+    console.error('Error updating AI settings:', error);
+    res.status(500).json({ error: error.message || 'Failed to update AI settings' });
+  }
+});
+
+// ============================================================
+// AI Usage Dashboard
+// ============================================================
+
+// GET /api/organizations/:id/ai-usage
+router.get('/:id/ai-usage', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasManageIntegrations(orgId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to view AI usage' });
+    }
+
+    const period = req.query.period === '7d' ? 7 : req.query.period === '90d' ? 90 : 30;
+    const { getAIUsageSummary } = await import('../lib/ai/logging');
+    const summary = await getAIUsageSummary(orgId, period);
+    res.json(summary);
+  } catch (error: any) {
+    console.error('Error fetching AI usage:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch AI usage' });
+  }
+});
+
+// GET /api/organizations/:id/ai-usage/logs
+router.get('/:id/ai-usage/logs', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasManageIntegrations(orgId, userId))) {
+      return res.status(403).json({ error: 'You do not have permission to view AI usage logs' });
+    }
+
+    const page = parseInt(req.query.page as string) || 1;
+    const perPage = Math.min(parseInt(req.query.per_page as string) || 50, 100);
+    const { getAIUsageLogs } = await import('../lib/ai/logging');
+    const result = await getAIUsageLogs(orgId, page, perPage);
+    res.json(result);
+  } catch (error: any) {
+    console.error('Error fetching AI usage logs:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch AI usage logs' });
+  }
+});
+
 // ============================================================
 // Webhook Deliveries
 // ============================================================

@@ -20,6 +20,7 @@ import {
   DependencyVersionVulnerability,
 } from '../lib/api';
 import { cn } from '../lib/utils';
+import { EntryPointBadge } from './security/EntryPointBadge';
 
 interface VersionSidebarProps {
   organizationId: string;
@@ -251,6 +252,11 @@ export function VersionSidebar({
                                         </span>
                                         <span className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
                                           <VulnDepscoreBadge v={v} />
+                                          <EntryPointBadge
+                                            classification={v.entry_point_classification ?? null}
+                                            status={v.epd_status ?? null}
+                                            compact
+                                          />
                                           <span
                                             className={`px-1.5 py-0.5 rounded border text-[10px] font-medium capitalize ${severityClass}`}
                                           >
@@ -311,6 +317,11 @@ export function VersionSidebar({
                                         </span>
                                         <span className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
                                           <VulnDepscoreBadge v={v} />
+                                          <EntryPointBadge
+                                            classification={v.entry_point_classification ?? null}
+                                            status={v.epd_status ?? null}
+                                            compact
+                                          />
                                           <span
                                             className={`px-1.5 py-0.5 rounded border text-[10px] font-medium capitalize ${severityClass}`}
                                           >

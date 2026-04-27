@@ -377,13 +377,33 @@ ${dataFlowContext}`,
 
 function classifyFallbackEntryPoint(tag: string | null): { classification: EntryPointClassification; weight: number } {
   const normalized = (tag ?? '').toLowerCase();
+
+  // Explicit class assertion from reachability-rules tags
+  // (e.g. `framework-input:public_unauth`). Phase 4 wires these from
+  // `RuleMetadata.entryPointClass` so authors can pin a rule's class
+  // without us having to interpret heterogeneous Semgrep pattern-source
+  // syntax. Match these BEFORE the heuristic substrings so a tag like
+  // `framework-input:auth_internal` doesn't get pulled to PUBLIC_UNAUTH
+  // by the `framework-input` substring fallback below.
+  if (normalized.includes('public_unauth')) {
+    return { classification: 'PUBLIC_UNAUTH', weight: ENTRY_WEIGHT_BY_CLASS.PUBLIC_UNAUTH };
+  }
+  if (normalized.includes('auth_internal')) {
+    return { classification: 'AUTH_INTERNAL', weight: ENTRY_WEIGHT_BY_CLASS.AUTH_INTERNAL };
+  }
+  if (normalized.includes('offline_worker')) {
+    return { classification: 'OFFLINE_WORKER', weight: ENTRY_WEIGHT_BY_CLASS.OFFLINE_WORKER };
+  }
+
+  // Heuristic substring routing for atom-derived flows whose tags come
+  // from atom's per-language source lists, not from our rule metadata.
   if (normalized.includes('worker') || normalized.includes('cron') || normalized.includes('batch') || normalized.includes('queue')) {
     return { classification: 'OFFLINE_WORKER', weight: ENTRY_WEIGHT_BY_CLASS.OFFLINE_WORKER };
   }
   if (normalized.includes('framework-input') || normalized.includes('http') || normalized.includes('route') || normalized.includes('controller')) {
-    return { classification: 'PUBLIC_UNAUTH', weight: 1.0 };
+    return { classification: 'PUBLIC_UNAUTH', weight: ENTRY_WEIGHT_BY_CLASS.PUBLIC_UNAUTH };
   }
-  return { classification: 'AUTH_INTERNAL', weight: 0.5 };
+  return { classification: 'AUTH_INTERNAL', weight: ENTRY_WEIGHT_BY_CLASS.AUTH_INTERNAL };
 }
 
 function fallbackDepthFromLevel(level: string | null): number {
@@ -427,8 +447,29 @@ export async function applyEpdScoringFallback(
   let hasAnthropicByok = false;
   let decryptedApiKey: string | null = null;
   let anthropicModel = DEFAULT_ANTHROPIC_MODEL;
+  let orgRunBudgetCapUsd: number | null = null;
+  let orgBudgetExceededBehavior: 'fail_job' | 'continue_with_fallback' | null = null;
   const organizationId = (projectRow as { organization_id?: string } | null)?.organization_id;
   if (organizationId) {
+    // Read BYOK provider + EPD per-org settings together. Both live on
+    // the org, and the scorer needs both before the first AI call.
+    const { data: orgRow } = await supabase
+      .from('organizations')
+      .select('epd_max_run_cost_usd, epd_budget_exceeded_behavior')
+      .eq('id', organizationId)
+      .maybeSingle();
+    if (orgRow) {
+      const capRaw = (orgRow as { epd_max_run_cost_usd?: number | string | null }).epd_max_run_cost_usd;
+      if (capRaw != null) {
+        const parsed = Number(capRaw);
+        if (Number.isFinite(parsed) && parsed > 0) orgRunBudgetCapUsd = parsed;
+      }
+      const behaviorRaw = (orgRow as { epd_budget_exceeded_behavior?: string | null }).epd_budget_exceeded_behavior;
+      if (behaviorRaw === 'fail_job' || behaviorRaw === 'continue_with_fallback') {
+        orgBudgetExceededBehavior = behaviorRaw;
+      }
+    }
+
     const { data: providerRow } = await supabase
       .from('organization_ai_providers')
       .select('id, provider, encrypted_api_key, encryption_key_version, model_preference')
@@ -450,6 +491,34 @@ export async function applyEpdScoringFallback(
         });
       }
     }
+  }
+
+  // Local CLI / self-host escape: the cloud path expects an encrypted
+  // BYOK row keyed by AI_ENCRYPTION_KEY, which the local PGLite scan
+  // doesn't set up. When ANTHROPIC_API_KEY is present in the env and
+  // we don't already have a decrypted key from the DB, use it directly.
+  // ANTHROPIC_MODEL overrides the model_preference (defaults still apply
+  // to costing). Keys are never persisted — only used for this run.
+  //
+  // The `DEPTEX_LOCAL_CLI=1` gate ensures this only fires when invoked
+  // through bin/deptex-scan (which sets it explicitly). A cloud worker
+  // that happens to have ANTHROPIC_API_KEY in its environment will NOT
+  // silently fall back to it on a customer BYOK decryption failure —
+  // the customer instead gets `byok_missing` until they re-add their key.
+  // Self-hosters who deploy this worker in their own cloud and want the
+  // env-var path can opt in by setting DEPTEX_LOCAL_CLI=1 themselves.
+  if (
+    !decryptedApiKey
+    && process.env.DEPTEX_LOCAL_CLI === '1'
+    && process.env.ANTHROPIC_API_KEY
+  ) {
+    decryptedApiKey = process.env.ANTHROPIC_API_KEY;
+    hasAnthropicByok = true;
+    if (process.env.ANTHROPIC_MODEL) anthropicModel = process.env.ANTHROPIC_MODEL;
+    await logger.info('epd', 'Using ANTHROPIC_API_KEY env var (local CLI / self-host path)', {
+      epd_phase: 'byok_env',
+      anthropic_model: anthropicModel,
+    });
   }
 
   const { data: pdvRows, error: pdvErr } = await supabase
@@ -540,7 +609,9 @@ export async function applyEpdScoringFallback(
   }
 
   const maxVulns = Number(process.env.EPD_MAX_VULNS_PER_RUN || DEFAULT_MAX_VULNS_PER_RUN);
-  const runBudgetCap = getRunBudgetCapUsd();
+  // Org setting wins when present; NULL means "inherit env var / built-in default".
+  // Keeps the single-tenant self-host path untouched (no DB write needed).
+  const runBudgetCap = orgRunBudgetCapUsd ?? getRunBudgetCapUsd();
   let runSpendUsd = 0;
   let budgetExceededTriggered = false;
 
@@ -593,7 +664,15 @@ export async function applyEpdScoringFallback(
     let modelUsed: string | null = null;
     let epdStatus = hasAnthropicByok ? 'fallback_no_ai' : 'byok_missing';
 
-    const aiEligible = reachabilityStatus === 'reachable' && hasAnthropicByok && decryptedApiKey && idx < maxVulns;
+    // Phase 4: only spend AI on the levels where we have a real taint
+    // trace (confirmed) or atom-derived data-flow path (data_flow).
+    // Function/module-level reachable vulns get heuristic-only scoring
+    // — the entry-point context for those is too unreliable to justify
+    // the per-call cost on Anthropic Sonnet. They still receive a
+    // contextual_depscore via the heuristic path (entry tag + decay).
+    const reachabilityLevel = (row.reachability_level as string | null) ?? null;
+    const aiEligibleLevel = reachabilityLevel === 'confirmed' || reachabilityLevel === 'data_flow';
+    const aiEligible = reachabilityStatus === 'reachable' && aiEligibleLevel && hasAnthropicByok && decryptedApiKey && idx < maxVulns;
     if (aiEligible) {
       const flowText = perDepFlows.map((f, i) =>
         `Flow ${i + 1}: depth=${Math.max(0, f.flowLength - 1)}, entryTag=${f.entryTag ?? 'unknown'}, entryFile=${f.entryFile ?? 'unknown'}, sinkMethod=${f.sinkMethod ?? 'unknown'}, sinkFile=${f.sinkFile ?? 'unknown'}`
@@ -754,7 +833,10 @@ ${sourceContext || 'none'}`;
     max_vulns_ai: maxVulns,
   });
 
-  const onBudgetExceeded = (process.env.EPD_BUDGET_EXCEEDED_BEHAVIOR || 'fail_job').toLowerCase();
+  // Org setting wins; NULL falls back to env; env default is `fail_job`
+  // so existing worker deployments stay on the strict path.
+  const onBudgetExceeded =
+    orgBudgetExceededBehavior ?? (process.env.EPD_BUDGET_EXCEEDED_BEHAVIOR || 'fail_job').toLowerCase();
   if (budgetExceededTriggered && onBudgetExceeded === 'fail_job') {
     throw new EpdBudgetExceededError(`EPD AI run budget exceeded ($${runBudgetCap.toFixed(2)} cap)`);
   }

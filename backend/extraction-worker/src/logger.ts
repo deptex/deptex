@@ -9,6 +9,12 @@ const SECRET_PATTERNS = [
   /oauth2:[^@\s]+@/g,
   /x-token-auth:[^@\s]+@/g,
   /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/g,
+  // AI provider keys — Phase 4's EPD path uses Anthropic BYOK; defense
+  // in depth in case any future code path concatenates a key into an
+  // error message or log line.
+  /sk-ant-api03-[A-Za-z0-9_-]{20,}/g,
+  /sk-[A-Za-z0-9]{32,}/g,
+  /AIza[A-Za-z0-9_-]{35}/g,
 ];
 
 function sanitize(message: string): string {
@@ -27,6 +33,7 @@ export type LogStep =
   | 'vuln_scan'
   | 'depscan'
   | 'reachability'
+  | 'reachability_rules'
   | 'epd'
   | 'semgrep'
   | 'trufflehog'
