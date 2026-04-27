@@ -35,9 +35,11 @@
     "@upstash/redis": "^1.25.0",
     "dotenv": "^16.3.1",
     "js-yaml": "^4.1.1",
+    "p-limit": "^3.1.0",
     "simple-git": "^3.22.0",
     "stream-json": "^1.8.0",
-    "web-tree-sitter": "^0.26.8"
+    "web-tree-sitter": "^0.26.8",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
