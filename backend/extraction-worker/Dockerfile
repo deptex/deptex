@@ -69,6 +69,14 @@ RUN npm ci
 
 COPY src ./src
 
+# Phase 3 reachability rule packs (per-CVE Semgrep taint YAMLs + fixtures)
+# are runtime data, not bundled into dist/. The pipeline reads them with
+# loadAllRulesWithSkipped(path.resolve(__dirname, '..', 'reachability-rules'))
+# so they need to live next to dist/ inside the image, otherwise the
+# reachability_rules step warns "No rules loaded" and every taint
+# promotion silently disappears.
+COPY reachability-rules ./reachability-rules
+
 # Local CLI mode reads schema.sql via PGLiteStorage at runtime. The
 # `docker:build` npm script stages the backend/database folder into
 # extraction-worker/.schema before invoking docker build so we can COPY it

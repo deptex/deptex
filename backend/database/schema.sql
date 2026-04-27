@@ -658,7 +658,9 @@ CREATE TABLE IF NOT EXISTS public.organizations (
   require_reauth_for_sensitive boolean DEFAULT false,
   ip_allowlist_enabled boolean DEFAULT false,
   allow_autonomous_containment boolean DEFAULT false,
-  canvas_cursors_enabled boolean DEFAULT true
+  canvas_cursors_enabled boolean DEFAULT true,
+  epd_max_run_cost_usd numeric(6,2),
+  epd_budget_exceeded_behavior text
 );
 CREATE TABLE IF NOT EXISTS public.package_anomalies (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1589,7 +1591,7 @@ ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT pdv_extract
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_extraction_run_id_file_path_key UNIQUE (project_id, extraction_run_id, file_path, line_number, framework, handler_name);
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_project_id_user_id_key UNIQUE (project_id, user_id);
 ALTER TABLE public.project_pr_guardrails ADD CONSTRAINT project_pr_guardrails_project_id_key UNIQUE (project_id);
-ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_project_id_extraction_run_id_purl_e_key UNIQUE (project_id, extraction_run_id, purl, entry_point_file, entry_point_line, sink_method);
+ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_source_dedup_key UNIQUE NULLS NOT DISTINCT (project_id, extraction_run_id, purl, entry_point_file, entry_point_line, sink_method, osv_id, rule_id);
 ALTER TABLE public.project_repositories ADD CONSTRAINT project_repositories_project_id_key UNIQUE (project_id);
 ALTER TABLE public.project_roles ADD CONSTRAINT project_roles_project_id_name_key UNIQUE (project_id, name);
 ALTER TABLE public.project_secret_findings ADD CONSTRAINT psecf_extraction_run_unique UNIQUE (project_id, detector_type, file_path, start_line, extraction_run_id);
@@ -1631,6 +1633,7 @@ ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_polic
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_max_hours_check CHECK ((max_hours > 0));
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_severity_check CHECK ((severity = ANY (ARRAY['critical'::text, 'high'::text, 'medium'::text, 'low'::text])));
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_warning_threshold_percent_check CHECK (((warning_threshold_percent >= 1) AND (warning_threshold_percent <= 99)));
+ALTER TABLE public.organizations ADD CONSTRAINT organizations_epd_budget_exceeded_behavior_check CHECK ((epd_budget_exceeded_behavior = ANY (ARRAY['fail_job'::text, 'continue_with_fallback'::text])));
 ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text])));
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_epd_confidence_tier CHECK (((epd_confidence_tier IS NULL) OR (epd_confidence_tier = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text]))));
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_reachability_status CHECK ((reachability_status = ANY (ARRAY['reachable'::text, 'unreachable'::text, 'unknown'::text])));
@@ -3835,7 +3838,7 @@ $function$
 ;
 
 CREATE OR REPLACE FUNCTION public.get_project_vulnerabilities_from_pdv(p_project_id uuid)
- RETURNS TABLE(id uuid, dependency_id uuid, osv_id text, severity text, summary text, details text, aliases text[], fixed_versions text[], published_at timestamp with time zone, modified_at timestamp with time zone, created_at timestamp with time zone, dependency_name text, dependency_version text, is_reachable boolean, epss_score numeric, cvss_score numeric, cisa_kev boolean, depscore integer, sla_status text, sla_deadline_at timestamp with time zone)
+ RETURNS TABLE(id uuid, dependency_id uuid, osv_id text, severity text, summary text, details text, aliases text[], fixed_versions text[], published_at timestamp with time zone, modified_at timestamp with time zone, created_at timestamp with time zone, dependency_name text, dependency_version text, is_reachable boolean, reachability_level text, reachability_details jsonb, epss_score numeric, cvss_score numeric, cisa_kev boolean, depscore integer, contextual_depscore numeric, entry_point_classification text, epd_status text, sla_status text, sla_deadline_at timestamp with time zone)
  LANGUAGE sql
  STABLE
 AS $function$
@@ -3854,10 +3857,15 @@ AS $function$
     pd.name AS dependency_name,
     pd.version AS dependency_version,
     pdv.is_reachable,
+    pdv.reachability_level,
+    pdv.reachability_details,
     pdv.epss_score,
     pdv.cvss_score,
     pdv.cisa_kev,
     pdv.depscore,
+    pdv.contextual_depscore,
+    pdv.entry_point_classification,
+    pdv.epd_status,
     pdv.sla_status,
     pdv.sla_deadline_at
   FROM project_dependency_vulnerabilities pdv

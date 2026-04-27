@@ -101,12 +101,16 @@ frontend/src/
 ```
 Connect repo -> queueExtractionJob() inserts extraction_jobs, starts Fly.io machine
   -> Worker claims via claim_extraction_job RPC (atomic, FOR UPDATE SKIP LOCKED)
-  -> Clone -> cdxgen SBOM -> parse deps -> upsert -> tree-sitter usage extraction + framework entry points -> dep-scan -> Semgrep -> TruffleHog
+  -> Clone -> cdxgen SBOM -> parse deps -> upsert -> tree-sitter usage extraction + framework entry points -> dep-scan
+  -> atom reachable flows + reachability_rules (Semgrep taint packs, per-CVE, upgrades matching PDVs to `confirmed`)
+  -> updateReachabilityLevels classifier -> Semgrep SAST -> TruffleHog
   -> Logs stream to extraction_logs (Supabase Realtime)
   -> QStash: populate-dependencies (registry + GHSA + OpenSSF + policy eval + health score)
   -> QStash: backfill-dependency-trees (transitive edges via pacote)
   -> Fault tolerance: 60s heartbeat, 5min stuck detection, recovery cron, max 3 attempts
 ```
+
+Reachability rule packs live in `backend/extraction-worker/reachability-rules/` — one folder per CVE (`CVE-YYYY-NNNNN-<slug>/rule.yml` + fixtures). See that directory's README for authoring conventions. `scripts/validate-reachability-rules.ts` runs in CI and fails on malformed/missing rules.
 
 ### Aegis AI Agent
 ```

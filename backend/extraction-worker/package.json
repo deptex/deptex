@@ -15,6 +15,7 @@
     "smoke:pglite": "tsx test/smoke-pglite.ts",
     "test:storage": "tsx test/storage-pglite.test.ts",
     "test:finalize": "tsx test/finalize-extraction.test.ts",
+    "test:reachability-rules-e2e": "tsx test/reachability-rules-e2e.test.ts",
     "docker:prepare": "mkdir -p .schema && cp ../database/schema.sql .schema/schema.sql",
     "docker:build": "npm run docker:prepare && docker build -t deptex-cli:local .",
     "scan": "./bin/deptex-scan",
@@ -33,11 +34,13 @@
     "@supabase/supabase-js": "^2.39.0",
     "@upstash/redis": "^1.25.0",
     "dotenv": "^16.3.1",
+    "js-yaml": "^4.1.1",
     "simple-git": "^3.22.0",
     "stream-json": "^1.8.0",
     "web-tree-sitter": "^0.26.8"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.10.6",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"

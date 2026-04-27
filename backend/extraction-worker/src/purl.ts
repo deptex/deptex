@@ -27,6 +27,33 @@ const PURL_TYPE_TO_ECOSYSTEM: Record<string, string> = {
   nuget: 'nuget',
 };
 
+const ECOSYSTEM_TO_PURL_TYPE: Record<string, string> = Object.fromEntries(
+  Object.entries(PURL_TYPE_TO_ECOSYSTEM).map(([t, e]) => [e, t]),
+);
+
+/**
+ * Build a purl string from our canonical (ecosystem, name, version) shape.
+ * Mirrors dep-scan's output format so rows we synthesize here collide on the
+ * project_reachable_flows UNIQUE when they should.
+ *
+ * Maven names are stored as `groupId:artifactId` in our dependencies table;
+ * purls put them as `groupId/artifactId`. Other ecosystems pass through.
+ */
+export function buildPurl(
+  ecosystem: string,
+  name: string,
+  version: string | null,
+): string | null {
+  const type = ECOSYSTEM_TO_PURL_TYPE[ecosystem];
+  if (!type || !name) return null;
+  let body = name;
+  if (type === 'maven' && name.includes(':')) {
+    body = name.replace(':', '/');
+  }
+  const v = version ? `@${version}` : '';
+  return `pkg:${type}/${body}${v}`;
+}
+
 export function parsePurl(purl: string): ParsedPurl | null {
   if (!purl || typeof purl !== 'string' || !purl.startsWith('pkg:')) return null;
 
