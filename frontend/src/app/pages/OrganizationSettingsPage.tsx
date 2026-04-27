@@ -35,6 +35,7 @@ import StatusesSection from '@/components/StatusesSection';
 import NotificationRulesSection from './NotificationRulesSection';
 import NotificationHistorySection from './NotificationHistorySection';
 import AIConfigurationSection from '../../components/settings/AIConfigurationSection';
+import ReachabilitySection from '../../components/settings/ReachabilitySection';
 import { AegisManagementConsole } from '../../components/settings/AegisManagementConsole';
 import { CODE_BLOCK_BG } from '../../components/policy-monaco-setup';
 import SLAConfigurationSection from '../../components/settings/SLAConfigurationSection';
@@ -150,7 +151,7 @@ type WebhookCacheSnapshot = {
 };
 const orgWebhooksCache: Record<string, WebhookCacheSnapshot> = {};
 
-const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'integrations', 'webhooks', 'notifications', 'policies', 'statuses', 'security_slas', 'audit_logs', 'sso', 'mfa', 'ip_allowlist', 'usage', 'plan', 'ai_configuration', 'aegis_management']);
+const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'integrations', 'webhooks', 'notifications', 'policies', 'statuses', 'security_slas', 'audit_logs', 'sso', 'mfa', 'ip_allowlist', 'usage', 'plan', 'ai_configuration', 'aegis_management', 'reachability']);
 
 /** Renders a tab-specific content skeleton for the org settings loading state. */
 function OrgSettingsTabSkeleton({ section }: { section: string }) {
@@ -2751,6 +2752,11 @@ export default function OrganizationSettingsPage() {
       label: 'AI Configuration',
       icon: <Zap className="h-4 w-4 tab-icon-shake" />,
     }] : []),
+    ...(effectivePermissions?.manage_aegis ? [{
+      id: 'reachability',
+      label: 'Reachability',
+      icon: <Network className="h-4 w-4 tab-icon-shake" />,
+    }] : []),
 
     // Plan Category - only show if user has manage_billing permission
     ...(effectivePermissions?.manage_billing ? [{
@@ -4340,6 +4346,13 @@ export default function OrganizationSettingsPage() {
                     <AIConfigurationSection organizationId={id} />
                   )}
                 </div>
+              )}
+
+              {activeSection === 'reachability' && id && (
+                <ReachabilitySection
+                  organizationId={id}
+                  canManage={!!effectivePermissions?.manage_aegis || isOrgOwner}
+                />
               )}
 
               {activeSection === 'aegis_management' && id && (
