@@ -242,6 +242,30 @@ describe('parseTaintOutput', () => {
     expect(findings).toEqual([]);
   });
 
+  // Regression guard: when `--config` points at a directory, semgrep prefixes
+  // each check_id with the rule-file's basename (`tmp.tmp.aBc.deptex...`).
+  // Before the suffix-match fix, every directory-config invocation produced
+  // zero findings because the rulesById lookup missed every result. This shape
+  // is what runReachabilityRules actually emits in production.
+  it('matches check_ids that semgrep prefixes when --config points at a dir', () => {
+    const findings = parseTaintOutput(
+      {
+        results: [
+          {
+            check_id: 'tmp.tmp.aBcDeF.deptex.lodash.template-injection',
+            path: 'src/index.js',
+            start: { line: 10 },
+            end: { line: 10 },
+            extra: { lines: '_.template(x)', dataflow_trace: {} },
+          },
+        ],
+      },
+      rulesById,
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0].ruleId).toBe('deptex.lodash.template-injection');
+  });
+
   it('parseTaintOutputWithDrops surfaces unknown rule ids as a de-duped list', () => {
     const result = parseTaintOutputWithDrops(
       {
