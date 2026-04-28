@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, AlertCircle, Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
@@ -12,16 +12,105 @@ interface ToolCallCardProps {
   errorText?: string;
 }
 
-function formatJson(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
 function prettyToolName(raw: string): string {
   return raw.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function renderInlineValue(v: unknown): ReactNode {
+  if (v === null || v === undefined) {
+    return <span className="text-foreground-muted">—</span>;
+  }
+  if (typeof v === 'string') {
+    if (v.length === 0) return <span className="text-foreground-muted">""</span>;
+    return v;
+  }
+  if (typeof v === 'number' || typeof v === 'boolean') {
+    return String(v);
+  }
+  if (Array.isArray(v)) {
+    if (v.length === 0) return <span className="text-foreground-muted">empty</span>;
+    const allPrimitive = v.every((x) => typeof x !== 'object' || x === null);
+    if (allPrimitive) return v.map((x) => String(x)).join(', ');
+    return (
+      <span className="text-foreground-secondary">
+        {v.length} {v.length === 1 ? 'item' : 'items'}
+      </span>
+    );
+  }
+  if (typeof v === 'object') {
+    const keys = Object.keys(v as object);
+    return <span className="text-foreground-secondary">{keys.length === 0 ? 'empty' : `{ ${keys.length} keys }`}</span>;
+  }
+  return String(v);
+}
+
+function DataCard({ data }: { data: unknown }) {
+  if (data === null || data === undefined) {
+    return (
+      <div className="rounded-md border border-border bg-background-card/60 px-3 py-1.5 text-xs text-foreground-muted">
+        —
+      </div>
+    );
+  }
+
+  // Top-level object: render keys as rows
+  if (typeof data === 'object' && !Array.isArray(data)) {
+    const entries = Object.entries(data as Record<string, unknown>);
+    if (entries.length === 0) {
+      return (
+        <div className="rounded-md border border-border bg-background-card/60 px-3 py-1.5 text-xs text-foreground-muted">
+          empty
+        </div>
+      );
+    }
+    return (
+      <div className="rounded-md border border-border bg-background-card/60 overflow-hidden">
+        <div className="divide-y divide-border">
+          {entries.map(([key, value]) => (
+            <div key={key} className="flex items-baseline gap-3 px-3 py-1.5 text-xs">
+              <span className="text-foreground-secondary font-mono shrink-0">{key}</span>
+              <span className="text-foreground flex-1 break-words text-right font-mono">
+                {renderInlineValue(value)}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Top-level array: render rows of items
+  if (Array.isArray(data)) {
+    if (data.length === 0) {
+      return (
+        <div className="rounded-md border border-border bg-background-card/60 px-3 py-1.5 text-xs text-foreground-muted">
+          empty
+        </div>
+      );
+    }
+    const visible = data.slice(0, 10);
+    return (
+      <div className="rounded-md border border-border bg-background-card/60 overflow-hidden">
+        <div className="divide-y divide-border">
+          {visible.map((item, i) => (
+            <div key={i} className="px-3 py-1.5 text-xs text-foreground font-mono break-words">
+              {renderInlineValue(item)}
+            </div>
+          ))}
+          {data.length > visible.length && (
+            <div className="px-3 py-1.5 text-xs text-foreground-muted">+ {data.length - visible.length} more</div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Primitive at top level
+  return (
+    <div className="rounded-md border border-border bg-background-card/60 px-3 py-1.5 text-xs text-foreground font-mono break-words">
+      {String(data)}
+    </div>
+  );
 }
 
 export function ToolCallCard({ toolName, state, input, output, errorText }: ToolCallCardProps) {
@@ -45,34 +134,37 @@ export function ToolCallCard({ toolName, state, input, output, errorText }: Tool
         {state === 'running' && <Loader2 className="h-3 w-3 animate-spin" />}
         {state === 'error' && <AlertCircle className="h-3 w-3" />}
       </button>
-      {expanded && (
-        <div className="mt-1.5 pl-4 space-y-2">
-          {input !== undefined && (
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-foreground-secondary/80 mb-1">Input</div>
-              <pre className="text-[11px] text-foreground-secondary font-mono whitespace-pre-wrap break-words">
-                {formatJson(input)}
-              </pre>
-            </div>
-          )}
-          {state === 'error' && errorText && (
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-destructive/80 mb-1">Error</div>
-              <pre className="text-[11px] text-destructive font-mono whitespace-pre-wrap break-words">
-                {errorText}
-              </pre>
-            </div>
-          )}
-          {state === 'done' && output !== undefined && (
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-foreground-secondary/80 mb-1">Result</div>
-              <pre className="text-[11px] text-foreground-secondary font-mono whitespace-pre-wrap break-words max-h-64 overflow-auto">
-                {formatJson(output)}
-              </pre>
-            </div>
-          )}
+      <div
+        className={cn(
+          'grid transition-all duration-200 ease-out',
+          expanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0',
+        )}
+      >
+        <div className="overflow-hidden">
+          <div className="pt-2 pl-4 space-y-2">
+            {input !== undefined && (
+              <div>
+                <div className="mb-1 text-[10px] uppercase tracking-wider text-foreground-secondary/80">Input</div>
+                <DataCard data={input} />
+              </div>
+            )}
+            {state === 'error' && errorText && (
+              <div>
+                <div className="mb-1 text-[10px] uppercase tracking-wider text-destructive/80">Error</div>
+                <pre className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-[11px] text-destructive font-mono whitespace-pre-wrap break-words">
+                  {errorText}
+                </pre>
+              </div>
+            )}
+            {state === 'done' && output !== undefined && (
+              <div>
+                <div className="mb-1 text-[10px] uppercase tracking-wider text-foreground-secondary/80">Result</div>
+                <DataCard data={output} />
+              </div>
+            )}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
