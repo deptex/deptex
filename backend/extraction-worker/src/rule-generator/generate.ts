@@ -230,7 +230,81 @@ function withRequestTimeout(outerSignal?: AbortSignal): { controller: AbortContr
   return { controller, clear: () => clearTimeout(timer) };
 }
 
+const RATE_LIMIT_MAX_ATTEMPTS = 4;
+const RATE_LIMIT_BASE_DELAY_MS = 4_000;
+const RATE_LIMIT_MAX_DELAY_MS = 60_000;
+
+/**
+ * Run `op` and retry on HTTP 429 (rate limit). Used uniformly across all
+ * providers — Anthropic returns 429 with `retry-after` (seconds), OpenAI-style
+ * hosts (incl. DeepInfra/OpenRouter) and Google use the same header. The
+ * inner op signals retry by throwing a RateLimitError carrying the parsed
+ * retry-after delay (or undefined → exponential backoff).
+ *
+ * Concurrency=5 against Anthropic's 30K input-tokens/minute org cap saturates
+ * after ~3 simultaneous CVE generations and the rest queue with 429s; without
+ * this wrapper they all fail. Cap at 4 attempts with exponential backoff so a
+ * sustained outage still surfaces a provider_error rather than spinning.
+ */
+class RateLimitError extends Error {
+  retryAfterMs?: number;
+  constructor(message: string, retryAfterMs?: number) {
+    super(message);
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+async function withRateLimitRetry<T>(
+  op: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await op();
+    } catch (err) {
+      if (!(err instanceof RateLimitError)) throw err;
+      attempt++;
+      if (attempt >= RATE_LIMIT_MAX_ATTEMPTS) {
+        // Surface the last 429 as a provider_error so the per-CVE result has
+        // an informative status. The message the wrapper threw already carries
+        // the body excerpt.
+        throw new GenerationError('provider_error', `Rate-limited after ${attempt} attempts: ${err.message}`);
+      }
+      const backoff = Math.min(RATE_LIMIT_BASE_DELAY_MS * 2 ** (attempt - 1), RATE_LIMIT_MAX_DELAY_MS);
+      const delayMs = err.retryAfterMs ?? backoff;
+      // Honor the outer abort signal during the wait so a pipeline timeout
+      // doesn't have to wait out the rate-limit sleep.
+      await new Promise<void>((resolve, reject) => {
+        const t = setTimeout(resolve, delayMs);
+        if (signal) {
+          const onAbort = () => { clearTimeout(t); reject(new Error('aborted')); };
+          if (signal.aborted) onAbort();
+          else signal.addEventListener('abort', onAbort, { once: true });
+        }
+      });
+    }
+  }
+}
+
+function parseRetryAfter(headerValue: string | null): number | undefined {
+  if (!headerValue) return undefined;
+  const seconds = Number(headerValue);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, RATE_LIMIT_MAX_DELAY_MS);
+  // Some providers send an HTTP date; parse-and-diff
+  const ts = Date.parse(headerValue);
+  if (Number.isFinite(ts)) {
+    const ms = ts - Date.now();
+    if (ms > 0) return Math.min(ms, RATE_LIMIT_MAX_DELAY_MS);
+  }
+  return undefined;
+}
+
 async function callAnthropic(args: CallProviderArgs): Promise<RawProviderResponse> {
+  return withRateLimitRetry(() => callAnthropicOnce(args), args.signal);
+}
+
+async function callAnthropicOnce(args: CallProviderArgs): Promise<RawProviderResponse> {
   const { controller, clear } = withRequestTimeout(args.signal);
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -248,6 +322,10 @@ async function callAnthropic(args: CallProviderArgs): Promise<RawProviderRespons
         messages: [{ role: 'user', content: [{ type: 'text', text: args.prompt }] }],
       }),
     });
+    if (res.status === 429) {
+      const errBody = await res.text().catch(() => '');
+      throw new RateLimitError(`Anthropic 429: ${errBody.slice(0, 200)}`, parseRetryAfter(res.headers.get('retry-after')));
+    }
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
       throw new GenerationError('provider_error', `Anthropic returned ${res.status}: ${errBody.slice(0, 200)}`);
@@ -274,6 +352,10 @@ async function callAnthropic(args: CallProviderArgs): Promise<RawProviderRespons
 }
 
 async function callOpenAI(args: CallProviderArgs): Promise<RawProviderResponse> {
+  return withRateLimitRetry(() => callOpenAIOnce(args), args.signal);
+}
+
+async function callOpenAIOnce(args: CallProviderArgs): Promise<RawProviderResponse> {
   const { controller, clear } = withRequestTimeout(args.signal);
   // Default to OpenAI; otherwise honor the override and append /chat/completions
   // if the caller passed only the base path. DeepInfra's OpenAI endpoint is
@@ -302,6 +384,10 @@ async function callOpenAI(args: CallProviderArgs): Promise<RawProviderResponse> 
         ],
       }),
     });
+    if (res.status === 429) {
+      const errBody = await res.text().catch(() => '');
+      throw new RateLimitError(`OpenAI-compat 429 (${url}): ${errBody.slice(0, 200)}`, parseRetryAfter(res.headers.get('retry-after')));
+    }
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
       throw new GenerationError('provider_error', `OpenAI-compat host returned ${res.status} (${url}): ${errBody.slice(0, 200)}`);
@@ -328,6 +414,10 @@ async function callOpenAI(args: CallProviderArgs): Promise<RawProviderResponse> 
 }
 
 async function callGoogle(args: CallProviderArgs): Promise<RawProviderResponse> {
+  return withRateLimitRetry(() => callGoogleOnce(args), args.signal);
+}
+
+async function callGoogleOnce(args: CallProviderArgs): Promise<RawProviderResponse> {
   const { controller, clear } = withRequestTimeout(args.signal);
   try {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(args.model)}:generateContent?key=${encodeURIComponent(args.apiKey)}`;
@@ -346,6 +436,10 @@ async function callGoogle(args: CallProviderArgs): Promise<RawProviderResponse> 
         ],
       }),
     });
+    if (res.status === 429) {
+      const errBody = await res.text().catch(() => '');
+      throw new RateLimitError(`Google 429: ${errBody.slice(0, 200)}`, parseRetryAfter(res.headers.get('retry-after')));
+    }
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
       throw new GenerationError('provider_error', `Google returned ${res.status}: ${errBody.slice(0, 200)}`);
