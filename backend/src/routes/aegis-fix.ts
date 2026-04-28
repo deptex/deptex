@@ -7,6 +7,7 @@ import {
   createInstallationToken,
   getBranchSha,
 } from '../lib/github';
+import { startFixMachine } from '../lib/fly-machines';
 import type {
   FindingType,
   FixPlan,
@@ -364,6 +365,14 @@ router.patch('/:fixId/approve', async (req: AuthRequest, res) => {
     .eq('id', req.params.fixId)
     .eq('status', 'awaiting_approval');
   if (updateError) return res.status(500).json({ error: updateError.message });
+
+  // Best-effort: start a fix-worker machine. If it fails, fix-recovery cron
+  // will surface orphaned approved jobs and start machines for them.
+  try {
+    await startFixMachine();
+  } catch (e: any) {
+    console.warn(`[AEGIS-FIX] Failed to start fix-worker machine: ${e?.message ?? e}`);
+  }
 
   const updated = await loadFixRow(req.params.fixId);
   return res.json({ fix: updated ? shapeFixRow(updated) : null });
