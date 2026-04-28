@@ -46,7 +46,8 @@
     "pacote": "^21.3.1",
     "semver": "^7.7.4",
     "simple-git": "^3.22.0",
-    "stripe": "^20.4.0"
+    "stripe": "^20.4.0",
+    "zod": "^4.1.8"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
@@ -66,5 +67,8 @@
     "ts-node": "^10.9.2",
     "tsx": "^4.7.0",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "zod": "$zod"
   }
 }
