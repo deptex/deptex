@@ -36,6 +36,7 @@ export interface RolePermissions {
   trigger_fix?: boolean;
   manage_incidents?: boolean;
   view_ai_spending?: boolean;
+  manage_organization_settings?: boolean;
   view_members: boolean;
   add_members: boolean;
   edit_roles: boolean;
@@ -1233,6 +1234,25 @@ export const api = {
     if (perPage) params.set('per_page', String(perPage));
     const qs = params.toString();
     return fetchWithAuth(`/api/organizations/${orgId}/ai-usage/logs${qs ? `?${qs}` : ''}`);
+  },
+
+  async getAIDefaultProvider(orgId: string): Promise<AIDefaultProvider> {
+    return fetchWithAuth(`/api/organizations/${orgId}/ai-default-provider`);
+  },
+
+  async setAIDefaultProvider(orgId: string, provider: PlatformAIProvider): Promise<AIDefaultProvider> {
+    return fetchWithAuth(`/api/organizations/${orgId}/ai-default-provider`, {
+      method: 'PATCH',
+      body: JSON.stringify({ provider }),
+    });
+  },
+
+  async getAIUsageDaily(orgId: string, days = 30): Promise<DailyUsageResponse> {
+    return fetchWithAuth(`/api/organizations/${orgId}/ai-usage/daily?days=${days}`);
+  },
+
+  async getAegisToolBreakdown(orgId: string, days = 30, limit = 10): Promise<AegisToolBreakdownResponse> {
+    return fetchWithAuth(`/api/organizations/${orgId}/aegis-tools/breakdown?days=${days}&limit=${limit}`);
   },
 
   async streamAegisMessage(
@@ -3513,6 +3533,37 @@ export interface AIUsageSummary {
   monthlyCostCap: number;
   byFeature: Record<string, { tokens: number; cost: number; count: number }>;
   byUser: Array<{ userId: string; tokens: number; cost: number; count: number }>;
+}
+
+export type PlatformAIProvider = 'openai' | 'anthropic' | 'google';
+
+export interface AIDefaultProvider {
+  provider: PlatformAIProvider;
+  model: string;
+}
+
+export interface DailyUsagePoint {
+  date: string;
+  tokens: number;
+  cost_cents: number;
+}
+
+export interface DailyUsageResponse {
+  days: number;
+  points: DailyUsagePoint[];
+}
+
+export interface AegisToolBreakdownRow {
+  tool_name: string;
+  executions: number;
+  total_tokens: number;
+  total_cost_cents: number;
+}
+
+export interface AegisToolBreakdownResponse {
+  days: number;
+  limit: number;
+  tools: AegisToolBreakdownRow[];
 }
 
 export interface ProjectPolicyException {

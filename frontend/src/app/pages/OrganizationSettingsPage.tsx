@@ -13,7 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle } from 'lucide-react';
+import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle, Sparkles } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
@@ -36,6 +36,7 @@ import NotificationRulesSection from './NotificationRulesSection';
 import NotificationHistorySection from './NotificationHistorySection';
 import { CODE_BLOCK_BG } from '../../components/policy-monaco-setup';
 import SLAConfigurationSection from '../../components/settings/SLAConfigurationSection';
+import AISection from '../../components/settings/AISection';
 
 interface OrganizationContextType {
   organization: Organization | null;
@@ -148,7 +149,7 @@ type WebhookCacheSnapshot = {
 };
 const orgWebhooksCache: Record<string, WebhookCacheSnapshot> = {};
 
-const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'integrations', 'webhooks', 'notifications', 'policies', 'statuses', 'security_slas', 'audit_logs', 'sso', 'mfa', 'ip_allowlist', 'usage', 'plan']);
+const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'ai', 'integrations', 'webhooks', 'notifications', 'policies', 'statuses', 'security_slas', 'audit_logs', 'sso', 'mfa', 'ip_allowlist', 'usage', 'plan']);
 
 /** Renders a tab-specific content skeleton for the org settings loading state. */
 function OrgSettingsTabSkeleton({ section }: { section: string }) {
@@ -2670,6 +2671,11 @@ export default function OrganizationSettingsPage() {
       label: 'Roles',
       icon: <Users className="h-4 w-4 tab-icon-shake" />,
     }] : []),
+    {
+      id: 'ai',
+      label: 'AI',
+      icon: <Sparkles className="h-4 w-4 tab-icon-shake" />,
+    },
     // Show Integrations section if user can manage integrations
     ...(effectivePermissions?.manage_integrations ? [{
       id: 'integrations',
@@ -3478,6 +3484,16 @@ export default function OrganizationSettingsPage() {
                       <h3 className="text-lg font-semibold text-foreground">No roles found</h3>
                     </div>
                   )}
+                </div>
+              )}
+
+              {activeSection === 'ai' && id && (
+                <div className="pt-8">
+                  <AISection
+                    organizationId={id}
+                    canManageSettings={!!effectivePermissions?.manage_organization_settings || !!effectivePermissions?.edit_roles}
+                    canViewSpending={!!effectivePermissions?.view_ai_spending}
+                  />
                 </div>
               )}
 
