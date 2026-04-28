@@ -41,8 +41,16 @@ import {
 } from './rule-generator';
 
 const STEP_NAME = 'rule_generation';
-const PER_CVE_TIMEOUT_MS = 90_000;
-const PROVIDER_CONCURRENCY = 5;
+// Bumped from 90s to accommodate up to 4 in-provider rate-limit retries
+// (each with up to 60s backoff) without timing out on a CVE that's only
+// stuck because of a transient 429.
+const PER_CVE_TIMEOUT_MS = 240_000;
+// Anthropic free/dev tiers cap at 30K input tokens/minute org-wide. With
+// p-limit 5 × ~8-10K tokens/request, three concurrent CVEs already saturate
+// the org cap and the rest 429. Drop to 3 — slightly slower for cheap
+// providers like DeepInfra/Gemini but doesn't burn through Anthropic quota.
+// The retry-with-backoff in generate.ts handles the residual bursts.
+const PROVIDER_CONCURRENCY = 3;
 const FALLBACK_MODELS: Record<AiProviderName, string> = {
   anthropic: 'claude-haiku-4-5-20251001',
   openai: 'gpt-4o-mini',
