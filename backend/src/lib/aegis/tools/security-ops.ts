@@ -219,89 +219,9 @@ registerAegisTool(
   }),
 );
 
-// 5. triggerFix
-registerAegisTool(
-  'triggerFix',
-  {
-    category: 'security_ops',
-    permissionLevel: 'moderate',
-    requiredRbacPermissions: ['trigger_fix'],
-  },
-  tool({
-    description: 'Trigger AI fix via the Aider engine. Calls queue_fix_job RPC. For vulnerability: targetId=osvId. For semgrep: targetId=semgrepFindingId. For secret: targetId=secretFindingId.',
-    parameters: z.object({
-      projectId: z.string().uuid(),
-      fixType: z.enum(['vulnerability', 'semgrep', 'secret']),
-      strategy: z.string(),
-      targetId: z.string().optional(),
-      organizationId: z.string().uuid(),
-      triggeredBy: z.string().uuid(),
-    }),
-    execute: async ({ projectId, fixType, strategy, targetId, organizationId, triggeredBy }) => {
-      const { requestFix } = await import('../../ai-fix-engine');
-
-      const req: any = {
-        projectId,
-        organizationId,
-        userId: triggeredBy,
-        strategy: strategy as any,
-      };
-
-      if (fixType === 'vulnerability') {
-        req.vulnerabilityOsvId = targetId;
-      } else if (fixType === 'semgrep') {
-        req.semgrepFindingId = targetId;
-      } else if (fixType === 'secret') {
-        req.secretFindingId = targetId;
-      }
-
-      const result = await requestFix(req);
-
-      if (!result.success) {
-        return JSON.stringify({ error: result.error, errorCode: result.errorCode });
-      }
-
-      return JSON.stringify({ success: true, jobId: result.jobId });
-    },
-  }),
-);
-
-// 6. getFixStatus
-registerAegisTool(
-  'getFixStatus',
-  {
-    category: 'security_ops',
-    permissionLevel: 'safe',
-    requiredRbacPermissions: [],
-  },
-  tool({
-    description: 'Get fix job statuses for a project. Optional status filter: queued, running, completed, failed, cancelled.',
-    parameters: z.object({
-      projectId: z.string().uuid(),
-      status: z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']).optional(),
-    }),
-    execute: async ({ projectId, status }) => {
-      let query = supabase
-        .from('project_security_fixes')
-        .select('id, fix_type, strategy, status, osv_id, pr_url, pr_number, error_message, created_at, completed_at')
-        .eq('project_id', projectId)
-        .order('created_at', { ascending: false })
-        .limit(20);
-
-      if (status) {
-        query = query.eq('status', status);
-      }
-
-      const { data, error } = await query;
-
-      if (error) {
-        return JSON.stringify({ error: error.message });
-      }
-
-      return JSON.stringify(data || []);
-    },
-  }),
-);
+// triggerFix / getFixStatus retired with the aider-worker.
+// Replaced by the aegis-v3 fix tools (request_fix / approve_fix / reject_fix /
+// check_fix_status) in lib/aegis-v3/tools/fix.ts.
 
 // 7. createSecuritySprint
 registerAegisTool(
