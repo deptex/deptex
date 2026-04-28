@@ -273,6 +273,7 @@ router.post('/', async (req: AuthRequest, res) => {
             manage_teams_and_projects: true,
             manage_integrations: true,
             manage_notifications: true,
+            manage_organization_settings: true,
           },
         },
         {
@@ -301,6 +302,7 @@ router.post('/', async (req: AuthRequest, res) => {
             manage_teams_and_projects: true,
             manage_integrations: true,
             manage_notifications: true,
+            manage_organization_settings: true,
           },
         },
       ]);

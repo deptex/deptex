@@ -1654,6 +1654,8 @@ export default function OrganizationSettingsPage() {
     interact_with_security_agent: true,
     interact_with_aegis: true,
     manage_aegis: true,
+    view_ai_spending: true,
+    manage_organization_settings: true,
     view_members: true,
     add_members: true,
     edit_roles: true,
