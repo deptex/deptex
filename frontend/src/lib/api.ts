@@ -1149,79 +1149,8 @@ export const api = {
   },
 
   // ============================================================
-  // AI Provider Management (BYOK)
+  // AI usage + default platform provider
   // ============================================================
-
-  async getAIProviders(orgId: string): Promise<AIProviderConfig[]> {
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers`);
-  },
-
-  async addAIProvider(
-    orgId: string,
-    provider: string,
-    apiKey: string,
-    opts?: { model_preference?: string; monthly_cost_cap?: number; display_name?: string; api_base_url?: string },
-  ): Promise<AIProviderConfig> {
-    const body: Record<string, unknown> = {
-      provider,
-      api_key: apiKey,
-      model_preference: opts?.model_preference,
-      monthly_cost_cap: opts?.monthly_cost_cap,
-    };
-    if (provider === 'custom' && opts) {
-      if (opts.display_name != null) body.display_name = opts.display_name;
-      if (opts.api_base_url != null) body.api_base_url = opts.api_base_url;
-    }
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-  },
-
-  async updateAIProvider(
-    orgId: string,
-    providerId: string,
-    updates: { model_preference?: string | null; display_name?: string | null; api_base_url?: string | null },
-  ): Promise<AIProviderConfig> {
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers/${providerId}`, {
-      method: 'PATCH',
-      body: JSON.stringify(updates),
-    });
-  },
-
-  async deleteAIProvider(orgId: string, providerId: string): Promise<{ message: string; warning?: string }> {
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers/${providerId}`, { method: 'DELETE' });
-  },
-
-  async testAIProvider(
-    orgId: string,
-    provider: string,
-    apiKey: string,
-    opts?: { model?: string; api_base_url?: string },
-  ): Promise<{ success: boolean; model?: string; error?: string; code?: string }> {
-    const body: Record<string, unknown> = { provider, api_key: apiKey };
-    if (opts?.model != null) body.model = opts.model;
-    if (provider === 'custom' && opts?.api_base_url != null) body.api_base_url = opts.api_base_url;
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers/test`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-  },
-
-  async setDefaultAIProvider(orgId: string, providerId: string): Promise<{ message: string }> {
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers/${providerId}/default`, { method: 'PATCH' });
-  },
-
-  async getOrgAISettings(orgId: string): Promise<OrgAISettings> {
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-settings`);
-  },
-
-  async updateOrgAISettings(orgId: string, patch: Partial<OrgAISettings>): Promise<OrgAISettings> {
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-settings`, {
-      method: 'PATCH',
-      body: JSON.stringify(patch),
-    });
-  },
 
   async getAIUsage(orgId: string, period?: string): Promise<AIUsageSummary> {
     const params = period ? `?period=${period}` : '';
@@ -3513,19 +3442,6 @@ export interface AegisInboxMessage {
   created_at: string;
 }
 
-export interface AIProviderConfig {
-  id: string;
-  provider: 'openai' | 'anthropic' | 'google' | 'custom';
-  model_preference: string | null;
-  is_default: boolean;
-  monthly_cost_cap: number;
-  connected: boolean;
-  display_name?: string | null;
-  api_base_url?: string | null;
-  created_at?: string;
-  updated_at?: string;
-}
-
 export interface AIUsageSummary {
   totalInputTokens: number;
   totalOutputTokens: number;
@@ -3976,12 +3892,6 @@ export type EpdStatus =
   | 'fallback_no_ai'
   | 'ai_error_fallback'
   | 'budget_exceeded';
-
-/** Org-level EPD knobs. Both NULL means "inherit the worker's env var defaults". */
-export interface OrgAISettings {
-  epd_max_run_cost_usd: number | null;
-  epd_budget_exceeded_behavior: 'fail_job' | 'continue_with_fallback' | null;
-}
 
 // PR & Commit tracking types
 
