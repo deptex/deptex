@@ -362,3 +362,51 @@ Worked through Phase 5c in one continuous session against `fixtures/test-minimal
 - SEMVER → GitHub release-tag commit resolver to unlock the no_fix_commit case (~1 day, M)
 - Cross-ecosystem live verification (test-python / test-java / test-go fixtures)
 - Programmatic YAML repair (strip malformed `pattern-sanitizers`) as a safety net beyond prompt guidance — defer until/unless v6 shows non-trivial flakiness on a larger fixture set
+
+---
+
+## Phase 5d multi-provider expansion (2026-04-28)
+
+Phase 5c got us to 75% on a 4-CVE fixture, but that sample was too small to draw real conclusions. Phase 5d added third-party provider routing and ran a 4-way comparison on the larger `fixtures/test-npm` (6 vulnerable npm packages → 24 detectable CVEs, 4 covered by platform rules → 20 candidates per scan).
+
+### What landed
+
+| Commit | Change |
+|---|---|
+| `5500901` | Route `provider=openai` through any OpenAI-compatible host via `DEPTEX_RULE_BASE_URL` (DeepInfra, OpenRouter, Alibaba). No DB schema change — `ai_provider` CHECK constraint stays on `('anthropic','openai','google')`; routing is purely env-driven. Wrapper forwards `DEEPINFRA_API_KEY` / `OPENROUTER_API_KEY` / `DASHSCOPE_API_KEY` / `OPENAI_API_KEY`, resolver picks the right one based on baseURL hostname. |
+| `1fc47a6` | Accept `GOOGLE_AI_API_KEY` (CLAUDE.md / backend/.env) as an alias for `GOOGLE_API_KEY` so a single .env file works. |
+| `2ec826c` | Retry-on-429 with exponential backoff on all three provider paths (Anthropic / OpenAI-compat / Google), honoring `retry-after` header. Anthropic dev/free orgs cap at 30K input tokens/min; without retry+lower-concurrency, every Anthropic call after the first batch 429s. |
+| `fdb02d2` | Per-provider concurrency table (anthropic=1, openai=2, google=3) replacing global p-limit constant. `REQUEST_TIMEOUT_MS` 60s → 180s for slow DeepInfra serverless cold-starts. parse_failed errors now include first 240 chars of raw response for diagnosis. |
+| `d46076b` | Disable Gemini 2.5 Flash thinking-mode (`thinkingConfig.thinkingBudget=0`). Thinking tokens were consuming the entire 2500-token output budget, leaving JSON truncated mid-stream. |
+
+### Live 4-way comparison results (test-npm, 20 candidates per model)
+
+| Model | Validated | Schema pass | Fixture pre | Fixture safe | Cost | Rate | $/validated |
+|---|---|---|---|---|---|---|---|
+| **gemini-2.5-flash** (no-thinking) | **7/20** | 18 | 10 | 14 | $0.17 | **35.0%** | $0.024 |
+| `deepseek-ai/DeepSeek-V3.1` (DeepInfra) | 6/20 | 13 | 9 | 7 | $0.07 | 30.0% | **$0.012** |
+| `Qwen/Qwen3-235B-A22B-Instruct-2507` (DeepInfra) | 5/20 | 6 | 6 | 5 | **$0.01** | 25.0% | $0.002 |
+| `claude-sonnet-4-6` | 3/20 | 13 | 6 | 6 | $0.42 | 15.0% | $0.140 |
+
+Notes:
+- DeepSeek V3.1 lost 5 candidates to `max_wait_seconds`-exceeded; on the 15 it actually completed, its rate was 6/15 = **40%**.
+- Qwen3 hit DeepInfra "Model busy, retry later" 503/429s on most calls even at concurrency=2 — DeepInfra serverless throttles big-model bursts hard. The 5 it did complete graduated cleanly. With more aggressive backoff or a paid concurrency tier, Qwen3's effective rate would likely be in the 30-40% range.
+- Sonnet 4.6 underperformed on this corpus: where the test-minimal-npm prompt-tuning landed at 75% on lodash CVEs, the broader corpus (jsonwebtoken, axios, node-fetch, minimatch, serialize-javascript) revealed prompt fragility — yaml_parse failures and fixture_safe_clean misses on package shapes the prompt wasn't tuned against.
+
+### Conclusions
+
+1. **Premium price ≠ premium quality on structured-output tasks.** All three non-Sonnet options beat Sonnet on this corpus. The "thinking" Sonnet cycles aren't useful for direct prompt → structured-output generation.
+2. **Gemini 2.5 Flash (thinking disabled) is the new recommended default.** Highest validation rate (35%), reasonable cost ($0.17), no provider-side rate limits at our concurrency. ~12× cheaper than Sonnet for 2.3× the rate.
+3. **DeepSeek V3.1 is the best value.** $0.012 per validated rule. Slower than Gemini due to DeepInfra cold-starts but cheaper per output rule.
+4. **Qwen3-235B-A22B is the price floor.** $0.002 per validated rule. Constrained by DeepInfra throttling rather than model capability — on a paid serverless tier this would likely lead the table.
+5. **Failure modes shift by provider, not just by model size.** DeepSeek tends to fail at YAML hygiene and Semgrep RuleParseErrors; Gemini at fixture_round_trip (safe-fixture FP); Sonnet at yaml_parse on novel package shapes. This means single-prompt tuning won't push any one model past ~50% on a diverse corpus; either we author per-provider prompt overrides, or we run a two-pass pipeline (cheap model drafts, refining model fixes failures).
+
+### Recommended next phase (5e or beyond)
+
+- Switch default `seed.ts` model when `provider=google` to `gemini-2.5-flash` (currently 2.0) and add a `DEPTEX_RULE_THINKING_BUDGET` env override for users who want to trade cost for thinking on harder CVEs.
+- Optional: add an "auto" provider that retries with a stronger model when a cheap one fails — e.g. Qwen3 first, DeepSeek on failure, Sonnet only as last resort. With ~25% baseline rate on Qwen3 at near-zero cost, the cascading approach could land 60%+ at a small fraction of Sonnet-only cost.
+- Add a `DEEPINFRA_BURST_BACKOFF_MS` knob so Qwen3's "Model busy" responses become first-class to the retry loop rather than trickling through as provider_error.
+
+### Spend on the comparison
+
+Total: ~$0.67 across 4 runs (Sonnet $0.42 + DeepSeek $0.07 + Qwen3 $0.01 + Gemini v1 $0 + Gemini v2 $0.17). Well under Henry's $2 cap. Future iteration of the same kind costs about $0.20-0.40 per full re-run if Sonnet is excluded.
