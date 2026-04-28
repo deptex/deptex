@@ -439,6 +439,13 @@ async function callGoogleOnce(args: CallProviderArgs): Promise<RawProviderRespon
           temperature: 0.1,
           maxOutputTokens: args.maxOutputTokens ?? 2_500,
           responseMimeType: 'application/json',
+          // Gemini 2.5 Flash defaults to thinking-on; thinking tokens count
+          // against maxOutputTokens, so a 2.5K cap is consumed entirely by
+          // chain-of-thought and the actual JSON gets truncated mid-string.
+          // We don't need reasoning here — the prompt is direct rule-from-
+          // patch — so disable thinking to keep all output budget for the
+          // JSON. 2.0 Flash and earlier models silently ignore the field.
+          thinkingConfig: { thinkingBudget: 0 },
         },
         contents: [
           { role: 'user', parts: [{ text: args.prompt }] },
