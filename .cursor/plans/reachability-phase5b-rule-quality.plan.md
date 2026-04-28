@@ -330,3 +330,35 @@ This is the architectural failure mode the plan flagged but inverted: not "loose
 **Cost confirmation:** haiku was 2.97× cheaper than sonnet for identical output shape on this fixture. Plan's risk note ("~$0.018/CVE sonnet, ~$0.006 haiku") was accurate to the cent.
 
 **Blocking smoke test #6 (a validated rule firing on a PDV) cannot pass** until one of the Phase 5c directions lands. M1–M4 of Phase 5b are nonetheless productive: diff-targeted validation, few-shot prompting, and per-stage telemetry are all the load-bearing infrastructure that *enables* Phase 5c iteration. The bench harness (M4) gives us an offline regression sentinel for whichever Phase 5c approach we pick.
+
+---
+
+## Phase 5c live iteration (2026-04-27, same session)
+
+Worked through Phase 5c in one continuous session against `fixtures/test-minimal-npm` (lodash 4.17.20 → 5 detectable CVEs, 1 covered by platform rule, 4 candidates per run). Took validation rate from 0% to 75% across 6 incremental fixes:
+
+| Iteration | Change | Sonnet | Haiku |
+|---|---|---|---|
+| Phase 5b baseline | n/a | 0/4 (0%) | 0/4 (0%) |
+| 5c-1 | Demote `patch_pre_match` from hard gate to advisory | 2/4 (50%) | 2/4 (50%) |
+| 5c-2 | Follow OSV soft-404 alias hop (CVE-2026-* → GHSA-*) | unchanged candidate count, but 1 CVE now reachable that previously bailed at osv_fetch | unchanged |
+| 5c-3 | Prompt v4: YAML hygiene — single-quote patterns containing `{`, `}`, `:`, `...` | 3/4 (75%) | 2/4 (50%) — different failure mode |
+| 5c-4 | Prompt v5: safe-fixture authoring (literal-only OR named-sanitizer-only, no inline if-checks) | 3/4 (75%) — stable | 3/4 (75%) initially, then regressed on a second run |
+| 5c-5 | Wire GITHUB_TOKEN/GITHUB_PAT through wrapper + step (60/hr → 5000/hr) | n/a — fixes external rate limit not validation | n/a |
+| 5c-6 | Prompt v6: explicit "drop pattern-sanitizers entirely when using static-literal safe fixture" | **3/4 (75%) — $0.27** | **3/4 (75%) — $0.09** |
+
+**Final state (v6 prompt, 5000/hr GitHub auth):** both sonnet-4-6 and haiku-4-5-20251001 land at 75% validation rate with identical breakdown shape (`schema_pass=3, fixture_pre=3, fixture_safe=3, patch_pre=0, patch_post=3, validated=3`). Haiku is 2.97× cheaper for the same output. The single remaining failure on both models is CVE-2026-2950 (`no_fix_commit`), where OSV/GHSA only carries a SEMVER fix range (`<4.18.0`) and no GitHub commit URL. That's a data-side gap; closing it would require resolving SEMVER → GitHub release tag → commit SHA, which is a real feature, not a tweak.
+
+**Validation gate semantics after 5c-1:**
+- Schema (Zod + YAML parse): hard gate
+- `fixture_pre_match`: hard gate (rule must catch the AI's vulnerable fixture)
+- `fixture_safe_clean`: hard gate (rule must NOT catch the AI's safe fixture)
+- `patch_pre_match`: ADVISORY (app-callsite rules legitimately miss library-internal patches; we generate the *richer* shape on purpose)
+- `patch_post_clean`: hard gate when patch validation ran (rule must NOT match upstream's fixed code)
+
+**Why patch_pre is correctly advisory:** Autogrep's gate works because their rules are library-internal — they target the same file the patch modifies. Ours target user-application callsites (`req.body` flowing into `_.toNumber`), which is strictly stronger for application reachability but means library-internal patches don't overlap with our rule shape. The post-fix gate still catches genuinely broken rules (rules that fire on the fixed code), so we keep one half of autogrep's invariant and drop the structurally-mismatched half.
+
+**Phase 5c follow-ups deferred:**
+- SEMVER → GitHub release-tag commit resolver to unlock the no_fix_commit case (~1 day, M)
+- Cross-ecosystem live verification (test-python / test-java / test-go fixtures)
+- Programmatic YAML repair (strip malformed `pattern-sanitizers`) as a safety net beyond prompt guidance — defer until/unless v6 shows non-trivial flakiness on a larger fixture set
