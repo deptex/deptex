@@ -20,6 +20,12 @@ export const AIDER_CONFIG: FlyMachineConfig = {
   maxBurst: parseInt(process.env.FLY_AIDER_MAX_BURST || '3', 10),
 };
 
+export const FIX_CONFIG: FlyMachineConfig = {
+  app: process.env.FLY_FIX_APP || 'deptex-fix-worker',
+  guest: { cpus: 4, memory_mb: 8192, cpu_kind: 'shared' },
+  maxBurst: parseInt(process.env.FLY_FIX_MAX_BURST || '3', 10),
+};
+
 interface FlyMachine {
   id: string;
   name: string;
@@ -182,3 +188,4 @@ export async function startFlyMachine(config: FlyMachineConfig): Promise<string 
 
 export const startExtractionMachine = () => startFlyMachine(EXTRACTION_CONFIG);
 export const startAiderMachine = () => startFlyMachine(AIDER_CONFIG);
+export const startFixMachine = () => startFlyMachine(FIX_CONFIG);
