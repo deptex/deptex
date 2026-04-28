@@ -36,6 +36,11 @@ export interface CallProviderArgs {
   signal?: AbortSignal;
   /** Cap on output tokens. Generated rules are small; default is plenty. */
   maxOutputTokens?: number;
+  /** OpenAI-compatible endpoint override. When provider='openai' and this is
+   *  set, the request goes to this URL instead of api.openai.com. Lets us
+   *  point at DeepInfra / OpenRouter / Alibaba / any drop-in OpenAI-compat
+   *  host without per-provider SDK work. Ignored for anthropic/google. */
+  baseUrl?: string;
 }
 
 export interface CallProviderResult {
@@ -90,6 +95,20 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   'gemini-2.5-flash': { input: 0.30 / 1_000_000, output: 2.50 / 1_000_000 },
   'gemini-2.0-flash': { input: 0.10 / 1_000_000, output: 0.40 / 1_000_000 },
   'gemini-1.5-pro': { input: 1.25 / 1_000_000, output: 5.00 / 1_000_000 },
+  // OpenAI-compatible third parties (provider='openai' + custom baseUrl).
+  // Pricing as advertised on the host's pricing page; cross-check before
+  // moving any of these to a billing-sensitive default.
+  // DeepInfra
+  'Qwen/Qwen3-235B-A22B-Instruct-2507': { input: 0.071 / 1_000_000, output: 0.10 / 1_000_000 },
+  'Qwen/Qwen3-235B-A22B-Instruct': { input: 0.071 / 1_000_000, output: 0.10 / 1_000_000 },
+  'Qwen/Qwen2.5-72B-Instruct': { input: 0.36 / 1_000_000, output: 0.40 / 1_000_000 },
+  'deepseek-ai/DeepSeek-V3.1': { input: 0.21 / 1_000_000, output: 0.79 / 1_000_000 },
+  'deepseek-ai/DeepSeek-V3': { input: 0.32 / 1_000_000, output: 0.89 / 1_000_000 },
+  'meta-llama/Llama-3.3-70B-Instruct-Turbo': { input: 0.10 / 1_000_000, output: 0.32 / 1_000_000 },
+  // OpenRouter (auto-routed)
+  'deepseek/deepseek-chat-v3.1': { input: 0.15 / 1_000_000, output: 0.75 / 1_000_000 },
+  'qwen/qwen3-235b-a22b': { input: 0.455 / 1_000_000, output: 1.82 / 1_000_000 },
+  'moonshotai/kimi-k2': { input: 0.57 / 1_000_000, output: 2.30 / 1_000_000 },
 };
 
 const FALLBACK_PRICING: ModelPricing = { input: 1.00 / 1_000_000, output: 5.00 / 1_000_000 };
@@ -256,8 +275,16 @@ async function callAnthropic(args: CallProviderArgs): Promise<RawProviderRespons
 
 async function callOpenAI(args: CallProviderArgs): Promise<RawProviderResponse> {
   const { controller, clear } = withRequestTimeout(args.signal);
+  // Default to OpenAI; otherwise honor the override and append /chat/completions
+  // if the caller passed only the base path. DeepInfra's OpenAI endpoint is
+  // https://api.deepinfra.com/v1/openai (note the /openai suffix); OpenRouter
+  // is https://openrouter.ai/api/v1; Alibaba dashscope is
+  // https://dashscope-intl.aliyuncs.com/compatible-mode/v1 — all expose a
+  // /chat/completions sub-route.
+  const baseUrl = args.baseUrl?.trim().replace(/\/$/, '') || 'https://api.openai.com/v1';
+  const url = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
   try {
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    const res = await fetch(url, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -277,7 +304,7 @@ async function callOpenAI(args: CallProviderArgs): Promise<RawProviderResponse> 
     });
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
-      throw new GenerationError('provider_error', `OpenAI returned ${res.status}: ${errBody.slice(0, 200)}`);
+      throw new GenerationError('provider_error', `OpenAI-compat host returned ${res.status} (${url}): ${errBody.slice(0, 200)}`);
     }
     const body = await res.json() as {
       choices?: Array<{ message?: { content?: string } }>;

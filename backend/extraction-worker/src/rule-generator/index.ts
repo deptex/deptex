@@ -62,6 +62,10 @@ export interface GenerateRuleForCveArgs {
   platformRulesDir?: string;
   /** Override how many few-shot examples to inline. Default: 3. */
   fewShotCount?: number;
+  /** OpenAI-compatible endpoint override. When provider='openai' and this is
+   *  set, requests go to this URL — DeepInfra, OpenRouter, Alibaba, or any
+   *  other drop-in OpenAI-compat host. Ignored for anthropic/google. */
+  baseUrl?: string;
 }
 
 export interface GenerationResult {
@@ -193,6 +197,7 @@ export async function generateRuleForCve(args: GenerateRuleForCveArgs): Promise<
         apiKey: args.apiKey,
         signal: args.signal,
         maxOutputTokens: args.maxOutputTokens,
+        baseUrl: args.baseUrl,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

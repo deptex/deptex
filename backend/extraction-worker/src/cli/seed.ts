@@ -82,8 +82,15 @@ export async function seedLocalDb(
   if (process.env.DEPTEX_RULE_GENERATION_ENABLED === '1') {
     const provider = (process.env.DEPTEX_RULE_PROVIDER ?? 'anthropic') as
       | 'anthropic' | 'openai' | 'google';
+    // For openai-compat third parties (DeepInfra / OpenRouter / Alibaba) the
+    // host is selected via DEPTEX_RULE_BASE_URL; the user MUST pass a model
+    // id understood by that host (e.g. Qwen/Qwen3-235B-A22B-Instruct-2507).
+    // Don't default — fall back to gpt-4o-mini for plain OpenAI only.
+    const baseUrl = process.env.DEPTEX_RULE_BASE_URL ?? '';
+    const isOpenAiCompatThirdParty = provider === 'openai' && baseUrl.length > 0;
     const model = process.env.DEPTEX_RULE_MODEL
-      ?? (provider === 'anthropic' ? 'claude-sonnet-4-6'
+      ?? (isOpenAiCompatThirdParty ? 'Qwen/Qwen3-235B-A22B-Instruct-2507'
+        : provider === 'anthropic' ? 'claude-sonnet-4-6'
         : provider === 'openai' ? 'gpt-4o-mini'
         : 'gemini-2.0-flash');
     const { error: rgErr } = await storage

@@ -300,6 +300,7 @@ export async function runRuleGenerationStep(
                 signal: combinedSignal(signal, innerSignal),
                 platformRulesDir: args.platformRulesDir,
                 githubToken: resolveGithubToken(),
+                baseUrl: resolveOpenAiCompatBaseUrl(settings!.ai_provider),
               }),
             PER_CVE_TIMEOUT_MS,
             STEP_NAME,
@@ -540,8 +541,23 @@ async function defaultResolveApiKey(orgId: string, provider: AiProviderName): Pr
   // path: when DEPTEX_LOCAL_CLI=1 and the matching env key is set, prefer
   // it. Cloud workers ignore this branch.
   if (process.env.DEPTEX_LOCAL_CLI === '1') {
+    // For provider='openai' the actual host may be DeepInfra / OpenRouter /
+    // Alibaba via DEPTEX_RULE_BASE_URL; pick the matching key env-var by
+    // hostname so a single .env file with all three keys works without
+    // forcing the user to also juggle OPENAI_API_KEY.
+    if (provider === 'openai') {
+      const baseUrl = process.env.DEPTEX_RULE_BASE_URL ?? '';
+      if (baseUrl.includes('deepinfra')) {
+        if (process.env.DEEPINFRA_API_KEY) return process.env.DEEPINFRA_API_KEY;
+      } else if (baseUrl.includes('openrouter')) {
+        if (process.env.OPENROUTER_API_KEY) return process.env.OPENROUTER_API_KEY;
+      } else if (baseUrl.includes('aliyuncs') || baseUrl.includes('dashscope')) {
+        if (process.env.DASHSCOPE_API_KEY) return process.env.DASHSCOPE_API_KEY;
+      }
+      if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY;
+      return null;
+    }
     const envKey = provider === 'anthropic' ? process.env.ANTHROPIC_API_KEY
-      : provider === 'openai' ? process.env.OPENAI_API_KEY
       : provider === 'google' ? process.env.GOOGLE_API_KEY
       : null;
     if (envKey) return envKey;
@@ -609,6 +625,20 @@ function decryptApiKey(encrypted: string, storedVersion: number): string {
 function resolveGithubToken(): string | undefined {
   const t = process.env.GITHUB_TOKEN || process.env.GITHUB_PAT;
   return t && t.trim().length > 0 ? t.trim() : undefined;
+}
+
+/**
+ * In local-CLI mode, allow routing the OpenAI-compatible call to a third-party
+ * host (DeepInfra, OpenRouter, Alibaba) via DEPTEX_RULE_BASE_URL. Cloud workers
+ * never set this — they speak directly to api.openai.com. Returns undefined
+ * outside CLI mode or when no override is configured. Only meaningful for
+ * provider='openai' (anthropic/google ignore the field).
+ */
+function resolveOpenAiCompatBaseUrl(provider: AiProviderName): string | undefined {
+  if (provider !== 'openai') return undefined;
+  if (process.env.DEPTEX_LOCAL_CLI !== '1') return undefined;
+  const url = process.env.DEPTEX_RULE_BASE_URL?.trim();
+  return url && url.length > 0 ? url : undefined;
 }
 
 async function persistGeneratedRule(
