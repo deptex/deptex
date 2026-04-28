@@ -5,8 +5,8 @@ import { supabase } from '../lib/supabase';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { userHasOrgPermission } from '../lib/permissions';
 import { rowToMessage, rowToThread, type ThreadRow, type UserStateRow } from '../lib/aegis/types';
-import { generateChat } from '../lib/aegis/chat';
 import { getAegisModel } from '../lib/aegis/provider';
+import { generateAegisChat } from '../lib/aegis-v3/chat-generation';
 import {
   isParticipant,
   isCreator,
@@ -328,15 +328,24 @@ router.post('/chat', async (req: AuthRequest, res: Response) => {
         .eq('thread_id', threadId)
         .order('created_at', { ascending: true });
 
-      const { name: senderName, role: senderRole } = await getSenderNameAndRole(userId, organizationId);
+      // History excludes the user message we just inserted — generateAegisChat
+      // appends it itself so the agent loop sees it as the latest turn.
+      const history = (rows ?? [])
+        .filter(
+          (r: { role: string; content: string }) =>
+            !(r.role === 'user' && r.content === userText),
+        )
+        .map((r: { role: string; content: string }) => ({
+          role: r.role as 'user' | 'assistant',
+          content: r.content,
+        }));
 
-      const { text, parts } = await generateChat({
-        organizationId,
-        orgName: org.name,
+      const { text, parts } = await generateAegisChat({
+        orgId: organizationId,
         userId,
-        senderName,
-        senderRole,
-        messages: (rows ?? []) as Array<{ role: 'user' | 'assistant'; content: string }>,
+        threadId,
+        userMessage: userText,
+        history,
       });
 
       // Auto-title on the first exchange (title before saving so the Realtime
