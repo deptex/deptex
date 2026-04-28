@@ -91,6 +91,42 @@ CREATE TABLE IF NOT EXISTS public.aegis_slack_config (
   enabled boolean DEFAULT true,
   created_at timestamp with time zone DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS public.aegis_tool_executions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  organization_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  thread_id uuid,
+  task_id uuid,
+  tool_name text NOT NULL,
+  tool_category text NOT NULL,
+  parameters jsonb NOT NULL,
+  result jsonb,
+  success boolean,
+  permission_level text NOT NULL,
+  approval_status text,
+  duration_ms integer,
+  tokens_used integer,
+  estimated_cost numeric(8,4),
+  created_at timestamp with time zone DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.ai_usage_logs (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  organization_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  feature text NOT NULL,
+  tier text NOT NULL,
+  provider text NOT NULL,
+  model text NOT NULL,
+  input_tokens integer NOT NULL,
+  output_tokens integer NOT NULL,
+  estimated_cost numeric(10,8),
+  context_type text,
+  context_id text,
+  duration_ms integer,
+  success boolean DEFAULT true,
+  error_message text,
+  created_at timestamp with time zone DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS public.api_tokens (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL,
@@ -232,7 +268,12 @@ CREATE TABLE IF NOT EXISTS public.extraction_jobs (
   started_at timestamp with time zone,
   heartbeat_at timestamp with time zone,
   completed_at timestamp with time zone,
-  created_at timestamp with time zone NOT NULL DEFAULT now()
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  reachability_rules_matched integer,
+  reachability_rules_total_detectable integer,
+  reachability_rules_generated_this_scan integer,
+  reachability_generation_cost_usd numeric(10,4),
+  reachability_validation_breakdown jsonb
 );
 CREATE TABLE IF NOT EXISTS public.extraction_logs (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -411,6 +452,29 @@ CREATE TABLE IF NOT EXISTS public.organization_deprecations (
   created_at timestamp with time zone DEFAULT now(),
   dependency_id uuid NOT NULL
 );
+CREATE TABLE IF NOT EXISTS public.organization_generated_rules (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  organization_id uuid NOT NULL,
+  cve_id text NOT NULL,
+  package_purl text NOT NULL,
+  ecosystem text NOT NULL,
+  affected_version_range text,
+  rule_yaml text NOT NULL,
+  vulnerable_fixture text NOT NULL,
+  safe_fixture text NOT NULL,
+  reachability_level text NOT NULL,
+  entry_point_class text,
+  generated_with_provider text NOT NULL,
+  generated_with_model text NOT NULL,
+  generation_cost_usd numeric(10,4) NOT NULL,
+  validation_status text NOT NULL DEFAULT 'pending'::text,
+  validation_log jsonb,
+  enabled boolean NOT NULL DEFAULT true,
+  previous_versions jsonb NOT NULL DEFAULT '[]'::jsonb,
+  generated_at timestamp with time zone NOT NULL DEFAULT now(),
+  last_used_at timestamp with time zone,
+  use_count integer NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS public.organization_integrations (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL,
@@ -537,6 +601,22 @@ CREATE TABLE IF NOT EXISTS public.organization_pr_checks (
   updated_at timestamp with time zone DEFAULT now(),
   updated_by_id uuid
 );
+CREATE TABLE IF NOT EXISTS public.organization_reachability_settings (
+  organization_id uuid NOT NULL,
+  auto_generate_enabled boolean NOT NULL DEFAULT false,
+  trigger_severities text[] NOT NULL DEFAULT ARRAY['critical'::text, 'high'::text],
+  trigger_kev boolean NOT NULL DEFAULT true,
+  trigger_asset_tier_max_rank integer NOT NULL DEFAULT 2,
+  trigger_newly_discovered boolean NOT NULL DEFAULT true,
+  trigger_reevaluate_existing boolean NOT NULL DEFAULT false,
+  ai_provider text NOT NULL DEFAULT 'anthropic'::text,
+  ai_model text NOT NULL DEFAULT 'claude-sonnet-4-6'::text,
+  monthly_budget_usd numeric(10,2) NOT NULL DEFAULT 10.00,
+  on_budget_exhaustion text NOT NULL DEFAULT 'skip'::text,
+  max_wait_seconds integer NOT NULL DEFAULT 300,
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_by uuid
+);
 CREATE TABLE IF NOT EXISTS public.organization_roles (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL,
@@ -660,7 +740,8 @@ CREATE TABLE IF NOT EXISTS public.organizations (
   allow_autonomous_containment boolean DEFAULT false,
   canvas_cursors_enabled boolean DEFAULT true,
   epd_max_run_cost_usd numeric(6,2),
-  epd_budget_exceeded_behavior text
+  epd_budget_exceeded_behavior text,
+  default_ai_provider text NOT NULL DEFAULT 'anthropic'::text
 );
 CREATE TABLE IF NOT EXISTS public.package_anomalies (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1455,6 +1536,8 @@ ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_pkey PRI
 ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_pkey PRIMARY KEY (thread_id, user_id);
 ALTER TABLE public.aegis_event_triggers ADD CONSTRAINT aegis_event_triggers_pkey PRIMARY KEY (id);
 ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_pkey PRIMARY KEY (id);
+ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_pkey PRIMARY KEY (id);
+ALTER TABLE public.ai_usage_logs ADD CONSTRAINT ai_usage_logs_pkey PRIMARY KEY (id);
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_pkey PRIMARY KEY (id);
 ALTER TABLE public.banned_versions ADD CONSTRAINT banned_versions_pkey PRIMARY KEY (id);
 ALTER TABLE public.demo_requests ADD CONSTRAINT demo_requests_pkey PRIMARY KEY (id);
@@ -1480,6 +1563,7 @@ ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_pkey P
 ALTER TABLE public.notification_rule_changes ADD CONSTRAINT notification_rule_changes_pkey PRIMARY KEY (id);
 ALTER TABLE public.organization_asset_tiers ADD CONSTRAINT organization_asset_tiers_pkey PRIMARY KEY (id);
 ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_pkey PRIMARY KEY (id);
 ALTER TABLE public.organization_integrations ADD CONSTRAINT organization_integrations_pkey PRIMARY KEY (id);
 ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_pkey PRIMARY KEY (id);
 ALTER TABLE public.organization_ip_allowlist ADD CONSTRAINT organization_ip_allowlist_pkey PRIMARY KEY (id);
@@ -1491,6 +1575,7 @@ ALTER TABLE public.organization_plans ADD CONSTRAINT organization_plans_pkey PRI
 ALTER TABLE public.organization_policies ADD CONSTRAINT organization_policies_pkey PRIMARY KEY (id);
 ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_policy_changes_pkey PRIMARY KEY (id);
 ALTER TABLE public.organization_pr_checks ADD CONSTRAINT organization_pr_checks_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_pkey PRIMARY KEY (organization_id);
 ALTER TABLE public.organization_roles ADD CONSTRAINT organization_roles_pkey PRIMARY KEY (id);
 ALTER TABLE public.organization_scim_configs ADD CONSTRAINT organization_scim_configs_pkey PRIMARY KEY (id);
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_pkey PRIMARY KEY (id);
@@ -1564,6 +1649,7 @@ ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_flow_id_version_ke
 ALTER TABLE public.invitation_teams ADD CONSTRAINT invitation_teams_invitation_id_team_id_key UNIQUE (invitation_id, team_id);
 ALTER TABLE public.license_obligations ADD CONSTRAINT license_obligations_license_spdx_id_key UNIQUE (license_spdx_id);
 ALTER TABLE public.organization_asset_tiers ADD CONSTRAINT organization_asset_tiers_organization_id_name_key UNIQUE (organization_id, name);
+ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_organization_id_cve_id_package_key UNIQUE (organization_id, cve_id, package_purl);
 ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_organization_id_email_status_key UNIQUE (organization_id, email, status) DEFERRABLE INITIALLY DEFERRED;
 ALTER TABLE public.organization_members ADD CONSTRAINT organization_members_organization_id_user_id_key UNIQUE (organization_id, user_id);
 ALTER TABLE public.organization_mfa_exemptions ADD CONSTRAINT organization_mfa_exemptions_organization_id_user_id_key UNIQUE (organization_id, user_id);
@@ -1613,6 +1699,7 @@ ALTER TABLE public.user_profiles ADD CONSTRAINT user_profiles_user_id_key UNIQUE
 ALTER TABLE public.user_sessions ADD CONSTRAINT user_sessions_session_id_key UNIQUE (session_id);
 ALTER TABLE public.watched_packages ADD CONSTRAINT watched_packages_dependency_id_key UNIQUE (dependency_id);
 ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_role_check CHECK ((role = ANY (ARRAY['user'::text, 'assistant'::text])));
+ALTER TABLE public.ai_usage_logs ADD CONSTRAINT ai_usage_logs_tier_check CHECK ((tier = ANY (ARRAY['platform'::text, 'byok'::text])));
 ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_type_check CHECK ((type = ANY (ARRAY['bump'::text, 'decrease'::text, 'remove'::text])));
 ALTER TABLE public.extraction_jobs ADD CONSTRAINT extraction_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])));
 ALTER TABLE public.extraction_logs ADD CONSTRAINT extraction_logs_level_check CHECK ((level = ANY (ARRAY['info'::text, 'success'::text, 'warning'::text, 'error'::text])));
@@ -1627,12 +1714,16 @@ ALTER TABLE public.notification_deliveries ADD CONSTRAINT notification_deliverie
 ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_priority_check CHECK ((priority = ANY (ARRAY['critical'::text, 'high'::text, 'normal'::text, 'low'::text])));
 ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'dispatching'::text, 'dispatched'::text, 'failed'::text])));
 ALTER TABLE public.notification_rule_changes ADD CONSTRAINT notification_rule_changes_rule_scope_check CHECK ((rule_scope = ANY (ARRAY['organization'::text, 'team'::text, 'project'::text])));
+ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_validation_status_check CHECK ((validation_status = ANY (ARRAY['pending'::text, 'validated'::text, 'failed_validation'::text, 'manual_override'::text])));
 ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'accepted'::text, 'rejected'::text, 'expired'::text])));
 ALTER TABLE public.organization_notification_rules ADD CONSTRAINT organization_notification_rules_trigger_type_check CHECK ((trigger_type = ANY (ARRAY['weekly_digest'::text, 'custom_code_pipeline'::text])));
 ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_policy_changes_code_type_check CHECK ((code_type = ANY (ARRAY['package_policy'::text, 'project_status'::text, 'pr_check'::text])));
+ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_ai_provider_check CHECK ((ai_provider = ANY (ARRAY['anthropic'::text, 'openai'::text, 'google'::text])));
+ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_on_budget_exhaustion_check CHECK ((on_budget_exhaustion = ANY (ARRAY['skip'::text, 'fall_back_to_haiku'::text])));
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_max_hours_check CHECK ((max_hours > 0));
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_severity_check CHECK ((severity = ANY (ARRAY['critical'::text, 'high'::text, 'medium'::text, 'low'::text])));
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_warning_threshold_percent_check CHECK (((warning_threshold_percent >= 1) AND (warning_threshold_percent <= 99)));
+ALTER TABLE public.organizations ADD CONSTRAINT organizations_default_ai_provider_check CHECK ((default_ai_provider = ANY (ARRAY['openai'::text, 'anthropic'::text, 'google'::text])));
 ALTER TABLE public.organizations ADD CONSTRAINT organizations_epd_budget_exceeded_behavior_check CHECK ((epd_budget_exceeded_behavior = ANY (ARRAY['fail_job'::text, 'continue_with_fallback'::text])));
 ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text])));
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_epd_confidence_tier CHECK (((epd_confidence_tier IS NULL) OR (epd_confidence_tier = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text]))));
@@ -1670,6 +1761,10 @@ ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_th
 ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_event_triggers ADD CONSTRAINT aegis_event_triggers_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id);
+ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+ALTER TABLE public.ai_usage_logs ADD CONSTRAINT ai_usage_logs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 ALTER TABLE public.banned_versions ADD CONSTRAINT banned_versions_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
@@ -1711,6 +1806,7 @@ ALTER TABLE public.organization_asset_tiers ADD CONSTRAINT organization_asset_ti
 ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_deprecated_by_fkey FOREIGN KEY (deprecated_by) REFERENCES auth.users(id);
 ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_integrations ADD CONSTRAINT organization_integrations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_invited_by_fkey FOREIGN KEY (invited_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
@@ -1733,6 +1829,8 @@ ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_polic
 ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_policy_changes_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES organization_policy_changes(id) ON DELETE SET NULL;
 ALTER TABLE public.organization_pr_checks ADD CONSTRAINT organization_pr_checks_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_pr_checks ADD CONSTRAINT organization_pr_checks_updated_by_id_fkey FOREIGN KEY (updated_by_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES auth.users(id);
 ALTER TABLE public.organization_roles ADD CONSTRAINT organization_roles_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_scim_configs ADD CONSTRAINT organization_scim_configs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_asset_tier_id_fkey FOREIGN KEY (asset_tier_id) REFERENCES organization_asset_tiers(id) ON DELETE CASCADE;
@@ -1857,9 +1955,17 @@ CREATE INDEX idx_aegis_chat_threads_user_id ON public.aegis_chat_threads USING b
 CREATE INDEX idx_aegis_chat_user_state_user_id ON public.aegis_chat_user_state USING btree (user_id);
 CREATE INDEX idx_aegis_event_triggers_event ON public.aegis_event_triggers USING btree (event_type) WHERE (enabled = true);
 CREATE INDEX idx_aegis_event_triggers_org ON public.aegis_event_triggers USING btree (organization_id);
+CREATE INDEX idx_aegis_tool_exec_created ON public.aegis_tool_executions USING btree (created_at DESC);
+CREATE INDEX idx_aegis_tool_exec_org ON public.aegis_tool_executions USING btree (organization_id);
+CREATE INDEX idx_aegis_tool_exec_thread ON public.aegis_tool_executions USING btree (thread_id);
+CREATE INDEX idx_aegis_tool_exec_tool ON public.aegis_tool_executions USING btree (tool_name);
+CREATE INDEX idx_aegis_tool_exec_user ON public.aegis_tool_executions USING btree (user_id);
 CREATE INDEX idx_api_tokens_hash ON public.api_tokens USING btree (token_hash) WHERE (revoked_at IS NULL);
 CREATE INDEX idx_api_tokens_org ON public.api_tokens USING btree (organization_id) WHERE (revoked_at IS NULL);
 CREATE INDEX idx_api_tokens_user ON public.api_tokens USING btree (user_id) WHERE (revoked_at IS NULL);
+CREATE INDEX idx_aul_org_created ON public.ai_usage_logs USING btree (organization_id, created_at DESC);
+CREATE INDEX idx_aul_org_month ON public.ai_usage_logs USING btree (organization_id, created_at) WHERE (success = true);
+CREATE INDEX idx_aul_user_feature ON public.ai_usage_logs USING btree (user_id, feature, created_at DESC);
 CREATE INDEX idx_banned_versions_org_dependency_id ON public.banned_versions USING btree (organization_id, dependency_id);
 CREATE INDEX idx_debt_snapshots_org_date ON public.security_debt_snapshots USING btree (organization_id, snapshot_date DESC);
 CREATE INDEX idx_debt_snapshots_project ON public.security_debt_snapshots USING btree (project_id, snapshot_date DESC);
@@ -1911,6 +2017,9 @@ CREATE INDEX idx_notif_events_org ON public.notification_events USING btree (org
 CREATE INDEX idx_notif_events_project ON public.notification_events USING btree (project_id, created_at DESC);
 CREATE INDEX idx_notif_events_status ON public.notification_events USING btree (status) WHERE (status = 'pending'::text);
 CREATE INDEX idx_notif_events_stuck ON public.notification_events USING btree (created_at, dispatch_attempts) WHERE (status = 'pending'::text);
+CREATE INDEX idx_ogr_cve ON public.organization_generated_rules USING btree (cve_id);
+CREATE INDEX idx_ogr_org_enabled ON public.organization_generated_rules USING btree (organization_id, enabled);
+CREATE INDEX idx_ogr_status ON public.organization_generated_rules USING btree (organization_id, validation_status);
 CREATE INDEX idx_op_status ON public.organization_plans USING btree (subscription_status);
 CREATE INDEX idx_op_stripe_customer ON public.organization_plans USING btree (stripe_customer_id);
 CREATE INDEX idx_op_stripe_subscription ON public.organization_plans USING btree (stripe_subscription_id);

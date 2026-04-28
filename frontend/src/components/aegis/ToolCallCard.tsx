@@ -1,84 +1,72 @@
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, Wrench, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, AlertCircle, Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 type ToolState = 'running' | 'done' | 'error';
 
-interface ToolCallCardProps {
+export interface ToolCallEntry {
   toolName: string;
   state: ToolState;
-  input?: unknown;
-  output?: unknown;
-  errorText?: string;
 }
 
-function formatJson(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
+interface ToolCallGroupProps {
+  tools: ToolCallEntry[];
 }
 
 function prettyToolName(raw: string): string {
   return raw.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-export function ToolCallCard({ toolName, state, input, output, errorText }: ToolCallCardProps) {
+export function ToolCallGroup({ tools }: ToolCallGroupProps) {
   const [expanded, setExpanded] = useState(false);
+  if (tools.length === 0) return null;
 
-  const Icon = state === 'running' ? Loader2 : state === 'error' ? AlertCircle : CheckCircle2;
-  const iconClass = cn(
-    'h-3.5 w-3.5',
-    state === 'running' && 'animate-spin text-foreground/60',
-    state === 'done' && 'text-emerald-500',
-    state === 'error' && 'text-red-500',
-  );
+  const Chevron = expanded ? ChevronDown : ChevronRight;
+  const hasError = tools.some((t) => t.state === 'error');
+  const anyRunning = tools.some((t) => t.state === 'running');
+  const label = `${tools.length} tool call${tools.length === 1 ? '' : 's'}`;
 
   return (
-    <div className="my-2 rounded-lg border border-border bg-background-card/50 overflow-hidden">
+    <div className="my-1">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-background-subtle/40 transition-colors"
-      >
-        {expanded ? (
-          <ChevronDown className="h-3.5 w-3.5 text-foreground/50" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 text-foreground/50" />
+        className={cn(
+          'inline-flex items-center gap-1.5 text-xs transition-colors',
+          hasError
+            ? 'text-destructive/90 hover:text-destructive'
+            : 'text-foreground-secondary hover:text-foreground',
         )}
-        <Wrench className="h-3.5 w-3.5 text-foreground/50" />
-        <span className="flex-1 text-xs text-foreground/80 font-medium">{prettyToolName(toolName)}</span>
-        <Icon className={iconClass} />
+      >
+        <Chevron className="h-3 w-3" />
+        <span>{label}</span>
+        {anyRunning && <Loader2 className="h-3 w-3 animate-spin" />}
+        {hasError && <AlertCircle className="h-3 w-3" />}
       </button>
-      {expanded && (
-        <div className="border-t border-border px-3 py-2 space-y-2">
-          {input !== undefined && (
-            <div>
-              <div className="text-[11px] uppercase tracking-wide text-foreground/50 mb-1">Input</div>
-              <pre className="text-[12px] text-foreground/80 bg-background-subtle/60 rounded p-2 overflow-x-auto">
-                {formatJson(input)}
-              </pre>
-            </div>
-          )}
-          {state === 'error' && errorText && (
-            <div>
-              <div className="text-[11px] uppercase tracking-wide text-red-500/80 mb-1">Error</div>
-              <pre className="text-[12px] text-red-400 bg-background-subtle/60 rounded p-2 overflow-x-auto">
-                {errorText}
-              </pre>
-            </div>
-          )}
-          {state === 'done' && output !== undefined && (
-            <div>
-              <div className="text-[11px] uppercase tracking-wide text-foreground/50 mb-1">Result</div>
-              <pre className="text-[12px] text-foreground/80 bg-background-subtle/60 rounded p-2 overflow-x-auto max-h-64">
-                {formatJson(output)}
-              </pre>
-            </div>
-          )}
+      <div
+        className={cn(
+          'grid transition-all duration-200 ease-out',
+          expanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0',
+        )}
+      >
+        <div className="overflow-hidden">
+          <div className="pt-1.5 pl-4 space-y-1">
+            {tools.map((t, i) => (
+              <div
+                key={i}
+                className={cn(
+                  'flex items-center gap-1.5 text-xs',
+                  t.state === 'error' ? 'text-destructive/90' : 'text-foreground-secondary',
+                )}
+              >
+                <span>{prettyToolName(t.toolName)}</span>
+                {t.state === 'running' && <Loader2 className="h-3 w-3 animate-spin" />}
+                {t.state === 'error' && <AlertCircle className="h-3 w-3" />}
+              </div>
+            ))}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

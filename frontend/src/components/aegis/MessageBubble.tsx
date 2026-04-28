@@ -1,6 +1,7 @@
+import type { ReactNode } from 'react';
 import type { UIMessage } from 'ai';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { ToolCallCard } from './ToolCallCard';
+import { ToolCallGroup, type ToolCallEntry } from './ToolCallCard';
 
 interface MessageBubbleProps {
   message: UIMessage;
@@ -40,30 +41,34 @@ export function MessageBubble({ message, currentUserId }: MessageBubbleProps) {
     );
   }
 
+  // Group consecutive tool-call parts so the bubble shows one
+  // expandable "N tool calls" block per cluster instead of a row per call.
+  const elements: ReactNode[] = [];
+  let toolBuffer: ToolCallEntry[] = [];
+  const flushTools = () => {
+    if (toolBuffer.length > 0) {
+      elements.push(<ToolCallGroup key={`tools-${elements.length}`} tools={toolBuffer} />);
+      toolBuffer = [];
+    }
+  };
+
+  parts.forEach((part: any, i: number) => {
+    if (part.type === 'text') {
+      flushTools();
+      elements.push(<MarkdownRenderer key={`text-${i}`} content={part.text ?? ''} />);
+      return;
+    }
+    if (part.type === 'dynamic-tool' || (typeof part.type === 'string' && part.type.startsWith('tool-'))) {
+      const toolName = part.toolName ?? (part.type as string).replace(/^tool-/, '');
+      toolBuffer.push({ toolName, state: mapState(part.state) });
+    }
+  });
+  flushTools();
+
   return (
     <div className="px-4 py-2">
       <div className="mx-auto max-w-3xl">
-        <div className="space-y-2">
-          {parts.map((part: any, i: number) => {
-            if (part.type === 'text') {
-              return <MarkdownRenderer key={i} content={part.text ?? ''} />;
-            }
-            if (part.type === 'dynamic-tool' || (typeof part.type === 'string' && part.type.startsWith('tool-'))) {
-              const toolName = part.toolName ?? (part.type as string).replace(/^tool-/, '');
-              return (
-                <ToolCallCard
-                  key={part.toolCallId ?? i}
-                  toolName={toolName}
-                  state={mapState(part.state)}
-                  input={part.input}
-                  output={part.output}
-                  errorText={part.errorText}
-                />
-              );
-            }
-            return null;
-          })}
-        </div>
+        <div className="space-y-2">{elements}</div>
       </div>
     </div>
   );
