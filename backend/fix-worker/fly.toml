@@ -2,7 +2,7 @@ app = 'deptex-fix-worker'
 primary_region = 'iad'
 
 [build]
-  dockerfile = 'backend/fix-worker/Dockerfile'
+  dockerfile = 'Dockerfile'
 
 [[vm]]
   memory = '8gb'
