@@ -37,7 +37,7 @@ export interface BuildPromptArgs {
   compact?: boolean;
 }
 
-const PROMPT_VERSION = 'rulegen-v3';
+const PROMPT_VERSION = 'rulegen-v4';
 
 export function getPromptVersion(): string {
   return PROMPT_VERSION;
@@ -115,6 +115,21 @@ export function buildGenerationPrompt(args: BuildPromptArgs): string {
     `      - pattern: dangerous_api($X)`,
     '```',
     `Do NOT use Semgrep features that aren't in the reference shape: no \`fix-regex\`, no \`metavariable-comparison\` with Python \`import re\` blocks, no nested \`patterns -> pattern-sources\`. Stick to plain \`pattern\` / \`pattern-either\` / \`pattern-not\` inside each source/sink/sanitizer entry. If you want regex-based metavariable filtering, use \`metavariable-regex\` (NOT \`metavariable-comparison\` with Python). NEVER omit the \`message\` field.`,
+    ``,
+    `# YAML hygiene (most common cause of rejected rules)`,
+    `Semgrep patterns and YAML have overlapping syntax. If a \`pattern:\` value contains ANY of: \`{\`, \`}\`, \`[\`, \`]\`, \`:\`, \`,\`, \`&\`, \`*\`, \`?\`, \`!\`, \`|\`, \`>\`, single quotes, OR the Semgrep ellipsis \`...\` — wrap the ENTIRE pattern value in single quotes. YAML otherwise treats unquoted \`{ ... }\` as a flow mapping and rejects the rule with "bad indentation of a mapping entry".`,
+    '```yaml',
+    `# WRONG — YAML parses { variable: $VAR, ... } as a flow mapping and fails`,
+    `pattern-sinks:`,
+    `  - pattern: _.template($STR, { variable: $VAR, ... })`,
+    ``,
+    `# RIGHT — single-quote the entire pattern when it contains {, }, :, or ...`,
+    `pattern-sinks:`,
+    `  - pattern: '_.template($STR, { variable: $VAR, ... })'`,
+    `  - pattern: 'res.send({ key: $VAL })'`,
+    `  - pattern: 'arr[$IDX] = $X'`,
+    '```',
+    `When a pattern itself already contains a single quote (rare), use a double-quoted YAML scalar with backslash escapes, or split the pattern into two single-quoted alternatives under \`pattern-either\`. The simple rule: every \`pattern:\` line that has braces, brackets, ellipsis, or a colon should be single-quoted.`,
     ``,
     `Constraints:`,
     `- The rule's primary language must be \`${lang}\` (\`languages: [${lang}]\`).`,
