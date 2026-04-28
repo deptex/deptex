@@ -37,7 +37,7 @@ export interface BuildPromptArgs {
   compact?: boolean;
 }
 
-const PROMPT_VERSION = 'rulegen-v4';
+const PROMPT_VERSION = 'rulegen-v5';
 
 export function getPromptVersion(): string {
   return PROMPT_VERSION;
@@ -137,6 +137,10 @@ export function buildGenerationPrompt(args: BuildPromptArgs): string {
     `- Set the following \`metadata\` keys exactly: \`cve\` (the CVE id), \`package\` (the package name), \`ecosystem\` (npm/pypi/maven/golang/etc.), \`affected_versions\` (the range string), \`reachability_level\` (one of "confirmed" or "function" — pick "confirmed" if you write a taint rule with sources AND sinks, else "function"), \`entry_point_class\` (one of "PUBLIC_UNAUTH" / "AUTH_INTERNAL" / "OFFLINE_WORKER" — pick "PUBLIC_UNAUTH" if the rule's source is an HTTP request body or environment variable, "OFFLINE_WORKER" if it's a queue/cron payload, else "AUTH_INTERNAL").`,
     `- The vulnerable_fixture must contain a small, plausible application snippet that demonstrates the unpatched usage AND that your rule will match. The safe_fixture must contain a fixed/sanitized variant that your rule will NOT match.`,
     `- Both fixtures must parse cleanly as ${lang} (no pseudo-code).`,
+    `- IMPORTANT — safe_fixture authoring: Semgrep's taint engine only recognises sanitization that goes through one of the function calls listed under \`pattern-sanitizers\`. INLINE control flow — \`if (!ALLOWED.includes(x)) return;\`, \`some(...)\`, regex \`.test()\`, ternary guards, try/catch — is NOT a sanitizer to Semgrep. The taint flows past it and the rule still fires. Write the safe_fixture using ONE of these patterns:`,
+    `  (a) Pass a STATIC LITERAL (string, number, hard-coded constant) as the sink's tainted argument so no \`req.*\` taint reaches the sink at all. This is the simplest and most reliable safe fixture.`,
+    `  (b) Call a named sanitizer function (e.g. \`sanitizePath($PATH)\`) that you have ALSO declared under \`pattern-sanitizers\` in the rule. The function name in the fixture must match the one in pattern-sanitizers exactly.`,
+    `  Do NOT mix: don't write a \`pattern-sanitizers\` entry that no fixture call site uses, and don't write inline if-checks expecting Semgrep to treat them as sanitization.`,
     ``,
     `# Output`,
     `Respond with a SINGLE JSON object. No prose before or after. The shape:`,
