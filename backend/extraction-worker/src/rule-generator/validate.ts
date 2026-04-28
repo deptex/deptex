@@ -375,6 +375,10 @@ interface SemgrepRunResult {
 async function runSemgrep(args: RunSemgrepArgs): Promise<SemgrepRunResult> {
   return await new Promise<SemgrepRunResult>((resolve, reject) => {
     const semgrepBin = args.semgrepBin ?? 'semgrep';
+    // --quiet hides stderr too, which makes "exit code 7" diagnostics
+    // useless when a generated rule is malformed. Drop --quiet so we still
+    // capture the real config-load error message; --metrics=off keeps the
+    // network noise out.
     const child = spawn(
       semgrepBin,
       [
@@ -383,7 +387,6 @@ async function runSemgrep(args: RunSemgrepArgs): Promise<SemgrepRunResult> {
         '--json',
         '--no-git-ignore',
         '--metrics=off',
-        '--quiet',
         args.target,
       ],
       {

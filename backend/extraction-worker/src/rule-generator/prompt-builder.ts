@@ -32,7 +32,7 @@ export interface BuildPromptArgs {
   compact?: boolean;
 }
 
-const PROMPT_VERSION = 'rulegen-v1';
+const PROMPT_VERSION = 'rulegen-v2';
 
 export function getPromptVersion(): string {
   return PROMPT_VERSION;
@@ -84,6 +84,30 @@ export function buildGenerationPrompt(args: BuildPromptArgs): string {
     ``,
     `# Your task`,
     `Generate a Semgrep rule that **matches code that calls the vulnerable API** in a way the patch fixes — i.e. the rule must hit the pre-patch behavior and miss the post-patch behavior. Use \`mode: taint\` with explicit \`pattern-sources\`, \`pattern-sinks\`, and (where applicable) \`pattern-sanitizers\`. Keep the rule narrow: pattern variables are fine, but avoid matching every call to the package's public surface.`,
+    ``,
+    `# Reference — well-formed taint rule shape`,
+    `Your rule_yaml MUST follow this top-level structure. EVERY field in the example below is REQUIRED — Semgrep will reject rules missing \`message\` (or any other required key). \`mode: taint\` is REQUIRED whenever the rule uses pattern-sources/pattern-sinks. \`pattern-sources\` and \`pattern-sinks\` are TOP-LEVEL keys on the rule, NOT nested inside a \`patterns\` array.`,
+    '```yaml',
+    `rules:`,
+    `  - id: deptex.<package>.<slug>`,
+    `    languages: [${lang}]`,
+    `    severity: ERROR        # one of: ERROR, WARNING, INFO`,
+    `    message: <one-sentence description of the vulnerability the rule catches>`,
+    `    mode: taint`,
+    `    metadata:`,
+    `      cve: <CVE-id>`,
+    `      package: <package>`,
+    `      ecosystem: ${args.ecosystem}`,
+    `      affected_versions: <range>`,
+    `      reachability_level: confirmed`,
+    `      entry_point_class: PUBLIC_UNAUTH`,
+    `    pattern-sources:`,
+    `      - pattern: $REQ.body`,
+    `      - pattern: $REQ.query`,
+    `    pattern-sinks:`,
+    `      - pattern: dangerous_api($X)`,
+    '```',
+    `Do NOT use Semgrep features that aren't in the reference shape: no \`fix-regex\`, no \`metavariable-comparison\` with Python \`import re\` blocks, no nested \`patterns -> pattern-sources\`. Stick to plain \`pattern\` / \`pattern-either\` / \`pattern-not\` inside each source/sink/sanitizer entry. If you want regex-based metavariable filtering, use \`metavariable-regex\` (NOT \`metavariable-comparison\` with Python). NEVER omit the \`message\` field.`,
     ``,
     `Constraints:`,
     `- The rule's primary language must be \`${lang}\` (\`languages: [${lang}]\`).`,
