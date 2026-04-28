@@ -17,11 +17,11 @@ import { fetchOsvAdvisory, extractFixCommits, summarizeAffectedRange, OsvFetchEr
 import { fetchPatchInfo, PatchFetchError } from './patch-fetch';
 import { buildGenerationPrompt, getPromptVersion } from './prompt-builder';
 import { callProviderAndParse, GenerationError, type GeneratedPayload, type AiProviderName } from './generate';
-import { validateRule, makeRuleGenWorkdir, type ValidationLog } from './validate';
+import { validateRule, makeRuleGenWorkdir, type ValidationLog, type ValidationBreakdown } from './validate';
 import { loadFewShotExamples } from './few-shot-loader';
 
 export type { GeneratedPayload, AiProviderName };
-export type { ValidationLog };
+export type { ValidationLog, ValidationBreakdown };
 
 export type GenerationStatus =
   | 'validated'
@@ -78,7 +78,23 @@ export interface GenerationResult {
   outputTokens: number;
   errors: string[];
   promptVersion: string;
+  /** Per-CVE pass/fail at each validation gate. Populated for every result —
+   *  for pre-schema bails (no_advisory / fetch_failed / no_fix_commit) all
+   *  fields are false / null. Aggregated by rule-generation-step. */
+  validationBreakdown: ValidationBreakdown;
 }
+
+/** Breakdown for results that bailed before the AI call ever ran (no_advisory,
+ *  fetch_failed, no_fix_commit). Schema can't have passed because we never
+ *  asked the model. */
+const PRE_ATTEMPT_BREAKDOWN: ValidationBreakdown = {
+  schema_pass: false,
+  fixture_pre_match: false,
+  fixture_safe_clean: false,
+  patch_pre_match: null,
+  patch_post_clean: null,
+  semgrep_parse_error: null,
+};
 
 const DEFAULT_RESULT_BASE = (args: GenerateRuleForCveArgs): Omit<GenerationResult, 'status' | 'errors'> => ({
   cveId: args.cveId,
@@ -89,6 +105,7 @@ const DEFAULT_RESULT_BASE = (args: GenerateRuleForCveArgs): Omit<GenerationResul
   inputTokens: 0,
   outputTokens: 0,
   promptVersion: getPromptVersion(),
+  validationBreakdown: PRE_ATTEMPT_BREAKDOWN,
 });
 
 export async function generateRuleForCve(args: GenerateRuleForCveArgs): Promise<GenerationResult> {
@@ -215,6 +232,7 @@ export async function generateRuleForCve(args: GenerateRuleForCveArgs): Promise<
       inputTokens: providerResult.inputTokens,
       outputTokens: providerResult.outputTokens,
       errors: validation.log.errors,
+      validationBreakdown: validation.log.validation_breakdown,
     };
   } catch (err) {
     // Programmer bug, not a generation failure — surface explicitly.

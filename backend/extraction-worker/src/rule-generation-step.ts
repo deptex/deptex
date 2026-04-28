@@ -37,6 +37,7 @@ import {
   generateRuleForCve,
   type AiProviderName,
   type GenerationResult,
+  type ValidationBreakdown,
 } from './rule-generator';
 
 const STEP_NAME = 'rule_generation';
@@ -328,6 +329,7 @@ export async function runRuleGenerationStep(
   // --- 8. Persist validated rules + tally stats ---
   let generatedCount = 0;
   let totalCost = 0;
+  const breakdownAccumulator: ValidationBreakdown[] = [];
   for (const r of results) {
     if (r.skipped) {
       bumpReason(r.reason);
@@ -335,6 +337,7 @@ export async function runRuleGenerationStep(
       continue;
     }
     totalCost += r.result.costUsd;
+    breakdownAccumulator.push(r.result.validationBreakdown);
     if (r.result.status !== 'validated') {
       bumpReason(`status:${r.result.status}`);
       const errSummary = (r.result.errors ?? []).join(' | ').slice(0, 240);
@@ -350,6 +353,8 @@ export async function runRuleGenerationStep(
     const persisted = await persistGeneratedRule(supabase, organizationId, r.result, log);
     if (persisted) generatedCount++;
   }
+
+  const validationBreakdown = aggregateBreakdowns(breakdownAccumulator);
 
   const tookMs = Date.now() - stepStart;
   // Surface the same four counters we persist to extraction_jobs so a single
@@ -372,6 +377,7 @@ export async function runRuleGenerationStep(
       provider: settings.ai_provider,
       model: effectiveModel,
       skip_reasons: skipReasons,
+      validation_breakdown: validationBreakdown,
     },
   );
 
@@ -383,6 +389,7 @@ export async function runRuleGenerationStep(
     alreadyCovered,
     generatedThisScan: generatedCount,
     costUsd: totalCost,
+    validationBreakdown,
     log,
   });
 
@@ -655,6 +662,40 @@ async function persistGeneratedRule(
   }
 }
 
+export interface AggregatedValidationBreakdown {
+  candidates: number;
+  schema_pass: number;
+  fixture_pre_pass: number;
+  fixture_safe_pass: number;
+  patch_pre_pass: number;
+  patch_post_pass: number;
+}
+
+/**
+ * Roll up per-CVE breakdowns into a step-level funnel: how many candidates
+ * passed each successive gate. `patch_*_pass` only counts CVEs where patch
+ * validation actually ran (null means skipped, e.g. no applicable changed
+ * files), so a low count there is informational, not a regression signal.
+ */
+export function aggregateBreakdowns(breakdowns: ValidationBreakdown[]): AggregatedValidationBreakdown {
+  let schema = 0, fixturePre = 0, fixtureSafe = 0, patchPre = 0, patchPost = 0;
+  for (const b of breakdowns) {
+    if (b.schema_pass) schema++;
+    if (b.fixture_pre_match) fixturePre++;
+    if (b.fixture_safe_clean) fixtureSafe++;
+    if (b.patch_pre_match === true) patchPre++;
+    if (b.patch_post_clean === true) patchPost++;
+  }
+  return {
+    candidates: breakdowns.length,
+    schema_pass: schema,
+    fixture_pre_pass: fixturePre,
+    fixture_safe_pass: fixtureSafe,
+    patch_pre_pass: patchPre,
+    patch_post_pass: patchPost,
+  };
+}
+
 interface JobTelemetryArgs {
   supabase: Storage;
   jobId: string | undefined;
@@ -662,6 +703,7 @@ interface JobTelemetryArgs {
   alreadyCovered: number;
   generatedThisScan: number;
   costUsd: number;
+  validationBreakdown: AggregatedValidationBreakdown;
   log: LogLike;
 }
 
@@ -678,6 +720,7 @@ async function persistJobTelemetry(args: JobTelemetryArgs): Promise<void> {
         reachability_rules_matched: args.alreadyCovered + args.generatedThisScan,
         reachability_rules_generated_this_scan: args.generatedThisScan,
         reachability_generation_cost_usd: args.costUsd,
+        reachability_validation_breakdown: args.validationBreakdown,
       })
       .eq('id', args.jobId);
   } catch (err) {

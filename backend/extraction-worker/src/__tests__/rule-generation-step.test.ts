@@ -8,8 +8,9 @@
  * step's queries deterministically.
  */
 
-import { runRuleGenerationStep, type PipelineVulnRow } from '../rule-generation-step';
+import { runRuleGenerationStep, aggregateBreakdowns, type PipelineVulnRow } from '../rule-generation-step';
 import type { Storage } from '../storage';
+import type { ValidationBreakdown } from '../rule-generator';
 
 interface TableState {
   rows: any[];
@@ -510,6 +511,17 @@ describe('runRuleGenerationStep — telemetry persistence', () => {
       reachability_rules_matched: 0, // already_covered=0 + generated=0
       reachability_rules_generated_this_scan: 0,
       reachability_generation_cost_usd: 0,
+      // Both candidates' provider calls fail at the network layer; the inner
+      // provider_error catch returns a result with the pre-attempt breakdown
+      // (schema_pass=false). Funnel shows 2 candidates, 0 reaching schema.
+      reachability_validation_breakdown: {
+        candidates: 2,
+        schema_pass: 0,
+        fixture_pre_pass: 0,
+        fixture_safe_pass: 0,
+        patch_pre_pass: 0,
+        patch_post_pass: 0,
+      },
     });
     expect(result.generated).toBe(0);
   });
@@ -558,5 +570,75 @@ describe('runRuleGenerationStep — telemetry persistence', () => {
         model: 'claude-sonnet-4-6',
       }),
     );
+  });
+});
+
+describe('aggregateBreakdowns — funnel rollup', () => {
+  // Convenience for tests that read better as named cases.
+  const b = (over: Partial<ValidationBreakdown> = {}): ValidationBreakdown => ({
+    schema_pass: false,
+    fixture_pre_match: false,
+    fixture_safe_clean: false,
+    patch_pre_match: null,
+    patch_post_clean: null,
+    semgrep_parse_error: null,
+    ...over,
+  });
+
+  it('returns all-zero counts on an empty input', () => {
+    expect(aggregateBreakdowns([])).toEqual({
+      candidates: 0,
+      schema_pass: 0,
+      fixture_pre_pass: 0,
+      fixture_safe_pass: 0,
+      patch_pre_pass: 0,
+      patch_post_pass: 0,
+    });
+  });
+
+  it('counts candidates as the input length, regardless of pass/fail', () => {
+    const out = aggregateBreakdowns([b(), b(), b()]);
+    expect(out.candidates).toBe(3);
+  });
+
+  it('only counts patch_*_pass when the underlying field is true (null is skip, not fail)', () => {
+    const out = aggregateBreakdowns([
+      b({ patch_pre_match: true,  patch_post_clean: true }),  // counted
+      b({ patch_pre_match: false, patch_post_clean: false }), // not counted (false)
+      b({ patch_pre_match: null,  patch_post_clean: null }),  // not counted (skipped)
+    ]);
+    expect(out.patch_pre_pass).toBe(1);
+    expect(out.patch_post_pass).toBe(1);
+  });
+
+  it('rolls up all six counters across mixed rows', () => {
+    const out = aggregateBreakdowns([
+      // Fully validated row
+      b({
+        schema_pass: true,
+        fixture_pre_match: true,
+        fixture_safe_clean: true,
+        patch_pre_match: true,
+        patch_post_clean: true,
+      }),
+      // Fixture FP — rule too broad, fires on safe code
+      b({
+        schema_pass: true,
+        fixture_pre_match: true,
+        fixture_safe_clean: false,
+        patch_pre_match: null,
+        patch_post_clean: null,
+      }),
+      // Schema fail — never reached fixtures
+      b({}),
+    ]);
+    expect(out).toEqual({
+      candidates: 3,
+      schema_pass: 2,
+      fixture_pre_pass: 2,
+      fixture_safe_pass: 1,
+      patch_pre_pass: 1,
+      patch_post_pass: 1,
+    });
   });
 });
