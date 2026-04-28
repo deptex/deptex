@@ -23,7 +23,6 @@ jobs:
               - 'backend/extraction-worker/**'
             fix:
               - 'backend/fix-worker/**'
-              - 'fly.fix-worker.toml'
 
   deploy-extraction:
     name: Deploy extraction-worker
@@ -52,6 +51,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - run: flyctl deploy --remote-only --config fly.fix-worker.toml
+      - run: flyctl deploy --remote-only
+        working-directory: backend/fix-worker
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
