@@ -73,6 +73,85 @@ describe('osv-fetch helpers', () => {
       const empty: OsvAdvisory = { ...advisory, references: [{ type: 'ADVISORY', url: 'https://nvd.nist.gov/vuln/detail/CVE-2021-23337' }] };
       expect(extractFixCommits(empty)).toEqual([]);
     });
+
+    it('falls back to affected[].ranges[] of type GIT when references have no commit URL', () => {
+      // Real-world shape from OSV CVE-2021-23337 — references contain no
+      // github.com commit URLs (only oracle/siemens/blob URLs), but the
+      // affected GIT range carries the fix SHAs.
+      const advisory: OsvAdvisory = {
+        id: 'CVE-2021-23337',
+        aliases: [],
+        summary: '',
+        details: '',
+        references: [
+          { type: 'WEB', url: 'https://github.com/lodash/lodash/blob/abcdef/lodash.js#L1' },
+          { type: 'FIX', url: 'https://www.oracle.com/security-alerts/cpujul2021.html' },
+        ],
+        affected: [
+          {
+            ranges: [
+              {
+                type: 'GIT',
+                repo: 'https://github.com/lodash/lodash',
+                events: [
+                  { introduced: '0' },
+                  { fixed: 'c6e281b878b315c7a10d90f9c2af4cdb112d9625' },
+                  { introduced: '0' },
+                  { fixed: '506f585d78d236075f5d47b240518f3e1fdf5811' },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+      const commits = extractFixCommits(advisory);
+      expect(commits.length).toBe(2);
+      expect(commits[0].owner).toBe('lodash');
+      expect(commits[0].repo).toBe('lodash');
+      expect(commits[0].sha).toBe('c6e281b878b315c7a10d90f9c2af4cdb112d9625');
+      expect(commits[1].sha).toBe('506f585d78d236075f5d47b240518f3e1fdf5811');
+    });
+
+    it('explicit FIX references still rank ahead of GIT-range SHAs', () => {
+      const advisory: OsvAdvisory = {
+        id: 'X', aliases: [], summary: '', details: '',
+        references: [
+          { type: 'FIX', url: 'https://github.com/owner/repo/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+        ],
+        affected: [
+          {
+            ranges: [
+              {
+                type: 'GIT',
+                repo: 'https://github.com/owner/repo',
+                events: [{ introduced: '0' }, { fixed: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' }],
+              },
+            ],
+          },
+        ],
+      };
+      const commits = extractFixCommits(advisory);
+      expect(commits.length).toBe(2);
+      expect(commits[0].sha).toBe('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+      expect(commits[1].sha).toBe('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+    });
+
+    it('skips non-github GIT range repos and malformed SHAs', () => {
+      const advisory: OsvAdvisory = {
+        id: 'X', aliases: [], summary: '', details: '',
+        references: [],
+        affected: [
+          {
+            ranges: [
+              { type: 'GIT', repo: 'https://gitlab.com/x/y', events: [{ fixed: 'aaaaaaa' }] },
+              { type: 'GIT', repo: 'https://github.com/x/y', events: [{ fixed: 'not-a-sha' }] },
+              { type: 'SEMVER', events: [{ fixed: '1.0.0' }] },
+            ],
+          },
+        ],
+      };
+      expect(extractFixCommits(advisory)).toEqual([]);
+    });
   });
 
   describe('summarizeAffectedRange', () => {

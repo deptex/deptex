@@ -16,6 +16,8 @@ const REQUEST_TIMEOUT_MS = 15_000;
 
 export interface OsvAffectedRange {
   type?: string;
+  /** Set when type === 'GIT'. Origin URL of the upstream repo. */
+  repo?: string;
   events?: Array<{ introduced?: string; fixed?: string; last_affected?: string }>;
 }
 
@@ -114,17 +116,23 @@ export async function fetchOsvAdvisory(cveId: string, signal?: AbortSignal): Pro
 }
 
 /**
- * Walk the references array and pull every github.com commit URL. We prefer
- * `type=FIX` references but fall back to any commit URL — some OSV entries
- * tag the patch commit only as `WEB`. Returned in OSV order (the entries are
- * already roughly chronological).
+ * Pull every fix-commit candidate from the advisory. Sources, in priority order:
+ *   1. references with type === 'FIX' that point at a github.com commit URL
+ *   2. references with any other type (WEB, ADVISORY...) that happen to be
+ *      github.com commit URLs
+ *   3. affected[].ranges[] of type === 'GIT' whose `repo` is on github.com and
+ *      whose events include a `fixed: <sha>` entry. Many OSV advisories
+ *      (e.g. CVE-2021-23337 lodash) carry their fix SHAs only here, never as
+ *      a `references` URL — without this branch we'd reject the CVE as
+ *      `no_fix_commit` despite OSV knowing the exact commit.
+ *
+ * Deduped by `{owner}/{repo}@{sha}`. Returned in priority order.
  */
 export function extractFixCommits(advisory: OsvAdvisory): FixCommit[] {
   const out: FixCommit[] = [];
   const seen = new Set<string>();
 
-  const consider = (ref: OsvReference) => {
-    const parsed = parseGithubCommitUrl(ref.url);
+  const push = (parsed: FixCommit | null): void => {
     if (!parsed) return;
     const key = `${parsed.owner}/${parsed.repo}@${parsed.sha}`;
     if (seen.has(key)) return;
@@ -133,13 +141,40 @@ export function extractFixCommits(advisory: OsvAdvisory): FixCommit[] {
   };
 
   for (const ref of advisory.references) {
-    if (ref.type === 'FIX') consider(ref);
+    if (ref.type === 'FIX') push(parseGithubCommitUrl(ref.url));
   }
   for (const ref of advisory.references) {
-    if (ref.type !== 'FIX') consider(ref);
+    if (ref.type !== 'FIX') push(parseGithubCommitUrl(ref.url));
+  }
+
+  for (const aff of advisory.affected ?? []) {
+    for (const range of aff.ranges ?? []) {
+      if (range.type !== 'GIT') continue;
+      const repoOwnerRepo = parseGithubRepoUrl(range.repo);
+      if (!repoOwnerRepo) continue;
+      for (const event of range.events ?? []) {
+        const sha = event.fixed;
+        if (!sha || !/^[0-9a-f]{7,40}$/i.test(sha)) continue;
+        push({
+          url: `https://github.com/${repoOwnerRepo.owner}/${repoOwnerRepo.repo}/commit/${sha.toLowerCase()}`,
+          owner: repoOwnerRepo.owner,
+          repo: repoOwnerRepo.repo,
+          sha: sha.toLowerCase(),
+        });
+      }
+    }
   }
 
   return out;
+}
+
+const REPO_URL_RE = /^https?:\/\/(?:www\.)?github\.com\/([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i;
+
+function parseGithubRepoUrl(url: string | undefined): { owner: string; repo: string } | null {
+  if (!url) return null;
+  const m = url.match(REPO_URL_RE);
+  if (!m) return null;
+  return { owner: m[1], repo: m[2] };
 }
 
 const COMMIT_URL_RE = /^https?:\/\/(?:www\.)?github\.com\/([^/\s]+)\/([^/\s]+)\/commit\/([0-9a-f]{7,40})\b/i;

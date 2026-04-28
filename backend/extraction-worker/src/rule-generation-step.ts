@@ -330,11 +330,17 @@ export async function runRuleGenerationStep(
   for (const r of results) {
     if (r.skipped) {
       bumpReason(r.reason);
+      await log.warn(STEP_NAME, `${r.cveId}: skipped (${r.reason})`);
       continue;
     }
     totalCost += r.result.costUsd;
     if (r.result.status !== 'validated') {
       bumpReason(`status:${r.result.status}`);
+      const errSummary = (r.result.errors ?? []).join(' | ').slice(0, 240);
+      await log.warn(
+        STEP_NAME,
+        `${r.cveId}: status=${r.result.status}${errSummary ? ` errors=${errSummary}` : ''}`,
+      );
       // Persist the failed attempt too — gives the org a record they can
       // see in the Settings UI ("we tried this CVE, failed at validation").
       await persistGeneratedRule(supabase, organizationId, r.result, log);
@@ -692,6 +698,11 @@ function combinedSignal(outer: AbortSignal | undefined, inner: AbortSignal): Abo
 }
 
 export function makePlatformRulesDir(): string {
+  // Allow self-host / local-CLI testing to point at an empty dir so an
+  // already-shipped platform rule doesn't shadow the AI-generation path
+  // we're trying to exercise.
+  const override = process.env.DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR;
+  if (override && override.length > 0) return override;
   return path.resolve(__dirname, '..', 'reachability-rules');
 }
 
