@@ -2,15 +2,18 @@ import { LanguageModel } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { decryptApiKey } from '../ai/encryption';
 import { DEFAULT_MODELS } from '../ai/models';
 
+export type AIProvider = 'openai' | 'anthropic' | 'google';
+
 interface ProviderConfig {
-  providerType: 'openai' | 'anthropic' | 'google';
+  providerType: AIProvider;
   apiKey: string;
   model: string;
   baseURL?: string;
 }
+
+const DEFAULT_MONTHLY_COST_CAP_USD = 100;
 
 export function getLanguageModel(config: ProviderConfig): LanguageModel {
   switch (config.providerType) {
@@ -25,53 +28,54 @@ export function getLanguageModel(config: ProviderConfig): LanguageModel {
   }
 }
 
-export async function getLanguageModelForOrg(organizationId: string): Promise<LanguageModel> {
+export function getPlatformKeyForProvider(provider: AIProvider): string | undefined {
+  switch (provider) {
+    case 'openai':
+      return process.env.OPENAI_API_KEY;
+    case 'anthropic':
+      return process.env.ANTHROPIC_API_KEY;
+    case 'google':
+      return process.env.GOOGLE_AI_API_KEY;
+  }
+}
+
+function envVarFor(provider: AIProvider): string {
+  return provider === 'google' ? 'GOOGLE_AI_API_KEY' : `${provider.toUpperCase()}_API_KEY`;
+}
+
+async function getOrgDefaultProvider(organizationId: string): Promise<AIProvider> {
   const { supabase } = await import('../supabase');
+  const { data, error } = await supabase
+    .from('organizations')
+    .select('default_ai_provider')
+    .eq('id', organizationId)
+    .single();
+  if (error) throw new Error(`Failed to load organization: ${error.message}`);
+  return (data?.default_ai_provider as AIProvider) ?? 'anthropic';
+}
 
-  const { data: providers } = await supabase
-    .from('organization_ai_providers')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .order('is_default', { ascending: false })
-    .limit(1);
-
-  if (!providers?.length) {
+export async function getLanguageModelForOrg(organizationId: string): Promise<LanguageModel> {
+  const provider = await getOrgDefaultProvider(organizationId);
+  const apiKey = getPlatformKeyForProvider(provider);
+  if (!apiKey) {
     throw new Error(
-      'No AI provider configured. Set up a provider in Organization Settings > AI Configuration.'
+      `Platform API key for ${provider} is not configured. Set ${envVarFor(provider)} on the backend, or pick a different provider in Organization Settings > AI.`
     );
   }
-
-  const row = providers[0];
-  const apiKey = decryptApiKey(row.encrypted_api_key, row.encryption_key_version);
-  const model = row.model_preference || DEFAULT_MODELS[row.provider as keyof typeof DEFAULT_MODELS];
-
-  return getLanguageModel({
-    providerType: row.provider as ProviderConfig['providerType'],
-    apiKey,
-    model,
-  });
+  const model = DEFAULT_MODELS[provider];
+  return getLanguageModel({ providerType: provider, apiKey, model });
 }
 
 export async function getProviderInfoForOrg(organizationId: string): Promise<{
-  provider: string;
+  provider: AIProvider;
   model: string;
   monthlyCostCap: number;
-} | null> {
-  const { supabase } = await import('../supabase');
-
-  const { data: providers } = await supabase
-    .from('organization_ai_providers')
-    .select('provider, model_preference, monthly_cost_cap, is_default')
-    .eq('organization_id', organizationId)
-    .order('is_default', { ascending: false })
-    .limit(1);
-
-  if (!providers?.length) return null;
-  const row = providers[0];
+}> {
+  const provider = await getOrgDefaultProvider(organizationId);
   return {
-    provider: row.provider,
-    model: row.model_preference || DEFAULT_MODELS[row.provider as keyof typeof DEFAULT_MODELS],
-    monthlyCostCap: row.monthly_cost_cap ?? 100,
+    provider,
+    model: DEFAULT_MODELS[provider],
+    monthlyCostCap: DEFAULT_MONTHLY_COST_CAP_USD,
   };
 }
 

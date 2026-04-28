@@ -75,7 +75,7 @@ export async function logChatUsage(params: {
       organizationId: params.organizationId,
       userId: params.userId,
       feature: 'aegis_chat_v3',
-      tier: 'byok',
+      tier: 'platform',
       provider: providerInfo?.provider || 'unknown',
       model: providerInfo?.model || 'unknown',
       inputTokens: params.promptTokens,
