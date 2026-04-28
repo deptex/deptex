@@ -4,14 +4,24 @@
  *   2. Fixture round-trip — rule MUST hit vulnerable_fixture, must NOT hit
  *      safe_fixture. This is a cheap local sanity check that catches the
  *      "rule matches nothing" / "rule matches everything" failure modes.
- *   3. Diff-targeted patch round-trip — autogrep-style: run Semgrep against
+ *   3. Diff-targeted patch round-trip — autogrep-inspired: run Semgrep against
  *      each changed file's pre-patch (`before`) and post-patch (`after`)
- *      blob from the OSV fix commit. Across the file set, the rule MUST
- *      have ≥1 pre-patch hit and 0 post-patch hits. We use the per-file
- *      blobs already fetched by patch-fetch.ts — no clone needed. This is
- *      strictly better than whole-repo cloning for application-level rules:
- *      the rule is judged exactly on the lines the patch touched, not on
- *      tens of thousands of unrelated files.
+ *      blob from the OSV fix commit. We use the per-file blobs already
+ *      fetched by patch-fetch.ts — no clone needed.
+ *
+ * Patch round-trip semantics (note: relaxed from the autogrep paper):
+ *   - `patch_post_clean` (post-fix matches must be 0) — HARD gate. If the
+ *     rule fires on the fixed code, the rule is wrong by definition: it's
+ *     matching code that the upstream maintainers consider safe.
+ *   - `patch_pre_match` (≥1 pre-fix match across changed files) — ADVISORY.
+ *     We generate app-callsite-aware rules whose sources are HTTP request
+ *     shapes (`req.body`) and whose sinks are user-side calls
+ *     (`_.toNumber($INPUT)`). Library-internal patches (e.g. lodash fixing
+ *     a regex inside `_.toNumber`'s implementation) don't contain any
+ *     `req.*` callers, so a correctly-shaped app-callsite rule will
+ *     legitimately get pre_match=0 against such patches. Treating that as
+ *     a hard fail is structurally wrong for our use case. We log it for
+ *     telemetry / future prompt iteration but don't block validation.
  *
  * Step (3) is gated behind `args.runPatchValidation`. When skipped (no
  * applicable changed files in the rule's language, or explicitly disabled),
@@ -225,7 +235,15 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
     }
   }
   if (patchPre !== null && patchPost !== null) {
-    if (patchPre <= 0) errors.push(`patch_round_trip_failed: pre-patch matches=${patchPre} (require ≥1)`);
+    // patch_pre_match is advisory only — see file header. App-callsite rules
+    // legitimately get pre_match=0 against library-internal patches, and
+    // failing on that excludes exactly the rules we want. Surface it through
+    // patch_validation_skipped_reason so telemetry still captures the signal.
+    if (patchPre <= 0 && !patchSkipReason) {
+      patchSkipReason = 'patch_pre_match_zero_advisory';
+    }
+    // patch_post_clean stays a hard gate: if the rule fires on the fixed
+    // code, the rule is matching what upstream considers safe.
     if (patchPost > 0) errors.push(`patch_round_trip_failed: post-patch matches=${patchPost} (require 0)`);
   }
 

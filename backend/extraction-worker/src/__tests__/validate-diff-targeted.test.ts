@@ -175,7 +175,7 @@ describe('validateRule (diff-targeted patch round-trip)', () => {
     expect(result.log.errors.some((e) => /post-patch matches=1/.test(e))).toBe(true);
   });
 
-  it('fails when patch pre-matches === 0 (rule does not catch the upstream fix shape)', async () => {
+  it('passes (advisory) when patch pre-matches === 0 — app-callsite rules legitimately miss library-internal patches', async () => {
     queueSemgrepResults([1, 0, 0, 0]);
     const result = await validateRule({
       payload: minimalPayload,
@@ -184,8 +184,25 @@ describe('validateRule (diff-targeted patch round-trip)', () => {
       changedFiles: [jsFile('lib/template.js', 'pre', 'post')],
       workDir,
     });
+    expect(result.status).toBe('validated');
+    expect(result.log.errors).toEqual([]);
+    expect(result.log.patch_pre_matches).toBe(0);
+    expect(result.log.patch_post_matches).toBe(0);
+    expect(result.log.patch_validation_skipped_reason).toBe('patch_pre_match_zero_advisory');
+  });
+
+  it('still fails when patch post-matches > 0 even if pre-matches === 0 (rule matches fixed code)', async () => {
+    queueSemgrepResults([1, 0, 0, 1]);
+    const result = await validateRule({
+      payload: minimalPayload,
+      cveId: 'CVE-XX',
+      ecosystem: 'npm',
+      changedFiles: [jsFile('lib/template.js', 'pre', 'post')],
+      workDir,
+    });
     expect(result.status).toBe('failed_validation');
-    expect(result.log.errors.some((e) => /pre-patch matches=0/.test(e))).toBe(true);
+    expect(result.log.errors.some((e) => /post-patch matches=1/.test(e))).toBe(true);
+    expect(result.log.errors.some((e) => /pre-patch/.test(e))).toBe(false);
   });
 
   it('skips patch validation when no applicable files (rename to image, deletion-only diff)', async () => {
@@ -246,10 +263,10 @@ describe('validateRule (diff-targeted patch round-trip)', () => {
     expect(result.log.patch_pre_matches).toBeNull();
   });
 
-  it('reports fixture failure even when patch validation also runs', async () => {
+  it('reports fixture failure cleanly when patch validation is advisory-only', async () => {
     // vuln matches 0 (rule too narrow) — fixture fails. Patch still runs
-    // because the fixture step didn't throw, and we want to surface ALL
-    // failure reasons to the rule author at once.
+    // because the fixture step didn't throw, but patch_pre=0 is advisory
+    // (see file header), so only the fixture failure shows up in errors.
     queueSemgrepResults([0, 0, 0, 0]);
     const result = await validateRule({
       payload: minimalPayload,
@@ -260,8 +277,8 @@ describe('validateRule (diff-targeted patch round-trip)', () => {
     });
     expect(result.status).toBe('failed_validation');
     expect(result.log.errors.some((e) => /fixture_round_trip_failed/.test(e))).toBe(true);
-    // patch_pre=0 also gets surfaced, so the rule author sees both failures
-    expect(result.log.errors.some((e) => /pre-patch matches=0/.test(e))).toBe(true);
+    expect(result.log.errors.some((e) => /pre-patch/.test(e))).toBe(false);
+    expect(result.log.patch_validation_skipped_reason).toBe('patch_pre_match_zero_advisory');
   });
 
   it('honors runPatchValidation: false to skip the diff-targeted step', async () => {
