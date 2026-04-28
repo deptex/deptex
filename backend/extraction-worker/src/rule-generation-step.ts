@@ -297,6 +297,7 @@ export async function runRuleGenerationStep(
                 model: effectiveModel,
                 apiKey,
                 signal: combinedSignal(signal, innerSignal),
+                platformRulesDir: args.platformRulesDir,
               }),
             PER_CVE_TIMEOUT_MS,
             STEP_NAME,

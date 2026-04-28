@@ -18,6 +18,7 @@ import { fetchPatchInfo, PatchFetchError } from './patch-fetch';
 import { buildGenerationPrompt, getPromptVersion } from './prompt-builder';
 import { callProviderAndParse, GenerationError, type GeneratedPayload, type AiProviderName } from './generate';
 import { validateRule, makeRuleGenWorkdir, type ValidationLog } from './validate';
+import { loadFewShotExamples } from './few-shot-loader';
 
 export type { GeneratedPayload, AiProviderName };
 export type { ValidationLog };
@@ -54,6 +55,13 @@ export interface GenerateRuleForCveArgs {
   /** Override the working directory for clones + temp files. Default:
    *  fresh os.tmpdir() subdir. */
   workDir?: string;
+  /** Path to the platform reachability-rules directory. When provided, the
+   *  prompt is augmented with up to 3 hand-authored rules from this corpus
+   *  matched on ecosystem (falls back to other ecosystems). Omit to skip the
+   *  few-shot section. */
+  platformRulesDir?: string;
+  /** Override how many few-shot examples to inline. Default: 3. */
+  fewShotCount?: number;
 }
 
 export interface GenerationResult {
@@ -134,6 +142,17 @@ export async function generateRuleForCve(args: GenerateRuleForCveArgs): Promise<
     }
 
     // --- 3. Build prompt ---
+    const fewShotK = args.fewShotCount ?? 3;
+    // Request K+1 so we can drop the target CVE's own example (if it's in the
+    // corpus) without dropping below the budget. rule-generation-step.ts
+    // already filters out already-covered CVEs upstream so this should be
+    // rare, but the leak guard is cheap.
+    const fewShotExamples = args.platformRulesDir
+      ? loadFewShotExamples(args.platformRulesDir, args.ecosystem, fewShotK + 1)
+          .filter((ex) => ex.cveId !== args.cveId)
+          .slice(0, fewShotK)
+      : [];
+
     const prompt = buildGenerationPrompt({
       cveId: args.cveId,
       packagePurl: args.packagePurl,
@@ -144,6 +163,7 @@ export async function generateRuleForCve(args: GenerateRuleForCveArgs): Promise<
       osvDetails: advisory.details,
       patchDiff: patchInfo.diff,
       changedFiles: patchInfo.changedFiles,
+      fewShotExamples,
     });
 
     // --- 4. Call provider + Zod validate ---
