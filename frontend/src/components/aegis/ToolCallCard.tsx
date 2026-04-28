@@ -46,7 +46,7 @@ export function ToolCallCard({ toolName, state, input, output, errorText }: Tool
         {state === 'error' && <AlertCircle className="h-3 w-3" />}
       </button>
       {expanded && (
-        <div className="mt-1.5 ml-3 border-l border-border pl-3 space-y-2">
+        <div className="mt-1.5 pl-4 space-y-2">
           {input !== undefined && (
             <div>
               <div className="text-[10px] uppercase tracking-wider text-foreground-secondary/80 mb-1">Input</div>
