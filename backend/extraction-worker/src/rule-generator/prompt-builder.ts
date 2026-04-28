@@ -16,6 +16,7 @@
  */
 
 import type { ChangedFileBlob } from './patch-fetch';
+import type { FewShotExample } from './few-shot-loader';
 
 export interface BuildPromptArgs {
   cveId: string;
@@ -27,12 +28,16 @@ export interface BuildPromptArgs {
   osvDetails: string;
   patchDiff: string;
   changedFiles: ChangedFileBlob[];
+  /** Reference rules from the platform corpus that already validated. Inlined
+   *  under "Reference rules that previously validated" to anchor the AI on the
+   *  shape we expect (taint mode, sources/sinks, fixture style). */
+  fewShotExamples?: FewShotExample[];
   /** When true, include a smaller subset of changed-file content. Used by
    *  generate.ts when the first attempt blew the model's context window. */
   compact?: boolean;
 }
 
-const PROMPT_VERSION = 'rulegen-v2';
+const PROMPT_VERSION = 'rulegen-v3';
 
 export function getPromptVersion(): string {
   return PROMPT_VERSION;
@@ -61,6 +66,7 @@ export function buildGenerationPrompt(args: BuildPromptArgs): string {
   const blobBudget = args.compact ? 8_000 : 20_000;
 
   const filesSection = args.changedFiles.slice(0, fileBudget).map((f) => renderFile(f, blobBudget)).join('\n\n');
+  const fewShotSection = renderFewShotSection(args.fewShotExamples ?? [], args.compact === true);
 
   return [
     `You are a senior application-security engineer writing a Semgrep taint-tracking rule for a real, published CVE patch.`,
@@ -82,6 +88,7 @@ export function buildGenerationPrompt(args: BuildPromptArgs): string {
     `# Changed source files (before / after)`,
     filesSection || '(none included — diff above is the only source signal)',
     ``,
+    ...(fewShotSection ? [fewShotSection, ``] : []),
     `# Your task`,
     `Generate a Semgrep rule that **matches code that calls the vulnerable API** in a way the patch fixes — i.e. the rule must hit the pre-patch behavior and miss the post-patch behavior. Use \`mode: taint\` with explicit \`pattern-sources\`, \`pattern-sinks\`, and (where applicable) \`pattern-sanitizers\`. Keep the rule narrow: pattern variables are fine, but avoid matching every call to the package's public surface.`,
     ``,
@@ -161,4 +168,44 @@ function oneLine(s: string): string {
 function truncate(s: string, n: number): string {
   if (!s) return '';
   return s.length <= n ? s : s.slice(0, n);
+}
+
+/**
+ * Inline a handful of pre-validated rules so the AI mirrors the style we
+ * expect. Each example renders as: `## Example N: CVE (package, ecosystem)`,
+ * the rule YAML in a fenced block, then the vulnerable + safe fixtures with
+ * their own fences. Per-example fixtures are capped so the section never
+ * dominates the prompt.
+ */
+function renderFewShotSection(examples: FewShotExample[], compact: boolean): string {
+  if (examples.length === 0) return '';
+
+  const fixtureBudget = compact ? 600 : 1_200;
+
+  const blocks = examples.map((ex, i) => {
+    const ruleYaml = truncate(ex.ruleYaml.trimEnd(), compact ? 1_500 : 3_000);
+    const vulnerable = truncate(ex.vulnerableFixture.trimEnd(), fixtureBudget);
+    const safe = truncate(ex.safeFixture.trimEnd(), fixtureBudget);
+    return [
+      `## Example ${i + 1}: ${ex.cveId} (${ex.packageName}, ${ex.ecosystem})`,
+      '```yaml',
+      ruleYaml,
+      '```',
+      `Vulnerable fixture (rule SHOULD match):`,
+      '```',
+      vulnerable,
+      '```',
+      `Safe fixture (rule should NOT match):`,
+      '```',
+      safe,
+      '```',
+    ].join('\n');
+  });
+
+  return [
+    `# Reference rules that previously validated`,
+    `Below are ${examples.length === 1 ? '1 hand-authored rule' : `${examples.length} hand-authored rules`} that already passed both fixture and diff-targeted patch validation. Match this style: \`mode: taint\` with explicit \`pattern-sources\` / \`pattern-sinks\`, narrow patterns anchored on the package's public API, fixtures that contain just enough surrounding code to parse.`,
+    ``,
+    blocks.join('\n\n'),
+  ].join('\n');
 }

@@ -233,6 +233,52 @@ describe('prompt-builder', () => {
   it('getPromptVersion is non-empty', () => {
     expect(getPromptVersion()).toMatch(/^rulegen-v\d+/);
   });
+
+  it('omits the few-shot section when no examples provided', () => {
+    const prompt = buildGenerationPrompt({
+      cveId: 'CVE-2021-23337',
+      packagePurl: 'pkg:npm/lodash@4.17.20',
+      packageName: 'lodash',
+      ecosystem: 'npm',
+      osvSummary: '',
+      osvDetails: '',
+      patchDiff: '',
+      changedFiles: [],
+    });
+    expect(prompt).not.toContain('Reference rules that previously validated');
+  });
+
+  it('renders few-shot examples under a clear section header', () => {
+    const prompt = buildGenerationPrompt({
+      cveId: 'CVE-2099-NEW',
+      packagePurl: 'pkg:npm/widget@1.0.0',
+      packageName: 'widget',
+      ecosystem: 'npm',
+      osvSummary: 'something bad',
+      osvDetails: '',
+      patchDiff: '',
+      changedFiles: [],
+      fewShotExamples: [
+        {
+          cveId: 'CVE-2021-23337',
+          packageName: 'lodash',
+          ecosystem: 'npm',
+          ruleYaml: 'rules:\n  - id: deptex.lodash.template\n    languages: [javascript]',
+          vulnerableFixture: '_.template(req.body.x)',
+          safeFixture: '_.template("static")',
+          totalLoc: 4,
+        },
+      ],
+    });
+    expect(prompt).toContain('# Reference rules that previously validated');
+    expect(prompt).toContain('CVE-2021-23337');
+    expect(prompt).toContain('deptex.lodash.template');
+    expect(prompt).toContain('_.template(req.body.x)');
+    expect(prompt).toContain('_.template("static")');
+    // Must come BEFORE "Your task" so the AI reads the examples first.
+    expect(prompt.indexOf('# Reference rules that previously validated'))
+      .toBeLessThan(prompt.indexOf('# Your task'));
+  });
 });
 
 describe('generate.parseAndValidate', () => {
