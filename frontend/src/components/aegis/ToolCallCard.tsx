@@ -141,27 +141,16 @@ export function ToolCallCard({ toolName, state, input, output, errorText }: Tool
         )}
       >
         <div className="overflow-hidden">
-          <div className="pt-2 pl-4 space-y-2">
-            {input !== undefined && (
-              <div>
-                <div className="mb-1 text-[10px] uppercase tracking-wider text-foreground-secondary/80">Input</div>
-                <DataCard data={input} />
-              </div>
-            )}
-            {state === 'error' && errorText && (
-              <div>
-                <div className="mb-1 text-[10px] uppercase tracking-wider text-destructive/80">Error</div>
-                <pre className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-[11px] text-destructive font-mono whitespace-pre-wrap break-words">
-                  {errorText}
-                </pre>
-              </div>
-            )}
-            {state === 'done' && output !== undefined && (
-              <div>
-                <div className="mb-1 text-[10px] uppercase tracking-wider text-foreground-secondary/80">Result</div>
-                <DataCard data={output} />
-              </div>
-            )}
+          <div className="pt-2 pl-4">
+            {state === 'error' && errorText ? (
+              <pre className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-[11px] text-destructive font-mono whitespace-pre-wrap break-words">
+                {errorText}
+              </pre>
+            ) : state === 'done' && output !== undefined ? (
+              <DataCard data={output} />
+            ) : input !== undefined ? (
+              <DataCard data={input} />
+            ) : null}
           </div>
         </div>
       </div>
