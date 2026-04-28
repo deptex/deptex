@@ -179,6 +179,36 @@ if [ -n "${DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR:-}" ]; then
   ENV_FLAGS+=(-e "DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR=$DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR")
 fi
 
+# OpenAI-compatible third-party hosts (DeepInfra, OpenRouter, Alibaba). When
+# DEPTEX_RULE_BASE_URL is set, the rule_generation step routes the openai-
+# style call to that host instead of api.openai.com. Forward the matching
+# host-specific API key by name; the in-container resolver picks the right
+# one based on which host the base URL points at. Like ANTHROPIC_API_KEY
+# above we use `-e VAR` (no =value) so secrets stay off docker's argv.
+if [ -n "${DEPTEX_RULE_BASE_URL:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_RULE_BASE_URL=$DEPTEX_RULE_BASE_URL")
+fi
+if [ -n "${DEEPINFRA_API_KEY:-}" ]; then
+  export DEEPINFRA_API_KEY
+  ENV_FLAGS+=(-e DEEPINFRA_API_KEY)
+fi
+if [ -n "${OPENROUTER_API_KEY:-}" ]; then
+  export OPENROUTER_API_KEY
+  ENV_FLAGS+=(-e OPENROUTER_API_KEY)
+fi
+if [ -n "${DASHSCOPE_API_KEY:-}" ]; then
+  export DASHSCOPE_API_KEY
+  ENV_FLAGS+=(-e DASHSCOPE_API_KEY)
+fi
+if [ -n "${OPENAI_API_KEY:-}" ]; then
+  export OPENAI_API_KEY
+  ENV_FLAGS+=(-e OPENAI_API_KEY)
+fi
+if [ -n "${GOOGLE_API_KEY:-}" ]; then
+  export GOOGLE_API_KEY
+  ENV_FLAGS+=(-e GOOGLE_API_KEY)
+fi
+
 # Forward a GitHub token (PAT or App installation) so patch-fetch hits the
 # 5000/hr authenticated rate limit instead of 60/hr anonymous. Without this,
 # busy local CLI sessions burn through the anon quota and every CVE fails
