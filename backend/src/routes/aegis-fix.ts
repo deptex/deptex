@@ -105,6 +105,7 @@ function shapeFixRow(row: FixRow) {
     planGeneratedAt: row.plan_generated_at,
     planBaseSha: row.plan_base_sha,
     planBaseBranch: row.plan_base_branch,
+    approvalToken: row.approval_token,
     approvedAt: row.approved_at,
     rejectedAt: row.rejected_at,
     prUrl: row.pr_url,
