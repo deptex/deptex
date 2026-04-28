@@ -15,18 +15,22 @@ export async function runTests(opts: {
   testCommand: string;
   logger: FixLogger;
   timeoutMs?: number;
+  extraEnv?: Record<string, string>;
 }): Promise<TestResult> {
-  const { workDir, testCommand, logger } = opts;
+  const { workDir, testCommand, logger, extraEnv } = opts;
   const timeoutMs = opts.timeoutMs ?? 5 * 60 * 1000;
 
   await logger.info('tests', `Running tests: ${testCommand}`);
   const startedAt = Date.now();
+
+  const env = { ...process.env, ...(extraEnv ?? {}) };
 
   const result = spawnSync('sh', ['-lc', testCommand], {
     cwd: workDir,
     encoding: 'utf-8',
     timeout: timeoutMs,
     maxBuffer: 10 * 1024 * 1024,
+    env,
   });
 
   const durationMs = Date.now() - startedAt;

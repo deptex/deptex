@@ -85,7 +85,7 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       return;
     }
 
-    await setupForLanguage({ workDir: sandbox.workDir, language: plan.language, logger });
+    const setup = await setupForLanguage({ workDir: sandbox.workDir, language: plan.language, logger });
 
     const model = await getLanguageModelForOrg(supabase, fullRow.organization_id);
 
@@ -108,6 +108,7 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       testCommand: plan.testCommand,
       logger,
       timeoutMs: Math.min(plan.wallClockBudgetSec * 1000, 10 * 60 * 1000),
+      extraEnv: setup.extraEnv,
     });
 
     if (!testResult.passed) {
@@ -126,6 +127,7 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
         testCommand: plan.testCommand,
         logger,
         timeoutMs: Math.min(plan.wallClockBudgetSec * 1000, 10 * 60 * 1000),
+        extraEnv: setup.extraEnv,
       });
       if (!testResult.passed) {
         throw new Error(`Tests still failing after one repair cycle (exit ${testResult.exitCode})`);
