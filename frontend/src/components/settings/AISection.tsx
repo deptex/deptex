@@ -61,8 +61,8 @@ const PROVIDERS: ProviderMeta[] = [
   {
     id: 'deepinfra',
     name: 'DeepInfra',
-    modelLabel: 'DeepSeek V3.1',
-    blurb: 'Open-weight (DeepSeek / Qwen3). Lowest cost per token.',
+    modelLabel: 'Qwen3 235B',
+    blurb: 'Open-weight (Qwen3 / DeepSeek). Lowest cost per token.',
     Icon: Zap,
   },
 ];

@@ -14,7 +14,7 @@ const DEFAULT_MODELS: Record<AIProvider, string> = {
   openai: 'gpt-4o',
   anthropic: 'claude-sonnet-4-5-20250929',
   google: 'gemini-2.5-pro',
-  deepinfra: 'deepseek-ai/DeepSeek-V3.1',
+  deepinfra: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
 };
 
 function getPlatformKey(provider: AIProvider): string | undefined {
