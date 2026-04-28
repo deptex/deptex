@@ -19,7 +19,8 @@
     "docker:prepare": "mkdir -p .schema && cp ../database/schema.sql .schema/schema.sql",
     "docker:build": "npm run docker:prepare && docker build -t deptex-cli:local .",
     "scan": "./bin/deptex-scan",
-    "test:fixtures": "tsx test/snapshot.ts"
+    "test:fixtures": "tsx test/snapshot.ts",
+    "bench:rule-generation": "tsx test/rule-generation-bench.ts"
   },
   "keywords": [
     "extraction",
