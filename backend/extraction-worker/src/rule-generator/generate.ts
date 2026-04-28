@@ -13,8 +13,10 @@ import { z } from 'zod';
 // 3 minutes accommodates slow serverless inference on big open-weight models
 // (DeepInfra cold-starts on Qwen3-235B / DeepSeek V3.1 commonly take 60-120s
 // for first-token). Anthropic and Gemini almost always reply in <30s but
-// using the same ceiling keeps the dispatch logic uniform.
-const REQUEST_TIMEOUT_MS = 180_000;
+// using the same ceiling keeps the dispatch logic uniform. Override via
+// DEPTEX_RULE_PROVIDER_TIMEOUT_MS for unusually large prompts (the iteration
+// harness runs ~85K-char prompts and routinely needs 4-5min on Qwen3-235B).
+const REQUEST_TIMEOUT_MS = Number(process.env.DEPTEX_RULE_PROVIDER_TIMEOUT_MS) || 180_000;
 
 export type AiProviderName = 'anthropic' | 'openai' | 'google';
 

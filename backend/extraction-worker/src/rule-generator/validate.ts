@@ -122,9 +122,19 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
   let stderrExcerpt: string | null = null;
 
   // --- 1. YAML parse + ruleId/language sanity ---
+  // Apply a deterministic quote-fixing pre-pass to rescue rules where the AI
+  // forgot to single-quote pattern values containing YAML-special characters
+  // ({}[]:,*?!|> or the Semgrep ellipsis ...). Empirically lifts Gemini's
+  // validation rate by ~+5pp on the npm corpus and is provider-agnostic. The
+  // pre-pass only rewrites `pattern:` lines; `message:` and other scalars are
+  // untouched. Rule_yaml that's already well-formed passes through unchanged.
+  const normalizedYaml = quotePatternsInYaml(args.payload.rule_yaml);
+  const normalizedPayload: GeneratedPayload = normalizedYaml === args.payload.rule_yaml
+    ? args.payload
+    : { ...args.payload, rule_yaml: normalizedYaml };
   let parsedRule: { id: string; language: string };
   try {
-    parsedRule = parseRuleYaml(args.payload.rule_yaml);
+    parsedRule = parseRuleYaml(normalizedPayload.rule_yaml);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
@@ -161,13 +171,13 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
   let fixturePost = 0;
   try {
     const ruleFile = path.join(fixtureRoot, 'rule.yml');
-    fs.writeFileSync(ruleFile, args.payload.rule_yaml, 'utf8');
+    fs.writeFileSync(ruleFile, normalizedPayload.rule_yaml, 'utf8');
     const vulnDir = path.join(fixtureRoot, 'vulnerable');
     const safeDir = path.join(fixtureRoot, 'safe');
     fs.mkdirSync(vulnDir, { recursive: true });
     fs.mkdirSync(safeDir, { recursive: true });
-    fs.writeFileSync(path.join(vulnDir, `index.${ext}`), args.payload.vulnerable_fixture, 'utf8');
-    fs.writeFileSync(path.join(safeDir, `index.${ext}`), args.payload.safe_fixture, 'utf8');
+    fs.writeFileSync(path.join(vulnDir, `index.${ext}`), normalizedPayload.vulnerable_fixture, 'utf8');
+    fs.writeFileSync(path.join(safeDir, `index.${ext}`), normalizedPayload.safe_fixture, 'utf8');
 
     const vulnRun = await runSemgrep({ ruleFile, target: vulnDir, signal: args.signal, semgrepBin: args.semgrepBin });
     const safeRun = await runSemgrep({ ruleFile, target: safeDir, signal: args.signal, semgrepBin: args.semgrepBin });
@@ -196,7 +206,7 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
         patchSkipReason = 'no_applicable_changed_files';
       } else {
         const result = await runDiffTargetedValidation({
-          ruleYaml: args.payload.rule_yaml,
+          ruleYaml: normalizedPayload.rule_yaml,
           files: applicable,
           language: parsedRule.language,
           workDir: args.workDir,
@@ -490,19 +500,53 @@ async function runSemgrep(args: RunSemgrepArgs): Promise<SemgrepRunResult> {
     // useless when a generated rule is malformed. Drop --quiet so we still
     // capture the real config-load error message; --metrics=off keeps the
     // network noise out.
-    const child = spawn(
-      semgrepBin,
-      [
+    //
+    // Docker fallback (DEPTEX_SEMGREP_DOCKER_IMAGE env): when set, run
+    // semgrep inside the named container instead of on the host. Required on
+    // Windows host where the Python launcher Semgrep is a non-functional stub
+    // — every scan returns exit=1 with no output. The deptex-cli image ships
+    // a working semgrep (1.160+), so we mount the workdir as /work and
+    // translate the rule + target paths into container space.
+    const dockerImage = process.env.DEPTEX_SEMGREP_DOCKER_IMAGE?.trim();
+    let cmd: string;
+    let cmdArgs: string[];
+    if (dockerImage) {
+      const common = commonAncestor(args.ruleFile, args.target);
+      const ruleInContainer = '/work/' + posixRelative(common, args.ruleFile);
+      const targetInContainer = '/work/' + posixRelative(common, args.target);
+      cmd = 'docker';
+      cmdArgs = [
+        'run', '--rm',
+        '-v', `${common}:/work`,
+        '--entrypoint', 'semgrep',
+        dockerImage,
+        'scan',
+        '--config', ruleInContainer,
+        '--json',
+        '--no-git-ignore',
+        '--metrics=off',
+        targetInContainer,
+      ];
+    } else {
+      cmd = semgrepBin;
+      cmdArgs = [
         'scan',
         '--config', args.ruleFile,
         '--json',
         '--no-git-ignore',
         '--metrics=off',
         args.target,
-      ],
+      ];
+    }
+    const child = spawn(
+      cmd,
+      cmdArgs,
       {
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: process.platform !== 'win32',
+        // Suppress Git-Bash path translation when invoking docker on Windows;
+        // the Linux paths we pass (/work/...) must reach docker verbatim.
+        env: dockerImage ? { ...process.env, MSYS_NO_PATHCONV: '1', MSYS2_ARG_CONV_EXCL: '*' } : process.env,
       },
     );
 
@@ -591,6 +635,100 @@ async function runSemgrep(args: RunSemgrepArgs): Promise<SemgrepRunResult> {
       }
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// YAML quote-fixer
+//
+// AI-generated rules frequently emit `pattern:` values containing characters
+// YAML treats as flow-mapping syntax (`{`, `}`, `[`, `]`, `:`, `,`, `&`, `*`,
+// `?`, `!`, `|`, `>`) or the Semgrep ellipsis `...`. The prompt warns about
+// this but models still forget on a fraction of cases. This pre-pass walks
+// the rule_yaml line-by-line and force-single-quotes any unquoted `pattern:`
+// scalar that contains those characters — recovering rules that would
+// otherwise fail YAML parse with "bad indentation of a mapping entry".
+//
+// Scope: only `pattern:` lines. `message:` and other scalars are left alone
+// (their YAML preserves block-scalar markers like `|` and `>-` that the rewrite
+// would corrupt). Block-scalar `pattern:` lines (rare) are skipped too.
+// ---------------------------------------------------------------------------
+
+const NEEDS_QUOTING = /[\{\}\[\]:,&*?!|>]|\.\.\./;
+
+function quotePatternsInYaml(yamlText: string): string {
+  const lines = yamlText.split(/\r?\n/);
+  const out: string[] = [];
+  const re = /^(\s*-?\s*pattern\s*:\s+)([^\r\n]*)$/;
+  for (const line of lines) {
+    const m = line.match(re);
+    if (!m) { out.push(line); continue; }
+    const head = m[1];
+    let value = m[2];
+    const t = value.trim();
+    // Empty / block-scalar markers: leave as-is.
+    if (t === '' || t === '|' || t === '>' || t === '|-' || t === '>-' || t === '|+' || t === '>+') {
+      out.push(line);
+      continue;
+    }
+    // Strip trailing inline comment so we don't quote it inside the value.
+    let comment = '';
+    const ci = findInlineCommentStart(value);
+    if (ci >= 0) {
+      comment = value.slice(ci);
+      value = value.slice(0, ci).trimEnd();
+    }
+    out.push(`${head}${quotePatternValue(value)}${comment ? '  ' + comment : ''}`);
+  }
+  return out.join('\n');
+}
+
+function quotePatternValue(raw: string): string {
+  const trimmed = raw.trimEnd();
+  if (trimmed.length === 0) return raw;
+  // Already quoted (single or double) — leave alone.
+  const first = trimmed[0];
+  const last = trimmed[trimmed.length - 1];
+  if ((first === "'" && last === "'") || (first === '"' && last === '"')) return raw;
+  if (!NEEDS_QUOTING.test(trimmed)) return raw;
+  // Single-quote it; inner single quotes are escaped as '' per YAML's
+  // single-quoted-scalar rules.
+  const inner = trimmed.replace(/'/g, "''");
+  const trailingWs = raw.slice(trimmed.length);
+  return `'${inner}'${trailingWs}`;
+}
+
+function findInlineCommentStart(s: string): number {
+  // Honor quote state — `#` inside a quoted scalar is not a comment.
+  let inS = false, inD = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === "'" && !inD) inS = !inS;
+    else if (ch === '"' && !inS) inD = !inD;
+    else if (ch === '#' && !inS && !inD) {
+      if (i === 0 || /\s/.test(s[i - 1])) return i;
+    }
+  }
+  return -1;
+}
+
+/** Longest common parent directory of two absolute paths. */
+function commonAncestor(a: string, b: string): string {
+  const segA = path.resolve(a).split(path.sep);
+  const segB = path.resolve(b).split(path.sep);
+  const out: string[] = [];
+  for (let i = 0; i < Math.min(segA.length, segB.length); i++) {
+    if (segA[i] !== segB[i]) break;
+    out.push(segA[i]);
+  }
+  // Strip the file basename if the common prefix included the full path of one
+  // of the inputs (e.g. ruleFile lives directly under target's parent).
+  const joined = out.join(path.sep);
+  return path.dirname(joined) === joined || /\.[^./]+$/.test(joined) ? path.dirname(joined) : joined;
+}
+
+/** Path relative from `from` to `to`, with platform separators normalised to '/'. */
+function posixRelative(from: string, to: string): string {
+  return path.relative(from, to).split(path.sep).filter(Boolean).join('/');
 }
 
 function sanitizeStderr(raw: string): string {
