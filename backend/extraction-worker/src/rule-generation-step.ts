@@ -558,7 +558,11 @@ async function defaultResolveApiKey(orgId: string, provider: AiProviderName): Pr
       return null;
     }
     const envKey = provider === 'anthropic' ? process.env.ANTHROPIC_API_KEY
-      : provider === 'google' ? process.env.GOOGLE_API_KEY
+      // Accept GOOGLE_AI_API_KEY (the Tier-1 platform key name in
+      // CLAUDE.md / backend/.env) as a fallback for plain GOOGLE_API_KEY.
+      // A self-host operator who already wired the platform AI key in
+      // shouldn't have to duplicate it.
+      : provider === 'google' ? (process.env.GOOGLE_API_KEY || process.env.GOOGLE_AI_API_KEY)
       : null;
     if (envKey) return envKey;
   }
