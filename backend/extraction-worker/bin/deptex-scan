@@ -157,6 +157,28 @@ if [ -n "${EPD_MAX_VULNS_PER_RUN:-}" ]; then
   ENV_FLAGS+=(-e "EPD_MAX_VULNS_PER_RUN=$EPD_MAX_VULNS_PER_RUN")
 fi
 
+# Phase 5 — per-org AI rule generation. The seed helper inserts an
+# organization_reachability_settings row only when DEPTEX_RULE_GENERATION_ENABLED=1
+# is set; the rule_generation pipeline step then picks up the BYOK key from
+# ANTHROPIC_API_KEY (forwarded above) via the same DEPTEX_LOCAL_CLI escape EPD
+# uses. DEPTEX_RULE_PROVIDER / DEPTEX_RULE_MODEL / DEPTEX_RULE_BUDGET_USD are
+# optional knobs for cheaper test runs (e.g. claude-haiku-4-5-20251001).
+if [ -n "${DEPTEX_RULE_GENERATION_ENABLED:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_RULE_GENERATION_ENABLED=$DEPTEX_RULE_GENERATION_ENABLED")
+fi
+if [ -n "${DEPTEX_RULE_PROVIDER:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_RULE_PROVIDER=$DEPTEX_RULE_PROVIDER")
+fi
+if [ -n "${DEPTEX_RULE_MODEL:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_RULE_MODEL=$DEPTEX_RULE_MODEL")
+fi
+if [ -n "${DEPTEX_RULE_BUDGET_USD:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_RULE_BUDGET_USD=$DEPTEX_RULE_BUDGET_USD")
+fi
+if [ -n "${DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR=$DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR")
+fi
+
 exec docker run --rm -i "${TTY_FLAG[@]}" "${USER_FLAG[@]}" "${ENV_FLAGS[@]}" \
   -v "$ABS_WS:/workspace" \
   -v "$ABS_OUT:/output" \
