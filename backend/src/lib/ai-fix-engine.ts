@@ -197,7 +197,7 @@ async function checkMaxAttempts(
 
 // ---------- Context gathering ----------
 
-async function gatherVulnerabilityContext(req: FixRequest): Promise<Record<string, any>> {
+export async function gatherVulnerabilityContext(req: FixRequest): Promise<Record<string, any>> {
   const ctx: Record<string, any> = {};
 
   if (req.vulnerabilityOsvId) {
@@ -270,7 +270,7 @@ async function gatherVulnerabilityContext(req: FixRequest): Promise<Record<strin
   return ctx;
 }
 
-async function gatherSemgrepContext(findingId: string, projectId: string): Promise<Record<string, any>> {
+export async function gatherSemgrepContext(findingId: string, projectId: string): Promise<Record<string, any>> {
   // Validate the semgrep finding belongs to the active extraction run before
   // pulling code context — stale findings from prior runs may reference files
   // that have moved or no longer exist on disk.
@@ -285,7 +285,7 @@ async function gatherSemgrepContext(findingId: string, projectId: string): Promi
   return data ? { semgrepFinding: data } : {};
 }
 
-async function gatherSecretContext(findingId: string, projectId: string): Promise<Record<string, any>> {
+export async function gatherSecretContext(findingId: string, projectId: string): Promise<Record<string, any>> {
   // Same Phase 19 contract as gatherSemgrepContext: validate the finding
   // belongs to the active extraction run before pulling code context.
 
