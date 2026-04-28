@@ -208,6 +208,10 @@ if [ -n "${GOOGLE_API_KEY:-}" ]; then
   export GOOGLE_API_KEY
   ENV_FLAGS+=(-e GOOGLE_API_KEY)
 fi
+if [ -n "${GOOGLE_AI_API_KEY:-}" ]; then
+  export GOOGLE_AI_API_KEY
+  ENV_FLAGS+=(-e GOOGLE_AI_API_KEY)
+fi
 
 # Forward a GitHub token (PAT or App installation) so patch-fetch hits the
 # 5000/hr authenticated rate limit instead of 60/hr anonymous. Without this,
