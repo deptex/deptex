@@ -16,7 +16,7 @@ import { runFixPipeline, FixPipelineError } from './executor';
 import { commitAndPushFix, openPullRequest } from './pr';
 import { FixLogger } from './logger';
 import { getLanguageModelForOrg } from './llm';
-import { isShipGateLanguage } from './plan-types';
+import { isLanguageEnabled, getEnabledLanguages } from './plan-types';
 
 const IDLE_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 5_000;
@@ -51,11 +51,18 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
 
     const plan = job.plan;
 
-    // Ship-gate guard. Stretch languages return failure with a clear message
-    // until M8 wires their bootstrap.
-    if (!isShipGateLanguage(plan.language)) {
-      await logger.error('init', `Language ${plan.language} not supported in v1 ship gate`);
-      await markFailed(supabase, job.id, `Language ${plan.language} not supported by Aegis Fix Agent v1`, 'unsupported_language');
+    // Language gate is read from LANGUAGE_GATE env (defaults to v1 ship gate
+    // js/ts/python/go). Stretch language bootstrap is wired in sandbox.ts but
+    // the gate stays closed by default — operator opens it explicitly.
+    if (!isLanguageEnabled(plan.language)) {
+      const enabled = getEnabledLanguages().join(', ');
+      await logger.error('init', `Language ${plan.language} not enabled (LANGUAGE_GATE=${enabled})`);
+      await markFailed(
+        supabase,
+        job.id,
+        `Language ${plan.language} not enabled on this fix-worker. Enabled: ${enabled}.`,
+        'unsupported_language',
+      );
       return;
     }
 

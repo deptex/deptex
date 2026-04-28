@@ -151,6 +151,75 @@ async function setupGo(workDir: string, logger: FixLogger): Promise<void> {
   execSync('go mod download', { ...EXEC_OPTS, cwd: workDir, timeout: 300_000 });
 }
 
+// Stretch-language bootstrap. None of these toolchains ship in the default
+// fix-worker Dockerfile yet — the operator opening LANGUAGE_GATE=...,java
+// is responsible for adding `mvn` / `gradle` / `bundle` / `composer` /
+// `cargo` / `dotnet` to the image. Each function fails fast with a clear
+// message if the toolchain isn't on PATH so the failure shows up in
+// extraction_logs instead of as a generic ENOENT.
+
+function requireBinary(name: string, suggestion: string): void {
+  try {
+    execSync(`command -v ${name}`, EXEC_OPTS);
+  } catch {
+    throw new Error(`${name} not installed in fix-worker image. ${suggestion}`);
+  }
+}
+
+async function setupJava(workDir: string, logger: FixLogger): Promise<void> {
+  // Maven is the most common; add Gradle later if needed.
+  if (fileExists(workDir, 'pom.xml')) {
+    requireBinary('mvn', 'Add Maven to backend/fix-worker/Dockerfile to enable Java fixes.');
+    await logger.info('setup', 'mvn -B -q dependency:resolve');
+    execSync('mvn -B -q dependency:resolve', { ...EXEC_OPTS, cwd: workDir, timeout: 600_000 });
+    return;
+  }
+  if (fileExists(workDir, 'build.gradle') || fileExists(workDir, 'build.gradle.kts')) {
+    requireBinary('gradle', 'Add Gradle to backend/fix-worker/Dockerfile to enable Java fixes.');
+    await logger.info('setup', 'gradle dependencies --quiet');
+    execSync('gradle dependencies --quiet', { ...EXEC_OPTS, cwd: workDir, timeout: 600_000 });
+    return;
+  }
+  await logger.warn('setup', 'No pom.xml or build.gradle found — skipping Java setup');
+}
+
+async function setupRuby(workDir: string, logger: FixLogger): Promise<void> {
+  if (!fileExists(workDir, 'Gemfile')) {
+    await logger.warn('setup', 'No Gemfile — skipping Ruby setup');
+    return;
+  }
+  requireBinary('bundle', 'Add Ruby + bundler to backend/fix-worker/Dockerfile to enable Ruby fixes.');
+  await logger.info('setup', 'bundle install --quiet');
+  execSync('bundle install --quiet', { ...EXEC_OPTS, cwd: workDir, timeout: 600_000 });
+}
+
+async function setupPhp(workDir: string, logger: FixLogger): Promise<void> {
+  if (!fileExists(workDir, 'composer.json')) {
+    await logger.warn('setup', 'No composer.json — skipping PHP setup');
+    return;
+  }
+  requireBinary('composer', 'Add PHP + composer to backend/fix-worker/Dockerfile to enable PHP fixes.');
+  await logger.info('setup', 'composer install --no-interaction --quiet');
+  execSync('composer install --no-interaction --quiet', { ...EXEC_OPTS, cwd: workDir, timeout: 600_000 });
+}
+
+async function setupRust(workDir: string, logger: FixLogger): Promise<void> {
+  if (!fileExists(workDir, 'Cargo.toml')) {
+    await logger.warn('setup', 'No Cargo.toml — skipping Rust setup');
+    return;
+  }
+  requireBinary('cargo', 'Add Rust toolchain to backend/fix-worker/Dockerfile to enable Rust fixes.');
+  await logger.info('setup', 'cargo fetch');
+  execSync('cargo fetch --quiet', { ...EXEC_OPTS, cwd: workDir, timeout: 600_000 });
+}
+
+async function setupCsharp(workDir: string, logger: FixLogger): Promise<void> {
+  // dotnet restore picks up .csproj / .sln automatically from the cwd.
+  requireBinary('dotnet', 'Add .NET SDK to backend/fix-worker/Dockerfile to enable C# fixes.');
+  await logger.info('setup', 'dotnet restore --nologo');
+  execSync('dotnet restore --nologo', { ...EXEC_OPTS, cwd: workDir, timeout: 600_000 });
+}
+
 export async function setupForLanguage(opts: {
   workDir: string;
   language: PlanLanguage;
@@ -166,6 +235,16 @@ export async function setupForLanguage(opts: {
     extraEnv = await setupPython(workDir, logger);
   } else if (language === 'go') {
     await setupGo(workDir, logger);
+  } else if (language === 'java') {
+    await setupJava(workDir, logger);
+  } else if (language === 'ruby') {
+    await setupRuby(workDir, logger);
+  } else if (language === 'php') {
+    await setupPhp(workDir, logger);
+  } else if (language === 'rust') {
+    await setupRust(workDir, logger);
+  } else if (language === 'csharp') {
+    await setupCsharp(workDir, logger);
   } else {
     await logger.warn('setup', `Language ${language} bootstrap not implemented; skipping setup.`);
   }
