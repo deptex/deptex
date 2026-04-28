@@ -60,7 +60,15 @@ export class OsvFetchError extends Error {
 }
 
 export async function fetchOsvAdvisory(cveId: string, signal?: AbortSignal): Promise<OsvAdvisory | null> {
-  const trimmed = cveId.trim();
+  return fetchOsvAdvisoryInner(cveId, signal, /* aliasDepth */ 0);
+}
+
+async function fetchOsvAdvisoryInner(
+  id: string,
+  signal: AbortSignal | undefined,
+  aliasDepth: number,
+): Promise<OsvAdvisory | null> {
+  const trimmed = id.trim();
   if (!trimmed) throw new OsvFetchError('unexpected', 'cveId is empty');
 
   const controller = new AbortController();
@@ -85,7 +93,28 @@ export async function fetchOsvAdvisory(cveId: string, signal?: AbortSignal): Pro
     clearTimeout(timer);
   }
 
-  if (res.status === 404) return null;
+  // OSV soft-404: HTTP 404 with a body like
+  //   {"code":5,"message":"Bug not found, but the following aliases were: GHSA-..."}
+  // Recent CVE-YYYY-NNNNN entries are often only indexed by their GHSA alias for
+  // a few weeks; without this branch every fresh CVE is rejected as no_advisory
+  // even when OSV has the data under another id. Cap at one alias hop to avoid
+  // pathological loops.
+  if (res.status === 404) {
+    if (aliasDepth >= 1) return null;
+    let aliasBody: unknown;
+    try {
+      aliasBody = await res.json();
+    } catch {
+      return null;
+    }
+    const aliasMessage =
+      aliasBody && typeof aliasBody === 'object' && typeof (aliasBody as Record<string, unknown>).message === 'string'
+        ? (aliasBody as Record<string, string>).message
+        : '';
+    const alias = extractFirstAliasFromMessage(aliasMessage);
+    if (!alias || alias.toUpperCase() === trimmed.toUpperCase()) return null;
+    return fetchOsvAdvisoryInner(alias, signal, aliasDepth + 1);
+  }
   if (!res.ok) {
     throw new OsvFetchError('network', `OSV returned ${res.status} for ${trimmed}`);
   }
@@ -113,6 +142,21 @@ export async function fetchOsvAdvisory(cveId: string, signal?: AbortSignal): Pro
     affected: Array.isArray(obj.affected) ? (obj.affected as OsvAffectedPackage[]) : [],
     references: Array.isArray(obj.references) ? (obj.references as OsvReference[]) : [],
   };
+}
+
+/**
+ * Extract the first GHSA / CVE alias from OSV's soft-404 message string.
+ * Format: "Bug not found, but the following aliases were: GHSA-xxxx-xxxx-xxxx"
+ * Sometimes contains a comma-separated list. We pick the first GHSA when
+ * present (most reliable id), else the first CVE.
+ */
+function extractFirstAliasFromMessage(msg: string): string | null {
+  if (!msg) return null;
+  const ghsa = msg.match(/GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}/i);
+  if (ghsa) return ghsa[0];
+  const cve = msg.match(/CVE-\d{4}-\d{4,7}/i);
+  if (cve) return cve[0];
+  return null;
 }
 
 /**
