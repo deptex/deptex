@@ -128,7 +128,8 @@ function hasRuleGenTelemetry(jobs: any[]): boolean {
     j?.reachability_rules_total_detectable != null
     || j?.reachability_rules_matched != null
     || j?.reachability_rules_generated_this_scan != null
-    || j?.reachability_generation_cost_usd != null,
+    || j?.reachability_generation_cost_usd != null
+    || j?.reachability_validation_breakdown != null,
   );
 }
 
@@ -141,12 +142,14 @@ function extractRuleGenTelemetry(jobs: any[]): unknown {
       rules_matched: j?.reachability_rules_matched ?? null,
       generated_this_scan: j?.reachability_rules_generated_this_scan ?? null,
       generation_cost_usd: j?.reachability_generation_cost_usd ?? null,
+      validation_breakdown: j?.reachability_validation_breakdown ?? null,
     }))
     .filter((j) =>
       j.rules_total_detectable !== null
       || j.rules_matched !== null
       || j.generated_this_scan !== null
-      || j.generation_cost_usd !== null,
+      || j.generation_cost_usd !== null
+      || j.validation_breakdown !== null,
     );
 }
 

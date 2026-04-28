@@ -236,7 +236,8 @@ CREATE TABLE IF NOT EXISTS public.extraction_jobs (
   reachability_rules_matched integer,
   reachability_rules_total_detectable integer,
   reachability_rules_generated_this_scan integer,
-  reachability_generation_cost_usd numeric(10,4)
+  reachability_generation_cost_usd numeric(10,4),
+  reachability_validation_breakdown jsonb
 );
 CREATE TABLE IF NOT EXISTS public.extraction_logs (
   id uuid NOT NULL DEFAULT gen_random_uuid(),

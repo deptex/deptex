@@ -55,6 +55,25 @@ export interface PerFileValidationBreakdown {
   post: number;
 }
 
+/**
+ * Funnel-style per-CVE summary of which validation gates passed. Aggregated
+ * across all candidates in a run by rule-generation-step into the
+ * `extraction_jobs.reachability_validation_breakdown` JSONB column.
+ *
+ * `schema_pass` is always true on a breakdown produced by validateRule —
+ * reaching validate means the AI's JSON already passed Zod. Pre-validate
+ * failure modes (parse_failed / invalid_schema / no_advisory etc.) get a
+ * synthesized breakdown in index.ts where schema_pass=false.
+ */
+export interface ValidationBreakdown {
+  schema_pass: boolean;
+  fixture_pre_match: boolean;
+  fixture_safe_clean: boolean;
+  patch_pre_match: boolean | null;
+  patch_post_clean: boolean | null;
+  semgrep_parse_error: string | null;
+}
+
 export interface ValidationLog {
   fixture_pre_matches: number;
   fixture_post_matches: number;
@@ -68,6 +87,8 @@ export interface ValidationLog {
    *  whenever patch validation actually ran (even with zero applicable files,
    *  in which case it's an empty array). */
   patch_per_file?: PerFileValidationBreakdown[];
+  /** Per-CVE pass/fail breakdown rolled up into step-level telemetry. */
+  validation_breakdown: ValidationBreakdown;
 }
 
 export interface ValidationResult {
@@ -95,6 +116,7 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
   try {
     parsedRule = parseRuleYaml(args.payload.rule_yaml);
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
     return {
       status: 'failed_validation',
       log: {
@@ -103,8 +125,20 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
         patch_pre_matches: null,
         patch_post_matches: null,
         semgrep_stderr_excerpt: null,
-        errors: [`yaml_parse: ${err instanceof Error ? err.message : String(err)}`],
+        errors: [`yaml_parse: ${msg}`],
         took_ms: Date.now() - start,
+        validation_breakdown: {
+          // Schema (Zod) passed upstream; the rule_yaml string itself is what
+          // failed to parse here, which is a separate downstream gate. Surface
+          // it through semgrep_parse_error so the funnel reflects "the YAML
+          // the AI emitted wasn't a valid Semgrep config".
+          schema_pass: true,
+          fixture_pre_match: false,
+          fixture_safe_clean: false,
+          patch_pre_match: null,
+          patch_post_clean: null,
+          semgrep_parse_error: msg.slice(0, 500),
+        },
       },
     };
   }
@@ -197,6 +231,14 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
 
   const status = errors.length === 0 && fixturePass ? 'validated' : 'failed_validation';
 
+  // Heuristic: if Semgrep emitted stderr AND the fixture didn't fire, the
+  // stderr is likely a rule-parse / config-load error rather than a benign
+  // deprecation warning. Surface a short excerpt for the funnel telemetry.
+  const looksLikeParseError =
+    !!stderrExcerpt &&
+    fixturePre === 0 &&
+    /(?:rule|yaml|config|invalid|parse)/i.test(stderrExcerpt);
+
   return {
     status,
     log: {
@@ -209,6 +251,14 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
       took_ms: Date.now() - start,
       patch_validation_skipped_reason: patchSkipReason,
       patch_per_file: patchPerFile,
+      validation_breakdown: {
+        schema_pass: true,
+        fixture_pre_match: fixturePre > 0,
+        fixture_safe_clean: fixturePost === 0,
+        patch_pre_match: patchPre === null ? null : patchPre > 0,
+        patch_post_clean: patchPost === null ? null : patchPost === 0,
+        semgrep_parse_error: looksLikeParseError ? stderrExcerpt!.slice(0, 500) : null,
+      },
     },
   };
 }
