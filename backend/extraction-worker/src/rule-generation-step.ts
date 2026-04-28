@@ -299,6 +299,7 @@ export async function runRuleGenerationStep(
                 apiKey,
                 signal: combinedSignal(signal, innerSignal),
                 platformRulesDir: args.platformRulesDir,
+                githubToken: resolveGithubToken(),
               }),
             PER_CVE_TIMEOUT_MS,
             STEP_NAME,
@@ -594,6 +595,20 @@ function decryptApiKey(encrypted: string, storedVersion: number): string {
     }
     throw new Error('Unable to decrypt BYOK key');
   }
+}
+
+/**
+ * Pull a GitHub token out of the worker's environment so patch-fetch can hit
+ * the api.github.com 5000/hr authenticated rate limit instead of the 60/hr
+ * anonymous one. Recognises GITHUB_TOKEN (standard for cloud workers wired
+ * with installation tokens), GITHUB_PAT (personal-access fallback used by
+ * the local CLI). Returns undefined if neither is set; the patch fetcher
+ * gracefully falls back to anonymous in that case, but a busy local dev loop
+ * burns through the 60/hr cap fast and surfaces as 403s on every CVE.
+ */
+function resolveGithubToken(): string | undefined {
+  const t = process.env.GITHUB_TOKEN || process.env.GITHUB_PAT;
+  return t && t.trim().length > 0 ? t.trim() : undefined;
 }
 
 async function persistGeneratedRule(

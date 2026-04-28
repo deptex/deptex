@@ -179,6 +179,22 @@ if [ -n "${DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR:-}" ]; then
   ENV_FLAGS+=(-e "DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR=$DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR")
 fi
 
+# Forward a GitHub token (PAT or App installation) so patch-fetch hits the
+# 5000/hr authenticated rate limit instead of 60/hr anonymous. Without this,
+# busy local CLI sessions burn through the anon quota and every CVE fails
+# with `patch_fetch: GitHub commit metadata returned 403`. Like
+# ANTHROPIC_API_KEY above we use `-e VAR` (no =value) to keep the secret off
+# docker's argv. GITHUB_TOKEN is the canonical name; GITHUB_PAT is accepted
+# as a fallback so a single env file works for both backend and CLI use.
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  export GITHUB_TOKEN
+  ENV_FLAGS+=(-e GITHUB_TOKEN)
+fi
+if [ -n "${GITHUB_PAT:-}" ]; then
+  export GITHUB_PAT
+  ENV_FLAGS+=(-e GITHUB_PAT)
+fi
+
 exec docker run --rm -i "${TTY_FLAG[@]}" "${USER_FLAG[@]}" "${ENV_FLAGS[@]}" \
   -v "$ABS_WS:/workspace" \
   -v "$ABS_OUT:/output" \
