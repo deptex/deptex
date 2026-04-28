@@ -173,12 +173,12 @@ export async function generateRuleForCve(args: GenerateRuleForCveArgs): Promise<
       };
     }
 
-    // --- 5. Validate (fixtures + optional patch round-trip) ---
+    // --- 5. Validate (fixtures + optional diff-targeted patch round-trip) ---
     const validation = await validateRule({
       payload: providerResult.payload,
       cveId: args.cveId,
       ecosystem: args.ecosystem,
-      fixCommit,
+      changedFiles: patchInfo.changedFiles,
       workDir,
       signal: args.signal,
       semgrepBin: args.semgrepBin,

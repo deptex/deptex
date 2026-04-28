@@ -4,15 +4,18 @@
  *   2. Fixture round-trip — rule MUST hit vulnerable_fixture, must NOT hit
  *      safe_fixture. This is a cheap local sanity check that catches the
  *      "rule matches nothing" / "rule matches everything" failure modes.
- *   3. Patch round-trip — clone the upstream repo at parent + fix SHA, run
- *      Semgrep on each tree. Pre-patch tree MUST have ≥1 hit; post-patch tree
- *      MUST have 0 hits. This is the autogrep-style validation that confirms
- *      the rule is actually CVE-specific (not just generic API matching).
+ *   3. Diff-targeted patch round-trip — autogrep-style: run Semgrep against
+ *      each changed file's pre-patch (`before`) and post-patch (`after`)
+ *      blob from the OSV fix commit. Across the file set, the rule MUST
+ *      have ≥1 pre-patch hit and 0 post-patch hits. We use the per-file
+ *      blobs already fetched by patch-fetch.ts — no clone needed. This is
+ *      strictly better than whole-repo cloning for application-level rules:
+ *      the rule is judged exactly on the lines the patch touched, not on
+ *      tens of thousands of unrelated files.
  *
- * Step (3) is gated behind `args.runPatchValidation`. When false (or when
- * cloning fails), we accept fixture validation alone — that's still strong
- * evidence the rule is well-formed. The pipeline can decide based on org
- * settings or runtime conditions whether to require the heavier check.
+ * Step (3) is gated behind `args.runPatchValidation`. When skipped (no
+ * applicable changed files in the rule's language, or explicitly disabled),
+ * fixture validation alone is sufficient.
  *
  * All temp files are torn down in finally blocks regardless of outcome.
  */
@@ -22,30 +25,34 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import * as yaml from 'js-yaml';
-import simpleGit from 'simple-git';
 import type { GeneratedPayload } from './generate';
-import type { FixCommit } from './osv-fetch';
+import type { ChangedFileBlob } from './patch-fetch';
 import { semgrepLanguageFor } from './prompt-builder';
 
 const SIGKILL_GRACE_MS = 10_000;
 const MAX_STDOUT = 32 * 1024 * 1024;
 const MAX_STDERR = 32 * 1024;
-const MAX_REPO_BYTES = 1024 * 1024 * 1024; // 1GB skip threshold per plan
-const CLONE_TIMEOUT_MS = 60_000;
 
 export interface ValidateRuleArgs {
   payload: GeneratedPayload;
   cveId: string;
   ecosystem: string;
-  /** When provided, validate.ts will additionally clone the repo at parent +
-   *  fix SHA and confirm the rule fires pre-patch and is silent post-patch. */
-  fixCommit?: FixCommit;
+  /** Per-file before/after blobs from the OSV fix commit (via patch-fetch).
+   *  When provided, validate.ts runs the rule against the pre-patch and
+   *  post-patch text of every applicable file and aggregates the matches. */
+  changedFiles?: ChangedFileBlob[];
   workDir: string;
   signal?: AbortSignal;
   semgrepBin?: string;
-  /** Run the heavier patch round-trip in addition to fixture round-trip.
-   *  Defaults to true when fixCommit is provided. */
+  /** Run the diff-targeted patch round-trip in addition to fixture round-trip.
+   *  Defaults to true when changedFiles is provided. */
   runPatchValidation?: boolean;
+}
+
+export interface PerFileValidationBreakdown {
+  path: string;
+  pre: number;
+  post: number;
 }
 
 export interface ValidationLog {
@@ -57,6 +64,10 @@ export interface ValidationLog {
   errors: string[];
   took_ms: number;
   patch_validation_skipped_reason?: string;
+  /** Per-file pre/post match counts from the diff-targeted run. Populated
+   *  whenever patch validation actually ran (even with zero applicable files,
+   *  in which case it's an empty array). */
+  patch_per_file?: PerFileValidationBreakdown[];
 }
 
 export interface ValidationResult {
@@ -65,7 +76,7 @@ export interface ValidationResult {
 }
 
 export class RuleValidationError extends Error {
-  readonly stage: 'yaml_parse' | 'fixture_run' | 'clone' | 'semgrep' | 'unexpected';
+  readonly stage: 'yaml_parse' | 'fixture_run' | 'patch_run' | 'semgrep' | 'unexpected';
 
   constructor(stage: RuleValidationError['stage'], message: string) {
     super(message);
@@ -126,27 +137,37 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
     safeRm(fixtureRoot);
   }
 
-  // --- 3. Patch round-trip (optional) ---
+  // --- 3. Diff-targeted patch round-trip (optional) ---
   let patchPre: number | null = null;
   let patchPost: number | null = null;
+  let patchPerFile: PerFileValidationBreakdown[] | undefined;
   let patchSkipReason: string | undefined;
 
-  const shouldRunPatch = (args.runPatchValidation ?? true) && !!args.fixCommit && errors.length === 0;
-  if (shouldRunPatch && args.fixCommit) {
+  const hasChangedFiles = !!args.changedFiles && args.changedFiles.length > 0;
+  const shouldRunPatch = (args.runPatchValidation ?? true) && hasChangedFiles && errors.length === 0;
+  if (shouldRunPatch && args.changedFiles) {
     try {
-      const result = await runPatchValidation({
-        ruleYaml: args.payload.rule_yaml,
-        fixCommit: args.fixCommit,
-        workDir: args.workDir,
-        signal: args.signal,
-        semgrepBin: args.semgrepBin,
-      });
-      patchPre = result.preMatches;
-      patchPost = result.postMatches;
-      if (!stderrExcerpt && result.stderr) stderrExcerpt = result.stderr;
+      const applicable = filterApplicableChangedFiles(args.changedFiles, parsedRule.language);
+      if (applicable.length === 0) {
+        patchSkipReason = 'no_applicable_changed_files';
+      } else {
+        const result = await runDiffTargetedValidation({
+          ruleYaml: args.payload.rule_yaml,
+          files: applicable,
+          language: parsedRule.language,
+          workDir: args.workDir,
+          signal: args.signal,
+          semgrepBin: args.semgrepBin,
+        });
+        patchPre = result.preMatches;
+        patchPost = result.postMatches;
+        patchPerFile = result.perFile;
+        if (!stderrExcerpt && result.stderr) stderrExcerpt = result.stderr;
+      }
     } catch (err) {
-      // Patch validation is best-effort — don't fail the whole rule on a
-      // clone or network blip. Surface the reason so authors can debug.
+      // Patch validation is best-effort — surface the reason but don't
+      // throw out of validateRule. The verdict logic below will treat null
+      // patch counts as "skipped" rather than failing the rule outright.
       const msg = err instanceof Error ? err.message : String(err);
       if (err instanceof RuleValidationError) {
         patchSkipReason = `${err.stage}: ${msg}`;
@@ -154,8 +175,8 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
         patchSkipReason = `unexpected: ${msg}`;
       }
     }
-  } else if (!args.fixCommit) {
-    patchSkipReason = 'no_fix_commit_provided';
+  } else if (!hasChangedFiles) {
+    patchSkipReason = 'no_changed_files_provided';
   } else if (errors.length > 0) {
     patchSkipReason = 'fixture_validation_failed';
   } else if (args.runPatchValidation === false) {
@@ -187,6 +208,7 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
       errors,
       took_ms: Date.now() - start,
       patch_validation_skipped_reason: patchSkipReason,
+      patch_per_file: patchPerFile,
     },
   };
 }
@@ -250,110 +272,131 @@ function safeRm(p: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Patch round-trip
+// Diff-targeted patch round-trip
+//
+// For each changed file in the rule's language with both `before` and `after`
+// blobs, we write the two snapshots to tmp files and run Semgrep against
+// each. Aggregate pre/post match counts decide the verdict: pass iff
+// preMatches > 0 and postMatches === 0.
+//
+// This replaced the previous clone-based path. Reasons:
+//   - App-level rules target callsite shapes (e.g. `_.template(req.body)`)
+//     that don't appear inside the upstream library repo. Whole-repo
+//     validation false-rejected such rules even when the rule was correct.
+//   - Network-free: no clone, no LFS, no submodules, no rate limits.
+//   - Bounded cost: changedFiles is already capped by patch-fetch.ts at
+//     8 files × 64KB, so worst-case validation is 16 small Semgrep runs.
 // ---------------------------------------------------------------------------
 
-interface PatchValidateArgs {
+interface DiffTargetedArgs {
   ruleYaml: string;
-  fixCommit: FixCommit;
+  files: ChangedFileBlob[];
+  language: string;
   workDir: string;
   signal?: AbortSignal;
   semgrepBin?: string;
 }
 
-async function runPatchValidation(args: PatchValidateArgs): Promise<{
+async function runDiffTargetedValidation(args: DiffTargetedArgs): Promise<{
   preMatches: number;
   postMatches: number;
+  perFile: PerFileValidationBreakdown[];
   stderr: string | null;
 }> {
-  const cloneRoot = fs.mkdtempSync(path.join(args.workDir, `rulegen-clone-`));
+  const root = fs.mkdtempSync(path.join(args.workDir, `rulegen-diff-`));
   try {
-    const repoUrl = `https://github.com/${args.fixCommit.owner}/${args.fixCommit.repo}.git`;
-
-    // Single shallow clone of the fix SHA, then a separate fetch to grab the
-    // parent SHA on top. simple-git supports `--depth=2` against a SHA so we
-    // get fix and parent in one round trip.
-    const repoDir = path.join(cloneRoot, 'repo');
-    const git = simpleGit();
-
-    await withClone(async () => {
-      await git.clone(repoUrl, repoDir, [
-        '--no-tags',
-        '--filter=blob:none',
-        '--no-checkout',
-        '--depth=2',
-      ]);
-    }, args.signal);
-
-    const repoSize = directorySizeBytes(repoDir);
-    if (repoSize > MAX_REPO_BYTES) {
-      throw new RuleValidationError('clone', `repo too large: ${Math.round(repoSize / 1024 / 1024)}MB > ${MAX_REPO_BYTES / 1024 / 1024}MB cap`);
-    }
-
-    const repoGit = simpleGit(repoDir);
-
-    // Fetch the specific commits in case the default clone didn't include
-    // them (the unstable depth heuristic varies by repo size).
-    try {
-      await repoGit.raw(['fetch', '--depth=2', 'origin', args.fixCommit.sha]);
-    } catch (err) {
-      throw new RuleValidationError('clone', `fetch fix SHA failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-
-    const ruleFile = path.join(cloneRoot, 'rule.yml');
+    const ruleFile = path.join(root, 'rule.yml');
     fs.writeFileSync(ruleFile, args.ruleYaml, 'utf8');
 
-    // Pre-patch tree
-    const parentSha = (await repoGit.raw(['rev-parse', `${args.fixCommit.sha}~1`])).trim();
-    await repoGit.checkout(parentSha);
-    const preRun = await runSemgrep({ ruleFile, target: repoDir, signal: args.signal, semgrepBin: args.semgrepBin });
+    const ext = sourceExtensionForLanguage(args.language);
+    let preTotal = 0;
+    let postTotal = 0;
+    let stderr: string | null = null;
+    const perFile: PerFileValidationBreakdown[] = [];
 
-    // Post-patch tree
-    await repoGit.checkout(args.fixCommit.sha);
-    const postRun = await runSemgrep({ ruleFile, target: repoDir, signal: args.signal, semgrepBin: args.semgrepBin });
+    for (let i = 0; i < args.files.length; i++) {
+      const file = args.files[i];
+      const before = file.before ?? '';
+      const after = file.after ?? '';
 
-    return {
-      preMatches: preRun.matches,
-      postMatches: postRun.matches,
-      stderr: preRun.stderr ?? postRun.stderr ?? null,
-    };
-  } finally {
-    safeRm(cloneRoot);
-  }
-}
+      const beforeDir = path.join(root, `before-${i}`);
+      const afterDir = path.join(root, `after-${i}`);
+      fs.mkdirSync(beforeDir, { recursive: true });
+      fs.mkdirSync(afterDir, { recursive: true });
 
-async function withClone<T>(fn: () => Promise<T>, outerSignal?: AbortSignal): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), CLONE_TIMEOUT_MS);
-  if (outerSignal) {
-    if (outerSignal.aborted) controller.abort();
-    else outerSignal.addEventListener('abort', () => controller.abort(), { once: true });
-  }
-  try {
-    return await fn();
-  } finally {
-    clearTimeout(timer);
-  }
-}
+      // Write both snapshots under the rule-language extension. Original
+      // path is preserved as the basename so error messages stay meaningful,
+      // but we override the extension to whatever Semgrep expects for the
+      // declared rule language.
+      const baseName = path.basename(file.path).replace(/\.[^./]+$/, '') || 'snippet';
+      const beforeFile = path.join(beforeDir, `${baseName}.${ext}`);
+      const afterFile = path.join(afterDir, `${baseName}.${ext}`);
+      fs.writeFileSync(beforeFile, before, 'utf8');
+      fs.writeFileSync(afterFile, after, 'utf8');
 
-function directorySizeBytes(dir: string): number {
-  let total = 0;
-  const stack = [dir];
-  while (stack.length > 0) {
-    const cur = stack.pop()!;
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(cur, { withFileTypes: true });
-    } catch { continue; }
-    for (const e of entries) {
-      const p = path.join(cur, e.name);
-      try {
-        if (e.isDirectory()) stack.push(p);
-        else if (e.isFile()) total += fs.statSync(p).size;
-      } catch { /* file disappeared mid-walk; ignore */ }
+      const preRun = await runSemgrep({ ruleFile, target: beforeDir, signal: args.signal, semgrepBin: args.semgrepBin });
+      const postRun = await runSemgrep({ ruleFile, target: afterDir, signal: args.signal, semgrepBin: args.semgrepBin });
+
+      preTotal += preRun.matches;
+      postTotal += postRun.matches;
+      perFile.push({ path: file.path, pre: preRun.matches, post: postRun.matches });
+      if (!stderr && preRun.stderr) stderr = preRun.stderr;
+      if (!stderr && postRun.stderr) stderr = postRun.stderr;
     }
+
+    return { preMatches: preTotal, postMatches: postTotal, perFile, stderr };
+  } finally {
+    safeRm(root);
   }
-  return total;
+}
+
+/**
+ * Filter changedFiles down to ones the rule's language can actually run on:
+ *   - file extension matches the rule language (so Semgrep can parse it)
+ *   - both before and after blobs are present
+ * If `before === null` the file was added by the fix (can't test pre-patch).
+ * If `after === null` the file was deleted (can't test post-patch).
+ */
+export function filterApplicableChangedFiles(
+  files: ChangedFileBlob[],
+  language: string,
+): ChangedFileBlob[] {
+  const accepted = expectedExtensionsForLanguage(language);
+  return files.filter((f) => {
+    if (f.before === null || f.after === null) return false;
+    const ext = path.extname(f.path).toLowerCase().replace(/^\./, '');
+    return accepted.has(ext);
+  });
+}
+
+function expectedExtensionsForLanguage(language: string): Set<string> {
+  switch (language) {
+    case 'javascript': return new Set(['js', 'jsx', 'mjs', 'cjs']);
+    case 'typescript': return new Set(['ts', 'tsx']);
+    case 'python':     return new Set(['py']);
+    case 'java':       return new Set(['java']);
+    case 'go':         return new Set(['go']);
+    case 'ruby':       return new Set(['rb']);
+    case 'php':        return new Set(['php']);
+    case 'rust':       return new Set(['rs']);
+    case 'csharp':     return new Set(['cs']);
+    default:           return new Set();
+  }
+}
+
+function sourceExtensionForLanguage(language: string): string {
+  switch (language) {
+    case 'javascript': return 'js';
+    case 'typescript': return 'ts';
+    case 'python':     return 'py';
+    case 'java':       return 'java';
+    case 'go':         return 'go';
+    case 'ruby':       return 'rb';
+    case 'php':        return 'php';
+    case 'rust':       return 'rs';
+    case 'csharp':     return 'cs';
+    default:           return 'txt';
+  }
 }
 
 // ---------------------------------------------------------------------------
