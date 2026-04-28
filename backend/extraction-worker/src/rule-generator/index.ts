@@ -118,34 +118,116 @@ const DEFAULT_RESULT_BASE = (args: GenerateRuleForCveArgs): Omit<GenerationResul
 });
 
 /**
- * Cap on AI calls per CVE — first attempt + at most one retry. Two attempts
- * is the autogrep-paper sweet spot: lifts validation rate ~+10pp while only
- * costing ~1.15× tokens (retry only fires on the ~30% failure tail).
+ * Cap on AI calls per CVE. First attempt + up to N-1 retries. N=4 lets the
+ * model see up to 3 distinct concrete failure cases — the autogrep paper's
+ * agentic loop typically converges within 3-5 iterations.
  *
- * Retry triggers: callProviderAndParse throws parse_failed/invalid_schema OR
- * validateRule emits a semgrep_parse_error. Fixture-round-trip failures
- * aren't retried — a single re-prompt rarely fixes "rule too narrow" /
- * "rule matches too broadly" without the agentic loop (Phase 5g territory).
+ * Retry triggers: any failed_validation result OR a parse_failed/invalid_schema
+ * thrown by callProviderAndParse. Each retry includes the previous rule, both
+ * fixtures, and the actual match counts, so the model can reason concretely
+ * about why its rule was rejected. This is the Phase 5g extension of the
+ * Phase 5f schema-only retry.
+ *
+ * Cost: retry only fires on the failure tail (~50% of CVEs after attempt 1
+ * on Gemini Flash), so worst-case 18 CVEs × 4 attempts = 72 calls vs 18
+ * single-shot — but in practice ~30 calls because validated CVEs short-circuit.
+ * At Gemini Flash prices that's ~$0.50 per full corpus run.
  *
  * Exported so the iteration harness (test/iterate/runner.ts) can mirror the
  * same retry behaviour — otherwise harness numbers underreport production.
  */
-export const MAX_GENERATION_ATTEMPTS = 2;
+export const MAX_GENERATION_ATTEMPTS = 4;
 
 export function buildRevisionPrompt(originalPrompt: string, feedback: string): string {
   return [
-    'Your previous attempt was rejected by automated validation. Read the error',
-    'feedback below, fix the issue, and emit a fresh JSON object using the same',
-    'schema as before. Do not apologize or explain — output ONLY the corrected',
-    'JSON.',
+    'Your previous attempt was rejected by automated validation. Read the',
+    'concrete failure details below, identify what went wrong with your rule,',
+    'and emit a fresh JSON object using the same schema as before. Do not',
+    'apologize or explain — output ONLY the corrected JSON.',
     '',
-    'Error feedback:',
     feedback,
     '',
-    '---',
+    '--- ORIGINAL TASK BELOW (re-read for context) ---',
     '',
     originalPrompt,
   ].join('\n');
+}
+
+/**
+ * Build rich diagnostic feedback for the model after a failed validation.
+ * Includes the rule it emitted, both fixtures, the match counts, and a
+ * targeted diagnosis ("rule too narrow", "matches safe fixture too", etc.).
+ *
+ * For pre-validation failures (parse_failed / invalid_schema) we don't have
+ * a usable payload — fall back to the raw error string.
+ */
+export function buildAttemptFailureFeedback(args: {
+  payload: GeneratedPayload | null;
+  errorMessage: string;
+  validation: { log: ValidationLog } | null;
+}): string {
+  if (!args.payload || !args.validation) {
+    return [
+      '-- Failure --',
+      'Your previous response could not be parsed or did not match the required JSON schema.',
+      '',
+      `Error: ${args.errorMessage}`,
+      '',
+      'Re-emit a fresh JSON object using exactly the schema described in the original task. The schema requires fields: rule_yaml, vulnerable_fixture, safe_fixture, reachability_level, entry_point_class, rationale.',
+    ].join('\n');
+  }
+
+  const log = args.validation.log;
+  const vb = log.validation_breakdown;
+  const lines: string[] = [];
+
+  lines.push('-- Rule you emitted --');
+  lines.push(args.payload.rule_yaml);
+  lines.push('');
+  lines.push('-- Vulnerable fixture (your rule SHOULD match this — at least 1 match required) --');
+  lines.push(args.payload.vulnerable_fixture);
+  lines.push('');
+  lines.push('-- Safe fixture (your rule must NOT match this — 0 matches required) --');
+  lines.push(args.payload.safe_fixture);
+  lines.push('');
+  lines.push('-- Actual match counts --');
+  lines.push(`Vulnerable fixture matches: ${log.fixture_pre_matches} (need > 0)`);
+  lines.push(`Safe fixture matches: ${log.fixture_post_matches} (need 0)`);
+  if (log.patch_post_matches !== null) {
+    lines.push(`Post-fix patched code matches: ${log.patch_post_matches} (need 0 — the fixed code must not match)`);
+  }
+  lines.push('');
+
+  if (vb.semgrep_parse_error) {
+    lines.push('-- Semgrep refused to load the rule --');
+    lines.push(vb.semgrep_parse_error);
+    lines.push('');
+    lines.push('Diagnosis: rule grammar / schema is invalid. Common causes:');
+    lines.push('- pattern-not given a list (it takes ONE pattern, not multiple)');
+    lines.push('- focus-metavariable nested as sibling of pattern-either instead of inside the same patterns: block');
+    lines.push('- referencing fields that do not exist (pattern-include, pattern-not-include, list-valued pattern-not-inside)');
+    lines.push('- YAML scalar containing {}[]:,&*?!|> or "..." not single-quoted');
+  } else if (log.fixture_pre_matches === 0 && log.fixture_post_matches === 0) {
+    lines.push('Diagnosis: your rule is too NARROW — it matches neither fixture.');
+    lines.push('Likely causes:');
+    lines.push('- pattern is too specific (matches one exact form when the vuln has many)');
+    lines.push('- wrong sink/source identifier name');
+    lines.push('- the fixture you generated does not actually exercise the pattern');
+    lines.push('Fix: broaden the pattern (use $X / $METHOD metavariables; make sure the vulnerable fixture clearly exercises the sink).');
+  } else if (log.fixture_pre_matches > 0 && log.fixture_post_matches > 0) {
+    lines.push('Diagnosis: your rule is too BROAD — it matches both the vulnerable AND the safe fixture.');
+    lines.push('Fix: narrow the rule. Add a metavariable-pattern constraint that distinguishes vuln from safe (e.g. metavariable-pattern restricting $INPUT to a tainted source like req.body), or add pattern-not to exclude the safe form.');
+  } else if (log.fixture_pre_matches === 0 && log.fixture_post_matches > 0) {
+    lines.push('Diagnosis: your rule matches the SAFE fixture but not the VULNERABLE one. The pattern direction is inverted.');
+    lines.push('Fix: re-read the vulnerability description. Ensure your pattern targets the unsafe form (the one in vulnerable_fixture).');
+  } else if (log.patch_post_matches !== null && log.patch_post_matches > 0) {
+    lines.push('Diagnosis: rule fires on the post-fix patched code. Whatever the upstream maintainers added to fix the bug must NOT match your rule.');
+    lines.push('Fix: tighten the pattern so it excludes the maintainers\' fix (often requires recognizing the added sanitizer or check).');
+  } else {
+    lines.push(`Diagnosis: validation failed — errors=${(log.errors ?? []).join(' | ').slice(0, 240)}`);
+  }
+
+  return lines.join('\n');
 }
 
 export async function generateRuleForCve(args: GenerateRuleForCveArgs): Promise<GenerationResult> {
@@ -257,7 +339,11 @@ export async function generateRuleForCve(args: GenerateRuleForCveArgs): Promise<
         }
         const retryable = status === 'parse_failed' || status === 'invalid_schema';
         if (retryable && attempt < MAX_GENERATION_ATTEMPTS) {
-          revisionFeedback = msg;
+          revisionFeedback = buildAttemptFailureFeedback({
+            payload: null,
+            errorMessage: msg,
+            validation: null,
+          });
           continue;
         }
         return {
@@ -303,13 +389,16 @@ export async function generateRuleForCve(args: GenerateRuleForCveArgs): Promise<
         };
       }
 
-      // Validation failed. Retry only if it's a Semgrep grammar/parse error —
-      // those are recoverable with a re-prompt. Fixture-round-trip failures
-      // (rule too narrow / matches safe fixture) need agentic iteration, not
-      // a single re-prompt, so we let those propagate.
-      const semgrepParseErr = validation.log.validation_breakdown.semgrep_parse_error;
-      if (semgrepParseErr && attempt < MAX_GENERATION_ATTEMPTS) {
-        revisionFeedback = `Your Semgrep rule failed to load: ${semgrepParseErr}`;
+      // Validation failed. Retry on ANY validation failure with rich
+      // diagnostic feedback (rule + fixtures + match counts). The model gets
+      // to see exactly why its rule was rejected and adjust. Caps at
+      // MAX_GENERATION_ATTEMPTS to bound cost.
+      if (attempt < MAX_GENERATION_ATTEMPTS) {
+        revisionFeedback = buildAttemptFailureFeedback({
+          payload: providerResult.payload,
+          errorMessage: validation.log.errors.join(' | '),
+          validation,
+        });
         continue;
       }
 

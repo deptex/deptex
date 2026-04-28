@@ -23,7 +23,7 @@ import { callProviderAndParse, GenerationError, type AiProviderName, type Genera
 import { validateRule, makeRuleGenWorkdir, type ValidationLog } from '../../src/rule-generator/validate';
 import type { BuildPromptArgs } from '../../src/rule-generator/prompt-builder';
 import { loadFewShotExamples, type FewShotExample } from '../../src/rule-generator/few-shot-loader';
-import { MAX_GENERATION_ATTEMPTS, buildRevisionPrompt } from '../../src/rule-generator';
+import { MAX_GENERATION_ATTEMPTS, buildRevisionPrompt, buildAttemptFailureFeedback } from '../../src/rule-generator';
 import { CANDIDATES, type Candidate } from './candidates';
 import { fetchAndCache, type CachedCveData } from './cache';
 
@@ -194,7 +194,11 @@ async function runOne(args: {
         : code === 'invalid_schema' ? 'invalid_schema' : 'provider_error';
       const retryable = status === 'parse_failed' || status === 'invalid_schema';
       if (retryable && attempt < MAX_GENERATION_ATTEMPTS) {
-        revisionFeedback = err instanceof Error ? err.message : String(err);
+        revisionFeedback = buildAttemptFailureFeedback({
+          payload: null,
+          errorMessage: err instanceof Error ? err.message : String(err),
+          validation: null,
+        });
         continue;
       }
       return {
@@ -276,9 +280,12 @@ async function runOne(args: {
       };
     }
 
-    const semgrepParseErr = validation.log.validation_breakdown.semgrep_parse_error;
-    if (semgrepParseErr && attempt < MAX_GENERATION_ATTEMPTS) {
-      revisionFeedback = `Your Semgrep rule failed to load: ${semgrepParseErr}`;
+    if (attempt < MAX_GENERATION_ATTEMPTS) {
+      revisionFeedback = buildAttemptFailureFeedback({
+        payload,
+        errorMessage: validation.log.errors.join(' | '),
+        validation,
+      });
       continue;
     }
 
