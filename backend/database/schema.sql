@@ -91,6 +91,42 @@ CREATE TABLE IF NOT EXISTS public.aegis_slack_config (
   enabled boolean DEFAULT true,
   created_at timestamp with time zone DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS public.aegis_tool_executions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  organization_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  thread_id uuid,
+  task_id uuid,
+  tool_name text NOT NULL,
+  tool_category text NOT NULL,
+  parameters jsonb NOT NULL,
+  result jsonb,
+  success boolean,
+  permission_level text NOT NULL,
+  approval_status text,
+  duration_ms integer,
+  tokens_used integer,
+  estimated_cost numeric(8,4),
+  created_at timestamp with time zone DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.ai_usage_logs (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  organization_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  feature text NOT NULL,
+  tier text NOT NULL,
+  provider text NOT NULL,
+  model text NOT NULL,
+  input_tokens integer NOT NULL,
+  output_tokens integer NOT NULL,
+  estimated_cost numeric(10,8),
+  context_type text,
+  context_id text,
+  duration_ms integer,
+  success boolean DEFAULT true,
+  error_message text,
+  created_at timestamp with time zone DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS public.api_tokens (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL,
@@ -1500,6 +1536,8 @@ ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_pkey PRI
 ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_pkey PRIMARY KEY (thread_id, user_id);
 ALTER TABLE public.aegis_event_triggers ADD CONSTRAINT aegis_event_triggers_pkey PRIMARY KEY (id);
 ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_pkey PRIMARY KEY (id);
+ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_pkey PRIMARY KEY (id);
+ALTER TABLE public.ai_usage_logs ADD CONSTRAINT ai_usage_logs_pkey PRIMARY KEY (id);
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_pkey PRIMARY KEY (id);
 ALTER TABLE public.banned_versions ADD CONSTRAINT banned_versions_pkey PRIMARY KEY (id);
 ALTER TABLE public.demo_requests ADD CONSTRAINT demo_requests_pkey PRIMARY KEY (id);
@@ -1661,6 +1699,7 @@ ALTER TABLE public.user_profiles ADD CONSTRAINT user_profiles_user_id_key UNIQUE
 ALTER TABLE public.user_sessions ADD CONSTRAINT user_sessions_session_id_key UNIQUE (session_id);
 ALTER TABLE public.watched_packages ADD CONSTRAINT watched_packages_dependency_id_key UNIQUE (dependency_id);
 ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_role_check CHECK ((role = ANY (ARRAY['user'::text, 'assistant'::text])));
+ALTER TABLE public.ai_usage_logs ADD CONSTRAINT ai_usage_logs_tier_check CHECK ((tier = ANY (ARRAY['platform'::text, 'byok'::text])));
 ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_type_check CHECK ((type = ANY (ARRAY['bump'::text, 'decrease'::text, 'remove'::text])));
 ALTER TABLE public.extraction_jobs ADD CONSTRAINT extraction_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])));
 ALTER TABLE public.extraction_logs ADD CONSTRAINT extraction_logs_level_check CHECK ((level = ANY (ARRAY['info'::text, 'success'::text, 'warning'::text, 'error'::text])));
@@ -1722,6 +1761,10 @@ ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_th
 ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_event_triggers ADD CONSTRAINT aegis_event_triggers_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id);
+ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+ALTER TABLE public.ai_usage_logs ADD CONSTRAINT ai_usage_logs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 ALTER TABLE public.banned_versions ADD CONSTRAINT banned_versions_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
@@ -1912,9 +1955,17 @@ CREATE INDEX idx_aegis_chat_threads_user_id ON public.aegis_chat_threads USING b
 CREATE INDEX idx_aegis_chat_user_state_user_id ON public.aegis_chat_user_state USING btree (user_id);
 CREATE INDEX idx_aegis_event_triggers_event ON public.aegis_event_triggers USING btree (event_type) WHERE (enabled = true);
 CREATE INDEX idx_aegis_event_triggers_org ON public.aegis_event_triggers USING btree (organization_id);
+CREATE INDEX idx_aegis_tool_exec_created ON public.aegis_tool_executions USING btree (created_at DESC);
+CREATE INDEX idx_aegis_tool_exec_org ON public.aegis_tool_executions USING btree (organization_id);
+CREATE INDEX idx_aegis_tool_exec_thread ON public.aegis_tool_executions USING btree (thread_id);
+CREATE INDEX idx_aegis_tool_exec_tool ON public.aegis_tool_executions USING btree (tool_name);
+CREATE INDEX idx_aegis_tool_exec_user ON public.aegis_tool_executions USING btree (user_id);
 CREATE INDEX idx_api_tokens_hash ON public.api_tokens USING btree (token_hash) WHERE (revoked_at IS NULL);
 CREATE INDEX idx_api_tokens_org ON public.api_tokens USING btree (organization_id) WHERE (revoked_at IS NULL);
 CREATE INDEX idx_api_tokens_user ON public.api_tokens USING btree (user_id) WHERE (revoked_at IS NULL);
+CREATE INDEX idx_aul_org_created ON public.ai_usage_logs USING btree (organization_id, created_at DESC);
+CREATE INDEX idx_aul_org_month ON public.ai_usage_logs USING btree (organization_id, created_at) WHERE (success = true);
+CREATE INDEX idx_aul_user_feature ON public.ai_usage_logs USING btree (user_id, feature, created_at DESC);
 CREATE INDEX idx_banned_versions_org_dependency_id ON public.banned_versions USING btree (organization_id, dependency_id);
 CREATE INDEX idx_debt_snapshots_org_date ON public.security_debt_snapshots USING btree (organization_id, snapshot_date DESC);
 CREATE INDEX idx_debt_snapshots_project ON public.security_debt_snapshots USING btree (project_id, snapshot_date DESC);
