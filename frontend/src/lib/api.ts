@@ -3522,7 +3522,7 @@ export interface AIUsageSummary {
   byUser: Array<{ userId: string; tokens: number; cost: number; count: number }>;
 }
 
-export type PlatformAIProvider = 'openai' | 'anthropic' | 'google';
+export type PlatformAIProvider = 'openai' | 'anthropic' | 'google' | 'deepinfra';
 
 export interface AIDefaultProvider {
   provider: PlatformAIProvider;
