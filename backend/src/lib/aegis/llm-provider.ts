@@ -17,6 +17,10 @@ const DEFAULT_MONTHLY_COST_CAP_USD = 100;
 
 // DeepInfra exposes an OpenAI-API-compatible endpoint, so we reuse the
 // OpenAI factory with a custom baseURL — no separate SDK required.
+// IMPORTANT: DeepInfra implements only the Chat Completions API
+// (/chat/completions), not OpenAI's newer Responses API (/responses) which
+// the AI SDK uses by default. Call .chat(model) so the SDK targets
+// /chat/completions and DeepInfra responds 200 instead of 404.
 const DEEPINFRA_BASE_URL = 'https://api.deepinfra.com/v1/openai';
 
 export function getLanguageModel(config: ProviderConfig): LanguageModel {
@@ -24,7 +28,7 @@ export function getLanguageModel(config: ProviderConfig): LanguageModel {
     case 'openai':
       return createOpenAI({ apiKey: config.apiKey, baseURL: config.baseURL })(config.model);
     case 'deepinfra':
-      return createOpenAI({ apiKey: config.apiKey, baseURL: config.baseURL ?? DEEPINFRA_BASE_URL })(config.model);
+      return createOpenAI({ apiKey: config.apiKey, baseURL: config.baseURL ?? DEEPINFRA_BASE_URL }).chat(config.model);
     case 'anthropic':
       return createAnthropic({ apiKey: config.apiKey })(config.model);
     case 'google':

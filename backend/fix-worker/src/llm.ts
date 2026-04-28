@@ -41,7 +41,10 @@ function buildModel(provider: AIProvider, apiKey: string, modelName: string): La
     case 'openai':
       return createOpenAI({ apiKey })(modelName);
     case 'deepinfra':
-      return createOpenAI({ apiKey, baseURL: DEEPINFRA_BASE_URL })(modelName);
+      // DeepInfra speaks only the Chat Completions API. The AI SDK defaults
+      // to OpenAI's newer Responses API, which DeepInfra returns 404 for.
+      // .chat(modelName) pins this branch to /chat/completions.
+      return createOpenAI({ apiKey, baseURL: DEEPINFRA_BASE_URL }).chat(modelName);
     case 'anthropic':
       return createAnthropic({ apiKey })(modelName);
     case 'google':
