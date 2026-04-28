@@ -12,13 +12,11 @@ import {
 } from './job-db';
 import { createInstallationToken } from './github';
 import { createSandbox, cloneAtSha, setupForLanguage } from './sandbox';
-import { runEditor } from './executor';
-import { runTests } from './test-runner';
-import { runRepair } from './repair';
+import { runFixPipeline, FixPipelineError } from './executor';
 import { commitAndPushFix, openPullRequest } from './pr';
 import { FixLogger } from './logger';
 import { getLanguageModelForOrg } from './llm';
-import { isShipGateLanguage, MAX_DIFF_LOC } from './plan-types';
+import { isShipGateLanguage } from './plan-types';
 
 const IDLE_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 5_000;
@@ -42,6 +40,7 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
 
   const logger = new FixLogger(supabase, fullRow.project_id, fullRow.run_id);
   const sandbox = createSandbox(job.id);
+  const pipelineStartMs = Date.now();
 
   const heartbeat = setInterval(() => {
     sendHeartbeat(supabase, job.id).catch(() => {});
@@ -89,50 +88,15 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
 
     const model = await getLanguageModelForOrg(supabase, fullRow.organization_id);
 
-    let totalTokens = 0;
-    const editorResult = await runEditor({ model, plan, workDir: sandbox.workDir, logger });
-    totalTokens += editorResult.tokensUsed;
-
-    // Diff-size cap. Counts inserted+removed lines from rawDiff `+`/`-`
-    // markers (excluding the file headers).
-    const diffLoc = editorResult.rawDiff
-      .split('\n')
-      .filter((l) => (l.startsWith('+') || l.startsWith('-')) && !l.startsWith('+++') && !l.startsWith('---'))
-      .length;
-    if (diffLoc > MAX_DIFF_LOC) {
-      throw new Error(`Diff too large: ${diffLoc} LOC > cap ${MAX_DIFF_LOC}. Split this fix into smaller plans.`);
-    }
-
-    let testResult = await runTests({
+    const pipeline = await runFixPipeline({
+      model,
+      plan,
       workDir: sandbox.workDir,
-      testCommand: plan.testCommand,
       logger,
-      timeoutMs: Math.min(plan.wallClockBudgetSec * 1000, 10 * 60 * 1000),
       extraEnv: setup.extraEnv,
+      pipelineStartMs,
     });
-
-    if (!testResult.passed) {
-      await logger.warn('repair', `Tests failed; attempting one repair cycle (M5 stub)`);
-      const repair = await runRepair({
-        model,
-        plan,
-        workDir: sandbox.workDir,
-        previousDiff: editorResult.rawDiff,
-        testResult,
-        logger,
-      });
-      totalTokens += repair.tokensUsed;
-      testResult = await runTests({
-        workDir: sandbox.workDir,
-        testCommand: plan.testCommand,
-        logger,
-        timeoutMs: Math.min(plan.wallClockBudgetSec * 1000, 10 * 60 * 1000),
-        extraEnv: setup.extraEnv,
-      });
-      if (!testResult.passed) {
-        throw new Error(`Tests still failing after one repair cycle (exit ${testResult.exitCode})`);
-      }
-    }
+    const totalTokens = pipeline.tokensUsed;
 
     const { prBranch, diffSummary } = await commitAndPushFix({
       workDir: sandbox.workDir,
@@ -165,8 +129,9 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
     await logger.success('complete', `Fix complete — PR #${pr.prNumber} opened`);
   } catch (err: any) {
     const message = err?.message ?? String(err);
+    const category = err instanceof FixPipelineError ? err.category : undefined;
     await logger.error('complete', `Fix failed: ${message}`, err);
-    await markFailed(supabase, job.id, message);
+    await markFailed(supabase, job.id, message, category);
   } finally {
     clearInterval(heartbeat);
     sandbox.cleanup();
