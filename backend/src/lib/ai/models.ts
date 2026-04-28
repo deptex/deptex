@@ -14,9 +14,8 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'gemini-2.0-flash': 1_000_000,
   'gemini-1.5-pro': 2_000_000,
   // DeepInfra-hosted open-weight models (OpenAI-API-compatible).
-  'Qwen/Qwen2.5-Coder-32B-Instruct': 32_768,
-  'Qwen/Qwen2.5-72B-Instruct': 32_768,
-  'deepseek-ai/DeepSeek-V3': 64_000,
+  'deepseek-ai/DeepSeek-V3.1': 128_000,
+  'Qwen/Qwen3-235B-A22B-Instruct-2507': 262_144,
   'meta-llama/Llama-3.3-70B-Instruct': 128_000,
 };
 
@@ -30,12 +29,12 @@ export const PROVIDER_MODELS: Record<string, string[]> = {
   openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o1', 'o1-mini'],
   anthropic: ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'claude-sonnet-4-20250514', 'claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307'],
   google: ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'],
-  deepinfra: ['Qwen/Qwen2.5-Coder-32B-Instruct', 'Qwen/Qwen2.5-72B-Instruct', 'deepseek-ai/DeepSeek-V3', 'meta-llama/Llama-3.3-70B-Instruct'],
+  deepinfra: ['deepseek-ai/DeepSeek-V3.1', 'Qwen/Qwen3-235B-A22B-Instruct-2507', 'meta-llama/Llama-3.3-70B-Instruct'],
 };
 
 export const DEFAULT_MODELS: Record<string, string> = {
   openai: 'gpt-4o',
   anthropic: 'claude-sonnet-4-6',
   google: 'gemini-2.5-flash',
-  deepinfra: 'Qwen/Qwen2.5-Coder-32B-Instruct',
+  deepinfra: 'deepseek-ai/DeepSeek-V3.1',
 };
