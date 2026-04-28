@@ -4,12 +4,17 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-type AIProvider = 'openai' | 'anthropic' | 'google';
+type AIProvider = 'openai' | 'anthropic' | 'google' | 'deepinfra';
+
+// DeepInfra's OpenAI-compatible endpoint. Reuse the OpenAI SDK with this
+// baseURL — no separate package required.
+const DEEPINFRA_BASE_URL = 'https://api.deepinfra.com/v1/openai';
 
 const DEFAULT_MODELS: Record<AIProvider, string> = {
   openai: 'gpt-4o',
   anthropic: 'claude-sonnet-4-5-20250929',
   google: 'gemini-2.5-pro',
+  deepinfra: 'Qwen/Qwen2.5-Coder-32B-Instruct',
 };
 
 function getPlatformKey(provider: AIProvider): string | undefined {
@@ -20,17 +25,23 @@ function getPlatformKey(provider: AIProvider): string | undefined {
       return process.env.ANTHROPIC_API_KEY;
     case 'google':
       return process.env.GOOGLE_AI_API_KEY;
+    case 'deepinfra':
+      return process.env.DEEPINFRA_API_KEY;
   }
 }
 
 function envVarFor(provider: AIProvider): string {
-  return provider === 'google' ? 'GOOGLE_AI_API_KEY' : `${provider.toUpperCase()}_API_KEY`;
+  if (provider === 'google') return 'GOOGLE_AI_API_KEY';
+  if (provider === 'deepinfra') return 'DEEPINFRA_API_KEY';
+  return `${provider.toUpperCase()}_API_KEY`;
 }
 
 function buildModel(provider: AIProvider, apiKey: string, modelName: string): LanguageModel {
   switch (provider) {
     case 'openai':
       return createOpenAI({ apiKey })(modelName);
+    case 'deepinfra':
+      return createOpenAI({ apiKey, baseURL: DEEPINFRA_BASE_URL })(modelName);
     case 'anthropic':
       return createAnthropic({ apiKey })(modelName);
     case 'google':

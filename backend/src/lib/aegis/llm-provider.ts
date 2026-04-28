@@ -4,7 +4,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { DEFAULT_MODELS } from '../ai/models';
 
-export type AIProvider = 'openai' | 'anthropic' | 'google';
+export type AIProvider = 'openai' | 'anthropic' | 'google' | 'deepinfra';
 
 interface ProviderConfig {
   providerType: AIProvider;
@@ -15,10 +15,16 @@ interface ProviderConfig {
 
 const DEFAULT_MONTHLY_COST_CAP_USD = 100;
 
+// DeepInfra exposes an OpenAI-API-compatible endpoint, so we reuse the
+// OpenAI factory with a custom baseURL — no separate SDK required.
+const DEEPINFRA_BASE_URL = 'https://api.deepinfra.com/v1/openai';
+
 export function getLanguageModel(config: ProviderConfig): LanguageModel {
   switch (config.providerType) {
     case 'openai':
       return createOpenAI({ apiKey: config.apiKey, baseURL: config.baseURL })(config.model);
+    case 'deepinfra':
+      return createOpenAI({ apiKey: config.apiKey, baseURL: config.baseURL ?? DEEPINFRA_BASE_URL })(config.model);
     case 'anthropic':
       return createAnthropic({ apiKey: config.apiKey })(config.model);
     case 'google':
@@ -36,11 +42,15 @@ export function getPlatformKeyForProvider(provider: AIProvider): string | undefi
       return process.env.ANTHROPIC_API_KEY;
     case 'google':
       return process.env.GOOGLE_AI_API_KEY;
+    case 'deepinfra':
+      return process.env.DEEPINFRA_API_KEY;
   }
 }
 
 function envVarFor(provider: AIProvider): string {
-  return provider === 'google' ? 'GOOGLE_AI_API_KEY' : `${provider.toUpperCase()}_API_KEY`;
+  if (provider === 'google') return 'GOOGLE_AI_API_KEY';
+  if (provider === 'deepinfra') return 'DEEPINFRA_API_KEY';
+  return `${provider.toUpperCase()}_API_KEY`;
 }
 
 async function getOrgDefaultProvider(organizationId: string): Promise<AIProvider> {

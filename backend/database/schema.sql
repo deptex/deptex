@@ -1733,7 +1733,7 @@ ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organizatio
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_max_hours_check CHECK ((max_hours > 0));
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_severity_check CHECK ((severity = ANY (ARRAY['critical'::text, 'high'::text, 'medium'::text, 'low'::text])));
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_warning_threshold_percent_check CHECK (((warning_threshold_percent >= 1) AND (warning_threshold_percent <= 99)));
-ALTER TABLE public.organizations ADD CONSTRAINT organizations_default_ai_provider_check CHECK ((default_ai_provider = ANY (ARRAY['openai'::text, 'anthropic'::text, 'google'::text])));
+ALTER TABLE public.organizations ADD CONSTRAINT organizations_default_ai_provider_check CHECK ((default_ai_provider = ANY (ARRAY['openai'::text, 'anthropic'::text, 'google'::text, 'deepinfra'::text])));
 ALTER TABLE public.organizations ADD CONSTRAINT organizations_epd_budget_exceeded_behavior_check CHECK ((epd_budget_exceeded_behavior = ANY (ARRAY['fail_job'::text, 'continue_with_fallback'::text])));
 ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text])));
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_epd_confidence_tier CHECK (((epd_confidence_tier IS NULL) OR (epd_confidence_tier = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text]))));
