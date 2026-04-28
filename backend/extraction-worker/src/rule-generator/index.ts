@@ -86,6 +86,10 @@ export interface GenerationResult {
    *  for pre-schema bails (no_advisory / fetch_failed / no_fix_commit) all
    *  fields are false / null. Aggregated by rule-generation-step. */
   validationBreakdown: ValidationBreakdown;
+  /** How many provider calls were made for this CVE. 1 on first-pass success,
+   *  2 when the schema-fail retry loop fired. 0 for pre-attempt bails. Cost
+   *  and token fields above are cumulative across all attempts. */
+  attempts: number;
 }
 
 /** Breakdown for results that bailed before the AI call ever ran (no_advisory,
@@ -110,7 +114,39 @@ const DEFAULT_RESULT_BASE = (args: GenerateRuleForCveArgs): Omit<GenerationResul
   outputTokens: 0,
   promptVersion: getPromptVersion(),
   validationBreakdown: PRE_ATTEMPT_BREAKDOWN,
+  attempts: 0,
 });
+
+/**
+ * Cap on AI calls per CVE — first attempt + at most one retry. Two attempts
+ * is the autogrep-paper sweet spot: lifts validation rate ~+10pp while only
+ * costing ~1.15× tokens (retry only fires on the ~30% failure tail).
+ *
+ * Retry triggers: callProviderAndParse throws parse_failed/invalid_schema OR
+ * validateRule emits a semgrep_parse_error. Fixture-round-trip failures
+ * aren't retried — a single re-prompt rarely fixes "rule too narrow" /
+ * "rule matches too broadly" without the agentic loop (Phase 5g territory).
+ *
+ * Exported so the iteration harness (test/iterate/runner.ts) can mirror the
+ * same retry behaviour — otherwise harness numbers underreport production.
+ */
+export const MAX_GENERATION_ATTEMPTS = 2;
+
+export function buildRevisionPrompt(originalPrompt: string, feedback: string): string {
+  return [
+    'Your previous attempt was rejected by automated validation. Read the error',
+    'feedback below, fix the issue, and emit a fresh JSON object using the same',
+    'schema as before. Do not apologize or explain — output ONLY the corrected',
+    'JSON.',
+    '',
+    'Error feedback:',
+    feedback,
+    '',
+    '---',
+    '',
+    originalPrompt,
+  ].join('\n');
+}
 
 export async function generateRuleForCve(args: GenerateRuleForCveArgs): Promise<GenerationResult> {
   const errors: string[] = [];
@@ -187,57 +223,123 @@ export async function generateRuleForCve(args: GenerateRuleForCveArgs): Promise<
       fewShotExamples,
     });
 
-    // --- 4. Call provider + Zod validate ---
-    let providerResult;
-    try {
-      providerResult = await callProviderAndParse({
-        prompt,
-        provider: args.provider,
-        model: args.model,
-        apiKey: args.apiKey,
-        signal: args.signal,
-        maxOutputTokens: args.maxOutputTokens,
-        baseUrl: args.baseUrl,
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      errors.push(`generate: ${msg}`);
-      let status: GenerationStatus = 'provider_error';
-      if (err instanceof GenerationError) {
-        if (err.code === 'parse_failed') status = 'parse_failed';
-        else if (err.code === 'invalid_schema') status = 'invalid_schema';
+    // --- 4 + 5. Call provider + validate, with a one-shot retry on schema /
+    //            grammar-stage failures (parse_failed, invalid_schema, or a
+    //            semgrep_parse_error from validateRule). ---
+    let cumulativeCost = 0;
+    let cumulativeInputTokens = 0;
+    let cumulativeOutputTokens = 0;
+    let revisionFeedback: string | null = null;
+
+    for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt++) {
+      const attemptPrompt = revisionFeedback
+        ? buildRevisionPrompt(prompt, revisionFeedback)
+        : prompt;
+
+      let providerResult;
+      try {
+        providerResult = await callProviderAndParse({
+          prompt: attemptPrompt,
+          provider: args.provider,
+          model: args.model,
+          apiKey: args.apiKey,
+          signal: args.signal,
+          maxOutputTokens: args.maxOutputTokens,
+          baseUrl: args.baseUrl,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`generate(attempt ${attempt}): ${msg}`);
+        let status: GenerationStatus = 'provider_error';
+        if (err instanceof GenerationError) {
+          if (err.code === 'parse_failed') status = 'parse_failed';
+          else if (err.code === 'invalid_schema') status = 'invalid_schema';
+        }
+        const retryable = status === 'parse_failed' || status === 'invalid_schema';
+        if (retryable && attempt < MAX_GENERATION_ATTEMPTS) {
+          revisionFeedback = msg;
+          continue;
+        }
+        return {
+          ...DEFAULT_RESULT_BASE(args),
+          status,
+          affectedVersionRange: affectedRange,
+          costUsd: cumulativeCost,
+          inputTokens: cumulativeInputTokens,
+          outputTokens: cumulativeOutputTokens,
+          errors,
+          attempts: attempt,
+        };
       }
+
+      cumulativeCost += providerResult.estimatedCostUsd;
+      cumulativeInputTokens += providerResult.inputTokens;
+      cumulativeOutputTokens += providerResult.outputTokens;
+
+      const validation = await validateRule({
+        payload: providerResult.payload,
+        cveId: args.cveId,
+        ecosystem: args.ecosystem,
+        changedFiles: patchInfo.changedFiles,
+        workDir,
+        signal: args.signal,
+        semgrepBin: args.semgrepBin,
+        runPatchValidation: args.runPatchValidation,
+      });
+
+      if (validation.status === 'validated') {
+        return {
+          ...DEFAULT_RESULT_BASE(args),
+          status: 'validated',
+          affectedVersionRange: affectedRange,
+          rule: providerResult.payload,
+          validationLog: validation.log,
+          costUsd: cumulativeCost,
+          inputTokens: cumulativeInputTokens,
+          outputTokens: cumulativeOutputTokens,
+          errors: validation.log.errors,
+          validationBreakdown: validation.log.validation_breakdown,
+          attempts: attempt,
+        };
+      }
+
+      // Validation failed. Retry only if it's a Semgrep grammar/parse error —
+      // those are recoverable with a re-prompt. Fixture-round-trip failures
+      // (rule too narrow / matches safe fixture) need agentic iteration, not
+      // a single re-prompt, so we let those propagate.
+      const semgrepParseErr = validation.log.validation_breakdown.semgrep_parse_error;
+      if (semgrepParseErr && attempt < MAX_GENERATION_ATTEMPTS) {
+        revisionFeedback = `Your Semgrep rule failed to load: ${semgrepParseErr}`;
+        continue;
+      }
+
       return {
         ...DEFAULT_RESULT_BASE(args),
-        status,
+        status: 'failed_validation',
         affectedVersionRange: affectedRange,
-        errors,
+        rule: providerResult.payload,
+        validationLog: validation.log,
+        costUsd: cumulativeCost,
+        inputTokens: cumulativeInputTokens,
+        outputTokens: cumulativeOutputTokens,
+        errors: validation.log.errors,
+        validationBreakdown: validation.log.validation_breakdown,
+        attempts: attempt,
       };
     }
 
-    // --- 5. Validate (fixtures + optional diff-targeted patch round-trip) ---
-    const validation = await validateRule({
-      payload: providerResult.payload,
-      cveId: args.cveId,
-      ecosystem: args.ecosystem,
-      changedFiles: patchInfo.changedFiles,
-      workDir,
-      signal: args.signal,
-      semgrepBin: args.semgrepBin,
-      runPatchValidation: args.runPatchValidation,
-    });
-
+    // Loop exhausted without returning — shouldn't happen because every branch
+    // in the loop returns, but TypeScript can't see that. Surface as a
+    // programmer bug rather than silently dropping.
     return {
       ...DEFAULT_RESULT_BASE(args),
-      status: validation.status,
+      status: 'unexpected',
       affectedVersionRange: affectedRange,
-      rule: providerResult.payload,
-      validationLog: validation.log,
-      costUsd: providerResult.estimatedCostUsd,
-      inputTokens: providerResult.inputTokens,
-      outputTokens: providerResult.outputTokens,
-      errors: validation.log.errors,
-      validationBreakdown: validation.log.validation_breakdown,
+      costUsd: cumulativeCost,
+      inputTokens: cumulativeInputTokens,
+      outputTokens: cumulativeOutputTokens,
+      errors: ['retry_loop_exhausted_without_return'],
+      attempts: MAX_GENERATION_ATTEMPTS,
     };
   } catch (err) {
     // Programmer bug, not a generation failure — surface explicitly.

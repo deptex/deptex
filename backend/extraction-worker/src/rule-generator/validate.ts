@@ -165,6 +165,57 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
 
   const ext = sourceExtensionFor(args.ecosystem);
 
+  // --- 1.5. semgrep --validate (real schema gate) ---
+  // YAML parse only catches structural problems. Semgrep itself owns the
+  // grammar of pattern-either / focus-metavariable / pattern-not / etc., and
+  // refuses to load rules with bugs the YAML layer can't see. Running
+  // `semgrep scan --validate --config <rule>` is fast (no targets to scan)
+  // and surfaces a clean parser error we can feed back to the model in M1's
+  // retry loop. Without this gate, broken rules waste two full fixture
+  // docker invocations before failing with a cryptic stderr excerpt.
+  const semgrepValidateRoot = fs.mkdtempSync(path.join(args.workDir, `rulegen-vlt-`));
+  let semgrepValidateError: string | null = null;
+  try {
+    const ruleFile = path.join(semgrepValidateRoot, 'rule.yml');
+    fs.writeFileSync(ruleFile, normalizedPayload.rule_yaml, 'utf8');
+    const validateRun = await runSemgrepValidate({
+      ruleFile,
+      signal: args.signal,
+      semgrepBin: args.semgrepBin,
+    });
+    if (!validateRun.ok) {
+      semgrepValidateError = validateRun.errorExcerpt;
+    }
+  } catch (err) {
+    // semgrep validate itself crashed (docker missing, etc.). Don't fail the
+    // rule for our infra problem — fall through to fixture run, which will
+    // surface the real issue or succeed.
+  } finally {
+    safeRm(semgrepValidateRoot);
+  }
+  if (semgrepValidateError) {
+    return {
+      status: 'failed_validation',
+      log: {
+        fixture_pre_matches: 0,
+        fixture_post_matches: 0,
+        patch_pre_matches: null,
+        patch_post_matches: null,
+        semgrep_stderr_excerpt: semgrepValidateError,
+        errors: [`semgrep_validate: ${semgrepValidateError}`],
+        took_ms: Date.now() - start,
+        validation_breakdown: {
+          schema_pass: true,
+          fixture_pre_match: false,
+          fixture_safe_clean: false,
+          patch_pre_match: null,
+          patch_post_clean: null,
+          semgrep_parse_error: semgrepValidateError.slice(0, 500),
+        },
+      },
+    };
+  }
+
   // --- 2. Fixture round-trip ---
   const fixtureRoot = fs.mkdtempSync(path.join(args.workDir, `rulegen-fix-`));
   let fixturePre = 0;
@@ -262,10 +313,17 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
   // Heuristic: if Semgrep emitted stderr AND the fixture didn't fire, the
   // stderr is likely a rule-parse / config-load error rather than a benign
   // deprecation warning. Surface a short excerpt for the funnel telemetry.
+  //
+  // The regex deliberately excludes "Parsed" — Semgrep prints "Parsed lines:
+  // ~100.0%" on every successful scan, which used to false-positive this
+  // heuristic and trigger the M1 retry loop on rules that loaded fine but
+  // simply didn't match the fixture. With M2's `semgrep --validate` gate
+  // running upstream, real parse errors get caught there, so this heuristic
+  // is now belt-and-braces — keep it tight.
   const looksLikeParseError =
     !!stderrExcerpt &&
     fixturePre === 0 &&
-    /(?:rule|yaml|config|invalid|parse)/i.test(stderrExcerpt);
+    /\b(error|invalid|failed|cannot|could not|couldn't load|ruleparse)\b/i.test(stderrExcerpt);
 
   return {
     status,
@@ -632,6 +690,126 @@ async function runSemgrep(args: RunSemgrepArgs): Promise<SemgrepRunResult> {
         });
       } catch (err) {
         reject(new RuleValidationError('semgrep', `semgrep JSON parse failed: ${err instanceof Error ? err.message : String(err)}`));
+      }
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// semgrep --validate (rule grammar gate)
+//
+// Runs `semgrep scan --validate --config <rule>` and reports whether the rule
+// loaded cleanly. We use the same docker fallback as runSemgrep — on Windows
+// hosts where the python-launcher Semgrep is a stub, validate-mode also
+// requires the deptex-cli image. Validate completes in <1s on the small rules
+// we generate (no targets, just parse + grammar check).
+// ---------------------------------------------------------------------------
+
+interface RunSemgrepValidateArgs {
+  ruleFile: string;
+  signal?: AbortSignal;
+  semgrepBin?: string;
+}
+
+interface SemgrepValidateResult {
+  ok: boolean;
+  errorExcerpt: string | null;
+}
+
+async function runSemgrepValidate(args: RunSemgrepValidateArgs): Promise<SemgrepValidateResult> {
+  return await new Promise<SemgrepValidateResult>((resolve, reject) => {
+    const semgrepBin = args.semgrepBin ?? 'semgrep';
+    const dockerImage = process.env.DEPTEX_SEMGREP_DOCKER_IMAGE?.trim();
+    let cmd: string;
+    let cmdArgs: string[];
+    if (dockerImage) {
+      const ruleDir = path.dirname(path.resolve(args.ruleFile));
+      const ruleBase = path.basename(args.ruleFile);
+      cmd = 'docker';
+      cmdArgs = [
+        'run', '--rm',
+        '-v', `${ruleDir}:/work`,
+        '--entrypoint', 'semgrep',
+        dockerImage,
+        'scan',
+        '--validate',
+        '--config', `/work/${ruleBase}`,
+        '--metrics=off',
+      ];
+    } else {
+      cmd = semgrepBin;
+      cmdArgs = [
+        'scan',
+        '--validate',
+        '--config', args.ruleFile,
+        '--metrics=off',
+      ];
+    }
+    const child = spawn(cmd, cmdArgs, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+      env: dockerImage ? { ...process.env, MSYS_NO_PATHCONV: '1', MSYS2_ARG_CONV_EXCL: '*' } : process.env,
+    });
+    const stderrChunks: Buffer[] = [];
+    const stdoutChunks: Buffer[] = [];
+    let stderrLen = 0;
+    let sigkillTimer: NodeJS.Timeout | undefined;
+
+    const killTree = () => {
+      try {
+        if (child.pid && process.platform !== 'win32') {
+          try { process.kill(-child.pid, 'SIGTERM'); } catch { child.kill('SIGTERM'); }
+        } else {
+          child.kill('SIGTERM');
+        }
+      } catch { /* gone */ }
+      if (!sigkillTimer) {
+        sigkillTimer = setTimeout(() => {
+          try {
+            if (child.pid && process.platform !== 'win32') {
+              try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
+            } else {
+              child.kill('SIGKILL');
+            }
+          } catch { /* gone */ }
+        }, SIGKILL_GRACE_MS);
+        sigkillTimer.unref?.();
+      }
+    };
+
+    child.stdout.on('data', (chunk: Buffer) => { stdoutChunks.push(chunk); });
+    child.stderr.on('data', (chunk: Buffer) => {
+      if (stderrLen >= MAX_STDERR) return;
+      const room = MAX_STDERR - stderrLen;
+      const slice = chunk.length <= room ? chunk : chunk.subarray(0, room);
+      stderrChunks.push(slice);
+      stderrLen += slice.length;
+    });
+
+    const onAbort = () => killTree();
+    if (args.signal) {
+      if (args.signal.aborted) onAbort();
+      else args.signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    const cleanup = () => {
+      if (args.signal) args.signal.removeEventListener('abort', onAbort);
+      if (sigkillTimer) { clearTimeout(sigkillTimer); sigkillTimer = undefined; }
+    };
+
+    child.on('error', (err) => { cleanup(); reject(new RuleValidationError('semgrep', err.message)); });
+    child.on('close', (code) => {
+      cleanup();
+      const stderrText = Buffer.concat(stderrChunks).toString('utf8').slice(0, MAX_STDERR);
+      const stdoutText = Buffer.concat(stdoutChunks).toString('utf8');
+      // Semgrep returns 0 when the config is valid. Non-zero means a parse /
+      // grammar error — extract a concise message for the model.
+      if (code === 0) {
+        resolve({ ok: true, errorExcerpt: null });
+      } else {
+        const combined = [stderrText, stdoutText].filter(Boolean).join('\n');
+        const excerpt = sanitizeStderr(combined).trim().slice(0, 500) || `semgrep validate exited ${code}`;
+        resolve({ ok: false, errorExcerpt: excerpt });
       }
     });
   });

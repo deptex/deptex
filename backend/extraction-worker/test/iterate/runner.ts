@@ -23,6 +23,7 @@ import { callProviderAndParse, GenerationError, type AiProviderName, type Genera
 import { validateRule, makeRuleGenWorkdir, type ValidationLog } from '../../src/rule-generator/validate';
 import type { BuildPromptArgs } from '../../src/rule-generator/prompt-builder';
 import { loadFewShotExamples, type FewShotExample } from '../../src/rule-generator/few-shot-loader';
+import { MAX_GENERATION_ATTEMPTS, buildRevisionPrompt } from '../../src/rule-generator';
 import { CANDIDATES, type Candidate } from './candidates';
 import { fetchAndCache, type CachedCveData } from './cache';
 
@@ -80,6 +81,9 @@ export interface PerCveResult {
   safeFixture?: string;
   validationLog?: ValidationLog;
   durationMs: number;
+  /** AI calls made (1 = no retry; 2 = retry fired). Counts only successful
+   *  calls — provider_error first attempts that don't retry stay at 1. */
+  attempts: number;
 }
 
 export interface VariantRunReport {
@@ -137,6 +141,7 @@ async function runOne(args: {
     inputTokens: 0,
     outputTokens: 0,
     durationMs: 0,
+    attempts: 0,
   };
 
   if (cached.status === 'no_advisory') return { ...base, status: 'no_advisory', durationMs: Date.now() - start };
@@ -157,86 +162,152 @@ async function runOne(args: {
     fewShotExamples,
   });
 
-  let providerResult;
-  try {
-    providerResult = await withTimeoutWrap(
-      callProviderAndParse({
-        prompt,
-        provider,
-        model,
-        apiKey,
-        baseUrl,
-        maxOutputTokens,
-      }),
-      perCveTimeoutMs,
-      'provider_call',
-    );
-  } catch (err) {
-    const code = err instanceof GenerationError ? err.code : 'provider_error';
-    return {
-      ...base,
-      status: code === 'parse_failed' ? 'parse_failed' : code === 'invalid_schema' ? 'invalid_schema' : 'provider_error',
-      errors: [err instanceof Error ? err.message : String(err)],
-      durationMs: Date.now() - start,
-    };
-  }
+  // Schema-fail retry loop. Mirrors generateRuleForCve() in src/rule-generator/index.ts
+  // so the harness's validation rate reflects the production path. See the
+  // export in that file for the full rationale.
+  let cumulativeCost = 0;
+  let cumulativeInputTokens = 0;
+  let cumulativeOutputTokens = 0;
+  let revisionFeedback: string | null = null;
 
-  let payload = providerResult.payload;
-  if (variant.postProcessPayload) {
+  for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt++) {
+    const attemptPrompt = revisionFeedback ? buildRevisionPrompt(prompt, revisionFeedback) : prompt;
+
+    let providerResult;
     try {
-      payload = variant.postProcessPayload(payload);
+      providerResult = await withTimeoutWrap(
+        callProviderAndParse({
+          prompt: attemptPrompt,
+          provider,
+          model,
+          apiKey,
+          baseUrl,
+          maxOutputTokens,
+        }),
+        perCveTimeoutMs,
+        'provider_call',
+      );
+    } catch (err) {
+      const code = err instanceof GenerationError ? err.code : 'provider_error';
+      const status: PerCveResult['status'] = code === 'parse_failed'
+        ? 'parse_failed'
+        : code === 'invalid_schema' ? 'invalid_schema' : 'provider_error';
+      const retryable = status === 'parse_failed' || status === 'invalid_schema';
+      if (retryable && attempt < MAX_GENERATION_ATTEMPTS) {
+        revisionFeedback = err instanceof Error ? err.message : String(err);
+        continue;
+      }
+      return {
+        ...base,
+        status,
+        errors: [err instanceof Error ? err.message : String(err)],
+        costUsd: cumulativeCost,
+        inputTokens: cumulativeInputTokens,
+        outputTokens: cumulativeOutputTokens,
+        durationMs: Date.now() - start,
+        attempts: attempt,
+      };
+    }
+
+    cumulativeCost += providerResult.estimatedCostUsd;
+    cumulativeInputTokens += providerResult.inputTokens;
+    cumulativeOutputTokens += providerResult.outputTokens;
+
+    let payload = providerResult.payload;
+    if (variant.postProcessPayload) {
+      try {
+        payload = variant.postProcessPayload(payload);
+      } catch (err) {
+        return {
+          ...base,
+          status: 'unexpected',
+          errors: [`postProcessPayload: ${err instanceof Error ? err.message : String(err)}`],
+          costUsd: cumulativeCost,
+          inputTokens: cumulativeInputTokens,
+          outputTokens: cumulativeOutputTokens,
+          durationMs: Date.now() - start,
+          attempts: attempt,
+        };
+      }
+    }
+
+    const workDir = makeRuleGenWorkdir();
+    let validation;
+    try {
+      validation = await validateRule({
+        payload,
+        cveId: candidate.cveId,
+        ecosystem: candidate.ecosystem,
+        changedFiles: cached.patchInfo.changedFiles,
+        workDir,
+      });
     } catch (err) {
       return {
         ...base,
         status: 'unexpected',
-        errors: [`postProcessPayload: ${err instanceof Error ? err.message : String(err)}`],
-        costUsd: providerResult.estimatedCostUsd,
-        inputTokens: providerResult.inputTokens,
-        outputTokens: providerResult.outputTokens,
+        errors: [`validate_threw: ${err instanceof Error ? err.message : String(err)}`],
+        costUsd: cumulativeCost,
+        inputTokens: cumulativeInputTokens,
+        outputTokens: cumulativeOutputTokens,
+        ruleYaml: payload.rule_yaml,
+        vulnerableFixture: payload.vulnerable_fixture,
+        safeFixture: payload.safe_fixture,
         durationMs: Date.now() - start,
+        attempts: attempt,
+      };
+    } finally {
+      try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
+    }
+
+    if (validation.status === 'validated') {
+      return {
+        ...base,
+        status: 'validated',
+        errors: validation.log.errors,
+        costUsd: cumulativeCost,
+        inputTokens: cumulativeInputTokens,
+        outputTokens: cumulativeOutputTokens,
+        ruleYaml: payload.rule_yaml,
+        vulnerableFixture: payload.vulnerable_fixture,
+        safeFixture: payload.safe_fixture,
+        validationLog: validation.log,
+        durationMs: Date.now() - start,
+        attempts: attempt,
       };
     }
-  }
 
-  const workDir = makeRuleGenWorkdir();
-  let validation;
-  try {
-    validation = await validateRule({
-      payload,
-      cveId: candidate.cveId,
-      ecosystem: candidate.ecosystem,
-      changedFiles: cached.patchInfo.changedFiles,
-      workDir,
-    });
-  } catch (err) {
+    const semgrepParseErr = validation.log.validation_breakdown.semgrep_parse_error;
+    if (semgrepParseErr && attempt < MAX_GENERATION_ATTEMPTS) {
+      revisionFeedback = `Your Semgrep rule failed to load: ${semgrepParseErr}`;
+      continue;
+    }
+
     return {
       ...base,
-      status: 'unexpected',
-      errors: [`validate_threw: ${err instanceof Error ? err.message : String(err)}`],
-      costUsd: providerResult.estimatedCostUsd,
-      inputTokens: providerResult.inputTokens,
-      outputTokens: providerResult.outputTokens,
+      status: 'failed_validation',
+      errors: validation.log.errors,
+      costUsd: cumulativeCost,
+      inputTokens: cumulativeInputTokens,
+      outputTokens: cumulativeOutputTokens,
       ruleYaml: payload.rule_yaml,
       vulnerableFixture: payload.vulnerable_fixture,
       safeFixture: payload.safe_fixture,
+      validationLog: validation.log,
       durationMs: Date.now() - start,
+      attempts: attempt,
     };
-  } finally {
-    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
   }
 
+  // Unreachable — every branch in the loop returns.
   return {
     ...base,
-    status: validation.status,
-    errors: validation.log.errors,
-    costUsd: providerResult.estimatedCostUsd,
-    inputTokens: providerResult.inputTokens,
-    outputTokens: providerResult.outputTokens,
-    ruleYaml: payload.rule_yaml,
-    vulnerableFixture: payload.vulnerable_fixture,
-    safeFixture: payload.safe_fixture,
-    validationLog: validation.log,
+    status: 'unexpected',
+    errors: ['retry_loop_exhausted_without_return'],
+    costUsd: cumulativeCost,
+    inputTokens: cumulativeInputTokens,
+    outputTokens: cumulativeOutputTokens,
     durationMs: Date.now() - start,
+    attempts: MAX_GENERATION_ATTEMPTS,
   };
 }
 

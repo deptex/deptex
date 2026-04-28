@@ -298,6 +298,16 @@ async function withRateLimitRetry<T>(
   }
 }
 
+/**
+ * Transient HTTP statuses worth retrying with backoff. 429 is rate-limit; the
+ * 5xx group covers provider-side overload (Google's "model overloaded" 503,
+ * gateway timeouts, etc.). Genuine 4xx errors (400 bad-request, 401 unauth,
+ * 404 not-found) propagate as provider_error — retrying won't help.
+ */
+function isTransientHttpStatus(status: number): boolean {
+  return status === 429 || status === 502 || status === 503 || status === 504;
+}
+
 function parseRetryAfter(headerValue: string | null): number | undefined {
   if (!headerValue) return undefined;
   const seconds = Number(headerValue);
@@ -318,6 +328,17 @@ async function callAnthropic(args: CallProviderArgs): Promise<RawProviderRespons
 async function callAnthropicOnce(args: CallProviderArgs): Promise<RawProviderResponse> {
   const { controller, clear } = withRequestTimeout(args.signal);
   try {
+    // Anthropic doesn't expose a JSON-only output mode like OpenAI's
+    // `response_format: { type: 'json_object' }`, so without a hint Claude
+    // sometimes prepends a "Here is the JSON object you requested:" preamble
+    // that breaks our parser. Two countermeasures:
+    //   1. Assistant prefill `{` — Anthropic continues from this token, which
+    //      forces the response to start mid-JSON. We prepend `{` back to the
+    //      response text before parseAndValidate sees it.
+    //   2. max_tokens default raised from 2.5K → 6K. Sonnet's verbose YAML
+    //      blocks routinely truncate at 2.5K; the rules we generate are
+    //      ~3-4K tokens of output, and truncation is a silent invalid_schema
+    //      that 5e's harness diagnosed as Sonnet's main failure mode.
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -329,13 +350,16 @@ async function callAnthropicOnce(args: CallProviderArgs): Promise<RawProviderRes
       body: JSON.stringify({
         model: args.model,
         temperature: 0.1,
-        max_tokens: args.maxOutputTokens ?? 2_500,
-        messages: [{ role: 'user', content: [{ type: 'text', text: args.prompt }] }],
+        max_tokens: args.maxOutputTokens ?? 6_000,
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: args.prompt }] },
+          { role: 'assistant', content: [{ type: 'text', text: '{' }] },
+        ],
       }),
     });
-    if (res.status === 429) {
+    if (isTransientHttpStatus(res.status)) {
       const errBody = await res.text().catch(() => '');
-      throw new RateLimitError(`Anthropic 429: ${errBody.slice(0, 200)}`, parseRetryAfter(res.headers.get('retry-after')));
+      throw new RateLimitError(`Anthropic ${res.status}: ${errBody.slice(0, 200)}`, parseRetryAfter(res.headers.get('retry-after')));
     }
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
@@ -345,14 +369,22 @@ async function callAnthropicOnce(args: CallProviderArgs): Promise<RawProviderRes
       content?: Array<{ type?: string; text?: string }>;
       usage?: { input_tokens?: number; output_tokens?: number };
     };
-    const text = body.content?.find((b) => b?.type === 'text')?.text ?? '';
+    const continuation = body.content?.find((b) => b?.type === 'text')?.text ?? '';
+    // Glue the prefill back so parseAndValidate sees a complete JSON object.
+    // If the model already opened with `{` (rare but possible when prefill is
+    // ignored), don't double it.
+    const text = continuation.startsWith('{') ? continuation : `{${continuation}`;
     return {
       text,
       inputTokens: Number(body.usage?.input_tokens ?? estimateInputTokens(args.prompt)),
       outputTokens: Number(body.usage?.output_tokens ?? estimateInputTokens(text)),
     };
   } catch (err) {
+    // Pass-through types: GenerationError surfaces directly; RateLimitError
+    // must propagate up to withRateLimitRetry for backoff handling — wrapping
+    // it here turns 429/503/etc. into non-retryable provider_errors.
     if (err instanceof GenerationError) throw err;
+    if (err instanceof RateLimitError) throw err;
     if (err instanceof Error && err.name === 'AbortError') {
       throw new GenerationError('provider_timeout', `Anthropic request timed out after ${REQUEST_TIMEOUT_MS}ms`);
     }
@@ -395,9 +427,9 @@ async function callOpenAIOnce(args: CallProviderArgs): Promise<RawProviderRespon
         ],
       }),
     });
-    if (res.status === 429) {
+    if (isTransientHttpStatus(res.status)) {
       const errBody = await res.text().catch(() => '');
-      throw new RateLimitError(`OpenAI-compat 429 (${url}): ${errBody.slice(0, 200)}`, parseRetryAfter(res.headers.get('retry-after')));
+      throw new RateLimitError(`OpenAI-compat ${res.status} (${url}): ${errBody.slice(0, 200)}`, parseRetryAfter(res.headers.get('retry-after')));
     }
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
@@ -415,6 +447,7 @@ async function callOpenAIOnce(args: CallProviderArgs): Promise<RawProviderRespon
     };
   } catch (err) {
     if (err instanceof GenerationError) throw err;
+    if (err instanceof RateLimitError) throw err;
     if (err instanceof Error && err.name === 'AbortError') {
       throw new GenerationError('provider_timeout', `OpenAI request timed out after ${REQUEST_TIMEOUT_MS}ms`);
     }
@@ -454,9 +487,9 @@ async function callGoogleOnce(args: CallProviderArgs): Promise<RawProviderRespon
         ],
       }),
     });
-    if (res.status === 429) {
+    if (isTransientHttpStatus(res.status)) {
       const errBody = await res.text().catch(() => '');
-      throw new RateLimitError(`Google 429: ${errBody.slice(0, 200)}`, parseRetryAfter(res.headers.get('retry-after')));
+      throw new RateLimitError(`Google ${res.status}: ${errBody.slice(0, 200)}`, parseRetryAfter(res.headers.get('retry-after')));
     }
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
@@ -475,6 +508,7 @@ async function callGoogleOnce(args: CallProviderArgs): Promise<RawProviderRespon
     };
   } catch (err) {
     if (err instanceof GenerationError) throw err;
+    if (err instanceof RateLimitError) throw err;
     if (err instanceof Error && err.name === 'AbortError') {
       throw new GenerationError('provider_timeout', `Google request timed out after ${REQUEST_TIMEOUT_MS}ms`);
     }
