@@ -1,9 +1,15 @@
+import { execSync, type ExecSyncOptionsWithStringEncoding } from 'child_process';
 import { generateText, type LanguageModel } from 'ai';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { FixLogger } from './logger';
 import type { FixPlan } from './plan-types';
+import { MAX_DIFF_LOC, MAX_TOOL_CALLS, REPAIR_BUDGET } from './plan-types';
 import { applyDiffText } from './edit-tool';
+import { runRepair } from './repair';
+import { runTests, type TestResult } from './test-runner';
+
+const EXEC_OPTS: ExecSyncOptionsWithStringEncoding = { encoding: 'utf-8', timeout: 60_000 };
 
 const ARCHITECT_SYSTEM = `You are the editor of Aegis Fix Agent. You receive an approved plan, the relevant source files, and you produce a single Aider-style udiff that resolves the finding.
 
@@ -120,4 +126,168 @@ export async function runEditor(opts: {
   const diffText = text.slice(diffStart);
   const { filesChanged } = applyDiffText(workDir, diffText);
   return { filesChanged, rawDiff: diffText, tokensUsed };
+}
+
+function cumulativeDiffLoc(workDir: string): number {
+  // Lines from the working tree against the base SHA. The clone reset us to
+  // baseSha at start, so HEAD is the base; staged + unstaged together is the
+  // entire fix delta. Counts every "+ "/"-" line including additions and
+  // deletions, ignoring file headers.
+  try {
+    const out = execSync('git diff HEAD', { ...EXEC_OPTS, cwd: workDir });
+    return out
+      .split('\n')
+      .filter((l) => (l.startsWith('+') || l.startsWith('-')) && !l.startsWith('+++') && !l.startsWith('---'))
+      .length;
+  } catch {
+    return 0;
+  }
+}
+
+export class FixPipelineError extends Error {
+  constructor(message: string, public category: string) {
+    super(message);
+  }
+}
+
+export interface RunFixPipelineOpts {
+  model: LanguageModel;
+  plan: FixPlan;
+  workDir: string;
+  logger: FixLogger;
+  extraEnv: Record<string, string>;
+  pipelineStartMs: number;
+}
+
+export interface RunFixPipelineResult {
+  rawDiff: string;
+  testResult: TestResult;
+  tokensUsed: number;
+  toolCalls: number;
+  repairAttempts: number;
+}
+
+/**
+ * Single entry point for "produce a fix that passes tests".
+ *
+ * Flow:
+ *   1. Editor produces a udiff (1 tool call).
+ *   2. Test runs.
+ *   3. If failing, up to REPAIR_BUDGET repair cycles (each = 1 tool call + 1 test).
+ *
+ * Safety caps enforced inline:
+ *   - Wall-clock budget from plan.wallClockBudgetSec, measured from the
+ *     pipeline start (clone + setup eat into the budget).
+ *   - Tool-call cap (MAX_TOOL_CALLS) across editor + repairs.
+ *   - Cumulative diff cap (MAX_DIFF_LOC) checked after editor and after
+ *     every repair, so a runaway repair can't ratchet the diff past the
+ *     line-count budget.
+ */
+export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPipelineResult> {
+  const { model, plan, workDir, logger, extraEnv, pipelineStartMs } = opts;
+
+  const wallClockBudgetMs = plan.wallClockBudgetSec * 1000;
+  const checkBudget = (label: string) => {
+    const elapsed = Date.now() - pipelineStartMs;
+    if (elapsed > wallClockBudgetMs) {
+      throw new FixPipelineError(
+        `Wall-clock budget exhausted before ${label} (elapsed ${Math.round(elapsed / 1000)}s > ${plan.wallClockBudgetSec}s)`,
+        'budget_wall_clock',
+      );
+    }
+  };
+
+  let toolCalls = 0;
+  const trackToolCall = (label: string) => {
+    toolCalls += 1;
+    if (toolCalls > MAX_TOOL_CALLS) {
+      throw new FixPipelineError(
+        `Tool-call cap (${MAX_TOOL_CALLS}) exceeded at ${label}`,
+        'budget_tool_calls',
+      );
+    }
+  };
+
+  const checkDiffCap = (label: string) => {
+    const loc = cumulativeDiffLoc(workDir);
+    if (loc > MAX_DIFF_LOC) {
+      throw new FixPipelineError(
+        `Diff too large after ${label}: ${loc} LOC > cap ${MAX_DIFF_LOC}. Split this fix into smaller plans.`,
+        'diff_too_large',
+      );
+    }
+  };
+
+  // 1. Editor pass.
+  checkBudget('editor');
+  trackToolCall('editor');
+  const editorResult = await runEditor({ model, plan, workDir, logger });
+  let totalTokens = editorResult.tokensUsed;
+  let lastDiff = editorResult.rawDiff;
+  checkDiffCap('editor');
+
+  // 2. Initial test run.
+  const remainingBudgetMs = (label: string): number => {
+    const elapsed = Date.now() - pipelineStartMs;
+    const remaining = wallClockBudgetMs - elapsed;
+    if (remaining <= 0) {
+      throw new FixPipelineError(
+        `Wall-clock budget exhausted before ${label}`,
+        'budget_wall_clock',
+      );
+    }
+    return Math.min(remaining, 10 * 60 * 1000);
+  };
+
+  let testResult = await runTests({
+    workDir,
+    testCommand: plan.testCommand,
+    logger,
+    timeoutMs: remainingBudgetMs('initial test'),
+    extraEnv,
+  });
+
+  // 3. Repair cycles. REPAIR_BUDGET cycles, each is one LLM call + one test run.
+  let repairAttempts = 0;
+  while (!testResult.passed && repairAttempts < REPAIR_BUDGET) {
+    repairAttempts += 1;
+    await logger.info('repair', `Repair cycle ${repairAttempts}/${REPAIR_BUDGET}`);
+
+    checkBudget(`repair ${repairAttempts}`);
+    trackToolCall(`repair ${repairAttempts}`);
+    const repair = await runRepair({
+      model,
+      plan,
+      workDir,
+      previousDiff: lastDiff,
+      testResult,
+      logger,
+    });
+    totalTokens += repair.tokensUsed;
+    lastDiff = repair.repairDiff;
+    checkDiffCap(`repair ${repairAttempts}`);
+
+    testResult = await runTests({
+      workDir,
+      testCommand: plan.testCommand,
+      logger,
+      timeoutMs: remainingBudgetMs(`test after repair ${repairAttempts}`),
+      extraEnv,
+    });
+  }
+
+  if (!testResult.passed) {
+    throw new FixPipelineError(
+      `Tests still failing after ${repairAttempts} repair cycle${repairAttempts === 1 ? '' : 's'} (exit ${testResult.exitCode})`,
+      'tests_failed',
+    );
+  }
+
+  return {
+    rawDiff: lastDiff,
+    testResult,
+    tokensUsed: totalTokens,
+    toolCalls,
+    repairAttempts,
+  };
 }
