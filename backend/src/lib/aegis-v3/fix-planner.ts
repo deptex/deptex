@@ -121,7 +121,11 @@ Produce a structured plan as JSON matching the provided schema.
 PLANNING RULES:
 1. Stay tightly scoped. Patch THIS finding only — no refactors, no opportunistic improvements.
 2. Prefer the lowest-risk strategy: bump version > pin > minimal code patch.
-3. Pick the test command that exercises the patched code in this repo's primary language. Default by language: npm test (js/ts), pytest (python), go test ./... (go), mvn test (java), bundle exec rspec (ruby), composer test (php), cargo test (rust), dotnet test (csharp).
+3. Pick the test command that exercises the patched code in this repo's primary language. Defaults:
+   - js/ts: \`npm test\` (or \`npm run test\`).
+   - python: \`pytest\` — the executor sets up a venv with pytest available, so just write \`pytest\` (or \`pytest path/to/test.py\` to scope). Do NOT prefix with \`.venv/bin/\`.
+   - go: \`go test ./...\` (or a narrower package path if appropriate). \`go mod download\` runs automatically before tests.
+   - java: \`mvn test\`. ruby: \`bundle exec rspec\`. php: \`composer test\`. rust: \`cargo test\`. csharp: \`dotnet test\`.
 4. estimatedDiffSize: small (<100 LOC), medium (100-500), large (>500). Plans estimated as "large" should be split.
 5. wallClockBudgetSec defaults to 300. Increase only when the language toolchain is slow (e.g., Java/Maven up to 600).
 6. fileChanges should list each touched file with a one-sentence rationale. Do not include diffs — those are produced during execution.
