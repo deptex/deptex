@@ -6634,6 +6634,160 @@ router.get('/:id/ai-usage/logs', async (req: AuthRequest, res) => {
 });
 
 // ============================================================
+// Platform-default AI provider (Phase 1 AI page)
+// ============================================================
+
+const VALID_AI_PROVIDERS = ['openai', 'anthropic', 'google'] as const;
+type ValidAIProvider = (typeof VALID_AI_PROVIDERS)[number];
+
+async function isOrgMember(orgId: string, userId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from('organization_members')
+    .select('user_id')
+    .eq('organization_id', orgId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  return !!data;
+}
+
+// GET /api/organizations/:id/ai-default-provider -- which platform provider Aegis uses
+router.get('/:id/ai-default-provider', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await isOrgMember(orgId, userId))) {
+      return res.status(403).json({ error: 'You are not a member of this organization' });
+    }
+
+    const { data, error } = await supabase
+      .from('organizations')
+      .select('default_ai_provider')
+      .eq('id', orgId)
+      .single();
+    if (error) throw error;
+
+    const provider = (data?.default_ai_provider ?? 'anthropic') as ValidAIProvider;
+    const { DEFAULT_MODELS } = await import('../lib/ai/models');
+    res.json({ provider, model: DEFAULT_MODELS[provider] });
+  } catch (error: any) {
+    console.error('Error fetching default AI provider:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch default AI provider' });
+  }
+});
+
+// PATCH /api/organizations/:id/ai-default-provider -- pick which provider Aegis uses
+router.patch('/:id/ai-default-provider', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasOrgPermission(orgId, userId, 'manage_organization_settings'))) {
+      return res.status(403).json({ error: 'You do not have permission to manage organization settings' });
+    }
+
+    const provider = req.body?.provider;
+    if (!VALID_AI_PROVIDERS.includes(provider)) {
+      return res.status(400).json({ error: `provider must be one of: ${VALID_AI_PROVIDERS.join(', ')}` });
+    }
+
+    const { error } = await supabase
+      .from('organizations')
+      .update({ default_ai_provider: provider, updated_at: new Date().toISOString() })
+      .eq('id', orgId);
+    if (error) throw error;
+
+    const { DEFAULT_MODELS } = await import('../lib/ai/models');
+    res.json({ provider, model: DEFAULT_MODELS[provider as ValidAIProvider] });
+  } catch (error: any) {
+    console.error('Error updating default AI provider:', error);
+    res.status(500).json({ error: error.message || 'Failed to update default AI provider' });
+  }
+});
+
+// GET /api/organizations/:id/ai-usage/daily?days=30 -- per-day token + cost trend
+router.get('/:id/ai-usage/daily', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasOrgPermission(orgId, userId, 'view_ai_spending'))) {
+      return res.status(403).json({ error: 'You do not have permission to view AI spending' });
+    }
+
+    const days = Math.min(Math.max(parseInt(req.query.days as string) || 30, 1), 90);
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data, error } = await supabase
+      .from('ai_usage_logs')
+      .select('input_tokens, output_tokens, estimated_cost, created_at')
+      .eq('organization_id', orgId)
+      .eq('success', true)
+      .gte('created_at', cutoff);
+    if (error) throw error;
+
+    const buckets = new Map<string, { tokens: number; cost_cents: number }>();
+    for (let i = 0; i < days; i++) {
+      const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
+      buckets.set(d.toISOString().slice(0, 10), { tokens: 0, cost_cents: 0 });
+    }
+    for (const row of data || []) {
+      const date = new Date(row.created_at).toISOString().slice(0, 10);
+      const bucket = buckets.get(date);
+      if (!bucket) continue;
+      bucket.tokens += (row.input_tokens || 0) + (row.output_tokens || 0);
+      bucket.cost_cents += Math.round(Number(row.estimated_cost || 0) * 100);
+    }
+    const points = Array.from(buckets.entries())
+      .map(([date, v]) => ({ date, tokens: v.tokens, cost_cents: v.cost_cents }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    res.json({ days, points });
+  } catch (error: any) {
+    console.error('Error fetching daily AI usage:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch daily AI usage' });
+  }
+});
+
+// GET /api/organizations/:id/aegis-tools/breakdown?days=30&limit=10 -- top Aegis tools by execution count
+router.get('/:id/aegis-tools/breakdown', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasOrgPermission(orgId, userId, 'view_ai_spending'))) {
+      return res.status(403).json({ error: 'You do not have permission to view AI spending' });
+    }
+
+    const days = Math.min(Math.max(parseInt(req.query.days as string) || 30, 1), 90);
+    const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 10, 1), 50);
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data, error } = await supabase
+      .from('aegis_tool_executions')
+      .select('tool_name, tokens_used, estimated_cost')
+      .eq('organization_id', orgId)
+      .gte('created_at', cutoff);
+    if (error) throw error;
+
+    const byTool = new Map<string, { executions: number; total_tokens: number; total_cost_cents: number }>();
+    for (const row of data || []) {
+      const key = row.tool_name || 'unknown';
+      const agg = byTool.get(key) ?? { executions: 0, total_tokens: 0, total_cost_cents: 0 };
+      agg.executions += 1;
+      agg.total_tokens += row.tokens_used || 0;
+      agg.total_cost_cents += Math.round(Number(row.estimated_cost || 0) * 100);
+      byTool.set(key, agg);
+    }
+    const tools = Array.from(byTool.entries())
+      .map(([tool_name, v]) => ({ tool_name, ...v }))
+      .sort((a, b) => b.executions - a.executions)
+      .slice(0, limit);
+
+    res.json({ days, limit, tools });
+  } catch (error: any) {
+    console.error('Error fetching Aegis tool breakdown:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch Aegis tool breakdown' });
+  }
+});
+
+// ============================================================
 // Webhook Deliveries
 // ============================================================
 
