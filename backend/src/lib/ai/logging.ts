@@ -65,14 +65,10 @@ export async function getAIUsageSummary(
     .eq('success', true)
     .gte('created_at', since.toISOString());
 
-  const { data: providers } = await supabase
-    .from('organization_ai_providers')
-    .select('monthly_cost_cap')
-    .eq('organization_id', orgId)
-    .eq('is_default', true)
-    .limit(1);
-
-  const monthlyCostCap = providers?.[0]?.monthly_cost_cap ?? 100;
+  // Cap is the platform default until per-org cap UI lands. The
+  // organization_ai_providers table is dormant on the platform-default
+  // path and may not exist in every environment.
+  const monthlyCostCap = 100;
   const rows = logs || [];
 
   let totalInputTokens = 0;
