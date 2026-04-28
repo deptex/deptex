@@ -45,12 +45,20 @@ const STEP_NAME = 'rule_generation';
 // (each with up to 60s backoff) without timing out on a CVE that's only
 // stuck because of a transient 429.
 const PER_CVE_TIMEOUT_MS = 240_000;
-// Anthropic free/dev tiers cap at 30K input tokens/minute org-wide. With
-// p-limit 5 × ~8-10K tokens/request, three concurrent CVEs already saturate
-// the org cap and the rest 429. Drop to 3 — slightly slower for cheap
-// providers like DeepInfra/Gemini but doesn't burn through Anthropic quota.
-// The retry-with-backoff in generate.ts handles the residual bursts.
-const PROVIDER_CONCURRENCY = 3;
+// Per-provider concurrency. Anthropic dev/free orgs cap at 30K input tokens/min;
+// with ~10K-token prompts even concurrency=3 saturates and the rest queue
+// on 429s for the full minute window. Drop Anthropic to 1 (the retry-with-
+// backoff in generate.ts smooths over the residual bursts). DeepInfra
+// serverless on big models (Qwen3-235B / DeepSeek V3.1) returns "Model busy"
+// when burst-loaded, so cap openai-compat at 2. Gemini handles bursts well.
+const PROVIDER_CONCURRENCY_BY_NAME: Record<AiProviderName, number> = {
+  anthropic: 1,
+  openai: 2,
+  google: 3,
+};
+function concurrencyFor(provider: AiProviderName): number {
+  return PROVIDER_CONCURRENCY_BY_NAME[provider] ?? 2;
+}
 const FALLBACK_MODELS: Record<AiProviderName, string> = {
   anthropic: 'claude-haiku-4-5-20251001',
   openai: 'gpt-4o-mini',
@@ -264,9 +272,10 @@ export async function runRuleGenerationStep(
   }
 
   // --- 7. Run generation with p-limit + per-CVE timeout ---
+  const providerConcurrency = concurrencyFor(settings.ai_provider);
   await log.info(
     STEP_NAME,
-    `Generating ${candidates.length} rule(s) via ${settings.ai_provider}/${effectiveModel} (p-limit ${PROVIDER_CONCURRENCY}, ${PER_CVE_TIMEOUT_MS / 1000}s/CVE)`,
+    `Generating ${candidates.length} rule(s) via ${settings.ai_provider}/${effectiveModel} (p-limit ${providerConcurrency}, ${PER_CVE_TIMEOUT_MS / 1000}s/CVE)`,
     {
       candidate_count: candidates.length,
       provider: settings.ai_provider,
@@ -276,7 +285,7 @@ export async function runRuleGenerationStep(
     },
   );
 
-  const limit = pLimit(PROVIDER_CONCURRENCY);
+  const limit = pLimit(providerConcurrency);
   const overallStart = Date.now();
   const maxWaitMs = settings.max_wait_seconds * 1_000;
 

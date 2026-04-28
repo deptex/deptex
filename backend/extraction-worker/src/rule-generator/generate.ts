@@ -10,7 +10,11 @@
 
 import { z } from 'zod';
 
-const REQUEST_TIMEOUT_MS = 60_000;
+// 3 minutes accommodates slow serverless inference on big open-weight models
+// (DeepInfra cold-starts on Qwen3-235B / DeepSeek V3.1 commonly take 60-120s
+// for first-token). Anthropic and Gemini almost always reply in <30s but
+// using the same ceiling keeps the dispatch logic uniform.
+const REQUEST_TIMEOUT_MS = 180_000;
 
 export type AiProviderName = 'anthropic' | 'openai' | 'google';
 
@@ -152,7 +156,12 @@ export function parseAndValidate(raw: string): GeneratedPayload {
   const stripped = stripCodeFence(raw).trim();
   const json = extractFirstJsonObject(stripped);
   if (!json) {
-    throw new GenerationError('parse_failed', 'Provider response did not contain a JSON object');
+    // Surface a snippet of what the provider DID return — empty string means
+    // a content-filter / safety block (Gemini), a non-JSON prose response means
+    // the model ignored the JSON instruction (often happens when Gemini is in
+    // thinking mode and emits chain-of-thought without final JSON).
+    const excerpt = raw ? raw.slice(0, 240).replace(/\s+/g, ' ') : '<empty>';
+    throw new GenerationError('parse_failed', `Provider response did not contain a JSON object. Raw[0..240]=${excerpt}`);
   }
   let parsed: unknown;
   try {
