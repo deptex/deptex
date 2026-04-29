@@ -285,6 +285,7 @@ async function runOne(args: {
         payload,
         errorMessage: validation.log.errors.join(' | '),
         validation,
+        patchDiff: cached.patchInfo.diff,
       });
       continue;
     }

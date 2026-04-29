@@ -153,10 +153,63 @@ export function buildRevisionPrompt(originalPrompt: string, feedback: string): s
   ].join('\n');
 }
 
+/** Tokens too generic to be useful as a "the patch added these" hint —
+ *  drop them so the top-N is concrete identifiers, not control flow. */
+const PATCH_SYMBOL_STOPWORDS = new Set([
+  'if', 'else', 'elif', 'return', 'def', 'class', 'function', 'func', 'var',
+  'let', 'const', 'import', 'from', 'as', 'in', 'is', 'not', 'and', 'or',
+  'true', 'false', 'null', 'nil', 'none', 'undefined', 'this', 'self', 'super',
+  'new', 'await', 'async', 'yield', 'try', 'catch', 'except', 'finally',
+  'raise', 'throw', 'public', 'private', 'protected', 'static', 'final',
+  'void', 'int', 'string', 'bool', 'boolean', 'float', 'double', 'long',
+  'for', 'while', 'do', 'switch', 'case', 'break', 'continue', 'pass',
+  'with', 'lambda', 'end', 'package', 'module', 'require', 'use', 'do',
+  'begin', 'rescue', 'ensure', 'then', 'unless', 'until', 'when',
+  'TODO', 'FIXME', 'NOTE',
+]);
+
+/**
+ * Parse a unified diff and return the most-frequent identifier-like tokens
+ * appearing on `+` lines (excluding `+++` headers). Used to give the model a
+ * concrete "the patch added these — your rule should reference at least one"
+ * hint when the rule is too narrow (pre=0).
+ *
+ * Heuristic, intentionally lossy: we don't try to parse code, we just count
+ * tokens that look like identifiers. Generic control-flow words are dropped.
+ * Returns up to `topK` symbols sorted by frequency descending.
+ */
+export function extractPatchAddedSymbols(diff: string, topK = 8): string[] {
+  if (!diff) return [];
+  const counts = new Map<string, number>();
+  const tokenRe = /[A-Za-z_][A-Za-z0-9_]*/g;
+  for (const line of diff.split('\n')) {
+    if (!line.startsWith('+')) continue;
+    if (line.startsWith('+++')) continue;
+    const body = line.slice(1);
+    let m: RegExpExecArray | null;
+    while ((m = tokenRe.exec(body)) !== null) {
+      const tok = m[0];
+      if (tok.length < 3) continue;
+      if (PATCH_SYMBOL_STOPWORDS.has(tok)) continue;
+      if (PATCH_SYMBOL_STOPWORDS.has(tok.toLowerCase())) continue;
+      counts.set(tok, (counts.get(tok) ?? 0) + 1);
+    }
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, topK)
+    .map(([tok]) => tok);
+}
+
 /**
  * Build rich diagnostic feedback for the model after a failed validation.
  * Includes the rule it emitted, both fixtures, the match counts, and a
  * targeted diagnosis ("rule too narrow", "matches safe fixture too", etc.).
+ *
+ * When `patchDiff` is supplied we additionally surface the concrete tokens
+ * the upstream patch added — these are usually the symbols a sound rule
+ * should reference, so showing them on a too-narrow failure is a strong
+ * nudge for the model to broaden in the right direction instead of guessing.
  *
  * For pre-validation failures (parse_failed / invalid_schema) we don't have
  * a usable payload — fall back to the raw error string.
@@ -165,6 +218,7 @@ export function buildAttemptFailureFeedback(args: {
   payload: GeneratedPayload | null;
   errorMessage: string;
   validation: { log: ValidationLog } | null;
+  patchDiff?: string;
 }): string {
   if (!args.payload || !args.validation) {
     return [
@@ -214,12 +268,14 @@ export function buildAttemptFailureFeedback(args: {
     lines.push('- wrong sink/source identifier name');
     lines.push('- the fixture you generated does not actually exercise the pattern');
     lines.push('Fix: broaden the pattern (use $X / $METHOD metavariables; make sure the vulnerable fixture clearly exercises the sink).');
+    appendPatchSymbolsHint(lines, args.patchDiff);
   } else if (log.fixture_pre_matches > 0 && log.fixture_post_matches > 0) {
     lines.push('Diagnosis: your rule is too BROAD — it matches both the vulnerable AND the safe fixture.');
     lines.push('Fix: narrow the rule. Add a metavariable-pattern constraint that distinguishes vuln from safe (e.g. metavariable-pattern restricting $INPUT to a tainted source like req.body), or add pattern-not to exclude the safe form.');
   } else if (log.fixture_pre_matches === 0 && log.fixture_post_matches > 0) {
     lines.push('Diagnosis: your rule matches the SAFE fixture but not the VULNERABLE one. The pattern direction is inverted.');
     lines.push('Fix: re-read the vulnerability description. Ensure your pattern targets the unsafe form (the one in vulnerable_fixture).');
+    appendPatchSymbolsHint(lines, args.patchDiff);
   } else if (log.patch_post_matches !== null && log.patch_post_matches > 0) {
     lines.push('Diagnosis: rule fires on the post-fix patched code. Whatever the upstream maintainers added to fix the bug must NOT match your rule.');
     lines.push('Fix: tighten the pattern so it excludes the maintainers\' fix (often requires recognizing the added sanitizer or check).');
@@ -228,6 +284,16 @@ export function buildAttemptFailureFeedback(args: {
   }
 
   return lines.join('\n');
+}
+
+function appendPatchSymbolsHint(lines: string[], patchDiff: string | undefined): void {
+  if (!patchDiff) return;
+  const symbols = extractPatchAddedSymbols(patchDiff);
+  if (symbols.length === 0) return;
+  lines.push('');
+  lines.push('-- Symbols the upstream patch ADDED (high-signal hint) --');
+  lines.push(symbols.join(', '));
+  lines.push('A sound rule for this CVE should reference at least one of these symbols (as part of a sink pattern, sanitizer, or metavariable-pattern). If your pattern uses none of them, you are almost certainly looking at the wrong sink.');
 }
 
 export async function generateRuleForCve(args: GenerateRuleForCveArgs): Promise<GenerationResult> {
@@ -398,6 +464,7 @@ export async function generateRuleForCve(args: GenerateRuleForCveArgs): Promise<
           payload: providerResult.payload,
           errorMessage: validation.log.errors.join(' | '),
           validation,
+          patchDiff: patchInfo.diff,
         });
         continue;
       }

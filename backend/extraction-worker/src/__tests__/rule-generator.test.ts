@@ -15,6 +15,7 @@ import {
   estimateCostUsd,
   GenerationError,
 } from '../rule-generator/generate';
+import { extractPatchAddedSymbols } from '../rule-generator';
 
 describe('osv-fetch helpers', () => {
   describe('parseGithubCommitUrl', () => {
@@ -346,6 +347,50 @@ describe('generate.estimateCostUsd', () => {
 
   it('zero tokens returns zero', () => {
     expect(estimateCostUsd('gpt-4o', 0, 0)).toBe(0);
+  });
+});
+
+describe('extractPatchAddedSymbols', () => {
+  it('returns top tokens added on + lines, frequency desc then alpha asc', () => {
+    const diff = `diff --git a/foo.py b/foo.py
++++ b/foo.py
+@@ -1,3 +1,4 @@
+ def parse(data):
+-    return yaml.load(data)
++    return yaml.safe_load(data)
++jwt.decode(token, key, algorithms=['HS256'])
+`;
+    const symbols = extractPatchAddedSymbols(diff);
+    // 'data' appears twice (the new return + the new jwt.decode line has none of it,
+    // actually it appears once in the new return; safe_load also once). Build is
+    // identifier-set focused, not exact-frequency.
+    expect(symbols).toContain('safe_load');
+    expect(symbols).toContain('algorithms');
+    expect(symbols).toContain('jwt');
+    // stopwords filtered
+    expect(symbols).not.toContain('return');
+    expect(symbols).not.toContain('def');
+    // +++ header line ignored
+    expect(symbols).not.toContain('foo');
+  });
+
+  it('returns [] for empty or symbol-free diff', () => {
+    expect(extractPatchAddedSymbols('')).toEqual([]);
+    expect(extractPatchAddedSymbols('-only deletions here\n-and more\n')).toEqual([]);
+  });
+
+  it('respects topK', () => {
+    const diff = '+a_one b_two c_three d_four e_five f_six g_seven h_eight i_nine\n';
+    expect(extractPatchAddedSymbols(diff, 3)).toHaveLength(3);
+  });
+
+  it('drops 1-2 char tokens (too noisy as patch hints)', () => {
+    const diff = '+x = y + zz + abc\n';
+    const symbols = extractPatchAddedSymbols(diff);
+    expect(symbols).not.toContain('x');
+    expect(symbols).not.toContain('y');
+    expect(symbols).not.toContain('zz');
+    expect(symbols).toContain('abc');
   });
 });
 
