@@ -292,6 +292,19 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
         break;
       }
       case 'call': {
+        // Detect call-shape source: source patterns ending in `(*)` (e.g.
+        // `request.json(*)`, `c.req.query(*)`, `searchParams.get(*)`) taint
+        // the call's return value. This covers Next.js App Router /
+        // Hono / standard Web API accessors that aren't property reads.
+        // Sources win over the rest — if a call is a source, we don't
+        // also try to match it as a sink/sanitizer.
+        const callSourceMatch = matchCallSourcePattern(step.callee.calleeText, specs);
+        if (callSourceMatch && step.target) {
+          local.set(step.target, makeTraceFromCall(callSourceMatch, step));
+          sourcesAddedThisPass++;
+          break;
+        }
+
         // Detect sanitizer: if callee matches a sanitizer pattern, the target
         // is clean (regardless of arg taint). Sanitizer wins over sink/internal.
         const sanMatch = matchSanitizerPattern(step.callee.calleeText, specs);
@@ -417,6 +430,21 @@ function subsumes(existing: TaintTrace | null | undefined, incoming: TaintTrace)
   return 'grew';
 }
 
+function makeTraceFromCall(source: FrameworkSource, step: Extract<Step, { kind: 'call' }>): TaintTrace {
+  const node: FlowNode = {
+    filePath: step.loc.filePath,
+    line: step.loc.line,
+    column: step.loc.column,
+    label: step.callee.calleeText,
+    kind: 'source',
+  };
+  return {
+    taint_kind: source.taint_kind,
+    source,
+    path: [node],
+  };
+}
+
 function makeTrace(source: FrameworkSource, step: Extract<Step, { kind: 'source' }>): TaintTrace {
   const node: FlowNode = {
     filePath: step.loc.filePath,
@@ -470,6 +498,11 @@ function hopFromStep(step: Step, kind: FlowNode['kind']): FlowNode {
 function matchSourcePattern(text: string, specs: FrameworkSpec[]): FrameworkSource | null {
   for (const spec of specs) {
     for (const src of spec.sources) {
+      // Call-shape source patterns (`request.json(*)`) only match call
+      // expressions; they're checked separately in matchCallSourcePattern
+      // and skipped here so the same pattern doesn't double-match a
+      // property access whose text happens to share the prefix.
+      if (src.pattern.endsWith('(*)')) continue;
       if (src.pattern.endsWith('.*')) {
         const prefix = src.pattern.slice(0, -2);
         if (text === prefix || text.startsWith(prefix + '.') || text.startsWith(prefix + '[')) {
@@ -478,6 +511,23 @@ function matchSourcePattern(text: string, specs: FrameworkSpec[]): FrameworkSour
       } else if (text === src.pattern) {
         return src;
       }
+    }
+  }
+  return null;
+}
+
+/**
+ * Match call-shape source patterns (`request.json(*)`, `c.req.query(*)`,
+ * `searchParams.get(*)`) against a call expression's callee text. The call's
+ * return value is then treated as freshly tainted with the source's
+ * taint_kind. Used by Next.js App Router + Hono + standard Web APIs that
+ * don't expose request data via property access.
+ */
+function matchCallSourcePattern(calleeText: string, specs: FrameworkSpec[]): FrameworkSource | null {
+  for (const spec of specs) {
+    for (const src of spec.sources) {
+      if (!src.pattern.endsWith('(*)')) continue;
+      if (matchesCallPattern(src.pattern, calleeText)) return src;
     }
   }
   return null;

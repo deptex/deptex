@@ -1,0 +1,38 @@
+# NestJS framework spec — Deptex cross-file taint engine.
+#
+# NestJS injects request data via parameter decorators (`@Body()`, `@Query()`,
+# `@Param()`, `@Headers()`). The text-based pattern matcher in M5 can't model
+# decorator-binding directly, so we approximate by treating any property
+# access on parameters conventionally named `body` / `query` / `params` /
+# `headers` as tainted. False positives in non-NestJS code are inevitable
+# until the lowerer learns decorators (deferred to M6+).
+#
+# Most NestJS controllers ultimately call into the underlying HTTP adapter
+# (Express by default, optionally Fastify). The express.yaml + fastify.yaml
+# sources are still loaded alongside this spec, so a NestJS controller that
+# touches `req.body.x` directly is also picked up via the Express patterns.
+#
+# Generic Node.js sinks/sanitizers live in node-stdlib.yaml.
+
+framework: nestjs
+version: "*"
+
+sources:
+  - pattern: body.*
+    taint_kind: http_input
+    description: NestJS @Body() decorator-bound parameter
+  - pattern: query.*
+    taint_kind: http_input
+    description: NestJS @Query() decorator-bound parameter
+  - pattern: params.*
+    taint_kind: http_input
+    description: NestJS @Param() decorator-bound parameter
+  - pattern: headers.*
+    taint_kind: http_input
+    description: NestJS @Headers() decorator-bound parameter
+  - pattern: dto.*
+    taint_kind: http_input
+    description: NestJS DTO-typed parameter (convention; high-noise)
+
+sinks: []
+sanitizers: []
