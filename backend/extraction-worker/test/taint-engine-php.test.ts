@@ -53,6 +53,20 @@ const CASES: FixtureCase[] = [
     specs: ['laravel'],
     expectedVulnClass: 'command_injection',
   },
+  {
+    name: 'Symfony SQL injection',
+    vulnDir: 'symfony-sql-injection-vuln',
+    safeDir: 'symfony-sql-injection-safe',
+    specs: ['symfony'],
+    expectedVulnClass: 'sql_injection',
+  },
+  {
+    name: 'Symfony XSS',
+    vulnDir: 'symfony-xss-vuln',
+    safeDir: 'symfony-xss-safe',
+    specs: ['symfony'],
+    expectedVulnClass: 'xss',
+  },
 ];
 
 function summarize(flows: Flow[]): string {
