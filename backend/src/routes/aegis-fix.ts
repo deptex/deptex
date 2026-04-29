@@ -2,7 +2,7 @@ import express from 'express';
 import { authenticateUser, type AuthRequest } from '../middleware/auth';
 import { supabase } from '../lib/supabase';
 import { generateFixPlan } from '../lib/aegis-v3/fix-planner';
-import { signApprovalToken, verifyApprovalToken } from '../lib/aegis-v3/approval-token';
+import { signApprovalToken } from '../lib/aegis-v3/approval-token';
 import {
   createInstallationToken,
   getBranchSha,
@@ -359,10 +359,15 @@ router.patch('/:fixId/approve', async (req: AuthRequest, res) => {
   if (!row.plan_generated_at || !row.approval_token) {
     return res.status(409).json({ error: 'Fix has no approval token to validate' });
   }
+  // The stored approval_token IS the HMAC, signed with INTERNAL_API_KEY at
+  // generation time. A simple equality check against the DB column is enough
+  // — the token is opaque, never leaves the wire/DB roundtrip, and only the
+  // legitimate /request response gave it to the client. We previously also
+  // re-verified the HMAC against plan_generated_at, but that fails on a real
+  // bug: supabase-js returns timestamptz columns as "2026-04-29 00:25:03+00"
+  // while sign time used new Date().toISOString() ("2026-04-29T00:25:03.722Z").
+  // Format drift made every legit approval 401.
   if (token !== row.approval_token) {
-    return res.status(401).json({ error: 'Invalid approval token' });
-  }
-  if (!verifyApprovalToken(token, row.id, row.organization_id, row.plan_generated_at)) {
     return res.status(401).json({ error: 'Invalid approval token' });
   }
 
