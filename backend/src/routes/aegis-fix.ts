@@ -247,8 +247,17 @@ router.post('/request', async (req: AuthRequest, res) => {
       userId,
     );
     const row = await loadFixRow(created.id);
+    const threadId = await ensureFixThread({
+      fixId: created.id,
+      organizationId,
+      projectId,
+      userId,
+      planSummary: plan?.summary ?? null,
+      findingType,
+    });
     return res.status(201).json({
       fixId: created.id,
+      threadId,
       status,
       plan,
       fix: row ? shapeFixRow(row) : null,
@@ -257,6 +266,66 @@ router.post('/request', async (req: AuthRequest, res) => {
     return res.status(500).json({ error: err?.message ?? 'Plan generation failed', fixId: created.id });
   }
 });
+
+/**
+ * Pre-create a chat thread tied to a fix (or return the existing one if already linked).
+ * Lets the sidebar render a status icon for the fix without the user having
+ * sent a message yet, and gives "Fix with Aegis" → chat a 1:1 navigation target.
+ */
+async function ensureFixThread(args: {
+  fixId: string;
+  organizationId: string;
+  projectId: string;
+  userId: string;
+  planSummary: string | null;
+  findingType: FindingType;
+}): Promise<string> {
+  const { fixId, organizationId, projectId, userId, planSummary, findingType } = args;
+
+  const { data: existing } = await supabase
+    .from('aegis_chat_threads')
+    .select('id')
+    .eq('organization_id', organizationId)
+    .eq('context_type', 'fix')
+    .eq('context_id', fixId)
+    .maybeSingle();
+  if (existing?.id) return existing.id as string;
+
+  const fallbackTitle =
+    findingType === 'vulnerability'
+      ? 'Fix Vulnerability'
+      : findingType === 'semgrep'
+        ? 'Fix Semgrep Finding'
+        : 'Remediate Secret';
+  const title = (planSummary?.trim() || fallbackTitle).slice(0, 120);
+
+  const { data: thread, error } = await supabase
+    .from('aegis_chat_threads')
+    .insert({
+      organization_id: organizationId,
+      user_id: userId,
+      created_by: userId,
+      title,
+      project_id: projectId,
+      context_type: 'fix',
+      context_id: fixId,
+    })
+    .select('id')
+    .single();
+  if (error || !thread) {
+    // Don't fail the fix request just because we couldn't pre-create a thread —
+    // the chat will still work, it just won't show an icon in the sidebar.
+    console.error('[aegis-fix] failed to create thread for fix', fixId, error);
+    return '';
+  }
+
+  await supabase.from('aegis_chat_participants').insert({
+    thread_id: thread.id,
+    user_id: userId,
+  });
+
+  return thread.id as string;
+}
 
 router.get('/pending', async (req: AuthRequest, res) => {
   const userId = req.user!.id;

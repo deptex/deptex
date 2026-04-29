@@ -1,5 +1,6 @@
 import { useMemo, useState, type KeyboardEvent } from 'react';
-import { MoreHorizontal, SquarePen, Search, Pencil, Trash2, Loader2, Pin, PinOff, Archive, ArchiveRestore, Clock } from 'lucide-react';
+import { MoreHorizontal, SquarePen, Search, Pencil, Trash2, Loader2, Pin, PinOff, Archive, ArchiveRestore, Clock, Sparkles, CircleCheck, CircleX } from 'lucide-react';
+import type { FixStatusForBadge } from '../../lib/aegis-api';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -14,6 +15,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from '../ui/dialog';
+import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip';
 import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
 import type { AegisThread } from '../../lib/aegis-api';
@@ -30,6 +32,40 @@ interface ThreadListProps {
   onSetPinned: (threadId: string, pinned: boolean) => Promise<void>;
   onSetArchived: (threadId: string, archived: boolean) => Promise<void>;
   onOpenSearch: () => void;
+}
+
+/**
+ * Render the leading status icon for a thread row. `null` fixStatus means a
+ * regular conversation — we show a muted message bubble for visual rhythm.
+ */
+function fixStatusLabel(fixStatus: FixStatusForBadge | null): string | null {
+  switch (fixStatus) {
+    case 'awaiting_approval': return 'Awaiting approval';
+    case 'running': return 'Running';
+    case 'succeeded': return 'PR opened';
+    case 'failed': return 'Failed';
+    case 'refused': return 'Aegis refused';
+    case 'rejected': return 'Plan rejected';
+    default: return null;
+  }
+}
+
+function ThreadIcon({ fixStatus }: { fixStatus: FixStatusForBadge | null }) {
+  const iconClass = 'h-4 w-4 shrink-0';
+  switch (fixStatus) {
+    case 'awaiting_approval':
+      return <CircleCheck className={cn(iconClass, 'text-foreground/50')} aria-label="Awaiting approval" />;
+    case 'running':
+      return <Loader2 className={cn(iconClass, 'text-foreground/80 animate-spin')} aria-label="Running" />;
+    case 'succeeded':
+      return <CircleCheck className={cn(iconClass, 'text-success/75')} aria-label="Fix succeeded" />;
+    case 'failed':
+    case 'refused':
+    case 'rejected':
+      return <CircleX className={cn(iconClass, 'text-error/75')} aria-label="Fix did not land" />;
+    default:
+      return <Sparkles className={cn(iconClass, 'text-foreground/50')} aria-label="Chat" />;
+  }
 }
 
 export function ThreadList({
@@ -79,21 +115,37 @@ export function ThreadList({
             onChange={(e) => setDraftTitle(e.target.value)}
             onBlur={commitRename}
             onKeyDown={onEditKeyDown}
-            className="w-full bg-background-subtle px-3 py-2 text-sm text-foreground outline-none rounded-md ring-1 ring-border focus:ring-foreground/30"
+            className="w-full bg-background-subtle px-3 py-2 text-sm text-foreground rounded-md border-0 ring-1 ring-border outline-none focus:outline-none focus:border-0 focus:ring-1 focus:!ring-foreground/30 focus:ring-offset-0 focus-visible:!ring-foreground/30 focus-visible:ring-offset-0"
           />
         ) : (
-          <button
-            type="button"
-            onClick={() => onSelect(thread.id)}
-            className="w-full text-left px-3 py-2 text-sm truncate pr-8 flex items-center gap-2 text-foreground/90"
-            title={thread.title}
-          >
-            {thread.id === pendingTitleThreadId
-              ? <span className="h-3 w-40 rounded bg-foreground/10 animate-pulse inline-block" />
-              : <span className="truncate">{thread.title}</span>
-            }
-
-          </button>
+          <Tooltip delayDuration={500}>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => onSelect(thread.id)}
+                className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 text-foreground/90 overflow-hidden"
+              >
+                <ThreadIcon fixStatus={thread.fixStatus} />
+                {isPending ? (
+                  <span className="h-3 w-40 rounded bg-foreground/10 animate-pulse inline-block" />
+                ) : (
+                  <span className="block min-w-0 flex-1 whitespace-nowrap overflow-hidden [mask-image:linear-gradient(to_right,black_calc(100%-12px),transparent)] group-hover:[mask-image:linear-gradient(to_right,black_calc(100%-44px),transparent)]">
+                    {thread.title}
+                  </span>
+                )}
+              </button>
+            </TooltipTrigger>
+            {!isPending && (
+              <TooltipContent side="right" sideOffset={8} className="max-w-xs whitespace-normal break-words">
+                <div className="font-semibold text-foreground">{thread.title}</div>
+                {fixStatusLabel(thread.fixStatus) && (
+                  <div className="mt-1 text-foreground/60">
+                    Status: {fixStatusLabel(thread.fixStatus)}
+                  </div>
+                )}
+              </TooltipContent>
+            )}
+          </Tooltip>
         )}
         {!isEditing && (
           <DropdownMenu>
@@ -238,21 +290,30 @@ export function ThreadList({
       </div>
 
       <Dialog open={!!confirmDeleteId} onOpenChange={(open) => !open && !deleting && setConfirmDeleteId(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete chat?</DialogTitle>
-            <DialogDescription>
-              This will permanently delete the thread and its messages. This cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setConfirmDeleteId(null)} disabled={deleting}>
+        <DialogContent hideClose className="p-0 gap-0 overflow-hidden bg-background-card-header">
+          <div className="p-6">
+            <DialogHeader>
+              <DialogTitle>Delete chat?</DialogTitle>
+              <DialogDescription>
+                This will permanently delete the thread and its messages. This cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+          </div>
+          <div className="flex items-center justify-between px-6 py-4 border-t border-border bg-background">
+            <Button variant="outline" onClick={() => setConfirmDeleteId(null)} disabled={deleting}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={confirmDelete} disabled={deleting}>
-              {deleting ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Deleting…</> : 'Delete'}
+            <Button
+              variant="destructive"
+              onClick={confirmDelete}
+              disabled={deleting}
+              className={cn(
+                deleting && 'disabled:opacity-100 disabled:bg-background-subtle disabled:text-foreground/70',
+              )}
+            >
+              {deleting ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Delete</> : 'Delete'}
             </Button>
-          </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

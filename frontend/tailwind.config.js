@@ -42,7 +42,7 @@ export default {
           foreground: "#0D0F12",
         },
         error: {
-          DEFAULT: "#EF5350",
+          DEFAULT: "#D43A38",
           foreground: "#F0F4F8",
         },
         info: {
