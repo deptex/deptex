@@ -61,6 +61,12 @@ sources:
   - pattern: Path.into_inner(*)
     taint_kind: http_input
     description: Path<T>.into_inner()
+  # Wildcard receiver — the IR records the LOCAL variable name (e.g. `query`),
+  # not the static type. Mirrors the actix-web spec's `*.into_inner(*)` fallback
+  # so axum handlers using `let q = query.into_inner()` are still tainted.
+  - pattern: "*.into_inner(*)"
+    taint_kind: http_input
+    description: any *.into_inner() — axum extractor unwrap (wildcard receiver)
 
   # ---------- Field reads on handler params ----------
   - pattern: params.*

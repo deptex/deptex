@@ -399,9 +399,13 @@ function matchSanitizerPattern(calleeText: string, specs: FrameworkSpec[]): Fram
   return null;
 }
 
-function matchesCallPattern(pattern: string, calleeText: string): boolean {
+export function matchesCallPattern(pattern: string, calleeText: string): boolean {
   const p = pattern.endsWith('(*)') ? pattern.slice(0, -3) : pattern;
-  if (p.startsWith('*.')) {
+  // Wildcard receiver: `*.method`, `*->method`, `*::method` — match any receiver
+  // calling `method` via the spec-declared separator. Languages emit calleeText
+  // using their native separator (PHP/symfony uses `->`, Rust uses `::`, JS/Ruby/
+  // Python use `.`), so the matcher honors whichever the YAML author wrote.
+  if (p.startsWith('*.') || p.startsWith('*->') || p.startsWith('*::')) {
     const suffix = p.slice(1);
     return calleeText.endsWith(suffix);
   }
