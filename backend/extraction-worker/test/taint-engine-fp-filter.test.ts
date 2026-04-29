@@ -119,18 +119,16 @@ function restoreFetch(): void {
   stubCalls = [];
 }
 
-function makeGeminiBody(verdict: 'kept' | 'rejected', reasoning: string, confidence: number) {
+function makeQwenBody(verdict: 'kept' | 'rejected', reasoning: string, confidence: number) {
   return {
-    candidates: [
+    choices: [
       {
-        content: {
-          parts: [
-            { text: JSON.stringify({ verdict, reasoning, confidence }) },
-          ],
+        message: {
+          content: JSON.stringify({ verdict, reasoning, confidence }),
         },
       },
     ],
-    usageMetadata: { promptTokenCount: 800, candidatesTokenCount: 50 },
+    usage: { prompt_tokens: 800, completion_tokens: 50 },
   };
 }
 
@@ -184,12 +182,12 @@ async function testEstimatePerFlowCost() {
   console.log('\n[test] estimatePerFlowCostUsd is positive');
   const cost = estimatePerFlowCostUsd(makeFlow());
   assert(cost > 0, `cost > 0 (got ${cost})`);
-  assert(cost < 0.01, `cost reasonable for one Gemini Flash call (got ${cost})`);
+  assert(cost < 0.01, `cost reasonable for one DeepInfra Qwen call (got ${cost})`);
 }
 
 async function testFilterFlowKept() {
   console.log('\n[test] filterFlow: model returns kept');
-  stubFetch(() => ({ body: makeGeminiBody('kept', 'real exploit', 0.9) }));
+  stubFetch(() => ({ body: makeQwenBody('kept', 'real exploit', 0.9) }));
   const calls: any[] = [];
   const logger = { async log(input: any) { calls.push(input); } };
   const result = await filterFlow(
@@ -210,7 +208,7 @@ async function testFilterFlowKept() {
 
 async function testFilterFlowRejected() {
   console.log('\n[test] filterFlow: model returns rejected');
-  stubFetch(() => ({ body: makeGeminiBody('rejected', 'sanitized via prepared statement', 0.85) }));
+  stubFetch(() => ({ body: makeQwenBody('rejected', 'sanitized via prepared statement', 0.85) }));
   const calls: any[] = [];
   const logger = { async log(input: any) { calls.push(input); } };
   const result = await filterFlow(
@@ -227,8 +225,8 @@ async function testFilterFlowMalformedJson() {
   console.log('\n[test] filterFlow: model returns garbage → kept_on_error');
   stubFetch(() => ({
     body: {
-      candidates: [{ content: { parts: [{ text: 'definitely not json' }] } }],
-      usageMetadata: { promptTokenCount: 800, candidatesTokenCount: 5 },
+      choices: [{ message: { content: 'definitely not json' } }],
+      usage: { prompt_tokens: 800, completion_tokens: 5 },
     },
   }));
   const calls: any[] = [];
@@ -268,7 +266,7 @@ async function testRunnerThresholdGating() {
   // (the runner resolves relative to __dirname), so ran=true but no flows
   // means the filter's no_flows short-circuit fires before any fetch.
   let fetchCalled = false;
-  stubFetch(() => { fetchCalled = true; return { body: makeGeminiBody('kept', 'x', 0.9) }; });
+  stubFetch(() => { fetchCalled = true; return { body: makeQwenBody('kept', 'x', 0.9) }; });
   const storage = await createPGLiteStorage();
   await storage.from('organizations').insert({ id: ORG_ID, name: 'fp-test', created_at: new Date().toISOString() });
 
@@ -322,8 +320,8 @@ async function testCostCapPreCheck() {
     user_id: USER_ID,
     feature: 'taint_engine_spec_inference',
     tier: 'platform',
-    provider: 'google',
-    model: 'gemini-2.5-flash',
+    provider: 'openai',
+    model: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
     input_tokens: 100000,
     output_tokens: 1000,
     estimated_cost: 1.5,
@@ -348,7 +346,7 @@ async function testCostCapPreCheck() {
   );
 
   let fetchCalled = false;
-  stubFetch(() => { fetchCalled = true; return { body: makeGeminiBody('kept', 'x', 0.9) }; });
+  stubFetch(() => { fetchCalled = true; return { body: makeQwenBody('kept', 'x', 0.9) }; });
 
   const result = await runEngine({
     workspaceRoot: tmpDir,
@@ -401,7 +399,7 @@ async function testAiLayerDisabled() {
   // Empty workspace; even when ai_layer_enabled=false the runner reads the
   // setting and bails before invoking the model. We assert no fetch went out.
   let fetchCalled = false;
-  stubFetch(() => { fetchCalled = true; return { body: makeGeminiBody('kept', 'x', 0.9) }; });
+  stubFetch(() => { fetchCalled = true; return { body: makeQwenBody('kept', 'x', 0.9) }; });
   const result = await runEngine({
     workspaceRoot: tmpDir,
     fpFilter: {
@@ -445,8 +443,8 @@ async function testUsageLoggerSwallowsErrors() {
     userId: USER_ID,
     feature: 'taint_engine_fp_filter',
     tier: 'platform',
-    provider: 'google',
-    model: 'gemini-2.5-flash',
+    provider: 'openai',
+    model: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
     inputTokens: 10,
     outputTokens: 5,
     estimatedCost: 0.000001,

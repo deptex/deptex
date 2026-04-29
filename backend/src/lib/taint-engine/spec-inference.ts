@@ -3,7 +3,7 @@
  *
  * Given a framework name + version + a small sample of its source code
  * (route handlers, middleware exports, request-object surface), asks
- * platform Gemini Flash to produce a FrameworkSpec JSON listing sources
+ * DeepInfra Qwen to produce a FrameworkSpec JSON listing sources
  * (request-data accessors), sinks (response writers + dangerous helpers),
  * and sanitizers. The returned spec is validated against the same
  * hand-rolled validator that loads YAML specs in the engine.
@@ -14,15 +14,28 @@
  *   - The "add framework" admin flow (initial inference for a brand-new
  *     framework not yet in the cache)
  *
- * Tier: platform (we pay) per locked decision #14. Cost caps live in
- * taint_engine_settings.monthly_ai_cost_cap_usd; ./cost-cap.ts handles
- * pre-call enforcement against ai_usage_logs aggregation.
+ * Tier: DeepInfra Qwen3-235B-Instruct via OpenAI-compatible endpoint —
+ * matches Phase 5's rule-generator wiring for cost consistency. Cost caps
+ * live in taint_engine_settings.monthly_ai_cost_cap_usd; ./cost-cap.ts
+ * handles pre-call enforcement against ai_usage_logs aggregation.
  */
 
-import { getPlatformProvider } from '../ai/provider';
 import { logAIUsage } from '../ai/logging';
-import { estimateCost } from '../ai/pricing';
-import type { ChatResult } from '../ai/types';
+
+const DEEPINFRA_URL = 'https://api.deepinfra.com/v1/openai/chat/completions';
+const DEFAULT_MODEL = 'Qwen/Qwen3-235B-A22B-Instruct-2507';
+/** DeepInfra Qwen3-235B pricing, USD per token (Apr 2026 published rates). */
+const PRICING = {
+  inputPerToken: 0.071 / 1_000_000,
+  outputPerToken: 0.10 / 1_000_000,
+};
+/** Spec inference prompts include up to ~30KB of framework source — give the
+ *  model time to read and respond. Phase 5 settled on 3min for big prompts. */
+const REQUEST_TIMEOUT_MS = 180_000;
+
+function estimateInputTokensFromText(text: string): number {
+  return Math.ceil(text.length / 4);
+}
 
 /**
  * The closed taxonomies the engine recognizes. Kept in sync with the
@@ -86,7 +99,7 @@ export interface InferenceInput {
    * verbatim to the model.
    */
   codeSamples: Array<{ path: string; content: string }>;
-  /** Optional model override; defaults to gemini-2.5-flash via getPlatformProvider. */
+  /** Optional model override; defaults to Qwen/Qwen3-235B-A22B-Instruct-2507. */
   modelOverride?: string;
 }
 
@@ -164,30 +177,74 @@ function userPrompt(input: InferenceInput): string {
  */
 export async function inferFrameworkSpec(input: InferenceInput): Promise<InferenceOutput> {
   const start = Date.now();
-  const provider = getPlatformProvider();
-  const model = input.modelOverride ?? 'gemini-2.5-flash';
+  const apiKey = process.env.DEEPINFRA_API_KEY;
+  if (!apiKey) {
+    throw new Error('DEEPINFRA_API_KEY not configured; cannot run taint-engine spec inference');
+  }
+  const model = input.modelOverride ?? DEFAULT_MODEL;
+  const userText = userPrompt(input);
 
-  let result: ChatResult;
-  let success = false;
-  let errorMessage: string | undefined;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let content = '';
   try {
-    result = await provider.chat(
-      [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userPrompt(input) },
-      ],
-      { model, temperature: 0, maxTokens: 4000 },
-    );
-    success = true;
+    const response = await fetch(DEEPINFRA_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${apiKey}`,
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        max_tokens: 4000,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: userText },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => '');
+      const errorMessage = `DeepInfra returned HTTP ${response.status}: ${errBody.slice(0, 200)}`;
+      await logAIUsage({
+        organizationId: input.organizationId,
+        userId: input.userId,
+        feature: FEATURE,
+        tier: 'platform',
+        provider: 'openai',
+        model,
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs: Date.now() - start,
+        success: false,
+        errorMessage,
+      });
+      throw new Error(errorMessage);
+    }
+
+    const payload = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
+    inputTokens = Number(payload.usage?.prompt_tokens ?? estimateInputTokensFromText(userText));
+    outputTokens = Number(payload.usage?.completion_tokens ?? 0);
+    content = payload.choices?.[0]?.message?.content ?? '';
   } catch (err) {
-    errorMessage = err instanceof Error ? err.message : String(err);
-    // Telemetry first (success=false), then rethrow.
+    if ((err as Error).message?.startsWith('DeepInfra returned HTTP')) throw err;
+    const errorMessage = err instanceof Error ? err.message : String(err);
     await logAIUsage({
       organizationId: input.organizationId,
       userId: input.userId,
       feature: FEATURE,
       tier: 'platform',
-      provider: 'google',
+      provider: 'openai',
       model,
       inputTokens: 0,
       outputTokens: 0,
@@ -196,30 +253,30 @@ export async function inferFrameworkSpec(input: InferenceInput): Promise<Inferen
       errorMessage,
     });
     throw err;
+  } finally {
+    clearTimeout(timer);
   }
 
-  // Always log usage on a successful provider call, even if parse/validate
-  // fails downstream — the cost was incurred either way.
-  const costUsd = estimateCost(model, result.usage.inputTokens, result.usage.outputTokens);
+  const costUsd = inputTokens * PRICING.inputPerToken + outputTokens * PRICING.outputPerToken;
   await logAIUsage({
     organizationId: input.organizationId,
     userId: input.userId,
     feature: FEATURE,
     tier: 'platform',
-    provider: 'google',
+    provider: 'openai',
     model,
-    inputTokens: result.usage.inputTokens,
-    outputTokens: result.usage.outputTokens,
+    inputTokens,
+    outputTokens,
     durationMs: Date.now() - start,
-    success,
+    success: true,
   });
 
-  const spec = parseAndValidateSpec(result.content, input.frameworkName, input.frameworkVersion);
+  const spec = parseAndValidateSpec(content, input.frameworkName, input.frameworkVersion);
   return {
     spec,
     model,
-    inputTokens: result.usage.inputTokens,
-    outputTokens: result.usage.outputTokens,
+    inputTokens,
+    outputTokens,
     costUsd,
     durationMs: Date.now() - start,
   };
