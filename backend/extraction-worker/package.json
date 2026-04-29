@@ -18,6 +18,7 @@
     "taint-engine:benchmark": "tsx scripts/taint-engine-benchmark.ts",
     "taint-engine:retirement-gates": "tsx scripts/taint-engine-retirement-gates.ts",
     "taint-engine:shadow-monitor": "tsx scripts/taint-engine-shadow-monitor.ts",
+    "taint-engine:smoke-cross-ecosystem": "tsx test/taint-engine/scripts/smoke-cross-ecosystem.ts",
     "test:taint-engine-invariants": "tsx test/taint-engine-invariants.test.ts",
     "test:taint-engine-callgraph": "tsx test/taint-engine-callgraph.test.ts",
     "test:taint-engine-propagator": "tsx test/taint-engine-propagator.test.ts",
