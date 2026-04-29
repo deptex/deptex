@@ -187,6 +187,73 @@ export interface OrganizationMember {
   teams?: Array<{ id: string; name: string }>;
 }
 
+// Aegis Fix Agent types — mirror the backend's plan-types.ts.
+export type FindingType = 'vulnerability' | 'semgrep' | 'secret';
+export type FixStatus =
+  | 'planning'
+  | 'awaiting_approval'
+  | 'approved'
+  | 'executing'
+  | 'completed'
+  | 'failed'
+  | 'rejected';
+export type PlanLanguage =
+  | 'js' | 'ts' | 'python' | 'go' | 'java' | 'ruby' | 'php' | 'rust' | 'csharp';
+export type PlanDiffSize = 'small' | 'medium' | 'large';
+
+export interface PlanFileChange {
+  path: string;
+  action: 'modify' | 'create' | 'delete';
+  description: string;
+}
+
+export interface FixPlan {
+  summary: string;
+  finding: { type: FindingType; id: string; severity?: string };
+  currentState: string[];
+  desiredState: string[];
+  fileChanges: PlanFileChange[];
+  testCommand: string;
+  language: PlanLanguage;
+  estimatedDiffSize: PlanDiffSize;
+  wallClockBudgetSec: number;
+  refusal?: { reason: string; manualSuggestion?: string };
+}
+
+export interface FixRecord {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  status: FixStatus;
+  finding: { type: FindingType; id: string };
+  plan: FixPlan | null;
+  planGeneratedAt: string | null;
+  planBaseSha: string | null;
+  planBaseBranch: string | null;
+  approvalToken: string | null;
+  approvedAt: string | null;
+  rejectedAt: string | null;
+  prUrl: string | null;
+  prNumber: number | null;
+  diffSummary: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+}
+
+export interface RequestFixResponse {
+  fixId: string;
+  status: FixStatus;
+  plan: FixPlan;
+  fix?: FixRecord | null;
+}
+
+export interface FixStalenessResponse {
+  isStale: boolean;
+  currentHeadSha: string | null;
+  baseSha: string | null;
+  baseBranch: string | null;
+}
+
 export async function getAuthToken(): Promise<string | null> {
   const { data: { session }, error } = await supabase.auth.getSession();
 
@@ -2589,45 +2656,49 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/teams/${teamId}/stats`);
   },
 
-  // AI Fix
-  async requestFix(orgId: string, projectId: string, body: {
-    strategy: string;
-    vulnerabilityOsvId?: string;
-    dependencyId?: string;
-    projectDependencyId?: string;
-    targetVersion?: string;
-    semgrepFindingId?: string;
-    secretFindingId?: string;
-  }): Promise<{ success: boolean; jobId?: string; error?: string; errorCode?: string }> {
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fix`, {
+  // Aegis Fix Agent (plan-then-approve flow). Replaces the legacy aider-worker
+  // direct-execute fix API; that worker is being retired.
+  async requestFix(body: {
+    organizationId: string;
+    projectId: string;
+    findingType: FindingType;
+    findingId: string;
+  }): Promise<RequestFixResponse> {
+    return fetchWithAuth('/api/aegis/fix/request', {
       method: 'POST',
       body: JSON.stringify(body),
     });
   },
 
-  async getFixStatus(orgId: string, projectId: string): Promise<FixJob[]> {
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fix-status`);
+  async getFix(fixId: string): Promise<{ fix: FixRecord }> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}`);
   },
 
-  async getFixes(orgId: string, projectId: string, params?: {
-    osvId?: string;
-    semgrepFindingId?: string;
-    secretFindingId?: string;
-    status?: string;
-  }): Promise<FixJob[]> {
-    const search = new URLSearchParams();
-    if (params?.osvId) search.set('osvId', params.osvId);
-    if (params?.semgrepFindingId) search.set('semgrepFindingId', params.semgrepFindingId);
-    if (params?.secretFindingId) search.set('secretFindingId', params.secretFindingId);
-    if (params?.status) search.set('status', params.status);
-    const qs = search.toString();
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fixes${qs ? `?${qs}` : ''}`);
+  async getFixStaleness(fixId: string): Promise<FixStalenessResponse> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}/staleness`);
   },
 
-  async cancelFix(orgId: string, projectId: string, fixId: string): Promise<{ success: boolean }> {
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fixes/${fixId}/cancel`, {
-      method: 'POST',
+  async approveFix(fixId: string, token: string): Promise<{ fix: FixRecord }> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}/approve`, {
+      method: 'PATCH',
+      body: JSON.stringify({ token }),
     });
+  },
+
+  async rejectFix(fixId: string, reason?: string): Promise<{ fix: FixRecord }> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}/reject`, {
+      method: 'PATCH',
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
+  },
+
+  async regenerateFixPlan(fixId: string): Promise<RequestFixResponse> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}/regenerate`, { method: 'POST' });
+  },
+
+  async getPendingFixes(organizationId: string): Promise<{ fixes: FixRecord[] }> {
+    const qs = new URLSearchParams({ organizationId });
+    return fetchWithAuth(`/api/aegis/fix/pending?${qs.toString()}`);
   },
 
   // Learning
@@ -3451,7 +3522,7 @@ export interface AIUsageSummary {
   byUser: Array<{ userId: string; tokens: number; cost: number; count: number }>;
 }
 
-export type PlatformAIProvider = 'openai' | 'anthropic' | 'google';
+export type PlatformAIProvider = 'openai' | 'anthropic' | 'google' | 'deepinfra';
 
 export interface AIDefaultProvider {
   provider: PlatformAIProvider;

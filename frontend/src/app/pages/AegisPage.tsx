@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
 import { aegisApi, type AegisThread } from '../../lib/aegis-api';
 import type { Organization } from '../../lib/api';
 import { ThreadList } from '../../components/aegis/ThreadList';
 import { ChatPane } from '../../components/aegis/ChatPane';
 import { SearchChatsModal } from '../../components/aegis/SearchChatsModal';
+import { PlanCard } from '../../components/aegis/PlanCard';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
 
@@ -16,6 +17,8 @@ interface OrgOutlet {
 export default function AegisPage() {
   const { id: orgId, threadId: activeThreadId } = useParams<{ id: string; threadId?: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const fixIdParam = searchParams.get('fix');
   const { organization } = useOutletContext<OrgOutlet>();
   const { user } = useAuth();
   const { toast } = useToast();
@@ -222,6 +225,13 @@ export default function AegisPage() {
         />
       </aside>
       <main className="flex-1 flex flex-col min-w-0">
+        {fixIdParam && (
+          <div className="px-4 pt-4">
+            <div className="mx-auto max-w-3xl">
+              <PlanCard fixId={fixIdParam} />
+            </div>
+          </div>
+        )}
         <ChatPane
           key={chatKey}
           organizationId={orgId}

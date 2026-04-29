@@ -4,12 +4,14 @@ import { projectsTools } from './projects';
 import { securityTools } from './security';
 import { intelligenceTools } from './intelligence';
 import { policyTools } from './policy';
+import { fixTools } from './fix';
 
 export const ALL_AEGIS_TOOLS: AegisToolEntry[] = [
   ...projectsTools,
   ...securityTools,
   ...intelligenceTools,
   ...policyTools,
+  ...fixTools,
 ];
 
 export function buildToolSet(ctx: AegisToolContext) {

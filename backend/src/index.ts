@@ -38,6 +38,7 @@ import integrationsRouter, { githubWebhookHandler } from './routes/integrations'
 import invitationsRouter from './routes/invitations';
 import aegisRouter from './routes/aegis';
 import aegisV3Router from './routes/aegis-v3';
+import aegisFixRouter from './routes/aegis-fix';
 import workersRouter from './routes/workers';
 import internalRouter from './routes/internal';
 import adminRouter from './routes/admin';
@@ -133,6 +134,7 @@ app.use('/api/integrations', integrationsRouter);
 app.use('/api/invitations', invitationsRouter);
 app.use('/api/aegis', aegisRouter);
 app.use('/api/aegis/v3', aegisV3Router);
+app.use('/api/aegis/fix', aegisFixRouter);
 app.use('/api/workers', workersRouter);
 app.use('/api/internal', internalRouter);
 app.use('/api/admin', adminRouter);
