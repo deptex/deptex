@@ -42,6 +42,7 @@ export type LogStep =
   | 'complete'
   | 'usage_extraction'
   | 'framework_detection'
+  | 'taint_engine'
   | 'populate'
   | 'api';
 
@@ -58,6 +59,7 @@ const CLI_STEP_LABELS: Record<string, string> = {
   depscan: 'vulns',
   usage_extraction: 'imports',
   framework_detection: 'frameworks',
+  taint_engine: 'taint',
   deps_sync: 'deps',
   clone: 'clone',
   cloning: 'clone',
