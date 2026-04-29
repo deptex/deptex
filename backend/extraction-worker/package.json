@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc && node -e \"require('fs').cpSync('src/taint-engine/framework-models', 'dist/taint-engine/framework-models', { recursive: true })\"",
     "start": "node dist/index.js",
     "type-check": "tsc --noEmit",
     "schema:dump": "tsx scripts/dump-schema.ts",
@@ -47,12 +47,12 @@
     "js-yaml": "^4.1.1",
     "simple-git": "^3.22.0",
     "stream-json": "^1.8.0",
+    "typescript": "^5.3.3",
     "web-tree-sitter": "^0.26.8"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.10.6",
-    "tsx": "^4.7.0",
-    "typescript": "^5.3.3"
+    "tsx": "^4.7.0"
   }
 }
