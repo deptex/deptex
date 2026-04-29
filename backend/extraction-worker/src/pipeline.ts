@@ -22,7 +22,7 @@ import { applyEpdScoringFallback, EpdBudgetExceededError } from './epd';
 import { withTimeout, logStepError, classifyError } from './with-timeout';
 import {
   runEngine as runTaintEngine,
-  shouldRunForRollout as shouldRunTaintEngineForRollout,
+  shouldRunForOrg as shouldRunTaintEngineForOrg,
   writeFlows as writeTaintEngineFlows,
   writeRun as writeTaintEngineRun,
   checkCircuitBreaker as checkTaintEngineCircuitBreaker,
@@ -913,8 +913,8 @@ export async function runPipeline(
       const stepStart = Date.now();
       await updateStep(supabase, projectId, 'taint_engine');
 
-      if (!shouldRunTaintEngineForRollout()) {
-        await log.info('taint_engine', 'Skipped: rollout pct gate (DEPTEX_TAINT_ENGINE_ROLLOUT_PCT)');
+      if (!(await shouldRunTaintEngineForOrg(supabase, organizationId))) {
+        await log.info('taint_engine', 'Skipped: rollout pct gate (DEPTEX_TAINT_ENGINE_ROLLOUT_PCT or rollout_pct_override)');
         await writeTaintEngineRun(supabase, {
           projectId,
           organizationId,

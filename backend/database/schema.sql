@@ -1399,7 +1399,8 @@ CREATE TABLE IF NOT EXISTS public.taint_engine_settings (
   killswitch_activated_at timestamp with time zone,
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now(),
-  ai_fp_filter_confidence_threshold numeric(3,2) DEFAULT 0.70
+  ai_fp_filter_confidence_threshold numeric(3,2) DEFAULT 0.70,
+  rollout_pct_override smallint
 );
 CREATE TABLE IF NOT EXISTS public.team_banned_versions (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1814,6 +1815,7 @@ ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_
 ALTER TABLE public.projects ADD CONSTRAINT projects_health_score_check CHECK (((health_score >= 0) AND (health_score <= 100)));
 ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_source_type_check CHECK ((source_type = ANY (ARRAY['hand_written'::text, 'ai_inferred'::text, 'user_edited'::text])));
 ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_status_check CHECK ((status = ANY (ARRAY['running'::text, 'completed'::text, 'failed'::text, 'aborted'::text, 'skipped'::text])));
+ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_rollout_chk CHECK (((rollout_pct_override IS NULL) OR ((rollout_pct_override >= 0) AND (rollout_pct_override <= 100))));
 ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_threshold_chk CHECK (((ai_fp_filter_confidence_threshold >= (0)::numeric) AND (ai_fp_filter_confidence_threshold <= (1)::numeric)));
 ALTER TABLE public.team_notification_rules ADD CONSTRAINT team_notification_rules_trigger_type_check CHECK ((trigger_type = ANY (ARRAY['weekly_digest'::text, 'custom_code_pipeline'::text])));
 ALTER TABLE public.user_notification_preferences ADD CONSTRAINT user_notification_preferences_digest_preference_check CHECK ((digest_preference = ANY (ARRAY['instant'::text, 'daily_digest'::text, 'weekly_digest'::text, 'off'::text])));
@@ -4218,6 +4220,23 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.get_taint_engine_recent_runs(p_days integer)
+ RETURNS TABLE(status text, ai_cost_usd numeric, total_ms integer, failed_at timestamp with time zone, organization_id uuid, project_id uuid)
+ LANGUAGE sql
+ STABLE
+AS $function$
+  SELECT
+    status,
+    ai_cost_usd,
+    total_ms,
+    completed_at AS failed_at,
+    organization_id,
+    project_id
+  FROM public.taint_engine_runs
+  WHERE created_at >= now() - (GREATEST(p_days, 1) || ' days')::interval;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.get_watchtower_commits_by_anomaly(p_watched_package_id uuid, p_since_created_at timestamp with time zone, p_cleared_shas text[], p_limit integer, p_offset integer)
  RETURNS SETOF package_commits
  LANGUAGE sql
@@ -5626,8 +5645,6 @@ CREATE TRIGGER add_project_creator_trigger AFTER INSERT ON public.projects FOR E
 CREATE TRIGGER create_project_roles_trigger AFTER INSERT ON public.projects FOR EACH ROW EXECUTE FUNCTION create_default_project_roles();
 CREATE TRIGGER create_team_roles_trigger AFTER INSERT ON public.teams FOR EACH ROW EXECUTE FUNCTION create_default_team_roles();
 CREATE TRIGGER organization_integrations_updated_at BEFORE UPDATE ON public.organization_integrations FOR EACH ROW EXECUTE FUNCTION update_organization_integrations_updated_at();
-CREATE TRIGGER trigger_update_pr_guardrails_updated_at BEFORE UPDATE ON public.project_pr_guardrails FOR EACH ROW EXECUTE FUNCTION update_pr_guardrails_updated_at();
-CREATE TRIGGER update_organization_notification_rules_updated_at BEFORE UPDATE ON public.organization_notification_rules FOR EACH ROW EXECUTE FUNCTION update_organization_notification_rules_updated_at();
 CREATE TRIGGER update_organization_policies_updated_at BEFORE UPDATE ON public.organization_policies FOR EACH ROW EXECUTE FUNCTION update_organization_policies_updated_at();
 CREATE TRIGGER update_project_policy_exceptions_updated_at BEFORE UPDATE ON public.project_policy_exceptions FOR EACH ROW EXECUTE FUNCTION update_project_policy_exceptions_updated_at();
 CREATE TRIGGER update_user_profiles_updated_at BEFORE UPDATE ON public.user_profiles FOR EACH ROW EXECUTE FUNCTION update_user_profiles_updated_at();
