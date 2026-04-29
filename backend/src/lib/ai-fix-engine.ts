@@ -58,15 +58,23 @@ export async function gatherVulnerabilityContext(req: FixRequest): Promise<Recor
     dependency = dep;
   }
 
+  // Vuln metadata lives in dependency_vulnerabilities, keyed on
+  // (dependency_id, osv_id) — the same OSV can affect multiple deps so we
+  // scope by dependency when we know it. Falls back to "first match by
+  // osv_id" when the dependency wasn't resolvable, which is fine for the
+  // planner prompt (severity/summary/fixed_versions are repo-level facts).
   let vulnerability: any = null;
   if (req.vulnerabilityOsvId) {
-    const { data: vuln } = await supabase
-      .from('vulnerabilities')
+    let query = supabase
+      .from('dependency_vulnerabilities')
       .select(
-        'osv_id, summary, details, severity, cvss_score, fixed_versions, vulnerable_versions, references',
+        'osv_id, severity, summary, details, classification, fixed_versions, affected_versions, aliases, cwe_ids',
       )
-      .eq('osv_id', req.vulnerabilityOsvId)
-      .maybeSingle();
+      .eq('osv_id', req.vulnerabilityOsvId);
+    if (dependency?.id) {
+      query = query.eq('dependency_id', dependency.id);
+    }
+    const { data: vuln } = await query.limit(1).maybeSingle();
     vulnerability = vuln;
   }
 
