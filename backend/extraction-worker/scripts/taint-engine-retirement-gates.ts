@@ -25,6 +25,9 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import * as dotenv from 'dotenv';
+dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
+
 import { createSupabaseStorage } from '../src/storage';
 import { evaluateRetirementGates } from '../src/taint-engine/benchmark';
 import type { BenchmarkReport } from '../src/taint-engine/benchmark';

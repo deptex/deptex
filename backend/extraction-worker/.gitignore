@@ -6,6 +6,7 @@
 extraction-results/
 test-*-results/
 test-output-*/
+out/
 
 # Staged by docker:prepare for COPY into image
 .schema/
