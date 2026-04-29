@@ -25,14 +25,16 @@ function detectNoTestSuite(opts: {
   stdout: string;
 }): boolean {
   const text = `${opts.stdout}\n${opts.stderr}`.toLowerCase();
-  // npm init's default test script
+  // npm init's default test script: `echo "Error: no test specified" && exit 1`
   if (text.includes('error: no test specified')) return true;
-  // pytest exits 5 when no tests collected
+  // npm errors when package.json has no "test" script at all.
+  // Format: `npm error Missing script: "test"` (npm 10+) or
+  //         `npm ERR! missing script: test` (npm 6).
+  if (text.includes('missing script:')) return true;
+  // pytest exits 5 when no tests are collected
   if (opts.testCommand.startsWith('pytest') && opts.exitCode === 5) return true;
   if (text.includes('no tests ran') || text.includes('collected 0 items')) return true;
-  // go test exits 0 with this message when there are no _test.go files; harmless
-  // but worth flagging so we don't claim "tests passed" if a future change
-  // makes the gate stricter
+  // go test exits with `[no test files]` when there are no _test.go files
   if (text.includes('[no test files]')) return true;
   return false;
 }
