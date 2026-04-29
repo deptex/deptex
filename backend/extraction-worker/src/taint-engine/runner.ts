@@ -25,8 +25,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { propagate, type PropagateResult } from './propagator';
+import { propagatePython } from './python/propagate';
+import { propagateJava } from './java/propagate';
+import { propagateGo } from './go/propagate';
 import { loadSpec } from './spec-loader';
-import type { FrameworkSpec } from './spec';
+import type { FrameworkSpec, FrameworkLanguage } from './spec';
 import type { Flow } from './flow';
 import {
   filterFlow,
@@ -39,6 +42,12 @@ import type { Storage } from '../storage';
 export interface RunEngineOptions {
   /** Absolute path to the cloned repo / workspace root. */
   workspaceRoot: string;
+  /**
+   * Project ecosystem (npm/pypi/maven/gomod). Drives language dispatch:
+   * npm → JS/TS, pypi → Python, maven → Java, gomod → Go. Defaults to
+   * 'npm' (the original Phase 6 behavior) for backward compatibility.
+   */
+  ecosystem?: 'npm' | 'pypi' | 'maven' | 'gomod' | string;
   /** Optional cap on iterations; default 50× function count. */
   maxIterations?: number;
   /**
@@ -56,6 +65,21 @@ export interface RunEngineOptions {
    * runs deterministic-only — safe for self-host without keys.
    */
   fpFilter?: FpFilterContext;
+}
+
+/** Map an SBOM-style ecosystem identifier to the framework spec language. */
+function ecosystemToLanguage(ecosystem: string | undefined): FrameworkLanguage {
+  switch (ecosystem) {
+    case 'pypi':
+      return 'python';
+    case 'maven':
+      return 'java';
+    case 'gomod':
+      return 'go';
+    case 'npm':
+    default:
+      return 'js';
+  }
 }
 
 export interface FpFilterContext {
@@ -114,29 +138,31 @@ const FRAMEWORK_MODELS_DIR = path.resolve(__dirname, 'framework-models');
 
 export async function runEngine(options: RunEngineOptions): Promise<RunEngineResult> {
   const { workspaceRoot, onWarn } = options;
+  const language = ecosystemToLanguage(options.ecosystem);
 
-  const specs: FrameworkSpec[] = [];
-  const frameworksLoaded: string[] = [];
-
+  const allSpecs: FrameworkSpec[] = [];
   if (fs.existsSync(FRAMEWORK_MODELS_DIR)) {
     const entries = fs.readdirSync(FRAMEWORK_MODELS_DIR);
     for (const entry of entries) {
       if (!entry.endsWith('.yaml') && !entry.endsWith('.yml')) continue;
       const full = path.join(FRAMEWORK_MODELS_DIR, entry);
       try {
-        const spec = loadSpec(full);
-        specs.push(spec);
-        frameworksLoaded.push(spec.framework);
+        allSpecs.push(loadSpec(full));
       } catch (err) {
         onWarn?.(`failed to load spec ${entry}: ${(err as Error).message}`);
       }
     }
   }
 
+  // Filter by language: a spec without an explicit language tag defaults to
+  // 'js' (the original Phase 6 specs predate the field).
+  const specs = allSpecs.filter((s) => (s.language ?? 'js') === language);
+  const frameworksLoaded = specs.map((s) => s.framework);
+
   if (specs.length === 0) {
     return {
       ran: false,
-      skippedReason: 'no framework specs found',
+      skippedReason: `no framework specs for language=${language}`,
       frameworksLoaded: [],
       propagation: null,
       flowsAfterFilter: null,
@@ -144,12 +170,43 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
     };
   }
 
-  const propagation = await propagate({
-    rootDir: workspaceRoot,
-    specs,
-    maxIterations: options.maxIterations,
-    onWarn,
-  });
+  // Dispatch to the right per-language propagator.
+  let propagation: PropagateResult;
+  switch (language) {
+    case 'python':
+      propagation = await propagatePython({
+        rootDir: workspaceRoot,
+        specs,
+        maxIterations: options.maxIterations,
+        onWarn,
+      });
+      break;
+    case 'java':
+      propagation = await propagateJava({
+        rootDir: workspaceRoot,
+        specs,
+        maxIterations: options.maxIterations,
+        onWarn,
+      });
+      break;
+    case 'go':
+      propagation = await propagateGo({
+        rootDir: workspaceRoot,
+        specs,
+        maxIterations: options.maxIterations,
+        onWarn,
+      });
+      break;
+    case 'js':
+    default:
+      propagation = await propagate({
+        rootDir: workspaceRoot,
+        specs,
+        maxIterations: options.maxIterations,
+        onWarn,
+      });
+      break;
+  }
 
   // Default: filter inactive, all flows pass through.
   let flowsAfterFilter: Flow[] = propagation.flows;

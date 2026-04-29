@@ -1,0 +1,114 @@
+# Gin (Go) framework spec — Deptex cross-file taint engine.
+#
+# Gin's *gin.Context is the request bridge: most user input arrives via
+# methods on `c` (the typical handler param). Most sinks are stdlib /
+# database/sql / os/exec — those live in go-stdlib.yaml so they apply
+# across Gin / Echo / Fiber / net-http handlers.
+
+framework: gin
+language: go
+version: "*"
+
+sources:
+  # Query string / form / route params / headers — all method-call shaped.
+  - pattern: c.Query(*)
+    taint_kind: http_input
+    description: Gin query string param
+  - pattern: c.DefaultQuery(*)
+    taint_kind: http_input
+    description: Gin query string param with default
+  - pattern: c.GetQuery(*)
+    taint_kind: http_input
+    description: Gin GetQuery
+  - pattern: c.QueryArray(*)
+    taint_kind: http_input
+    description: Gin QueryArray
+  - pattern: c.QueryMap(*)
+    taint_kind: http_input
+    description: Gin QueryMap
+  - pattern: c.PostForm(*)
+    taint_kind: http_input
+    description: Gin POST form value
+  - pattern: c.DefaultPostForm(*)
+    taint_kind: http_input
+    description: Gin POST form value with default
+  - pattern: c.GetPostForm(*)
+    taint_kind: http_input
+    description: Gin GetPostForm
+  - pattern: c.PostFormArray(*)
+    taint_kind: http_input
+    description: Gin PostFormArray
+  - pattern: c.PostFormMap(*)
+    taint_kind: http_input
+    description: Gin PostFormMap
+  - pattern: c.Param(*)
+    taint_kind: http_input
+    description: Gin route param
+  - pattern: c.GetHeader(*)
+    taint_kind: http_input
+    description: Gin request header
+  - pattern: c.Cookie(*)
+    taint_kind: http_input
+    description: Gin request cookie
+  - pattern: c.GetRawData(*)
+    taint_kind: http_input
+    description: Gin raw request body bytes
+  - pattern: c.BindJSON(*)
+    taint_kind: http_input
+    description: Gin BindJSON — bound struct is tainted
+  - pattern: c.ShouldBindJSON(*)
+    taint_kind: http_input
+    description: Gin ShouldBindJSON
+  - pattern: c.Bind(*)
+    taint_kind: http_input
+    description: Gin generic Bind
+  - pattern: c.ShouldBind(*)
+    taint_kind: http_input
+    description: Gin ShouldBind
+  - pattern: c.BindQuery(*)
+    taint_kind: http_input
+    description: Gin BindQuery
+  - pattern: c.ShouldBindQuery(*)
+    taint_kind: http_input
+    description: Gin ShouldBindQuery
+  - pattern: c.BindUri(*)
+    taint_kind: http_input
+    description: Gin BindUri
+  - pattern: c.ShouldBindUri(*)
+    taint_kind: http_input
+    description: Gin ShouldBindUri
+  - pattern: c.FormFile(*)
+    taint_kind: http_input
+    description: Gin form file upload
+
+sinks:
+  # XSS — Gin's HTML/String/Data response writers emit unescaped data when
+  # the framework template auto-escape is bypassed.
+  - pattern: c.HTML(*)
+    vuln_class: xss
+    argument_indices: [2]
+    description: Gin HTML — third arg is the model passed to the template
+  - pattern: c.String(*)
+    vuln_class: xss
+    argument_indices: [2]
+    description: Gin String — format-shaped raw response
+  - pattern: c.Data(*)
+    vuln_class: xss
+    argument_indices: [2]
+    description: Gin Data — raw bytes response
+  # Open redirect
+  - pattern: c.Redirect(*)
+    vuln_class: open_redirect
+    argument_indices: [1]
+    description: Gin Redirect — second arg is the URL
+  # Path traversal — Gin file response with a controllable path
+  - pattern: c.File(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Gin File — serves the named filesystem path
+  - pattern: c.FileAttachment(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Gin FileAttachment
+
+sanitizers: []
