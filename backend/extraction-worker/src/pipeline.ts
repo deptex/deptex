@@ -1008,15 +1008,17 @@ export async function runPipeline(
                 typedFilesPct: propagation.callgraph.typedFilesPct,
               });
               if (aiFilter?.invoked) {
-                await log.info(
+                await log.success(
                   'taint_engine',
                   `Emitted ${propagation.flows.length} flows; AI filter checked ${aiFilter.flowsChecked}, rejected ${aiFilter.flowsRejected} (kept ${survivors.length}). Cost $${aiFilter.costUsd.toFixed(4)}. ${propagation.stats.totalMs}ms total.`,
+                  Date.now() - stepStart,
                 );
               } else {
                 const reason = aiFilter?.skippedReason ? ` (filter skipped: ${aiFilter.skippedReason})` : '';
-                await log.info(
+                await log.success(
                   'taint_engine',
                   `Emitted ${propagation.flows.length} flows from ${frameworksLoaded.length} framework spec(s) in ${propagation.stats.totalMs}ms${reason}`,
+                  Date.now() - stepStart,
                 );
               }
             }
