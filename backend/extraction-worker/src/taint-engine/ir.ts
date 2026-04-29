@@ -240,13 +240,22 @@ function walkExpressionAsAssign(
     const args: (LocalVar | null)[] = [];
     const argTexts: string[] = [];
     const argList = expr.arguments ?? [];
-    for (const a of argList) {
+    for (let i = 0; i < argList.length; i++) {
+      const a = argList[i];
       argTexts.push(a.getText(opts.sourceFile));
-      args.push(extractVarFromArg(a));
-      // Recurse into args that are themselves calls so we capture nested sinks.
-      if (ts.isCallExpression(a) || ts.isNewExpression(a)) {
-        walkExpressionAsAssign(a, null, steps, opts);
+      const direct = extractVarFromArg(a);
+      if (direct) {
+        args.push(direct);
+        continue;
       }
+      // Synthesize a temp var for non-Identifier args so taint can flow through
+      // template literals (`db.query(\`SELECT ${id}\`)`), direct property
+      // access (`fs.readFile(req.body.x)`), nested calls (`exec(decode(x))`),
+      // and string concatenation. The lowered expression's effects fire BEFORE
+      // the call step, so the propagator sees the temp's taint at call time.
+      const tmp = `<arg${i}@${steps.length}>`;
+      walkExpressionAsAssign(a, tmp, steps, opts);
+      args.push(tmp);
     }
     steps.push({
       kind: 'call',

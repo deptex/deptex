@@ -14,6 +14,7 @@
     "schema:dump": "tsx scripts/dump-schema.ts",
     "taint-engine:callgraph": "tsx scripts/taint-engine-callgraph.ts",
     "taint-engine:propagate": "tsx scripts/taint-engine-propagate.ts",
+    "taint-engine:validate": "tsx scripts/taint-engine-validate.ts",
     "test:taint-engine-callgraph": "tsx test/taint-engine-callgraph.test.ts",
     "test:taint-engine-propagator": "tsx test/taint-engine-propagator.test.ts",
     "smoke:pglite": "tsx test/smoke-pglite.ts",
