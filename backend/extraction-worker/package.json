@@ -17,6 +17,7 @@
     "taint-engine:validate": "tsx scripts/taint-engine-validate.ts",
     "test:taint-engine-callgraph": "tsx test/taint-engine-callgraph.test.ts",
     "test:taint-engine-propagator": "tsx test/taint-engine-propagator.test.ts",
+    "test:taint-engine-integration": "tsx test/taint-engine-integration.test.ts",
     "smoke:pglite": "tsx test/smoke-pglite.ts",
     "test:storage": "tsx test/storage-pglite.test.ts",
     "test:finalize": "tsx test/finalize-extraction.test.ts",

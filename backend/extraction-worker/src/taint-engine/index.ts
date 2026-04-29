@@ -38,3 +38,18 @@ export type { Flow, FlowNode, SinkHit, TaintTrace } from './flow';
 
 export type { IrFunction, Step, LocalVar, SourceLocation, CalleeRef } from './ir';
 export { lowerFunction } from './ir';
+
+export { runEngine, shouldRunForRollout } from './runner';
+export type { RunEngineOptions, RunEngineResult } from './runner';
+
+export { writeFlows, writeRun } from './storage';
+export type { WriteFlowsOptions, WriteFlowsResult, WriteRunOptions, TaintEngineRunStatus } from './storage';
+
+export {
+  checkCircuitBreaker,
+  maybeEngageKillswitch,
+  CIRCUIT_BREAKER_WINDOW_MINUTES,
+  CIRCUIT_BREAKER_FAILURE_THRESHOLD_PCT,
+  CIRCUIT_BREAKER_MIN_SAMPLE_SIZE,
+} from './circuit-breaker';
+export type { CircuitBreakerState } from './circuit-breaker';
