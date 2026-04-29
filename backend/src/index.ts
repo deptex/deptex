@@ -29,6 +29,7 @@ import { startSelfHostCrons } from './lib/self-host-cron';
 import feedbackRouter from './routes/feedback';
 import demoRequestRouter from './routes/demo-request';
 import enterpriseContactRouter from './routes/enterprise-contact';
+import taintEngineRouter from './routes/taint-engine';
 import organizationsRouter from './routes/organizations';
 import teamsRouter from './routes/teams';
 import projectsRouter from './routes/projects';
@@ -122,6 +123,7 @@ app.use('/api/internal/cron', cronDispatcherRouter);
 app.use('/api/feedback', feedbackRouter);
 app.use('/api/demo-request', demoRequestRouter);
 app.use('/api/enterprise-contact', enterpriseContactRouter);
+app.use('/api/orgs', taintEngineRouter);
 
 // API Routes (former EE - now merged)
 app.use('/api/organizations', organizationsRouter);
