@@ -164,6 +164,22 @@ export function applyDiff(workDir: string, diff: ParsedFileDiff): void {
   const targetPath = diff.newPath ?? sourcePath;
   const sourceAbs = path.join(workDir, sourcePath);
   if (!fs.existsSync(sourceAbs)) {
+    // LLMs (Qwen3 in particular) frequently emit a "modify"-shaped udiff
+    // (--- a/path, +++ b/path) for what's actually a new file rather than
+    // using --- /dev/null. If the diff is purely additive (no `-` lines),
+    // treat it as a create so the patch lands cleanly instead of failing
+    // with "Source file does not exist". Hunks with removals against a
+    // non-existent file are still a real error.
+    const hasRemovals = diff.hunks.some((h) =>
+      h.lines.some((line) => line.startsWith('-') && !line.startsWith('---')),
+    );
+    if (!hasRemovals) {
+      const targetAbs = path.join(workDir, targetPath);
+      fs.mkdirSync(path.dirname(targetAbs), { recursive: true });
+      const content = diff.hunks.flatMap((h) => expandHunk(h).newLines).join('\n');
+      fs.writeFileSync(targetAbs, content + (content.endsWith('\n') ? '' : '\n'));
+      return;
+    }
     throw new DiffApplyError(`Source file does not exist: ${sourcePath}`);
   }
 
