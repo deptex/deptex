@@ -503,10 +503,18 @@ function matchSanitizerPattern(calleeText: string, specs: FrameworkSpec[]): Fram
 
 function matchesCallPattern(pattern: string, calleeText: string): boolean {
   const p = pattern.endsWith('(*)') ? pattern.slice(0, -3) : pattern;
+  // Wildcard receiver: `*.query` matches any callee ending in `.query`
+  // (e.g. `pool.query`, `database.query`, `this.db.query`). Useful for
+  // ORM/DB libs where the receiver name is the user's variable.
+  if (p.startsWith('*.')) {
+    const suffix = p.slice(1); // ".query"
+    return calleeText.endsWith(suffix);
+  }
   if (calleeText === p) return true;
-  // Last-segment match: pattern `child_process.exec` matches a callee imported
-  // as a bare `exec` identifier (M2 doesn't follow import bindings textually,
-  // so this catches the common `import { exec } from 'child_process'` case).
+  // Last-segment match: pattern `child_process.exec` also matches a callee
+  // imported as the bare `exec` identifier — covers the common
+  // `import { exec } from 'child_process'` shape since the lowerer doesn't
+  // follow import bindings textually.
   const last = p.split('.').pop();
   if (last && calleeText === last) return true;
   return false;

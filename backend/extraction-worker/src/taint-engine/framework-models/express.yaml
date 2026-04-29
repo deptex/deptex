@@ -1,0 +1,322 @@
+# Express framework taint spec — Deptex cross-file taint engine
+#
+# Covers the five core OWASP-style vuln classes for v1: SQL injection,
+# SSRF, XSS, path traversal, command injection. Sources are Express
+# request-object accessors; sinks are the standard library / common-lib
+# functions an Express handler is most likely to call with user input;
+# sanitizers are the canonical clean-up helpers (validator.escape,
+# DOMPurify, path.normalize, mysql.escape, etc.).
+#
+# Pattern grammar (reminder):
+#   `Foo.bar.*`   — prefix match for property/element access (taint sources)
+#   `Foo.bar(*)`  — exact callee text or bare last-segment match
+#   `*.method(*)` — receiver wildcard; matches any callee ending in `.method`
+#                   (e.g. db.query, pool.query, this.connection.query)
+
+framework: express
+version: "*"
+
+sources:
+  - pattern: req.body.*
+    taint_kind: http_input
+    description: Express request body
+  - pattern: req.query.*
+    taint_kind: http_input
+    description: Express request query string
+  - pattern: req.params.*
+    taint_kind: http_input
+    description: Express request route params
+  - pattern: req.headers.*
+    taint_kind: http_input
+    description: Express request headers
+  - pattern: req.cookies.*
+    taint_kind: http_input
+    description: Express request cookies
+  - pattern: req.signedCookies.*
+    taint_kind: http_input
+    description: Express signed cookies
+  - pattern: req.url
+    taint_kind: http_input
+    description: Express raw request URL
+  - pattern: req.originalUrl
+    taint_kind: http_input
+    description: Express raw original URL
+  - pattern: req.path
+    taint_kind: http_input
+    description: Express request path
+  - pattern: req.hostname
+    taint_kind: http_input
+    description: Express request hostname header
+
+sinks:
+  # ---------- SQL injection ----------
+  - pattern: "*.query(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Generic db.query / pool.query / connection.query
+  - pattern: "*.raw(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Knex raw SQL passthrough
+  - pattern: "*.execute(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Mysql2 / generic execute()
+  - pattern: "*.prepare(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Better-sqlite3 / mysql2 prepare with template
+  - pattern: sequelize.query(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Sequelize raw query
+  - pattern: knex.raw(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Knex raw
+
+  # ---------- SSRF ----------
+  - pattern: axios.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: axios GET
+  - pattern: axios.post(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: axios POST
+  - pattern: axios.put(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: axios PUT
+  - pattern: axios.delete(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: axios DELETE
+  - pattern: axios.request(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: axios request config
+  - pattern: axios(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: axios call
+  - pattern: fetch(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Web fetch
+  - pattern: node-fetch(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: node-fetch
+  - pattern: http.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: http.get
+  - pattern: http.request(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: http.request
+  - pattern: https.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: https.get
+  - pattern: https.request(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: https.request
+  - pattern: request(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: request lib call
+  - pattern: got(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: got HTTP client
+  - pattern: superagent(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: superagent
+
+  # ---------- XSS ----------
+  - pattern: res.send(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Express response body
+  - pattern: res.write(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Express raw response write
+  - pattern: res.end(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Express end-with-body
+  - pattern: res.render(*)
+    vuln_class: xss
+    argument_indices: [1]
+    description: Express render — model object passed unsanitized
+  - pattern: res.jsonp(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Express jsonp — callback name reflected
+
+  # ---------- Path traversal ----------
+  - pattern: fs.readFile(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.readFile
+  - pattern: fs.readFileSync(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.readFileSync
+  - pattern: fs.writeFile(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.writeFile
+  - pattern: fs.writeFileSync(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.writeFileSync
+  - pattern: fs.appendFile(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.appendFile
+  - pattern: fs.createReadStream(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.createReadStream
+  - pattern: fs.createWriteStream(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.createWriteStream
+  - pattern: fs.unlink(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.unlink
+  - pattern: fs.unlinkSync(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.unlinkSync
+  - pattern: fs.open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.open
+  - pattern: fsPromises.readFile(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs/promises readFile
+  - pattern: res.sendFile(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Express sendFile
+
+  # ---------- Command injection ----------
+  - pattern: child_process.exec(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: child_process.exec (shell)
+  - pattern: child_process.execSync(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: child_process.execSync (shell)
+  - pattern: child_process.spawn(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: child_process.spawn — first arg is the command name
+  - pattern: child_process.spawnSync(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: child_process.spawnSync
+  - pattern: child_process.execFile(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: child_process.execFile — first arg is the file
+  - pattern: cp.exec(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: cp alias for child_process.exec
+  - pattern: cp.execSync(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: cp alias for child_process.execSync
+
+sanitizers:
+  # ---------- XSS sanitizers ----------
+  - pattern: validator.escape(*)
+    vuln_classes: [xss]
+    description: validator.escape — HTML entity encoding
+  - pattern: DOMPurify.sanitize(*)
+    vuln_classes: [xss]
+    description: DOMPurify
+  - pattern: escape-html(*)
+    vuln_classes: [xss]
+    description: escape-html package
+  - pattern: escapeHtml(*)
+    vuln_classes: [xss]
+    description: escapeHtml helper
+  - pattern: he.encode(*)
+    vuln_classes: [xss]
+    description: he encode
+
+  # ---------- SQL sanitizers ----------
+  - pattern: mysql.escape(*)
+    vuln_classes: [sql_injection]
+    description: mysql.escape
+  - pattern: mysql.escapeId(*)
+    vuln_classes: [sql_injection]
+    description: mysql.escapeId
+  - pattern: pg.escapeLiteral(*)
+    vuln_classes: [sql_injection]
+    description: pg.escapeLiteral
+  - pattern: pg.escapeIdentifier(*)
+    vuln_classes: [sql_injection]
+    description: pg.escapeIdentifier
+  - pattern: sqlstring.escape(*)
+    vuln_classes: [sql_injection]
+    description: sqlstring.escape
+
+  # ---------- Path traversal sanitizers ----------
+  - pattern: path.normalize(*)
+    vuln_classes: [path_traversal]
+    description: path.normalize — collapses ../
+  - pattern: path.resolve(*)
+    vuln_classes: [path_traversal]
+    description: path.resolve — absolute resolution
+  - pattern: path.basename(*)
+    vuln_classes: [path_traversal]
+    description: path.basename — strips directory components
+
+  # ---------- Command injection sanitizers ----------
+  - pattern: shell-quote.quote(*)
+    vuln_classes: [command_injection]
+    description: shell-quote.quote
+  - pattern: shellQuote(*)
+    vuln_classes: [command_injection]
+    description: shellQuote helper
+  - pattern: shell-escape(*)
+    vuln_classes: [command_injection]
+    description: shell-escape
+
+  # ---------- SSRF sanitizers ----------
+  - pattern: ssrf-req-filter(*)
+    vuln_classes: [ssrf]
+    description: ssrf-req-filter
+  - pattern: validateUrl(*)
+    vuln_classes: [ssrf]
+    description: validateUrl helper (allowlist check)
+  - pattern: assertSafeUrl(*)
+    vuln_classes: [ssrf]
+    description: assertSafeUrl helper (allowlist check)
+
+  # ---------- Cross-class strict validators ----------
+  - pattern: validator.isURL(*)
+    vuln_classes: [ssrf, open_redirect]
+    description: validator.isURL — boolean check (returns; cleans by association)
+  - pattern: validator.isInt(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: validator.isInt — numeric coercion gate
+  - pattern: Number.parseInt(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: Number.parseInt — numeric coercion
+  - pattern: parseInt(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: parseInt — numeric coercion
