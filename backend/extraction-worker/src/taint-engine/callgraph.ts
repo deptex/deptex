@@ -67,7 +67,26 @@ const FALLBACK_COMPILER_OPTIONS: ts.CompilerOptions = {
   isolatedModules: false,
 };
 
+/** Result of building the whole-program callgraph along with the underlying
+ *  TypeScript program + AST↔FunctionId lookups. The propagator (M2) needs
+ *  the program and the maps to walk function bodies during taint propagation;
+ *  callers that only need the serializable Callgraph can ignore them. */
+export interface CallgraphContext {
+  callgraph: Callgraph;
+  /** Live TS program used to build the callgraph. Not serializable. */
+  program: ts.Program;
+  /** AST node → FunctionId for every node we emitted. */
+  declarationToNodeId: Map<ts.Node, FunctionId>;
+  /** Inverse: FunctionId → AST node. */
+  nodeIdToDeclaration: Map<FunctionId, ts.Node>;
+}
+
 export async function buildCallgraph(options: BuildCallgraphOptions): Promise<Callgraph> {
+  const ctx = await buildCallgraphContext(options);
+  return ctx.callgraph;
+}
+
+export async function buildCallgraphContext(options: BuildCallgraphOptions): Promise<CallgraphContext> {
   const { rootDir, maxFiles, onWarn } = options;
   const start = Date.now();
 
@@ -121,7 +140,7 @@ export async function buildCallgraph(options: BuildCallgraphOptions): Promise<Ca
   const resolutionRate = totalCalls === 0 ? 0 : (resolvedCalls / totalCalls) * 100;
   const isTypedJsProject = typedFilesPct >= 80 || resolutionRate >= 95;
 
-  return {
+  const callgraph: Callgraph = {
     rootDir: absoluteRoot,
     hasOwnTsconfig,
     isTypedJsProject,
@@ -132,6 +151,13 @@ export async function buildCallgraph(options: BuildCallgraphOptions): Promise<Ca
     buildMs: Date.now() - start,
     fileCount: fileStats.length,
   };
+
+  const nodeIdToDeclaration = new Map<FunctionId, ts.Node>();
+  for (const [decl, id] of declarationToNodeId.entries()) {
+    nodeIdToDeclaration.set(id, decl);
+  }
+
+  return { callgraph, program, declarationToNodeId, nodeIdToDeclaration };
 }
 
 /** Discover and load the workspace's tsconfig.json, or synthesize a fallback. */

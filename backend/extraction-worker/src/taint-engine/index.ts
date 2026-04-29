@@ -1,12 +1,15 @@
 /**
  * Public surface for the Deptex cross-file taint engine.
  *
- * M1 ships only the callgraph substrate. M2+ will add the IR converter,
- * worklist propagator, framework spec loader, and the AI augmentation layer.
+ * M1: callgraph substrate (TypeScript Compiler API).
+ * M2: forward-propagation taint engine + IR + YAML framework spec format.
+ *
+ * M3+ adds the hand-written framework specs (Express, Fastify, ...) and
+ * the AI augmentation layer (spec inference + FP filter).
  */
 
-export { buildCallgraph } from './callgraph';
-export type { BuildCallgraphOptions } from './callgraph';
+export { buildCallgraph, buildCallgraphContext } from './callgraph';
+export type { BuildCallgraphOptions, CallgraphContext } from './callgraph';
 export type {
   Callgraph,
   CallEdge,
@@ -16,3 +19,22 @@ export type {
   FunctionKind,
   FunctionNode,
 } from './types';
+
+export { propagate } from './propagator';
+export type { PropagateOptions, PropagateResult, PropagateStats } from './propagator';
+
+export { loadSpec, validateSpec, SpecValidationError } from './spec-loader';
+export type {
+  FrameworkSpec,
+  FrameworkSource,
+  FrameworkSink,
+  FrameworkSanitizer,
+  TaintKind,
+  VulnClass,
+} from './spec';
+export { ALL_VULN_CLASSES } from './spec';
+
+export type { Flow, FlowNode, SinkHit, TaintTrace } from './flow';
+
+export type { IrFunction, Step, LocalVar, SourceLocation, CalleeRef } from './ir';
+export { lowerFunction } from './ir';
