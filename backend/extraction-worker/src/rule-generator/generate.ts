@@ -308,6 +308,47 @@ function isTransientHttpStatus(status: number): boolean {
   return status === 429 || status === 502 || status === 503 || status === 504;
 }
 
+/**
+ * Transient network-level errors from fetch() itself (no HTTP response yet).
+ * On Node 22's undici, these surface as `TypeError: fetch failed` with the
+ * underlying socket error attached as `cause`. DeepInfra in particular
+ * sheds connections under load — the 88-CVE Qwen rebaseline lost 16/88
+ * (18% of corpus) to this exact failure mode. Classify them as transient
+ * so withRateLimitRetry backs off and retries instead of immediately
+ * surfacing a non-retryable provider_error.
+ *
+ * What we DON'T retry: AbortError from our own controller (request-timeout
+ * elapsed, retry won't help) and AbortError from an outer signal (caller
+ * cancelled). Both surface as provider_timeout via the existing AbortError
+ * branch above this function in each provider's catch block.
+ */
+function isTransientFetchError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err.name === 'AbortError') return false;
+  // Node's undici wraps network failures as `TypeError: fetch failed` and
+  // attaches the OS-level error code on `cause`.
+  const cause = (err as { cause?: { code?: string; message?: string } }).cause;
+  const code = cause?.code ?? '';
+  const TRANSIENT_CODES = new Set([
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'ETIMEDOUT',
+    'ENOTFOUND',
+    'EAI_AGAIN',
+    'EPIPE',
+    'UND_ERR_SOCKET',
+    'UND_ERR_CONNECT_TIMEOUT',
+    'UND_ERR_HEADERS_TIMEOUT',
+    'UND_ERR_BODY_TIMEOUT',
+  ]);
+  if (TRANSIENT_CODES.has(code)) return true;
+  // Final fallback — match the surface message. Node's bare `fetch failed`
+  // and `terminated` (HTTP/2 stream peer reset) and `socket hang up` are
+  // all transient.
+  const msg = `${err.message ?? ''} ${cause?.message ?? ''}`.toLowerCase();
+  return /fetch failed|terminated|socket hang up|network|connection (reset|refused|closed)/.test(msg);
+}
+
 function parseRetryAfter(headerValue: string | null): number | undefined {
   if (!headerValue) return undefined;
   const seconds = Number(headerValue);
@@ -388,6 +429,9 @@ async function callAnthropicOnce(args: CallProviderArgs): Promise<RawProviderRes
     if (err instanceof Error && err.name === 'AbortError') {
       throw new GenerationError('provider_timeout', `Anthropic request timed out after ${REQUEST_TIMEOUT_MS}ms`);
     }
+    if (isTransientFetchError(err)) {
+      throw new RateLimitError(`Anthropic fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
     throw new GenerationError('provider_error', `Anthropic call failed: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     clear();
@@ -451,6 +495,9 @@ async function callOpenAIOnce(args: CallProviderArgs): Promise<RawProviderRespon
     if (err instanceof Error && err.name === 'AbortError') {
       throw new GenerationError('provider_timeout', `OpenAI request timed out after ${REQUEST_TIMEOUT_MS}ms`);
     }
+    if (isTransientFetchError(err)) {
+      throw new RateLimitError(`OpenAI-compat fetch failed (${url}): ${err instanceof Error ? err.message : String(err)}`);
+    }
     throw new GenerationError('provider_error', `OpenAI call failed: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     clear();
@@ -511,6 +558,9 @@ async function callGoogleOnce(args: CallProviderArgs): Promise<RawProviderRespon
     if (err instanceof RateLimitError) throw err;
     if (err instanceof Error && err.name === 'AbortError') {
       throw new GenerationError('provider_timeout', `Google request timed out after ${REQUEST_TIMEOUT_MS}ms`);
+    }
+    if (isTransientFetchError(err)) {
+      throw new RateLimitError(`Google fetch failed: ${err instanceof Error ? err.message : String(err)}`);
     }
     throw new GenerationError('provider_error', `Google call failed: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
