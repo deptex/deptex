@@ -72,6 +72,10 @@ export interface RepairResult {
   repairDiff: string;
   filesChanged: string[];
   tokensUsed: number;
+  // Same contract as ExecutorResult: when the repair LLM emits a hunk that
+  // doesn't match the file, the pipeline keeps the cycle alive (next loop
+  // iteration retries with this error in the test stderr context).
+  applyError?: string;
 }
 
 export async function runRepair(opts: {
@@ -100,8 +104,12 @@ export async function runRepair(opts: {
     throw new Error('Repair LLM did not return a udiff');
   }
   const diffText = text.slice(diffStart);
-  const { filesChanged } = applyDiffText(workDir, diffText);
-
-  await logger.success('repair', 'Repair udiff applied', Date.now() - startedAt, { tokens: tokensUsed });
-  return { repairDiff: diffText, filesChanged, tokensUsed };
+  try {
+    const { filesChanged } = applyDiffText(workDir, diffText);
+    await logger.success('repair', 'Repair udiff applied', Date.now() - startedAt, { tokens: tokensUsed });
+    return { repairDiff: diffText, filesChanged, tokensUsed };
+  } catch (err: any) {
+    await logger.warn('repair', `Repair patch failed to apply: ${err.message}`);
+    return { repairDiff: diffText, filesChanged: [], tokensUsed, applyError: err.message };
+  }
 }
