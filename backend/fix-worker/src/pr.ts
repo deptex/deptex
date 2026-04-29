@@ -75,7 +75,16 @@ export async function commitAndPushFix(opts: {
   execSync('git add -A', { ...EXEC_OPTS, cwd: workDir });
 
   const stat = execSync('git diff --cached --stat', { ...EXEC_OPTS, cwd: workDir }).trim();
-  if (!stat) throw new Error('No changes to commit — editor produced an empty diff');
+  if (!stat) {
+    // Diagnostic: dump unstaged status + working-tree listing so we can tell
+    // whether the patches landed in unexpected places, were silently no-ops,
+    // or got swallowed by .gitignore.
+    const porcelain = execSync('git status --porcelain --ignored', { ...EXEC_OPTS, cwd: workDir }).trim();
+    const tree = execSync('ls -la', { ...EXEC_OPTS, cwd: workDir }).trim();
+    throw new Error(
+      `No changes to commit — editor produced an empty diff. git status: "${porcelain}" | top-level: "${tree.slice(0, 600)}"`,
+    );
+  }
 
   const message = commitMessage(plan);
   // Pass the message via stdin to avoid shell-escaping pitfalls.
