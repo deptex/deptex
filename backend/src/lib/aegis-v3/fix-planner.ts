@@ -133,13 +133,15 @@ PLANNING RULES:
 8. summary is one or two sentences a developer can scan in two seconds.
 
 REFUSAL RULES:
-Set refusal.reason ONLY when a fix cannot be safely produced. Examples:
+The refusal field is OPTIONAL. OMIT it entirely from your output when the fix is feasible. Do NOT emit \`refusal: null\`, \`refusal: {}\`, \`refusal: { reason: "" }\`, \`refusal: { reason: "null" }\`, or \`refusal: { reason: "none" }\` — those will be treated as a real refusal and the plan will fail.
+
+Include refusal.reason ONLY when a fix cannot be safely produced. Examples of real refusals:
 - No patched version exists for this vulnerability.
 - The finding is ambiguous or already remediated.
 - The required change is too large for v1 (>500 LOC) and must be split.
 - Language not in the v1 ship gate (anything outside js/ts/python/go) — set refusal.reason to "Language X is not supported by Aegis Fix Agent v1." with no manualSuggestion needed.
 
-When you set refusal, still populate the other fields with best-effort placeholders so the schema validates; humans will read the refusal first.`;
+When you DO set refusal, still populate the other fields with best-effort placeholders so the schema validates; humans will read the refusal first.`;
 
 function buildUserPrompt(input: PlannerInput, ctx: Record<string, any>, repo: RepoLookup): string {
   return [

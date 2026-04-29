@@ -157,26 +157,37 @@ async function runPlanForRow(
     throw err;
   }
 
+  // Some models (Qwen3, certain OpenAI configs) always populate optional
+  // schema fields with placeholders rather than omitting them. So
+  // refusal: { reason: "null" } shows up on perfectly fine plans. Detect
+  // sentinel values and strip the refusal before persisting; otherwise the
+  // PlanCard renders the refusal layout on what's actually an approvable plan.
+  const SENTINEL_REASONS = new Set(['', 'null', 'none', 'n/a', 'na', 'no', 'false']);
+  const rawReason = result.plan.refusal?.reason?.trim().toLowerCase();
+  const isRealRefusal = !!result.plan.refusal && !!rawReason && !SENTINEL_REASONS.has(rawReason);
+  const finalPlan: FixPlan = isRealRefusal
+    ? result.plan
+    : { ...result.plan, refusal: undefined };
+
   const generatedAt = new Date().toISOString();
-  const isRefusal = !!result.plan.refusal;
-  const status: FixStatus = isRefusal ? 'failed' : 'awaiting_approval';
-  const approvalToken = isRefusal ? null : signApprovalToken(fixId, organizationId, generatedAt);
+  const status: FixStatus = isRealRefusal ? 'failed' : 'awaiting_approval';
+  const approvalToken = isRealRefusal ? null : signApprovalToken(fixId, organizationId, generatedAt);
 
   await supabase
     .from('project_security_fixes')
     .update({
       status,
-      plan: result.plan,
+      plan: finalPlan,
       plan_generated_at: generatedAt,
       plan_base_sha: result.baseSha,
       plan_base_branch: result.baseBranch,
       approval_token: approvalToken,
-      error_message: isRefusal ? `Refusal: ${result.plan.refusal?.reason}` : null,
-      completed_at: isRefusal ? generatedAt : null,
+      error_message: isRealRefusal ? `Refusal: ${finalPlan.refusal?.reason}` : null,
+      completed_at: isRealRefusal ? generatedAt : null,
     })
     .eq('id', fixId);
 
-  return { status, plan: result.plan, baseSha: result.baseSha, baseBranch: result.baseBranch };
+  return { status, plan: finalPlan, baseSha: result.baseSha, baseBranch: result.baseBranch };
 }
 
 router.post('/request', async (req: AuthRequest, res) => {
