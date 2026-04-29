@@ -1345,6 +1345,63 @@ CREATE TABLE IF NOT EXISTS public.stripe_webhook_events (
   event_type text NOT NULL,
   processed_at timestamp with time zone DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS public.taint_engine_framework_models (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  organization_id uuid NOT NULL,
+  framework_name text NOT NULL,
+  framework_version text NOT NULL DEFAULT '*'::text,
+  source_type text NOT NULL,
+  spec jsonb NOT NULL,
+  inferred_at timestamp with time zone DEFAULT now(),
+  inferred_by_model text,
+  inferred_cost_usd numeric(10,6),
+  edited_by_user_id uuid,
+  edited_at timestamp with time zone,
+  last_validated_at timestamp with time zone,
+  validation_score numeric(5,2),
+  is_active boolean DEFAULT true,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.taint_engine_runs (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL,
+  organization_id uuid NOT NULL,
+  extraction_run_id text NOT NULL,
+  status text NOT NULL,
+  callgraph_build_ms integer,
+  taint_propagation_ms integer,
+  ai_spec_inference_ms integer,
+  ai_fp_filter_ms integer,
+  total_ms integer,
+  flows_emitted integer DEFAULT 0,
+  flows_after_ai_filter integer DEFAULT 0,
+  ai_cost_usd numeric(10,6) DEFAULT 0,
+  frameworks_detected text[] DEFAULT '{}'::text[],
+  framework_models_used jsonb DEFAULT '{}'::jsonb,
+  is_typed_js_project boolean,
+  typed_files_pct numeric(5,2),
+  vuln_classes_evaluated text[] DEFAULT '{}'::text[],
+  error_code text,
+  error_message text,
+  created_at timestamp with time zone DEFAULT now(),
+  completed_at timestamp with time zone
+);
+CREATE TABLE IF NOT EXISTS public.taint_engine_settings (
+  organization_id uuid NOT NULL,
+  enabled boolean DEFAULT true,
+  ai_layer_enabled boolean DEFAULT true,
+  monthly_ai_cost_cap_usd numeric(10,2) DEFAULT 50.00,
+  untyped_js_enabled boolean DEFAULT true,
+  vuln_classes_enabled text[] DEFAULT ARRAY['sql_injection'::text, 'ssrf'::text, 'xss'::text, 'path_traversal'::text, 'command_injection'::text, 'prototype_pollution'::text, 'deserialization'::text, 'redos'::text, 'file_upload'::text, 'open_redirect'::text, 'log_injection'::text],
+  killswitch_active boolean DEFAULT false,
+  killswitch_reason text,
+  killswitch_activated_at timestamp with time zone,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  ai_fp_filter_confidence_threshold numeric(3,2) DEFAULT 0.70,
+  rollout_pct_override smallint
+);
 CREATE TABLE IF NOT EXISTS public.team_banned_versions (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   team_id uuid NOT NULL,
@@ -1631,6 +1688,9 @@ ALTER TABLE public.security_audit_logs ADD CONSTRAINT security_audit_logs_pkey P
 ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_pkey PRIMARY KEY (id);
 ALTER TABLE public.sla_policy_changes ADD CONSTRAINT sla_policy_changes_pkey PRIMARY KEY (id);
 ALTER TABLE public.stripe_webhook_events ADD CONSTRAINT stripe_webhook_events_pkey PRIMARY KEY (id);
+ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_pkey PRIMARY KEY (id);
+ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_pkey PRIMARY KEY (id);
+ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_pkey PRIMARY KEY (organization_id);
 ALTER TABLE public.team_banned_versions ADD CONSTRAINT team_banned_versions_pkey PRIMARY KEY (id);
 ALTER TABLE public.team_deprecations ADD CONSTRAINT team_deprecations_pkey PRIMARY KEY (id);
 ALTER TABLE public.team_integrations ADD CONSTRAINT team_integrations_pkey PRIMARY KEY (id);
@@ -1700,6 +1760,8 @@ ALTER TABLE public.projects ADD CONSTRAINT projects_organization_id_name_key UNI
 ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_organization_id_scim_external_id_key UNIQUE (organization_id, scim_external_id);
 ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_organization_id_project_id_snapshot_key UNIQUE (organization_id, project_id, snapshot_date);
 ALTER TABLE public.stripe_webhook_events ADD CONSTRAINT stripe_webhook_events_event_id_key UNIQUE (event_id);
+ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_organization_id_framework_nam_key UNIQUE (organization_id, framework_name, framework_version);
+ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_project_id_extraction_run_id_key UNIQUE (project_id, extraction_run_id);
 ALTER TABLE public.team_members ADD CONSTRAINT team_members_team_id_user_id_key UNIQUE (team_id, user_id);
 ALTER TABLE public.team_roles ADD CONSTRAINT team_roles_team_id_name_key UNIQUE (team_id, name);
 ALTER TABLE public.teams ADD CONSTRAINT teams_organization_id_name_key UNIQUE (organization_id, name);
@@ -1746,11 +1808,15 @@ ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_excep
 ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_slsa_enforcement_check CHECK (((slsa_enforcement IS NULL) OR (slsa_enforcement = ANY (ARRAY['none'::text, 'recommended'::text, 'require_provenance'::text, 'require_attestations'::text, 'require_signed'::text]))));
 ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_slsa_level_check CHECK (((slsa_level IS NULL) OR ((slsa_level >= 1) AND (slsa_level <= 4))));
 ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'accepted'::text, 'rejected'::text, 'revoked'::text])));
-ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_source_chk CHECK ((reachability_source = ANY (ARRAY['atom'::text, 'semgrep_taint'::text])));
+ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_reachability_source_check CHECK ((reachability_source = ANY (ARRAY['atom'::text, 'semgrep_taint'::text, 'taint_engine'::text])));
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_fix_type_check CHECK ((fix_type = ANY (ARRAY['vulnerability'::text, 'semgrep'::text, 'secret'::text])));
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_status_check CHECK ((status = ANY (ARRAY['planning'::text, 'awaiting_approval'::text, 'approved'::text, 'executing'::text, 'completed'::text, 'failed'::text, 'rejected'::text])));
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_strategy_check CHECK ((strategy = ANY (ARRAY['bump_version'::text, 'code_patch'::text, 'add_wrapper'::text, 'pin_transitive'::text, 'remove_unused'::text, 'fix_semgrep'::text, 'remediate_secret'::text])));
 ALTER TABLE public.projects ADD CONSTRAINT projects_health_score_check CHECK (((health_score >= 0) AND (health_score <= 100)));
+ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_source_type_check CHECK ((source_type = ANY (ARRAY['hand_written'::text, 'ai_inferred'::text, 'user_edited'::text])));
+ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_status_check CHECK ((status = ANY (ARRAY['running'::text, 'completed'::text, 'failed'::text, 'aborted'::text, 'skipped'::text])));
+ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_rollout_chk CHECK (((rollout_pct_override IS NULL) OR ((rollout_pct_override >= 0) AND (rollout_pct_override <= 100))));
+ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_threshold_chk CHECK (((ai_fp_filter_confidence_threshold >= (0)::numeric) AND (ai_fp_filter_confidence_threshold <= (1)::numeric)));
 ALTER TABLE public.team_notification_rules ADD CONSTRAINT team_notification_rules_trigger_type_check CHECK ((trigger_type = ANY (ARRAY['weekly_digest'::text, 'custom_code_pipeline'::text])));
 ALTER TABLE public.user_notification_preferences ADD CONSTRAINT user_notification_preferences_digest_preference_check CHECK ((digest_preference = ANY (ARRAY['instant'::text, 'daily_digest'::text, 'weekly_digest'::text, 'off'::text])));
 ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_job_type_check CHECK ((job_type = ANY (ARRAY['full_analysis'::text, 'new_version'::text, 'batch_version_analysis'::text, 'poll_sweep'::text])));
@@ -1772,7 +1838,7 @@ ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_us
 ALTER TABLE public.aegis_event_triggers ADD CONSTRAINT aegis_event_triggers_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id);
+ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
 ALTER TABLE public.ai_usage_logs ADD CONSTRAINT ai_usage_logs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
@@ -1919,6 +1985,11 @@ ALTER TABLE public.security_audit_logs ADD CONSTRAINT security_audit_logs_organi
 ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.sla_policy_changes ADD CONSTRAINT sla_policy_changes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_edited_by_user_id_fkey FOREIGN KEY (edited_by_user_id) REFERENCES auth.users(id);
+ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.team_banned_versions ADD CONSTRAINT team_banned_versions_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
 ALTER TABLE public.team_banned_versions ADD CONSTRAINT team_banned_versions_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
 ALTER TABLE public.team_deprecations ADD CONSTRAINT team_deprecations_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
@@ -2208,6 +2279,12 @@ CREATE INDEX idx_team_roles_display_order ON public.team_roles USING btree (team
 CREATE INDEX idx_team_roles_team_id ON public.team_roles USING btree (team_id);
 CREATE INDEX idx_teams_canvas_position_updated_by ON public.teams USING btree (canvas_position_updated_by) WHERE (canvas_position_updated_by IS NOT NULL);
 CREATE INDEX idx_teams_organization_id ON public.teams USING btree (organization_id);
+CREATE INDEX idx_temf_framework ON public.taint_engine_framework_models USING btree (framework_name);
+CREATE INDEX idx_temf_org_active ON public.taint_engine_framework_models USING btree (organization_id, is_active);
+CREATE INDEX idx_ter_failed_recent ON public.taint_engine_runs USING btree (created_at DESC) WHERE (status = 'failed'::text);
+CREATE INDEX idx_ter_org_created ON public.taint_engine_runs USING btree (organization_id, created_at DESC);
+CREATE INDEX idx_ter_project_extraction ON public.taint_engine_runs USING btree (project_id, extraction_run_id);
+CREATE INDEX idx_ter_status_created ON public.taint_engine_runs USING btree (status, created_at DESC);
 CREATE INDEX idx_user_integrations_provider ON public.user_integrations USING btree (provider);
 CREATE INDEX idx_user_integrations_user_id ON public.user_integrations USING btree (user_id);
 CREATE INDEX idx_user_notifs_unread ON public.user_notifications USING btree (user_id, read_at) WHERE (read_at IS NULL);
@@ -2561,6 +2638,44 @@ begin
 
   return false;
 end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.check_taint_engine_circuit_breaker(p_organization_id uuid, p_window_minutes integer DEFAULT 60, p_failure_threshold_pct numeric DEFAULT 5.0)
+ RETURNS TABLE(should_run boolean, recent_runs integer, recent_failures integer, failure_pct numeric, killswitch_active boolean)
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  v_killswitch BOOLEAN;
+  v_recent_runs INT;
+  v_recent_failures INT;
+  v_failure_pct NUMERIC;
+BEGIN
+  SELECT s.killswitch_active INTO v_killswitch
+  FROM taint_engine_settings s
+  WHERE s.organization_id = p_organization_id;
+  v_killswitch := COALESCE(v_killswitch, false);
+
+  SELECT
+    COUNT(*),
+    COUNT(*) FILTER (WHERE r.status = 'failed')
+  INTO v_recent_runs, v_recent_failures
+  FROM taint_engine_runs r
+  WHERE r.organization_id = p_organization_id
+    AND r.created_at > NOW() - (p_window_minutes || ' minutes')::INTERVAL;
+
+  v_failure_pct := CASE
+    WHEN v_recent_runs > 0 THEN (v_recent_failures::NUMERIC / v_recent_runs * 100)
+    ELSE 0
+  END;
+
+  RETURN QUERY SELECT
+    NOT v_killswitch AND (v_recent_runs < 5 OR v_failure_pct < p_failure_threshold_pct),
+    v_recent_runs,
+    v_recent_failures,
+    v_failure_pct,
+    v_killswitch;
+END;
 $function$
 ;
 
@@ -3502,6 +3617,21 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.engage_taint_engine_killswitch(p_organization_id uuid, p_reason text)
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  INSERT INTO taint_engine_settings (organization_id, killswitch_active, killswitch_reason, killswitch_activated_at)
+  VALUES (p_organization_id, true, p_reason, NOW())
+  ON CONFLICT (organization_id) DO UPDATE
+  SET killswitch_active = true,
+      killswitch_reason = EXCLUDED.killswitch_reason,
+      killswitch_activated_at = NOW();
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.fail_exhausted_extraction_jobs()
  RETURNS SETOF extraction_jobs
  LANGUAGE sql
@@ -4073,6 +4203,37 @@ AS $function$
     AND NOW() > pdv.sla_deadline_at
   ORDER BY pdv.sla_deadline_at ASC
   LIMIT p_batch_limit;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.get_taint_engine_monthly_spend(p_organization_id uuid)
+ RETURNS numeric
+ LANGUAGE sql
+ STABLE
+AS $function$
+  SELECT COALESCE(SUM(estimated_cost), 0)::numeric
+  FROM public.ai_usage_logs
+  WHERE organization_id = p_organization_id
+    AND success = true
+    AND feature IN ('taint_engine_spec_inference', 'taint_engine_fp_filter')
+    AND created_at >= date_trunc('month', now() AT TIME ZONE 'UTC');
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.get_taint_engine_recent_runs(p_days integer)
+ RETURNS TABLE(status text, ai_cost_usd numeric, total_ms integer, failed_at timestamp with time zone, organization_id uuid, project_id uuid)
+ LANGUAGE sql
+ STABLE
+AS $function$
+  SELECT
+    status,
+    ai_cost_usd,
+    total_ms,
+    completed_at AS failed_at,
+    organization_id,
+    project_id
+  FROM public.taint_engine_runs
+  WHERE created_at >= now() - (GREATEST(p_days, 1) || ' days')::interval;
 $function$
 ;
 
@@ -5481,18 +5642,9 @@ AS '$libdir/vector', $function$vector$function$
 -- TRIGGERS
 -- ============================================
 CREATE TRIGGER add_project_creator_trigger AFTER INSERT ON public.projects FOR EACH ROW EXECUTE FUNCTION add_project_creator_as_owner();
-CREATE TRIGGER aegis_creator_leaves_org AFTER DELETE ON public.organization_members FOR EACH ROW EXECUTE FUNCTION handle_aegis_creator_leaves_org();
 CREATE TRIGGER create_project_roles_trigger AFTER INSERT ON public.projects FOR EACH ROW EXECUTE FUNCTION create_default_project_roles();
 CREATE TRIGGER create_team_roles_trigger AFTER INSERT ON public.teams FOR EACH ROW EXECUTE FUNCTION create_default_team_roles();
 CREATE TRIGGER organization_integrations_updated_at BEFORE UPDATE ON public.organization_integrations FOR EACH ROW EXECUTE FUNCTION update_organization_integrations_updated_at();
-CREATE TRIGGER project_integrations_updated_at BEFORE UPDATE ON public.project_integrations FOR EACH ROW EXECUTE FUNCTION update_project_integrations_updated_at();
-CREATE TRIGGER team_integrations_updated_at BEFORE UPDATE ON public.team_integrations FOR EACH ROW EXECUTE FUNCTION update_team_integrations_updated_at();
-CREATE TRIGGER trg_cleanup_orphaned_watchlist AFTER DELETE ON public.project_watchlist FOR EACH ROW EXECUTE FUNCTION cleanup_orphaned_watchlist();
-CREATE TRIGGER trigger_update_pr_guardrails_updated_at BEFORE UPDATE ON public.project_pr_guardrails FOR EACH ROW EXECUTE FUNCTION update_pr_guardrails_updated_at();
-CREATE TRIGGER update_aegis_chat_threads_updated_at BEFORE UPDATE ON public.aegis_chat_threads FOR EACH ROW EXECUTE FUNCTION update_aegis_chat_threads_updated_at();
-CREATE TRIGGER update_organization_notification_rules_updated_at BEFORE UPDATE ON public.organization_notification_rules FOR EACH ROW EXECUTE FUNCTION update_organization_notification_rules_updated_at();
 CREATE TRIGGER update_organization_policies_updated_at BEFORE UPDATE ON public.organization_policies FOR EACH ROW EXECUTE FUNCTION update_organization_policies_updated_at();
-CREATE TRIGGER update_project_notification_rules_updated_at BEFORE UPDATE ON public.project_notification_rules FOR EACH ROW EXECUTE FUNCTION update_project_notification_rules_updated_at();
 CREATE TRIGGER update_project_policy_exceptions_updated_at BEFORE UPDATE ON public.project_policy_exceptions FOR EACH ROW EXECUTE FUNCTION update_project_policy_exceptions_updated_at();
-CREATE TRIGGER update_team_notification_rules_updated_at BEFORE UPDATE ON public.team_notification_rules FOR EACH ROW EXECUTE FUNCTION update_team_notification_rules_updated_at();
 CREATE TRIGGER update_user_profiles_updated_at BEFORE UPDATE ON public.user_profiles FOR EACH ROW EXECUTE FUNCTION update_user_profiles_updated_at();
