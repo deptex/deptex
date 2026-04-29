@@ -1,5 +1,6 @@
 import { LanguageModel } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { DEFAULT_MODELS } from '../ai/models';
@@ -28,7 +29,15 @@ export function getLanguageModel(config: ProviderConfig): LanguageModel {
     case 'openai':
       return createOpenAI({ apiKey: config.apiKey, baseURL: config.baseURL })(config.model);
     case 'deepinfra':
-      return createOpenAI({ apiKey: config.apiKey, baseURL: config.baseURL ?? DEEPINFRA_BASE_URL }).chat(config.model);
+      // Use @ai-sdk/openai-compatible rather than @ai-sdk/openai for
+      // DeepInfra. The OpenAI provider maps system messages to
+      // role: 'developer' (the new OpenAI o1/o3 role) which DeepInfra
+      // rejects with 422. The compatible provider keeps role: 'system'.
+      return createOpenAICompatible({
+        name: 'deepinfra',
+        apiKey: config.apiKey,
+        baseURL: config.baseURL ?? DEEPINFRA_BASE_URL,
+      }).chatModel(config.model);
     case 'anthropic':
       return createAnthropic({ apiKey: config.apiKey })(config.model);
     case 'google':

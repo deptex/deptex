@@ -106,11 +106,21 @@ export async function runEditor(opts: {
   await logger.info('edit', 'Calling editor LLM for udiff');
   const startedAt = Date.now();
 
-  const result = await generateText({
-    model,
-    system: ARCHITECT_SYSTEM,
-    prompt: buildUserPrompt(plan, workDir),
-  });
+  let result;
+  try {
+    result = await generateText({
+      model,
+      system: ARCHITECT_SYSTEM,
+      prompt: buildUserPrompt(plan, workDir),
+    });
+  } catch (err: any) {
+    // Surface the underlying provider error so we can diagnose 422s etc.
+    const detail = err?.responseBody ? ` body=${err.responseBody}` : '';
+    const status = err?.statusCode ? ` status=${err.statusCode}` : '';
+    const url = err?.url ? ` url=${err.url}` : '';
+    await logger.error('edit', `Editor LLM call failed:${status}${url}${detail}`, err);
+    throw err;
+  }
 
   const tokensUsed =
     (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0);
