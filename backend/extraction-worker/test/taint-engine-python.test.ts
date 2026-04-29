@@ -68,6 +68,41 @@ const CASES: FixtureCase[] = [
     framework: 'flask',
     expectedVulnClass: 'command_injection',
   },
+  {
+    name: 'Flask path traversal',
+    vulnDir: 'flask-path-traversal-vuln',
+    safeDir: 'flask-path-traversal-safe',
+    framework: 'flask',
+    expectedVulnClass: 'path_traversal',
+  },
+  {
+    name: 'Django XSS',
+    vulnDir: 'django-xss-vuln',
+    safeDir: 'django-xss-safe',
+    framework: 'django',
+    expectedVulnClass: 'xss',
+  },
+  {
+    name: 'Django path traversal',
+    vulnDir: 'django-path-traversal-vuln',
+    safeDir: 'django-path-traversal-safe',
+    framework: 'django',
+    expectedVulnClass: 'path_traversal',
+  },
+  {
+    name: 'FastAPI XSS',
+    vulnDir: 'fastapi-xss-vuln',
+    safeDir: 'fastapi-xss-safe',
+    framework: 'fastapi',
+    expectedVulnClass: 'xss',
+  },
+  {
+    name: 'FastAPI path traversal',
+    vulnDir: 'fastapi-path-traversal-vuln',
+    safeDir: 'fastapi-path-traversal-safe',
+    framework: 'fastapi',
+    expectedVulnClass: 'path_traversal',
+  },
 ];
 
 function summarizeFlows(flows: Flow[]): string {
