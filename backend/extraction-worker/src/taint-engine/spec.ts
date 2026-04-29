@@ -98,7 +98,15 @@ export interface FrameworkSanitizer {
  * specs only apply to PyPI projects, etc. Defaults to 'js' when unset, for
  * backward compatibility with the original Express/Fastify/NestJS/Next/Hono
  * specs that pre-dated multi-language support. */
-export type FrameworkLanguage = 'js' | 'python' | 'java' | 'go';
+export type FrameworkLanguage =
+  | 'js'
+  | 'python'
+  | 'java'
+  | 'go'
+  | 'ruby'
+  | 'php'
+  | 'rust'
+  | 'csharp';
 
 export interface FrameworkSpec {
   framework: string;
