@@ -122,24 +122,48 @@ function expandHunk(hunk: ParsedHunk): HunkText {
   return { oldLines, newLines };
 }
 
-function findHunkOffset(fileLines: string[], oldLines: string[]): number {
-  if (oldLines.length === 0) return 0;
-  // Exact match first.
-  outer: for (let i = 0; i <= fileLines.length - oldLines.length; i++) {
-    for (let j = 0; j < oldLines.length; j++) {
-      if (fileLines[i + j] !== oldLines[j]) continue outer;
+interface HunkParts {
+  removed: string[]; // only `-` lines
+  added: string[];   // only `+` lines
+}
+
+function expandHunkParts(hunk: ParsedHunk): HunkParts {
+  const removed: string[] = [];
+  const added: string[] = [];
+  for (const raw of hunk.lines) {
+    if (raw.startsWith('\\')) continue;
+    const marker = raw[0];
+    const content = raw.slice(1);
+    if (marker === '-') removed.push(content);
+    else if (marker === '+') added.push(content);
+  }
+  return { removed, added };
+}
+
+const norm = (s: string) => s.replace(/\s+$/, '').replace(/^\s+/, '');
+
+function findContiguous(fileLines: string[], target: string[]): number {
+  if (target.length === 0) return -1;
+  // Exact match.
+  outer: for (let i = 0; i <= fileLines.length - target.length; i++) {
+    for (let j = 0; j < target.length; j++) {
+      if (fileLines[i + j] !== target[j]) continue outer;
     }
     return i;
   }
-  // Whitespace-tolerant fallback.
-  const norm = (s: string) => s.replace(/\s+$/, '').replace(/^\s+/, '');
-  outer2: for (let i = 0; i <= fileLines.length - oldLines.length; i++) {
-    for (let j = 0; j < oldLines.length; j++) {
-      if (norm(fileLines[i + j]) !== norm(oldLines[j])) continue outer2;
+  // Whitespace-tolerant.
+  outer2: for (let i = 0; i <= fileLines.length - target.length; i++) {
+    for (let j = 0; j < target.length; j++) {
+      if (norm(fileLines[i + j]) !== norm(target[j])) continue outer2;
     }
     return i;
   }
   return -1;
+}
+
+function findHunkOffset(fileLines: string[], oldLines: string[]): number {
+  if (oldLines.length === 0) return 0;
+  return findContiguous(fileLines, oldLines);
 }
 
 export function applyDiff(workDir: string, diff: ParsedFileDiff): void {
@@ -193,8 +217,27 @@ export function applyDiff(workDir: string, diff: ParsedFileDiff): void {
 
   for (const hunk of diff.hunks) {
     const { oldLines, newLines } = expandHunk(hunk);
-    const offset = findHunkOffset(working, oldLines);
+    let offset = findHunkOffset(working, oldLines);
     if (offset === -1) {
+      // Context-drift fallback: weaker editor models often emit context lines
+      // that don't quite match the file (off-by-one whitespace, slightly
+      // wrong surrounding code, drifted line numbers). When the full-hunk
+      // match fails, try matching on JUST the `-` lines — the actual content
+      // being changed. If found, replace exactly those lines with the `+`
+      // lines, ignoring context. This is essentially Aider's diff-fenced
+      // SEARCH/REPLACE strategy embedded in the udiff parser.
+      const { removed, added } = expandHunkParts(hunk);
+      if (removed.length > 0) {
+        const removedOffset = findContiguous(working, removed);
+        if (removedOffset !== -1) {
+          working = [
+            ...working.slice(0, removedOffset),
+            ...added,
+            ...working.slice(removedOffset + removed.length),
+          ];
+          continue;
+        }
+      }
       throw new DiffApplyError(
         `Hunk did not match in ${sourcePath} (header: ${hunk.header.trim()})`,
       );
