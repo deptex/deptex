@@ -70,6 +70,7 @@ function makeFlow(overrides: Partial<Flow> = {}): Flow {
     flow_length: 2,
     source_description: 'Express request body',
     sink_description: 'shell exec',
+    engine_confidence: 0.9,
     ...overrides,
   };
 }

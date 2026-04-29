@@ -954,6 +954,16 @@ export async function runPipeline(
                 workspaceRoot,
                 signal,
                 onWarn: (m) => { void log.warn('taint_engine', m); },
+                fpFilter: {
+                  storage: supabase,
+                  organizationId,
+                  // No human triggered this extraction; we attribute the
+                  // platform AI spend to the org owner (the cost-cap
+                  // aggregator filters by organization_id, not user_id).
+                  userId: organizationId,
+                  projectId,
+                  extractionRunId: runId,
+                },
               }),
               30 * 60_000,
               'taint_engine',
@@ -970,11 +980,13 @@ export async function runPipeline(
                 errorCode: 'no_specs_loaded',
               });
             } else {
-              const { propagation, frameworksLoaded } = engineResult;
+              const { propagation, frameworksLoaded, flowsAfterFilter, aiFilter } = engineResult;
+              const survivors = flowsAfterFilter ?? propagation.flows;
               const writeResult = await writeTaintEngineFlows(supabase, {
                 projectId,
                 extractionRunId: runId,
-                flows: propagation.flows,
+                flows: survivors,
+                filterVerdicts: aiFilter?.verdicts,
               });
               for (const e of writeResult.errors) {
                 await log.warn('taint_engine', `flow write: ${e}`);
@@ -986,17 +998,27 @@ export async function runPipeline(
                 status: 'completed',
                 callgraphBuildMs: propagation.stats.callgraphMs,
                 taintPropagationMs: propagation.stats.propagationMs,
+                aiFpFilterMs: aiFilter?.invoked ? aiFilter.durationMs : undefined,
                 totalMs: Date.now() - stepStart,
                 flowsEmitted: propagation.flows.length,
-                flowsAfterAiFilter: propagation.flows.length,
+                flowsAfterAiFilter: survivors.length,
+                aiCostUsd: aiFilter?.costUsd ?? 0,
                 frameworksDetected: frameworksLoaded,
                 isTypedJsProject: propagation.callgraph.isTypedJsProject,
                 typedFilesPct: propagation.callgraph.typedFilesPct,
               });
-              await log.info(
-                'taint_engine',
-                `Emitted ${propagation.flows.length} flows from ${frameworksLoaded.length} framework spec(s) in ${propagation.stats.totalMs}ms`,
-              );
+              if (aiFilter?.invoked) {
+                await log.info(
+                  'taint_engine',
+                  `Emitted ${propagation.flows.length} flows; AI filter checked ${aiFilter.flowsChecked}, rejected ${aiFilter.flowsRejected} (kept ${survivors.length}). Cost $${aiFilter.costUsd.toFixed(4)}. ${propagation.stats.totalMs}ms total.`,
+                );
+              } else {
+                const reason = aiFilter?.skippedReason ? ` (filter skipped: ${aiFilter.skippedReason})` : '';
+                await log.info(
+                  'taint_engine',
+                  `Emitted ${propagation.flows.length} flows from ${frameworksLoaded.length} framework spec(s) in ${propagation.stats.totalMs}ms${reason}`,
+                );
+              }
             }
           } catch (err: unknown) {
             // HARD-FAIL: log telemetry, maybe engage killswitch, then rethrow.

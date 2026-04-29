@@ -27,6 +27,14 @@ import * as path from 'path';
 import { propagate, type PropagateResult } from './propagator';
 import { loadSpec } from './spec-loader';
 import type { FrameworkSpec } from './spec';
+import type { Flow } from './flow';
+import {
+  filterFlow,
+  estimatePerFlowCostUsd,
+  createUsageLogger,
+  type FilterResult,
+} from './fp-filter';
+import type { Storage } from '../storage';
 
 export interface RunEngineOptions {
   /** Absolute path to the cloned repo / workspace root. */
@@ -41,6 +49,47 @@ export interface RunEngineOptions {
   signal?: AbortSignal;
   /** Optional warning sink. */
   onWarn?: (msg: string) => void;
+  /**
+   * AI false-positive filter context. When provided + ai_layer_enabled +
+   * GOOGLE_AI_API_KEY set, flows below the org's confidence threshold are
+   * routed to platform Gemini Flash for a per-flow check. Without it the
+   * engine runs deterministic-only — safe for self-host without keys.
+   */
+  fpFilter?: FpFilterContext;
+}
+
+export interface FpFilterContext {
+  storage: Storage;
+  organizationId: string;
+  /** Triggering user (system user when extraction is automated); audit-trail only. */
+  userId: string;
+  projectId: string;
+  extractionRunId: string;
+  /** Per-org settings — the runner re-reads in case the caller stale-reads. */
+  apiKey?: string;
+  /** Optional model override for the filter (defaults to gemini-2.5-flash). */
+  model?: string;
+}
+
+export interface AiFilterStats {
+  invoked: boolean;
+  /** Reason the filter did not run, when invoked=false. */
+  skippedReason: string | null;
+  /** Flows passed deterministically (engine_confidence ≥ threshold). */
+  flowsAboveThreshold: number;
+  /** Flows submitted to the model. */
+  flowsChecked: number;
+  /** Flows the model rejected as false positives. */
+  flowsRejected: number;
+  /** Flows the model kept. */
+  flowsKept: number;
+  /** Flows kept by default because the model call errored. */
+  flowsKeptOnError: number;
+  /** Aggregate USD spend across this run's filter calls. */
+  costUsd: number;
+  /** Per-flow verdict map keyed by Flow.id, for storage embedding. */
+  verdicts: Map<string, FilterResult>;
+  durationMs: number;
 }
 
 export interface RunEngineResult {
@@ -52,6 +101,13 @@ export interface RunEngineResult {
   frameworksLoaded: string[];
   /** Engine output; null when ran=false. */
   propagation: PropagateResult | null;
+  /**
+   * Flows after the AI filter has dropped rejections. Same shape as
+   * propagation.flows; identical when the filter didn't run.
+   */
+  flowsAfterFilter: Flow[] | null;
+  /** AI filter telemetry; null when ran=false or filter not configured. */
+  aiFilter: AiFilterStats | null;
 }
 
 const FRAMEWORK_MODELS_DIR = path.resolve(__dirname, 'framework-models');
@@ -83,6 +139,8 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
       skippedReason: 'no framework specs found',
       frameworksLoaded: [],
       propagation: null,
+      flowsAfterFilter: null,
+      aiFilter: null,
     };
   }
 
@@ -93,12 +151,198 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
     onWarn,
   });
 
+  // Default: filter inactive, all flows pass through.
+  let flowsAfterFilter: Flow[] = propagation.flows;
+  let aiFilter: AiFilterStats | null = null;
+
+  if (options.fpFilter) {
+    const result = await runFpFilterStage(
+      propagation.flows,
+      options.fpFilter,
+      workspaceRoot,
+      onWarn,
+    );
+    aiFilter = result.stats;
+    flowsAfterFilter = result.flowsAfterFilter;
+  }
+
   return {
     ran: true,
     skippedReason: null,
     frameworksLoaded,
     propagation,
+    flowsAfterFilter,
+    aiFilter,
   };
+}
+
+interface FpFilterStageOutput {
+  stats: AiFilterStats;
+  flowsAfterFilter: Flow[];
+}
+
+/**
+ * Resolve the org's filter settings, pre-check the cost cap, batch the
+ * sub-threshold flows through Gemini Flash, and return the surviving
+ * flows + telemetry.
+ */
+async function runFpFilterStage(
+  flows: Flow[],
+  fp: FpFilterContext,
+  workspaceRoot: string,
+  onWarn?: (msg: string) => void,
+): Promise<FpFilterStageOutput> {
+  const start = Date.now();
+
+  const baseStats: AiFilterStats = {
+    invoked: false,
+    skippedReason: null,
+    flowsAboveThreshold: 0,
+    flowsChecked: 0,
+    flowsRejected: 0,
+    flowsKept: 0,
+    flowsKeptOnError: 0,
+    costUsd: 0,
+    verdicts: new Map(),
+    durationMs: 0,
+  };
+
+  if (flows.length === 0) {
+    baseStats.skippedReason = 'no_flows';
+    baseStats.durationMs = Date.now() - start;
+    return { stats: baseStats, flowsAfterFilter: flows };
+  }
+
+  // Read settings.
+  const { data: settingsRow } = await fp.storage
+    .from('taint_engine_settings')
+    .select('ai_layer_enabled, monthly_ai_cost_cap_usd, ai_fp_filter_confidence_threshold')
+    .eq('organization_id', fp.organizationId)
+    .maybeSingle();
+  const settings = (settingsRow ?? null) as {
+    ai_layer_enabled?: boolean;
+    monthly_ai_cost_cap_usd?: number | string | null;
+    ai_fp_filter_confidence_threshold?: number | string | null;
+  } | null;
+
+  if (settings && settings.ai_layer_enabled === false) {
+    baseStats.skippedReason = 'ai_layer_disabled';
+    baseStats.durationMs = Date.now() - start;
+    return { stats: baseStats, flowsAfterFilter: flows };
+  }
+
+  // Resolve API key (caller may pass directly; otherwise use platform env).
+  const apiKey = fp.apiKey ?? process.env.GOOGLE_AI_API_KEY;
+  if (!apiKey) {
+    baseStats.skippedReason = 'no_platform_api_key';
+    baseStats.durationMs = Date.now() - start;
+    onWarn?.('fp-filter skipped: GOOGLE_AI_API_KEY not configured');
+    return { stats: baseStats, flowsAfterFilter: flows };
+  }
+
+  const threshold = clampThreshold(settings?.ai_fp_filter_confidence_threshold);
+  const above: Flow[] = [];
+  const below: Flow[] = [];
+  for (const f of flows) {
+    if (f.engine_confidence >= threshold) above.push(f);
+    else below.push(f);
+  }
+  baseStats.flowsAboveThreshold = above.length;
+
+  if (below.length === 0) {
+    baseStats.skippedReason = 'all_flows_above_threshold';
+    baseStats.durationMs = Date.now() - start;
+    return { stats: baseStats, flowsAfterFilter: flows };
+  }
+
+  // Cost-cap pre-check: project the cost and bail (degrade to deterministic-only)
+  // if running the batch would push the org over its monthly cap.
+  const cap = Number(settings?.monthly_ai_cost_cap_usd ?? 50);
+  const spendNow = await readMonthlySpend(fp.storage, fp.organizationId, onWarn);
+  const projected = below.reduce((sum, f) => sum + estimatePerFlowCostUsd(f), 0);
+  if (Number.isFinite(cap) && spendNow + projected > cap) {
+    baseStats.skippedReason = 'cost_cap_exceeded';
+    baseStats.durationMs = Date.now() - start;
+    onWarn?.(
+      `fp-filter skipped: projected $${projected.toFixed(4)} on top of $${spendNow.toFixed(4)} would exceed cap $${cap.toFixed(2)}`,
+    );
+    return { stats: baseStats, flowsAfterFilter: flows };
+  }
+
+  baseStats.invoked = true;
+  const logger = createUsageLogger(fp.storage, {
+    organizationId: fp.organizationId,
+    userId: fp.userId,
+    projectId: fp.projectId,
+    extractionRunId: fp.extractionRunId,
+  }, onWarn);
+
+  // Sequential calls so we don't overwhelm the rate limit on huge batches.
+  // ~25s timeout per call; for ≤100 flows the M7 perf budget allows this.
+  const surviving: Flow[] = [...above];
+  for (const f of below) {
+    const result = await filterFlow(
+      { flow: f, workspaceRoot, apiKey, model: fp.model, onWarn },
+      logger,
+      {
+        organizationId: fp.organizationId,
+        userId: fp.userId,
+        projectId: fp.projectId,
+        extractionRunId: fp.extractionRunId,
+      },
+    );
+    baseStats.verdicts.set(f.id, result);
+    if (result.verdict === 'kept_on_error') {
+      baseStats.flowsKeptOnError++;
+      baseStats.costUsd += result.costUsd;
+      surviving.push(f);
+      continue;
+    }
+    baseStats.flowsChecked++;
+    baseStats.costUsd += result.costUsd;
+    if (result.verdict === 'kept') {
+      baseStats.flowsKept++;
+      surviving.push(f);
+    } else {
+      baseStats.flowsRejected++;
+    }
+  }
+
+  baseStats.durationMs = Date.now() - start;
+  return { stats: baseStats, flowsAfterFilter: surviving };
+}
+
+function clampThreshold(raw: number | string | null | undefined): number {
+  const v = raw === null || raw === undefined ? 0.7 : Number(raw);
+  if (!Number.isFinite(v)) return 0.7;
+  if (v < 0) return 0;
+  if (v > 1) return 1;
+  return v;
+}
+
+async function readMonthlySpend(
+  storage: Storage,
+  organizationId: string,
+  onWarn?: (msg: string) => void,
+): Promise<number> {
+  // Prefer the dedicated RPC (server-side SUM); fall back to 0 if it isn't
+  // installed (older self-host migrations) — the cap will then defer to the
+  // engine's deterministic output and the next admin migration will catch up.
+  try {
+    const { data, error } = await storage.rpc<number | string>(
+      'get_taint_engine_monthly_spend',
+      { p_organization_id: organizationId },
+    );
+    if (error) {
+      onWarn?.(`get_taint_engine_monthly_spend rpc failed: ${error.message}`);
+      return 0;
+    }
+    const v = typeof data === 'number' ? data : Number(data ?? 0);
+    return Number.isFinite(v) ? v : 0;
+  } catch (err) {
+    onWarn?.(`get_taint_engine_monthly_spend rpc threw: ${(err as Error).message}`);
+    return 0;
+  }
 }
 
 /**

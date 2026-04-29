@@ -619,7 +619,36 @@ function sinkHitToFlow(hit: SinkHit, sinkContainingFunc: FunctionNode, maxPathLe
     flow_length: flowNodes.length,
     source_description: hit.trace.source.description,
     sink_description: hit.sink.description,
+    engine_confidence: scoreEngineConfidence(hit, flowNodes),
   };
+}
+
+/**
+ * Heuristic confidence score for a flow ∈ [0,1]. Drives M7's per-flow AI
+ * filter: flows below the org's configured threshold (default 0.7) are
+ * routed to the LLM check; flows above are kept verbatim.
+ *
+ * The deterministic engine doesn't track aliasing or branching precisely,
+ * so longer flows and wildcard / external sinks are noisier:
+ *   - base 1.0
+ *   - −0.1 per hop beyond 3 (capped at −0.4)
+ *   - −0.2 if the sink pattern starts with `*.`
+ *   - −0.1 if the sink resolved as external/unresolved
+ *   - clamped to [0.05, 0.99] so we never claim absolute certainty and
+ *     never write a literal 0 (which the threshold check would treat as
+ *     an unconditional kept-no-filter signal).
+ */
+function scoreEngineConfidence(hit: SinkHit, flowNodes: FlowNode[]): number {
+  let score = 1.0;
+  const hops = flowNodes.length;
+  if (hops > 3) score -= Math.min(0.4, (hops - 3) * 0.1);
+  if (hit.sink.pattern.startsWith('*.')) score -= 0.2;
+  if (hit.hit_node.kind === 'sink' && /node_modules/.test(hit.hit_node.filePath)) {
+    score -= 0.1;
+  }
+  if (score < 0.05) score = 0.05;
+  if (score > 0.99) score = 0.99;
+  return Number(score.toFixed(2));
 }
 
 // path module is required by createHash usage in some bundlers; quiet unused-imports.
