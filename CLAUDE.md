@@ -30,7 +30,7 @@ Deptex is an AI-powered open-core dependency security platform. It combines depe
 | Routing | React Router v6 (`createBrowserRouter`) |
 | Graphs | @xyflow/react (dependency + vulnerability graphs) |
 | Code editor | Monaco Editor (policy code) |
-| Workers | 2 workers on Fly.io: extraction-worker, aider-worker (Python) |
+| Workers | 2 workers on Fly.io: extraction-worker, fix-worker (Aegis Fix Agent) |
 | SBOM | cdxgen (CycloneDX). dep-scan (VDR, reachability). Semgrep, TruffleHog |
 | AST parsing | web-tree-sitter (WASM) — 8 languages (JS/TS, Python, Java, Go, Ruby, PHP, Rust, C#), 34 framework detectors |
 | Queues | Upstash QStash (async jobs, cron schedules) |
@@ -52,7 +52,7 @@ backend/
     lib/                  Shared libraries (ai/, aegis/, learning/, github, policy-engine, etc.)
     middleware/            auth.ts (JWT), ip-allowlist.ts
   extraction-worker/      Clone + cdxgen + dep-scan + tree-sitter extractor + framework detection + Semgrep + TruffleHog (Fly.io scale-to-zero)
-  aider-worker/           AI-powered fix worker (Aider/Python on Fly.io)
+  fix-worker/             Aegis Fix Agent — plan-then-execute coding agent (Fly.io scale-to-zero)
   database/               ~140 SQL migration files
 
 frontend/src/
@@ -145,7 +145,7 @@ PR -> check runs + smart comments + policy engine + PR tracking
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` | Database, auth, realtime, storage |
 | `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY` | Async job dispatch |
 | `UPSTASH_REDIS_URL`, `UPSTASH_REDIS_TOKEN` | Caching, job queues |
-| `FLY_API_TOKEN`, `FLY_EXTRACTION_APP`, `FLY_AIDER_APP` | Worker machine management |
+| `FLY_API_TOKEN`, `FLY_EXTRACTION_APP`, `FLY_FIX_APP` | Worker machine management |
 | `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` | GitHub App (webhook secret required in prod) |
 | `GOOGLE_AI_API_KEY` | Tier 1 AI (Gemini Flash) |
 | `AI_ENCRYPTION_KEY` | BYOK key encryption (32-byte hex, required for Tier 2) |

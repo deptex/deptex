@@ -1,7 +1,7 @@
 {
-  "name": "deptex-aider-worker",
+  "name": "deptex-fix-worker",
   "version": "0.1.0",
-  "description": "AI fix worker for Deptex - Aider-powered vulnerability remediation on Fly.io",
+  "description": "Aegis Fix Agent worker — clones repo, applies plan via architect-then-editor with udiff, runs tests, opens PR",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -11,9 +11,15 @@
   },
   "license": "LicenseRef-FSL-1.1-ALv2",
   "dependencies": {
+    "@ai-sdk/anthropic": "^2.0.0",
+    "@ai-sdk/google": "^2.0.0",
+    "@ai-sdk/openai": "^2.0.0",
+    "@ai-sdk/openai-compatible": "^2.0.41",
     "@supabase/supabase-js": "^2.39.0",
+    "ai": "^6.0.0",
     "dotenv": "^16.3.1",
-    "simple-git": "^3.22.0"
+    "simple-git": "^3.22.0",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.6",

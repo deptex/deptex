@@ -1149,7 +1149,7 @@ CREATE TABLE IF NOT EXISTS public.project_security_fixes (
   run_id uuid NOT NULL DEFAULT gen_random_uuid(),
   fix_type text NOT NULL,
   strategy text NOT NULL,
-  status text NOT NULL DEFAULT 'queued'::text,
+  status text NOT NULL DEFAULT 'planning'::text,
   triggered_by uuid NOT NULL,
   osv_id text,
   dependency_id uuid,
@@ -1176,7 +1176,17 @@ CREATE TABLE IF NOT EXISTS public.project_security_fixes (
   validation_result jsonb,
   started_at timestamp with time zone,
   completed_at timestamp with time zone,
-  created_at timestamp with time zone DEFAULT now()
+  created_at timestamp with time zone DEFAULT now(),
+  plan jsonb,
+  plan_generated_at timestamp with time zone,
+  plan_base_sha text,
+  plan_base_branch text,
+  approved_at timestamp with time zone,
+  approved_by_user_id uuid,
+  approval_token text,
+  rejected_at timestamp with time zone,
+  rejected_by_user_id uuid,
+  rejection_reason text
 );
 CREATE TABLE IF NOT EXISTS public.project_semgrep_findings (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1723,7 +1733,7 @@ ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organizatio
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_max_hours_check CHECK ((max_hours > 0));
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_severity_check CHECK ((severity = ANY (ARRAY['critical'::text, 'high'::text, 'medium'::text, 'low'::text])));
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_warning_threshold_percent_check CHECK (((warning_threshold_percent >= 1) AND (warning_threshold_percent <= 99)));
-ALTER TABLE public.organizations ADD CONSTRAINT organizations_default_ai_provider_check CHECK ((default_ai_provider = ANY (ARRAY['openai'::text, 'anthropic'::text, 'google'::text])));
+ALTER TABLE public.organizations ADD CONSTRAINT organizations_default_ai_provider_check CHECK ((default_ai_provider = ANY (ARRAY['openai'::text, 'anthropic'::text, 'google'::text, 'deepinfra'::text])));
 ALTER TABLE public.organizations ADD CONSTRAINT organizations_epd_budget_exceeded_behavior_check CHECK ((epd_budget_exceeded_behavior = ANY (ARRAY['fail_job'::text, 'continue_with_fallback'::text])));
 ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text])));
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_epd_confidence_tier CHECK (((epd_confidence_tier IS NULL) OR (epd_confidence_tier = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text]))));
@@ -1738,7 +1748,7 @@ ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_excep
 ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'accepted'::text, 'rejected'::text, 'revoked'::text])));
 ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_source_chk CHECK ((reachability_source = ANY (ARRAY['atom'::text, 'semgrep_taint'::text])));
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_fix_type_check CHECK ((fix_type = ANY (ARRAY['vulnerability'::text, 'semgrep'::text, 'secret'::text])));
-ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'completed'::text, 'failed'::text, 'cancelled'::text, 'pr_closed'::text, 'merged'::text, 'superseded'::text])));
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_status_check CHECK ((status = ANY (ARRAY['planning'::text, 'awaiting_approval'::text, 'approved'::text, 'executing'::text, 'completed'::text, 'failed'::text, 'rejected'::text])));
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_strategy_check CHECK ((strategy = ANY (ARRAY['bump_version'::text, 'code_patch'::text, 'add_wrapper'::text, 'pin_transitive'::text, 'remove_unused'::text, 'fix_semgrep'::text, 'remediate_secret'::text])));
 ALTER TABLE public.projects ADD CONSTRAINT projects_health_score_check CHECK (((health_score >= 0) AND (health_score <= 100)));
 ALTER TABLE public.team_notification_rules ADD CONSTRAINT team_notification_rules_trigger_type_check CHECK ((trigger_type = ANY (ARRAY['weekly_digest'::text, 'custom_code_pipeline'::text])));
@@ -1883,9 +1893,11 @@ ALTER TABLE public.project_repositories ADD CONSTRAINT project_repositories_inte
 ALTER TABLE public.project_repositories ADD CONSTRAINT project_repositories_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_roles ADD CONSTRAINT project_roles_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_secret_findings ADD CONSTRAINT project_secret_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_approved_by_user_id_fkey FOREIGN KEY (approved_by_user_id) REFERENCES auth.users(id);
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id);
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_rejected_by_user_id_fkey FOREIGN KEY (rejected_by_user_id) REFERENCES auth.users(id);
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_triggered_by_fkey FOREIGN KEY (triggered_by) REFERENCES auth.users(id);
 ALTER TABLE public.project_semgrep_findings ADD CONSTRAINT project_semgrep_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
@@ -2152,12 +2164,13 @@ CREATE INDEX idx_psemf_fingerprint ON public.project_semgrep_findings USING btre
 CREATE INDEX idx_psemf_project_extraction_run ON public.project_semgrep_findings USING btree (project_id, extraction_run_id);
 CREATE INDEX idx_psemf_status ON public.project_semgrep_findings USING btree (status);
 CREATE INDEX idx_psf_org_status ON public.project_security_fixes USING btree (organization_id, status);
+CREATE INDEX idx_psf_org_status_pending ON public.project_security_fixes USING btree (organization_id, status) WHERE (status = ANY (ARRAY['planning'::text, 'awaiting_approval'::text]));
 CREATE INDEX idx_psf_osv ON public.project_security_fixes USING btree (project_id, osv_id) WHERE (osv_id IS NOT NULL);
 CREATE INDEX idx_psf_project ON public.project_semgrep_findings USING btree (project_id);
 CREATE INDEX idx_psf_project_status ON public.project_security_fixes USING btree (project_id, status);
-CREATE INDEX idx_psf_queued ON public.project_security_fixes USING btree (status, created_at) WHERE (status = 'queued'::text);
 CREATE INDEX idx_psf_run ON public.project_semgrep_findings USING btree (extraction_run_id);
-CREATE INDEX idx_psf_running ON public.project_security_fixes USING btree (status, heartbeat_at) WHERE (status = 'running'::text);
+CREATE INDEX idx_psf_status_approved ON public.project_security_fixes USING btree (status, approved_at) WHERE (status = 'approved'::text);
+CREATE INDEX idx_psf_status_executing ON public.project_security_fixes USING btree (status, heartbeat_at) WHERE (status = 'executing'::text);
 CREATE INDEX idx_pus_project_extraction_run ON public.project_usage_slices USING btree (project_id, extraction_run_id);
 CREATE INDEX idx_pus_project_file ON public.project_usage_slices USING btree (project_id, file_path);
 CREATE INDEX idx_pus_project_type ON public.project_usage_slices USING btree (project_id, target_type);
@@ -2573,33 +2586,41 @@ $function$
 ;
 
 CREATE OR REPLACE FUNCTION public.claim_fix_job(p_machine_id text)
- RETURNS SETOF project_security_fixes
+ RETURNS TABLE(id uuid, project_id uuid, organization_id uuid, payload jsonb, plan jsonb, attempts integer)
  LANGUAGE plpgsql
 AS $function$
+DECLARE
+  v_job_id uuid;
 BEGIN
-  RETURN QUERY
-  WITH candidate AS (
-    SELECT psf.*
+  SELECT psf.id INTO v_job_id
     FROM project_security_fixes psf
-    WHERE psf.status = 'queued'
-      AND NOT EXISTS (
-        SELECT 1 FROM project_security_fixes running
-        WHERE running.project_id = psf.project_id
-          AND running.status = 'running'
-      )
-    ORDER BY psf.created_at ASC
+    WHERE psf.status = 'approved'
+      AND psf.attempts < psf.max_attempts
+    ORDER BY psf.approved_at ASC
     LIMIT 1
-    FOR UPDATE SKIP LOCKED
-  )
-  UPDATE project_security_fixes
-  SET status = 'running',
-      machine_id = p_machine_id,
-      started_at = NOW(),
-      heartbeat_at = NOW(),
-      attempts = attempts + 1
-  FROM candidate
-  WHERE project_security_fixes.id = candidate.id
-  RETURNING project_security_fixes.*;
+    FOR UPDATE SKIP LOCKED;
+
+  IF v_job_id IS NULL THEN
+    RETURN;
+  END IF;
+
+  UPDATE project_security_fixes psf
+    SET status = 'executing',
+        machine_id = p_machine_id,
+        heartbeat_at = NOW(),
+        started_at = NOW(),
+        attempts = psf.attempts + 1
+    WHERE psf.id = v_job_id
+    RETURNING
+      psf.id,
+      psf.project_id,
+      psf.organization_id,
+      psf.payload,
+      psf.plan,
+      psf.attempts
+    INTO id, project_id, organization_id, payload, plan, attempts;
+
+  RETURN NEXT;
 END;
 $function$
 ;
@@ -4830,20 +4851,23 @@ $function$
 ;
 
 CREATE OR REPLACE FUNCTION public.recover_stuck_fix_jobs()
- RETURNS SETOF project_security_fixes
+ RETURNS integer
  LANGUAGE plpgsql
 AS $function$
+DECLARE
+  v_count integer;
 BEGIN
-  RETURN QUERY
   UPDATE project_security_fixes
-  SET status = 'queued',
-      machine_id = NULL,
-      heartbeat_at = NULL,
-      run_id = gen_random_uuid()
-  WHERE status = 'running'
-    AND heartbeat_at < NOW() - INTERVAL '5 minutes'
-    AND attempts < max_attempts
-  RETURNING *;
+    SET status = 'approved',
+        machine_id = NULL,
+        heartbeat_at = NULL,
+        error_message = COALESCE(error_message, '') ||
+          E'\n[recovered from stuck state at ' || NOW()::text || ']'
+    WHERE status = 'executing'
+      AND heartbeat_at < NOW() - INTERVAL '5 minutes'
+      AND attempts < max_attempts;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
 END;
 $function$
 ;

@@ -1,10 +1,11 @@
 import { LanguageModel } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { DEFAULT_MODELS } from '../ai/models';
 
-export type AIProvider = 'openai' | 'anthropic' | 'google';
+export type AIProvider = 'openai' | 'anthropic' | 'google' | 'deepinfra';
 
 interface ProviderConfig {
   providerType: AIProvider;
@@ -15,10 +16,28 @@ interface ProviderConfig {
 
 const DEFAULT_MONTHLY_COST_CAP_USD = 100;
 
+// DeepInfra exposes an OpenAI-API-compatible endpoint, so we reuse the
+// OpenAI factory with a custom baseURL — no separate SDK required.
+// IMPORTANT: DeepInfra implements only the Chat Completions API
+// (/chat/completions), not OpenAI's newer Responses API (/responses) which
+// the AI SDK uses by default. Call .chat(model) so the SDK targets
+// /chat/completions and DeepInfra responds 200 instead of 404.
+const DEEPINFRA_BASE_URL = 'https://api.deepinfra.com/v1/openai';
+
 export function getLanguageModel(config: ProviderConfig): LanguageModel {
   switch (config.providerType) {
     case 'openai':
       return createOpenAI({ apiKey: config.apiKey, baseURL: config.baseURL })(config.model);
+    case 'deepinfra':
+      // Use @ai-sdk/openai-compatible rather than @ai-sdk/openai for
+      // DeepInfra. The OpenAI provider maps system messages to
+      // role: 'developer' (the new OpenAI o1/o3 role) which DeepInfra
+      // rejects with 422. The compatible provider keeps role: 'system'.
+      return createOpenAICompatible({
+        name: 'deepinfra',
+        apiKey: config.apiKey,
+        baseURL: config.baseURL ?? DEEPINFRA_BASE_URL,
+      }).chatModel(config.model);
     case 'anthropic':
       return createAnthropic({ apiKey: config.apiKey })(config.model);
     case 'google':
@@ -36,11 +55,15 @@ export function getPlatformKeyForProvider(provider: AIProvider): string | undefi
       return process.env.ANTHROPIC_API_KEY;
     case 'google':
       return process.env.GOOGLE_AI_API_KEY;
+    case 'deepinfra':
+      return process.env.DEEPINFRA_API_KEY;
   }
 }
 
 function envVarFor(provider: AIProvider): string {
-  return provider === 'google' ? 'GOOGLE_AI_API_KEY' : `${provider.toUpperCase()}_API_KEY`;
+  if (provider === 'google') return 'GOOGLE_AI_API_KEY';
+  if (provider === 'deepinfra') return 'DEEPINFRA_API_KEY';
+  return `${provider.toUpperCase()}_API_KEY`;
 }
 
 async function getOrgDefaultProvider(organizationId: string): Promise<AIProvider> {
