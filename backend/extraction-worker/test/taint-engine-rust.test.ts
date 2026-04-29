@@ -53,6 +53,20 @@ const CASES: FixtureCase[] = [
     specs: ['actix-web', 'rust-stdlib'],
     expectedVulnClass: 'command_injection',
   },
+  {
+    name: 'Axum SQL injection',
+    vulnDir: 'axum-sql-injection-vuln',
+    safeDir: 'axum-sql-injection-safe',
+    specs: ['axum', 'rust-stdlib'],
+    expectedVulnClass: 'sql_injection',
+  },
+  {
+    name: 'Axum path traversal',
+    vulnDir: 'axum-path-traversal-vuln',
+    safeDir: 'axum-path-traversal-safe',
+    specs: ['axum', 'rust-stdlib'],
+    expectedVulnClass: 'path_traversal',
+  },
 ];
 
 function summarize(flows: Flow[]): string {
