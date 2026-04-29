@@ -367,3 +367,37 @@ export function shouldRunForRollout(env: NodeJS.ProcessEnv = process.env): boole
   if (pct === 0) return false;
   return Math.random() * 100 < pct;
 }
+
+/**
+ * Per-org rollout decision (M8.4). When `taint_engine_settings.rollout_pct_override`
+ * is set for the org, it wins outright over the env var — letting us canary
+ * specific orgs to 100% during the shadow A/B without flipping the fleet
+ * variable. NULL override falls back to `shouldRunForRollout(env)`.
+ *
+ * The settings read swallows errors and falls back to the env-based decision
+ * so a transient DB hiccup never causes a "did the engine run?" mystery.
+ */
+export async function shouldRunForOrg(
+  storage: Storage,
+  organizationId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  try {
+    const { data, error } = await storage
+      .from('taint_engine_settings')
+      .select('rollout_pct_override')
+      .eq('organization_id', organizationId)
+      .maybeSingle();
+    if (error) return shouldRunForRollout(env);
+    const row = data as { rollout_pct_override?: number | null } | null;
+    const override = row?.rollout_pct_override ?? null;
+    if (override === null || override === undefined) return shouldRunForRollout(env);
+    const pct = Math.max(0, Math.min(100, Number(override)));
+    if (!Number.isFinite(pct)) return shouldRunForRollout(env);
+    if (pct === 100) return true;
+    if (pct === 0) return false;
+    return Math.random() * 100 < pct;
+  } catch {
+    return shouldRunForRollout(env);
+  }
+}

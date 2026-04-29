@@ -39,7 +39,7 @@ export type { Flow, FlowNode, SinkHit, TaintTrace } from './flow';
 export type { IrFunction, Step, LocalVar, SourceLocation, CalleeRef } from './ir';
 export { lowerFunction } from './ir';
 
-export { runEngine, shouldRunForRollout } from './runner';
+export { runEngine, shouldRunForRollout, shouldRunForOrg } from './runner';
 export type { RunEngineOptions, RunEngineResult } from './runner';
 
 export { writeFlows, writeRun } from './storage';
