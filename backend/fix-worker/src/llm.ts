@@ -1,13 +1,17 @@
 import type { LanguageModel } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 type AIProvider = 'openai' | 'anthropic' | 'google' | 'deepinfra';
 
-// DeepInfra's OpenAI-compatible endpoint. Reuse the OpenAI SDK with this
-// baseURL — no separate package required.
+// DeepInfra's OpenAI-compatible endpoint. We use @ai-sdk/openai-compatible
+// rather than @ai-sdk/openai because the latter maps system messages to the
+// new role: 'developer' (introduced for OpenAI's o1/o3 reasoning models),
+// which DeepInfra rejects with 422. The openai-compatible provider sticks
+// to the older standard role: 'system'.
 const DEEPINFRA_BASE_URL = 'https://api.deepinfra.com/v1/openai';
 
 const DEFAULT_MODELS: Record<AIProvider, string> = {
@@ -41,10 +45,11 @@ function buildModel(provider: AIProvider, apiKey: string, modelName: string): La
     case 'openai':
       return createOpenAI({ apiKey })(modelName);
     case 'deepinfra':
-      // DeepInfra speaks only the Chat Completions API. The AI SDK defaults
-      // to OpenAI's newer Responses API, which DeepInfra returns 404 for.
-      // .chat(modelName) pins this branch to /chat/completions.
-      return createOpenAI({ apiKey, baseURL: DEEPINFRA_BASE_URL }).chat(modelName);
+      return createOpenAICompatible({
+        name: 'deepinfra',
+        apiKey,
+        baseURL: DEEPINFRA_BASE_URL,
+      }).chatModel(modelName);
     case 'anthropic':
       return createAnthropic({ apiKey })(modelName);
     case 'google':

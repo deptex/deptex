@@ -14,6 +14,7 @@
     "@ai-sdk/anthropic": "^2.0.0",
     "@ai-sdk/google": "^2.0.0",
     "@ai-sdk/openai": "^2.0.0",
+    "@ai-sdk/openai-compatible": "^2.0.41",
     "@supabase/supabase-js": "^2.39.0",
     "ai": "^6.0.0",
     "dotenv": "^16.3.1",

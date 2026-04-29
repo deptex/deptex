@@ -1,25 +1,51 @@
 import { generateText, type LanguageModel } from 'ai';
+import * as fs from 'fs';
+import * as path from 'path';
 import type { FixLogger } from './logger';
 import type { FixPlan } from './plan-types';
 import { applyDiffText } from './edit-tool';
 import type { TestResult } from './test-runner';
-
-// M5 lands a 1-cycle repair stub: when tests fail, give the LLM the failures
-// once and let it produce a follow-up udiff. M7 expands this into a 2-cycle
-// budget with the full safety caps.
 
 const REPAIR_SYSTEM = `You are repairing a failed fix attempt. The plan was approved and partially applied, but tests are now failing.
 
 You will receive:
 - The original plan
 - The previous diff that was applied
+- The CURRENT contents of every file the plan touched (post-previous-diff)
 - The test failure output
 
-Produce a NEW Aider-style udiff against the CURRENT working state (post-previous-diff). Do not undo the prior fix unless it is the cause of the test failure. Stay tightly scoped — only change what is needed to make the tests pass.
+Produce a NEW Aider-style udiff against the CURRENT working state shown below. Match your hunk context to those CURRENT contents — the previous diff has ALREADY been applied, so do not re-add lines you can already see. Do not undo the prior fix unless it is the cause of the test failure. Stay tightly scoped — only change what is needed to make the tests pass.
 
 OUTPUT: brief reasoning then a udiff using "--- a/path", "+++ b/path", "@@ ... @@".`;
 
-function buildRepairPrompt(plan: FixPlan, previousDiff: string, tests: TestResult): string {
+const MAX_FILE_PEEK_BYTES = 32_000;
+
+function readFilesContext(workDir: string, plan: FixPlan): string {
+  const lines: string[] = ['CURRENT FILE CONTENTS (after previous diff was applied):'];
+  for (const fc of plan.fileChanges) {
+    if (fc.action === 'delete') continue;
+    const full = path.join(workDir, fc.path);
+    if (!fs.existsSync(full)) {
+      lines.push(`--- ${fc.path} (does not exist)`);
+      continue;
+    }
+    try {
+      const stat = fs.statSync(full);
+      const raw = fs.readFileSync(full, 'utf-8');
+      const content = stat.size > MAX_FILE_PEEK_BYTES
+        ? raw.slice(0, MAX_FILE_PEEK_BYTES) + '\n... [truncated]'
+        : raw;
+      lines.push(`--- ${fc.path} ---`);
+      lines.push(content);
+      lines.push(`--- end ${fc.path} ---`);
+    } catch {
+      lines.push(`--- ${fc.path} (read failed)`);
+    }
+  }
+  return lines.join('\n');
+}
+
+function buildRepairPrompt(workDir: string, plan: FixPlan, previousDiff: string, tests: TestResult): string {
   const stderrTail = tests.stderr.slice(-4_000);
   const stdoutTail = tests.stdout.slice(-4_000);
   return [
@@ -28,6 +54,8 @@ function buildRepairPrompt(plan: FixPlan, previousDiff: string, tests: TestResul
     '',
     'PREVIOUS DIFF:',
     previousDiff,
+    '',
+    readFilesContext(workDir, plan),
     '',
     `TEST EXIT CODE: ${tests.exitCode}`,
     'TEST STDERR (tail):',
@@ -61,7 +89,7 @@ export async function runRepair(opts: {
   const result = await generateText({
     model,
     system: REPAIR_SYSTEM,
-    prompt: buildRepairPrompt(plan, previousDiff, testResult),
+    prompt: buildRepairPrompt(workDir, plan, previousDiff, testResult),
   });
 
   const tokensUsed =
