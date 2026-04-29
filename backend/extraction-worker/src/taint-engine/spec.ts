@@ -94,10 +94,18 @@ export interface FrameworkSanitizer {
   description: string;
 }
 
+/** Language a framework spec applies to. Drives runner dispatch — Python
+ * specs only apply to PyPI projects, etc. Defaults to 'js' when unset, for
+ * backward compatibility with the original Express/Fastify/NestJS/Next/Hono
+ * specs that pre-dated multi-language support. */
+export type FrameworkLanguage = 'js' | 'python' | 'java' | 'go';
+
 export interface FrameworkSpec {
   framework: string;
   /** Semver range or '*'. M2 doesn't enforce; M6 will dispatch on this. */
   version: string;
+  /** Optional; defaults to 'js'. */
+  language?: FrameworkLanguage;
   sources: FrameworkSource[];
   sinks: FrameworkSink[];
   sanitizers: FrameworkSanitizer[];

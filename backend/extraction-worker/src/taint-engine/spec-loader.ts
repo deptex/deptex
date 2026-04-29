@@ -52,6 +52,18 @@ export function validateSpec(input: unknown, source?: string): FrameworkSpec {
   }
   const framework = expectString(input, 'framework', '$.framework', source);
   const version = expectString(input, 'version', '$.version', source);
+  const rawLanguage = (input as Record<string, unknown>).language;
+  let language: FrameworkSpec['language'];
+  if (rawLanguage !== undefined) {
+    if (typeof rawLanguage !== 'string' || !['js', 'python', 'java', 'go'].includes(rawLanguage)) {
+      throw new SpecValidationError(
+        `language must be one of js|python|java|go, got ${JSON.stringify(rawLanguage)}`,
+        '$.language',
+        source,
+      );
+    }
+    language = rawLanguage as FrameworkSpec['language'];
+  }
   const sources = expectArray(input, 'sources', '$.sources', source).map((s, i) =>
     validateSource(s, `$.sources[${i}]`, source),
   );
@@ -61,7 +73,7 @@ export function validateSpec(input: unknown, source?: string): FrameworkSpec {
   const sanitizers = expectArray(input, 'sanitizers', '$.sanitizers', source).map((s, i) =>
     validateSanitizer(s, `$.sanitizers[${i}]`, source),
   );
-  return { framework, version, sources, sinks, sanitizers };
+  return { framework, version, language, sources, sinks, sanitizers };
 }
 
 function validateSource(input: unknown, fieldPath: string, source?: string): FrameworkSource {

@@ -952,6 +952,7 @@ export async function runPipeline(
             const engineResult = await withTimeout(
               async (signal) => runTaintEngine({
                 workspaceRoot,
+                ecosystem: job.ecosystem,
                 signal,
                 onWarn: (m) => { void log.warn('taint_engine', m); },
                 fpFilter: {
