@@ -12,6 +12,8 @@
     "start": "node dist/index.js",
     "type-check": "tsc --noEmit",
     "schema:dump": "tsx scripts/dump-schema.ts",
+    "taint-engine:callgraph": "tsx scripts/taint-engine-callgraph.ts",
+    "test:taint-engine-callgraph": "tsx test/taint-engine-callgraph.test.ts",
     "smoke:pglite": "tsx test/smoke-pglite.ts",
     "test:storage": "tsx test/storage-pglite.test.ts",
     "test:finalize": "tsx test/finalize-extraction.test.ts",
