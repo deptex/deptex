@@ -94,6 +94,10 @@ export interface ExecutorResult {
   filesChanged: string[];
   rawDiff: string;
   tokensUsed: number;
+  // Set when the udiff parsed but at least one hunk didn't match the file.
+  // The pipeline routes this into the repair loop so the model can see
+  // current file contents and try again, instead of dying mid-pipeline.
+  applyError?: string;
 }
 
 export async function runEditor(opts: {
@@ -134,8 +138,18 @@ export async function runEditor(opts: {
     throw new Error('Editor LLM did not return a udiff (no "--- " marker found)');
   }
   const diffText = text.slice(diffStart);
-  const { filesChanged } = applyDiffText(workDir, diffText);
-  return { filesChanged, rawDiff: diffText, tokensUsed };
+  try {
+    const { filesChanged } = applyDiffText(workDir, diffText);
+    return { filesChanged, rawDiff: diffText, tokensUsed };
+  } catch (err: any) {
+    // Editor LLMs frequently emit context lines that don't quite match the
+    // file (off-by-one whitespace, drifted line numbers, hallucinated
+    // surrounding code). Don't crash — surface the error to runFixPipeline
+    // so it can route the situation through the repair loop, where the
+    // model gets actual file contents and a second chance.
+    await logger.warn('edit', `Editor patch failed to apply: ${err.message}`);
+    return { filesChanged: [], rawDiff: diffText, tokensUsed, applyError: err.message };
+  }
 }
 
 function cumulativeDiffLoc(workDir: string): number {
@@ -234,9 +248,11 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
   const editorResult = await runEditor({ model, plan, workDir, logger });
   let totalTokens = editorResult.tokensUsed;
   let lastDiff = editorResult.rawDiff;
-  checkDiffCap('editor');
 
-  // 2. Initial test run.
+  // 2. Initial test run — OR a synthetic failure if the editor's patch
+  // didn't apply cleanly. Either way, the repair loop has the same shape:
+  // fix the diff, retry. Repair already reads current file contents so it
+  // can recover from off-by-one context drift.
   const remainingBudgetMs = (label: string): number => {
     const elapsed = Date.now() - pipelineStartMs;
     const remaining = wallClockBudgetMs - elapsed;
@@ -249,13 +265,27 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
     return Math.min(remaining, 10 * 60 * 1000);
   };
 
-  let testResult = await runTests({
-    workDir,
-    testCommand: plan.testCommand,
-    logger,
-    timeoutMs: remainingBudgetMs('initial test'),
-    extraEnv,
-  });
+  let testResult: TestResult;
+  if (editorResult.applyError) {
+    testResult = {
+      passed: false,
+      exitCode: -1,
+      stdout: '',
+      stderr: `Patch from editor did not apply: ${editorResult.applyError}\nFix the hunk so it matches the CURRENT file content shown below, then re-emit the full udiff.`,
+      durationMs: 0,
+      timedOut: false,
+      noTestSuite: false,
+    };
+  } else {
+    checkDiffCap('editor');
+    testResult = await runTests({
+      workDir,
+      testCommand: plan.testCommand,
+      logger,
+      timeoutMs: remainingBudgetMs('initial test'),
+      extraEnv,
+    });
+  }
 
   // 3. Repair cycles. REPAIR_BUDGET cycles, each is one LLM call + one test run.
   let repairAttempts = 0;
@@ -275,6 +305,21 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
     });
     totalTokens += repair.tokensUsed;
     lastDiff = repair.repairDiff;
+    if (repair.applyError) {
+      // Repair patch didn't apply either. Keep looping with the apply error
+      // as the synthetic test failure — same recovery shape as the editor
+      // case above.
+      testResult = {
+        passed: false,
+        exitCode: -1,
+        stdout: '',
+        stderr: `Repair patch did not apply: ${repair.applyError}\nFix the hunk so it matches the CURRENT file content shown below, then re-emit the full udiff.`,
+        durationMs: 0,
+        timedOut: false,
+        noTestSuite: false,
+      };
+      continue;
+    }
     checkDiffCap(`repair ${repairAttempts}`);
 
     testResult = await runTests({
