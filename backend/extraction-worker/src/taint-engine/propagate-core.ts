@@ -349,7 +349,7 @@ function hopFromStep(step: Step, kind: FlowNode['kind']): FlowNode {
  * access) — in that case a source-step with no match means "this is just a
  * read of an untainted local", not "field access on tainted local".
  */
-function receiverRoot(text: string): string | null {
+export function receiverRoot(text: string): string | null {
   const m = text.match(/^([A-Za-z_][A-Za-z0-9_]*)([.\[(]|->|::)/);
   return m ? m[1] : null;
 }
