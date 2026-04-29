@@ -23,6 +23,7 @@
 
 import type { Storage } from '../storage';
 import type { Flow } from './flow';
+import type { FilterResult } from './fp-filter';
 
 const FLOW_BATCH_SIZE = 100;
 
@@ -49,6 +50,13 @@ export interface WriteFlowsOptions {
    * don't promote a specific PDV. M5+ will plumb real dep resolution.
    */
   resolveDep?: (flow: Flow) => { purl: string; dependencyId: string | null } | null;
+  /**
+   * Optional per-flow AI filter verdicts (M7). Embedded into the
+   * flow_nodes JSONB so admins can see why a borderline flow survived
+   * (or, for rejected flows, this map skips them entirely upstream and
+   * we never see them here). Keyed by Flow.id.
+   */
+  filterVerdicts?: Map<string, FilterResult>;
 }
 
 /**
@@ -61,12 +69,38 @@ export async function writeFlows(
 ): Promise<WriteFlowsResult> {
   const { projectId, extractionRunId, flows } = options;
   const resolveDep = options.resolveDep ?? defaultResolveDep;
+  const verdicts = options.filterVerdicts;
   const errors: string[] = [];
 
   const rows: Record<string, unknown>[] = [];
   for (const flow of flows) {
     const dep = resolveDep(flow);
     if (!dep) continue;
+    // Embed AI filter verdict (M7.5) into the JSONB so admins can see why
+    // a borderline flow survived. We append a synthetic node rather than
+    // adding a top-level column (keeps the project_reachable_flows schema
+    // identical between engine + atom + reachability_rules sources).
+    const v = verdicts?.get(flow.id);
+    let flowNodesWithVerdict: unknown = flow.flow_nodes;
+    if (v) {
+      flowNodesWithVerdict = [
+        ...flow.flow_nodes,
+        v.verdict === 'kept_on_error'
+          ? {
+              kind: 'ai_filter_verdict',
+              verdict: 'kept_on_error',
+              reasoning: v.reasoning,
+              error_message: v.errorMessage,
+            }
+          : {
+              kind: 'ai_filter_verdict',
+              verdict: v.verdict,
+              reasoning: v.reasoning,
+              confidence: v.confidence,
+              model: v.model,
+            },
+      ];
+    }
     rows.push({
       project_id: projectId,
       extraction_run_id: extractionRunId,
@@ -79,7 +113,7 @@ export async function writeFlows(
       // on coords alone (matches atom semantics).
       osv_id: null,
       rule_id: null,
-      flow_nodes: flow.flow_nodes,
+      flow_nodes: flowNodesWithVerdict,
       entry_point_file: flow.entry_point_file,
       entry_point_method: flow.entry_point_method,
       entry_point_line: flow.entry_point_line,

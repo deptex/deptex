@@ -47,6 +47,16 @@ export interface Flow {
   source_description: string;
   /** The matched sink spec, for telemetry. */
   sink_description: string;
+  /**
+   * Engine's own confidence the flow is real, ∈ [0,1]. Heuristic:
+   *   - short, non-wildcard, non-external sinks            → 0.9
+   *   - long path / wildcard receiver / external sink      → 0.5–0.7
+   *   - very long path or multiple lossy hops              → 0.3
+   * Used by M7's FP filter to decide which flows the LLM should re-examine
+   * (configured per-org via taint_engine_settings.ai_fp_filter_confidence_threshold,
+   * default 0.7).
+   */
+  engine_confidence: number;
 }
 
 /** Compact in-memory metadata about a tainted value flowing through the program. */
