@@ -93,21 +93,27 @@ BEGIN
     RETURN;
   END IF;
 
-  RETURN QUERY
-  UPDATE project_security_fixes
+  -- Alias the table so the unqualified `attempts` in `attempts = ...` doesn't
+  -- collide with the OUT parameter `attempts` declared via RETURNS TABLE
+  -- (Postgres "column reference is ambiguous"). Qualify both the SET and the
+  -- RETURNING list with the alias so no plan_attempts ambiguity sneaks back.
+  UPDATE project_security_fixes psf
     SET status = 'executing',
         machine_id = p_machine_id,
         heartbeat_at = NOW(),
         started_at = NOW(),
-        attempts = attempts + 1
-    WHERE project_security_fixes.id = v_job_id
+        attempts = psf.attempts + 1
+    WHERE psf.id = v_job_id
     RETURNING
-      project_security_fixes.id,
-      project_security_fixes.project_id,
-      project_security_fixes.organization_id,
-      project_security_fixes.payload,
-      project_security_fixes.plan,
-      project_security_fixes.attempts;
+      psf.id,
+      psf.project_id,
+      psf.organization_id,
+      psf.payload,
+      psf.plan,
+      psf.attempts
+    INTO id, project_id, organization_id, payload, plan, attempts;
+
+  RETURN NEXT;
 END;
 $$;
 
