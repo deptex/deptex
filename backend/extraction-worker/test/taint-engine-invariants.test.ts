@@ -23,6 +23,7 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   buildCallersByCallee,
+  matchesCallPattern,
   receiverRoot,
   runWorklistAndAggregate,
   type FunctionState,
@@ -749,6 +750,57 @@ fn handler(query: actix_web::web::Query<()>) {
 }
 
 // ---------------------------------------------------------------------------
+// SECTION F — matchesCallPattern wildcard-receiver semantics
+//
+// Languages emit calleeText with their native method separator: JS / Ruby /
+// Python use `.`, PHP uses `->`, Rust path-call uses `::`. The matcher must
+// honor whichever the YAML author wrote — `*.method`, `*->method`, `*::method`
+// — so spec patterns like symfony's `*->executeQuery(*)` actually fire.
+// Regression: until 2026-04-29 only `*.` was honored, leaving every PHP
+// method-call sink (and every Rust path-call sink in the same shape) silently
+// unmatched.
+// ---------------------------------------------------------------------------
+
+function sectionF_callPatternWildcards() {
+  console.log('\n[F] matchesCallPattern wildcard-receiver semantics');
+
+  // *.method — JS / Python / Ruby / etc.
+  assert(matchesCallPattern('*.exec(*)', 'child.exec'), '*.exec matches child.exec');
+  assert(matchesCallPattern('*.query(*)', 'pool.query'), '*.query matches pool.query');
+  assert(!matchesCallPattern('*.exec(*)', 'execve'), '*.exec does not match execve (no separator)');
+
+  // *->method — PHP. Until the 2026-04-29 fix this was silently treated as a
+  // literal pattern and never matched any PHP call.
+  assert(
+    matchesCallPattern('*->executeQuery(*)', 'conn->executeQuery'),
+    '*->executeQuery matches conn->executeQuery',
+  );
+  assert(
+    matchesCallPattern('*->setContent(*)', 'resp->setContent'),
+    '*->setContent matches resp->setContent',
+  );
+  assert(
+    !matchesCallPattern('*->executeQuery(*)', 'conn.executeQuery'),
+    '*->executeQuery does NOT match conn.executeQuery (wrong separator)',
+  );
+
+  // *::method — Rust associated-fn / PHP scoped-call form.
+  assert(
+    matchesCallPattern('*::query(*)', 'sqlx::query'),
+    '*::query matches sqlx::query',
+  );
+  assert(
+    !matchesCallPattern('*::query(*)', 'sqlx.query'),
+    '*::query does NOT match sqlx.query (wrong separator)',
+  );
+
+  // Exact-match (non-wildcard) form still works.
+  assert(matchesCallPattern('new Response(*)', 'new Response'), 'exact: new Response');
+  assert(matchesCallPattern('DB::select(*)', 'DB::select'), 'exact: DB::select');
+  assert(!matchesCallPattern('DB::select(*)', 'DB::selectOne'), 'exact does not partial-match');
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -761,6 +813,7 @@ async function main() {
   await sectionE_phpDollarStrip();
   await sectionE_csharpVarDeclFallback();
   await sectionE_rustFieldExpressionReroute();
+  sectionF_callPatternWildcards();
   console.log(`\n${passes} passed, ${failures} failed`);
   process.exit(failures > 0 ? 1 : 0);
 }
