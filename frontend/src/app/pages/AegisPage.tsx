@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
 import { aegisApi, type AegisThread } from '../../lib/aegis-api';
 import type { Organization } from '../../lib/api';
@@ -35,6 +35,39 @@ export default function AegisPage() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [pendingTitleThreadId, setPendingTitleThreadId] = useState<string | null>(null);
   const pendingTitleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const SIDEBAR_MIN = 200;
+  const SIDEBAR_MAX = 380;
+  const SIDEBAR_DEFAULT = 260;
+  const SIDEBAR_KEY = 'aegis-sidebar-width';
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    if (typeof window === 'undefined') return SIDEBAR_DEFAULT;
+    const stored = window.localStorage.getItem(SIDEBAR_KEY);
+    const parsed = stored ? parseInt(stored, 10) : NaN;
+    return Number.isFinite(parsed) ? Math.min(Math.max(parsed, SIDEBAR_MIN), SIDEBAR_MAX) : SIDEBAR_DEFAULT;
+  });
+
+  const startSidebarResize = useCallback((e: ReactMouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+    const clamp = (n: number) => Math.min(Math.max(n, SIDEBAR_MIN), SIDEBAR_MAX);
+    const onMove = (ev: globalThis.MouseEvent) => {
+      setSidebarWidth(clamp(startWidth + (ev.clientX - startX)));
+    };
+    const onUp = (ev: globalThis.MouseEvent) => {
+      const next = clamp(startWidth + (ev.clientX - startX));
+      window.localStorage.setItem(SIDEBAR_KEY, String(next));
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, [sidebarWidth]);
 
   // The key passed to ChatPane. It stays stable across "silent" URL updates
   // (e.g. when ChatPane creates a thread from the landing state and we just
@@ -112,6 +145,7 @@ export default function AegisPage() {
         updatedAt: now,
         pinnedAt: null,
         archivedAt: null,
+        fixStatus: null,
       };
       return [optimistic, ...prev];
     });
@@ -209,7 +243,10 @@ export default function AegisPage() {
 
   return (
     <div className="flex h-[calc(100vh-3rem)] bg-background">
-      <aside className="w-[260px] flex-shrink-0 border-r border-border bg-background">
+      <aside
+        className="relative flex-shrink-0 border-r border-border bg-background"
+        style={{ width: sidebarWidth }}
+      >
         <ThreadList
           threads={threads}
           activeThreadId={activeThreadId ?? null}
@@ -222,6 +259,13 @@ export default function AegisPage() {
           onSetPinned={handleSetPinned}
           onSetArchived={handleSetArchived}
           onOpenSearch={() => setSearchOpen(true)}
+        />
+        <div
+          onMouseDown={startSidebarResize}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar"
+          className="absolute top-0 right-0 h-full w-1 -mr-0.5 cursor-col-resize hover:bg-foreground/15 active:bg-foreground/25 transition-colors z-10"
         />
       </aside>
       <main className="flex-1 flex flex-col min-w-0">

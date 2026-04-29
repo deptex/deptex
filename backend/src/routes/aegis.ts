@@ -4,7 +4,7 @@ import { generateText } from 'ai';
 import { supabase } from '../lib/supabase';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { userHasOrgPermission } from '../lib/permissions';
-import { rowToMessage, rowToThread, type ThreadRow, type UserStateRow } from '../lib/aegis/types';
+import { rowToMessage, rowToThread, mapFixStatusToBadge, type ThreadRow, type UserStateRow, type FixStatusForBadge } from '../lib/aegis/types';
 import { getAegisModel } from '../lib/aegis/provider';
 import { generateAegisChat } from '../lib/aegis-v3/chat-generation';
 import {
@@ -24,7 +24,34 @@ const AEGIS_PERMISSION = 'interact_with_aegis';
 
 router.use(authenticateUser);
 
-const THREAD_COLUMNS = 'id, organization_id, user_id, created_by, title, created_at, updated_at';
+const THREAD_COLUMNS = 'id, organization_id, user_id, created_by, title, created_at, updated_at, context_type, context_id';
+
+/** Batch-load fix status for any threads linked to fixes via context_type='fix'. */
+async function loadFixStatusesForThreads(
+  threads: ThreadRow[],
+): Promise<Map<string, FixStatusForBadge>> {
+  const fixIds = threads
+    .filter((t) => t.context_type === 'fix' && t.context_id)
+    .map((t) => t.context_id as string);
+  if (fixIds.length === 0) return new Map();
+  const { data } = await supabase
+    .from('project_security_fixes')
+    .select('id, status, error_message')
+    .in('id', fixIds);
+  const byFixId = new Map<string, { status: string; errorMessage: string | null }>();
+  for (const row of data ?? []) {
+    byFixId.set(row.id, { status: row.status, errorMessage: row.error_message ?? null });
+  }
+  const byThreadId = new Map<string, FixStatusForBadge>();
+  for (const t of threads) {
+    if (t.context_type !== 'fix' || !t.context_id) continue;
+    const fix = byFixId.get(t.context_id);
+    if (!fix) continue;
+    const badge = mapFixStatusToBadge(fix.status, fix.errorMessage);
+    if (badge) byThreadId.set(t.id, badge);
+  }
+  return byThreadId;
+}
 
 async function getSenderNameAndRole(userId: string, organizationId: string): Promise<{ name: string | null; role: string | null }> {
   const [{ data: profile }, { data: membership }] = await Promise.all([
@@ -63,7 +90,7 @@ router.get('/threads', async (req: AuthRequest, res: Response) => {
   if (threads.length === 0) return res.json({ threads: [] });
 
   const ids = threads.map((t) => t.id);
-  const [{ data: stateRows }, { data: allParticipantRows }] = await Promise.all([
+  const [{ data: stateRows }, { data: allParticipantRows }, fixStatusByThread] = await Promise.all([
     supabase
       .from('aegis_chat_user_state')
       .select('thread_id, pinned_at, archived_at')
@@ -73,6 +100,7 @@ router.get('/threads', async (req: AuthRequest, res: Response) => {
       .from('aegis_chat_participants')
       .select('thread_id')
       .in('thread_id', ids),
+    loadFixStatusesForThreads(threads),
   ]);
 
   const stateByThread = new Map<string, UserStateRow>(
@@ -85,7 +113,13 @@ router.get('/threads', async (req: AuthRequest, res: Response) => {
 
   res.json({
     threads: threads.map((t) =>
-      rowToThread(t, userId, stateByThread.get(t.id) ?? null, countByThread.get(t.id) ?? 1),
+      rowToThread(
+        t,
+        userId,
+        stateByThread.get(t.id) ?? null,
+        countByThread.get(t.id) ?? 1,
+        fixStatusByThread.get(t.id) ?? null,
+      ),
     ),
   });
 });
@@ -353,7 +387,22 @@ router.post('/chat', async (req: AuthRequest, res: Response) => {
       const totalMessages = (rows ?? []).length + 1;
       if (totalMessages <= 3) {
         try {
-          const prompt = `Summarize this chat in 3-5 words, Title Case, no quotes, no trailing punctuation.\n\nUser: ${userText.slice(0, 800)}\nAssistant: ${text.slice(0, 800)}\n\nTitle:`;
+          const prompt = `Generate a short title (3-7 words, Title Case, no quotes, no trailing punctuation) for this conversation.
+
+Describe what the user is trying to accomplish — action + target. Use the project, package, or finding name when present in the conversation.
+Good examples:
+- "Fix Semgrep Finding in deptex-test"
+- "Investigate CVE-2024-12345 in api-server"
+- "Update Vulnerable Lodash Dependency"
+- "Audit Org Security Posture"
+- "Plan Reachability Migration"
+
+Avoid status/state words like "Awaiting", "Pending", "Discussion", "Plan Approval".
+
+User: ${userText.slice(0, 800)}
+Assistant: ${text.slice(0, 800)}
+
+Title:`;
           const { text: titleText } = await generateText({ model: getAegisModel(), prompt, temperature: 0.3 });
           const title = titleText.trim().replace(/^["']|["']$/g, '').replace(/[.?!]+$/, '').slice(0, 80) || 'New chat';
           await supabase.from('aegis_chat_threads').update({ title }).eq('id', threadId);

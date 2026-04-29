@@ -1,5 +1,13 @@
 import { fetchWithAuth } from './api';
 
+export type FixStatusForBadge =
+  | 'awaiting_approval'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'refused'
+  | 'rejected';
+
 export interface AegisThread {
   id: string;
   organizationId: string;
@@ -12,6 +20,7 @@ export interface AegisThread {
   updatedAt: string;
   pinnedAt: string | null;
   archivedAt: string | null;
+  fixStatus: FixStatusForBadge | null;
 }
 
 export interface AegisParticipant {
