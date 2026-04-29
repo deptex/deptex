@@ -51,9 +51,9 @@ export interface RunEngineOptions {
   onWarn?: (msg: string) => void;
   /**
    * AI false-positive filter context. When provided + ai_layer_enabled +
-   * GOOGLE_AI_API_KEY set, flows below the org's confidence threshold are
-   * routed to platform Gemini Flash for a per-flow check. Without it the
-   * engine runs deterministic-only — safe for self-host without keys.
+   * DEEPINFRA_API_KEY set, flows below the org's confidence threshold are
+   * routed to DeepInfra Qwen for a per-flow check. Without it the engine
+   * runs deterministic-only — safe for self-host without keys.
    */
   fpFilter?: FpFilterContext;
 }
@@ -67,7 +67,7 @@ export interface FpFilterContext {
   extractionRunId: string;
   /** Per-org settings — the runner re-reads in case the caller stale-reads. */
   apiKey?: string;
-  /** Optional model override for the filter (defaults to gemini-2.5-flash). */
+  /** Optional model override (defaults to Qwen/Qwen3-235B-A22B-Instruct-2507). */
   model?: string;
 }
 
@@ -232,11 +232,11 @@ async function runFpFilterStage(
   }
 
   // Resolve API key (caller may pass directly; otherwise use platform env).
-  const apiKey = fp.apiKey ?? process.env.GOOGLE_AI_API_KEY;
+  const apiKey = fp.apiKey ?? process.env.DEEPINFRA_API_KEY;
   if (!apiKey) {
     baseStats.skippedReason = 'no_platform_api_key';
     baseStats.durationMs = Date.now() - start;
-    onWarn?.('fp-filter skipped: GOOGLE_AI_API_KEY not configured');
+    onWarn?.('fp-filter skipped: DEEPINFRA_API_KEY not configured');
     return { stats: baseStats, flowsAfterFilter: flows };
   }
 

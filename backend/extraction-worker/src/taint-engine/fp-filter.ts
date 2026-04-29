@@ -3,11 +3,10 @@
  *
  * For each engine-emitted flow whose deterministic confidence falls below
  * the org's threshold, we ship the source/sink/intermediate code snippets
- * to platform Gemini Flash and ask "is this genuinely exploitable?". Flows
- * the model rejects are dropped; flows it keeps (or fails to evaluate)
- * survive. We never let a model-side error increase user-visible recall
- * loss — the engine output stays the source of truth, the filter only
- * subtracts.
+ * to DeepInfra Qwen and ask "is this genuinely exploitable?". Flows the
+ * model rejects are dropped; flows it keeps (or fails to evaluate) survive.
+ * We never let a model-side error increase user-visible recall loss — the
+ * engine output stays the source of truth, the filter only subtracts.
  *
  * Cost model:
  *   - Each call writes a row to ai_usage_logs(feature='taint_engine_fp_filter')
@@ -15,12 +14,12 @@
  *   - The runner pre-checks the org's monthly cap via a Postgres RPC
  *     (get_taint_engine_monthly_spend) before invoking the filter, and
  *     skips the entire batch with a warning if filtering would push the
- *     month over cap. (Per-flow projected cost × pending count > remaining.)
+ *     month over cap.
  *
- * Tier: platform Gemini Flash, per locked decision #14. The worker calls
- * the Generative Language REST API directly so we don't drag the backend's
- * provider abstraction into the worker package — same shape as how
- * epd.ts calls Anthropic directly.
+ * Tier: DeepInfra Qwen3-235B-Instruct via OpenAI-compatible endpoint, matching
+ * Phase 5's rule-generator wiring. Worker calls the REST API directly so we
+ * don't drag the backend's provider abstraction into the worker package —
+ * same shape as how epd.ts calls Anthropic directly.
  */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -30,22 +29,23 @@ import type { Storage } from '../storage';
 import type { Flow, FlowNode } from './flow';
 
 const FEATURE = 'taint_engine_fp_filter';
-const PROVIDER = 'google';
+const PROVIDER = 'openai';
 const TIER = 'platform';
-const DEFAULT_MODEL = 'gemini-2.5-flash';
-const REQUEST_TIMEOUT_MS = 25_000;
+const DEFAULT_MODEL = 'Qwen/Qwen3-235B-A22B-Instruct-2507';
+const DEEPINFRA_URL = 'https://api.deepinfra.com/v1/openai/chat/completions';
+const REQUEST_TIMEOUT_MS = 60_000;
 /** Snippet window around each hop's line. */
 const SNIPPET_CONTEXT_LINES = 4;
 /** Hard cap on chars per code snippet to keep prompt size sane. */
 const MAX_SNIPPET_CHARS = 1200;
 
-/** Gemini Flash 2.5 pricing, USD per token (Apr 2026 published rates). */
+/** DeepInfra Qwen3-235B pricing, USD per token (Apr 2026 published rates). */
 const PRICING = {
-  inputPerToken: 0.30 / 1_000_000,
-  outputPerToken: 2.50 / 1_000_000,
+  inputPerToken: 0.071 / 1_000_000,
+  outputPerToken: 0.10 / 1_000_000,
 };
 
-/** Loose estimate: ~1.6 chars per Gemini token (similar to Anthropic). */
+/** Loose estimate: ~4 chars per Qwen token (similar to most BPE tokenizers). */
 function estimateInputTokensFromText(text: string): number {
   return Math.ceil(text.length / 4);
 }
@@ -166,39 +166,43 @@ export async function filterFlow(
   let errorMessage: string | undefined;
 
   try {
-    response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0,
-            maxOutputTokens: 400,
-            responseMimeType: 'application/json',
-            responseSchema: VERDICT_SCHEMA,
-          },
-        }),
+    response = await fetch(DEEPINFRA_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${apiKey}`,
       },
-    );
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        max_tokens: 400,
+        response_format: { type: 'json_object' },
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a senior application-security engineer reviewing static taint-analysis findings. Respond with valid JSON only.',
+          },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    });
 
     if (!response.ok) {
-      errorMessage = `Gemini returned HTTP ${response.status}`;
+      errorMessage = `DeepInfra returned HTTP ${response.status}`;
       throw new Error(errorMessage);
     }
 
     const payload = (await response.json()) as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-      usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
 
-    inputTokens = Number(payload.usageMetadata?.promptTokenCount ?? estimateInputTokensFromText(prompt));
-    outputTokens = Number(payload.usageMetadata?.candidatesTokenCount ?? 100);
+    inputTokens = Number(payload.usage?.prompt_tokens ?? estimateInputTokensFromText(prompt));
+    outputTokens = Number(payload.usage?.completion_tokens ?? 100);
     costUsd = inputTokens * PRICING.inputPerToken + outputTokens * PRICING.outputPerToken;
 
-    const text = payload.candidates?.[0]?.content?.parts?.find((p) => typeof p.text === 'string')?.text ?? '';
+    const text = payload.choices?.[0]?.message?.content ?? '';
     const parsed = parseVerdict(text);
     if (!parsed) {
       errorMessage = 'model returned malformed JSON';
@@ -257,17 +261,6 @@ export async function filterFlow(
     clearTimeout(timeout);
   }
 }
-
-/** Closed schema the model is forced to honor (Gemini structured output). */
-const VERDICT_SCHEMA = {
-  type: 'object',
-  properties: {
-    verdict: { type: 'string', enum: ['kept', 'rejected'] },
-    reasoning: { type: 'string' },
-    confidence: { type: 'number' },
-  },
-  required: ['verdict', 'reasoning', 'confidence'],
-} as const;
 
 export interface ParsedVerdict {
   verdict: 'kept' | 'rejected';
