@@ -85,7 +85,14 @@ export async function runTests(opts: {
   } else if (passed) {
     await logger.success('tests', 'Tests passed', durationMs);
   } else {
-    await logger.warn('tests', `Tests failed (exit ${result.status})`);
+    // Log a tail of the actual output so we can tell whether this is a real
+    // failure or a "no test suite" signature we didn't yet recognize.
+    const stdoutTail = stdout.slice(-400).replace(/\s+/g, ' ').trim();
+    const stderrTail = stderr.slice(-400).replace(/\s+/g, ' ').trim();
+    await logger.warn(
+      'tests',
+      `Tests failed (exit ${result.status}) | stdout: "${stdoutTail}" | stderr: "${stderrTail}"`,
+    );
   }
 
   return {
