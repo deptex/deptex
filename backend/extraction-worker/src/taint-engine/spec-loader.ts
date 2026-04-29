@@ -55,9 +55,12 @@ export function validateSpec(input: unknown, source?: string): FrameworkSpec {
   const rawLanguage = (input as Record<string, unknown>).language;
   let language: FrameworkSpec['language'];
   if (rawLanguage !== undefined) {
-    if (typeof rawLanguage !== 'string' || !['js', 'python', 'java', 'go'].includes(rawLanguage)) {
+    if (
+      typeof rawLanguage !== 'string' ||
+      !['js', 'python', 'java', 'go', 'ruby', 'php', 'rust', 'csharp'].includes(rawLanguage)
+    ) {
       throw new SpecValidationError(
-        `language must be one of js|python|java|go, got ${JSON.stringify(rawLanguage)}`,
+        `language must be one of js|python|java|go|ruby|php|rust|csharp, got ${JSON.stringify(rawLanguage)}`,
         '$.language',
         source,
       );

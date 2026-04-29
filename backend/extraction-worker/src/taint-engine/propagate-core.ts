@@ -146,7 +146,19 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
           local.set(step.target, makeTrace(matched, step));
           sourcesAddedThisPass++;
         } else {
-          local.delete(step.target);
+          // No framework source matched. If the source text reads like a
+          // field/index access on a known-tainted local (e.g. `q.name`,
+          // `data[i]` where `q`/`data` was previously tainted), propagate
+          // the receiver's taint forward instead of clearing — this is the
+          // common case for handlers that bind an extractor to a local then
+          // read its fields.
+          const receiver = receiverRoot(step.sourceText);
+          const trace = receiver ? local.get(receiver) : undefined;
+          if (trace) {
+            local.set(step.target, extendPath(trace, hopFromStep(step, 'source'), maxPathLength));
+          } else {
+            local.delete(step.target);
+          }
         }
         break;
       }
@@ -325,6 +337,21 @@ function hopFromStep(step: Step, kind: FlowNode['kind']): FlowNode {
       break;
   }
   return { filePath: step.loc.filePath, line: step.loc.line, column: step.loc.column, label, kind };
+}
+
+/**
+ * Given a source-step text like `q.name`, `q[idx]`, `obj->prop`, or
+ * `Class::field`, return the leading identifier (the "receiver") so
+ * propagate-core can fall back to receiver-taint when no framework
+ * source pattern matches.
+ *
+ * Returns null when the text is a single identifier (no field/index/scope
+ * access) — in that case a source-step with no match means "this is just a
+ * read of an untainted local", not "field access on tainted local".
+ */
+function receiverRoot(text: string): string | null {
+  const m = text.match(/^([A-Za-z_][A-Za-z0-9_]*)([.\[(]|->|::)/);
+  return m ? m[1] : null;
 }
 
 function matchSourcePattern(text: string, specs: FrameworkSpec[]): FrameworkSource | null {

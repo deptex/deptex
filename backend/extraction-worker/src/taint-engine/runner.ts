@@ -28,6 +28,10 @@ import { propagate, type PropagateResult } from './propagator';
 import { propagatePython } from './python/propagate';
 import { propagateJava } from './java/propagate';
 import { propagateGo } from './go/propagate';
+import { propagateRuby } from './ruby/propagate';
+import { propagatePhp } from './php/propagate';
+import { propagateRust } from './rust/propagate';
+import { propagateCSharp } from './csharp/propagate';
 import { loadSpec } from './spec-loader';
 import type { FrameworkSpec, FrameworkLanguage } from './spec';
 import type { Flow } from './flow';
@@ -43,11 +47,27 @@ export interface RunEngineOptions {
   /** Absolute path to the cloned repo / workspace root. */
   workspaceRoot: string;
   /**
-   * Project ecosystem (npm/pypi/maven/gomod). Drives language dispatch:
-   * npm → JS/TS, pypi → Python, maven → Java, gomod → Go. Defaults to
-   * 'npm' (the original Phase 6 behavior) for backward compatibility.
+   * Project ecosystem. Drives language dispatch:
+   *   npm        → JS/TS
+   *   pypi       → Python
+   *   maven      → Java
+   *   gomod      → Go
+   *   rubygems   → Ruby
+   *   composer   → PHP
+   *   cargo      → Rust
+   *   nuget      → C#
+   * Defaults to 'npm' (the original Phase 6 behavior) for backward compatibility.
    */
-  ecosystem?: 'npm' | 'pypi' | 'maven' | 'gomod' | string;
+  ecosystem?:
+    | 'npm'
+    | 'pypi'
+    | 'maven'
+    | 'gomod'
+    | 'rubygems'
+    | 'composer'
+    | 'cargo'
+    | 'nuget'
+    | string;
   /** Optional cap on iterations; default 50× function count. */
   maxIterations?: number;
   /**
@@ -76,6 +96,14 @@ function ecosystemToLanguage(ecosystem: string | undefined): FrameworkLanguage {
       return 'java';
     case 'gomod':
       return 'go';
+    case 'rubygems':
+      return 'ruby';
+    case 'composer':
+      return 'php';
+    case 'cargo':
+      return 'rust';
+    case 'nuget':
+      return 'csharp';
     case 'npm':
     default:
       return 'js';
@@ -191,6 +219,38 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
       break;
     case 'go':
       propagation = await propagateGo({
+        rootDir: workspaceRoot,
+        specs,
+        maxIterations: options.maxIterations,
+        onWarn,
+      });
+      break;
+    case 'ruby':
+      propagation = await propagateRuby({
+        rootDir: workspaceRoot,
+        specs,
+        maxIterations: options.maxIterations,
+        onWarn,
+      });
+      break;
+    case 'php':
+      propagation = await propagatePhp({
+        rootDir: workspaceRoot,
+        specs,
+        maxIterations: options.maxIterations,
+        onWarn,
+      });
+      break;
+    case 'rust':
+      propagation = await propagateRust({
+        rootDir: workspaceRoot,
+        specs,
+        maxIterations: options.maxIterations,
+        onWarn,
+      });
+      break;
+    case 'csharp':
+      propagation = await propagateCSharp({
         rootDir: workspaceRoot,
         specs,
         maxIterations: options.maxIterations,
