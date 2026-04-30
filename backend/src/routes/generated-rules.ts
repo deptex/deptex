@@ -63,6 +63,7 @@ router.get('/:id/generated-rules', authenticateUser, async (req: AuthRequest, re
     if (!(await requireMembership(userId, orgId))) {
       return res.status(403).json({ error: 'Not a member of this organization' });
     }
+    const canViewSpend = await hasPermission(userId, orgId, 'view_ai_spending');
 
     const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
     const perPage = Math.min(100, Math.max(1, parseInt(req.query.per_page as string, 10) || 50));
@@ -98,8 +99,14 @@ router.get('/:id/generated-rules', authenticateUser, async (req: AuthRequest, re
     const { data, error, count } = await query;
     if (error) throw error;
 
+    // Per-rule generation_cost_usd is AI-spend data — gate on view_ai_spending
+    // for consistency with the sibling reachability-settings GET. Members
+    // without that permission still see the rule list (they need to see what
+    // CVEs are covered) but cost fields are nulled out.
+    const rules = (data ?? []).map((row: any) => canViewSpend ? row : { ...row, generation_cost_usd: null });
+
     res.json({
-      rules: data ?? [],
+      rules,
       pagination: {
         page,
         per_page: perPage,
@@ -122,6 +129,7 @@ router.get('/:id/generated-rules/:ruleId', authenticateUser, async (req: AuthReq
     if (!(await requireMembership(userId, orgId))) {
       return res.status(403).json({ error: 'Not a member of this organization' });
     }
+    const canViewSpend = await hasPermission(userId, orgId, 'view_ai_spending');
 
     const { data, error } = await supabase
       .from('organization_generated_rules')
@@ -131,6 +139,13 @@ router.get('/:id/generated-rules/:ruleId', authenticateUser, async (req: AuthReq
       .maybeSingle();
     if (error) throw error;
     if (!data) return res.status(404).json({ error: 'Rule not found' });
+
+    if (!canViewSpend) {
+      data.generation_cost_usd = null;
+      if (Array.isArray(data.previous_versions)) {
+        data.previous_versions = data.previous_versions.map((v: any) => ({ ...v, generation_cost_usd: null }));
+      }
+    }
 
     res.json(data);
   } catch (error: any) {

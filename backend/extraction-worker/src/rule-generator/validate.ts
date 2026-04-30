@@ -42,6 +42,13 @@ import { semgrepLanguageFor } from './prompt-builder';
 const SIGKILL_GRACE_MS = 10_000;
 const MAX_STDOUT = 32 * 1024 * 1024;
 const MAX_STDERR = 32 * 1024;
+// Per-spawn watchdog so one hung semgrep child can't eat the entire 240s
+// per-CVE budget (which is shared across OSV fetch, patch fetch, AI calls,
+// and multiple semgrep invocations). A real semgrep run completes in <2s
+// against fixtures and <1s against `--validate`; 90s is generous enough that
+// nothing benign should ever trip it.
+const RUN_SEMGREP_TIMEOUT_MS = 90_000;
+const RUN_SEMGREP_VALIDATE_TIMEOUT_MS = 60_000;
 
 export interface ValidateRuleArgs {
   payload: GeneratedPayload;
@@ -132,7 +139,7 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
   const normalizedPayload: GeneratedPayload = normalizedYaml === args.payload.rule_yaml
     ? args.payload
     : { ...args.payload, rule_yaml: normalizedYaml };
-  let parsedRule: { id: string; language: string };
+  let parsedRule: { id: string; language: string; metadataCve: string | null };
   try {
     parsedRule = parseRuleYaml(normalizedPayload.rule_yaml);
   } catch (err) {
@@ -152,6 +159,35 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
           // failed to parse here, which is a separate downstream gate. Surface
           // it through semgrep_parse_error so the funnel reflects "the YAML
           // the AI emitted wasn't a valid Semgrep config".
+          schema_pass: true,
+          fixture_pre_match: false,
+          fixture_safe_clean: false,
+          patch_pre_match: null,
+          patch_post_clean: null,
+          semgrep_parse_error: msg.slice(0, 500),
+        },
+      },
+    };
+  }
+
+  // Defense-in-depth against prompt-injection: the model receives untrusted
+  // OSV/patch content and could be steered into emitting metadata.cve for a
+  // different CVE than the one we're generating for. selectRulesForCves keys
+  // on metadata.cve, so a CVE-mismatch rule would be a no-op for the requested
+  // CVE — but rejecting it here makes the failure loud rather than silent.
+  if (parsedRule.metadataCve && parsedRule.metadataCve !== args.cveId) {
+    const msg = `metadata.cve mismatch: rule claims ${parsedRule.metadataCve} but generation was requested for ${args.cveId}`;
+    return {
+      status: 'failed_validation',
+      log: {
+        fixture_pre_matches: 0,
+        fixture_post_matches: 0,
+        patch_pre_matches: null,
+        patch_post_matches: null,
+        semgrep_stderr_excerpt: null,
+        errors: [`metadata_cve_mismatch: ${msg}`],
+        took_ms: Date.now() - start,
+        validation_breakdown: {
           schema_pass: true,
           fixture_pre_match: false,
           fixture_safe_clean: false,
@@ -353,7 +389,7 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
 // YAML parse helpers
 // ---------------------------------------------------------------------------
 
-function parseRuleYaml(yamlText: string): { id: string; language: string } {
+function parseRuleYaml(yamlText: string): { id: string; language: string; metadataCve: string | null } {
   let parsed: unknown;
   try {
     parsed = yaml.load(yamlText);
@@ -364,7 +400,7 @@ function parseRuleYaml(yamlText: string): { id: string; language: string } {
   if (!doc || typeof doc !== 'object' || !Array.isArray(doc.rules) || doc.rules.length !== 1) {
     throw new Error("expected exactly one rule under 'rules:'");
   }
-  const rule = doc.rules[0] as { id?: unknown; languages?: unknown };
+  const rule = doc.rules[0] as { id?: unknown; languages?: unknown; metadata?: unknown };
   if (typeof rule.id !== 'string' || rule.id.length === 0) {
     throw new Error('rule.id is missing');
   }
@@ -372,7 +408,9 @@ function parseRuleYaml(yamlText: string): { id: string; language: string } {
   if (langs.length === 0) {
     throw new Error("rule.languages is missing or empty");
   }
-  return { id: rule.id, language: langs[0] };
+  const metadata = (rule.metadata && typeof rule.metadata === 'object') ? rule.metadata as { cve?: unknown } : null;
+  const metadataCve = metadata && typeof metadata.cve === 'string' ? metadata.cve : null;
+  return { id: rule.id, language: langs[0], metadataCve };
 }
 
 const EXT_BY_ECOSYSTEM: Record<string, string> = {
@@ -661,10 +699,13 @@ async function runSemgrep(args: RunSemgrepArgs): Promise<SemgrepRunResult> {
       if (args.signal.aborted) onAbort();
       else args.signal.addEventListener('abort', onAbort, { once: true });
     }
+    const watchdog = setTimeout(killTree, RUN_SEMGREP_TIMEOUT_MS);
+    watchdog.unref?.();
 
     const cleanup = () => {
       if (args.signal) args.signal.removeEventListener('abort', onAbort);
       if (sigkillTimer) { clearTimeout(sigkillTimer); sigkillTimer = undefined; }
+      clearTimeout(watchdog);
     };
 
     child.on('error', (err) => { cleanup(); reject(new RuleValidationError('semgrep', err.message)); });
@@ -777,7 +818,19 @@ async function runSemgrepValidate(args: RunSemgrepValidateArgs): Promise<Semgrep
       }
     };
 
-    child.stdout.on('data', (chunk: Buffer) => { stdoutChunks.push(chunk); });
+    let stdoutLen = 0;
+    let truncated = false;
+    child.stdout.on('data', (chunk: Buffer) => {
+      if (truncated) return;
+      stdoutLen += chunk.length;
+      if (stdoutLen > MAX_STDOUT) {
+        truncated = true;
+        stdoutChunks.length = 0;
+        killTree();
+        return;
+      }
+      stdoutChunks.push(chunk);
+    });
     child.stderr.on('data', (chunk: Buffer) => {
       if (stderrLen >= MAX_STDERR) return;
       const room = MAX_STDERR - stderrLen;
@@ -791,10 +844,13 @@ async function runSemgrepValidate(args: RunSemgrepValidateArgs): Promise<Semgrep
       if (args.signal.aborted) onAbort();
       else args.signal.addEventListener('abort', onAbort, { once: true });
     }
+    const watchdog = setTimeout(killTree, RUN_SEMGREP_VALIDATE_TIMEOUT_MS);
+    watchdog.unref?.();
 
     const cleanup = () => {
       if (args.signal) args.signal.removeEventListener('abort', onAbort);
       if (sigkillTimer) { clearTimeout(sigkillTimer); sigkillTimer = undefined; }
+      clearTimeout(watchdog);
     };
 
     child.on('error', (err) => { cleanup(); reject(new RuleValidationError('semgrep', err.message)); });
