@@ -1927,6 +1927,107 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/secret-findings?page=${page}&per_page=${perPage}`);
   },
 
+  async getProjectIaCFindings(
+    organizationId: string,
+    projectId: string,
+    opts: {
+      page?: number;
+      perPage?: number;
+      severity?: string;
+      status?: 'open' | 'ignored' | 'all';
+      framework?: string;
+    } = {}
+  ): Promise<PaginatedResponse<IaCFinding>> {
+    const params = new URLSearchParams();
+    params.set('page', String(opts.page ?? 1));
+    params.set('per_page', String(opts.perPage ?? 50));
+    if (opts.severity) params.set('severity', opts.severity);
+    if (opts.status && opts.status !== 'all') params.set('status', opts.status);
+    if (opts.framework) params.set('framework', opts.framework);
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/iac-findings?${params.toString()}`
+    );
+  },
+
+  async getProjectContainerFindings(
+    organizationId: string,
+    projectId: string,
+    opts: {
+      page?: number;
+      perPage?: number;
+      severity?: string;
+      status?: 'open' | 'ignored' | 'all';
+    } = {}
+  ): Promise<PaginatedResponse<ContainerFinding>> {
+    const params = new URLSearchParams();
+    params.set('page', String(opts.page ?? 1));
+    params.set('per_page', String(opts.perPage ?? 50));
+    if (opts.severity) params.set('severity', opts.severity);
+    if (opts.status && opts.status !== 'all') params.set('status', opts.status);
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/container-findings?${params.toString()}`
+    );
+  },
+
+  async getProjectScannerSummary(
+    organizationId: string,
+    projectId: string
+  ): Promise<ScannerSummary> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/scanner-summary`
+    );
+  },
+
+  async toggleIaCFindingIgnore(
+    organizationId: string,
+    projectId: string,
+    findingId: string,
+    ignored: boolean
+  ): Promise<{ success: boolean; status: string }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/iac-findings/${findingId}/ignore`,
+      { method: 'PATCH', body: JSON.stringify({ ignored }) }
+    );
+  },
+
+  async setIaCFindingRiskAccepted(
+    organizationId: string,
+    projectId: string,
+    findingId: string,
+    accepted: boolean,
+    reason?: string
+  ): Promise<{ success: boolean }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/iac-findings/${findingId}/risk-accept`,
+      { method: 'PATCH', body: JSON.stringify({ accepted, reason }) }
+    );
+  },
+
+  async toggleContainerFindingIgnore(
+    organizationId: string,
+    projectId: string,
+    findingId: string,
+    ignored: boolean
+  ): Promise<{ success: boolean; status: string }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/container-findings/${findingId}/ignore`,
+      { method: 'PATCH', body: JSON.stringify({ ignored }) }
+    );
+  },
+
+  async setContainerFindingRiskAccepted(
+    organizationId: string,
+    projectId: string,
+    findingId: string,
+    accepted: boolean,
+    reason?: string
+  ): Promise<{ success: boolean }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/container-findings/${findingId}/risk-accept`,
+      { method: 'PATCH', body: JSON.stringify({ accepted, reason }) }
+    );
+  },
+
   async getVulnerabilityDetail(
     organizationId: string,
     projectId: string,
@@ -3750,6 +3851,76 @@ export interface LicenseViolation {
   reasons: string[];
   dependency_id: string | null;
   depscore: number | null;
+}
+
+export interface IaCFinding {
+  id: string;
+  project_id: string;
+  organization_id: string;
+  extraction_run_id: string;
+  scanner: 'trivy' | 'checkov';
+  scanner_version: string | null;
+  rule_id: string;
+  framework: 'terraform' | 'kubernetes' | 'dockerfile';
+  file_path: string;
+  start_line: number | null;
+  end_line: number | null;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO' | null;
+  depscore: number | null;
+  message: string | null;
+  description: string | null;
+  cwe_ids: string[];
+  code_snippet: string | null;
+  rule_doc_url: string | null;
+  iac_fingerprint: string | null;
+  status: 'open' | 'ignored';
+  suppressed: boolean;
+  risk_accepted: boolean;
+  risk_accepted_reason: string | null;
+  created_at: string;
+  project_name?: string;
+  project_framework?: string | null;
+}
+
+export interface ContainerFinding {
+  id: string;
+  project_id: string;
+  organization_id: string;
+  extraction_run_id: string;
+  scanner_version: string | null;
+  image_reference: string;
+  image_digest: string;
+  image_source: 'dockerfile_base';
+  os_package_name: string;
+  os_package_version: string;
+  os_package_ecosystem: string | null;
+  osv_id: string | null;
+  cve_id: string | null;
+  vulnerability_id: string;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO' | null;
+  cvss_score: number | null;
+  epss_score: number | null;
+  is_kev: boolean;
+  fix_versions: string[];
+  layer_digest: string | null;
+  depscore: number | null;
+  description: string | null;
+  rule_doc_url: string | null;
+  status: 'open' | 'ignored';
+  suppressed: boolean;
+  risk_accepted: boolean;
+  risk_accepted_reason: string | null;
+  created_at: string;
+  project_name?: string;
+  project_framework?: string | null;
+}
+
+export interface ScannerSummary {
+  iac: { critical: number; high: number; medium: number; low: number; info: number; ignored: number };
+  container: { critical: number; high: number; medium: number; low: number; info: number; ignored: number };
+  infra_types: Array<'terraform' | 'kubernetes' | 'dockerfile'>;
+  last_scan_at: string | null;
+  skipped_images: Array<{ image: string; reason: string }>;
 }
 
 export interface VulnerabilityEvent {
