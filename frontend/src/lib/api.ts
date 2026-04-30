@@ -1927,6 +1927,44 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/secret-findings?page=${page}&per_page=${perPage}`);
   },
 
+  maliciousFindings: {
+    async list(
+      organizationId: string,
+      projectId: string,
+      page = 1,
+      perPage = 50
+    ): Promise<PaginatedResponse<MaliciousFinding>> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/malicious-findings?page=${page}&per_page=${perPage}`);
+    },
+    async get(
+      organizationId: string,
+      projectId: string,
+      findingId: string
+    ): Promise<MaliciousFinding> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/malicious-findings/${findingId}`);
+    },
+    async updateStatus(
+      organizationId: string,
+      projectId: string,
+      findingId: string,
+      body: { suppressed?: boolean; suppressed_reason?: string; risk_accepted?: boolean; risk_accepted_reason?: string }
+    ): Promise<{ success: true }> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/malicious-findings/${findingId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      });
+    },
+    async explain(
+      organizationId: string,
+      projectId: string,
+      findingId: string
+    ): Promise<{ narrative: string; risk_level: MaliciousSeverity | 'none'; cached: boolean }> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/malicious-findings/${findingId}/explain`, {
+        method: 'POST',
+      });
+    },
+  },
+
   async getVulnerabilityDetail(
     organizationId: string,
     projectId: string,
@@ -3750,6 +3788,38 @@ export interface LicenseViolation {
   reasons: string[];
   dependency_id: string | null;
   depscore: number | null;
+}
+
+export type MaliciousScanner = 'feed' | 'guarddog';
+export type MaliciousSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+
+export interface MaliciousFinding {
+  id: string;
+  project_id: string;
+  organization_id: string;
+  extraction_run_id: string;
+  project_dependency_id: string;
+  dependency_id: string;
+  rule_id: string;
+  scanner: MaliciousScanner;
+  severity: MaliciousSeverity;
+  message: string | null;
+  depscore: number | null;
+  suppressed: boolean;
+  suppressed_by: string | null;
+  suppressed_at: string | null;
+  suppressed_reason: string | null;
+  risk_accepted: boolean;
+  risk_accepted_by: string | null;
+  risk_accepted_at: string | null;
+  risk_accepted_reason: string | null;
+  created_at: string;
+  package_name?: string | null;
+  ecosystem?: string | null;
+  package_version?: string | null;
+  evidence?: { file_path: string; lines: [number, number]; snippet: string }[];
+  ai_narrative?: string | null;
+  ai_narrative_cached_at?: string | null;
 }
 
 export interface VulnerabilityEvent {
