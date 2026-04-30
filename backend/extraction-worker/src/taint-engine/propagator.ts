@@ -26,6 +26,7 @@ import { buildCallgraphContext } from './callgraph';
 import { lowerFunction } from './ir';
 import type { Callgraph, FunctionId } from './types';
 import type { FrameworkSpec } from './spec';
+import { filterSpecsByLanguage } from './spec';
 import type { Flow } from './flow';
 import {
   buildCallersByCallee,
@@ -64,6 +65,7 @@ export interface PropagateResult {
 export async function propagate(options: PropagateOptions): Promise<PropagateResult> {
   const t0 = Date.now();
   const onWarn = options.onWarn;
+  const specs = filterSpecsByLanguage(options.specs, 'js');
 
   // 1. Callgraph (TS-specific)
   const cgStart = Date.now();
@@ -102,7 +104,7 @@ export async function propagate(options: PropagateOptions): Promise<PropagateRes
   const result = runWorklistAndAggregate({
     stateById,
     callersByCallee,
-    specs: options.specs,
+    specs,
     maxPathLength: options.maxPathLength,
     maxIterations: options.maxIterations,
     onWarn,

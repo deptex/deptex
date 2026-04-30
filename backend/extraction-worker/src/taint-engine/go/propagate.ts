@@ -14,7 +14,7 @@ import type {
   CallEdge,
   FunctionId,
 } from '../types';
-import type { FrameworkSpec } from '../spec';
+import { filterSpecsByLanguage, type FrameworkSpec } from '../spec';
 import type { Flow } from '../flow';
 import type { Node } from 'web-tree-sitter';
 import {
@@ -50,6 +50,7 @@ export interface PropagateGoResult {
 export async function propagateGo(options: PropagateGoOptions): Promise<PropagateGoResult> {
   const t0 = Date.now();
   const onWarn = options.onWarn;
+  const specs = filterSpecsByLanguage(options.specs, 'go');
 
   // 1. Build Go callgraph (Go-specific)
   const cgStart = Date.now();
@@ -89,7 +90,7 @@ export async function propagateGo(options: PropagateGoOptions): Promise<Propagat
   const result = runWorklistAndAggregate({
     stateById,
     callersByCallee,
-    specs: options.specs,
+    specs,
     maxPathLength: options.maxPathLength,
     maxIterations: options.maxIterations,
     onWarn,

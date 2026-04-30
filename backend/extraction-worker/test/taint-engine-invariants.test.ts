@@ -14,6 +14,8 @@
  *   D. Worklist termination + runaway safety net
  *   E. Per-grammar IR workarounds — PHP $-stripping, C# var-decl flatten,
  *      Rust call_expression-with-field_expression reroute
+ *   F. matchesCallPattern wildcard-receiver semantics across language separators
+ *   G. Cross-language spec contamination — language filter pins out leaks
  *
  * Run: npx tsx test/taint-engine-invariants.test.ts
  */
@@ -28,7 +30,7 @@ import {
   runWorklistAndAggregate,
   type FunctionState,
 } from '../src/taint-engine/propagate-core';
-import type { FrameworkSpec } from '../src/taint-engine/spec';
+import { filterSpecsByLanguage, type FrameworkSpec } from '../src/taint-engine/spec';
 import type { IrFunction, SourceLocation } from '../src/taint-engine/ir';
 import type { FunctionId, FunctionNode } from '../src/taint-engine/types';
 import { propagatePhp } from '../src/taint-engine/php/propagate';
@@ -801,6 +803,66 @@ function sectionF_callPatternWildcards() {
 }
 
 // ---------------------------------------------------------------------------
+// Section G — language filter pins out cross-language spec contamination.
+//
+// Why: rails.yaml + sinatra.yaml mark `JSON.parse(*)` as a deserialization
+// SANITIZER (correct for Ruby — JSON.parse there is data-only). node-stdlib.yaml
+// marks the same pattern as a deser SINK (correct for Node, even though only
+// noisy unless paired with proto-pollution). Before the language filter,
+// loading all specs into a JS run let the Ruby sanitizer cancel the Node sink,
+// silently breaking the express deserialization-vuln fixture. This test pins
+// down that filterSpecsByLanguage strips the Ruby sanitizer from a JS-language
+// spec set so the leak can't re-occur via a fresh propagator entry-point or
+// validate harness flow.
+// ---------------------------------------------------------------------------
+
+function sectionG_crossLanguageSpecFilter(): void {
+  console.log('\n[G.1] filterSpecsByLanguage drops other-language specs');
+  const jsSpec: FrameworkSpec = {
+    framework: 'fake-js-fw',
+    version: '*',
+    language: 'js',
+    sources: [],
+    sinks: [{ pattern: 'JSON.parse(*)', vuln_class: 'deserialization', argument_indices: [0], description: '' }],
+    sanitizers: [],
+  };
+  const rubySpec: FrameworkSpec = {
+    framework: 'fake-ruby-fw',
+    version: '*',
+    language: 'ruby',
+    sources: [],
+    sinks: [],
+    sanitizers: [{ pattern: 'JSON.parse(*)', vuln_classes: ['deserialization'], description: '' }],
+  };
+  const legacyUntagged: FrameworkSpec = {
+    framework: 'fake-legacy-fw',
+    version: '*',
+    // language deliberately unset — defaults to 'js' for backward compat
+    sources: [],
+    sinks: [],
+    sanitizers: [],
+  };
+
+  const jsFiltered = filterSpecsByLanguage([jsSpec, rubySpec, legacyUntagged], 'js');
+  assert(jsFiltered.length === 2, 'js filter keeps js + legacy-untagged (defaults to js)');
+  assert(
+    jsFiltered.every((s) => s.framework !== 'fake-ruby-fw'),
+    'js filter excludes ruby-tagged spec',
+  );
+  assert(
+    jsFiltered.some((s) => s.framework === 'fake-legacy-fw'),
+    'js filter retains language-untagged spec (back-compat default)',
+  );
+
+  const rubyFiltered = filterSpecsByLanguage([jsSpec, rubySpec, legacyUntagged], 'ruby');
+  assert(rubyFiltered.length === 1, 'ruby filter keeps only ruby-tagged spec');
+  assert(rubyFiltered[0].framework === 'fake-ruby-fw', 'ruby filter retains ruby spec');
+
+  const pythonFiltered = filterSpecsByLanguage([jsSpec, rubySpec, legacyUntagged], 'python');
+  assert(pythonFiltered.length === 0, 'python filter excludes js + ruby specs');
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -814,6 +876,7 @@ async function main() {
   await sectionE_csharpVarDeclFallback();
   await sectionE_rustFieldExpressionReroute();
   sectionF_callPatternWildcards();
+  sectionG_crossLanguageSpecFilter();
   console.log(`\n${passes} passed, ${failures} failed`);
   process.exit(failures > 0 ? 1 : 0);
 }

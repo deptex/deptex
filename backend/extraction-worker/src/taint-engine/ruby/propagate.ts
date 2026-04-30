@@ -5,7 +5,7 @@
  * then hands off to the language-agnostic core in ../propagate-core.ts.
  */
 
-import type { FrameworkSpec } from '../spec';
+import { filterSpecsByLanguage, type FrameworkSpec } from '../spec';
 import type { Flow } from '../flow';
 import type { Callgraph, FunctionId } from '../types';
 import { buildRubyCallgraphContext, type RubyFileContext } from './callgraph';
@@ -47,6 +47,7 @@ export async function propagateRuby(
 ): Promise<PropagateRubyResult> {
   const t0 = Date.now();
   const onWarn = options.onWarn;
+  const specs = filterSpecsByLanguage(options.specs, 'ruby');
 
   // 1. Callgraph (Ruby-specific)
   const cgStart = Date.now();
@@ -83,7 +84,7 @@ export async function propagateRuby(
   const result = runWorklistAndAggregate({
     stateById,
     callersByCallee,
-    specs: options.specs,
+    specs,
     maxPathLength: options.maxPathLength,
     maxIterations: options.maxIterations,
     onWarn,

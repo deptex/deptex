@@ -7,7 +7,7 @@
 
 import { lowerJavaMethod } from './ir';
 import { buildJavaCallgraphContext, type JavaCallgraphContext } from './callgraph';
-import type { FrameworkSpec } from '../spec';
+import { filterSpecsByLanguage, type FrameworkSpec } from '../spec';
 import type { Flow } from '../flow';
 import type { Callgraph, FunctionId } from '../types';
 import {
@@ -45,6 +45,7 @@ export interface PropagateJavaResult {
 export async function propagateJava(options: PropagateJavaOptions): Promise<PropagateJavaResult> {
   const t0 = Date.now();
   const onWarn = options.onWarn;
+  const specs = filterSpecsByLanguage(options.specs, 'java');
 
   // 1. Callgraph (Java-specific)
   const cgStart = Date.now();
@@ -92,7 +93,7 @@ export async function propagateJava(options: PropagateJavaOptions): Promise<Prop
   const result = runWorklistAndAggregate({
     stateById,
     callersByCallee,
-    specs: options.specs,
+    specs,
     maxPathLength: options.maxPathLength,
     maxIterations: options.maxIterations,
     onWarn,

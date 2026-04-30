@@ -8,7 +8,7 @@
 
 import { lowerCSharpMethod } from './ir';
 import { buildCSharpCallgraphContext, type CSharpCallgraphContext } from './callgraph';
-import type { FrameworkSpec } from '../spec';
+import { filterSpecsByLanguage, type FrameworkSpec } from '../spec';
 import type { Flow } from '../flow';
 import type { Callgraph, FunctionId } from '../types';
 import {
@@ -46,6 +46,7 @@ export interface PropagateCSharpResult {
 export async function propagateCSharp(options: PropagateCSharpOptions): Promise<PropagateCSharpResult> {
   const t0 = Date.now();
   const onWarn = options.onWarn;
+  const specs = filterSpecsByLanguage(options.specs, 'csharp');
 
   // 1. Callgraph (C#-specific)
   const cgStart = Date.now();
@@ -111,7 +112,7 @@ export async function propagateCSharp(options: PropagateCSharpOptions): Promise<
   const result = runWorklistAndAggregate({
     stateById,
     callersByCallee,
-    specs: options.specs,
+    specs,
     maxPathLength: options.maxPathLength,
     maxIterations: options.maxIterations,
     onWarn,
