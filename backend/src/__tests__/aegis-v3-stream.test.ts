@@ -46,6 +46,12 @@ jest.mock('../lib/aegis-v3/errors', () => ({
   writeAegisChatError: jest.fn().mockResolvedValue(undefined),
 }));
 
+const mockGetThreadForParticipant = jest.fn();
+jest.mock('../lib/aegis/participants', () => ({
+  getThreadForParticipant: (threadId: string, userId: string) =>
+    mockGetThreadForParticipant(threadId, userId),
+}));
+
 const mockGetLanguageModelForOrg = jest.fn();
 jest.mock('../lib/aegis-v3/provider', () => ({
   __esModule: true,
@@ -116,6 +122,7 @@ beforeEach(() => {
   clearTableRegistry();
   clearRpcRegistry();
   mockGetLanguageModelForOrg.mockReset();
+  mockGetThreadForParticipant.mockReset();
   (saveUserMessage as jest.Mock).mockClear();
   (saveAssistantMessage as jest.Mock).mockClear();
   (getOrCreateThread as jest.Mock).mockClear();
@@ -212,5 +219,69 @@ describe('POST /api/aegis/v3/stream', () => {
 
     expect(res.status).toBe(500);
     expect(res.body.error).toContain('BYOK');
+  });
+});
+
+describe('POST /api/aegis/v3/regenerate', () => {
+  it('rejects requests without threadId', async () => {
+    const res = await request(makeApp()).post('/api/aegis/v3/regenerate').send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 404 when the caller is not a thread participant', async () => {
+    mockGetThreadForParticipant.mockResolvedValueOnce(null);
+    const res = await request(makeApp())
+      .post('/api/aegis/v3/regenerate')
+      .send({ threadId: THREAD_ID });
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 403 when caller lacks interact_with_aegis', async () => {
+    mockGetThreadForParticipant.mockResolvedValueOnce({
+      id: THREAD_ID,
+      organization_id: ORG_ID,
+    });
+    setTableResponse('organization_members', 'single', { data: { role: 'viewer' }, error: null });
+    setTableResponse('organization_roles', 'single', {
+      data: { permissions: { interact_with_aegis: false } },
+      error: null,
+    });
+    const res = await request(makeApp())
+      .post('/api/aegis/v3/regenerate')
+      .send({ threadId: THREAD_ID });
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 400 when the thread has no user message to regenerate from', async () => {
+    mockGetThreadForParticipant.mockResolvedValueOnce({
+      id: THREAD_ID,
+      organization_id: ORG_ID,
+    });
+    setOwnerWithAegisPermission();
+    setTableResponse('aegis_chat_messages', 'maybeSingle', { data: null, error: null });
+    const res = await request(makeApp())
+      .post('/api/aegis/v3/regenerate')
+      .send({ threadId: THREAD_ID });
+    expect(res.status).toBe(400);
+  });
+
+  it('responds with the threadId after deleting trailing assistant rows', async () => {
+    mockGetThreadForParticipant.mockResolvedValueOnce({
+      id: THREAD_ID,
+      organization_id: ORG_ID,
+    });
+    setOwnerWithAegisPermission();
+    setTableResponse('aegis_chat_messages', 'maybeSingle', {
+      data: { id: 'msg-user-1', created_at: '2026-01-01T00:00:00Z' },
+      error: null,
+    });
+    setTableResponse('aegis_chat_messages', 'then', { data: null, error: null });
+
+    const res = await request(makeApp())
+      .post('/api/aegis/v3/regenerate')
+      .send({ threadId: THREAD_ID });
+
+    expect(res.status).toBe(200);
+    expect(res.body.threadId).toBe(THREAD_ID);
   });
 });

@@ -9,6 +9,7 @@ import { saveUserMessage } from '../lib/aegis-v3/persistence';
 import { classifyChatError, writeAegisChatError } from '../lib/aegis-v3/errors';
 import { getProviderInfoForOrg } from '../lib/aegis-v3/provider';
 import { checkMonthlyCostCap } from '../lib/ai/cost-cap';
+import { getThreadForParticipant } from '../lib/aegis/participants';
 import type { ModelMessage } from 'ai';
 
 const router = express.Router();
@@ -124,6 +125,43 @@ router.post('/stream', async (req: AuthRequest, res) => {
       res.end();
     }
   }
+});
+
+// Regenerate trims the thread back to the last user message so a fresh
+// /stream call (driven by useChat.regenerate on the client) re-runs against
+// the same prompt. The actual streaming is the client's job — this route
+// just owns the server-side cleanup.
+router.post('/regenerate', async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const { threadId } = req.body ?? {};
+  if (!threadId || typeof threadId !== 'string') {
+    return res.status(400).json({ error: 'threadId is required' });
+  }
+
+  const thread = await getThreadForParticipant(threadId, userId);
+  if (!thread) return res.status(404).json({ error: 'Thread not found' });
+  if (!(await hasAegisPermission(thread.organization_id, userId))) {
+    return res.status(403).json({ error: 'You do not have permission to use Aegis' });
+  }
+
+  const { data: lastUser } = await supabase
+    .from('aegis_chat_messages')
+    .select('id, created_at')
+    .eq('thread_id', threadId)
+    .eq('role', 'user')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!lastUser) return res.status(400).json({ error: 'No user message to regenerate from' });
+
+  const { error: deleteErr } = await supabase
+    .from('aegis_chat_messages')
+    .delete()
+    .eq('thread_id', threadId)
+    .gt('created_at', lastUser.created_at);
+  if (deleteErr) return res.status(500).json({ error: deleteErr.message });
+
+  res.json({ threadId });
 });
 
 export default router;

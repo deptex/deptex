@@ -1,11 +1,10 @@
-import { type UIMessage } from 'ai';
+import { useChat } from '@ai-sdk/react';
+import { DefaultChatTransport, type UIMessage } from 'ai';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { aegisApi, type AegisMessage, type AegisThread, type MessagePart } from '../../lib/aegis-api';
+import { aegisApi, type AegisMessage, type MessagePart } from '../../lib/aegis-api';
 import { getAuthToken } from '../../lib/api';
 import { MessageBubble } from './MessageBubble';
 import { ChatInput } from './ChatInput';
-import { supabase } from '../../lib/supabase';
-import { useAuth } from '../../contexts/AuthContext';
 
 const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:3001';
 
@@ -112,24 +111,81 @@ export function ChatPane({
   onThreadCreated,
   onThreadUpdated,
 }: ChatPaneProps) {
-  const { user } = useAuth();
   // We track the thread ID that THIS mount is working with. The prop may arrive
   // later (after a silent URL update). We never reset state just because the
   // prop appeared — the parent changes `key` when it wants a fresh mount.
   const [selfThreadId, setSelfThreadId] = useState<string | undefined>(propThreadId);
   const activeThreadId = selfThreadId ?? propThreadId;
+  const activeThreadIdRef = useRef(activeThreadId);
+  useEffect(() => { activeThreadIdRef.current = activeThreadId; });
 
-  const [messages, setMessages] = useState<UIMessage[]>([]);
   const [seedLoaded, setSeedLoaded] = useState(!propThreadId);
-  const [isGenerating, setIsGenerating] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Keep latest onThreadUpdated in a ref so the Realtime effect doesn't tear
-  // down on every parent render.
+  const onThreadCreatedRef = useRef(onThreadCreated);
   const onThreadUpdatedRef = useRef(onThreadUpdated);
+  useEffect(() => { onThreadCreatedRef.current = onThreadCreated; });
   useEffect(() => { onThreadUpdatedRef.current = onThreadUpdated; });
+
+  // The transport owns the actual fetch. We wrap it so we can:
+  //   1. attach the auth bearer dynamically (token may rotate during a session)
+  //   2. shape the request body the way our route expects (the v3 route reads
+  //      `message` as a single string, not the full `messages[]` array — the
+  //      backend re-loads history from the DB for itself)
+  //   3. capture the X-Thread-Id response header and surface it back to the
+  //      parent for URL/sidebar updates
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport({
+        api: `${API_BASE_URL}/api/aegis/v3/stream`,
+        prepareSendMessagesRequest: ({ messages, body }) => {
+          const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+          const text = (lastUser?.parts ?? [])
+            .filter((p: any) => p.type === 'text')
+            .map((p: any) => p.text ?? '')
+            .join('\n');
+          return {
+            body: {
+              ...(body ?? {}),
+              organizationId,
+              threadId: activeThreadIdRef.current,
+              message: text,
+            },
+          };
+        },
+        fetch: async (input, init) => {
+          const token = await getAuthToken();
+          const headers = new Headers(init?.headers);
+          if (token) headers.set('Authorization', `Bearer ${token}`);
+          headers.set('Content-Type', 'application/json');
+          const response = await fetch(input, { ...init, headers });
+          const tid = response.headers.get('X-Thread-Id');
+          if (tid && tid !== activeThreadIdRef.current) {
+            setSelfThreadId(tid);
+            onThreadCreatedRef.current(tid);
+          }
+          return response;
+        },
+      }),
+    [organizationId],
+  );
+
+  const { messages, setMessages, sendMessage, regenerate, stop, status, error, clearError } =
+    useChat({
+      transport,
+      onFinish: () => {
+        setIsRegenerating(false);
+        onThreadUpdatedRef.current?.();
+      },
+      onError: (err) => {
+        setIsRegenerating(false);
+        setSendError(err?.message ?? 'Failed to generate response');
+      },
+    });
+
+  const isStreaming = status === 'streaming' || status === 'submitted';
 
   // One-shot seed load: if we mounted with a threadId prop, load history.
   // Never runs again — fresh thread = fresh mount via parent `key`.
@@ -151,73 +207,38 @@ export function ChatPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleSubmit = useCallback(async (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed || isGenerating) return;
-    setSendError(null);
-
-    const tempId = `temp-${Date.now()}`;
-    const tempMsg: UIMessage = {
-      id: tempId,
-      role: 'user',
-      parts: [{ type: 'text', text: trimmed }],
-      userId: currentUserId,
-    } as unknown as UIMessage;
-    setMessages((prev) => [...prev, tempMsg]);
-    setIsGenerating(true);
-
-    try {
-      const token = await getAuthToken();
-      const response = await fetch(`${API_BASE_URL}/api/aegis/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ organizationId, threadId: activeThreadId, message: trimmed }),
-      });
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        throw new Error((err as any).error || 'Failed to send message');
-      }
-      const data = (await response.json()) as { threadId: string };
-      if (!activeThreadId && data.threadId) {
-        setSelfThreadId(data.threadId);
-        onThreadCreated(data.threadId);
-      }
-    } catch (err: any) {
-      setIsGenerating(false);
-      setMessages((prev) => prev.filter((m) => m.id !== tempId));
-      setSendError(err?.message ?? 'Failed to send message');
-    }
-  }, [organizationId, activeThreadId, currentUserId, isGenerating, onThreadCreated]);
+  const handleSubmit = useCallback(
+    (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed || isStreaming) return;
+      setSendError(null);
+      clearError();
+      void sendMessage({ text: trimmed });
+    },
+    [isStreaming, sendMessage, clearError],
+  );
 
   const handleRegenerate = useCallback(async () => {
-    if (!activeThreadId || isGenerating || isRegenerating) return;
+    const tid = activeThreadIdRef.current;
+    if (!tid || isStreaming || isRegenerating) return;
     setSendError(null);
     setIsRegenerating(true);
-    setIsGenerating(true);
-    // Optimistically drop the trailing assistant error bubble so the typing
-    // indicator can take its place — the backend will delete it server-side.
-    setMessages((prev) => {
-      for (let i = prev.length - 1; i >= 0; i--) {
-        const m = prev[i] as any;
-        if (m.role === 'assistant' && m.error) {
-          return prev.filter((_, idx) => idx !== i);
-        }
-        if (m.role === 'user') break;
-      }
-      return prev;
-    });
-
     try {
-      await aegisApi.regenerate(activeThreadId);
+      // Server-side cleanup: delete the trailing assistant error row so the
+      // DB matches what useChat is about to redo locally.
+      await aegisApi.regenerate(tid);
+      // useChat.regenerate slices off the trailing assistant in local state
+      // and POSTs the trimmed history to /stream — exactly what we want.
+      await regenerate();
     } catch (err: any) {
-      setIsGenerating(false);
       setIsRegenerating(false);
       setSendError(err?.message ?? 'Failed to regenerate response');
     }
-  }, [activeThreadId, isGenerating, isRegenerating]);
+  }, [isStreaming, isRegenerating, regenerate]);
+
+  const handleStop = useCallback(() => {
+    void stop();
+  }, [stop]);
 
   // Index of the latest assistant error message — only that bubble shows the
   // Regenerate button so stacked older errors stay read-only.
@@ -232,64 +253,16 @@ export function ChatPane({
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages, isGenerating]);
+  }, [messages, isStreaming]);
 
-  // Realtime subscription on aegis_chat_messages for this thread.
-  // Kicks in once we have an activeThreadId (either from prop or from a
-  // just-created thread). Doesn't depend on onThreadUpdated — uses the ref.
+  // Surface useChat errors that fire before any tokens stream — e.g. provider
+  // 5xx on the first chunk, or a network drop. Once a stream succeeds these
+  // clear naturally; we only flash the inline banner.
   useEffect(() => {
-    if (!activeThreadId) return;
-    let cancelled = false;
-    let channel: ReturnType<typeof supabase.channel> | null = null;
+    if (error?.message) setSendError(error.message);
+  }, [error]);
 
-    (async () => {
-      // Ensure Realtime uses the authenticated user's JWT. Without this, the
-      // first channel after page-load can race the auth wiring and subscribe
-      // as anon — RLS then filters out every postgres_changes event.
-      const { data: { session } } = await supabase.auth.getSession();
-      await (supabase.realtime as any).setAuth(session?.access_token ?? null);
-      if (cancelled) return;
-
-      channel = supabase
-        .channel(`aegis-thread-${activeThreadId}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'aegis_chat_messages', filter: `thread_id=eq.${activeThreadId}` },
-        (payload) => {
-          const row = payload.new as any;
-          if (row.role === 'user' && row.user_id === currentUserId) return;
-          setMessages((prev) => {
-            if (prev.some((m) => m.id === row.id)) return prev;
-            const [uiMsg] = buildInitialMessages([
-              {
-                id: row.id,
-                threadId: row.thread_id,
-                role: row.role,
-                userId: row.user_id ?? null,
-                content: row.content ?? '',
-                metadata: row.metadata ?? { parts: [] },
-                createdAt: row.created_at,
-              },
-            ]);
-            return [...prev, uiMsg];
-          });
-          if (row.role === 'assistant') {
-            setIsGenerating(false);
-            setIsRegenerating(false);
-            onThreadUpdatedRef.current?.();
-          }
-        },
-      )
-      .subscribe();
-    })();
-
-    return () => {
-      cancelled = true;
-      if (channel) supabase.removeChannel(channel);
-    };
-  }, [activeThreadId, currentUserId]);
-
-  const showLanding = !activeThreadId && messages.length === 0;
+  const showLanding = !activeThreadId && messages.length === 0 && (seedLoaded || !propThreadId);
   const placeholder = useTypewriterPlaceholder(AEGIS_PROMPTS, showLanding);
 
   if (showLanding) {
@@ -328,17 +301,24 @@ export function ChatPane({
               isRegenerating={i === latestErrorIdx && isRegenerating}
             />
           ))}
-          {isGenerating && (
+          {isStreaming && (
             <div className="px-4 py-3">
-              <div className="mx-auto max-w-3xl">
+              <div className="mx-auto max-w-3xl flex items-center gap-3">
                 <span
                   className="h-4 w-4 rounded-full bg-foreground/60 inline-block"
                   style={{ animation: 'aegis-thinking 1.6s ease-in-out infinite' }}
                 />
+                <button
+                  type="button"
+                  onClick={handleStop}
+                  className="text-xs font-medium text-foreground/60 hover:text-foreground underline underline-offset-2"
+                >
+                  Stop
+                </button>
               </div>
             </div>
           )}
-          {sendError && (
+          {sendError && !isStreaming && (
             <div className="px-4 py-3">
               <div className="mx-auto max-w-3xl text-sm text-red-500">{sendError}</div>
             </div>
@@ -349,7 +329,7 @@ export function ChatPane({
       <div className="px-4 pb-4">
         <div className="mx-auto max-w-3xl">
           <div className="rounded-2xl bg-background-card border border-border">
-            <ChatInput onSubmit={handleSubmit} disabled={isGenerating} placeholder="Ask anything" autoFocus />
+            <ChatInput onSubmit={handleSubmit} disabled={isStreaming} placeholder="Ask anything" autoFocus />
           </div>
         </div>
       </div>
