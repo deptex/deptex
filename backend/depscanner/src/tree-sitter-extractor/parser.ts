@@ -18,7 +18,7 @@ async function ensureParserInitialized(): Promise<void> {
  * against a current-ABI tree-sitter that produces the `dylink.0` custom
  * section web-tree-sitter 0.22+ requires).
  *
- * Resolution uses `require.resolve` so the path works whether extraction-worker
+ * Resolution uses `require.resolve` so the path works whether depscanner
  * is run from source (tsx), compiled (dist/), or inside the Docker image.
  */
 function resolveWasmPath(wasmFile: string): string {

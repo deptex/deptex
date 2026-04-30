@@ -47,8 +47,9 @@ describe('claimJob', () => {
 
     const result = await claimJob(mockSupabase as any, machineId);
 
-    expect(mockRpc).toHaveBeenCalledWith('claim_extraction_job', {
+    expect(mockRpc).toHaveBeenCalledWith('claim_scan_job', {
       p_machine_id: machineId,
+      p_supported_types: ['extraction'],
     });
     expect(result).toEqual(job);
   });

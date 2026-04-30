@@ -1,7 +1,7 @@
 {
-  "name": "deptex-extraction-worker",
+  "name": "deptex-depscanner",
   "version": "0.1.0",
-  "description": "Extraction worker for Deptex - Clone, cdxgen SBOM, dep-scan, Semgrep, TruffleHog",
+  "description": "Depscanner for Deptex - unified scanner worker (extraction: clone + cdxgen SBOM + dep-scan + Semgrep + TruffleHog + tree-sitter; DAST: ZAP).",
   "main": "dist/index.js",
   "bin": {
     "deptex-scan": "bin/deptex-scan"

@@ -10,7 +10,7 @@ jobs:
     name: Detect changed workers
     runs-on: ubuntu-latest
     outputs:
-      extraction: ${{ steps.filter.outputs.extraction }}
+      depscanner: ${{ steps.filter.outputs.depscanner }}
       fix: ${{ steps.filter.outputs.fix }}
     steps:
       - uses: actions/checkout@v4
@@ -19,24 +19,24 @@ jobs:
         id: filter
         with:
           filters: |
-            extraction:
-              - 'backend/extraction-worker/**'
+            depscanner:
+              - 'backend/depscanner/**'
             fix:
               - 'backend/fix-worker/**'
 
-  deploy-extraction:
-    name: Deploy extraction-worker
+  deploy-depscanner:
+    name: Deploy depscanner
     needs: changes
-    if: needs.changes.outputs.extraction == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.changes.outputs.depscanner == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     concurrency:
-      group: deploy-extraction-${{ github.ref }}
+      group: deploy-depscanner-${{ github.ref }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - run: flyctl deploy --remote-only
-        working-directory: backend/extraction-worker
+        working-directory: backend/depscanner
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 

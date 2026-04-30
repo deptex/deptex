@@ -2138,9 +2138,10 @@ router.get('/:id/teams/:teamId/stats', async (req: AuthRequest, res) => {
               .in('extraction_run_id', activeRunIds)
               .eq('suppressed', false)
           : Promise.resolve({ data: [] as any[] }),
-        supabase.from('extraction_jobs')
+        supabase.from('scan_jobs')
           .select('id', { count: 'exact', head: true })
           .in('project_id', projectIds)
+          .eq('type', 'extraction')
           .in('status', ['queued', 'processing']),
       ]);
 

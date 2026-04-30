@@ -4,6 +4,7 @@ export interface ExtractionJobRow {
   id: string;
   project_id: string;
   organization_id: string;
+  type: string;
   status: string;
   run_id: string;
   machine_id: string | null;
@@ -17,12 +18,16 @@ export interface ExtractionJobRow {
   created_at: string;
 }
 
+// PR 1: depscanner only handles extraction. PR 2 adds 'dast' to the supported list.
+const SUPPORTED_TYPES = ['extraction'] as const;
+
 export async function claimJob(
   supabase: Storage,
   machineId: string
 ): Promise<ExtractionJobRow | null> {
-  const { data, error } = await supabase.rpc('claim_extraction_job', {
+  const { data, error } = await supabase.rpc('claim_scan_job', {
     p_machine_id: machineId,
+    p_supported_types: SUPPORTED_TYPES as unknown as string[],
   });
 
   if (error) {
@@ -44,7 +49,7 @@ export async function updateJobStatus(
   error?: string
 ): Promise<void> {
   await supabase
-    .from('extraction_jobs')
+    .from('scan_jobs')
     .update({
       status,
       error: error ?? null,
@@ -58,7 +63,7 @@ export async function sendHeartbeat(
   jobId: string
 ): Promise<void> {
   await supabase
-    .from('extraction_jobs')
+    .from('scan_jobs')
     .update({ heartbeat_at: new Date().toISOString() })
     .eq('id', jobId);
 }
@@ -68,7 +73,7 @@ export async function isJobCancelled(
   jobId: string
 ): Promise<boolean> {
   const { data } = await supabase
-    .from('extraction_jobs')
+    .from('scan_jobs')
     .select('status')
     .eq('id', jobId)
     .single();
@@ -85,7 +90,7 @@ export async function updateJobPayloadCommit(
   commit: { commit_sha: string; commit_message?: string; branch?: string }
 ): Promise<void> {
   const { data, error: fetchError } = await supabase
-    .from('extraction_jobs')
+    .from('scan_jobs')
     .select('payload')
     .eq('id', jobId)
     .single();
@@ -103,7 +108,7 @@ export async function updateJobPayloadCommit(
   };
 
   await supabase
-    .from('extraction_jobs')
+    .from('scan_jobs')
     .update({ payload: merged })
     .eq('id', jobId);
 }

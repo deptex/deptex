@@ -1479,19 +1479,20 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
     }
 
     // Phase 19: Resolve the extraction_run_id this populate batch belongs to.
-    // This handler runs DURING extraction (extraction-worker queues populate before
+    // This handler runs DURING extraction (depscanner queues populate before
     // calling finalize_extraction). So we cannot use getActiveExtractionId — that
     // would point at the previous run until finalize flips the pointer. Instead
-    // look up the in-flight extraction_jobs row (status='processing') and use its
-    // id as runId (per pipeline.ts the runId stored on findings = extraction_jobs.id).
-    // Fall back to active_extraction_run_id if no in-flight job is found (e.g.
-    // populate fired after finalize completed).
+    // look up the in-flight scan_jobs row (type='extraction', status='processing')
+    // and use its id as runId (per pipeline.ts the runId stored on findings =
+    // scan_jobs.id for extraction-type runs). Fall back to active_extraction_run_id
+    // if no in-flight job is found (e.g. populate fired after finalize completed).
     let runId: string | null = null;
     if (projectId) {
       const { data: inflightJob } = await supabase
-        .from('extraction_jobs')
+        .from('scan_jobs')
         .select('id')
         .eq('project_id', projectId)
+        .eq('type', 'extraction')
         .eq('status', 'processing')
         .order('created_at', { ascending: false })
         .limit(1)

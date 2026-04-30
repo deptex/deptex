@@ -6960,7 +6960,7 @@ router.get('/:id/stats', async (req: AuthRequest, res) => {
       statusesResult,
     ] = await Promise.all([
       supabase.from('projects').select('id, name, health_score, status_id, active_extraction_run_id').eq('organization_id', orgId),
-      supabase.from('extraction_jobs').select('id', { count: 'exact', head: true }).eq('organization_id', orgId).in('status', ['queued', 'processing']),
+      supabase.from('scan_jobs').select('id', { count: 'exact', head: true }).eq('organization_id', orgId).eq('type', 'extraction').in('status', ['queued', 'processing']),
       supabase.from('organization_members').select('id', { count: 'exact', head: true }).eq('organization_id', orgId),
       supabase.from('organization_statuses').select('id, name, color, is_passing').eq('organization_id', orgId),
     ]);

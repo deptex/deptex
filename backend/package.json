@@ -36,7 +36,7 @@
     "ai": "^6.0.106",
     "bullmq": "^5.34.0",
     "cors": "^2.8.5",
-    "deptex-extraction-worker": "file:extraction-worker",
+    "deptex-depscanner": "file:depscanner",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "ioredis": "^5.4.1",
