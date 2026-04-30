@@ -19,6 +19,7 @@ export function projectStatusLabel(project: Project): {
       deps_synced: 'Creating',
       usage_extraction: 'Creating',
       framework_detection: 'Creating',
+      taint_engine: 'Creating',
       scanning: 'Creating',
       uploading: 'Creating',
       completed: 'Creating',

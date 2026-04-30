@@ -176,6 +176,116 @@ export async function loadAllRules(rulesDir: string): Promise<LoadedRule[]> {
   return loaded;
 }
 
+// -----------------------------------------------------------------------------
+// loadOrgGeneratedRules
+// -----------------------------------------------------------------------------
+
+/**
+ * Loads an organization's enabled + validated AI-generated reachability rules
+ * from the DB and materializes each `rule_yaml` to a file in `tmpDir` so the
+ * Semgrep invocation can treat platform-shipped folder rules and DB rules
+ * uniformly. The caller owns the lifecycle of `tmpDir`.
+ *
+ * Phase 5 (rule generation): rows live in `organization_generated_rules`.
+ * Only rules with `enabled=true` AND `validation_status IN ('validated',
+ * 'manual_override')` are loaded — pending and failed_validation rules are
+ * intentionally excluded so a half-generated or ill-formed rule never lands
+ * in a customer scan.
+ */
+export interface OrgRuleRow {
+  id: string;
+  cve_id: string;
+  package_purl: string;
+  ecosystem: string;
+  affected_version_range: string | null;
+  rule_yaml: string;
+  entry_point_class: string | null;
+}
+
+export async function loadOrgGeneratedRules(
+  orgId: string,
+  supabase: { from: (table: string) => any },
+  tmpDir: string,
+): Promise<LoadAllRulesResult> {
+  const loaded: LoadedRule[] = [];
+  const skipped: SkippedRule[] = [];
+
+  const { data, error } = await supabase
+    .from('organization_generated_rules')
+    .select('id, cve_id, package_purl, ecosystem, affected_version_range, rule_yaml, entry_point_class')
+    .eq('organization_id', orgId)
+    .eq('enabled', true)
+    .in('validation_status', ['validated', 'manual_override']);
+
+  if (error) {
+    // Phase 25 migration not applied → return empty so the pipeline keeps
+    // running with platform rules only. The caller is expected to surface
+    // the error via extraction_logs at warn-level.
+    skipped.push({ folder: '<db>', reason: `DB load failed: ${(error as { message?: string }).message ?? 'unknown'}` });
+    return { loaded, skipped };
+  }
+
+  if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+
+  for (const row of (data ?? []) as OrgRuleRow[]) {
+    let parsed: unknown;
+    try {
+      parsed = yaml.load(row.rule_yaml);
+    } catch (err) {
+      skipped.push({ folder: `org/${row.id}`, reason: `YAML parse failed: ${err instanceof Error ? err.message : String(err)}` });
+      continue;
+    }
+    const doc = parsed as { rules?: unknown };
+    if (!doc || typeof doc !== 'object' || !Array.isArray(doc.rules) || doc.rules.length !== 1) {
+      skipped.push({ folder: `org/${row.id}`, reason: "expected exactly one rule under 'rules:'" });
+      continue;
+    }
+    const rule = doc.rules[0] as { id?: unknown; metadata?: unknown };
+    if (typeof rule.id !== 'string' || !rule.id) {
+      skipped.push({ folder: `org/${row.id}`, reason: 'rule.id missing' });
+      continue;
+    }
+
+    const baseMeta = normaliseMetadata(rule.metadata);
+    // Even if the YAML's metadata is incomplete, we have the canonical
+    // CVE/package/ecosystem on the row itself — use those to fill in.
+    const metadata: RuleMetadata = baseMeta ?? {
+      cve: row.cve_id,
+      package: extractPackageNameFromPurl(row.package_purl) ?? row.id,
+      ecosystem: row.ecosystem,
+    };
+    if (row.affected_version_range && !metadata.affectedVersions) {
+      metadata.affectedVersions = row.affected_version_range;
+    }
+    if (row.entry_point_class && !metadata.entryPointClass) {
+      const c = row.entry_point_class;
+      if (c === 'PUBLIC_UNAUTH' || c === 'AUTH_INTERNAL' || c === 'OFFLINE_WORKER') {
+        metadata.entryPointClass = c;
+      }
+    }
+
+    const safeSlug = `org-${row.id}`.replace(/[^A-Za-z0-9._-]/g, '_');
+    const rulePath = path.join(tmpDir, `${safeSlug}.yml`);
+    try {
+      fs.writeFileSync(rulePath, row.rule_yaml, 'utf8');
+    } catch (err) {
+      skipped.push({ folder: `org/${row.id}`, reason: `write failed: ${err instanceof Error ? err.message : String(err)}` });
+      continue;
+    }
+
+    loaded.push({ rulePath, ruleId: rule.id, metadata });
+  }
+
+  return { loaded, skipped };
+}
+
+function extractPackageNameFromPurl(purl: string): string | null {
+  // pkg:npm/lodash@4.17.20  →  "lodash"
+  // pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1  →  "log4j-core"
+  const m = purl.match(/^pkg:[^/]+\/(?:[^/@]+\/)?([^@/]+)(?:@.+)?$/);
+  return m ? m[1] : null;
+}
+
 function normaliseMetadata(raw: unknown): RuleMetadata | null {
   if (!raw || typeof raw !== 'object') return null;
   const m = raw as Record<string, unknown>;
