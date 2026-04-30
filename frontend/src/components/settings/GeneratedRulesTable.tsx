@@ -307,7 +307,7 @@ export default function GeneratedRulesTable({
                       <span className="font-mono">{r.generated_with_model}</span>
                     </td>
                     <td className="px-5 py-2.5 text-right text-xs text-foreground tabular-nums whitespace-nowrap">
-                      ${r.generation_cost_usd.toFixed(4)}
+                      {r.generation_cost_usd != null ? `$${r.generation_cost_usd.toFixed(4)}` : '—'}
                     </td>
                     <td className="px-5 py-2.5 text-xs text-foreground-secondary whitespace-nowrap">
                       {formatDate(r.generated_at)}

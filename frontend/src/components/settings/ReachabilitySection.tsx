@@ -1,18 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  AlertCircle, Info, Loader2, Sparkles, ShieldAlert, DollarSign,
-  CheckCircle2,
+  Info, Loader2, Sparkles, ShieldAlert, DollarSign,
 } from 'lucide-react';
 import {
   api,
-  type AIProviderConfig,
   type ReachabilitySettings,
 } from '../../lib/api';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { Switch } from '../ui/switch';
-import { Badge } from '../ui/badge';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '../ui/select';
@@ -77,7 +74,6 @@ export default function ReachabilitySection({ organizationId, canManage }: Reach
   const { toast } = useToast();
 
   const [settings, setSettings] = useState<ReachabilitySettings | null>(null);
-  const [providers, setProviders] = useState<AIProviderConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingField, setSavingField] = useState<keyof ReachabilitySettings | null>(null);
 
@@ -87,12 +83,8 @@ export default function ReachabilitySection({ organizationId, canManage }: Reach
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, p] = await Promise.all([
-        api.getReachabilitySettings(organizationId),
-        api.getAIProviders(organizationId).catch(() => [] as AIProviderConfig[]),
-      ]);
+      const s = await api.getReachabilitySettings(organizationId);
       setSettings(s);
-      setProviders(p);
       setBudgetInput(String(s.monthly_budget_usd ?? 10));
       setWaitInput(String(s.max_wait_seconds ?? 300));
     } catch (err: unknown) {
@@ -104,13 +96,6 @@ export default function ReachabilitySection({ organizationId, canManage }: Reach
   }, [organizationId, toast]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
-
-  const connectedProviders = useMemo(
-    () => new Set<string>(providers.filter((p) => p.connected).map((p) => p.provider)),
-    [providers],
-  );
-
-  const selectedProviderConnected = settings ? connectedProviders.has(settings.ai_provider) : false;
 
   const updateField = useCallback(
     async <K extends keyof ReachabilitySettings>(field: K, value: ReachabilitySettings[K]) => {
@@ -186,10 +171,10 @@ export default function ReachabilitySection({ organizationId, canManage }: Reach
   }
 
   const disabled = !canManage;
-  const providerOptions: { value: Provider; label: string; connected: boolean }[] = [
-    { value: 'anthropic', label: 'Anthropic', connected: connectedProviders.has('anthropic') },
-    { value: 'openai', label: 'OpenAI', connected: connectedProviders.has('openai') },
-    { value: 'google', label: 'Google', connected: connectedProviders.has('google') },
+  const providerOptions: { value: Provider; label: string }[] = [
+    { value: 'anthropic', label: 'Anthropic' },
+    { value: 'openai', label: 'OpenAI' },
+    { value: 'google', label: 'Google' },
   ];
 
   const currentModelCost = findModelCost(settings.ai_provider, settings.ai_model);
@@ -232,17 +217,6 @@ export default function ReachabilitySection({ organizationId, canManage }: Reach
             />
           </div>
         </div>
-        {!selectedProviderConnected && settings.auto_generate_enabled && (
-          <div className="mt-4 flex items-start gap-2 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2">
-            <AlertCircle className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />
-            <p className="text-xs text-foreground">
-              Generation is enabled, but no <span className="capitalize font-medium">{settings.ai_provider}</span>{' '}
-              key is connected. Add one in{' '}
-              <span className="font-medium">AI Configuration</span> or pick another provider below — generation
-              will skip until a key is available.
-            </p>
-          </div>
-        )}
       </div>
 
       {/* Trigger policy */}
@@ -393,15 +367,7 @@ export default function ReachabilitySection({ organizationId, canManage }: Reach
                 <SelectContent>
                   {providerOptions.map((p) => (
                     <SelectItem key={p.value} value={p.value}>
-                      <span className="flex items-center gap-2">
-                        {p.label}
-                        {p.connected
-                          ? <Badge variant="success" className="ml-1 px-1.5 py-0 text-[10px] gap-1">
-                              <CheckCircle2 className="h-2.5 w-2.5" />
-                              Connected
-                            </Badge>
-                          : <Badge variant="muted" className="ml-1 px-1.5 py-0 text-[10px]">No key</Badge>}
-                      </span>
+                      {p.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
