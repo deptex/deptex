@@ -1,5 +1,6 @@
 import { jsonSchema } from 'ai';
 import { calculateLatestSafeVersion } from '../../latest-safe-version';
+import { resolveProjectDependency } from './resolvers';
 import type { AegisToolEntry } from '../tool-types';
 
 const checkCisaKev: AegisToolEntry<{ cveOrOsvId: string }> = {
@@ -146,57 +147,43 @@ const getPackageReputation: AegisToolEntry<{ packageName: string }> = {
 };
 
 const analyzeUpgradePath: AegisToolEntry<{
-  projectDependencyId: string;
+  projectName: string;
+  packageName: string;
   severity?: 'critical' | 'high' | 'medium' | 'low';
 }> = {
   name: 'analyze_upgrade_path',
   description:
-    'Analyze the safest upgrade target for a project dependency. Given a project_dependency_id, returns the latest version that has no vulnerabilities (direct + transitive) above the chosen severity threshold.',
+    'Find the safest upgrade target for a package inside a project. Returns the latest version that has no vulnerabilities (direct + transitive) above the chosen severity threshold.',
   danger: 'safe',
   inputSchema: jsonSchema({
     type: 'object',
     properties: {
-      projectDependencyId: {
-        type: 'string',
-        format: 'uuid',
-        description: 'project_dependencies.id (from list_project_dependencies).',
-      },
+      projectName: { type: 'string', minLength: 1, description: 'Project name as the user said it.' },
+      packageName: { type: 'string', minLength: 1, description: 'Package name as it appears in dependencies (e.g. lodash).' },
       severity: {
         type: 'string',
         enum: ['critical', 'high', 'medium', 'low'],
         description: 'Highest severity to tolerate (default "high").',
       },
     },
-    required: ['projectDependencyId'],
+    required: ['projectName', 'packageName'],
     additionalProperties: false,
   }),
-  execute: async ({ projectDependencyId, severity }, ctx) => {
-    const { data: pd } = await ctx.supabase
-      .from('project_dependencies')
-      .select('id, project_id, name, version')
-      .eq('id', projectDependencyId)
-      .single();
-    if (!pd) return { error: 'Project dependency not found' };
-
-    const { data: project } = await ctx.supabase
-      .from('projects')
-      .select('id, organization_id')
-      .eq('id', pd.project_id)
-      .single();
-    if (!project || project.organization_id !== ctx.orgId) {
-      return { error: 'Project not in current organization' };
-    }
+  execute: async ({ projectName, packageName, severity }, ctx) => {
+    const ref = await resolveProjectDependency(projectName, packageName, ctx.orgId, ctx.supabase);
+    if ('error' in ref) return ref;
 
     try {
       const result = await calculateLatestSafeVersion({
         organizationId: ctx.orgId,
-        projectId: pd.project_id,
-        projectDependencyId: pd.id,
+        projectId: ref.projectId,
+        projectDependencyId: ref.id,
         severity: severity ?? 'high',
       });
       return {
-        packageName: pd.name,
-        currentVersion: pd.version,
+        project: ref.projectName,
+        packageName: ref.name,
+        currentVersion: ref.version,
         safeVersion: result.safeVersion,
         isCurrent: result.isCurrent,
         severityThreshold: result.severity,

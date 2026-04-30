@@ -1,0 +1,252 @@
+# Cross-framework .NET stdlib sinks + sanitizers — shared across every
+# C# framework spec the engine loads.
+#
+# Convention: this file declares NO sources of its own; sources are
+# framework-specific and live in the per-framework yamls (aspnet-core.yaml,
+# etc.). The engine loads every yaml and matches sources from any spec
+# against sinks from any spec, so a request body identified in
+# aspnet-core.yaml flows just fine through a Process.Start sink declared
+# here.
+#
+# Note on EF Core: `Database.ExecuteSqlInterpolated(*)` is technically safe
+# because EF Core parameterizes the interpolation holes — but for v1 we flag
+# it conservatively. Real SQL-via-string-concat in interpolated form will
+# always be a true positive; safe FormattableString-only call sites should
+# be triaged by reviewers.
+
+framework: dotnet-stdlib
+language: csharp
+version: "*"
+
+sources: []
+
+sinks:
+  # ---------- SQL injection ----------
+  - pattern: "SqlCommand(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: System.Data.SqlClient.SqlCommand constructor — raw SQL
+  - pattern: "*.ExecuteReader(*)"
+    vuln_class: sql_injection
+    argument_indices: []
+    description: SqlCommand.ExecuteReader / similar
+  - pattern: "*.ExecuteNonQuery(*)"
+    vuln_class: sql_injection
+    argument_indices: []
+    description: SqlCommand.ExecuteNonQuery
+  - pattern: "*.ExecuteScalar(*)"
+    vuln_class: sql_injection
+    argument_indices: []
+    description: SqlCommand.ExecuteScalar
+  - pattern: "Database.ExecuteSqlRaw(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: EF Core DatabaseFacade.ExecuteSqlRaw — raw SQL
+  - pattern: "Database.ExecuteSqlInterpolated(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: EF Core DatabaseFacade.ExecuteSqlInterpolated (parameterized in EF, but flagged for v1 conservatism)
+  - pattern: "*.ExecuteSqlRaw(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: ExecuteSqlRaw on any DatabaseFacade-shaped receiver
+  - pattern: "*.FromSqlRaw(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: EF Core DbSet.FromSqlRaw
+
+  # ---------- Command injection ----------
+  - pattern: "Process.Start(*)"
+    vuln_class: command_injection
+    argument_indices: []
+    description: System.Diagnostics.Process.Start
+  - pattern: "ProcessStartInfo(*)"
+    vuln_class: command_injection
+    argument_indices: []
+    description: System.Diagnostics.ProcessStartInfo constructor
+  - pattern: "Diagnostics.Process.Start(*)"
+    vuln_class: command_injection
+    argument_indices: []
+    description: System.Diagnostics.Process.Start (qualified form)
+
+  # ---------- Path traversal ----------
+  - pattern: "File.OpenRead(*)"
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: System.IO.File.OpenRead
+  - pattern: "File.ReadAllText(*)"
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: System.IO.File.ReadAllText
+  - pattern: "File.ReadAllBytes(*)"
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: System.IO.File.ReadAllBytes
+  - pattern: "File.WriteAllText(*)"
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: System.IO.File.WriteAllText
+  - pattern: "File.OpenWrite(*)"
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: System.IO.File.OpenWrite
+  - pattern: "Path.Combine(*)"
+    vuln_class: path_traversal
+    argument_indices: []
+    description: System.IO.Path.Combine — composes user-controlled segments
+  - pattern: "StreamReader(*)"
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: System.IO.StreamReader constructor
+  - pattern: "StreamWriter(*)"
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: System.IO.StreamWriter constructor
+  - pattern: "FileStream(*)"
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: System.IO.FileStream constructor
+
+  # ---------- SSRF ----------
+  - pattern: "*.GetAsync(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: HttpClient.GetAsync
+  - pattern: "*.PostAsync(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: HttpClient.PostAsync
+  - pattern: "*.SendAsync(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: HttpClient.SendAsync
+  - pattern: "WebRequest.Create(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: System.Net.WebRequest.Create
+  - pattern: "*.DownloadString(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: System.Net.WebClient.DownloadString
+  - pattern: "*.OpenRead(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: System.Net.WebClient.OpenRead
+
+  # ---------- Deserialization ----------
+  - pattern: "BinaryFormatter.Deserialize(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: BinaryFormatter.Deserialize — CRITICAL, well-known RCE primitive
+  - pattern: "*.Deserialize(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Generic Deserialize on any formatter (instance receiver)
+  - pattern: "JavaScriptSerializer.Deserialize(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: System.Web.Script.Serialization.JavaScriptSerializer.Deserialize
+  - pattern: "XmlSerializer.Deserialize(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: System.Xml.Serialization.XmlSerializer.Deserialize
+  - pattern: "DataContractSerializer.ReadObject(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: System.Runtime.Serialization.DataContractSerializer.ReadObject
+  - pattern: "*.ReadObject(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Generic ReadObject on a DataContractSerializer-shaped receiver
+  - pattern: "JsonConvert.DeserializeObject(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Newtonsoft.Json.JsonConvert.DeserializeObject (best-effort — risky with TypeNameHandling)
+  - pattern: "JsonSerializer.Deserialize(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: System.Text.Json.JsonSerializer.Deserialize
+
+  # ---------- Log injection ----------
+  - pattern: "*.LogInformation(*)"
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: ILogger.LogInformation — un-encoded user input in log line
+  - pattern: "*.LogError(*)"
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: ILogger.LogError
+  - pattern: "*.LogWarning(*)"
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: ILogger.LogWarning
+  - pattern: "*.LogDebug(*)"
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: ILogger.LogDebug
+  - pattern: "Log.Information(*)"
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: Serilog Log.Information
+  - pattern: "Log.Error(*)"
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: Serilog Log.Error
+
+  # ---------- ReDoS ----------
+  - pattern: "Regex(*)"
+    vuln_class: redos
+    argument_indices: [0]
+    description: System.Text.RegularExpressions.Regex constructor (untrusted pattern)
+  - pattern: "Regex.Match(*)"
+    vuln_class: redos
+    argument_indices: [1]
+    description: Regex.Match (static) with untrusted pattern
+  - pattern: "Regex.Replace(*)"
+    vuln_class: redos
+    argument_indices: [1]
+    description: Regex.Replace (static) with untrusted pattern
+  - pattern: "Regex.Matches(*)"
+    vuln_class: redos
+    argument_indices: [1]
+    description: Regex.Matches (static) with untrusted pattern
+
+sanitizers:
+  # ---------- Path traversal ----------
+  - pattern: "Path.GetFileName(*)"
+    vuln_classes: [path_traversal]
+    description: System.IO.Path.GetFileName — drops traversal segments
+
+  # ---------- Numeric / GUID coercion (cross-class) ----------
+  - pattern: "int.Parse(*)"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: int.Parse — numeric coercion gate
+  - pattern: "Int32.Parse(*)"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: Int32.Parse — numeric coercion gate
+  - pattern: "long.Parse(*)"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: long.Parse — numeric coercion gate
+  - pattern: "Int64.Parse(*)"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: Int64.Parse — numeric coercion gate
+  - pattern: "double.Parse(*)"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: double.Parse — numeric coercion gate
+  - pattern: "Convert.ToInt32(*)"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: Convert.ToInt32
+  - pattern: "Convert.ToInt64(*)"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: Convert.ToInt64
+  - pattern: "Guid.Parse(*)"
+    vuln_classes: [sql_injection, path_traversal]
+    description: Guid.Parse — strict UUID validation
+
+  # ---------- SQL parameterization ----------
+  - pattern: "*.AddWithValue(*)"
+    vuln_classes: [sql_injection]
+    description: SqlParameterCollection.AddWithValue — parameterized binding
+  - pattern: "*.Add(*)"
+    vuln_classes: [sql_injection]
+    description: SqlParameterCollection.Add — parameterized binding

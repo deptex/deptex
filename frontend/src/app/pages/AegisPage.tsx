@@ -1,25 +1,29 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
 import { aegisApi, type AegisThread } from '../../lib/aegis-api';
-import type { Organization } from '../../lib/api';
+import type { Organization, RolePermissions } from '../../lib/api';
 import { ThreadList } from '../../components/aegis/ThreadList';
 import { ChatPane } from '../../components/aegis/ChatPane';
 import { SearchChatsModal } from '../../components/aegis/SearchChatsModal';
 import { PlanCard } from '../../components/aegis/PlanCard';
+import { RoutinesPanel } from '../../components/aegis/RoutinesPanel';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
 
 interface OrgOutlet {
   organization: Organization | null;
   reloadOrganization: () => Promise<void>;
+  userPermissions: RolePermissions | null;
 }
 
 export default function AegisPage() {
   const { id: orgId, threadId: activeThreadId } = useParams<{ id: string; threadId?: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const routinesActive = location.pathname.endsWith('/aegis/routines');
   const [searchParams] = useSearchParams();
   const fixIdParam = searchParams.get('fix');
-  const { organization } = useOutletContext<OrgOutlet>();
+  const { userPermissions } = useOutletContext<OrgOutlet>();
   const { user } = useAuth();
   const { toast } = useToast();
 
@@ -35,6 +39,39 @@ export default function AegisPage() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [pendingTitleThreadId, setPendingTitleThreadId] = useState<string | null>(null);
   const pendingTitleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const SIDEBAR_MIN = 200;
+  const SIDEBAR_MAX = 380;
+  const SIDEBAR_DEFAULT = 260;
+  const SIDEBAR_KEY = 'aegis-sidebar-width';
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    if (typeof window === 'undefined') return SIDEBAR_DEFAULT;
+    const stored = window.localStorage.getItem(SIDEBAR_KEY);
+    const parsed = stored ? parseInt(stored, 10) : NaN;
+    return Number.isFinite(parsed) ? Math.min(Math.max(parsed, SIDEBAR_MIN), SIDEBAR_MAX) : SIDEBAR_DEFAULT;
+  });
+
+  const startSidebarResize = useCallback((e: ReactMouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+    const clamp = (n: number) => Math.min(Math.max(n, SIDEBAR_MIN), SIDEBAR_MAX);
+    const onMove = (ev: globalThis.MouseEvent) => {
+      setSidebarWidth(clamp(startWidth + (ev.clientX - startX)));
+    };
+    const onUp = (ev: globalThis.MouseEvent) => {
+      const next = clamp(startWidth + (ev.clientX - startX));
+      window.localStorage.setItem(SIDEBAR_KEY, String(next));
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, [sidebarWidth]);
 
   // The key passed to ChatPane. It stays stable across "silent" URL updates
   // (e.g. when ChatPane creates a thread from the landing state and we just
@@ -52,7 +89,12 @@ export default function AegisPage() {
     setChatKey(activeThreadId ?? `new-${Date.now()}`);
   }, [activeThreadId]);
 
-  const canUseAegis = organization?.permissions?.interact_with_aegis === true;
+  // userPermissions === null means "still resolving" (cache miss + dbPermissions
+  // still in flight). Only treat the absence of `interact_with_aegis` as a true
+  // denial once we actually have a permissions object — otherwise the gate
+  // flashes on every refresh before OrganizationLayout finishes loading.
+  const permissionsLoading = userPermissions === null;
+  const canUseAegis = userPermissions?.interact_with_aegis === true;
 
   const refreshThreads = useCallback(async () => {
     if (!orgId) return;
@@ -112,6 +154,7 @@ export default function AegisPage() {
         updatedAt: now,
         pinnedAt: null,
         archivedAt: null,
+        fixStatus: null,
       };
       return [optimistic, ...prev];
     });
@@ -194,6 +237,12 @@ export default function AegisPage() {
   }, [activeThreadId, orgId, navigate, toast]);
 
   if (!orgId) return null;
+  // While permissions resolve, render an empty shell rather than the denial
+  // gate. The OrganizationLayout sidebar/header is already on screen, so a
+  // blank main pane is the least jarring intermediate state.
+  if (permissionsLoading) {
+    return <div className="h-[calc(100vh-3rem)] bg-background" />;
+  }
   if (!canUseAegis) {
     return (
       <div className="flex h-[calc(100vh-3rem)] items-center justify-center p-12">
@@ -209,7 +258,10 @@ export default function AegisPage() {
 
   return (
     <div className="flex h-[calc(100vh-3rem)] bg-background">
-      <aside className="w-[260px] flex-shrink-0 border-r border-border bg-background">
+      <aside
+        className="relative flex-shrink-0 border-r border-border bg-background"
+        style={{ width: sidebarWidth }}
+      >
         <ThreadList
           threads={threads}
           activeThreadId={activeThreadId ?? null}
@@ -222,25 +274,40 @@ export default function AegisPage() {
           onSetPinned={handleSetPinned}
           onSetArchived={handleSetArchived}
           onOpenSearch={() => setSearchOpen(true)}
+          onOpenRoutines={() => orgId && navigate(`/organizations/${orgId}/aegis/routines`)}
+          routinesActive={routinesActive}
+        />
+        <div
+          onMouseDown={startSidebarResize}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar"
+          className="absolute top-0 right-0 h-full w-1 -mr-0.5 cursor-col-resize hover:bg-foreground/15 active:bg-foreground/25 transition-colors z-10"
         />
       </aside>
       <main className="flex-1 flex flex-col min-w-0">
-        {fixIdParam && (
-          <div className="px-4 pt-4">
-            <div className="mx-auto max-w-3xl">
-              <PlanCard fixId={fixIdParam} />
-            </div>
-          </div>
+        {routinesActive ? (
+          <RoutinesPanel />
+        ) : (
+          <>
+            {fixIdParam && (
+              <div className="px-4 pt-4">
+                <div className="mx-auto max-w-3xl">
+                  <PlanCard fixId={fixIdParam} />
+                </div>
+              </div>
+            )}
+            <ChatPane
+              key={chatKey}
+              organizationId={orgId}
+              threadId={activeThreadId}
+              currentUserId={user?.id ?? ''}
+              displayName={displayName}
+              onThreadCreated={handleThreadCreated}
+              onThreadUpdated={handleThreadUpdated}
+            />
+          </>
         )}
-        <ChatPane
-          key={chatKey}
-          organizationId={orgId}
-          threadId={activeThreadId}
-          currentUserId={user?.id ?? ''}
-          displayName={displayName}
-          onThreadCreated={handleThreadCreated}
-          onThreadUpdated={handleThreadUpdated}
-        />
       </main>
 
       <SearchChatsModal

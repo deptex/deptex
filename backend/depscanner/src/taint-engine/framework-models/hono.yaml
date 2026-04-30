@@ -1,0 +1,71 @@
+# Hono framework spec — Deptex cross-file taint engine.
+#
+# Hono uses a context object `c` with `c.req.*` accessors and `c.json()` /
+# `c.text()` / `c.html()` / `c.redirect()` response helpers. Generic
+# Node.js sinks/sanitizers live in node-stdlib.yaml.
+
+framework: hono
+version: "*"
+
+sources:
+  - pattern: c.req.body.*
+    taint_kind: http_input
+    description: Hono request body (synchronous accessor)
+  - pattern: c.req.query.*
+    taint_kind: http_input
+    description: Hono request query
+  - pattern: c.req.param.*
+    taint_kind: http_input
+    description: Hono request route params
+  - pattern: c.req.header.*
+    taint_kind: http_input
+    description: Hono request headers
+  - pattern: c.req.url
+    taint_kind: http_input
+    description: Hono raw URL
+  - pattern: c.req.path
+    taint_kind: http_input
+    description: Hono request path
+
+  # Call-shape sources — Hono's accessors are method calls, not bare reads.
+  - pattern: c.req.json(*)
+    taint_kind: http_input
+    description: Hono `await c.req.json()` body parser
+  - pattern: c.req.text(*)
+    taint_kind: http_input
+    description: Hono `await c.req.text()` raw body
+  - pattern: c.req.query(*)
+    taint_kind: http_input
+    description: Hono `c.req.query()` / `c.req.query('id')` accessor
+  - pattern: c.req.param(*)
+    taint_kind: http_input
+    description: Hono `c.req.param('id')` accessor
+  - pattern: c.req.header(*)
+    taint_kind: http_input
+    description: Hono `c.req.header('x-foo')` accessor
+  - pattern: c.req.parseBody(*)
+    taint_kind: http_input
+    description: Hono `c.req.parseBody()` form parser
+  - pattern: c.req.formData(*)
+    taint_kind: http_input
+    description: Hono `c.req.formData()` accessor
+
+sinks:
+  - pattern: c.text(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Hono text response (set as text/plain — XSS in HTML contexts only)
+  - pattern: c.html(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Hono html response
+  - pattern: c.body(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Hono raw body
+  - pattern: c.redirect(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Hono redirect
+
+sanitizers: []

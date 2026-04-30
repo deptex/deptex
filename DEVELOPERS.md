@@ -79,6 +79,8 @@ npm install
 npm run dev
 ```
 
+The extraction pipeline now includes a `malicious_scan` step (after vuln scan, before Semgrep) that does feed lookup against `known_malicious_packages` plus a GuardDog source-code scan. GuardDog is installed into an isolated venv at `/opt/guarddog-venv/` inside the Docker image so its bundled Semgrep doesn't conflict with the global pin; the worker invokes `/opt/guarddog-venv/bin/guarddog` explicitly. Outside the container the step soft-fails with an install hint — feed lookup still runs.
+
 ---
 
 ## Project Structure

@@ -4,16 +4,22 @@
  * Sandboxed policy evaluation using isolated-vm with controlled fetch(),
  * helper functions, and strict return-shape validation.
  *
- * Falls back to a simple Function()-based sandbox when isolated-vm is unavailable
- * (e.g., Windows dev without native build tools).
+ * Sandbox model: fresh `Isolate` per call, hydrated from a process-wide
+ * V8 startup snapshot. No pooling — each call gets a clean heap.
+ * Caps: 32MB memory, 30s CPU (5s for validation), 256KB return value (enforced
+ * inside the isolate via JSON.stringify-then-slice), plus a 200ms post-execution
+ * copy timeout as defense-in-depth against hung result transfers.
+ *
+ * Fail-closed at module load: if isolated-vm isn't available the process refuses
+ * to boot rather than silently degrading to a Function()-based fallback.
  */
 
+import { Isolate, Reference, ExternalCopy } from 'isolated-vm';
 import { supabase } from '../lib/supabase';
 import { createActivity } from './activities';
 import { getActiveExtractionId, NO_ACTIVE_RUN } from './active-extraction';
 import * as dns from 'dns';
 import * as net from 'net';
-import * as url from 'url';
 
 // ─── Types ───
 
@@ -213,12 +219,43 @@ function daysSince(dateString: string): number {
   return Math.floor((Date.now() - then) / (1000 * 60 * 60 * 24));
 }
 
-// ─── Sandbox Execution (Function()-based fallback) ───
+// ─── Sandbox execution (isolated-vm with snapshot-warm-restore) ───
 
 const EXECUTION_TIMEOUT_MS = 30_000;
 const VALIDATION_TIMEOUT_MS = 5_000;
+const MEMORY_LIMIT_MB = 32;
+const RETURN_CAP_BYTES = 256 * 1024; // 256KB
+const RESULT_COPY_TIMEOUT_MS = 200;
+const MAX_FETCHES_PER_EXECUTION = 10;
 
-interface ExecuteOptions {
+// Process-wide V8 startup snapshot. Built once at module load; reused for every
+// per-call isolate so V8 doesn't pay heap-init cost on the hot path.
+//
+// `runPackagePolicy` runs per-dependency in `evaluateProjectPolicies` (100–1500
+// deps for typical → large monorepos). Without this snapshot, a 1500-dep sweep
+// adds ~75s to extraction time; with it, ~1–2s. See plan M0 acceptance gate.
+let BOOTSTRAP_SNAPSHOT: ExternalCopy<ArrayBuffer> | null = null;
+
+function ensureSnapshot(): ExternalCopy<ArrayBuffer> {
+  if (BOOTSTRAP_SNAPSHOT) return BOOTSTRAP_SNAPSHOT;
+  // Empty snapshot is enough — we just want V8 startup state pre-baked.
+  // Helpers can't live in the snapshot (host references aren't serializable);
+  // they're attached per-call to the fresh isolate's context.
+  BOOTSTRAP_SNAPSHOT = Isolate.createSnapshot([{ code: 'void 0;' }]);
+  return BOOTSTRAP_SNAPSHOT;
+}
+
+// Fail-closed at module load. If isolated-vm can't build the snapshot the
+// process refuses to start — no Function() fallback at any tier.
+try {
+  ensureSnapshot();
+} catch (err) {
+  // eslint-disable-next-line no-console
+  console.error('[policy-engine] Failed to initialize isolated-vm snapshot:', err);
+  throw new Error('isolated-vm unavailable; refusing to start policy engine');
+}
+
+export interface ExecuteOptions {
   code: string;
   functionName: string;
   context: Record<string, unknown>;
@@ -228,7 +265,14 @@ interface ExecuteOptions {
   mockFetch?: (url: string) => Promise<unknown>;
 }
 
-async function executePolicyFunction(opts: ExecuteOptions): Promise<unknown> {
+/**
+ * Run user-supplied JS in the per-call isolated-vm sandbox.
+ *
+ * Exposed for `flow-code/sandbox.ts` to reuse the same hardened engine. New
+ * call sites should NOT invoke this directly — wrap it in a contract-aware
+ * helper so return-shape validation lives next to the caller's expectations.
+ */
+export async function executePolicyFunction(opts: ExecuteOptions): Promise<unknown> {
   const {
     code,
     functionName,
@@ -239,81 +283,147 @@ async function executePolicyFunction(opts: ExecuteOptions): Promise<unknown> {
     mockFetch,
   } = opts;
 
-  const MAX_FETCHES_PER_EXECUTION = 10;
   let fetchCount = 0;
-
   const rawFetch = mockFetch
     ? mockFetch
     : (urlStr: string) => controlledFetch(urlStr, organizationId, codeType);
 
-  const fetchFn = (urlStr: string) => {
+  // Host-side fetch helper: returns plain serializable data. The legacy `json()`
+  // / `text()` methods are synthesized inside the isolate from the cached body,
+  // since functions can't cross the isolate boundary.
+  const fetchHostFn = async (
+    urlStr: string,
+  ): Promise<{ ok: boolean; status: number; bodyText: string }> => {
     if (++fetchCount > MAX_FETCHES_PER_EXECUTION) {
-      throw new Error(`fetch() limit exceeded: maximum ${MAX_FETCHES_PER_EXECUTION} requests per policy execution`);
-    }
-    return rawFetch(urlStr);
-  };
-
-  const helpers = {
-    isLicenseAllowed,
-    isLicenseBanned,
-    semverGt,
-    semverLt,
-    daysSince,
-  };
-
-  const wrappedCode = `
-    ${code}
-
-    if (typeof ${functionName} !== 'function') {
-      throw new Error('Expected function \`${functionName}\` to be defined.');
-    }
-
-    return (async () => ${functionName}(__context))();
-  `;
-
-  const asyncFn = new Function(
-    '__context',
-    'fetch',
-    'isLicenseAllowed',
-    'isLicenseBanned',
-    'semverGt',
-    'semverLt',
-    'daysSince',
-    wrappedCode,
-  );
-
-  const enrichedContext = {
-    ...context,
-    fetch: fetchFn,
-    isLicenseAllowed: helpers.isLicenseAllowed,
-    isLicenseBanned: helpers.isLicenseBanned,
-    semverGt: helpers.semverGt,
-    semverLt: helpers.semverLt,
-    daysSince: helpers.daysSince,
-  };
-
-  return new Promise(async (resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`Policy execution timed out after ${timeoutMs / 1000}s`));
-    }, timeoutMs);
-
-    try {
-      const result = await asyncFn(
-        enrichedContext,
-        fetchFn,
-        helpers.isLicenseAllowed,
-        helpers.isLicenseBanned,
-        helpers.semverGt,
-        helpers.semverLt,
-        helpers.daysSince,
+      throw new Error(
+        `fetch() limit exceeded: maximum ${MAX_FETCHES_PER_EXECUTION} requests per policy execution`,
       );
-      clearTimeout(timer);
-      resolve(result);
-    } catch (err) {
-      clearTimeout(timer);
-      reject(err);
     }
+    const resp = (await rawFetch(urlStr)) as {
+      ok?: boolean;
+      status?: number;
+      text?: () => Promise<string>;
+    };
+    const bodyText = typeof resp?.text === 'function' ? await resp.text() : '';
+    return {
+      ok: !!resp?.ok,
+      status: typeof resp?.status === 'number' ? resp.status : 0,
+      bodyText,
+    };
+  };
+
+  const isolate = new Isolate({
+    memoryLimit: MEMORY_LIMIT_MB,
+    snapshot: ensureSnapshot(),
   });
+
+  try {
+    const ctx = isolate.createContextSync();
+    const jail = ctx.global;
+    jail.setSync('global', jail.derefInto());
+
+    // Install host references. applySync/copy used inside the isolate to call back.
+    jail.setSync('__fetchRef', new Reference(fetchHostFn));
+    jail.setSync('__isLicenseAllowedRef', new Reference(isLicenseAllowed));
+    jail.setSync('__isLicenseBannedRef', new Reference(isLicenseBanned));
+    jail.setSync('__semverGtRef', new Reference(semverGt));
+    jail.setSync('__semverLtRef', new Reference(semverLt));
+    jail.setSync('__daysSinceRef', new Reference(daysSince));
+
+    // Inject context as a structured-cloned copy. release: true frees the source buffer.
+    jail.setSync(
+      '__context',
+      new ExternalCopy(context).copyInto({ release: true }),
+    );
+
+    // The wrapper (a) declares helper proxies that bridge to host references,
+    // (b) runs the user's code (function declaration is hoisted),
+    // (c) calls the policy function with helpers merged into context (legacy parity),
+    // (d) JSON.stringifies the result and enforces the return-size cap inside the isolate.
+    const wrapped = `
+'use strict';
+
+const fetch = async (urlStr) => {
+  const raw = await __fetchRef.apply(undefined, [urlStr], {
+    arguments: { copy: true },
+    result: { promise: true, copy: true },
+  });
+  return {
+    ok: raw.ok,
+    status: raw.status,
+    json: async () => JSON.parse(raw.bodyText),
+    text: async () => raw.bodyText,
+  };
+};
+
+const isLicenseAllowed = (license, list) =>
+  __isLicenseAllowedRef.applySync(undefined, [license, list], { arguments: { copy: true }, result: { copy: true } });
+const isLicenseBanned = (license, list) =>
+  __isLicenseBannedRef.applySync(undefined, [license, list], { arguments: { copy: true }, result: { copy: true } });
+const semverGt = (a, b) =>
+  __semverGtRef.applySync(undefined, [a, b], { arguments: { copy: true }, result: { copy: true } });
+const semverLt = (a, b) =>
+  __semverLtRef.applySync(undefined, [a, b], { arguments: { copy: true }, result: { copy: true } });
+const daysSince = (d) =>
+  __daysSinceRef.applySync(undefined, [d], { arguments: { copy: true }, result: { copy: true } });
+
+${code}
+
+if (typeof ${functionName} !== 'function') {
+  throw new Error('Expected function \`${functionName}\` to be defined.');
+}
+
+const __ctxWithHelpers = Object.assign({}, __context, {
+  fetch, isLicenseAllowed, isLicenseBanned, semverGt, semverLt, daysSince,
+});
+
+(async () => {
+  const result = await ${functionName}(__ctxWithHelpers);
+  if (result === undefined) return undefined;
+  const json = JSON.stringify(result);
+  if (typeof json === 'string' && json.length > ${RETURN_CAP_BYTES}) {
+    throw new Error('Policy return value exceeds ' + ${RETURN_CAP_BYTES / 1024} + 'KB cap');
+  }
+  return json;
+})()
+`;
+
+    const script = isolate.compileScriptSync(wrapped);
+
+    // script.run with promise: true awaits the inner async IIFE.
+    // result: { reference: true } returns a Reference (no implicit copy) so we can
+    // race the explicit copy() against the 200ms post-execution timeout.
+    const refResult = (await script.run(ctx, {
+      timeout: timeoutMs,
+      promise: true,
+      reference: true,
+    })) as Reference<string | undefined>;
+
+    let copyTimer: NodeJS.Timeout | undefined;
+    try {
+      const json = await Promise.race([
+        refResult.copy(),
+        new Promise<never>((_, reject) => {
+          copyTimer = setTimeout(() => {
+            reject(
+              new Error(
+                `Policy result copy exceeded ${RESULT_COPY_TIMEOUT_MS}ms post-execution`,
+              ),
+            );
+          }, RESULT_COPY_TIMEOUT_MS);
+        }),
+      ]);
+      if (typeof json !== 'string') return undefined;
+      return JSON.parse(json);
+    } finally {
+      if (copyTimer) clearTimeout(copyTimer);
+      try { refResult.release(); } catch { /* already released */ }
+    }
+  } finally {
+    if (!isolate.isDisposed) {
+      try { isolate.dispose(); } catch { /* already disposed */ }
+    }
+  }
 }
 
 // ─── Public API ───
@@ -493,9 +603,15 @@ export async function validatePolicyCode(
     : codeType === 'project_status' ? 'projectStatus'
     : 'pullRequestCheck';
 
-  // Check 1: Syntax
+  // Check 1: Syntax — parse-only via isolated-vm. compileScript validates the
+  // script in V8 without executing; the probe isolate is disposed immediately.
   try {
-    new Function(code);
+    const probe = new Isolate({ memoryLimit: 8, snapshot: ensureSnapshot() });
+    try {
+      probe.compileScriptSync(code);
+    } finally {
+      probe.dispose();
+    }
     result.syntaxPass = true;
   } catch (err: any) {
     result.syntaxError = `SyntaxError: ${err.message}`;

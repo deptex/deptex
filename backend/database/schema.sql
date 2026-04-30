@@ -2639,6 +2639,161 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.array_to_halfvec(double precision[], integer, boolean)
+ RETURNS halfvec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$array_to_halfvec$function$
+;
+
+CREATE OR REPLACE FUNCTION public.array_to_halfvec(integer[], integer, boolean)
+ RETURNS halfvec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$array_to_halfvec$function$
+;
+
+CREATE OR REPLACE FUNCTION public.array_to_halfvec(numeric[], integer, boolean)
+ RETURNS halfvec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$array_to_halfvec$function$
+;
+
+CREATE OR REPLACE FUNCTION public.array_to_halfvec(real[], integer, boolean)
+ RETURNS halfvec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$array_to_halfvec$function$
+;
+
+CREATE OR REPLACE FUNCTION public.array_to_sparsevec(double precision[], integer, boolean)
+ RETURNS sparsevec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$array_to_sparsevec$function$
+;
+
+CREATE OR REPLACE FUNCTION public.array_to_sparsevec(integer[], integer, boolean)
+ RETURNS sparsevec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$array_to_sparsevec$function$
+;
+
+CREATE OR REPLACE FUNCTION public.array_to_sparsevec(numeric[], integer, boolean)
+ RETURNS sparsevec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$array_to_sparsevec$function$
+;
+
+CREATE OR REPLACE FUNCTION public.array_to_sparsevec(real[], integer, boolean)
+ RETURNS sparsevec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$array_to_sparsevec$function$
+;
+
+CREATE OR REPLACE FUNCTION public.array_to_vector(double precision[], integer, boolean)
+ RETURNS vector
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$array_to_vector$function$
+;
+
+CREATE OR REPLACE FUNCTION public.array_to_vector(integer[], integer, boolean)
+ RETURNS vector
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$array_to_vector$function$
+;
+
+CREATE OR REPLACE FUNCTION public.array_to_vector(numeric[], integer, boolean)
+ RETURNS vector
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$array_to_vector$function$
+;
+
+CREATE OR REPLACE FUNCTION public.array_to_vector(real[], integer, boolean)
+ RETURNS vector
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$array_to_vector$function$
+;
+
+CREATE OR REPLACE FUNCTION public.backfill_sla_for_organization(p_organization_id uuid)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  v_updated INTEGER := 0;
+  v_row RECORD;
+  v_detected_at TIMESTAMPTZ;
+  v_max_hours INTEGER;
+  v_warning_pct INTEGER;
+BEGIN
+  FOR v_row IN
+    SELECT pdv.id, pdv.project_id, pdv.osv_id, pdv.severity, pdv.created_at, p.asset_tier_id
+    FROM project_dependency_vulnerabilities pdv
+    JOIN projects p ON p.id = pdv.project_id
+    WHERE p.organization_id = p_organization_id
+      AND (pdv.suppressed = false OR pdv.suppressed IS NULL)
+      AND (pdv.risk_accepted = false OR pdv.risk_accepted IS NULL)
+      AND pdv.sla_status IS NULL
+      AND pdv.severity IN ('critical', 'high', 'medium', 'low')
+  LOOP
+    -- Resolve detected_at: first 'detected' event for this (project_id, osv_id) or created_at
+    SELECT MIN(pve.created_at) INTO v_detected_at
+    FROM project_vulnerability_events pve
+    WHERE pve.project_id = v_row.project_id
+      AND pve.osv_id = v_row.osv_id
+      AND pve.event_type = 'detected';
+
+    IF v_detected_at IS NULL THEN
+      v_detected_at := v_row.created_at;
+    END IF;
+
+    -- Get effective policy
+    SELECT f.max_hours, f.warning_threshold_percent INTO v_max_hours, v_warning_pct
+    FROM get_effective_sla_policy(p_organization_id, v_row.severity, v_row.asset_tier_id) f;
+
+    IF v_max_hours IS NULL THEN
+      CONTINUE;
+    END IF;
+
+    UPDATE project_dependency_vulnerabilities
+    SET
+      detected_at = v_detected_at,
+      sla_deadline_at = v_detected_at + (v_max_hours || ' hours')::INTERVAL,
+      sla_warning_at = v_detected_at + (v_max_hours * COALESCE(v_warning_pct, 75) / 100.0 || ' hours')::INTERVAL,
+      sla_status = CASE
+        WHEN NOW() > v_detected_at + (v_max_hours || ' hours')::INTERVAL THEN 'breached'
+        WHEN NOW() >= v_detected_at + (v_max_hours * COALESCE(v_warning_pct, 75) / 100.0 || ' hours')::INTERVAL THEN 'warning'
+        ELSE 'on_track'
+      END,
+      sla_breached_at = CASE
+        WHEN NOW() > v_detected_at + (v_max_hours || ' hours')::INTERVAL THEN v_detected_at + (v_max_hours || ' hours')::INTERVAL
+        ELSE NULL
+      END
+    WHERE project_dependency_vulnerabilities.id = v_row.id;
+
+    v_updated := v_updated + 1;
+  END LOOP;
+
+  RETURN v_updated;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.binary_quantize(halfvec)
+ RETURNS bit
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_binary_quantize$function$
+;
+
 CREATE OR REPLACE FUNCTION public.binary_quantize(vector)
  RETURNS bit
  LANGUAGE c
@@ -3552,6 +3707,148 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.compute_strategy_patterns(p_org_id uuid)
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  DELETE FROM strategy_patterns WHERE organization_id = p_org_id;
+
+  -- Level 1: Most specific (ecosystem + vulnerability_type + strategy + is_direct_dep)
+  INSERT INTO strategy_patterns (
+    organization_id, ecosystem, vulnerability_type, strategy, is_direct_dep,
+    total_attempts, successes, success_rate, avg_duration_seconds, avg_cost,
+    avg_quality_rating, pr_merge_rate, revert_rate, confidence, sample_count,
+    common_failure_reasons, last_computed_at
+  )
+  SELECT
+    p_org_id, ecosystem, vulnerability_type, strategy, is_direct_dep,
+    COUNT(*),
+    COUNT(*) FILTER (WHERE success),
+    ROUND(COUNT(*) FILTER (WHERE success)::numeric / NULLIF(COUNT(*), 0), 4),
+    AVG(duration_seconds)::integer,
+    AVG(estimated_cost),
+    AVG(human_quality_rating),
+    ROUND(COUNT(*) FILTER (WHERE pr_merged)::numeric / NULLIF(COUNT(*) FILTER (WHERE success), 0), 4),
+    ROUND(COUNT(*) FILTER (WHERE fix_reverted)::numeric / NULLIF(COUNT(*) FILTER (WHERE pr_merged), 0), 4),
+    CASE
+      WHEN COUNT(*) >= 20 THEN 'high'
+      WHEN COUNT(*) >= 5 THEN 'medium'
+      ELSE 'low'
+    END,
+    COUNT(*),
+    (SELECT jsonb_object_agg(fr, cnt) FROM (
+      SELECT failure_reason AS fr, COUNT(*) AS cnt
+      FROM fix_outcomes fo2
+      WHERE fo2.organization_id = p_org_id
+        AND fo2.ecosystem = fix_outcomes.ecosystem
+        AND fo2.vulnerability_type IS NOT DISTINCT FROM fix_outcomes.vulnerability_type
+        AND fo2.strategy = fix_outcomes.strategy
+        AND fo2.is_direct_dep IS NOT DISTINCT FROM fix_outcomes.is_direct_dep
+        AND fo2.failure_reason IS NOT NULL
+      GROUP BY failure_reason
+    ) sub),
+    NOW()
+  FROM fix_outcomes
+  WHERE organization_id = p_org_id
+    AND ecosystem IS NOT NULL
+  GROUP BY ecosystem, vulnerability_type, strategy, is_direct_dep;
+
+  -- Level 2: Medium (ecosystem + strategy only)
+  INSERT INTO strategy_patterns (
+    organization_id, ecosystem, vulnerability_type, strategy, is_direct_dep,
+    total_attempts, successes, success_rate, avg_duration_seconds, avg_cost,
+    avg_quality_rating, pr_merge_rate, revert_rate, confidence, sample_count,
+    last_computed_at
+  )
+  SELECT
+    p_org_id, ecosystem, NULL, strategy, NULL,
+    COUNT(*),
+    COUNT(*) FILTER (WHERE success),
+    ROUND(COUNT(*) FILTER (WHERE success)::numeric / NULLIF(COUNT(*), 0), 4),
+    AVG(duration_seconds)::integer,
+    AVG(estimated_cost),
+    AVG(human_quality_rating),
+    ROUND(COUNT(*) FILTER (WHERE pr_merged)::numeric / NULLIF(COUNT(*) FILTER (WHERE success), 0), 4),
+    ROUND(COUNT(*) FILTER (WHERE fix_reverted)::numeric / NULLIF(COUNT(*) FILTER (WHERE pr_merged), 0), 4),
+    CASE WHEN COUNT(*) >= 20 THEN 'high' WHEN COUNT(*) >= 5 THEN 'medium' ELSE 'low' END,
+    COUNT(*),
+    NOW()
+  FROM fix_outcomes
+  WHERE organization_id = p_org_id AND ecosystem IS NOT NULL
+  GROUP BY ecosystem, strategy
+  ON CONFLICT (organization_id, ecosystem, vulnerability_type, strategy, is_direct_dep, framework)
+  DO NOTHING;
+
+  -- Level 3: Broad (strategy only, org-wide)
+  INSERT INTO strategy_patterns (
+    organization_id, ecosystem, vulnerability_type, strategy, is_direct_dep,
+    total_attempts, successes, success_rate, avg_duration_seconds, avg_cost,
+    avg_quality_rating, pr_merge_rate, revert_rate, confidence, sample_count,
+    last_computed_at
+  )
+  SELECT
+    p_org_id, NULL, NULL, strategy, NULL,
+    COUNT(*),
+    COUNT(*) FILTER (WHERE success),
+    ROUND(COUNT(*) FILTER (WHERE success)::numeric / NULLIF(COUNT(*), 0), 4),
+    AVG(duration_seconds)::integer,
+    AVG(estimated_cost),
+    AVG(human_quality_rating),
+    ROUND(COUNT(*) FILTER (WHERE pr_merged)::numeric / NULLIF(COUNT(*) FILTER (WHERE success), 0), 4),
+    ROUND(COUNT(*) FILTER (WHERE fix_reverted)::numeric / NULLIF(COUNT(*) FILTER (WHERE pr_merged), 0), 4),
+    CASE WHEN COUNT(*) >= 20 THEN 'high' WHEN COUNT(*) >= 5 THEN 'medium' ELSE 'low' END,
+    COUNT(*),
+    NOW()
+  FROM fix_outcomes
+  WHERE organization_id = p_org_id
+  GROUP BY strategy
+  ON CONFLICT (organization_id, ecosystem, vulnerability_type, strategy, is_direct_dep, framework)
+  DO NOTHING;
+
+  -- Compute follow-up strategies from retry chains
+  UPDATE strategy_patterns sp SET
+    best_followup_strategy = sub.next_strategy,
+    followup_success_rate = sub.followup_rate
+  FROM (
+    SELECT
+      fo_failed.organization_id,
+      fo_failed.ecosystem,
+      fo_failed.vulnerability_type,
+      fo_failed.strategy,
+      fo_failed.is_direct_dep,
+      fo_retry.strategy AS next_strategy,
+      ROUND(COUNT(*) FILTER (WHERE fo_retry.success)::numeric / NULLIF(COUNT(*), 0), 4) AS followup_rate
+    FROM fix_outcomes fo_failed
+    JOIN fix_outcomes fo_retry ON fo_retry.previous_attempt_id = fo_failed.id
+    WHERE fo_failed.organization_id = p_org_id AND NOT fo_failed.success
+    GROUP BY fo_failed.organization_id, fo_failed.ecosystem, fo_failed.vulnerability_type,
+             fo_failed.strategy, fo_failed.is_direct_dep, fo_retry.strategy
+    ORDER BY followup_rate DESC
+  ) sub
+  WHERE sp.organization_id = sub.organization_id
+    AND sp.ecosystem IS NOT DISTINCT FROM sub.ecosystem
+    AND sp.vulnerability_type IS NOT DISTINCT FROM sub.vulnerability_type
+    AND sp.strategy = sub.strategy
+    AND sp.is_direct_dep IS NOT DISTINCT FROM sub.is_direct_dep;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.cosine_distance(halfvec, halfvec)
+ RETURNS double precision
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_cosine_distance$function$
+;
+
+CREATE OR REPLACE FUNCTION public.cosine_distance(sparsevec, sparsevec)
+ RETURNS double precision
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_cosine_distance$function$
+;
+
 CREATE OR REPLACE FUNCTION public.cosine_distance(vector, vector)
  RETURNS double precision
  LANGUAGE c
@@ -3641,6 +3938,18 @@ BEGIN
   }'::jsonb);
   
   RETURN NEW;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.decrement_sync_usage(p_org_id uuid)
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  UPDATE organization_plans
+    SET syncs_used = GREATEST(syncs_used - 1, 0), updated_at = NOW()
+    WHERE organization_id = p_org_id;
 END;
 $function$
 ;
@@ -4159,6 +4468,31 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.get_effective_sla_policy(p_organization_id uuid, p_severity text, p_asset_tier_id uuid)
+ RETURNS TABLE(max_hours integer, warning_threshold_percent integer)
+ LANGUAGE sql
+ STABLE
+AS $function$
+  SELECT osp.max_hours, osp.warning_threshold_percent
+  FROM organization_sla_policies osp
+  WHERE osp.organization_id = p_organization_id
+    AND osp.severity = p_severity
+    AND osp.enabled = true
+    AND (
+      (p_asset_tier_id IS NOT NULL AND osp.asset_tier_id = p_asset_tier_id)
+      OR (osp.asset_tier_id IS NULL AND NOT EXISTS (
+        SELECT 1 FROM organization_sla_policies osp2
+        WHERE osp2.organization_id = p_organization_id
+          AND osp2.severity = p_severity
+          AND osp2.asset_tier_id = p_asset_tier_id
+          AND osp2.enabled = true
+      ))
+    )
+  ORDER BY osp.asset_tier_id IS NULL ASC
+  LIMIT 1;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.get_extraction_runs_for_project(p_project_id uuid)
  RETURNS TABLE(run_id uuid, started_at timestamp with time zone)
  LANGUAGE sql
@@ -4238,6 +4572,50 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.get_sla_approaching_warning(p_batch_limit integer DEFAULT 200)
+ RETURNS TABLE(id uuid, project_id uuid, organization_id uuid, osv_id text, severity text, sla_deadline_at timestamp with time zone, hours_remaining numeric)
+ LANGUAGE sql
+ STABLE
+AS $function$
+  SELECT pdv.id, pdv.project_id, p.organization_id, pdv.osv_id, pdv.severity,
+         pdv.sla_deadline_at,
+         EXTRACT(EPOCH FROM (pdv.sla_deadline_at - NOW())) / 3600 AS hours_remaining
+  FROM project_dependency_vulnerabilities pdv
+  JOIN projects p ON p.id = pdv.project_id
+  JOIN organizations o ON o.id = p.organization_id
+  WHERE pdv.sla_status = 'on_track'
+    AND pdv.sla_deadline_at IS NOT NULL
+    AND pdv.sla_warning_at IS NOT NULL
+    AND pdv.sla_warning_notified_at IS NULL
+    AND o.sla_paused_at IS NULL
+    AND NOW() >= pdv.sla_warning_at
+    AND NOW() < pdv.sla_deadline_at
+  ORDER BY pdv.sla_deadline_at ASC
+  LIMIT p_batch_limit;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.get_sla_newly_breached(p_batch_limit integer DEFAULT 200)
+ RETURNS TABLE(id uuid, project_id uuid, organization_id uuid, osv_id text, severity text, sla_deadline_at timestamp with time zone, hours_overdue numeric)
+ LANGUAGE sql
+ STABLE
+AS $function$
+  SELECT pdv.id, pdv.project_id, p.organization_id, pdv.osv_id, pdv.severity,
+         pdv.sla_deadline_at,
+         EXTRACT(EPOCH FROM (NOW() - pdv.sla_deadline_at)) / 3600 AS hours_overdue
+  FROM project_dependency_vulnerabilities pdv
+  JOIN projects p ON p.id = pdv.project_id
+  JOIN organizations o ON o.id = p.organization_id
+  WHERE pdv.sla_status IN ('on_track', 'warning')
+    AND pdv.sla_deadline_at IS NOT NULL
+    AND pdv.sla_breach_notified_at IS NULL
+    AND o.sla_paused_at IS NULL
+    AND NOW() > pdv.sla_deadline_at
+  ORDER BY pdv.sla_deadline_at ASC
+  LIMIT p_batch_limit;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.get_taint_engine_monthly_spend(p_organization_id uuid)
  RETURNS numeric
  LANGUAGE sql
@@ -4285,6 +4663,195 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.halfvec_accum(double precision[], halfvec)
+ RETURNS double precision[]
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_accum$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_add(halfvec, halfvec)
+ RETURNS halfvec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_add$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_avg(double precision[])
+ RETURNS halfvec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_avg$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_cmp(halfvec, halfvec)
+ RETURNS integer
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_cmp$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_combine(double precision[], double precision[])
+ RETURNS double precision[]
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$vector_combine$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_concat(halfvec, halfvec)
+ RETURNS halfvec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_concat$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_eq(halfvec, halfvec)
+ RETURNS boolean
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_eq$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_ge(halfvec, halfvec)
+ RETURNS boolean
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_ge$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_gt(halfvec, halfvec)
+ RETURNS boolean
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_gt$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_in(cstring, oid, integer)
+ RETURNS halfvec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_in$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_l2_squared_distance(halfvec, halfvec)
+ RETURNS double precision
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_l2_squared_distance$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_le(halfvec, halfvec)
+ RETURNS boolean
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_le$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_lt(halfvec, halfvec)
+ RETURNS boolean
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_lt$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_mul(halfvec, halfvec)
+ RETURNS halfvec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_mul$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_ne(halfvec, halfvec)
+ RETURNS boolean
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_ne$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_negative_inner_product(halfvec, halfvec)
+ RETURNS double precision
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_negative_inner_product$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_out(halfvec)
+ RETURNS cstring
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_out$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_recv(internal, oid, integer)
+ RETURNS halfvec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_recv$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_send(halfvec)
+ RETURNS bytea
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_send$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_spherical_distance(halfvec, halfvec)
+ RETURNS double precision
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_spherical_distance$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_sub(halfvec, halfvec)
+ RETURNS halfvec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_sub$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_to_float4(halfvec, integer, boolean)
+ RETURNS real[]
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_to_float4$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_to_sparsevec(halfvec, integer, boolean)
+ RETURNS sparsevec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_to_sparsevec$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_to_vector(halfvec, integer, boolean)
+ RETURNS vector
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_to_vector$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec_typmod_in(cstring[])
+ RETURNS integer
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_typmod_in$function$
+;
+
+CREATE OR REPLACE FUNCTION public.halfvec(halfvec, integer, boolean)
+ RETURNS halfvec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec$function$
+;
+
+CREATE OR REPLACE FUNCTION public.hamming_distance(bit, bit)
+ RETURNS double precision
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$hamming_distance$function$
+;
+
 CREATE OR REPLACE FUNCTION public.handle_aegis_creator_leaves_org()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -4320,6 +4887,73 @@ BEGIN
   RETURN OLD;
 END;
 $function$
+;
+
+CREATE OR REPLACE FUNCTION public.hnsw_bit_support(internal)
+ RETURNS internal
+ LANGUAGE c
+AS '$libdir/vector', $function$hnsw_bit_support$function$
+;
+
+CREATE OR REPLACE FUNCTION public.hnsw_halfvec_support(internal)
+ RETURNS internal
+ LANGUAGE c
+AS '$libdir/vector', $function$hnsw_halfvec_support$function$
+;
+
+CREATE OR REPLACE FUNCTION public.hnsw_sparsevec_support(internal)
+ RETURNS internal
+ LANGUAGE c
+AS '$libdir/vector', $function$hnsw_sparsevec_support$function$
+;
+
+CREATE OR REPLACE FUNCTION public.hnswhandler(internal)
+ RETURNS index_am_handler
+ LANGUAGE c
+AS '$libdir/vector', $function$hnswhandler$function$
+;
+
+CREATE OR REPLACE FUNCTION public.increment_sync_usage(p_org_id uuid, p_sync_limit integer)
+ RETURNS TABLE(new_count integer, was_allowed boolean)
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  v_current INTEGER;
+BEGIN
+  SELECT syncs_used INTO v_current
+    FROM organization_plans
+    WHERE organization_id = p_org_id
+    FOR UPDATE;
+
+  IF v_current IS NULL THEN
+    RETURN QUERY SELECT 0, false;
+    RETURN;
+  END IF;
+
+  IF p_sync_limit = -1 OR v_current < p_sync_limit THEN
+    UPDATE organization_plans
+      SET syncs_used = syncs_used + 1, updated_at = NOW()
+      WHERE organization_id = p_org_id;
+    RETURN QUERY SELECT v_current + 1, true;
+  ELSE
+    RETURN QUERY SELECT v_current, false;
+  END IF;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.inner_product(halfvec, halfvec)
+ RETURNS double precision
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_inner_product$function$
+;
+
+CREATE OR REPLACE FUNCTION public.inner_product(sparsevec, sparsevec)
+ RETURNS double precision
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_inner_product$function$
 ;
 
 CREATE OR REPLACE FUNCTION public.inner_product(vector, vector)
@@ -4370,11 +5004,64 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.ivfflat_bit_support(internal)
+ RETURNS internal
+ LANGUAGE c
+AS '$libdir/vector', $function$ivfflat_bit_support$function$
+;
+
+CREATE OR REPLACE FUNCTION public.ivfflat_halfvec_support(internal)
+ RETURNS internal
+ LANGUAGE c
+AS '$libdir/vector', $function$ivfflat_halfvec_support$function$
+;
+
+CREATE OR REPLACE FUNCTION public.ivfflathandler(internal)
+ RETURNS index_am_handler
+ LANGUAGE c
+AS '$libdir/vector', $function$ivfflathandler$function$
+;
+
+CREATE OR REPLACE FUNCTION public.jaccard_distance(bit, bit)
+ RETURNS double precision
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$jaccard_distance$function$
+;
+
+CREATE OR REPLACE FUNCTION public.l1_distance(halfvec, halfvec)
+ RETURNS double precision
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_l1_distance$function$
+;
+
+CREATE OR REPLACE FUNCTION public.l1_distance(sparsevec, sparsevec)
+ RETURNS double precision
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_l1_distance$function$
+;
+
 CREATE OR REPLACE FUNCTION public.l1_distance(vector, vector)
  RETURNS double precision
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
 AS '$libdir/vector', $function$l1_distance$function$
+;
+
+CREATE OR REPLACE FUNCTION public.l2_distance(halfvec, halfvec)
+ RETURNS double precision
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_l2_distance$function$
+;
+
+CREATE OR REPLACE FUNCTION public.l2_distance(sparsevec, sparsevec)
+ RETURNS double precision
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_l2_distance$function$
 ;
 
 CREATE OR REPLACE FUNCTION public.l2_distance(vector, vector)
@@ -4384,11 +5071,56 @@ CREATE OR REPLACE FUNCTION public.l2_distance(vector, vector)
 AS '$libdir/vector', $function$l2_distance$function$
 ;
 
+CREATE OR REPLACE FUNCTION public.l2_norm(halfvec)
+ RETURNS double precision
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_l2_norm$function$
+;
+
+CREATE OR REPLACE FUNCTION public.l2_norm(sparsevec)
+ RETURNS double precision
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_l2_norm$function$
+;
+
+CREATE OR REPLACE FUNCTION public.l2_normalize(halfvec)
+ RETURNS halfvec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_l2_normalize$function$
+;
+
+CREATE OR REPLACE FUNCTION public.l2_normalize(sparsevec)
+ RETURNS sparsevec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_l2_normalize$function$
+;
+
 CREATE OR REPLACE FUNCTION public.l2_normalize(vector)
  RETURNS vector
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
 AS '$libdir/vector', $function$l2_normalize$function$
+;
+
+CREATE OR REPLACE FUNCTION public.match_aegis_memories(query_embedding vector, match_threshold double precision, match_count integer, filter_org_id uuid, filter_category text DEFAULT NULL::text)
+ RETURNS TABLE(id uuid, category text, key text, content text, similarity double precision)
+ LANGUAGE sql
+ STABLE
+AS $function$
+  SELECT id, category, key, content,
+         1 - (embedding <=> query_embedding) AS similarity
+  FROM aegis_memory
+  WHERE organization_id = filter_org_id
+    AND (filter_category IS NULL OR category = filter_category)
+    AND (expires_at IS NULL OR expires_at > NOW())
+    AND 1 - (embedding <=> query_embedding) > match_threshold
+  ORDER BY embedding <=> query_embedding
+  LIMIT match_count;
+$function$
 ;
 
 CREATE OR REPLACE FUNCTION public.pg_catalog_dump_v1_all()
@@ -4911,6 +5643,153 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.resume_sla_shift_deadlines(p_organization_id uuid, p_pause_duration_seconds integer)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  v_count INTEGER;
+BEGIN
+  UPDATE project_dependency_vulnerabilities pdv
+  SET
+    sla_deadline_at = pdv.sla_deadline_at + (p_pause_duration_seconds || ' seconds')::INTERVAL,
+    sla_warning_at = pdv.sla_warning_at + (p_pause_duration_seconds || ' seconds')::INTERVAL
+  WHERE pdv.project_id IN (SELECT id FROM projects WHERE organization_id = p_organization_id)
+    AND pdv.sla_status IN ('on_track', 'warning')
+    AND pdv.sla_deadline_at IS NOT NULL;
+
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sparsevec_cmp(sparsevec, sparsevec)
+ RETURNS integer
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_cmp$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sparsevec_eq(sparsevec, sparsevec)
+ RETURNS boolean
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_eq$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sparsevec_ge(sparsevec, sparsevec)
+ RETURNS boolean
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_ge$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sparsevec_gt(sparsevec, sparsevec)
+ RETURNS boolean
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_gt$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sparsevec_in(cstring, oid, integer)
+ RETURNS sparsevec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_in$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sparsevec_l2_squared_distance(sparsevec, sparsevec)
+ RETURNS double precision
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_l2_squared_distance$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sparsevec_le(sparsevec, sparsevec)
+ RETURNS boolean
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_le$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sparsevec_lt(sparsevec, sparsevec)
+ RETURNS boolean
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_lt$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sparsevec_ne(sparsevec, sparsevec)
+ RETURNS boolean
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_ne$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sparsevec_negative_inner_product(sparsevec, sparsevec)
+ RETURNS double precision
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_negative_inner_product$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sparsevec_out(sparsevec)
+ RETURNS cstring
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_out$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sparsevec_recv(internal, oid, integer)
+ RETURNS sparsevec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_recv$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sparsevec_send(sparsevec)
+ RETURNS bytea
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_send$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sparsevec_to_halfvec(sparsevec, integer, boolean)
+ RETURNS halfvec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_to_halfvec$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sparsevec_to_vector(sparsevec, integer, boolean)
+ RETURNS vector
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_to_vector$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sparsevec_typmod_in(cstring[])
+ RETURNS integer
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec_typmod_in$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sparsevec(sparsevec, integer, boolean)
+ RETURNS sparsevec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$sparsevec$function$
+;
+
+CREATE OR REPLACE FUNCTION public.subvector(halfvec, integer, integer)
+ RETURNS halfvec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_subvector$function$
+;
+
 CREATE OR REPLACE FUNCTION public.subvector(vector, integer, integer)
  RETURNS vector
  LANGUAGE c
@@ -4926,6 +5805,100 @@ BEGIN
   NEW.updated_at = NOW();
   RETURN NEW;
 END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.update_canvas_positions_batch(_org_id uuid, _user_id uuid, _teams jsonb, _projects jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  _now timestamptz := now();
+  _expected_teams int := coalesce(jsonb_array_length(_teams), 0);
+  _expected_projects int := coalesce(jsonb_array_length(_projects), 0);
+  _updated_teams jsonb := '[]'::jsonb;
+  _updated_projects jsonb := '[]'::jsonb;
+  _team_count int := 0;
+  _project_count int := 0;
+begin
+  if _expected_teams > 0 then
+    with
+      team_input as (
+        select
+          (elem->>'id')::uuid as id,
+          (elem->>'x')::numeric as x,
+          (elem->>'y')::numeric as y
+        from jsonb_array_elements(_teams) elem
+      ),
+      team_updates as (
+        update public.teams t
+        set
+          canvas_position_x = ti.x,
+          canvas_position_y = ti.y,
+          canvas_position_updated_at = _now,
+          canvas_position_updated_by = _user_id
+        from team_input ti
+        where t.id = ti.id and t.organization_id = _org_id
+        returning
+          t.id,
+          t.canvas_position_x,
+          t.canvas_position_y,
+          t.canvas_position_updated_at
+      )
+    select
+      coalesce(jsonb_agg(to_jsonb(tu.*)), '[]'::jsonb),
+      count(*)
+    into _updated_teams, _team_count
+    from team_updates tu;
+
+    if _team_count <> _expected_teams then
+      raise exception using
+        errcode = 'P0001',
+        message = 'one or more teams not found in this organization';
+    end if;
+  end if;
+
+  if _expected_projects > 0 then
+    with
+      project_input as (
+        select
+          (elem->>'id')::uuid as id,
+          (elem->>'x')::numeric as x,
+          (elem->>'y')::numeric as y
+        from jsonb_array_elements(_projects) elem
+      ),
+      project_updates as (
+        update public.projects p
+        set
+          canvas_position_x = pi.x,
+          canvas_position_y = pi.y,
+          canvas_position_updated_at = _now,
+          canvas_position_updated_by = _user_id
+        from project_input pi
+        where p.id = pi.id and p.organization_id = _org_id
+        returning
+          p.id,
+          p.canvas_position_x,
+          p.canvas_position_y,
+          p.canvas_position_updated_at
+      )
+    select
+      coalesce(jsonb_agg(to_jsonb(pu.*)), '[]'::jsonb),
+      count(*)
+    into _updated_projects, _project_count
+    from project_updates pu;
+
+    if _project_count <> _expected_projects then
+      raise exception using
+        errcode = 'P0001',
+        message = 'one or more projects not found in this organization';
+    end if;
+  end if;
+
+  return jsonb_build_object('teams', _updated_teams, 'projects', _updated_projects);
+end;
 $function$
 ;
 
@@ -5081,6 +6054,13 @@ CREATE OR REPLACE FUNCTION public.vector_concat(vector, vector)
 AS '$libdir/vector', $function$vector_concat$function$
 ;
 
+CREATE OR REPLACE FUNCTION public.vector_dims(halfvec)
+ RETURNS integer
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$halfvec_vector_dims$function$
+;
+
 CREATE OR REPLACE FUNCTION public.vector_dims(vector)
  RETURNS integer
  LANGUAGE c
@@ -5200,6 +6180,27 @@ CREATE OR REPLACE FUNCTION public.vector_sub(vector, vector)
 AS '$libdir/vector', $function$vector_sub$function$
 ;
 
+CREATE OR REPLACE FUNCTION public.vector_to_float4(vector, integer, boolean)
+ RETURNS real[]
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$vector_to_float4$function$
+;
+
+CREATE OR REPLACE FUNCTION public.vector_to_halfvec(vector, integer, boolean)
+ RETURNS halfvec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$vector_to_halfvec$function$
+;
+
+CREATE OR REPLACE FUNCTION public.vector_to_sparsevec(vector, integer, boolean)
+ RETURNS sparsevec
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/vector', $function$vector_to_sparsevec$function$
+;
+
 CREATE OR REPLACE FUNCTION public.vector_typmod_in(cstring[])
  RETURNS integer
  LANGUAGE c
@@ -5214,3 +6215,26 @@ CREATE OR REPLACE FUNCTION public.vector(vector, integer, boolean)
 AS '$libdir/vector', $function$vector$function$
 ;
 
+
+-- ============================================
+-- TRIGGERS
+-- ============================================
+CREATE TRIGGER add_project_creator_trigger AFTER INSERT ON public.projects FOR EACH ROW EXECUTE FUNCTION add_project_creator_as_owner();
+CREATE TRIGGER aegis_creator_leaves_org AFTER DELETE ON public.organization_members FOR EACH ROW EXECUTE FUNCTION handle_aegis_creator_leaves_org();
+CREATE TRIGGER create_project_roles_trigger AFTER INSERT ON public.projects FOR EACH ROW EXECUTE FUNCTION create_default_project_roles();
+CREATE TRIGGER create_team_roles_trigger AFTER INSERT ON public.teams FOR EACH ROW EXECUTE FUNCTION create_default_team_roles();
+CREATE TRIGGER organization_integrations_updated_at BEFORE UPDATE ON public.organization_integrations FOR EACH ROW EXECUTE FUNCTION update_organization_integrations_updated_at();
+CREATE TRIGGER pmf_enforce_org_consistency BEFORE INSERT OR UPDATE OF organization_id, project_id ON public.project_malicious_findings FOR EACH ROW EXECUTE FUNCTION enforce_pmf_org_consistency();
+CREATE TRIGGER project_container_findings_enforce_org_id BEFORE INSERT OR UPDATE OF project_id, organization_id ON public.project_container_findings FOR EACH ROW EXECUTE FUNCTION enforce_finding_org_id();
+CREATE TRIGGER project_iac_findings_enforce_org_id BEFORE INSERT OR UPDATE OF project_id, organization_id ON public.project_iac_findings FOR EACH ROW EXECUTE FUNCTION enforce_finding_org_id();
+CREATE TRIGGER project_integrations_updated_at BEFORE UPDATE ON public.project_integrations FOR EACH ROW EXECUTE FUNCTION update_project_integrations_updated_at();
+CREATE TRIGGER team_integrations_updated_at BEFORE UPDATE ON public.team_integrations FOR EACH ROW EXECUTE FUNCTION update_team_integrations_updated_at();
+CREATE TRIGGER trg_cleanup_orphaned_watchlist AFTER DELETE ON public.project_watchlist FOR EACH ROW EXECUTE FUNCTION cleanup_orphaned_watchlist();
+CREATE TRIGGER trigger_update_pr_guardrails_updated_at BEFORE UPDATE ON public.project_pr_guardrails FOR EACH ROW EXECUTE FUNCTION update_pr_guardrails_updated_at();
+CREATE TRIGGER update_aegis_chat_threads_updated_at BEFORE UPDATE ON public.aegis_chat_threads FOR EACH ROW EXECUTE FUNCTION update_aegis_chat_threads_updated_at();
+CREATE TRIGGER update_organization_notification_rules_updated_at BEFORE UPDATE ON public.organization_notification_rules FOR EACH ROW EXECUTE FUNCTION update_organization_notification_rules_updated_at();
+CREATE TRIGGER update_organization_policies_updated_at BEFORE UPDATE ON public.organization_policies FOR EACH ROW EXECUTE FUNCTION update_organization_policies_updated_at();
+CREATE TRIGGER update_project_notification_rules_updated_at BEFORE UPDATE ON public.project_notification_rules FOR EACH ROW EXECUTE FUNCTION update_project_notification_rules_updated_at();
+CREATE TRIGGER update_project_policy_exceptions_updated_at BEFORE UPDATE ON public.project_policy_exceptions FOR EACH ROW EXECUTE FUNCTION update_project_policy_exceptions_updated_at();
+CREATE TRIGGER update_team_notification_rules_updated_at BEFORE UPDATE ON public.team_notification_rules FOR EACH ROW EXECUTE FUNCTION update_team_notification_rules_updated_at();
+CREATE TRIGGER update_user_profiles_updated_at BEFORE UPDATE ON public.user_profiles FOR EACH ROW EXECUTE FUNCTION update_user_profiles_updated_at();

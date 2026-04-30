@@ -163,7 +163,7 @@ function projectStatusLabel(project: Project): { label: string; inProgress: bool
     const step = project.extraction_step;
     const labels: Record<string, string> = {
       queued: 'Creating', cloning: 'Creating', sbom: 'Creating', deps_synced: 'Creating',
-      usage_extraction: 'Creating', framework_detection: 'Creating', scanning: 'Creating',
+      usage_extraction: 'Creating', framework_detection: 'Creating', taint_engine: 'Creating', scanning: 'Creating',
       uploading: 'Creating', completed: 'Creating',
     };
     const label = step ? (labels[step] ?? 'Creating') : (status === 'analyzing' || status === 'finalizing' ? 'Analyzing' : 'Creating');
@@ -4157,6 +4157,14 @@ export default function OrganizationVulnerabilitiesPage() {
               >
 {projectSidebarTab === 'vulnerabilities' && (
                   <div className="space-y-4">
+                    {projectStats?.malicious_packages?.scan_status === 'partial' && (
+                      <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                        <span className="font-semibold">Partial coverage:</span> the malicious-package scan
+                        completed with gaps — some packages could not be scanned this run. Findings shown below
+                        are still accurate; investigate <span className="font-mono">extraction_step_errors</span> for
+                        the affected packages.
+                      </div>
+                    )}
                     {selectedProjectEffectiveIsInitialExtracting ? (
                       <ExtractionProgressCard
                         title="Project extraction still in progress"

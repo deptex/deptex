@@ -1,0 +1,87 @@
+# Next.js framework spec — Deptex cross-file taint engine.
+#
+# Two routing models in scope:
+#
+#   App Router (app/ directory, Next.js 13+):
+#     export async function POST(request: NextRequest) {
+#       const body = await request.json();
+#       const url = request.nextUrl.searchParams.get('redirect');
+#     }
+#
+#   Pages Router (pages/api/, legacy):
+#     export default function handler(req, res) {
+#       const { id } = req.query;
+#       res.json(...);
+#     }
+#
+# The Pages Router shape overlaps Express (req.body, req.query, req.params),
+# already covered by express.yaml. This spec adds the App Router shape +
+# Next.js-specific response sinks. Generic Node.js sinks/sanitizers live in
+# node-stdlib.yaml.
+
+framework: nextjs
+version: "*"
+
+sources:
+  # App Router — NextRequest accessors. The await-form lowers fine
+  # because the lowerer treats `await foo()` as a pass-through.
+  - pattern: request.nextUrl.searchParams.*
+    taint_kind: http_input
+    description: Next.js App Router URL search params
+  - pattern: request.headers.*
+    taint_kind: http_input
+    description: Next.js App Router request headers
+  - pattern: request.cookies.*
+    taint_kind: http_input
+    description: Next.js App Router request cookies
+  - pattern: request.url
+    taint_kind: http_input
+    description: Next.js App Router request URL
+  - pattern: request.geo.*
+    taint_kind: http_input
+    description: Next.js geo (set from CDN; treat as untrusted in middleware)
+
+  # searchParams accessor on the page-level params object (App Router pages).
+  - pattern: searchParams.*
+    taint_kind: http_input
+    description: Next.js page searchParams prop
+
+  # Call-shape sources for App Router request methods.
+  - pattern: request.json(*)
+    taint_kind: http_input
+    description: Next.js `await request.json()` body parser
+  - pattern: request.text(*)
+    taint_kind: http_input
+    description: Next.js `await request.text()` raw body
+  - pattern: request.formData(*)
+    taint_kind: http_input
+    description: Next.js `await request.formData()` form parser
+  - pattern: request.nextUrl.searchParams.get(*)
+    taint_kind: http_input
+    description: Next.js `searchParams.get('id')` accessor
+  - pattern: request.headers.get(*)
+    taint_kind: http_input
+    description: Next.js `request.headers.get('x-foo')` Headers API
+  - pattern: cookies.get(*)
+    taint_kind: http_input
+    description: Next.js cookies().get('name') from next/headers
+  - pattern: headers.get(*)
+    taint_kind: http_input
+    description: Next.js headers().get('x-foo') from next/headers
+
+sinks:
+  # Server-side response sinks
+  - pattern: NextResponse.redirect(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Next.js NextResponse.redirect
+  - pattern: NextResponse.json(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: NextResponse.json (untrusted body in error pages)
+  - pattern: redirect(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Next.js bare `redirect()` from next/navigation
+
+sanitizers: []

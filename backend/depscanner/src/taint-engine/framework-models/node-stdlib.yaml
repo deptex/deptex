@@ -1,0 +1,484 @@
+# Cross-framework Node.js stdlib sinks + sanitizers — shared across every
+# framework spec the engine loads.
+#
+# Convention: this file declares NO sources of its own; sources are
+# framework-specific and live in the per-framework yamls. The engine loads
+# every yaml and matches sources from any spec against sinks from any spec,
+# so a request body identified in fastify.yaml flows just fine through a
+# child_process.exec sink declared here.
+#
+# Vuln class scope: the eleven classes locked in feature-brief decision #3.
+
+framework: node-stdlib
+version: "*"
+
+sources: []
+
+sinks:
+  # ---------- SQL injection ----------
+  - pattern: "*.query(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Generic db.query / pool.query / connection.query
+  - pattern: "*.raw(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Knex raw SQL passthrough
+  - pattern: "*.execute(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: mysql2 / generic execute()
+  - pattern: "*.prepare(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: better-sqlite3 / mysql2 prepare with template
+  - pattern: sequelize.query(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Sequelize raw query
+  - pattern: knex.raw(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Knex raw
+
+  # ---------- SSRF ----------
+  - pattern: axios.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: axios GET
+  - pattern: axios.post(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: axios POST
+  - pattern: axios.put(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: axios PUT
+  - pattern: axios.delete(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: axios DELETE
+  - pattern: axios.request(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: axios request config
+  - pattern: axios(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: axios call
+  - pattern: fetch(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Web fetch
+  - pattern: node-fetch(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: node-fetch
+  - pattern: http.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: http.get
+  - pattern: http.request(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: http.request
+  - pattern: https.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: https.get
+  - pattern: https.request(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: https.request
+  - pattern: request(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: request lib call
+  - pattern: got(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: got HTTP client
+  - pattern: superagent(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: superagent
+
+  # ---------- Path traversal ----------
+  - pattern: fs.readFile(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.readFile
+  - pattern: fs.readFileSync(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.readFileSync
+  - pattern: fs.writeFile(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.writeFile
+  - pattern: fs.writeFileSync(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.writeFileSync
+  - pattern: fs.appendFile(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.appendFile
+  - pattern: fs.createReadStream(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.createReadStream
+  - pattern: fs.createWriteStream(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.createWriteStream
+  - pattern: fs.unlink(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.unlink
+  - pattern: fs.unlinkSync(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.unlinkSync
+  - pattern: fs.open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs.open
+  - pattern: fsPromises.readFile(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: fs/promises readFile
+
+  # ---------- Command injection ----------
+  - pattern: child_process.exec(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: child_process.exec (shell)
+  - pattern: child_process.execSync(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: child_process.execSync (shell)
+  - pattern: child_process.spawn(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: child_process.spawn — first arg is the command name
+  - pattern: child_process.spawnSync(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: child_process.spawnSync
+  - pattern: child_process.execFile(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: child_process.execFile — first arg is the file
+  - pattern: cp.exec(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: cp alias for child_process.exec
+  - pattern: cp.execSync(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: cp alias for child_process.execSync
+
+  # ---------- Prototype pollution ----------
+  # Lodash + generic merge functions where attacker-controlled keys can
+  # poison Object.prototype. We model the merge target itself, not the
+  # specific __proto__ shape — over-approximates, but the concrete-key
+  # filter is M6 territory.
+  - pattern: _.merge(*)
+    vuln_class: prototype_pollution
+    argument_indices: [1]
+    description: lodash merge — second arg poisons first
+  - pattern: _.mergeWith(*)
+    vuln_class: prototype_pollution
+    argument_indices: [1]
+    description: lodash mergeWith
+  - pattern: _.set(*)
+    vuln_class: prototype_pollution
+    argument_indices: [1]
+    description: lodash set with attacker-controlled key path
+  - pattern: _.setWith(*)
+    vuln_class: prototype_pollution
+    argument_indices: [1]
+    description: lodash setWith
+  - pattern: _.defaultsDeep(*)
+    vuln_class: prototype_pollution
+    argument_indices: [1]
+    description: lodash defaultsDeep
+  - pattern: _.assign(*)
+    vuln_class: prototype_pollution
+    argument_indices: [1]
+    description: lodash assign
+  - pattern: lodash.merge(*)
+    vuln_class: prototype_pollution
+    argument_indices: [1]
+    description: lodash.merge namespaced
+  - pattern: "*.merge(*)"
+    vuln_class: prototype_pollution
+    argument_indices: [1]
+    description: Generic .merge() — high precision in the "obj.merge(req.body)" shape
+  - pattern: Object.assign(*)
+    vuln_class: prototype_pollution
+    argument_indices: [1]
+    description: Object.assign with untrusted source
+
+  # ---------- Deserialization ----------
+  - pattern: JSON.parse(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: JSON.parse — RCE only via prototype-pollution-then-eval, but
+      noisy enough to trace
+  - pattern: eval(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: eval — direct RCE
+  - pattern: Function(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Function constructor — eval-equivalent
+  - pattern: vm.runInNewContext(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: vm.runInNewContext
+  - pattern: vm.runInThisContext(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: vm.runInThisContext
+  - pattern: vm.runInContext(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: vm.runInContext
+  - pattern: vm.compileFunction(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: vm.compileFunction
+  - pattern: serialize.unserialize(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: node-serialize.unserialize — known-RCE
+  - pattern: unserialize(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: bare unserialize import
+  - pattern: yaml.load(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: js-yaml load (the unsafe variant)
+
+  # ---------- ReDoS ----------
+  - pattern: RegExp(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: RegExp constructor with untrusted pattern
+  - pattern: new RegExp(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: new RegExp with untrusted pattern
+
+  # ---------- File upload ----------
+  # M5 model: multer factory functions taking a config object whose
+  # filename callback is attacker-controlled. We approximate by flagging
+  # any tainted argument to the multer factory; the noise is acceptable
+  # given multer is rarely called with truly user-controlled args.
+  - pattern: multer.single(*)
+    vuln_class: file_upload
+    argument_indices: [0]
+    description: multer.single — unvalidated field name
+  - pattern: multer.array(*)
+    vuln_class: file_upload
+    argument_indices: [0]
+    description: multer.array
+  - pattern: multer.fields(*)
+    vuln_class: file_upload
+    argument_indices: [0]
+    description: multer.fields
+  - pattern: multer.diskStorage(*)
+    vuln_class: file_upload
+    argument_indices: [0]
+    description: multer.diskStorage with untrusted destination/filename
+  - pattern: formidable.IncomingForm(*)
+    vuln_class: file_upload
+    argument_indices: [0]
+    description: formidable IncomingForm with untrusted opts
+  - pattern: busboy(*)
+    vuln_class: file_upload
+    argument_indices: [0]
+    description: busboy with untrusted opts
+
+  # ---------- Open redirect ----------
+  - pattern: res.location(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Express res.location header set
+  - pattern: Response.redirect(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Web Response.redirect (Next.js / fetch standard)
+
+  # ---------- Log injection ----------
+  - pattern: winston.log(*)
+    vuln_class: log_injection
+    argument_indices: [1]
+    description: winston.log(level, msg) — second arg is the message
+  - pattern: winston.info(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: winston.info
+  - pattern: winston.error(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: winston.error
+  - pattern: winston.warn(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: winston.warn
+  - pattern: pino.info(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: pino.info
+  - pattern: pino.error(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: pino.error
+  - pattern: pino.warn(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: pino.warn
+  - pattern: bunyan.info(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: bunyan.info
+  - pattern: log4js.log(*)
+    vuln_class: log_injection
+    argument_indices: [1]
+    description: log4js.log
+
+sanitizers:
+  # ---------- XSS ----------
+  - pattern: validator.escape(*)
+    vuln_classes: [xss]
+    description: validator.escape — HTML entity encoding
+  - pattern: DOMPurify.sanitize(*)
+    vuln_classes: [xss]
+    description: DOMPurify
+  - pattern: escape-html(*)
+    vuln_classes: [xss]
+    description: escape-html package
+  - pattern: escapeHtml(*)
+    vuln_classes: [xss]
+    description: escapeHtml helper
+  - pattern: he.encode(*)
+    vuln_classes: [xss]
+    description: he encode
+
+  # ---------- SQL ----------
+  - pattern: mysql.escape(*)
+    vuln_classes: [sql_injection]
+    description: mysql.escape
+  - pattern: mysql.escapeId(*)
+    vuln_classes: [sql_injection]
+    description: mysql.escapeId
+  - pattern: pg.escapeLiteral(*)
+    vuln_classes: [sql_injection]
+    description: pg.escapeLiteral
+  - pattern: pg.escapeIdentifier(*)
+    vuln_classes: [sql_injection]
+    description: pg.escapeIdentifier
+  - pattern: sqlstring.escape(*)
+    vuln_classes: [sql_injection]
+    description: sqlstring.escape
+
+  # ---------- Path traversal ----------
+  - pattern: path.normalize(*)
+    vuln_classes: [path_traversal]
+    description: path.normalize — collapses ../
+  - pattern: path.resolve(*)
+    vuln_classes: [path_traversal]
+    description: path.resolve — absolute resolution
+  - pattern: path.basename(*)
+    vuln_classes: [path_traversal]
+    description: path.basename — strips directory components
+
+  # ---------- Command injection ----------
+  - pattern: shell-quote.quote(*)
+    vuln_classes: [command_injection]
+    description: shell-quote.quote
+  - pattern: shellQuote(*)
+    vuln_classes: [command_injection]
+    description: shellQuote helper
+  - pattern: shell-escape(*)
+    vuln_classes: [command_injection]
+    description: shell-escape
+
+  # ---------- SSRF ----------
+  - pattern: ssrf-req-filter(*)
+    vuln_classes: [ssrf]
+    description: ssrf-req-filter
+  - pattern: validateUrl(*)
+    vuln_classes: [ssrf, open_redirect]
+    description: validateUrl helper (allowlist check)
+  - pattern: assertSafeUrl(*)
+    vuln_classes: [ssrf, open_redirect]
+    description: assertSafeUrl helper (allowlist check)
+  - pattern: isAllowlistedHost(*)
+    vuln_classes: [ssrf, open_redirect]
+    description: isAllowlistedHost helper
+
+  # ---------- Prototype pollution ----------
+  - pattern: cleanObject(*)
+    vuln_classes: [prototype_pollution]
+    description: hand-written __proto__-stripping helper
+  - pattern: stripProtoKeys(*)
+    vuln_classes: [prototype_pollution]
+    description: hand-written prototype-pollution sanitizer
+
+  # ---------- Deserialization ----------
+  - pattern: validateSchema(*)
+    vuln_classes: [deserialization]
+    description: schema-validated parse (zod / joi / ajv post-parse check)
+  - pattern: ajv.validate(*)
+    vuln_classes: [deserialization]
+    description: ajv schema validation
+  - pattern: schema.parse(*)
+    vuln_classes: [deserialization]
+    description: zod schema.parse — both validates AND coerces
+
+  # ---------- ReDoS ----------
+  - pattern: escapeRegExp(*)
+    vuln_classes: [redos]
+    description: escape-regexp helper
+  - pattern: _.escapeRegExp(*)
+    vuln_classes: [redos]
+    description: lodash escapeRegExp
+  - pattern: lodash.escapeRegExp(*)
+    vuln_classes: [redos]
+    description: lodash escapeRegExp namespaced
+
+  # ---------- File upload ----------
+  - pattern: validateMimeType(*)
+    vuln_classes: [file_upload]
+    description: validateMimeType helper
+  - pattern: whitelistedFilename(*)
+    vuln_classes: [file_upload]
+    description: whitelistedFilename helper
+
+  # ---------- Log injection ----------
+  - pattern: stripNewlines(*)
+    vuln_classes: [log_injection]
+    description: stripNewlines helper
+  - pattern: sanitizeLogString(*)
+    vuln_classes: [log_injection]
+    description: sanitizeLogString helper
+
+  # ---------- Cross-class strict validators ----------
+  - pattern: validator.isURL(*)
+    vuln_classes: [ssrf, open_redirect]
+    description: validator.isURL — boolean check
+  - pattern: validator.isInt(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: validator.isInt — numeric coercion gate
+  - pattern: Number.parseInt(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: Number.parseInt — numeric coercion
+  - pattern: parseInt(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: parseInt — numeric coercion

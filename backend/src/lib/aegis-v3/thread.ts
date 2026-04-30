@@ -1,5 +1,6 @@
 import type { ModelMessage } from 'ai';
 import { supabase } from '../../lib/supabase';
+import { addParticipant } from '../aegis/participants';
 
 export interface ThreadContext {
   type?: string;
@@ -28,6 +29,7 @@ export async function getOrCreateThread(
     .insert({
       organization_id: organizationId,
       user_id: userId,
+      created_by: userId,
       title,
       project_id: context?.projectId || null,
       context_type: context?.type || null,
@@ -37,8 +39,14 @@ export async function getOrCreateThread(
     .single();
 
   if (error || !data) {
-    throw new Error(`Failed to create chat thread: ${error?.message ?? 'unknown error'}`);
+    // Real cause goes to server logs; the route owns the user-facing message.
+    console.error('[aegis-v3] thread insert failed', error);
+    throw new Error('thread_create_failed');
   }
+
+  // The creator must also be a participant or every subsequent thread query
+  // (which goes through getThreadForParticipant → isParticipant) returns 404.
+  await addParticipant(data.id as string, userId);
 
   return data.id as string;
 }

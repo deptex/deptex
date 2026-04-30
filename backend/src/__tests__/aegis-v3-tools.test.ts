@@ -13,7 +13,6 @@ const ORG_ID = '00000000-0000-0000-0000-000000000001';
 const USER_ID = '00000000-0000-0000-0000-000000000099';
 const THREAD_ID = '00000000-0000-0000-0000-0000000000aa';
 const PROJECT_ID = '00000000-0000-0000-0000-000000000111';
-const OTHER_ORG_ID = '00000000-0000-0000-0000-000000000222';
 const PD_ID = '00000000-0000-0000-0000-000000000333';
 const VULN_ID = '00000000-0000-0000-0000-000000000444';
 
@@ -31,6 +30,14 @@ function tool(name: string): AegisToolEntry<any, any> {
   const t = ALL_AEGIS_TOOLS.find((x) => x.name === name);
   if (!t) throw new Error(`tool not found: ${name}`);
   return t as AegisToolEntry<any, any>;
+}
+
+// Helpers — every project-scoped tool resolves the project name first via a
+// `.from('projects').select('id, name').eq('organization_id', orgId).eq('name',
+// trimmed).limit(2)` call. Mock that pre-flight separately so the test bodies
+// stay focused on the tool's actual logic.
+function mockProjectResolverHit(name = 'deptex-test-npm') {
+  setTableResponse('projects', 'then', { data: [{ id: PROJECT_ID, name }], error: null });
 }
 
 jest.mock('../lib/latest-safe-version', () => ({
@@ -88,10 +95,23 @@ describe('registry shape', () => {
       expect(t.permission).toBe('trigger_fix');
     }
   });
+
+  it('no read-only tool advertises a UUID-formatted arg', () => {
+    const readOnly = ALL_AEGIS_TOOLS.filter(
+      (t) => !['request_fix', 'approve_fix', 'reject_fix', 'check_fix_status'].includes(t.name),
+    );
+    for (const t of readOnly) {
+      const schema = (t.inputSchema as any).jsonSchema ?? t.inputSchema;
+      const props = schema?.properties ?? {};
+      for (const prop of Object.values<any>(props)) {
+        expect(prop.format).not.toBe('uuid');
+      }
+    }
+  });
 });
 
 describe('list_projects', () => {
-  it('returns rows scoped to ctx.orgId, mapped to a flat shape', async () => {
+  it('returns rows in the new flat shape with no UUIDs leaked', async () => {
     setTableResponse('projects', 'then', {
       data: [
         {
@@ -106,11 +126,10 @@ describe('list_projects', () => {
       ],
       error: null,
     });
-    const out = await tool('list_projects').execute({}, makeCtx());
+    const out = (await tool('list_projects').execute({}, makeCtx())) as any;
     expect(out).toEqual({
       projects: [
         {
-          id: 'p1',
           name: 'Web',
           health_score: 90,
           status: 'OK',
@@ -120,59 +139,86 @@ describe('list_projects', () => {
         },
       ],
     });
+    // Sanity: no `id` field on the result row.
+    expect(out.projects[0].id).toBeUndefined();
   });
 
-  it('returns empty when teamId filter has no matching projects', async () => {
-    setTableResponse('project_teams', 'then', { data: [], error: null });
-    const out = await tool('list_projects').execute({ teamId: 'team-x' }, makeCtx());
-    expect(out).toEqual({ projects: [] });
+  it('returns multi-match error from resolveTeam when teamName is ambiguous', async () => {
+    setTableResponse('teams', 'then', {
+      data: [
+        { id: 't1', name: 'platform-frontend' },
+        { id: 't2', name: 'platform-backend' },
+      ],
+      error: null,
+    });
+    // exact match on name first → no rows; falls through to fuzzy match
+    pushTableResponse('teams', { data: [], error: null });
+    const out = (await tool('list_projects').execute({ teamName: 'platform' }, makeCtx())) as any;
+    expect(out.error).toContain('Multiple teams match');
   });
 });
 
 describe('get_project_summary', () => {
-  it('returns project not found when project missing', async () => {
-    setTableResponse('projects', 'single', { data: null, error: null });
-    const out = await tool('get_project_summary').execute({ projectId: PROJECT_ID }, makeCtx());
-    expect(out).toEqual({ error: 'Project not found' });
+  it('returns no-match error when project name is unknown', async () => {
+    // resolveProject: exact miss, fuzzy miss, available list empty
+    setTableResponse('projects', 'then', { data: [], error: null });
+    const out = (await tool('get_project_summary').execute(
+      { projectName: 'nonexistent' },
+      makeCtx(),
+    )) as any;
+    expect(out.error).toContain('No projects exist');
   });
 
-  it('rejects projects in another organization', async () => {
+  it('resolves the project then returns the detailed summary', async () => {
+    mockProjectResolverHit('Web');
+    // After resolving, the tool fetches the full project row by id
     setTableResponse('projects', 'single', {
-      data: { id: PROJECT_ID, name: 'X', organization_id: OTHER_ORG_ID, health_score: 50 },
+      data: {
+        id: PROJECT_ID,
+        name: 'Web',
+        organization_id: ORG_ID,
+        health_score: 88,
+        status_id: 's1',
+        framework: 'next',
+        organization_statuses: { name: 'OK' },
+        project_repositories: [
+          {
+            status: 'connected',
+            repo_full_name: 'org/web',
+            default_branch: 'main',
+            ecosystem: 'npm',
+          },
+        ],
+      },
       error: null,
     });
-    const out = await tool('get_project_summary').execute({ projectId: PROJECT_ID }, makeCtx());
-    expect(out).toEqual({ error: 'Project not in current organization' });
+    const out = (await tool('get_project_summary').execute(
+      { projectName: 'Web' },
+      makeCtx(),
+    )) as any;
+    expect(out).toMatchObject({
+      name: 'Web',
+      health_score: 88,
+      status: 'OK',
+      framework: 'next',
+      repository: { repo_full_name: 'org/web', default_branch: 'main', ecosystem: 'npm' },
+    });
+    expect(out.id).toBeUndefined();
   });
 });
 
 describe('list_project_dependencies', () => {
-  it('returns 404 when project missing', async () => {
-    setTableResponse('projects', 'single', { data: null, error: null });
-    const out = await tool('list_project_dependencies').execute(
-      { projectId: PROJECT_ID },
+  it('returns no-match when project name is unknown', async () => {
+    setTableResponse('projects', 'then', { data: [], error: null });
+    const out = (await tool('list_project_dependencies').execute(
+      { projectName: 'nope' },
       makeCtx(),
-    );
-    expect(out).toEqual({ error: 'Project not found' });
+    )) as any;
+    expect(out.error).toContain('No projects exist');
   });
 
-  it('rejects cross-org access', async () => {
-    setTableResponse('projects', 'single', {
-      data: { id: PROJECT_ID, organization_id: OTHER_ORG_ID },
-      error: null,
-    });
-    const out = await tool('list_project_dependencies').execute(
-      { projectId: PROJECT_ID },
-      makeCtx(),
-    );
-    expect(out).toEqual({ error: 'Project not in current organization' });
-  });
-
-  it('joins reputation data when deps exist', async () => {
-    setTableResponse('projects', 'single', {
-      data: { id: PROJECT_ID, organization_id: ORG_ID },
-      error: null,
-    });
+  it('joins reputation data when deps exist (no `id` leaked)', async () => {
+    mockProjectResolverHit('Web');
     setTableResponse('project_dependencies', 'then', {
       data: [
         {
@@ -202,9 +248,10 @@ describe('list_project_dependencies', () => {
       error: null,
     });
     const out = (await tool('list_project_dependencies').execute(
-      { projectId: PROJECT_ID },
+      { projectName: 'Web' },
       makeCtx(),
     )) as any;
+    expect(out.project).toBe('Web');
     expect(out.totalReturned).toBe(1);
     expect(out.dependencies[0]).toMatchObject({
       name: 'lodash',
@@ -214,41 +261,32 @@ describe('list_project_dependencies', () => {
       reputationScore: 95,
       isMalicious: false,
     });
+    expect(out.dependencies[0].id).toBeUndefined();
   });
 });
 
 describe('get_project_vulnerabilities', () => {
-  it('rejects cross-org access', async () => {
-    setTableResponse('projects', 'single', {
-      data: { id: PROJECT_ID, organization_id: OTHER_ORG_ID },
-      error: null,
-    });
-    const out = await tool('get_project_vulnerabilities').execute(
-      { projectId: PROJECT_ID },
+  it('returns no-match when project name is unknown', async () => {
+    setTableResponse('projects', 'then', { data: [], error: null });
+    const out = (await tool('get_project_vulnerabilities').execute(
+      { projectName: 'nope' },
       makeCtx(),
-    );
-    expect(out).toEqual({ error: 'Project not in current organization' });
+    )) as any;
+    expect(out.error).toContain('No projects exist');
   });
 
   it('returns empty array when there are no vulnerabilities', async () => {
-    setTableResponse('projects', 'single', {
-      data: { id: PROJECT_ID, organization_id: ORG_ID },
-      error: null,
-    });
+    mockProjectResolverHit('Web');
     setTableResponse('project_dependency_vulnerabilities', 'then', { data: [], error: null });
-    const out = await tool('get_project_vulnerabilities').execute(
-      { projectId: PROJECT_ID },
+    const out = (await tool('get_project_vulnerabilities').execute(
+      { projectName: 'Web' },
       makeCtx(),
-    );
-    expect(out).toEqual({ vulnerabilities: [], totalReturned: 0 });
+    )) as any;
+    expect(out).toEqual({ project: 'Web', vulnerabilities: [], totalReturned: 0 });
   });
 
-  it('hydrates dependency info for each vulnerability', async () => {
-    setTableResponse('projects', 'single', {
-      data: { id: PROJECT_ID, organization_id: ORG_ID },
-      error: null,
-    });
-    pushTableResponse('project_dependency_vulnerabilities', { data: undefined, error: null });
+  it('hydrates dependency info for each vulnerability without leaking row IDs', async () => {
+    mockProjectResolverHit('Web');
     setTableResponse('project_dependency_vulnerabilities', 'then', {
       data: [
         {
@@ -276,9 +314,10 @@ describe('get_project_vulnerabilities', () => {
     });
 
     const out = (await tool('get_project_vulnerabilities').execute(
-      { projectId: PROJECT_ID },
+      { projectName: 'Web' },
       makeCtx(),
     )) as any;
+    expect(out.project).toBe('Web');
     expect(out.totalReturned).toBe(1);
     expect(out.vulnerabilities[0]).toMatchObject({
       osvId: 'GHSA-aaaa',
@@ -288,8 +327,10 @@ describe('get_project_vulnerabilities', () => {
       isReachable: true,
       reachabilityLevel: 'function',
       depscore: 88,
-      dependency: { id: PD_ID, name: 'react', version: '18.0.0' },
+      dependency: { name: 'react', version: '18.0.0' },
     });
+    expect(out.vulnerabilities[0].id).toBeUndefined();
+    expect(out.vulnerabilities[0].dependency.id).toBeUndefined();
   });
 });
 
@@ -330,52 +371,40 @@ describe('get_security_posture', () => {
 
 describe('get_vulnerability_detail', () => {
   it('errors when no lookup id is provided', async () => {
-    const out = await tool('get_vulnerability_detail').execute({}, makeCtx());
-    expect(out).toEqual({ error: 'Provide cveId, osvId, or vulnerabilityId.' });
+    const out = (await tool('get_vulnerability_detail').execute({}, makeCtx())) as any;
+    expect(out.error).toContain('required');
   });
 
   it('returns not-found when no rows match', async () => {
     setTableResponse('projects', 'then', { data: [{ id: 'p1', name: 'Web' }], error: null });
     setTableResponse('project_dependency_vulnerabilities', 'then', { data: [], error: null });
-    const out = await tool('get_vulnerability_detail').execute({ osvId: 'GHSA-zzzz' }, makeCtx());
-    expect(out).toEqual({ error: 'Vulnerability not found in this organization' });
+    const out = (await tool('get_vulnerability_detail').execute(
+      { cveOrOsvId: 'GHSA-zzzz' },
+      makeCtx(),
+    )) as any;
+    expect(out.error).toContain('Vulnerability "GHSA-zzzz" not found');
   });
 });
 
 describe('get_reachability_flows', () => {
-  it('returns 404 when vulnerability not found', async () => {
-    setTableResponse('project_dependency_vulnerabilities', 'single', {
-      data: null,
-      error: null,
-    });
-    const out = await tool('get_reachability_flows').execute(
-      { vulnerabilityId: VULN_ID },
+  it('returns no-match when project name is unknown', async () => {
+    setTableResponse('projects', 'then', { data: [], error: null });
+    const out = (await tool('get_reachability_flows').execute(
+      { projectName: 'nope', cveOrOsvId: 'CVE-2024-1' },
       makeCtx(),
-    );
-    expect(out).toEqual({ error: 'Vulnerability not found' });
+    )) as any;
+    expect(out.error).toContain('No projects exist');
   });
 
-  it('rejects cross-org access via the project lookup', async () => {
-    setTableResponse('project_dependency_vulnerabilities', 'single', {
-      data: {
-        id: VULN_ID,
-        project_id: PROJECT_ID,
-        osv_id: 'GHSA-aaaa',
-        reachability_level: 'function',
-        reachability_details: null,
-        project_dependency_id: PD_ID,
-      },
-      error: null,
-    });
-    setTableResponse('projects', 'single', {
-      data: { id: PROJECT_ID, organization_id: OTHER_ORG_ID },
-      error: null,
-    });
-    const out = await tool('get_reachability_flows').execute(
-      { vulnerabilityId: VULN_ID },
+  it('returns vuln-not-found when CVE missing in resolved project', async () => {
+    mockProjectResolverHit('Web');
+    setTableResponse('project_dependency_vulnerabilities', 'then', { data: [], error: null });
+    const out = (await tool('get_reachability_flows').execute(
+      { projectName: 'Web', cveOrOsvId: 'CVE-9999' },
       makeCtx(),
-    );
-    expect(out).toEqual({ error: 'Project not in current organization' });
+    )) as any;
+    expect(out.error).toContain('Vulnerability "CVE-9999" not found');
+    expect(out.error).toContain('Web');
   });
 });
 
@@ -387,7 +416,6 @@ describe('check_cisa_kev', () => {
   });
 
   it('returns isKev=true when any matched row is on the KEV list', async () => {
-    pushTableResponse('projects', { data: undefined, error: null });
     setTableResponse('projects', 'then', {
       data: [{ id: 'p1' }, { id: 'p2' }],
       error: null,
@@ -482,29 +510,19 @@ describe('get_package_reputation', () => {
 });
 
 describe('analyze_upgrade_path', () => {
-  it('rejects cross-org access via the project lookup', async () => {
-    pushTableResponse('project_dependencies', {
-      data: { id: PD_ID, project_id: PROJECT_ID, name: 'react', version: '18.0.0' },
-      error: null,
-    });
-    setTableResponse('projects', 'single', {
-      data: { id: PROJECT_ID, organization_id: OTHER_ORG_ID },
-      error: null,
-    });
-    const out = await tool('analyze_upgrade_path').execute(
-      { projectDependencyId: PD_ID },
+  it('returns project-not-found from resolveProjectDependency', async () => {
+    setTableResponse('projects', 'then', { data: [], error: null });
+    const out = (await tool('analyze_upgrade_path').execute(
+      { projectName: 'nope', packageName: 'react' },
       makeCtx(),
-    );
-    expect(out).toEqual({ error: 'Project not in current organization' });
+    )) as any;
+    expect(out.error).toContain('No projects exist');
   });
 
   it('delegates to calculateLatestSafeVersion and surfaces the result', async () => {
-    setTableResponse('project_dependencies', 'single', {
-      data: { id: PD_ID, project_id: PROJECT_ID, name: 'react', version: '18.0.0' },
-      error: null,
-    });
-    setTableResponse('projects', 'single', {
-      data: { id: PROJECT_ID, organization_id: ORG_ID },
+    mockProjectResolverHit('Web');
+    setTableResponse('project_dependencies', 'then', {
+      data: [{ id: PD_ID, name: 'react', version: '18.0.0' }],
       error: null,
     });
     (calculateLatestSafeVersion as jest.Mock).mockResolvedValueOnce({
@@ -516,10 +534,11 @@ describe('analyze_upgrade_path', () => {
       message: null,
     });
     const out = (await tool('analyze_upgrade_path').execute(
-      { projectDependencyId: PD_ID },
+      { projectName: 'Web', packageName: 'react' },
       makeCtx(),
     )) as any;
     expect(out).toEqual({
+      project: 'Web',
       packageName: 'react',
       currentVersion: '18.0.0',
       safeVersion: '18.2.0',
@@ -571,7 +590,7 @@ describe('list_policies', () => {
       updatedAt: '2024-04-01T00:00:00Z',
       lines: 3,
     });
-    expect(out.packagePolicy.preview).toContain("openssf_score");
+    expect(out.packagePolicy.preview).toContain('openssf_score');
     expect(out.availableStatuses).toHaveLength(2);
     expect(out.availableStatuses[0].isPassing).toBe(true);
   });

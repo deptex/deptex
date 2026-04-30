@@ -1,0 +1,80 @@
+# Express framework spec — Deptex cross-file taint engine.
+#
+# Only Express-specific sources + framework response sinks live here. The
+# generic Node.js stdlib sinks (fs.*, child_process.*, JSON.parse, eval,
+# vm.*, RegExp, lodash merge, etc.) and most cross-framework sanitizers
+# live in node-stdlib.yaml — both files load together at engine startup
+# so taint introduced in this spec can flow to a sink declared in the
+# stdlib spec.
+
+framework: express
+version: "*"
+
+sources:
+  - pattern: req.body.*
+    taint_kind: http_input
+    description: Express request body
+  - pattern: req.query.*
+    taint_kind: http_input
+    description: Express request query string
+  - pattern: req.params.*
+    taint_kind: http_input
+    description: Express request route params
+  - pattern: req.headers.*
+    taint_kind: http_input
+    description: Express request headers
+  - pattern: req.cookies.*
+    taint_kind: http_input
+    description: Express request cookies
+  - pattern: req.signedCookies.*
+    taint_kind: http_input
+    description: Express signed cookies
+  - pattern: req.url
+    taint_kind: http_input
+    description: Express raw request URL
+  - pattern: req.originalUrl
+    taint_kind: http_input
+    description: Express raw original URL
+  - pattern: req.path
+    taint_kind: http_input
+    description: Express request path
+  - pattern: req.hostname
+    taint_kind: http_input
+    description: Express request hostname header
+
+sinks:
+  # XSS — response writers that emit unescaped HTML
+  - pattern: res.send(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Express response body
+  - pattern: res.write(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Express raw response write
+  - pattern: res.end(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Express end-with-body
+  - pattern: res.render(*)
+    vuln_class: xss
+    argument_indices: [1]
+    description: Express render — model object passed unsanitized
+  - pattern: res.jsonp(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Express jsonp — callback name reflected
+
+  # Path traversal — sendFile takes a literal path
+  - pattern: res.sendFile(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Express sendFile
+
+  # Open redirect — res.redirect with attacker-controlled URL
+  - pattern: res.redirect(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Express res.redirect
+
+sanitizers: []

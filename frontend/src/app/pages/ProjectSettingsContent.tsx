@@ -2,8 +2,9 @@ import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from 'rea
 import { createPortal } from 'react-dom';
 import { useOutletContext, useNavigate, useParams, useLocation, Link, useSearchParams } from 'react-router-dom';
 import { cn } from '../../lib/utils';
-import { Settings, Trash2, Shield, Bell, ChevronDown, Users, Plus, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, BookOpen, Clock, Loader2, Eye, Ban, Mail, Webhook, GitBranch, Info, RefreshCw, GitCommit, AlertTriangle, PauseCircle, Radar } from 'lucide-react';
+import { Settings, Trash2, Shield, Bell, ChevronDown, Users, Plus, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, BookOpen, Clock, Loader2, Eye, Ban, Mail, Webhook, GitBranch, Info, RefreshCw, GitCommit, AlertTriangle, PauseCircle, Radar, Boxes } from 'lucide-react';
 import { DastScanningTab } from '../../components/dast/DastScanningTab';
+import ScannersPanel from '../../components/security/ScannersPanel';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -292,7 +293,7 @@ function formatRunDuration(createdAt: string, completedAt: string | null, status
   return `${Math.floor(m / 60)}h`;
 }
 
-const VALID_PROJECT_SETTINGS_SECTIONS = new Set(['general', 'repository', 'access', 'notifications', 'policies', 'scanning']);
+const VALID_PROJECT_SETTINGS_SECTIONS = new Set(['general', 'repository', 'access', 'notifications', 'policies', 'scanning', 'scanners']);
 
 const ASSET_TIER_LABEL: Record<AssetTier, string> = {
   CROWN_JEWELS: 'Crown Jewels',
@@ -1620,6 +1621,11 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
       id: 'scanning',
       label: 'Scanning',
       icon: <Radar className="h-4 w-4 tab-icon-shake" />,
+    },
+    {
+      id: 'scanners',
+      label: 'Scanners',
+      icon: <Boxes className="h-4 w-4 tab-icon-shake" />,
     },
   ];
 
@@ -3726,6 +3732,15 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                 projectId={projectId}
                 canManage={!!userPermissions?.edit_settings}
               />
+            )}
+
+            {activeSection === 'scanners' && organizationId && projectId && (
+              <div className="space-y-6">
+                <div className="mb-6 flex items-center gap-2">
+                  <h2 className="text-2xl font-bold text-foreground">Scanners</h2>
+                </div>
+                <ScannersPanel organizationId={organizationId} projectId={projectId} />
+              </div>
             )}
           </div>
         </div>
