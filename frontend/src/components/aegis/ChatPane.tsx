@@ -94,7 +94,13 @@ function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
     if (!hasText && msg.content) parts.unshift({ type: 'text', text: msg.content });
     if (parts.length === 0) parts.push({ type: 'text', text: msg.content ?? '' });
 
-    return { id: msg.id, role: msg.role, parts, userId: msg.userId } as unknown as UIMessage;
+    return {
+      id: msg.id,
+      role: msg.role,
+      parts,
+      userId: msg.userId,
+      error: msg.metadata?.error,
+    } as unknown as UIMessage;
   });
 }
 
@@ -116,6 +122,7 @@ export function ChatPane({
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [seedLoaded, setSeedLoaded] = useState(!propThreadId);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -185,6 +192,44 @@ export function ChatPane({
     }
   }, [organizationId, activeThreadId, currentUserId, isGenerating, onThreadCreated]);
 
+  const handleRegenerate = useCallback(async () => {
+    if (!activeThreadId || isGenerating || isRegenerating) return;
+    setSendError(null);
+    setIsRegenerating(true);
+    setIsGenerating(true);
+    // Optimistically drop the trailing assistant error bubble so the typing
+    // indicator can take its place — the backend will delete it server-side.
+    setMessages((prev) => {
+      for (let i = prev.length - 1; i >= 0; i--) {
+        const m = prev[i] as any;
+        if (m.role === 'assistant' && m.error) {
+          return prev.filter((_, idx) => idx !== i);
+        }
+        if (m.role === 'user') break;
+      }
+      return prev;
+    });
+
+    try {
+      await aegisApi.regenerate(activeThreadId);
+    } catch (err: any) {
+      setIsGenerating(false);
+      setIsRegenerating(false);
+      setSendError(err?.message ?? 'Failed to regenerate response');
+    }
+  }, [activeThreadId, isGenerating, isRegenerating]);
+
+  // Index of the latest assistant error message — only that bubble shows the
+  // Regenerate button so stacked older errors stay read-only.
+  const latestErrorIdx = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i] as any;
+      if (m.role === 'assistant' && m.error) return i;
+      if (m.role === 'user') break;
+    }
+    return -1;
+  }, [messages]);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, isGenerating]);
@@ -230,6 +275,7 @@ export function ChatPane({
           });
           if (row.role === 'assistant') {
             setIsGenerating(false);
+            setIsRegenerating(false);
             onThreadUpdatedRef.current?.();
           }
         },
@@ -272,11 +318,14 @@ export function ChatPane({
     <div className="flex h-full flex-col">
       <div className="flex-1 overflow-y-auto">
         <div className="py-4">
-          {messages.map((m) => (
+          {messages.map((m, i) => (
             <MessageBubble
               key={m.id}
               message={m}
               currentUserId={currentUserId}
+              organizationId={organizationId}
+              onRegenerate={i === latestErrorIdx ? handleRegenerate : undefined}
+              isRegenerating={i === latestErrorIdx && isRegenerating}
             />
           ))}
           {isGenerating && (
