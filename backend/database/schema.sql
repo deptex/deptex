@@ -2690,6 +2690,29 @@ end;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.canonicalize_malicious_ecosystem(raw text)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+  SELECT CASE lower(coalesce(raw, ''))
+    WHEN 'npm'              THEN 'npm'
+    WHEN 'pypi'             THEN 'pypi'
+    WHEN 'pip'              THEN 'pypi'
+    WHEN 'maven'            THEN 'maven'
+    WHEN 'golang'           THEN 'golang'
+    WHEN 'go'               THEN 'golang'
+    WHEN 'rubygems'         THEN 'rubygems'
+    WHEN 'gem'              THEN 'rubygems'
+    WHEN 'github-actions'   THEN 'github-actions'
+    WHEN 'github-action'    THEN 'github-actions'
+    WHEN 'github actions'   THEN 'github-actions'
+    WHEN 'vscode'           THEN 'vscode'
+    ELSE NULL
+  END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.check_taint_engine_circuit_breaker(p_organization_id uuid, p_window_minutes integer DEFAULT 60, p_failure_threshold_pct numeric DEFAULT 5.0)
  RETURNS TABLE(should_run boolean, recent_runs integer, recent_failures integer, failure_pct numeric, killswitch_active boolean)
  LANGUAGE plpgsql
@@ -4178,13 +4201,6 @@ CREATE OR REPLACE FUNCTION public.halfvec_in(cstring, oid, integer)
 AS '$libdir/vector', $function$halfvec_in$function$
 ;
 
-CREATE OR REPLACE FUNCTION public.halfvec_lt(halfvec, halfvec)
- RETURNS boolean
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$halfvec_lt$function$
-;
-
 CREATE OR REPLACE FUNCTION public.halfvec_mul(halfvec, halfvec)
  RETURNS halfvec
  LANGUAGE c
@@ -4833,7 +4849,7 @@ BEGIN
     OR EXISTS (
       SELECT 1 FROM public.known_malicious_packages k
       WHERE k.package_name = d.name
-        AND k.ecosystem = lower(d.ecosystem)
+        AND k.ecosystem = public.canonicalize_malicious_ecosystem(d.ecosystem)
         AND k.withdrawn_at IS NULL
     )
   )
