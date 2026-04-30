@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import type { Storage } from './storage';
 import { runPipeline } from './pipeline';
+import { runDastPipeline } from './dast/pipeline';
 import { ExtractionLogger } from './logger';
 import {
   claimJob,
@@ -66,13 +67,11 @@ async function processExtractionJob(supabase: Storage, job: ExtractionJobRow): P
   }
 }
 
-// PR 2 stub. The real DAST pipeline (ZAP runner + cross-link + route-matcher) lands
-// in PR 3 — see `.cursor/plans/dast.plan.md` Tasks 7-10. Stub fails fast so PR 2 can
-// validate the claim → dispatch path end-to-end without queueing actual scans.
 async function processDastJob(supabase: Storage, job: ExtractionJobRow): Promise<void> {
-  const message = 'DAST pipeline not yet implemented (ships in PR 3)';
-  console.warn(`[DAST] ${message} — failing job ${job.id}`);
-  await updateJobStatus(supabase, job.id, 'failed', message);
+  // The pipeline owns its own scan_jobs UPDATE on success (status='completed',
+  // findings_count, duration_seconds, completed_at). On thrown error the
+  // outer processJob catch flips status='failed'.
+  await runDastPipeline(job, supabase);
 }
 
 async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<void> {
