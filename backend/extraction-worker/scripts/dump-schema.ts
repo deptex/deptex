@@ -8,8 +8,12 @@
  * run this script in the same PR so schema.sql stays in sync. The CI check at
  * .github/workflows/schema-check.yml enforces this.
  *
- * Calls the pg_catalog_dump_v1() helper function installed by
- * backend/database/phase19_4_schema_dump_helper.sql.
+ * Calls the pg_catalog_dump_v1_all() JSONB wrapper installed by
+ * backend/database/phase26_6_schema_dump_jsonb.sql, which sits on top of
+ * pg_catalog_dump_v1() (phase19_4_schema_dump_helper.sql). The JSONB
+ * wrapper exists so the dump bypasses PostgREST's db-max-rows cap (1000
+ * on managed Supabase) — the schema crossed 1000 rows during Phase 6 and
+ * silently truncated the trigger section without it.
  */
 
 import { createClient } from '@supabase/supabase-js';
@@ -41,21 +45,21 @@ interface DumpRow {
 async function main() {
   console.log('Dumping schema from', SUPABASE_URL);
 
-  const { data, error } = await sb.rpc('pg_catalog_dump_v1');
+  const { data, error } = await sb.rpc('pg_catalog_dump_v1_all');
   if (error) {
-    console.error('pg_catalog_dump_v1() call failed:', error.message);
+    console.error('pg_catalog_dump_v1_all() call failed:', error.message);
     console.error(
-      '\nIf the function is missing, apply the migration:\n' +
+      '\nIf the function is missing, apply both migrations:\n' +
         '  backend/database/phase19_4_schema_dump_helper.sql\n' +
-        'via `supabase db push` or the Supabase SQL editor, then re-run this script.',
+        '  backend/database/phase26_6_schema_dump_jsonb.sql\n' +
+        'via the Supabase SQL editor, then re-run this script.',
     );
     process.exit(1);
   }
 
-  const rows = (data as DumpRow[]).slice().sort((a, b) => {
-    if (a.ord !== b.ord) return a.ord - b.ord;
-    return a.ddl.localeCompare(b.ddl);
-  });
+  // JSONB wrapper already sorts by (ord, ddl); copy out so the type-asserted
+  // array is mutable for any downstream tweaks.
+  const rows = ((data as DumpRow[] | null) ?? []).slice();
 
   const out: string[] = [];
   out.push('-- Deptex schema dump');
