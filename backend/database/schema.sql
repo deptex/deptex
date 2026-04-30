@@ -857,6 +857,41 @@ CREATE TABLE IF NOT EXISTS public.project_commits (
   provider_url text,
   created_at timestamp with time zone DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS public.project_container_findings (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  project_id uuid NOT NULL,
+  organization_id uuid NOT NULL,
+  extraction_run_id text NOT NULL,
+  scanner_version text,
+  image_reference text NOT NULL,
+  image_digest text NOT NULL,
+  image_source text NOT NULL,
+  os_package_name text NOT NULL,
+  os_package_version text NOT NULL,
+  os_package_ecosystem text,
+  osv_id text,
+  cve_id text,
+  vulnerability_id text NOT NULL,
+  severity text,
+  cvss_score numeric(4,1),
+  epss_score numeric(8,6),
+  is_kev boolean DEFAULT false,
+  fix_versions text[],
+  layer_digest text,
+  depscore integer,
+  description text,
+  rule_doc_url text,
+  container_fingerprint text,
+  status text NOT NULL DEFAULT 'open'::text,
+  suppressed boolean DEFAULT false,
+  suppressed_by uuid,
+  suppressed_at timestamp with time zone,
+  risk_accepted boolean DEFAULT false,
+  risk_accepted_by uuid,
+  risk_accepted_at timestamp with time zone,
+  risk_accepted_reason text,
+  created_at timestamp with time zone DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS public.project_dast_config (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   project_id uuid NOT NULL,
@@ -1002,6 +1037,38 @@ CREATE TABLE IF NOT EXISTS public.project_entry_points (
   auth_mechanism text,
   middleware_chain text[],
   metadata jsonb,
+  created_at timestamp with time zone DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.project_iac_findings (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  project_id uuid NOT NULL,
+  organization_id uuid NOT NULL,
+  extraction_run_id text NOT NULL,
+  scanner text NOT NULL,
+  scanner_version text,
+  rule_id text NOT NULL,
+  framework text NOT NULL,
+  file_path text NOT NULL,
+  start_line integer,
+  start_line_key integer NOT NULL,
+  end_line integer,
+  severity text,
+  depscore integer,
+  message text,
+  description text,
+  cwe_ids text[],
+  code_snippet text,
+  rule_doc_url text,
+  iac_fingerprint text,
+  metadata jsonb,
+  status text NOT NULL DEFAULT 'open'::text,
+  suppressed boolean DEFAULT false,
+  suppressed_by uuid,
+  suppressed_at timestamp with time zone,
+  risk_accepted boolean DEFAULT false,
+  risk_accepted_by uuid,
+  risk_accepted_at timestamp with time zone,
+  risk_accepted_reason text,
   created_at timestamp with time zone DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS public.project_integrations (
@@ -1377,7 +1444,8 @@ CREATE TABLE IF NOT EXISTS public.projects (
   active_extraction_run_id text,
   previous_extraction_run_id text,
   active_dast_run_id text,
-  previous_dast_run_id text
+  previous_dast_run_id text,
+  infra_types text[] NOT NULL DEFAULT '{}'::text[]
 );
 CREATE TABLE IF NOT EXISTS public.scan_jobs (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1407,7 +1475,8 @@ CREATE TABLE IF NOT EXISTS public.scan_jobs (
   triggered_by uuid,
   error_category text,
   findings_count integer,
-  duration_seconds integer
+  duration_seconds integer,
+  malicious_scan_status text
 );
 CREATE TABLE IF NOT EXISTS public.scim_user_mappings (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1773,6 +1842,7 @@ ALTER TABLE public.package_reputation_scores ADD CONSTRAINT package_reputation_s
 ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_pkey PRIMARY KEY (id);
 ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_commits ADD CONSTRAINT project_commits_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_dependencies ADD CONSTRAINT project_dependencies_pkey PRIMARY KEY (id);
@@ -1780,6 +1850,7 @@ ALTER TABLE public.project_dependency_files ADD CONSTRAINT project_dependency_fi
 ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_integrations ADD CONSTRAINT project_integrations_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_pkey PRIMARY KEY (id);
@@ -1924,6 +1995,7 @@ ALTER TABLE public.organizations ADD CONSTRAINT organizations_epd_budget_exceede
 ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'github-actions'::text, 'vscode'::text])));
 ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_scanner_chk CHECK ((scanner = ANY (ARRAY['guarddog'::text, 'ai_review'::text])));
 ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text])));
+ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_image_source_check CHECK ((image_source = 'dockerfile_base'::text));
 ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_scan_profile_check CHECK ((scan_profile = ANY (ARRAY['auto'::text, 'quick'::text, 'full'::text, 'api'::text])));
 ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_scan_timeout_minutes_check CHECK (((scan_timeout_minutes >= 5) AND (scan_timeout_minutes <= 60)));
 ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_confidence_check CHECK ((confidence = ANY (ARRAY['confirmed'::text, 'high'::text, 'medium'::text, 'low'::text])));
@@ -1932,6 +2004,8 @@ ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_st
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_epd_confidence_tier CHECK (((epd_confidence_tier IS NULL) OR (epd_confidence_tier = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text]))));
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_reachability_status CHECK ((reachability_status = ANY (ARRAY['reachable'::text, 'unreachable'::text, 'unknown'::text])));
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_sla_status CHECK (((sla_status IS NULL) OR (sla_status = ANY (ARRAY['on_track'::text, 'warning'::text, 'breached'::text, 'met'::text, 'resolved_late'::text, 'exempt'::text]))));
+ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_framework_check CHECK ((framework = ANY (ARRAY['terraform'::text, 'kubernetes'::text, 'dockerfile'::text])));
+ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_scanner_check CHECK ((scanner = ANY (ARRAY['trivy'::text, 'checkov'::text])));
 ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_scanner_check CHECK ((scanner = ANY (ARRAY['feed'::text, 'guarddog'::text])));
 ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_severity_check CHECK ((severity = ANY (ARRAY['critical'::text, 'high'::text, 'medium'::text, 'low'::text, 'info'::text])));
 ALTER TABLE public.project_notification_rules ADD CONSTRAINT project_notification_rules_trigger_type_check CHECK ((trigger_type = ANY (ARRAY['weekly_digest'::text, 'custom_code_pipeline'::text])));
@@ -1949,6 +2023,7 @@ ALTER TABLE public.projects ADD CONSTRAINT projects_health_score_check CHECK (((
 ALTER TABLE public.scan_jobs ADD CONSTRAINT extraction_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])));
 ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_dast_columns_match_type CHECK (((type = 'dast'::text) OR ((target_url IS NULL) AND (scan_profile IS NULL) AND (timeout_minutes IS NULL) AND (trigger_source IS NULL) AND (triggered_by IS NULL) AND (error_category IS NULL) AND (findings_count IS NULL) AND (duration_seconds IS NULL))));
 ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_error_category_check CHECK (((error_category IS NULL) OR (error_category = ANY (ARRAY['timeout'::text, 'unreachable_target'::text, 'ssrf_blocked'::text, 'auth_failed'::text, 'engine_crash'::text, 'unknown'::text]))));
+ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_malicious_scan_status_check CHECK (((malicious_scan_status IS NULL) OR (malicious_scan_status = ANY (ARRAY['complete'::text, 'partial'::text, 'failed'::text]))));
 ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_scan_profile_check CHECK (((scan_profile IS NULL) OR (scan_profile = ANY (ARRAY['baseline'::text, 'full'::text, 'api'::text]))));
 ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_trigger_source_check CHECK (((trigger_source IS NULL) OR (trigger_source = ANY (ARRAY['manual'::text, 'webhook'::text, 'scheduled'::text, 'aegis'::text]))));
 ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_type_check CHECK ((type = ANY (ARRAY['extraction'::text, 'dast'::text])));
@@ -2068,6 +2143,10 @@ ALTER TABLE public.package_reputation_scores ADD CONSTRAINT package_reputation_s
 ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_triggered_by_id_fkey FOREIGN KEY (triggered_by_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.project_commits ADD CONSTRAINT project_commits_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_risk_accepted_by_fkey FOREIGN KEY (risk_accepted_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_suppressed_by_fkey FOREIGN KEY (suppressed_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_linked_sca_project_dependency_id_fkey FOREIGN KEY (linked_sca_project_dependency_id) REFERENCES project_dependencies(id) ON DELETE SET NULL;
@@ -2081,6 +2160,10 @@ ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependenc
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_risk_accepted_by_fkey FOREIGN KEY (risk_accepted_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_suppressed_by_fkey FOREIGN KEY (suppressed_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.project_integrations ADD CONSTRAINT project_integrations_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id);
 ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
@@ -2303,6 +2386,9 @@ CREATE INDEX idx_package_contributors_author_email ON public.package_contributor
 CREATE INDEX idx_package_contributors_total_commits ON public.package_contributors USING btree (total_commits DESC);
 CREATE INDEX idx_package_contributors_watched_package_id ON public.package_contributors USING btree (watched_package_id);
 CREATE INDEX idx_package_security_cache_lookup ON public.package_security_cache USING btree (package_name, version, ecosystem, scanner);
+CREATE INDEX idx_pcf_org_status_depscore ON public.project_container_findings USING btree (organization_id, status, depscore DESC NULLS LAST);
+CREATE INDEX idx_pcf_project_run ON public.project_container_findings USING btree (project_id, extraction_run_id);
+CREATE INDEX idx_pcf_severity ON public.project_container_findings USING btree (severity);
 CREATE INDEX idx_pd_namespace ON public.project_dependencies USING btree (namespace) WHERE (namespace IS NOT NULL);
 CREATE INDEX idx_pdf_dep_extraction_run ON public.project_dependency_files USING btree (project_dependency_id, extraction_run_id);
 CREATE INDEX idx_pdfn_dep_extraction_run ON public.project_dependency_functions USING btree (project_dependency_id, extraction_run_id);
@@ -2319,6 +2405,10 @@ CREATE INDEX idx_pep_framework ON public.project_entry_points USING btree (frame
 CREATE INDEX idx_pep_project ON public.project_entry_points USING btree (project_id);
 CREATE INDEX idx_pep_project_run ON public.project_entry_points USING btree (project_id, extraction_run_id);
 CREATE INDEX idx_pep_run ON public.project_entry_points USING btree (extraction_run_id);
+CREATE INDEX idx_piacf_framework ON public.project_iac_findings USING btree (framework);
+CREATE INDEX idx_piacf_org_status_depscore ON public.project_iac_findings USING btree (organization_id, status, depscore DESC NULLS LAST);
+CREATE INDEX idx_piacf_project_run ON public.project_iac_findings USING btree (project_id, extraction_run_id);
+CREATE INDEX idx_piacf_severity ON public.project_iac_findings USING btree (severity);
 CREATE INDEX idx_pmf_dep ON public.project_malicious_findings USING btree (dependency_id);
 CREATE INDEX idx_pmf_org ON public.project_malicious_findings USING btree (organization_id);
 CREATE INDEX idx_pmf_project_open ON public.project_malicious_findings USING btree (project_id, suppressed, risk_accepted);
@@ -2472,6 +2562,10 @@ CREATE UNIQUE INDEX banned_versions_organization_id_dependency_id_banned_version
 CREATE UNIQUE INDEX idx_dependencies_ecosystem_name ON public.dependencies USING btree (ecosystem, name);
 CREATE UNIQUE INDEX idx_notif_events_dedup_unique ON public.notification_events USING btree (deduplication_key) WHERE (deduplication_key IS NOT NULL);
 CREATE UNIQUE INDEX idx_org_integrations_org_provider_installation ON public.organization_integrations USING btree (organization_id, provider, installation_id) WHERE (installation_id IS NOT NULL);
+CREATE UNIQUE INDEX idx_pcf_fingerprint ON public.project_container_findings USING btree (project_id, container_fingerprint) WHERE (container_fingerprint IS NOT NULL);
+CREATE UNIQUE INDEX idx_pcf_unique ON public.project_container_findings USING btree (project_id, image_digest, os_package_name, os_package_version, vulnerability_id, extraction_run_id);
+CREATE UNIQUE INDEX idx_piacf_fingerprint ON public.project_iac_findings USING btree (project_id, scanner, iac_fingerprint) WHERE (iac_fingerprint IS NOT NULL);
+CREATE UNIQUE INDEX idx_piacf_unique ON public.project_iac_findings USING btree (project_id, rule_id, file_path, start_line_key, extraction_run_id);
 CREATE UNIQUE INDEX idx_project_commits_project_sha ON public.project_commits USING btree (project_id, sha);
 CREATE UNIQUE INDEX idx_project_prs_project_pr ON public.project_pull_requests USING btree (project_id, pr_number, provider);
 CREATE UNIQUE INDEX idx_project_repositories_repo_full_name_package_json_path ON public.project_repositories USING btree (repo_full_name, package_json_path);
@@ -2545,21 +2639,7 @@ END;
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.array_to_vector(double precision[], integer, boolean)
- RETURNS vector
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$array_to_vector$function$
-;
-
 CREATE OR REPLACE FUNCTION public.array_to_vector(integer[], integer, boolean)
- RETURNS vector
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$array_to_vector$function$
-;
-
-CREATE OR REPLACE FUNCTION public.array_to_vector(numeric[], integer, boolean)
  RETURNS vector
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
@@ -2571,13 +2651,6 @@ CREATE OR REPLACE FUNCTION public.array_to_vector(real[], integer, boolean)
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
 AS '$libdir/vector', $function$array_to_vector$function$
-;
-
-CREATE OR REPLACE FUNCTION public.binary_quantize(halfvec)
- RETURNS bit
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$halfvec_binary_quantize$function$
 ;
 
 CREATE OR REPLACE FUNCTION public.binary_quantize(vector)
@@ -3493,13 +3566,6 @@ END;
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.cosine_distance(halfvec, halfvec)
- RETURNS double precision
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$halfvec_cosine_distance$function$
-;
-
 CREATE OR REPLACE FUNCTION public.cosine_distance(vector, vector)
  RETURNS double precision
  LANGUAGE c
@@ -3588,6 +3654,20 @@ BEGIN
     "manage_notification_settings": false
   }'::jsonb);
   
+  RETURN NEW;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.enforce_finding_org_id()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  NEW.organization_id := (SELECT organization_id FROM projects WHERE id = NEW.project_id);
+  IF NEW.organization_id IS NULL THEN
+    RAISE EXCEPTION 'enforce_finding_org_id: project % not found', NEW.project_id;
+  END IF;
   RETURN NEW;
 END;
 $function$
@@ -3994,6 +4074,45 @@ BEGIN
       AND old_secf.detector_type = new_secf.detector_type
       AND old_secf.file_path = new_secf.file_path
       AND old_secf.redacted_value IS NOT DISTINCT FROM new_secf.redacted_value;
+
+    UPDATE project_iac_findings new_if
+    SET
+      status = old_if.status,
+      suppressed = old_if.suppressed,
+      suppressed_by = old_if.suppressed_by,
+      suppressed_at = old_if.suppressed_at,
+      risk_accepted = old_if.risk_accepted,
+      risk_accepted_by = old_if.risk_accepted_by,
+      risk_accepted_at = old_if.risk_accepted_at,
+      risk_accepted_reason = old_if.risk_accepted_reason
+    FROM project_iac_findings old_if
+    WHERE new_if.project_id = p_project_id
+      AND new_if.extraction_run_id = p_extraction_run_id
+      AND new_if.iac_fingerprint IS NOT NULL
+      AND old_if.project_id = p_project_id
+      AND old_if.extraction_run_id = v_prev_active
+      AND old_if.iac_fingerprint IS NOT NULL
+      AND old_if.scanner = new_if.scanner
+      AND old_if.iac_fingerprint = new_if.iac_fingerprint;
+
+    UPDATE project_container_findings new_cf
+    SET
+      status = old_cf.status,
+      suppressed = old_cf.suppressed,
+      suppressed_by = old_cf.suppressed_by,
+      suppressed_at = old_cf.suppressed_at,
+      risk_accepted = old_cf.risk_accepted,
+      risk_accepted_by = old_cf.risk_accepted_by,
+      risk_accepted_at = old_cf.risk_accepted_at,
+      risk_accepted_reason = old_cf.risk_accepted_reason
+    FROM project_container_findings old_cf
+    WHERE new_cf.project_id = p_project_id
+      AND new_cf.extraction_run_id = p_extraction_run_id
+      AND new_cf.container_fingerprint IS NOT NULL
+      AND old_cf.project_id = p_project_id
+      AND old_cf.extraction_run_id = v_prev_active
+      AND old_cf.container_fingerprint IS NOT NULL
+      AND old_cf.container_fingerprint = new_cf.container_fingerprint;
   END IF;
 
   IF NOT v_sla_paused THEN
@@ -4180,69 +4299,6 @@ AS $function$
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.halfvec_add(halfvec, halfvec)
- RETURNS halfvec
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$halfvec_add$function$
-;
-
-CREATE OR REPLACE FUNCTION public.halfvec_concat(halfvec, halfvec)
- RETURNS halfvec
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$halfvec_concat$function$
-;
-
-CREATE OR REPLACE FUNCTION public.halfvec_in(cstring, oid, integer)
- RETURNS halfvec
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$halfvec_in$function$
-;
-
-CREATE OR REPLACE FUNCTION public.halfvec_mul(halfvec, halfvec)
- RETURNS halfvec
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$halfvec_mul$function$
-;
-
-CREATE OR REPLACE FUNCTION public.halfvec_out(halfvec)
- RETURNS cstring
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$halfvec_out$function$
-;
-
-CREATE OR REPLACE FUNCTION public.halfvec_recv(internal, oid, integer)
- RETURNS halfvec
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$halfvec_recv$function$
-;
-
-CREATE OR REPLACE FUNCTION public.halfvec_send(halfvec)
- RETURNS bytea
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$halfvec_send$function$
-;
-
-CREATE OR REPLACE FUNCTION public.halfvec_sub(halfvec, halfvec)
- RETURNS halfvec
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$halfvec_sub$function$
-;
-
-CREATE OR REPLACE FUNCTION public.halfvec_typmod_in(cstring[])
- RETURNS integer
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$halfvec_typmod_in$function$
-;
-
 CREATE OR REPLACE FUNCTION public.handle_aegis_creator_leaves_org()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -4278,37 +4334,6 @@ BEGIN
   RETURN OLD;
 END;
 $function$
-;
-
-CREATE OR REPLACE FUNCTION public.hnsw_bit_support(internal)
- RETURNS internal
- LANGUAGE c
-AS '$libdir/vector', $function$hnsw_bit_support$function$
-;
-
-CREATE OR REPLACE FUNCTION public.hnsw_halfvec_support(internal)
- RETURNS internal
- LANGUAGE c
-AS '$libdir/vector', $function$hnsw_halfvec_support$function$
-;
-
-CREATE OR REPLACE FUNCTION public.hnsw_sparsevec_support(internal)
- RETURNS internal
- LANGUAGE c
-AS '$libdir/vector', $function$hnsw_sparsevec_support$function$
-;
-
-CREATE OR REPLACE FUNCTION public.hnswhandler(internal)
- RETURNS index_am_handler
- LANGUAGE c
-AS '$libdir/vector', $function$hnswhandler$function$
-;
-
-CREATE OR REPLACE FUNCTION public.inner_product(halfvec, halfvec)
- RETURNS double precision
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$halfvec_inner_product$function$
 ;
 
 CREATE OR REPLACE FUNCTION public.inner_product(vector, vector)
@@ -4359,31 +4384,6 @@ END;
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.ivfflat_bit_support(internal)
- RETURNS internal
- LANGUAGE c
-AS '$libdir/vector', $function$ivfflat_bit_support$function$
-;
-
-CREATE OR REPLACE FUNCTION public.ivfflat_halfvec_support(internal)
- RETURNS internal
- LANGUAGE c
-AS '$libdir/vector', $function$ivfflat_halfvec_support$function$
-;
-
-CREATE OR REPLACE FUNCTION public.ivfflathandler(internal)
- RETURNS index_am_handler
- LANGUAGE c
-AS '$libdir/vector', $function$ivfflathandler$function$
-;
-
-CREATE OR REPLACE FUNCTION public.l1_distance(halfvec, halfvec)
- RETURNS double precision
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$halfvec_l1_distance$function$
-;
-
 CREATE OR REPLACE FUNCTION public.l1_distance(vector, vector)
  RETURNS double precision
  LANGUAGE c
@@ -4391,32 +4391,11 @@ CREATE OR REPLACE FUNCTION public.l1_distance(vector, vector)
 AS '$libdir/vector', $function$l1_distance$function$
 ;
 
-CREATE OR REPLACE FUNCTION public.l2_distance(halfvec, halfvec)
- RETURNS double precision
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$halfvec_l2_distance$function$
-;
-
 CREATE OR REPLACE FUNCTION public.l2_distance(vector, vector)
  RETURNS double precision
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
 AS '$libdir/vector', $function$l2_distance$function$
-;
-
-CREATE OR REPLACE FUNCTION public.l2_norm(halfvec)
- RETURNS double precision
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$halfvec_l2_norm$function$
-;
-
-CREATE OR REPLACE FUNCTION public.l2_normalize(halfvec)
- RETURNS halfvec
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$halfvec_l2_normalize$function$
 ;
 
 CREATE OR REPLACE FUNCTION public.l2_normalize(vector)
@@ -4930,13 +4909,6 @@ END;
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.subvector(halfvec, integer, integer)
- RETURNS halfvec
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$halfvec_subvector$function$
-;
-
 CREATE OR REPLACE FUNCTION public.subvector(vector, integer, integer)
  RETURNS vector
  LANGUAGE c
@@ -5107,13 +5079,6 @@ CREATE OR REPLACE FUNCTION public.vector_concat(vector, vector)
 AS '$libdir/vector', $function$vector_concat$function$
 ;
 
-CREATE OR REPLACE FUNCTION public.vector_dims(halfvec)
- RETURNS integer
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$halfvec_vector_dims$function$
-;
-
 CREATE OR REPLACE FUNCTION public.vector_dims(vector)
  RETURNS integer
  LANGUAGE c
@@ -5231,13 +5196,6 @@ CREATE OR REPLACE FUNCTION public.vector_sub(vector, vector)
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
 AS '$libdir/vector', $function$vector_sub$function$
-;
-
-CREATE OR REPLACE FUNCTION public.vector_to_float4(vector, integer, boolean)
- RETURNS real[]
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$vector_to_float4$function$
 ;
 
 CREATE OR REPLACE FUNCTION public.vector_typmod_in(cstring[])
