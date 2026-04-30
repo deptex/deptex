@@ -806,8 +806,22 @@ function emitCallStep(
   // Resolve to a CalleeRef.
   const callee = resolveCallee(calleeText, ctx);
 
-  // Walk args.
-  const argList = expr.childForFieldName('arguments');
+  // Walk args. tree-sitter-php exposes call arguments via the `arguments`
+  // field for *_call_expression nodes, but for `object_creation_expression`
+  // some grammar builds expose it as a direct named-child `arguments` node
+  // instead of a field. Fall through to a children-scan when the field is
+  // missing so `new Response($bio)` lowers with `args = ['bio']` instead of
+  // dropping the argument list silently.
+  let argList = expr.childForFieldName('arguments');
+  if (!argList) {
+    for (let i = 0; i < expr.namedChildCount; i++) {
+      const c = expr.namedChild(i);
+      if (c && c.type === 'arguments') {
+        argList = c;
+        break;
+      }
+    }
+  }
   const args: (LocalVar | null)[] = [];
   const argTexts: string[] = [];
   if (argList) {
