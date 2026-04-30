@@ -35,7 +35,10 @@ export function FixWithAegisButton({
         findingType,
         findingId,
       });
-      navigate(`/organizations/${organizationId}/aegis?fix=${encodeURIComponent(res.fixId)}`);
+      const threadSegment = res.threadId ? `/${res.threadId}` : '';
+      navigate(
+        `/organizations/${organizationId}/aegis${threadSegment}?fix=${encodeURIComponent(res.fixId)}`,
+      );
       if (res.status === 'failed' && res.plan?.refusal) {
         toast({
           title: "Aegis can't fix this",

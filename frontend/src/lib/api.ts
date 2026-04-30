@@ -242,6 +242,7 @@ export interface FixRecord {
 
 export interface RequestFixResponse {
   fixId: string;
+  threadId?: string;
   status: FixStatus;
   plan: FixPlan;
   fix?: FixRecord | null;
