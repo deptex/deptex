@@ -397,6 +397,18 @@ describe('detectVulnClass', () => {
     expect(detectVulnClass({ ...blank, osvSummary: 'something completely opaque' })).toBe('none');
   });
 
+  it('library-internal fires only on explicit textual signal (Phase D tightening)', () => {
+    // Just having a library-internal-looking diff is not enough anymore — the
+    // v9 classifier was too eager and steered the model away from working
+    // taint rules on CVEs that did have a public-API entry point. We now
+    // require an explicit "internal/protocol/race/memory-safety" textual cue.
+    expect(detectVulnClass({ ...blank, osvSummary: 'memory safety bug in parser' })).toBe('library-internal');
+    expect(detectVulnClass({ ...blank, osvDetails: 'race condition during connection close' })).toBe('library-internal');
+    // Diff that LOOKS internal but lacks the textual cue → none, not library-internal
+    const internalShapedDiff = '+++ b/lib/internal.go\n+x := computeX()\n';
+    expect(detectVulnClass({ ...blank, patchDiff: internalShapedDiff })).toBe('none');
+  });
+
   it('text-class signals beat diff-shape signals (more specific)', () => {
     // Diff would suggest options-bag-shape, but summary says ReDoS — class-text wins.
     const diff = `+++ b/foo.js\n+  algorithms: ['HS256'],\n`;

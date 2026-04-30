@@ -37,7 +37,7 @@ export interface BuildPromptArgs {
   compact?: boolean;
 }
 
-const PROMPT_VERSION = 'rulegen-v9';
+const PROMPT_VERSION = 'rulegen-v10';
 
 export function getPromptVersion(): string {
   return PROMPT_VERSION;
@@ -100,16 +100,14 @@ export function detectVulnClass(args: {
     return 'options-bag-shape';
   }
 
-  // No callsite-shape signal; check whether the patch touches only
-  // library-internal files (no test fixtures, no examples) — those CVEs
-  // tend to be physically undetectable from app-code static rules.
-  const plusFiles = diff.match(/^\+\+\+ b\/(.+)$/gm) ?? [];
-  if (plusFiles.length > 0 && plusFiles.every((line) => !/test|example|doc|fixture/i.test(line))) {
-    // Only call it library-internal if the diff has zero callsite-API surface
-    // changes — otherwise let the model decide.
-    if (!/\bdef\s+|\bfunction\s+|\bclass\s+|\bfunc\s+\w+\(/i.test(diff)) {
-      return 'library-internal';
-    }
+  // library-internal — STRICT classifier (Phase D tightening). The v9
+  // version was too eager and steered the model away from working taint
+  // rules on CVEs that did have a public-API entry point (CVE-2018-18074
+  // requests, CVE-2022-29153 consul). Now we require an explicit textual
+  // signal that the bug is internal/protocol/state-level — diff shape
+  // alone is too noisy to gate this hint on.
+  if (/\b(library[-\s]*internal|protocol[-\s]*level|state[-\s]*machine|race\s*condition|memory\s*safety|use[-\s]*after[-\s]*free|double[-\s]*free|buffer\s*overflow|integer\s*overflow|null\s*pointer)\b/i.test(text)) {
+    return 'library-internal';
   }
 
   return 'none';
@@ -136,11 +134,27 @@ const VULN_CLASS_PLAYBOOK: Record<Exclude<VulnClass, 'none'>, string[]> = {
   'options-bag-shape': [
     `# Vuln-class hint: OPTIONS-BAG SHAPE (missing/wrong key).`,
     `# The patch adds a new key to an options object passed to a library API.`,
-    `# Use \`mode: search\`. Bind the options object with metavariable, then`,
-    `# constrain it with metavariable-pattern + pattern-not to require the`,
-    `# safe key be present. Do NOT use \`mode: taint\` — there is no source/sink`,
-    `# data flow here, only a callsite shape. The safe_fixture should call`,
-    `# the same API with the missing key supplied so pattern-not excludes it.`,
+    `# Use \`mode: search\` with the EXACT triple-nested "absence-of-key" idiom`,
+    `# below. DO NOT invent shorter syntax — \`metavariable-pattern\` only takes`,
+    `# \`pattern\` / \`pattern-either\` / \`pattern-regex\` as a child. To express`,
+    `# "options object MUST contain key X" you negate the call-PLUS-options-shape`,
+    `# combination as one unit:`,
+    `#`,
+    `#   mode: search`,
+    `#   patterns:`,
+    `#     - pattern: 'jwt.verify($T, $K, $OPTS)'    # the unsafe callsite`,
+    `#     - pattern-not:`,
+    `#         patterns:`,
+    `#           - pattern: 'jwt.verify($T, $K, $OPTS)'`,
+    `#           - metavariable-pattern:`,
+    `#               metavariable: $OPTS`,
+    `#               pattern: '{ ..., algorithms: [...], ... }'`,
+    `#`,
+    `# safe_fixture must call the API with the required key supplied so the`,
+    `# pattern-not branch matches it and the rule does NOT fire.`,
+    `# If you cannot write the absence-of-key form correctly, fall back to a`,
+    `# taint rule modelled on the Reference rules section above — a working`,
+    `# taint rule is strictly better than a broken search rule.`,
   ],
   'library-internal': [
     `# Vuln-class hint: LIBRARY-INTERNAL bug.`,
