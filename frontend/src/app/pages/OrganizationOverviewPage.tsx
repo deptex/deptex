@@ -79,6 +79,7 @@ import {
   VulnerabilityOrgSidebarExpandedContent,
 } from '../../components/security/VulnerabilityOrgSidebarExpandedContent';
 import VulnerabilityExpandableTable, { type SecurityTableRow } from '../../components/security/VulnerabilityExpandableTable';
+import { DastFindingsSection } from '../../components/dast/DastFindingsSection';
 import OrganizationVulnerabilitiesTableSkeleton from '../../components/security/OrganizationVulnerabilitiesTableSkeleton';
 import { supabase } from '../../lib/supabase';
 
@@ -4357,6 +4358,10 @@ export default function OrganizationVulnerabilitiesPage() {
                           </tbody>
                         </table>
                       </div>
+                    )}
+
+                    {orgId && selectedProjectId && (
+                      <DastFindingsSection organizationId={orgId} projectId={selectedProjectId} />
                     )}
                   </div>
                 )}
