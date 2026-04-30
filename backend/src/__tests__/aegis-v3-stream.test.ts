@@ -209,7 +209,7 @@ describe('POST /api/aegis/v3/stream', () => {
     expect([200]).toContain(res.status);
   });
 
-  it('returns 500 when the BYOK provider loader rejects', async () => {
+  it('returns 500 with a generic message when the BYOK provider loader rejects', async () => {
     setOwnerWithAegisPermission();
     mockGetLanguageModelForOrg.mockRejectedValueOnce(new Error('No BYOK key configured'));
 
@@ -218,7 +218,10 @@ describe('POST /api/aegis/v3/stream', () => {
       .send({ organizationId: ORG_ID, message: 'hi' });
 
     expect(res.status).toBe(500);
-    expect(res.body.error).toContain('BYOK');
+    // Real cause stays in server logs only — the body must never leak provider
+    // / DB / supabase error text to the user-facing chat banner.
+    expect(res.body.error).toBe('Something went wrong. Please try again.');
+    expect(res.body.error).not.toContain('BYOK');
   });
 });
 

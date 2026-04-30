@@ -180,8 +180,12 @@ export function ChatPane({
         onThreadUpdatedRef.current?.();
       },
       onError: (err) => {
+        // Never surface backend error text to the chat — it leaks DB columns
+        // and reads as a system failure to the user. Real cause is in the
+        // server logs; the user always sees a generic message.
+        console.error('[aegis] chat error', err);
         setIsRegenerating(false);
-        setSendError(err?.message ?? 'Failed to generate response');
+        setSendError('Something went wrong. Please try again.');
       },
     });
 
@@ -231,8 +235,9 @@ export function ChatPane({
       // and POSTs the trimmed history to /stream — exactly what we want.
       await regenerate();
     } catch (err: any) {
+      console.error('[aegis] regenerate error', err);
       setIsRegenerating(false);
-      setSendError(err?.message ?? 'Failed to regenerate response');
+      setSendError('Something went wrong. Please try again.');
     }
   }, [isStreaming, isRegenerating, regenerate]);
 
@@ -256,10 +261,13 @@ export function ChatPane({
   }, [messages, isStreaming]);
 
   // Surface useChat errors that fire before any tokens stream — e.g. provider
-  // 5xx on the first chunk, or a network drop. Once a stream succeeds these
-  // clear naturally; we only flash the inline banner.
+  // 5xx on the first chunk, or a network drop. Always show the same generic
+  // message; the real cause is logged server-side and in the browser console.
   useEffect(() => {
-    if (error?.message) setSendError(error.message);
+    if (error) {
+      console.error('[aegis] useChat error', error);
+      setSendError('Something went wrong. Please try again.');
+    }
   }, [error]);
 
   const showLanding = !activeThreadId && messages.length === 0 && (seedLoaded || !propThreadId);
