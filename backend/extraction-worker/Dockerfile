@@ -25,24 +25,29 @@ RUN curl -sL https://go.dev/dl/go1.22.10.linux-amd64.tar.gz \
   | tar xz -C /usr/local
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-# Install dep-scan, Semgrep, and Checkov (IaC misconfig scanner). semgrep is
-# exact-pinned because it ships breaking changes frequently. dep-scan is
-# major-version-pinned (6.*) to allow patch uptake while blocking the 6→7
-# breaking-change class. Checkov is exact-pinned to the 3.2.x line — the rule
-# library is what we depend on and 3.x→4.x will be a deliberate bump with bench
-# re-runs.
+# Install dep-scan and Semgrep into the system Python. semgrep is exact-pinned
+# because it ships breaking changes frequently. dep-scan is major-version-pinned
+# (6.*) to allow patch uptake while blocking the 6→7 breaking-change class.
 RUN pip3 install --no-cache-dir --break-system-packages \
   owasp-depscan==6.* \
   semgrep==1.160.0 \
-  checkov==3.2.420 \
   && depscan --help >/dev/null \
-  && semgrep --version \
+  && semgrep --version
+
+# Install Checkov in an isolated venv at /opt/checkov-venv. Checkov pins
+# packageurl-python<0.14.0 while owasp-depscan pins >=0.16.0 — the two cannot
+# coexist in the same Python environment. Pinning Checkov to the 3.2.x line —
+# the rule library is what we depend on; 3.x→4.x will be a deliberate bump with
+# bench re-runs. The /usr/local/bin symlink keeps `checkov` on PATH.
+RUN python3 -m venv /opt/checkov-venv \
+  && /opt/checkov-venv/bin/pip install --no-cache-dir checkov==3.2.420 \
+  && ln -s /opt/checkov-venv/bin/checkov /usr/local/bin/checkov \
   && checkov --version
 
 # Install Trivy (Aquasec) for Dockerfile misconfig + container CVE scanning.
 # Pin to a specific release tarball (no install.sh / curl-pipe-sh) for the
 # same supply-chain reasons as TruffleHog below.
-RUN curl -sSfL https://github.com/aquasecurity/trivy/releases/download/v0.50.4/trivy_0.50.4_Linux-64bit.tar.gz \
+RUN curl -sSfL https://github.com/aquasecurity/trivy/releases/download/v0.69.3/trivy_0.69.3_Linux-64bit.tar.gz \
   -o /tmp/trivy.tar.gz \
   && tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy \
   && rm /tmp/trivy.tar.gz \

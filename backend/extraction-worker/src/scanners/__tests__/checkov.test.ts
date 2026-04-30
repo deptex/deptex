@@ -111,4 +111,29 @@ describe('parseCheckovOutput', () => {
   it('returns [] on malformed JSON', () => {
     expect(parseCheckovOutput('not json', 'checkov@3.2.420')).toEqual([]);
   });
+
+  it('uses canonical check_id (CKV_*) not bc_check_id (BC_*) for fingerprint', () => {
+    // Real Checkov output: check_id is CKV_*, bc_check_id is BC_* — these
+    // diverge for ~all rules. The fingerprint regex requires CKV_* so the
+    // parser must prefer check_id over bc_check_id.
+    const sample = JSON.stringify({
+      check_type: 'terraform',
+      results: {
+        failed_checks: [
+          {
+            check_id: 'CKV_AWS_145',
+            bc_check_id: 'BC_AWS_GENERAL_56',
+            check_name: 'Ensure that S3 buckets are encrypted with KMS',
+            resource: 'aws_s3_bucket.public_bucket',
+            resource_address: null,
+            file_path: '/main.tf',
+          },
+        ],
+      },
+    });
+    const findings = parseCheckovOutput(sample, 'checkov@3.2.420');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].rule_id).toBe('CKV_AWS_145');
+    expect(findings[0].iac_fingerprint).toBe('checkov:CKV_AWS_145:aws_s3_bucket.public_bucket');
+  });
 });
