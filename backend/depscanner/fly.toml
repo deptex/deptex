@@ -1,7 +1,11 @@
 # fly.toml app configuration for the depscanner Fly app.
-# Originally `deptex-extraction-worker`; renamed to `deptex-depscanner` in
-# Phase 23 to reflect that the worker now hosts multiple scanner types
-# (extraction + DAST + future iac/container/malicious-pkg).
+#
+# Phase 23 widened this worker from "just extraction" to "extraction + DAST +
+# future iac/container/malicious-pkg" via a unified scan_jobs.type discriminator.
+# The Fly app was migrated from `deptex-extraction-worker` to `deptex-depscanner`
+# 2026-04-30 (new 50 GB depscan_vdb volume; secrets re-staged from backend/.env).
+# The backend reads FLY_DEPSCANNER_APP || FLY_EXTRACTION_APP — set
+# FLY_DEPSCANNER_APP=deptex-depscanner in backend env to route here.
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #

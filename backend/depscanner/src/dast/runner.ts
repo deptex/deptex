@@ -12,7 +12,6 @@
 
 import { spawn } from 'child_process';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 
 // ---------------------------------------------------------------------------
@@ -385,8 +384,20 @@ export async function runZap(opts: RunZapOptions): Promise<RunZapResult> {
   const timeoutMs = opts.timeoutMs ?? ZAP_DEFAULT_TIMEOUT_MS;
   const script = selectScript(opts.scanProfile, opts.routes.length > 0);
 
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deptex-dast-'));
+  // ZAP helpers refuse any `-J / -t / -c / -g` path outside `/zap/wrk` when
+  // running inside a Docker container (zap-baseline.py:374). We always run
+  // inside the depscanner image at scan time, so default to /zap/wrk; allow
+  // override for local dev where the dir doesn't exist.
+  const zapWorkDir = process.env.DAST_WORK_DIR || '/zap/wrk';
+  const tmpDir = fs.mkdtempSync(path.join(zapWorkDir, 'deptex-dast-'));
   const reportPath = path.join(tmpDir, 'zap-report.json');
+
+  // ZAP's Automation Framework joins `reportDir` (= /zap/wrk) with whatever we
+  // pass via -J, even when -J is absolute, producing /zap/wrk/zap/wrk/... and
+  // failing the report write. Pass paths *relative to* /zap/wrk for any flag
+  // that gets routed through the AF report job (`-J`) or the AF input file
+  // resolver (`-t openapi.json`).
+  const reportArg = path.relative(zapWorkDir, reportPath);
 
   let args: string[];
   let cleanup: (() => void) | null = null;
@@ -395,10 +406,11 @@ export async function runZap(opts: RunZapOptions): Promise<RunZapResult> {
     const stub = buildOpenApiStub(opts.targetUrl, opts.routes);
     const stubPath = path.join(tmpDir, 'openapi.json');
     fs.writeFileSync(stubPath, JSON.stringify(stub));
+    const stubArg = path.relative(zapWorkDir, stubPath);
     args = [
-      '-t', stubPath,
+      '-t', stubArg,
       '-f', 'openapi',
-      '-J', reportPath,
+      '-J', reportArg,
       '-I', // do not return non-zero on warn/fail
     ];
     cleanup = () => {
@@ -407,14 +419,14 @@ export async function runZap(opts: RunZapOptions): Promise<RunZapResult> {
   } else if (script === 'full') {
     args = [
       '-t', opts.targetUrl,
-      '-J', reportPath,
+      '-J', reportArg,
       '-I',
     ];
   } else {
     // baseline
     args = [
       '-t', opts.targetUrl,
-      '-J', reportPath,
+      '-J', reportArg,
       '-I',
     ];
   }
