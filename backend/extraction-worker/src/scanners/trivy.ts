@@ -93,18 +93,32 @@ const KNOWN_REGISTRY_HOSTS = new Set([
 export function classifyImageRef(imageRef: string): PullEligibility {
   // Strip digest pin if present.
   const noDigest = imageRef.split('@')[0];
-  // Detect explicit registry by presence of "/" in the first segment AND a
-  // dot or colon (e.g. host:port) — same heuristic used by Docker CLI.
   const firstSlash = noDigest.indexOf('/');
-  const firstSegment = firstSlash === -1 ? noDigest : noDigest.slice(0, firstSlash);
-  const hasHost = /[.:]/.test(firstSegment);
 
-  if (!hasHost) {
-    // Bare name like "node:20" or "library/node:20" — resolves to docker.io/library/*
+  // Docker CLI rule: a host must precede the first "/", AND the segment
+  // before that "/" must look like a host (contains ".", contains ":<port>",
+  // or is the literal "localhost"). When there's no "/", it's always a bare
+  // name in the docker.io/library namespace — `:` there is the tag separator,
+  // not a port.
+  if (firstSlash === -1) {
+    return { kind: 'public_dockerhub' };
+  }
+  const firstSegment = noDigest.slice(0, firstSlash);
+  const looksLikeHost =
+    firstSegment === 'localhost' ||
+    /\./.test(firstSegment) ||
+    /:\d+$/.test(firstSegment);
+
+  if (!looksLikeHost) {
+    // e.g. "library/node:20" — bare-name with explicit library prefix.
     return { kind: 'public_dockerhub' };
   }
 
-  if (firstSegment === 'docker.io' || firstSegment === 'index.docker.io' || firstSegment === 'registry-1.docker.io') {
+  if (
+    firstSegment === 'docker.io' ||
+    firstSegment === 'index.docker.io' ||
+    firstSegment === 'registry-1.docker.io'
+  ) {
     return { kind: 'public_dockerhub' };
   }
 
@@ -116,11 +130,7 @@ export function classifyImageRef(imageRef: string): PullEligibility {
   }
 
   // Any other host (ECR, GCR, ACR, Quay, Harbor, JFrog, private docker.io) → skip.
-  if (KNOWN_REGISTRY_HOSTS.has(firstSegment) || hasHost) {
-    return { kind: 'unsupported_registry' };
-  }
-
-  return { kind: 'public_dockerhub' };
+  return { kind: 'unsupported_registry' };
 }
 
 // ============================================================
