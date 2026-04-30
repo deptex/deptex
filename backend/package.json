@@ -21,6 +21,9 @@
   ],
   "author": "",
   "license": "LicenseRef-FSL-1.1-ALv2",
+  "engines": {
+    "node": "22.x"
+  },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.50",
     "@ai-sdk/google": "^3.0.34",
