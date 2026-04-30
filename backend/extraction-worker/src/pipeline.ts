@@ -344,6 +344,8 @@ const INSTALL_HINTS: Record<string, string> = {
     "Semgrep not found — the Dockerfile bundles it, so this likely means the image is misbuilt or you are running the worker outside the container. Static analysis skipped.",
   trufflehog:
     "TruffleHog not found — the Dockerfile bundles it, so this likely means the image is misbuilt or you are running the worker outside the container. Secret scanning skipped.",
+  guarddog:
+    "GuardDog binary not found at /opt/guarddog-venv/bin/guarddog — the Dockerfile installs it into an isolated venv, so this likely means the image is misbuilt or you are running the worker outside the container. Malicious-package source-code analysis skipped (feed lookup still runs).",
 };
 
 function classifyCloneError(message: string): string {
@@ -2098,6 +2100,151 @@ export async function runPipeline(
 
     // --- Final vuln scan summary ---
     await log.success('vuln_scan', 'Vulnerability scan complete', Date.now() - scanStart);
+
+    // === STEP: Malicious-package scan (OPTIONAL, soft-fail) ===
+    if (checkCancelled && await checkCancelled()) return;
+    {
+      const malStart = Date.now();
+      try {
+        const { data: pdRows, error: pdErr } = await supabase
+          .from('project_dependencies')
+          .select('id, name, version, dependency_id')
+          .eq('project_id', projectId)
+          .eq('last_seen_extraction_run_id', runId);
+        if (pdErr) throw new Error(`malicious-scan failed to load dependencies: ${pdErr.message}`);
+
+        const pdRowList = (pdRows ?? []) as Array<{
+          id: string;
+          name: string;
+          version: string | null;
+          dependency_id: string | null;
+        }>;
+        const depIds = Array.from(
+          new Set(pdRowList.map((r) => r.dependency_id).filter((x): x is string => !!x)),
+        );
+        const ecoById = new Map<string, string>();
+        if (depIds.length > 0) {
+          const { data: depRows } = await supabase
+            .from('dependencies')
+            .select('id, ecosystem')
+            .in('id', depIds);
+          for (const d of (depRows ?? []) as Array<{ id: string; ecosystem: string }>) {
+            ecoById.set(d.id, d.ecosystem);
+          }
+        }
+
+        const packages = pdRowList
+          .filter((r) => !!r.dependency_id && !!r.version)
+          .map((r) => ({
+            project_dependency_id: r.id,
+            dependency_id: r.dependency_id as string,
+            name: r.name,
+            ecosystem: ecoById.get(r.dependency_id as string) ?? jobEcosystem,
+            version: r.version,
+          }));
+
+        const { runMaliciousScan, eventDeduplicationKey } = await import('./malicious-scan');
+        const result = await runMaliciousScan({
+          supabase,
+          projectId,
+          organizationId,
+          extractionRunId: runId,
+          jobId: job.jobId ?? runId,
+          packages,
+          log,
+          checkCancelled,
+          heartbeat,
+        });
+
+        // Emit one batched event per (org, project, run). Idempotent via
+        // dedup key — second extraction with no new findings emits nothing
+        // because the upsert RPC returned 0.
+        if (result.inserted_findings > 0) {
+          try {
+            const dedupKey = eventDeduplicationKey(organizationId, projectId, runId);
+            const { data: insertedEvent, error: insertErr } = await supabase
+              .from('notification_events')
+              .insert({
+                event_type: 'malicious_package_detected',
+                organization_id: organizationId,
+                project_id: projectId,
+                payload: {
+                  organization_id: organizationId,
+                  project_id: projectId,
+                  extraction_run_id: runId,
+                  feed_hits: result.feed_hits,
+                  guarddog_hits: result.guarddog_hits,
+                  inserted_findings: result.inserted_findings,
+                },
+                source: 'extraction_worker',
+                priority: 'critical',
+                deduplication_key: dedupKey,
+                status: 'pending',
+              })
+              .select('id')
+              .single();
+
+            // Trigger immediate dispatch via backend internal endpoint.
+            // Without this, the row sits at status='pending' and only fires
+            // when the reconcile-stuck-notifications cron sweeps it (≤10m
+            // delay). For a critical-class event that delay is unacceptable.
+            // If the dispatch call fails we leave the row pending and rely
+            // on the reconciler — same eventual safety net, slower path.
+            if (!insertErr && insertedEvent?.id) {
+              try {
+                const backendBaseUrl = process.env.BACKEND_URL || process.env.API_BASE_URL || 'http://localhost:3001';
+                const internalKey = process.env.INTERNAL_API_KEY;
+                if (internalKey) {
+                  const url = `${backendBaseUrl.replace(/\/$/, '')}/api/workers/dispatch-notification`;
+                  await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'X-Internal-Api-Key': internalKey,
+                    },
+                    body: JSON.stringify({ eventId: insertedEvent.id }),
+                  });
+                }
+              } catch (dispatchErr: any) {
+                await log.warn('malicious_scan', `Dispatch trigger failed (reconciler will retry): ${dispatchErr?.message ?? dispatchErr}`);
+              }
+            } else if (insertErr && (insertErr as any).code !== '23505') {
+              // 23505 = dedup hit on (org, dedup_key) — expected on idempotent re-run.
+              await log.warn('malicious_scan', `Event emission failed: ${insertErr.message ?? insertErr}`);
+            }
+          } catch (eventErr: any) {
+            // Non-fatal — findings are already in the DB; the dispatcher
+            // can still surface them on read.
+            await log.warn('malicious_scan', `Event emission failed: ${eventErr?.message ?? eventErr}`);
+          }
+        }
+
+        // Persist scan_status onto scan_jobs for the soft-fail UI banner.
+        if (job.jobId) {
+          try {
+            await supabase
+              .from('scan_jobs')
+              .update({ malicious_scan_status: result.status })
+              .eq('id', job.jobId);
+          } catch { /* column landed in malicious_packages_scan_status.sql */ }
+        }
+      } catch (err: any) {
+        if (job.jobId) {
+          const { code, message, stack } = classifyError(err);
+          await logStepError(supabase, {
+            jobId: job.jobId,
+            projectId,
+            step: 'malicious_scan',
+            code,
+            message,
+            stack,
+            durationMs: Date.now() - malStart,
+            severity: 'warn',
+          });
+        }
+        await log.warn('malicious_scan', `Malicious-package scan failed: ${err?.message ?? err}`);
+      }
+    }
 
     // === STEP: Semgrep (OPTIONAL) ===
     if (checkCancelled && await checkCancelled()) return;

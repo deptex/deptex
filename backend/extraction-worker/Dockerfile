@@ -34,6 +34,15 @@ RUN pip3 install --no-cache-dir --break-system-packages \
   && depscan --help >/dev/null \
   && semgrep --version
 
+# Install GuardDog into an isolated venv. GuardDog ships its own pinned
+# Semgrep dependency that conflicts with the version above; dropping it into
+# /opt/guarddog-venv keeps the conflicts contained to the malicious-package
+# scan step. The malicious-scan worker invokes /opt/guarddog-venv/bin/guarddog
+# explicitly (never the global PATH).
+RUN python3 -m venv /opt/guarddog-venv \
+  && /opt/guarddog-venv/bin/pip install --no-cache-dir guarddog==2.9.0 \
+  && /opt/guarddog-venv/bin/guarddog --version
+
 # Install cdxgen globally (dep-scan invokes it for SBOM generation + atom reachability)
 # and atom (reachability engine used by dep-scan --profile research)
 RUN npm install -g @cyclonedx/cdxgen @appthreat/atom \
