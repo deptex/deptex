@@ -25,14 +25,29 @@ RUN curl -sL https://go.dev/dl/go1.22.10.linux-amd64.tar.gz \
   | tar xz -C /usr/local
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-# Install dep-scan and Semgrep. semgrep is exact-pinned because it ships
-# breaking changes frequently. dep-scan is major-version-pinned (6.*) to allow
-# patch uptake while blocking the 6→7 breaking-change class.
+# Install dep-scan, Semgrep, and Checkov (IaC misconfig scanner). semgrep is
+# exact-pinned because it ships breaking changes frequently. dep-scan is
+# major-version-pinned (6.*) to allow patch uptake while blocking the 6→7
+# breaking-change class. Checkov is exact-pinned to the 3.2.x line — the rule
+# library is what we depend on and 3.x→4.x will be a deliberate bump with bench
+# re-runs.
 RUN pip3 install --no-cache-dir --break-system-packages \
   owasp-depscan==6.* \
   semgrep==1.160.0 \
+  checkov==3.2.420 \
   && depscan --help >/dev/null \
-  && semgrep --version
+  && semgrep --version \
+  && checkov --version
+
+# Install Trivy (Aquasec) for Dockerfile misconfig + container CVE scanning.
+# Pin to a specific release tarball (no install.sh / curl-pipe-sh) for the
+# same supply-chain reasons as TruffleHog below.
+RUN curl -sSfL https://github.com/aquasecurity/trivy/releases/download/v0.50.4/trivy_0.50.4_Linux-64bit.tar.gz \
+  -o /tmp/trivy.tar.gz \
+  && tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy \
+  && rm /tmp/trivy.tar.gz \
+  && chmod +x /usr/local/bin/trivy \
+  && trivy --version
 
 # Install cdxgen globally (dep-scan invokes it for SBOM generation + atom reachability)
 # and atom (reachability engine used by dep-scan --profile research)
