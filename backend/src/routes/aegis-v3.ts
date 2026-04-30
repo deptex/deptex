@@ -5,6 +5,10 @@ import { checkRateLimit } from '../lib/rate-limit';
 import { createAegisAgent } from '../lib/aegis-v3/agent';
 import { getOrCreateThread, loadThreadHistory } from '../lib/aegis-v3/thread';
 import { queryRelevantMemories } from '../lib/aegis-v3/memory';
+import { saveUserMessage } from '../lib/aegis-v3/persistence';
+import { classifyChatError, writeAegisChatError } from '../lib/aegis-v3/errors';
+import { getProviderInfoForOrg } from '../lib/aegis-v3/provider';
+import { checkMonthlyCostCap } from '../lib/ai/cost-cap';
 import type { ModelMessage } from 'ai';
 
 const router = express.Router();
@@ -46,8 +50,9 @@ router.post('/stream', async (req: AuthRequest, res) => {
     return res.status(429).json({ error: 'Daily message limit reached. Try again tomorrow.' });
   }
 
+  let resolvedThreadId: string | null = null;
   try {
-    const resolvedThreadId = await getOrCreateThread(
+    resolvedThreadId = await getOrCreateThread(
       organizationId,
       userId,
       threadId,
@@ -60,11 +65,33 @@ router.post('/stream', async (req: AuthRequest, res) => {
       queryRelevantMemories(organizationId, message),
     ]);
 
+    // Pre-flight cost cap. If the org is over budget, record a cost_cap error
+    // assistant message and skip the model call. We deliberately also skip
+    // saving the user message — there's nothing to answer it with.
+    const providerInfo = await getProviderInfoForOrg(organizationId);
+    const cap = await checkMonthlyCostCap(
+      organizationId,
+      providerInfo.model,
+      [{ role: 'user', content: message }],
+      providerInfo.monthlyCostCap,
+    );
+    if (!cap.allowed) {
+      await writeAegisChatError(resolvedThreadId, { type: 'cost_cap', message: cap.message });
+      res.setHeader('X-Thread-Id', resolvedThreadId);
+      return res.json({ threadId: resolvedThreadId });
+    }
+
+    // Persist the user message before streaming starts. A refresh mid-stream
+    // then keeps the question visible; only the in-flight assistant tokens
+    // are lost (the user can resend).
+    await saveUserMessage({ threadId: resolvedThreadId, userId, content: message });
+
     const agent = await createAegisAgent({
       orgId: organizationId,
       userId,
       threadId: resolvedThreadId,
       userMessage: message,
+      priorMessageCount: history.length,
       context,
       memoryContext,
     });
@@ -73,9 +100,24 @@ router.post('/stream', async (req: AuthRequest, res) => {
 
     const messages: ModelMessage[] = [...history, { role: 'user', content: message }];
     const result = await agent.stream({ messages });
-    result.pipeUIMessageStreamToResponse(res);
+    // onError fires for mid-stream failures (provider 429/5xx, network drops).
+    // We persist the error as an assistant message so on reload the user sees
+    // the regenerate-able error bubble; the SDK still sends a generic string
+    // down the SSE channel for the live `useChat.error` hook on the client.
+    result.pipeUIMessageStreamToResponse(res, {
+      onError: (err) => {
+        console.error('[aegis-v3] Stream error:', err);
+        if (resolvedThreadId) {
+          void writeAegisChatError(resolvedThreadId, classifyChatError(err));
+        }
+        return 'Something went wrong while generating a response.';
+      },
+    });
   } catch (err: any) {
-    console.error('[aegis-v3] Stream error:', err);
+    console.error('[aegis-v3] Stream setup error:', err);
+    if (resolvedThreadId) {
+      await writeAegisChatError(resolvedThreadId, classifyChatError(err));
+    }
     if (!res.headersSent) {
       res.status(500).json({ error: err?.message ?? 'Failed to create Aegis stream' });
     } else if (!res.writableEnded) {

@@ -1,14 +1,14 @@
 // @ts-nocheck
 import express, { Router, Response } from 'express';
-import { generateText } from 'ai';
 import { supabase } from '../lib/supabase';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { userHasOrgPermission } from '../lib/permissions';
 import { rowToMessage, rowToThread, mapFixStatusToBadge, type ThreadRow, type UserStateRow, type FixStatusForBadge } from '../lib/aegis/types';
-import { getAegisModel } from '../lib/aegis/provider';
 import { generateAegisChat } from '../lib/aegis-v3/chat-generation';
 import { getProviderInfoForOrg } from '../lib/aegis/llm-provider';
 import { checkMonthlyCostCap } from '../lib/ai/cost-cap';
+import { classifyChatError, writeAegisChatError } from '../lib/aegis-v3/errors';
+import { generateThreadTitle } from '../lib/aegis-v3/title';
 import {
   isParticipant,
   isCreator,
@@ -27,52 +27,6 @@ const AEGIS_PERMISSION = 'interact_with_aegis';
 router.use(authenticateUser);
 
 const THREAD_COLUMNS = 'id, organization_id, user_id, created_by, title, created_at, updated_at, context_type, context_id';
-
-type ChatErrorClass = {
-  type: 'rate_limit' | 'transient' | 'cost_cap';
-  statusCode?: number;
-  message?: string;
-};
-
-function classifyChatError(err: any): ChatErrorClass {
-  const status = err?.statusCode ?? err?.lastError?.statusCode;
-  if (status === 429) return { type: 'rate_limit', statusCode: 429 };
-  return {
-    type: 'transient',
-    statusCode: typeof status === 'number' ? status : undefined,
-    message: err?.message ?? err?.lastError?.message,
-  };
-}
-
-function chatErrorUserText(error: ChatErrorClass): string {
-  if (error.type === 'cost_cap') return error.message ?? 'Monthly AI budget reached.';
-  return 'Something went wrong while generating a response.';
-}
-
-async function writeAegisChatError(threadId: string, error: ChatErrorClass): Promise<void> {
-  const text = chatErrorUserText(error);
-  try {
-    await Promise.all([
-      supabase.from('aegis_chat_messages').insert({
-        thread_id: threadId,
-        role: 'assistant',
-        user_id: null,
-        content: text,
-        metadata: {
-          parts: [{ type: 'text', text }],
-          error: {
-            type: error.type,
-            statusCode: error.statusCode ?? null,
-            message: error.message ?? null,
-          },
-        },
-      }),
-      supabase.from('aegis_chat_threads').update({ updated_at: new Date().toISOString() }).eq('id', threadId),
-    ]);
-  } catch (writeErr) {
-    console.error('[aegis] failed to persist chat error', writeErr);
-  }
-}
 
 // Background generation for /chat and /regenerate. Loads thread history,
 // invokes the agent, persists the assistant reply, and auto-titles on the
@@ -112,28 +66,7 @@ async function runBackgroundChatGeneration(args: {
 
     const totalMessages = (rows ?? []).length + 1;
     if (totalMessages <= 3) {
-      try {
-        const prompt = `Generate a short title (3-7 words, Title Case, no quotes, no trailing punctuation) for this conversation.
-
-Describe what the user is trying to accomplish — action + target. Use the project, package, or finding name when present in the conversation.
-Good examples:
-- "Fix Semgrep Finding in deptex-test"
-- "Investigate CVE-2024-12345 in api-server"
-- "Update Vulnerable Lodash Dependency"
-- "Audit Org Security Posture"
-- "Plan Reachability Migration"
-
-Avoid status/state words like "Awaiting", "Pending", "Discussion", "Plan Approval".
-Output only the title, no "Title:" prefix and no surrounding quotes.
-
-User: ${userText.slice(0, 800)}
-Assistant: ${text.slice(0, 800)}`;
-        const { text: titleText } = await generateText({ model: getAegisModel(), prompt, temperature: 0.3 });
-        const title = cleanGeneratedTitle(titleText);
-        await supabase.from('aegis_chat_threads').update({ title }).eq('id', threadId);
-      } catch (err) {
-        console.error('[aegis] auto-title failed', err);
-      }
+      await generateThreadTitle(threadId, userText, text);
     }
 
     await Promise.all([
@@ -150,21 +83,6 @@ Assistant: ${text.slice(0, 800)}`;
     console.error('[aegis] background generation failed', err);
     await writeAegisChatError(threadId, classifyChatError(err));
   }
-}
-
-// Strip leading "Title:" / "Chat title:" labels the model often parrots from
-// the prompt, plus surrounding quotes and trailing punctuation. Returns
-// "New chat" when nothing usable is left.
-function cleanGeneratedTitle(raw: string): string {
-  return (
-    raw
-      .trim()
-      .replace(/^(?:chat\s+)?title\s*[:\-]\s*/i, '')
-      .replace(/^["'`]|["'`]$/g, '')
-      .replace(/[.?!]+$/, '')
-      .trim()
-      .slice(0, 80) || 'New chat'
-  );
 }
 
 /** Batch-load fix status for any threads linked to fixes via context_type='fix'. */
@@ -582,26 +500,16 @@ router.post('/threads/:id/auto-title', async (req: AuthRequest, res: Response) =
     return res.status(400).json({ error: 'Thread has no messages yet' });
   }
 
-  const prompt = `Summarize this chat in 3-5 words, Title Case, no quotes, no trailing punctuation.
-
-User: ${(firstMessages[0]?.content ?? '').slice(0, 800)}
-Assistant: ${(firstMessages[1]?.content ?? '').slice(0, 800)}
-
-Title:`;
-
-  let title: string;
-  try {
-    const { text } = await generateText({ model: getAegisModel(), prompt, temperature: 0.3 });
-    title = cleanGeneratedTitle(text);
-  } catch (err: any) {
-    return res.status(500).json({ error: err?.message ?? 'Auto-title failed' });
-  }
+  await generateThreadTitle(
+    threadId,
+    firstMessages[0]?.content ?? '',
+    firstMessages[1]?.content ?? '',
+  );
 
   const { data: updated, error } = await supabase
     .from('aegis_chat_threads')
-    .update({ title })
-    .eq('id', threadId)
     .select(THREAD_COLUMNS)
+    .eq('id', threadId)
     .single();
   if (error || !updated) return res.status(500).json({ error: error?.message ?? 'Update failed' });
 
