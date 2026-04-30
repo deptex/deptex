@@ -94,10 +94,18 @@ export function parseGuardDogJson(
     return { rules: [], errored: true };
   }
 
-  // GuardDog's JSON shape varies by ecosystem; we accept either:
-  //   { "results": { "rule_id": { ... }, "rule_id": { ... } } }
+  // GuardDog 2.9.0 (npm/pypi) shape:
+  //   { "package": "<dir>", "issues": N, "errors": {}, "results": {
+  //       "<rule_id>": {}                       — rule ran, no findings
+  //       "<rule_id>": [ <match>, ... ]         — rule ran, fired
+  //       "<rule_id>": { "<file>": [ <match>, ... ] }   — metadata rules
+  //   }}
+  // Each <match> has { location: "file:line", code, message } for source rules
+  // and a flat object for metadata rules.
+  //
+  // We also tolerate two older / future shapes for robustness:
   //   { "results": [ { "rule_name": ..., "details": ... }, ... ] }
-  //   { "<rule_id>": { ... } }                              (older shape)
+  //   { "<rule_id>": { ... } }
   const rules: GuardDogRule[] = [];
   const root = parsed?.results ?? parsed;
   if (!root || typeof root !== 'object') return { rules, errored: false };
@@ -107,27 +115,103 @@ export function parseGuardDogJson(
     : Object.entries(root);
 
   for (const [ruleId, body] of entries) {
-    if (!body || typeof body !== 'object') continue;
-    const severityRaw =
-      body.severity ??
-      body.metadata?.severity ??
-      (typeof body.matches !== 'undefined' && body.matches?.length > 0 ? 'ERROR' : 'WARNING');
-    const severity = String(severityRaw).toUpperCase();
-    const message = String(body.description ?? body.message ?? `${packageName}/${ecosystem}: ${ruleId}`);
-    const evidence: GuardDogRule['evidence'] = [];
+    if (body === null || body === undefined) continue;
 
-    const matches = Array.isArray(body.matches) ? body.matches : [];
-    for (const m of matches) {
-      const filePath = m?.file ?? m?.path ?? m?.location?.file ?? '';
-      const startLine = m?.line ?? m?.location?.line?.start ?? 0;
-      const endLine = m?.location?.line?.end ?? startLine;
+    // Skip empty objects — GuardDog emits `{}` for every rule that ran
+    // without firing; treating those as findings would create one
+    // bogus WARNING row per package per supported rule.
+    if (
+      typeof body === 'object' &&
+      !Array.isArray(body) &&
+      Object.keys(body).length === 0
+    ) {
+      continue;
+    }
+
+    // Collect raw match objects from whichever shape the rule used.
+    const rawMatches: any[] = [];
+    if (Array.isArray(body)) {
+      // Source rules: rule_id maps directly to an array of matches.
+      for (const m of body) rawMatches.push(m);
+    } else if (typeof body === 'object') {
+      if (Array.isArray((body as any).matches)) {
+        // Older / alternate shape with explicit matches array.
+        for (const m of (body as any).matches) rawMatches.push(m);
+      } else if ((body as any).location || (body as any).message || (body as any).code) {
+        // Single-object match.
+        rawMatches.push(body);
+      } else {
+        // Metadata rules sometimes nest by file:
+        //   { "<file>": [ <match>, ... ] }
+        // Treat each value-array as additional matches.
+        for (const v of Object.values(body)) {
+          if (Array.isArray(v)) {
+            for (const m of v) rawMatches.push(m);
+          } else if (v && typeof v === 'object') {
+            rawMatches.push(v);
+          }
+        }
+      }
+    }
+
+    if (rawMatches.length === 0 && !(body as any).severity && !(body as any).message) {
+      // Body wasn't empty but yielded no usable findings (e.g. some
+      // metadata-rules emit error stanzas we don't model). Skip rather
+      // than fabricate a no-evidence finding.
+      continue;
+    }
+
+    const severityRaw =
+      (body as any).severity ??
+      (body as any).metadata?.severity ??
+      (rawMatches.length > 0 ? 'ERROR' : 'WARNING');
+    const severity = String(severityRaw).toUpperCase();
+    const messageBase =
+      (body as any).description ?? (body as any).message ?? rawMatches[0]?.message ?? null;
+    const message = String(messageBase ?? `${packageName}/${ecosystem}: ${ruleId}`);
+
+    const evidence: GuardDogRule['evidence'] = [];
+    for (const m of rawMatches) {
+      // GuardDog's `location` is usually "file:line[-endline]"; sometimes
+      // an object with file/line/end fields. Handle both.
+      let filePath = m?.file ?? m?.path ?? '';
+      let startLine = 0;
+      let endLine = 0;
+      const loc = m?.location;
+      if (typeof loc === 'string') {
+        const colon = loc.lastIndexOf(':');
+        if (colon > 0) {
+          filePath = loc.slice(0, colon);
+          const lineSpec = loc.slice(colon + 1);
+          const dash = lineSpec.indexOf('-');
+          if (dash > 0) {
+            startLine = parseInt(lineSpec.slice(0, dash), 10) || 0;
+            endLine = parseInt(lineSpec.slice(dash + 1), 10) || startLine;
+          } else {
+            startLine = parseInt(lineSpec, 10) || 0;
+            endLine = startLine;
+          }
+        } else {
+          filePath = loc;
+        }
+      } else if (loc && typeof loc === 'object') {
+        filePath = loc.file ?? filePath;
+        startLine = Number(m?.line ?? loc?.line?.start ?? 0) || 0;
+        endLine = Number(loc?.line?.end ?? startLine) || startLine;
+      } else {
+        startLine = Number(m?.line ?? 0) || 0;
+        endLine = startLine;
+      }
       const snippet = String(m?.code ?? m?.snippet ?? '').slice(0, 1024);
-      // file_path is intentionally tarball-relative so the cache stays
-      // free of org-derived data per multi-tenant invariant #2.
-      const rel = filePath ? path.relative('/', filePath) : '';
+      // GuardDog 2.9.0 emits paths already relative to the scanned
+      // directory (e.g. "perf/perf.js"). Strip a leading slash if a
+      // future version starts emitting absolute paths so the cache row
+      // stays free of org-derived prefix data per multi-tenant
+      // invariant #2.
+      const stripped = typeof filePath === 'string' ? filePath.replace(/^\/+/, '') : '';
       evidence.push({
-        file_path: rel || filePath || '',
-        lines: [Number(startLine) || 0, Number(endLine) || 0],
+        file_path: stripped,
+        lines: [startLine, endLine],
         snippet,
       });
     }
