@@ -141,6 +141,10 @@ export const router = createBrowserRouter([
         element: <AegisPage />,
       },
       {
+        path: "aegis/routines",
+        element: <AegisPage />,
+      },
+      {
         path: "aegis/:threadId",
         element: <AegisPage />,
       },

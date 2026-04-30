@@ -1,6 +1,7 @@
 import { useMemo, useState, type KeyboardEvent } from 'react';
-import { MoreHorizontal, SquarePen, Search, Pencil, Trash2, Loader2, Pin, PinOff, Archive, ArchiveRestore, Clock, Sparkles, CircleCheck, CircleX } from 'lucide-react';
+import { MoreHorizontal, SquarePen, Search, Pencil, Trash2, Loader2, Pin, PinOff, Archive, ArchiveRestore, Zap } from 'lucide-react';
 import type { FixStatusForBadge } from '../../lib/aegis-api';
+import { ThreadIcon } from './ThreadIcon';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,6 +33,8 @@ interface ThreadListProps {
   onSetPinned: (threadId: string, pinned: boolean) => Promise<void>;
   onSetArchived: (threadId: string, archived: boolean) => Promise<void>;
   onOpenSearch: () => void;
+  onOpenRoutines: () => void;
+  routinesActive?: boolean;
 }
 
 /**
@@ -50,24 +53,6 @@ function fixStatusLabel(fixStatus: FixStatusForBadge | null): string | null {
   }
 }
 
-function ThreadIcon({ fixStatus }: { fixStatus: FixStatusForBadge | null }) {
-  const iconClass = 'h-4 w-4 shrink-0';
-  switch (fixStatus) {
-    case 'awaiting_approval':
-      return <CircleCheck className={cn(iconClass, 'text-foreground/50')} aria-label="Awaiting approval" />;
-    case 'running':
-      return <Loader2 className={cn(iconClass, 'text-foreground/80 animate-spin')} aria-label="Running" />;
-    case 'succeeded':
-      return <CircleCheck className={cn(iconClass, 'text-success/75')} aria-label="Fix succeeded" />;
-    case 'failed':
-    case 'refused':
-    case 'rejected':
-      return <CircleX className={cn(iconClass, 'text-error/75')} aria-label="Fix did not land" />;
-    default:
-      return <Sparkles className={cn(iconClass, 'text-foreground/50')} aria-label="Chat" />;
-  }
-}
-
 export function ThreadList({
   threads,
   activeThreadId,
@@ -80,6 +65,8 @@ export function ThreadList({
   onSetPinned,
   onSetArchived,
   onOpenSearch,
+  onOpenRoutines,
+  routinesActive,
 }: ThreadListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
@@ -123,13 +110,13 @@ export function ThreadList({
               <button
                 type="button"
                 onClick={() => onSelect(thread.id)}
-                className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 text-foreground/90 overflow-hidden"
+                className="w-full text-left px-3 py-1.5 text-[13px] flex items-center gap-2 text-foreground/90 overflow-hidden"
               >
                 <ThreadIcon fixStatus={thread.fixStatus} />
                 {isPending ? (
                   <span className="h-3 w-40 rounded bg-foreground/10 animate-pulse inline-block" />
                 ) : (
-                  <span className="block min-w-0 flex-1 whitespace-nowrap overflow-hidden [mask-image:linear-gradient(to_right,black_calc(100%-12px),transparent)] group-hover:[mask-image:linear-gradient(to_right,black_calc(100%-44px),transparent)]">
+                  <span className="block min-w-0 flex-1 whitespace-nowrap overflow-hidden [mask-image:linear-gradient(to_right,black_calc(100%-12px),transparent)] group-hover:[mask-image:linear-gradient(to_right,black_calc(100%-72px),transparent)]">
                     {thread.title}
                   </span>
                 )}
@@ -224,11 +211,11 @@ export function ThreadList({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="px-2 pt-3 pb-1 space-y-1">
+      <div className="px-2 pt-3 pb-1 space-y-0.5">
         <button
           type="button"
           onClick={onCreate}
-          className="w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm text-foreground/90 hover:bg-background-subtle/60 transition-colors"
+          className="w-full flex items-center gap-2 rounded-md px-3 py-1.5 text-sm text-foreground/90 hover:bg-background-subtle/60 transition-colors"
         >
           <SquarePen className="h-4 w-4" />
           New chat
@@ -236,18 +223,28 @@ export function ThreadList({
         <button
           type="button"
           onClick={onOpenSearch}
-          className="w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm text-foreground/90 hover:bg-background-subtle/60 transition-colors"
+          className="w-full flex items-center gap-2 rounded-md px-3 py-1.5 text-sm text-foreground/90 hover:bg-background-subtle/60 transition-colors"
         >
           <Search className="h-4 w-4" />
           Search chats
+        </button>
+        <button
+          type="button"
+          onClick={onOpenRoutines}
+          className={cn(
+            'w-full flex items-center gap-2 rounded-md px-3 py-1.5 text-sm text-foreground/90 transition-colors',
+            routinesActive ? 'bg-white/[0.06]' : 'hover:bg-background-subtle/60',
+          )}
+        >
+          <Zap className="h-4 w-4" />
+          Routines
         </button>
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 pb-2">
         {loading && threads.length === 0 && (
           <>
-            <div className="px-3 pt-3 pb-1 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-foreground/60">
-              <Clock className="h-3 w-3" />
+            <div className="px-3 pt-3 pb-1 text-[11px] font-medium text-foreground/60">
               Recents
             </div>
             <div className="space-y-0.5">
@@ -265,8 +262,7 @@ export function ThreadList({
 
         {pinned.length > 0 && (
           <>
-            <div className="px-3 pt-3 pb-1 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-foreground/60">
-              <Pin className="h-3 w-3" />
+            <div className="px-3 pt-3 pb-1 text-[11px] font-medium text-foreground/60">
               Pinned
             </div>
             <div className="space-y-0.5">
@@ -277,8 +273,7 @@ export function ThreadList({
 
         {recents.length > 0 && (
           <>
-            <div className="px-3 pt-3 pb-1 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-foreground/60">
-              <Clock className="h-3 w-3" />
+            <div className="px-3 pt-3 pb-1 text-[11px] font-medium text-foreground/60">
               Recents
             </div>
             <div className="space-y-0.5">
