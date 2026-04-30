@@ -17,6 +17,10 @@ export interface SeedResult {
   organizationId: string;
   projectId: string;
   projectName: string;
+  /** Synthetic extraction_jobs row id, only populated when rule generation
+   *  is enabled — gives the rule_generation step a target for telemetry
+   *  persistence in CLI mode. Cloud workers fill this in from QStash. */
+  jobId?: string;
 }
 
 export interface SeedOptions {
@@ -69,10 +73,63 @@ export async function seedLocalDb(
   });
   if (repoErr) throw new Error(`seed project_repositories failed: ${repoErr.message}`);
 
+  // 4) organization_reachability_settings — only seeded when the user opts in
+  //    via DEPTEX_RULE_GENERATION_ENABLED=1. Defaults are tuned for local
+  //    testing (KEV not required, matches everything reachable, no asset
+  //    tier means the rank filter passes). The provider/model can be tuned
+  //    via DEPTEX_RULE_PROVIDER / DEPTEX_RULE_MODEL.
+  let jobId: string | undefined;
+  if (process.env.DEPTEX_RULE_GENERATION_ENABLED === '1') {
+    const provider = (process.env.DEPTEX_RULE_PROVIDER ?? 'anthropic') as
+      | 'anthropic' | 'openai' | 'google';
+    // For openai-compat third parties (DeepInfra / OpenRouter / Alibaba) the
+    // host is selected via DEPTEX_RULE_BASE_URL; the user MUST pass a model
+    // id understood by that host (e.g. Qwen/Qwen3-235B-A22B-Instruct-2507).
+    // Don't default — fall back to gpt-4o-mini for plain OpenAI only.
+    const baseUrl = process.env.DEPTEX_RULE_BASE_URL ?? '';
+    const isOpenAiCompatThirdParty = provider === 'openai' && baseUrl.length > 0;
+    const model = process.env.DEPTEX_RULE_MODEL
+      ?? (isOpenAiCompatThirdParty ? 'Qwen/Qwen3-235B-A22B-Instruct-2507'
+        : provider === 'anthropic' ? 'claude-sonnet-4-6'
+        : provider === 'openai' ? 'gpt-4o-mini'
+        : 'gemini-2.0-flash');
+    const { error: rgErr } = await storage
+      .from('organization_reachability_settings')
+      .insert({
+        organization_id: LOCAL_ORG_ID,
+        auto_generate_enabled: true,
+        trigger_severities: ['critical', 'high', 'medium'],
+        trigger_kev: false,
+        trigger_asset_tier_max_rank: 5,
+        trigger_newly_discovered: true,
+        trigger_reevaluate_existing: false,
+        ai_provider: provider,
+        ai_model: model,
+        monthly_budget_usd: Number(process.env.DEPTEX_RULE_BUDGET_USD ?? '5.00'),
+        on_budget_exhaustion: 'skip',
+        max_wait_seconds: 600,
+      });
+    if (rgErr) throw new Error(`seed reachability settings failed: ${rgErr.message}`);
+
+    // 5) extraction_jobs — synthetic row so persistJobTelemetry can write the
+    //    four reachability_* counters. The pipeline uses job.jobId as the WHERE
+    //    target; without this row in CLI mode telemetry is silently dropped.
+    jobId = generateUuid();
+    const { error: jobErr } = await storage.from('extraction_jobs').insert({
+      id: jobId,
+      project_id: projectId,
+      organization_id: LOCAL_ORG_ID,
+      status: 'processing',
+      payload: { source: 'local-cli', label: repoLabel },
+    });
+    if (jobErr) throw new Error(`seed extraction_jobs failed: ${jobErr.message}`);
+  }
+
   return {
     organizationId: LOCAL_ORG_ID,
     projectId,
     projectName: repoLabel,
+    jobId,
   };
 }
 

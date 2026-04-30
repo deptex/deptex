@@ -1559,7 +1559,6 @@ CREATE TABLE IF NOT EXISTS public.taint_engine_runs (
   flows_after_ai_filter integer DEFAULT 0,
   ai_cost_usd numeric(10,6) DEFAULT 0,
   frameworks_detected text[] DEFAULT '{}'::text[],
-  framework_models_used jsonb DEFAULT '{}'::jsonb,
   is_typed_js_project boolean,
   typed_files_pct numeric(5,2),
   vuln_classes_evaluated text[] DEFAULT '{}'::text[],
@@ -1905,7 +1904,7 @@ ALTER TABLE public.dependency_versions ADD CONSTRAINT dependency_versions_depend
 ALTER TABLE public.dependency_vulnerabilities ADD CONSTRAINT dependency_vulnerabilities_dependency_id_osv_id_key UNIQUE (dependency_id, osv_id);
 ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_flow_id_version_key UNIQUE (flow_id, version);
 ALTER TABLE public.invitation_teams ADD CONSTRAINT invitation_teams_invitation_id_team_id_key UNIQUE (invitation_id, team_id);
-ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_source_id_key UNIQUE (source, source_id);
+ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_natural_key UNIQUE NULLS NOT DISTINCT (source, source_id, package_name, version, ecosystem);
 ALTER TABLE public.license_obligations ADD CONSTRAINT license_obligations_license_spdx_id_key UNIQUE (license_spdx_id);
 ALTER TABLE public.organization_asset_tiers ADD CONSTRAINT organization_asset_tiers_organization_id_name_key UNIQUE (organization_id, name);
 ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_organization_id_cve_id_package_key UNIQUE (organization_id, cve_id, package_purl);
@@ -2346,6 +2345,7 @@ CREATE INDEX idx_org_package_policies_org ON public.organization_package_policie
 CREATE INDEX idx_org_policy_changes_org ON public.organization_policy_changes USING btree (organization_id);
 CREATE INDEX idx_org_policy_changes_type ON public.organization_policy_changes USING btree (organization_id, code_type);
 CREATE INDEX idx_org_pr_checks_org ON public.organization_pr_checks USING btree (organization_id);
+CREATE INDEX idx_org_reach_settings_updated_by ON public.organization_reachability_settings USING btree (updated_by);
 CREATE INDEX idx_org_status_codes_org ON public.organization_status_codes USING btree (organization_id);
 CREATE INDEX idx_organization_asset_tiers_org ON public.organization_asset_tiers USING btree (organization_id);
 CREATE INDEX idx_organization_asset_tiers_rank ON public.organization_asset_tiers USING btree (organization_id, rank);

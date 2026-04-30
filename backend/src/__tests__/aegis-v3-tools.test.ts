@@ -50,13 +50,14 @@ beforeEach(() => {
 });
 
 describe('registry shape', () => {
-  it('exposes 12 read-only tools with safe danger and no permission gate', () => {
-    expect(ALL_AEGIS_TOOLS).toHaveLength(12);
+  it('exposes the read-only tools and the fix-flow tools', () => {
     const names = ALL_AEGIS_TOOLS.map((t) => t.name).sort();
     expect(names).toEqual(
       [
         'analyze_upgrade_path',
+        'approve_fix',
         'check_cisa_kev',
+        'check_fix_status',
         'get_epss_score',
         'get_package_reputation',
         'get_project_summary',
@@ -67,11 +68,24 @@ describe('registry shape', () => {
         'list_policies',
         'list_project_dependencies',
         'list_projects',
+        'reject_fix',
+        'request_fix',
       ].sort(),
     );
-    for (const t of ALL_AEGIS_TOOLS) {
+
+    const readOnly = ALL_AEGIS_TOOLS.filter(
+      (t) => !['request_fix', 'approve_fix', 'reject_fix', 'check_fix_status'].includes(t.name),
+    );
+    for (const t of readOnly) {
       expect(t.danger).toBe('safe');
       expect(t.permission).toBeUndefined();
+    }
+
+    const writeTools = ALL_AEGIS_TOOLS.filter((t) =>
+      ['request_fix', 'approve_fix', 'reject_fix'].includes(t.name),
+    );
+    for (const t of writeTools) {
+      expect(t.permission).toBe('trigger_fix');
     }
   });
 });

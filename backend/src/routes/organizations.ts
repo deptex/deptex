@@ -6639,7 +6639,7 @@ router.get('/:id/ai-usage/logs', async (req: AuthRequest, res) => {
 // Platform-default AI provider (Phase 1 AI page)
 // ============================================================
 
-const VALID_AI_PROVIDERS = ['openai', 'anthropic', 'google'] as const;
+const VALID_AI_PROVIDERS = ['openai', 'anthropic', 'google', 'deepinfra'] as const;
 type ValidAIProvider = (typeof VALID_AI_PROVIDERS)[number];
 
 async function isOrgMember(orgId: string, userId: string): Promise<boolean> {

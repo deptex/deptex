@@ -187,6 +187,73 @@ export interface OrganizationMember {
   teams?: Array<{ id: string; name: string }>;
 }
 
+// Aegis Fix Agent types — mirror the backend's plan-types.ts.
+export type FindingType = 'vulnerability' | 'semgrep' | 'secret';
+export type FixStatus =
+  | 'planning'
+  | 'awaiting_approval'
+  | 'approved'
+  | 'executing'
+  | 'completed'
+  | 'failed'
+  | 'rejected';
+export type PlanLanguage =
+  | 'js' | 'ts' | 'python' | 'go' | 'java' | 'ruby' | 'php' | 'rust' | 'csharp';
+export type PlanDiffSize = 'small' | 'medium' | 'large';
+
+export interface PlanFileChange {
+  path: string;
+  action: 'modify' | 'create' | 'delete';
+  description: string;
+}
+
+export interface FixPlan {
+  summary: string;
+  finding: { type: FindingType; id: string; severity?: string };
+  currentState: string[];
+  desiredState: string[];
+  fileChanges: PlanFileChange[];
+  testCommand: string;
+  language: PlanLanguage;
+  estimatedDiffSize: PlanDiffSize;
+  wallClockBudgetSec: number;
+  refusal?: { reason: string; manualSuggestion?: string };
+}
+
+export interface FixRecord {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  status: FixStatus;
+  finding: { type: FindingType; id: string };
+  plan: FixPlan | null;
+  planGeneratedAt: string | null;
+  planBaseSha: string | null;
+  planBaseBranch: string | null;
+  approvalToken: string | null;
+  approvedAt: string | null;
+  rejectedAt: string | null;
+  prUrl: string | null;
+  prNumber: number | null;
+  diffSummary: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+}
+
+export interface RequestFixResponse {
+  fixId: string;
+  status: FixStatus;
+  plan: FixPlan;
+  fix?: FixRecord | null;
+}
+
+export interface FixStalenessResponse {
+  isStale: boolean;
+  currentHeadSha: string | null;
+  baseSha: string | null;
+  baseBranch: string | null;
+}
+
 export async function getAuthToken(): Promise<string | null> {
   const { data: { session }, error } = await supabase.auth.getSession();
 
@@ -1182,6 +1249,71 @@ export const api = {
 
   async getAegisToolBreakdown(orgId: string, days = 30, limit = 10): Promise<AegisToolBreakdownResponse> {
     return fetchWithAuth(`/api/organizations/${orgId}/aegis-tools/breakdown?days=${days}&limit=${limit}`);
+  },
+
+  // ============================================================
+  // Reachability rule generation (Phase 5)
+  // ============================================================
+
+  async getReachabilitySettings(orgId: string): Promise<ReachabilitySettings> {
+    return fetchWithAuth(`/api/organizations/${orgId}/reachability-settings`);
+  },
+
+  async updateReachabilitySettings(
+    orgId: string,
+    patch: Partial<ReachabilitySettings>,
+  ): Promise<ReachabilitySettings> {
+    return fetchWithAuth(`/api/organizations/${orgId}/reachability-settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+  },
+
+  async listGeneratedRules(
+    orgId: string,
+    opts?: { page?: number; perPage?: number; status?: GeneratedRuleStatus; enabled?: boolean; search?: string },
+  ): Promise<{
+    rules: GeneratedRuleSummary[];
+    pagination: { page: number; per_page: number; total: number; total_pages: number };
+  }> {
+    const params = new URLSearchParams();
+    if (opts?.page) params.set('page', String(opts.page));
+    if (opts?.perPage) params.set('per_page', String(opts.perPage));
+    if (opts?.status) params.set('status', opts.status);
+    if (opts?.enabled != null) params.set('enabled', String(opts.enabled));
+    if (opts?.search) params.set('search', opts.search);
+    const qs = params.toString();
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules${qs ? `?${qs}` : ''}`);
+  },
+
+  async getGeneratedRule(orgId: string, ruleId: string): Promise<GeneratedRuleDetail> {
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules/${ruleId}`);
+  },
+
+  async updateGeneratedRule(
+    orgId: string,
+    ruleId: string,
+    patch: { enabled?: boolean; validation_status?: 'manual_override' },
+  ): Promise<GeneratedRuleDetail> {
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules/${ruleId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+  },
+
+  async deleteGeneratedRule(orgId: string, ruleId: string): Promise<void> {
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules/${ruleId}`, { method: 'DELETE' });
+  },
+
+  async regenerateGeneratedRule(
+    orgId: string,
+    ruleId: string,
+    body: { provider: 'anthropic' | 'openai' | 'google'; model: string },
+  ): Promise<{ rule: GeneratedRuleDetail; message: string }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules/${ruleId}/regenerate`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
   },
 
   async streamAegisMessage(
@@ -2589,45 +2721,49 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/teams/${teamId}/stats`);
   },
 
-  // AI Fix
-  async requestFix(orgId: string, projectId: string, body: {
-    strategy: string;
-    vulnerabilityOsvId?: string;
-    dependencyId?: string;
-    projectDependencyId?: string;
-    targetVersion?: string;
-    semgrepFindingId?: string;
-    secretFindingId?: string;
-  }): Promise<{ success: boolean; jobId?: string; error?: string; errorCode?: string }> {
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fix`, {
+  // Aegis Fix Agent (plan-then-approve flow). Replaces the legacy aider-worker
+  // direct-execute fix API; that worker is being retired.
+  async requestFix(body: {
+    organizationId: string;
+    projectId: string;
+    findingType: FindingType;
+    findingId: string;
+  }): Promise<RequestFixResponse> {
+    return fetchWithAuth('/api/aegis/fix/request', {
       method: 'POST',
       body: JSON.stringify(body),
     });
   },
 
-  async getFixStatus(orgId: string, projectId: string): Promise<FixJob[]> {
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fix-status`);
+  async getFix(fixId: string): Promise<{ fix: FixRecord }> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}`);
   },
 
-  async getFixes(orgId: string, projectId: string, params?: {
-    osvId?: string;
-    semgrepFindingId?: string;
-    secretFindingId?: string;
-    status?: string;
-  }): Promise<FixJob[]> {
-    const search = new URLSearchParams();
-    if (params?.osvId) search.set('osvId', params.osvId);
-    if (params?.semgrepFindingId) search.set('semgrepFindingId', params.semgrepFindingId);
-    if (params?.secretFindingId) search.set('secretFindingId', params.secretFindingId);
-    if (params?.status) search.set('status', params.status);
-    const qs = search.toString();
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fixes${qs ? `?${qs}` : ''}`);
+  async getFixStaleness(fixId: string): Promise<FixStalenessResponse> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}/staleness`);
   },
 
-  async cancelFix(orgId: string, projectId: string, fixId: string): Promise<{ success: boolean }> {
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fixes/${fixId}/cancel`, {
-      method: 'POST',
+  async approveFix(fixId: string, token: string): Promise<{ fix: FixRecord }> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}/approve`, {
+      method: 'PATCH',
+      body: JSON.stringify({ token }),
     });
+  },
+
+  async rejectFix(fixId: string, reason?: string): Promise<{ fix: FixRecord }> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}/reject`, {
+      method: 'PATCH',
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
+  },
+
+  async regenerateFixPlan(fixId: string): Promise<RequestFixResponse> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}/regenerate`, { method: 'POST' });
+  },
+
+  async getPendingFixes(organizationId: string): Promise<{ fixes: FixRecord[] }> {
+    const qs = new URLSearchParams({ organizationId });
+    return fetchWithAuth(`/api/aegis/fix/pending?${qs.toString()}`);
   },
 
   // Learning
@@ -3451,7 +3587,7 @@ export interface AIUsageSummary {
   byUser: Array<{ userId: string; tokens: number; cost: number; count: number }>;
 }
 
-export type PlatformAIProvider = 'openai' | 'anthropic' | 'google';
+export type PlatformAIProvider = 'openai' | 'anthropic' | 'google' | 'deepinfra';
 
 export interface AIDefaultProvider {
   provider: PlatformAIProvider;
@@ -3892,6 +4028,68 @@ export type EpdStatus =
   | 'fallback_no_ai'
   | 'ai_error_fallback'
   | 'budget_exceeded';
+
+/** Per-org reachability rule generation policy (Phase 5). */
+export interface ReachabilitySettings {
+  organization_id: string;
+  auto_generate_enabled: boolean;
+  trigger_severities: Array<'critical' | 'high' | 'medium' | 'low'>;
+  trigger_kev: boolean;
+  trigger_asset_tier_max_rank: number;
+  trigger_newly_discovered: boolean;
+  trigger_reevaluate_existing: boolean;
+  ai_provider: 'anthropic' | 'openai' | 'google';
+  ai_model: string;
+  monthly_budget_usd: number;
+  on_budget_exhaustion: 'skip' | 'fall_back_to_haiku';
+  max_wait_seconds: number;
+  updated_at?: string;
+  updated_by?: string | null;
+}
+
+export type GeneratedRuleStatus = 'pending' | 'validated' | 'failed_validation' | 'manual_override';
+
+export interface GeneratedRuleSummary {
+  id: string;
+  organization_id: string;
+  cve_id: string;
+  package_purl: string;
+  ecosystem: string;
+  affected_version_range: string | null;
+  reachability_level: string;
+  entry_point_class: string | null;
+  generated_with_provider: string;
+  generated_with_model: string;
+  generation_cost_usd: number | null;
+  validation_status: GeneratedRuleStatus;
+  enabled: boolean;
+  generated_at: string;
+  last_used_at: string | null;
+  use_count: number;
+}
+
+export interface GeneratedRulePreviousVersion {
+  rule_yaml: string;
+  vulnerable_fixture: string;
+  safe_fixture: string;
+  generated_with_provider: string;
+  generated_with_model: string;
+  generation_cost_usd: number | null;
+  validation_status: GeneratedRuleStatus;
+  validation_log: Record<string, unknown> | null;
+  generated_at: string;
+  replaced_at: string;
+  replaced_by_user_id: string | null;
+}
+
+export interface GeneratedRuleDetail extends GeneratedRuleSummary {
+  rule_yaml: string;
+  vulnerable_fixture: string;
+  safe_fixture: string;
+  validation_log: Record<string, unknown> | null;
+  previous_versions: GeneratedRulePreviousVersion[];
+}
+
 
 // PR & Commit tracking types
 
