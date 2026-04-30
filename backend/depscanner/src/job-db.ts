@@ -18,8 +18,9 @@ export interface ExtractionJobRow {
   created_at: string;
 }
 
-// PR 1: depscanner only handles extraction. PR 2 adds 'dast' to the supported list.
-const SUPPORTED_TYPES = ['extraction'] as const;
+// PR 2: depscanner accepts both extraction and dast. The dast pipeline ships in PR 3;
+// PR 2 has a stub that fails fast so the queue path can be exercised end-to-end.
+const SUPPORTED_TYPES = ['extraction', 'dast'] as const;
 
 export async function claimJob(
   supabase: Storage,

@@ -400,7 +400,7 @@ router.use(authenticateUser);
 // Helper function to check if user has access to a project
 // Access is granted if user is org owner, has manage_teams_and_projects permission,
 // is a direct project member, or is in a team assigned to the project
-async function checkProjectAccess(userId: string, organizationId: string, projectId: string): Promise<{
+export async function checkProjectAccess(userId: string, organizationId: string, projectId: string): Promise<{
   hasAccess: boolean;
   orgMembership: { role: string } | null;
   projectMembership: { role_id: string } | null;
@@ -579,7 +579,7 @@ async function getAccessibleProjectIdsInOrganization(
 
 /** Check if user can manage a project (enable integrations, suppress findings, accept risk, etc.).
  * Requires org-level manage_teams_and_projects OR team-level manage_projects (owner team). */
-async function checkProjectManagePermission(userId: string, organizationId: string, projectId: string): Promise<boolean> {
+export async function checkProjectManagePermission(userId: string, organizationId: string, projectId: string): Promise<boolean> {
   const { data: membership } = await supabase
     .from('organization_members')
     .select('role')
