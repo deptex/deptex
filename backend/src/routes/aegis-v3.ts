@@ -115,12 +115,15 @@ router.post('/stream', async (req: AuthRequest, res) => {
       },
     });
   } catch (err: any) {
+    // Real cause stays in server logs; the user only ever sees the generic
+    // "something went wrong" message. Leaking DB column names or supabase
+    // error text into the chat is a UX failure and a small infosec leak.
     console.error('[aegis-v3] Stream setup error:', err);
     if (resolvedThreadId) {
       await writeAegisChatError(resolvedThreadId, classifyChatError(err));
     }
     if (!res.headersSent) {
-      res.status(500).json({ error: err?.message ?? 'Failed to create Aegis stream' });
+      res.status(500).json({ error: 'Something went wrong. Please try again.' });
     } else if (!res.writableEnded) {
       res.end();
     }
@@ -159,7 +162,10 @@ router.post('/regenerate', async (req: AuthRequest, res) => {
     .delete()
     .eq('thread_id', threadId)
     .gt('created_at', lastUser.created_at);
-  if (deleteErr) return res.status(500).json({ error: deleteErr.message });
+  if (deleteErr) {
+    console.error('[aegis-v3] regenerate delete failed', deleteErr);
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
+  }
 
   res.json({ threadId });
 });
