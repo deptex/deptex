@@ -53,6 +53,13 @@ const CASES: FixtureCase[] = [
     specs: ['aspnet-core', 'dotnet-stdlib'],
     expectedVulnClass: 'command_injection',
   },
+  {
+    name: 'ASP.NET Core path traversal',
+    vulnDir: 'aspnet-path-traversal-vuln',
+    safeDir: 'aspnet-path-traversal-safe',
+    specs: ['aspnet-core', 'dotnet-stdlib'],
+    expectedVulnClass: 'path_traversal',
+  },
 ];
 
 function summarize(flows: Flow[]): string {
