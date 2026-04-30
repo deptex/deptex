@@ -2790,7 +2790,29 @@ export const api = {
       body: JSON.stringify({ version }),
     });
   },
+
+  async validateFlowCode(input: {
+    flowId: string;
+    nodeType: string;
+    eventType: string;
+    code: string;
+    customContext?: unknown;
+  }): Promise<FlowCodeValidationResult> {
+    return fetchWithAuth(`/api/flows/validate-code`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
 };
+
+export interface FlowCodeValidationResult {
+  syntaxOk: boolean;
+  runOk: boolean;
+  returnValue?: unknown;
+  error?: { stage: 'parse' | 'run' | 'returnShape' | 'returnSize'; message: string; line?: number };
+  durationMs: number;
+  cached?: boolean;
+}
 
 // ---------- Flows ----------
 

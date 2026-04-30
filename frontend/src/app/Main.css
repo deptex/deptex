@@ -534,6 +534,34 @@
   z-index: 100 !important;
 }
 
+/* Flow builder canvas — same drag affordance as the org overview graph
+   (scale + faint white ring on grab) so node interaction reads identically. */
+.flow-builder-canvas .react-flow__edge path[style*="stroke-dasharray"] {
+  animation: org-edge-flow 1.2s linear infinite;
+}
+.flow-builder-canvas .flow-add-stub line {
+  animation: org-edge-flow 1.2s linear infinite;
+}
+.flow-builder-canvas .react-flow__node > * {
+  transition:
+    transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 0.15s ease-out;
+}
+.flow-builder-canvas .react-flow__node:active:not(:has(.flow-add-affordance:active)) > *,
+.flow-builder-canvas .react-flow__node.dragging > * {
+  transform: scale(1.04);
+  box-shadow:
+    0 0 0 1.5px rgba(212, 212, 212, 0.5),
+    0 0 0 4px rgba(212, 212, 212, 0.04);
+}
+.flow-builder-canvas .react-flow__node:active:not(:has(.flow-add-affordance:active)) > *,
+.flow-builder-canvas .react-flow__node.dragging > * {
+  cursor: grabbing !important;
+}
+.flow-builder-canvas .react-flow__node.dragging {
+  z-index: 100 !important;
+}
+
 /* Monaco editor: force dark background to match app theme (#1A1C1E) */
 .monaco-editor,
 .monaco-editor .overflowingContentWidgets,

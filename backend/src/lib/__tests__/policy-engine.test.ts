@@ -283,3 +283,122 @@ describe('validatePolicyCode', () => {
     expect(result.allPassed).toBe(true);
   });
 });
+
+// ─── M0 hardening: isolated-vm sandbox invariants ───
+//
+// These tests verify the per-call sandbox actually delivers the security and
+// performance properties the plan promises. They exercise the engine through
+// `runPackagePolicy` (the hottest call site) so a regression here also tells
+// us the legacy callers still work.
+
+describe('isolated-vm sandbox invariants', () => {
+  it('fresh isolate per call: prototype mutations do not leak between calls', async () => {
+    // Mutate Object.prototype in call N; verify call N+1 sees a clean prototype.
+    const pollute = `function packagePolicy(ctx) {
+      Object.prototype.__leaked = 'pwned';
+      return { allowed: true, reasons: [] };
+    }`;
+    const observe = `function packagePolicy(ctx) {
+      var obj = {};
+      var leaked = (obj).__leaked;
+      return { allowed: leaked == null, reasons: leaked == null ? [] : ['LEAK: ' + leaked] };
+    }`;
+    const a = await runPackagePolicy(pollute, makeDep(), TIER_INTERNAL);
+    expect(a.allowed).toBe(true);
+    const b = await runPackagePolicy(observe, makeDep(), TIER_INTERNAL);
+    expect(b.allowed).toBe(true);
+    expect(b.reasons).toEqual([]);
+  });
+
+  it('CPU cap preempts an infinite loop and surfaces a timeout error', async () => {
+    const code = `function packagePolicy(ctx) { while (true) {} return { allowed: true, reasons: [] }; }`;
+    const start = Date.now();
+    const result = await runPackagePolicy(code, makeDep(), TIER_INTERNAL);
+    const elapsed = Date.now() - start;
+    expect(result.allowed).toBe(false);
+    expect(result.reasons[0]).toMatch(/Policy execution error/i);
+    // EXECUTION_TIMEOUT_MS is 30s; we just want to confirm the cap actually fires
+    // (legacy Function() couldn't preempt a synchronous while(true)).
+    expect(elapsed).toBeLessThan(35_000);
+  }, 40_000);
+
+  it('return-value cap blocks payloads larger than 256KB', async () => {
+    // Build a string just over the cap. JSON.stringify of a 300_000-char string
+    // produces ~300_002 chars (quotes), comfortably above the 262_144 limit.
+    const code = `function packagePolicy(ctx) {
+      var big = 'x'.repeat(300000);
+      return { allowed: true, reasons: [big] };
+    }`;
+    const result = await runPackagePolicy(code, makeDep(), TIER_INTERNAL);
+    expect(result.allowed).toBe(false);
+    expect(result.reasons[0]).toMatch(/256KB cap|exceeds/i);
+  });
+
+  it('hostile Proxy with throwing getters cannot hang the host', async () => {
+    // A Proxy whose getter throws would have crashed naive copy paths. With
+    // JSON.stringify-then-slice inside the isolate, the throw happens during
+    // stringify and surfaces as a normal policy execution error.
+    const code = `function packagePolicy(ctx) {
+      var hostile = new Proxy({}, { get: function() { throw new Error('boom getter'); } });
+      return { allowed: true, reasons: [], extra: hostile };
+    }`;
+    const start = Date.now();
+    const result = await runPackagePolicy(code, makeDep(), TIER_INTERNAL);
+    const elapsed = Date.now() - start;
+    expect(result.allowed).toBe(false);
+    // Host did not infinite-loop — must complete well inside the CPU cap.
+    expect(elapsed).toBeLessThan(2_000);
+  });
+
+  it('snapshot-warm-restore bench: per-call p50 < 5ms, 1500-call sweep < 10s', async () => {
+    // Acceptance gate from plan M0: this is the perf path that gates the
+    // extraction pipeline. If it fails, fall back to batch evaluation before
+    // declaring M0 complete.
+    const code = `function packagePolicy(ctx) {
+      if (ctx.dependency.dependencyScore != null && ctx.dependency.dependencyScore < 40) {
+        return { allowed: false, reasons: ['Low score'] };
+      }
+      return { allowed: true, reasons: [] };
+    }`;
+
+    const N = 1500;
+    const samples: number[] = new Array(N);
+    const sweepStart = Date.now();
+    for (let i = 0; i < N; i++) {
+      const t0 = Date.now();
+      await runPackagePolicy(code, makeDep(), TIER_INTERNAL);
+      samples[i] = Date.now() - t0;
+    }
+    const sweepMs = Date.now() - sweepStart;
+    samples.sort((a, b) => a - b);
+    const p50 = samples[Math.floor(N * 0.5)];
+    const p95 = samples[Math.floor(N * 0.95)];
+
+    // eslint-disable-next-line no-console
+    console.log(
+      `[bench] 1500-call sweep: total=${sweepMs}ms, p50=${p50}ms, p95=${p95}ms`,
+    );
+
+    expect(sweepMs).toBeLessThan(10_000);
+    expect(p50).toBeLessThan(5);
+  }, 30_000);
+
+  it('helpers round-trip correctly through host references', async () => {
+    // Verify each host helper proxy actually invokes the host function and
+    // returns its result. If a Reference were misconfigured, helpers would
+    // return undefined and the test would fail.
+    const code = `function packagePolicy(ctx) {
+      var reasons = [];
+      if (!isLicenseAllowed('MIT', ['MIT', 'Apache-2.0'])) reasons.push('isLicenseAllowed broke');
+      if (isLicenseBanned('MIT', ['GPL-3.0'])) reasons.push('isLicenseBanned broke');
+      if (!semverGt('2.0.0', '1.9.0')) reasons.push('semverGt broke');
+      if (!semverLt('1.0.0', '2.0.0')) reasons.push('semverLt broke');
+      var ds = daysSince('2000-01-01T00:00:00Z');
+      if (typeof ds !== 'number' || ds < 1000) reasons.push('daysSince broke: ' + ds);
+      return { allowed: reasons.length === 0, reasons: reasons };
+    }`;
+    const result = await runPackagePolicy(code, makeDep(), TIER_INTERNAL);
+    expect(result.reasons).toEqual([]);
+    expect(result.allowed).toBe(true);
+  });
+});
