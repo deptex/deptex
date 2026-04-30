@@ -36,6 +36,7 @@ export interface RolePermissions {
   trigger_fix?: boolean;
   manage_incidents?: boolean;
   view_ai_spending?: boolean;
+  manage_organization_settings?: boolean;
   view_members: boolean;
   add_members: boolean;
   edit_roles: boolean;
@@ -186,7 +187,74 @@ export interface OrganizationMember {
   teams?: Array<{ id: string; name: string }>;
 }
 
-async function getAuthToken(): Promise<string | null> {
+// Aegis Fix Agent types — mirror the backend's plan-types.ts.
+export type FindingType = 'vulnerability' | 'semgrep' | 'secret';
+export type FixStatus =
+  | 'planning'
+  | 'awaiting_approval'
+  | 'approved'
+  | 'executing'
+  | 'completed'
+  | 'failed'
+  | 'rejected';
+export type PlanLanguage =
+  | 'js' | 'ts' | 'python' | 'go' | 'java' | 'ruby' | 'php' | 'rust' | 'csharp';
+export type PlanDiffSize = 'small' | 'medium' | 'large';
+
+export interface PlanFileChange {
+  path: string;
+  action: 'modify' | 'create' | 'delete';
+  description: string;
+}
+
+export interface FixPlan {
+  summary: string;
+  finding: { type: FindingType; id: string; severity?: string };
+  currentState: string[];
+  desiredState: string[];
+  fileChanges: PlanFileChange[];
+  testCommand: string;
+  language: PlanLanguage;
+  estimatedDiffSize: PlanDiffSize;
+  wallClockBudgetSec: number;
+  refusal?: { reason: string; manualSuggestion?: string };
+}
+
+export interface FixRecord {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  status: FixStatus;
+  finding: { type: FindingType; id: string };
+  plan: FixPlan | null;
+  planGeneratedAt: string | null;
+  planBaseSha: string | null;
+  planBaseBranch: string | null;
+  approvalToken: string | null;
+  approvedAt: string | null;
+  rejectedAt: string | null;
+  prUrl: string | null;
+  prNumber: number | null;
+  diffSummary: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+}
+
+export interface RequestFixResponse {
+  fixId: string;
+  status: FixStatus;
+  plan: FixPlan;
+  fix?: FixRecord | null;
+}
+
+export interface FixStalenessResponse {
+  isStale: boolean;
+  currentHeadSha: string | null;
+  baseSha: string | null;
+  baseBranch: string | null;
+}
+
+export async function getAuthToken(): Promise<string | null> {
   const { data: { session }, error } = await supabase.auth.getSession();
 
   if (error) {
@@ -212,7 +280,7 @@ async function getAuthToken(): Promise<string | null> {
   return null;
 }
 
-async function fetchWithAuth(url: string, options: RequestInit = {}) {
+export async function fetchWithAuth(url: string, options: RequestInit = {}) {
   const token = await getAuthToken();
 
   if (!token) {
@@ -1148,79 +1216,8 @@ export const api = {
   },
 
   // ============================================================
-  // AI Provider Management (BYOK)
+  // AI usage + default platform provider
   // ============================================================
-
-  async getAIProviders(orgId: string): Promise<AIProviderConfig[]> {
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers`);
-  },
-
-  async addAIProvider(
-    orgId: string,
-    provider: string,
-    apiKey: string,
-    opts?: { model_preference?: string; monthly_cost_cap?: number; display_name?: string; api_base_url?: string },
-  ): Promise<AIProviderConfig> {
-    const body: Record<string, unknown> = {
-      provider,
-      api_key: apiKey,
-      model_preference: opts?.model_preference,
-      monthly_cost_cap: opts?.monthly_cost_cap,
-    };
-    if (provider === 'custom' && opts) {
-      if (opts.display_name != null) body.display_name = opts.display_name;
-      if (opts.api_base_url != null) body.api_base_url = opts.api_base_url;
-    }
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-  },
-
-  async updateAIProvider(
-    orgId: string,
-    providerId: string,
-    updates: { model_preference?: string | null; display_name?: string | null; api_base_url?: string | null },
-  ): Promise<AIProviderConfig> {
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers/${providerId}`, {
-      method: 'PATCH',
-      body: JSON.stringify(updates),
-    });
-  },
-
-  async deleteAIProvider(orgId: string, providerId: string): Promise<{ message: string; warning?: string }> {
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers/${providerId}`, { method: 'DELETE' });
-  },
-
-  async testAIProvider(
-    orgId: string,
-    provider: string,
-    apiKey: string,
-    opts?: { model?: string; api_base_url?: string },
-  ): Promise<{ success: boolean; model?: string; error?: string; code?: string }> {
-    const body: Record<string, unknown> = { provider, api_key: apiKey };
-    if (opts?.model != null) body.model = opts.model;
-    if (provider === 'custom' && opts?.api_base_url != null) body.api_base_url = opts.api_base_url;
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers/test`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-  },
-
-  async setDefaultAIProvider(orgId: string, providerId: string): Promise<{ message: string }> {
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers/${providerId}/default`, { method: 'PATCH' });
-  },
-
-  async getOrgAISettings(orgId: string): Promise<OrgAISettings> {
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-settings`);
-  },
-
-  async updateOrgAISettings(orgId: string, patch: Partial<OrgAISettings>): Promise<OrgAISettings> {
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-settings`, {
-      method: 'PATCH',
-      body: JSON.stringify(patch),
-    });
-  },
 
   async getAIUsage(orgId: string, period?: string): Promise<AIUsageSummary> {
     const params = period ? `?period=${period}` : '';
@@ -1233,6 +1230,25 @@ export const api = {
     if (perPage) params.set('per_page', String(perPage));
     const qs = params.toString();
     return fetchWithAuth(`/api/organizations/${orgId}/ai-usage/logs${qs ? `?${qs}` : ''}`);
+  },
+
+  async getAIDefaultProvider(orgId: string): Promise<AIDefaultProvider> {
+    return fetchWithAuth(`/api/organizations/${orgId}/ai-default-provider`);
+  },
+
+  async setAIDefaultProvider(orgId: string, provider: PlatformAIProvider): Promise<AIDefaultProvider> {
+    return fetchWithAuth(`/api/organizations/${orgId}/ai-default-provider`, {
+      method: 'PATCH',
+      body: JSON.stringify({ provider }),
+    });
+  },
+
+  async getAIUsageDaily(orgId: string, days = 30): Promise<DailyUsageResponse> {
+    return fetchWithAuth(`/api/organizations/${orgId}/ai-usage/daily?days=${days}`);
+  },
+
+  async getAegisToolBreakdown(orgId: string, days = 30, limit = 10): Promise<AegisToolBreakdownResponse> {
+    return fetchWithAuth(`/api/organizations/${orgId}/aegis-tools/breakdown?days=${days}&limit=${limit}`);
   },
 
   // ============================================================
@@ -2705,45 +2721,49 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/teams/${teamId}/stats`);
   },
 
-  // AI Fix
-  async requestFix(orgId: string, projectId: string, body: {
-    strategy: string;
-    vulnerabilityOsvId?: string;
-    dependencyId?: string;
-    projectDependencyId?: string;
-    targetVersion?: string;
-    semgrepFindingId?: string;
-    secretFindingId?: string;
-  }): Promise<{ success: boolean; jobId?: string; error?: string; errorCode?: string }> {
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fix`, {
+  // Aegis Fix Agent (plan-then-approve flow). Replaces the legacy aider-worker
+  // direct-execute fix API; that worker is being retired.
+  async requestFix(body: {
+    organizationId: string;
+    projectId: string;
+    findingType: FindingType;
+    findingId: string;
+  }): Promise<RequestFixResponse> {
+    return fetchWithAuth('/api/aegis/fix/request', {
       method: 'POST',
       body: JSON.stringify(body),
     });
   },
 
-  async getFixStatus(orgId: string, projectId: string): Promise<FixJob[]> {
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fix-status`);
+  async getFix(fixId: string): Promise<{ fix: FixRecord }> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}`);
   },
 
-  async getFixes(orgId: string, projectId: string, params?: {
-    osvId?: string;
-    semgrepFindingId?: string;
-    secretFindingId?: string;
-    status?: string;
-  }): Promise<FixJob[]> {
-    const search = new URLSearchParams();
-    if (params?.osvId) search.set('osvId', params.osvId);
-    if (params?.semgrepFindingId) search.set('semgrepFindingId', params.semgrepFindingId);
-    if (params?.secretFindingId) search.set('secretFindingId', params.secretFindingId);
-    if (params?.status) search.set('status', params.status);
-    const qs = search.toString();
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fixes${qs ? `?${qs}` : ''}`);
+  async getFixStaleness(fixId: string): Promise<FixStalenessResponse> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}/staleness`);
   },
 
-  async cancelFix(orgId: string, projectId: string, fixId: string): Promise<{ success: boolean }> {
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fixes/${fixId}/cancel`, {
-      method: 'POST',
+  async approveFix(fixId: string, token: string): Promise<{ fix: FixRecord }> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}/approve`, {
+      method: 'PATCH',
+      body: JSON.stringify({ token }),
     });
+  },
+
+  async rejectFix(fixId: string, reason?: string): Promise<{ fix: FixRecord }> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}/reject`, {
+      method: 'PATCH',
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
+  },
+
+  async regenerateFixPlan(fixId: string): Promise<RequestFixResponse> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}/regenerate`, { method: 'POST' });
+  },
+
+  async getPendingFixes(organizationId: string): Promise<{ fixes: FixRecord[] }> {
+    const qs = new URLSearchParams({ organizationId });
+    return fetchWithAuth(`/api/aegis/fix/pending?${qs.toString()}`);
   },
 
   // Learning
@@ -3558,19 +3578,6 @@ export interface AegisInboxMessage {
   created_at: string;
 }
 
-export interface AIProviderConfig {
-  id: string;
-  provider: 'openai' | 'anthropic' | 'google' | 'custom';
-  model_preference: string | null;
-  is_default: boolean;
-  monthly_cost_cap: number;
-  connected: boolean;
-  display_name?: string | null;
-  api_base_url?: string | null;
-  created_at?: string;
-  updated_at?: string;
-}
-
 export interface AIUsageSummary {
   totalInputTokens: number;
   totalOutputTokens: number;
@@ -3578,6 +3585,37 @@ export interface AIUsageSummary {
   monthlyCostCap: number;
   byFeature: Record<string, { tokens: number; cost: number; count: number }>;
   byUser: Array<{ userId: string; tokens: number; cost: number; count: number }>;
+}
+
+export type PlatformAIProvider = 'openai' | 'anthropic' | 'google' | 'deepinfra';
+
+export interface AIDefaultProvider {
+  provider: PlatformAIProvider;
+  model: string;
+}
+
+export interface DailyUsagePoint {
+  date: string;
+  tokens: number;
+  cost_cents: number;
+}
+
+export interface DailyUsageResponse {
+  days: number;
+  points: DailyUsagePoint[];
+}
+
+export interface AegisToolBreakdownRow {
+  tool_name: string;
+  executions: number;
+  total_tokens: number;
+  total_cost_cents: number;
+}
+
+export interface AegisToolBreakdownResponse {
+  days: number;
+  limit: number;
+  tools: AegisToolBreakdownRow[];
 }
 
 export interface ProjectPolicyException {
@@ -3991,12 +4029,6 @@ export type EpdStatus =
   | 'ai_error_fallback'
   | 'budget_exceeded';
 
-/** Org-level EPD knobs. Both NULL means "inherit the worker's env var defaults". */
-export interface OrgAISettings {
-  epd_max_run_cost_usd: number | null;
-  epd_budget_exceeded_behavior: 'fail_job' | 'continue_with_fallback' | null;
-}
-
 /** Per-org reachability rule generation policy (Phase 5). */
 export interface ReachabilitySettings {
   organization_id: string;
@@ -4028,7 +4060,7 @@ export interface GeneratedRuleSummary {
   entry_point_class: string | null;
   generated_with_provider: string;
   generated_with_model: string;
-  generation_cost_usd: number;
+  generation_cost_usd: number | null;
   validation_status: GeneratedRuleStatus;
   enabled: boolean;
   generated_at: string;
@@ -4042,7 +4074,7 @@ export interface GeneratedRulePreviousVersion {
   safe_fixture: string;
   generated_with_provider: string;
   generated_with_model: string;
-  generation_cost_usd: number;
+  generation_cost_usd: number | null;
   validation_status: GeneratedRuleStatus;
   validation_log: Record<string, unknown> | null;
   generated_at: string;
@@ -4057,6 +4089,7 @@ export interface GeneratedRuleDetail extends GeneratedRuleSummary {
   validation_log: Record<string, unknown> | null;
   previous_versions: GeneratedRulePreviousVersion[];
 }
+
 
 // PR & Commit tracking types
 

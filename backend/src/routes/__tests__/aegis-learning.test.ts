@@ -40,7 +40,6 @@ import {
 import { recomputePatterns, recomputeAllStaleOrgs } from '../../lib/learning/pattern-engine';
 import { recommendStrategies, getDashboardData } from '../../lib/learning/recommendation-engine';
 import { normalizeStrategy, CANONICAL_STRATEGIES, STRATEGY_DISPLAY_NAMES } from '../../lib/learning/strategy-constants';
-import { parseTokenUsage } from '../../../../backend/aider-worker/src/executor';
 
 function mockChain(finalData: any = null, finalError: any = null) {
   const chain: any = {
@@ -320,19 +319,6 @@ describe('Strategy Constants', () => {
   });
 });
 
-// ──── Token Parsing (39-40) ────
-
-describe('Token Parsing', () => {
-  test('39. parseTokenUsage extracts tokens sent/received', () => {
-    const output = 'Tokens: 1,234 sent, 567 received\nCost: $0.05';
-    const { tokens, cost } = parseTokenUsage(output);
-    expect(tokens).toBe(1801);
-    expect(cost).toBeCloseTo(0.05);
-  });
-
-  test('40. parseTokenUsage returns 0 for no match', () => {
-    const { tokens, cost } = parseTokenUsage('some random output');
-    expect(tokens).toBe(0);
-    expect(cost).toBe(0);
-  });
-});
+// Token Parsing tests retired with the aider-worker. The Aegis Fix Agent
+// tracks tokens directly via the AI SDK's usage object — see
+// backend/fix-worker/src/executor.ts.
