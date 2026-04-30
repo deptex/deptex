@@ -567,7 +567,7 @@ export async function runPipeline(
     const sbomContent = fs.readFileSync(sbomPath, 'utf8');
     const sbom = JSON.parse(sbomContent) as Parameters<typeof parseSbom>[0];
 
-    // Use job id so GET /sbom can find the file (it looks up extraction_jobs.id → projectId/{id}/sbom.json)
+    // Use job id so GET /sbom can find the file (it looks up scan_jobs.id → projectId/{id}/sbom.json)
     const runId = job.jobId ?? Date.now().toString();
     const storagePath = `${projectId}/${runId}/sbom.json`;
 

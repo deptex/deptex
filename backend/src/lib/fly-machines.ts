@@ -8,10 +8,33 @@ export interface FlyMachineConfig {
   region?: string;
 }
 
-export const EXTRACTION_CONFIG: FlyMachineConfig = {
-  app: process.env.FLY_EXTRACTION_APP || 'deptex-extraction-worker',
+// Phase 23: extraction-worker → depscanner. The new Fly app name is `deptex-depscanner`.
+// During the rollover window we still read FLY_EXTRACTION_APP so existing deployments
+// keep pointing at the old app until Henry creates the new one and flips the env var.
+//
+// Single Fly app hosts every scan_jobs.type. Per-type machine size differs at start —
+// extraction needs the perf-8x for tree-sitter + atom + dep-scan; DAST needs less.
+// Same `app` value, different `guest` shape passed to the Machines API at create time.
+function depscannerApp(): string {
+  return (
+    process.env.FLY_DEPSCANNER_APP ||
+    process.env.FLY_EXTRACTION_APP ||
+    'deptex-depscanner'
+  );
+}
+
+export const DEPSCANNER_CONFIG: FlyMachineConfig = {
+  app: depscannerApp(),
   guest: { cpus: 8, memory_mb: 65536, cpu_kind: 'performance' },
   maxBurst: parseInt(process.env.FLY_MAX_BURST_MACHINES || '5', 10),
+};
+
+// Phase 23b: DAST scans run on the same depscanner Fly app but on a smaller
+// machine shape. ZAP doesn't need 65GB; 8GB shared-cpu-4x is plenty.
+export const DAST_CONFIG: FlyMachineConfig = {
+  app: depscannerApp(),
+  guest: { cpus: 4, memory_mb: 8192, cpu_kind: 'shared' },
+  maxBurst: parseInt(process.env.FLY_DAST_MAX_BURST || '3', 10),
 };
 
 export const FIX_CONFIG: FlyMachineConfig = {
@@ -180,5 +203,8 @@ export async function startFlyMachine(config: FlyMachineConfig): Promise<string 
   return null;
 }
 
-export const startExtractionMachine = () => startFlyMachine(EXTRACTION_CONFIG);
+export const startDepscannerMachine = () => startFlyMachine(DEPSCANNER_CONFIG);
+// Back-compat alias — extraction is one of several scan types depscanner runs.
+export const startExtractionMachine = startDepscannerMachine;
+export const startDastMachine = () => startFlyMachine(DAST_CONFIG);
 export const startFixMachine = () => startFlyMachine(FIX_CONFIG);

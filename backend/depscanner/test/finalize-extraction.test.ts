@@ -518,7 +518,7 @@ async function testMonorepoSameCveTwoPDsEmitTwoEvents(): Promise<void> {
   const pdIds = events.rows.map((e) => e.project_dependency_id).sort();
   assert(pdIds[0] === PD_20 && pdIds[1] === PD_21, `events carry distinct pd_ids (got ${JSON.stringify(pdIds)})`);
 
-  // Retry-within-same-run_id isn't a production scenario (recover_stuck_extraction_jobs
+  // Retry-within-same-run_id isn't a production scenario (recover_stuck_scan_jobs
   // always assigns a new run_id before requeuing). Cross-run retry idempotency is
   // covered by the partial unique index itself: on a different run_id, events from
   // the prior run stay, and the new run's INSERTs only conflict if the same

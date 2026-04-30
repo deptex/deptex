@@ -1,12 +1,12 @@
-# Run the extraction worker in Docker (no local Python/dep-scan needed).
-# From backend/extraction-worker:
+# Run depscanner (the unified scanner worker) in Docker (no local Python/dep-scan needed).
+# From backend/depscanner:
 #   docker compose up --build
 #
 # Backend must be reachable from the container. If the backend runs on your host:
 #   set BACKEND_URL=http://host.docker.internal:3001 in .env (or below)
 
 services:
-  extraction-worker:
+  depscanner:
     build: .
     env_file: .env
     environment:

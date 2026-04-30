@@ -107,7 +107,7 @@ export async function createPGLiteStorage(
     if (!fs.existsSync(schemaPath)) {
       throw new Error(
         `PGLiteStorage: schema.sql not found at ${schemaPath}. ` +
-          `Run "cd backend/extraction-worker && npm run schema:dump" to generate it, or pass { schemaPath }.`,
+          `Run "cd backend/depscanner && npm run schema:dump" to generate it, or pass { schemaPath }.`,
       );
     }
     const schemaSql = fs.readFileSync(schemaPath, 'utf8');

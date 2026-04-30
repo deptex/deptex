@@ -53,11 +53,12 @@ describe('queueExtractionJob', () => {
     expect(result.success).toBe(true);
     expect(result.run_id).toBeDefined();
     expect(typeof result.run_id).toBe('string');
-    expect(mockFrom).toHaveBeenCalledWith('extraction_jobs');
+    expect(mockFrom).toHaveBeenCalledWith('scan_jobs');
     expect(chain.insert).toHaveBeenCalledWith(
       expect.objectContaining({
         project_id: 'proj-1',
         organization_id: 'org-1',
+        type: 'extraction',
         status: 'queued',
         payload: expect.objectContaining({
           repo_full_name: 'owner/repo',
@@ -79,7 +80,7 @@ describe('queueExtractionJob', () => {
         order: jest.fn().mockReturnThis(),
         limit: jest.fn().mockReturnThis(),
         maybeSingle: jest.fn().mockResolvedValue({
-          data: table === 'extraction_jobs' ? { id: 'job-1', status: 'processing' } : null,
+          data: table === 'scan_jobs' ? { id: 'job-1', status: 'processing' } : null,
           error: null,
         }),
       };
@@ -129,7 +130,7 @@ describe('cancelExtractionJob', () => {
         order: jest.fn().mockReturnThis(),
         limit: jest.fn().mockReturnThis(),
         maybeSingle: jest.fn().mockResolvedValue(
-          table === 'extraction_jobs'
+          table === 'scan_jobs'
             ? { data: { id: 'job-1', status: 'processing' }, error: null }
             : { data: null, error: null }
         ),
@@ -141,7 +142,7 @@ describe('cancelExtractionJob', () => {
     const result = await cancelExtractionJob('proj-1');
 
     expect(result.success).toBe(true);
-    expect(mockFrom).toHaveBeenCalledWith('extraction_jobs');
+    expect(mockFrom).toHaveBeenCalledWith('scan_jobs');
   });
 
   it('returns error when no active extraction', async () => {

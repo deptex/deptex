@@ -1,3 +1,14 @@
+# ============================================================================
+# Stage 1: ZAP source — extract OWASP ZAP binaries for the DAST pipeline.
+# Base image is ~1.7GB; we COPY only the runtime tree (/zap) into the runtime
+# stage so we don't carry the whole base image. Java is provided by the
+# runtime stage (Temurin 21 already installed for atom + Maven).
+# ============================================================================
+FROM ghcr.io/zaproxy/zaproxy:stable AS zap
+
+# ============================================================================
+# Stage 2: depscanner runtime
+# ============================================================================
 FROM node:20-slim
 
 RUN apt-get update && apt-get install -y \
@@ -6,6 +17,16 @@ RUN apt-get update && apt-get install -y \
   python3 \
   python3-pip \
   python3-venv \
+  python-is-python3 \
+  xmlstarlet \
+  xvfb \
+  xauth \
+  fontconfig \
+  libxi6 \
+  libxtst6 \
+  libxrender1 \
+  xfonts-base \
+  xfonts-encodings \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Eclipse Temurin JDK 21 (full JDK for Maven + atom)
@@ -82,9 +103,34 @@ RUN curl -sSfL https://github.com/trufflesecurity/trufflehog/releases/download/v
   && chmod +x /usr/local/bin/trufflehog \
   && trufflehog --version
 
+# OWASP ZAP for the DAST pipeline (Phase 23b PR 3). Copied from the ZAP base
+# image so we get zap.jar + addons + the python helper scripts used by Task 8's
+# runner (zap-baseline.py / zap-full-scan.py / zap-api-scan.py). Java is shared
+# with the existing JDK 21 install above.
+COPY --from=zap /zap /zap
+ENV PATH="/zap:${PATH}" \
+    ZAP_PATH="/zap/zap.sh"
+
+# ZAP's helper scripts (zap-baseline.py etc) need a small set of Python deps
+# that are normally pre-installed in the official ZAP image but not in
+# node:20-slim. Smoke check only verifies binaries exist (full version prints
+# require the JVM warmup that we want to avoid at build time).
+RUN pip3 install --no-cache-dir --break-system-packages \
+  python-owasp-zap-v2.4 \
+  && test -f /zap/zap.sh \
+  && test -f /zap/zap-baseline.py \
+  && test -f /zap/zap-api-scan.py \
+  && test -f /zap/zap-full-scan.py
+
 RUN useradd -m -s /bin/bash worker
 
 RUN mkdir -p /data /data/cache && chown -R worker:worker /data
+
+# /zap/wrk is the only directory ZAP's helper scripts will accept as a target
+# for `-J / -r / -w / -x / -c / -g` (see zap-baseline.py:374, the script bails
+# with `'/zap/wrk' is not mounted` otherwise). The runner writes report+stub
+# files there. Owned by `worker` so the runtime user can mkdtempSync into it.
+RUN mkdir -p /zap/wrk && chown worker:worker /zap/wrk
 
 ENV VDB_HOME=/data
 ENV DEPSCAN_CACHE_DIR=/data/cache
@@ -108,7 +154,7 @@ COPY reachability-rules ./reachability-rules
 
 # Local CLI mode reads schema.sql via PGLiteStorage at runtime. The
 # `docker:build` npm script stages the backend/database folder into
-# extraction-worker/.schema before invoking docker build so we can COPY it
+# depscanner/.schema before invoking docker build so we can COPY it
 # in here. On Fly.io (which uses Supabase, not PGLite) this dir is unused.
 COPY .schema/schema.sql /database/schema.sql
 
@@ -116,7 +162,7 @@ RUN npm run build
 
 RUN rm -rf src tsconfig.json && npm ci --only=production
 
-RUN chown -R worker:worker /app /tmp /data /database
+RUN chown -R worker:worker /app /tmp /data /database /zap
 
 USER worker
 

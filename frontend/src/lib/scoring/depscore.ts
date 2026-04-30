@@ -1,7 +1,7 @@
 /**
  * Depscore: context-aware vulnerability score (0–100).
  * Supports both legacy 4-tier enum and custom tier multipliers from organization_asset_tiers.
- * Matches backend extraction-worker depscore formula.
+ * Matches backend depscanner depscore formula.
  */
 
 export type AssetTier = 'CROWN_JEWELS' | 'EXTERNAL' | 'INTERNAL' | 'NON_PRODUCTION';
@@ -22,7 +22,7 @@ export interface DepscoreContext {
   packageScore?: number | null;
 }
 
-/** Reachability level weights (must match extraction-worker). */
+/** Reachability level weights (must match depscanner). */
 const REACHABILITY_LEVEL_WEIGHTS: Record<string, number> = {
   confirmed: 1.0,
   data_flow: 0.9,

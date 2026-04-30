@@ -45,7 +45,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install Semgrep
-        # Pinned to match extraction-worker/Dockerfile so CI rule-fixture runs
+        # Pinned to match depscanner/Dockerfile so CI rule-fixture runs
         # match what ships in the worker image. Without this, the live-semgrep
         # Jest block at __tests__/reachability-rules.test.ts is describe.skip'd
         # in CI and rule-pack regressions merge green.
@@ -59,7 +59,7 @@ jobs:
         # Fails CI if any bundled rule.yml is malformed, missing required
         # metadata, or has a duplicate rule id. Also runs locally via
         # `npx tsx scripts/validate-reachability-rules.ts`.
-        working-directory: backend/extraction-worker
+        working-directory: backend/depscanner
         run: npx tsx scripts/validate-reachability-rules.ts
 
       - name: Run backend tests
@@ -71,5 +71,5 @@ jobs:
         # the confirmed-promotion classifier against a real Postgres-shaped
         # store, not a Supabase mock. Jest doesn't pick this up because it
         # lives outside the `roots` tree; run it explicitly.
-        working-directory: backend/extraction-worker
+        working-directory: backend/depscanner
         run: npm run test:reachability-rules-e2e

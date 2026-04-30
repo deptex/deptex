@@ -53,9 +53,10 @@ registerAegisTool(
     }),
     execute: async ({ projectId }) => {
       const { data: latestJob } = await supabase
-        .from('extraction_jobs')
+        .from('scan_jobs')
         .select('id, completed_at')
         .eq('project_id', projectId)
+        .eq('type', 'extraction')
         .eq('status', 'completed')
         .order('completed_at', { ascending: false })
         .limit(1)
@@ -193,9 +194,10 @@ registerAegisTool(
       const auditId = `audit-${Date.now()}`;
       const basePath = `audit-packages/${projectId}/${auditId}`;
       const { data: latestJob } = await supabase
-        .from('extraction_jobs')
+        .from('scan_jobs')
         .select('id')
         .eq('project_id', projectId)
+        .eq('type', 'extraction')
         .eq('status', 'completed')
         .order('completed_at', { ascending: false })
         .limit(1)
