@@ -47,6 +47,7 @@ import {
   DialogContent,
   DialogDescription,
   DialogFooter,
+  DialogHeader,
   DialogTitle,
 } from '../../components/ui/dialog';
 import { Button } from '../../components/ui/button';
@@ -932,21 +933,25 @@ function ConditionSidebar({
       </div>
 
       <Dialog open={pendingMode !== null} onOpenChange={(open) => { if (!open) cancelModeSwitch(); }}>
-        <DialogContent className="sm:max-w-[440px]">
-          <DialogTitle>
-            {pendingMode === 'visual' ? 'Switch to Visual?' : 'Replace existing code?'}
-          </DialogTitle>
-          <DialogDescription>
-            {pendingMode === 'visual'
-              ? 'Switching to Visual will discard the code currently saved on this condition. This cannot be undone.'
-              : 'Code is already saved on this condition. Switching to Code mode will replace it with the default template.'}
-          </DialogDescription>
-          <DialogFooter>
+        <DialogContent hideClose className="p-0 gap-0 overflow-hidden bg-background-card-header">
+          <div className="p-6">
+            <DialogHeader>
+              <DialogTitle>
+                {pendingMode === 'visual' ? 'Switch to Visual?' : 'Replace existing code?'}
+              </DialogTitle>
+              <DialogDescription>
+                {pendingMode === 'visual'
+                  ? 'Switching to Visual will discard the code currently saved on this condition. This cannot be undone.'
+                  : 'Code is already saved on this condition. Switching to Code mode will replace it with the default template.'}
+              </DialogDescription>
+            </DialogHeader>
+          </div>
+          <div className="flex items-center justify-between px-6 py-4 border-t border-border bg-background">
             <Button variant="outline" onClick={cancelModeSwitch}>Cancel</Button>
-            <Button onClick={confirmModeSwitch}>
+            <Button variant="destructive" onClick={confirmModeSwitch}>
               {pendingMode === 'visual' ? 'Discard code' : 'Replace'}
             </Button>
-          </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
     </aside>
