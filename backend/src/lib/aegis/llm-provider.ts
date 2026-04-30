@@ -1,21 +1,43 @@
 import { LanguageModel } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { decryptApiKey } from '../ai/encryption';
 import { DEFAULT_MODELS } from '../ai/models';
 
+export type AIProvider = 'openai' | 'anthropic' | 'google' | 'deepinfra';
+
 interface ProviderConfig {
-  providerType: 'openai' | 'anthropic' | 'google';
+  providerType: AIProvider;
   apiKey: string;
   model: string;
   baseURL?: string;
 }
 
+const DEFAULT_MONTHLY_COST_CAP_USD = 100;
+
+// DeepInfra exposes an OpenAI-API-compatible endpoint, so we reuse the
+// OpenAI factory with a custom baseURL — no separate SDK required.
+// IMPORTANT: DeepInfra implements only the Chat Completions API
+// (/chat/completions), not OpenAI's newer Responses API (/responses) which
+// the AI SDK uses by default. Call .chat(model) so the SDK targets
+// /chat/completions and DeepInfra responds 200 instead of 404.
+const DEEPINFRA_BASE_URL = 'https://api.deepinfra.com/v1/openai';
+
 export function getLanguageModel(config: ProviderConfig): LanguageModel {
   switch (config.providerType) {
     case 'openai':
       return createOpenAI({ apiKey: config.apiKey, baseURL: config.baseURL })(config.model);
+    case 'deepinfra':
+      // Use @ai-sdk/openai-compatible rather than @ai-sdk/openai for
+      // DeepInfra. The OpenAI provider maps system messages to
+      // role: 'developer' (the new OpenAI o1/o3 role) which DeepInfra
+      // rejects with 422. The compatible provider keeps role: 'system'.
+      return createOpenAICompatible({
+        name: 'deepinfra',
+        apiKey: config.apiKey,
+        baseURL: config.baseURL ?? DEEPINFRA_BASE_URL,
+      }).chatModel(config.model);
     case 'anthropic':
       return createAnthropic({ apiKey: config.apiKey })(config.model);
     case 'google':
@@ -25,53 +47,58 @@ export function getLanguageModel(config: ProviderConfig): LanguageModel {
   }
 }
 
-export async function getLanguageModelForOrg(organizationId: string): Promise<LanguageModel> {
+export function getPlatformKeyForProvider(provider: AIProvider): string | undefined {
+  switch (provider) {
+    case 'openai':
+      return process.env.OPENAI_API_KEY;
+    case 'anthropic':
+      return process.env.ANTHROPIC_API_KEY;
+    case 'google':
+      return process.env.GOOGLE_AI_API_KEY;
+    case 'deepinfra':
+      return process.env.DEEPINFRA_API_KEY;
+  }
+}
+
+function envVarFor(provider: AIProvider): string {
+  if (provider === 'google') return 'GOOGLE_AI_API_KEY';
+  if (provider === 'deepinfra') return 'DEEPINFRA_API_KEY';
+  return `${provider.toUpperCase()}_API_KEY`;
+}
+
+async function getOrgDefaultProvider(organizationId: string): Promise<AIProvider> {
   const { supabase } = await import('../supabase');
+  const { data, error } = await supabase
+    .from('organizations')
+    .select('default_ai_provider')
+    .eq('id', organizationId)
+    .single();
+  if (error) throw new Error(`Failed to load organization: ${error.message}`);
+  return (data?.default_ai_provider as AIProvider) ?? 'anthropic';
+}
 
-  const { data: providers } = await supabase
-    .from('organization_ai_providers')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .order('is_default', { ascending: false })
-    .limit(1);
-
-  if (!providers?.length) {
+export async function getLanguageModelForOrg(organizationId: string): Promise<LanguageModel> {
+  const provider = await getOrgDefaultProvider(organizationId);
+  const apiKey = getPlatformKeyForProvider(provider);
+  if (!apiKey) {
     throw new Error(
-      'No AI provider configured. Set up a provider in Organization Settings > AI Configuration.'
+      `Platform API key for ${provider} is not configured. Set ${envVarFor(provider)} on the backend, or pick a different provider in Organization Settings > AI.`
     );
   }
-
-  const row = providers[0];
-  const apiKey = decryptApiKey(row.encrypted_api_key, row.encryption_key_version);
-  const model = row.model_preference || DEFAULT_MODELS[row.provider as keyof typeof DEFAULT_MODELS];
-
-  return getLanguageModel({
-    providerType: row.provider as ProviderConfig['providerType'],
-    apiKey,
-    model,
-  });
+  const model = DEFAULT_MODELS[provider];
+  return getLanguageModel({ providerType: provider, apiKey, model });
 }
 
 export async function getProviderInfoForOrg(organizationId: string): Promise<{
-  provider: string;
+  provider: AIProvider;
   model: string;
   monthlyCostCap: number;
-} | null> {
-  const { supabase } = await import('../supabase');
-
-  const { data: providers } = await supabase
-    .from('organization_ai_providers')
-    .select('provider, model_preference, monthly_cost_cap, is_default')
-    .eq('organization_id', organizationId)
-    .order('is_default', { ascending: false })
-    .limit(1);
-
-  if (!providers?.length) return null;
-  const row = providers[0];
+}> {
+  const provider = await getOrgDefaultProvider(organizationId);
   return {
-    provider: row.provider,
-    model: row.model_preference || DEFAULT_MODELS[row.provider as keyof typeof DEFAULT_MODELS],
-    monthlyCostCap: row.monthly_cost_cap ?? 100,
+    provider,
+    model: DEFAULT_MODELS[provider],
+    monthlyCostCap: DEFAULT_MONTHLY_COST_CAP_USD,
   };
 }
 

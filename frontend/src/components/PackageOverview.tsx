@@ -531,7 +531,7 @@ export default function PackageOverview({ dependency, organizationId, projectId,
                 )}
               </div>
 
-              {/* Right side: Deprecate + Aegis analyze buttons */}
+              {/* Right side: Deprecate + Analyze buttons */}
               {(dependency.is_direct || canManageDeprecations) && (
                 <div className="flex items-center gap-2 shrink-0">
                   {/* Deprecate button */}
@@ -561,7 +561,7 @@ export default function PackageOverview({ dependency, organizationId, projectId,
                       ) : (
                         <Sparkles className="h-3.5 w-3.5 mr-1.5" />
                       )}
-                      Have Aegis analyze usage
+                      Analyze usage
                     </Button>
                   )}
                 </div>
@@ -576,7 +576,7 @@ export default function PackageOverview({ dependency, organizationId, projectId,
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Sparkles className="h-4 w-4 text-foreground-secondary" />
-                    <span className="text-sm font-medium text-foreground">Aegis Usage Analysis</span>
+                    <span className="text-sm font-medium text-foreground">AI Usage Analysis</span>
                   </div>
                   <div className="flex items-center gap-2">
                     {aiAnalyzedAt && (

@@ -25,6 +25,7 @@
     "@ai-sdk/anthropic": "^3.0.50",
     "@ai-sdk/google": "^3.0.34",
     "@ai-sdk/openai": "^3.0.37",
+    "@ai-sdk/openai-compatible": "^2.0.41",
     "@anthropic-ai/sdk": "^0.39.0",
     "@google/generative-ai": "^0.24.0",
     "@node-saml/node-saml": "^5.1.0",
@@ -32,13 +33,13 @@
     "@supabase/supabase-js": "^2.39.0",
     "@upstash/qstash": "^2.9.0",
     "@upstash/redis": "^1.25.0",
-    "bullmq": "^5.34.0",
-    "ioredis": "^5.4.1",
     "ai": "^6.0.106",
+    "bullmq": "^5.34.0",
     "cors": "^2.8.5",
     "deptex-extraction-worker": "file:extraction-worker",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
+    "ioredis": "^5.4.1",
     "ipaddr.js": "^2.3.0",
     "jsonwebtoken": "^9.0.2",
     "nodemailer": "^7.0.11",
@@ -46,7 +47,8 @@
     "pacote": "^21.3.1",
     "semver": "^7.7.4",
     "simple-git": "^3.22.0",
-    "stripe": "^20.4.0"
+    "stripe": "^20.4.0",
+    "zod": "^4.1.8"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
@@ -66,5 +68,8 @@
     "ts-node": "^10.9.2",
     "tsx": "^4.7.0",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "zod": "$zod"
   }
 }

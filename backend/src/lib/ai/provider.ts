@@ -1,90 +1,5 @@
-import { AIProvider, AIProviderError, ChatResult, Message, ChatOptions, ToolDef, ToolCallResult, StreamChunk } from './types';
-import { decryptApiKey } from './encryption';
-import { DEFAULT_MODELS } from './models';
-import { OpenAIProvider } from './providers/openai-provider';
-import { AnthropicProvider } from './providers/anthropic-provider';
+import { AIProvider, ChatResult, ToolCallResult, StreamChunk } from './types';
 import { GoogleProvider } from './providers/google-provider';
-
-function createProvider(providerName: string, apiKey: string, model?: string, baseURL?: string): AIProvider {
-  switch (providerName) {
-    case 'openai':
-      return new OpenAIProvider(apiKey, model);
-    case 'anthropic':
-      return new AnthropicProvider(apiKey, model);
-    case 'google':
-      return new GoogleProvider(apiKey, model);
-    case 'custom':
-      return new OpenAIProvider(apiKey, model || 'gpt-4o', baseURL);
-    default:
-      throw new AIProviderError(`Unknown provider: ${providerName}`, 'unknown', providerName, false);
-  }
-}
-
-export type AIPurpose = 'aegis' | 'aider' | 'rule_generation';
-
-export interface GetProviderOptions {
-  // Tag for ai_usage_logs.feature partition. Callers that don't pass this
-  // fall back to the existing default and behavior is unchanged.
-  purpose?: AIPurpose;
-  // Phase 25 (rule generation) lets the org pin a specific provider/model
-  // independent of the default Aegis provider. Both override the row picked
-  // from organization_ai_providers; the chosen provider must still have a
-  // BYOK key configured or this throws AIProviderError.
-  providerOverride?: 'openai' | 'anthropic' | 'google';
-  modelOverride?: string;
-}
-
-export async function getProviderForOrg(orgId: string, options?: GetProviderOptions): Promise<AIProvider> {
-  const { supabase } = await import('../supabase');
-
-  let query = supabase
-    .from('organization_ai_providers')
-    .select('*')
-    .eq('organization_id', orgId);
-
-  if (options?.providerOverride) {
-    query = query.eq('provider', options.providerOverride);
-  } else {
-    query = query.order('is_default', { ascending: false });
-  }
-
-  const { data: providers } = await query.limit(1);
-
-  if (!providers?.length) {
-    throw new AIProviderError(
-      options?.providerOverride
-        ? `No ${options.providerOverride} BYOK key configured for this organization. Configure one in Organization Settings > AI Configuration.`
-        : 'No AI provider configured for this organization. Configure one in Organization Settings > AI Configuration.',
-      'auth_failed', options?.providerOverride ?? 'none', false
-    );
-  }
-
-  const row = providers[0];
-  const apiKey = decryptApiKey(row.encrypted_api_key, row.encryption_key_version);
-  const model = options?.modelOverride
-    || row.model_preference
-    || (DEFAULT_MODELS as Record<string, string>)[row.provider]
-    || 'gpt-4o';
-  const baseURL = row.api_base_url || undefined;
-
-  return createProvider(row.provider, apiKey, model, baseURL);
-}
-
-export async function getProviderConfigForOrg(orgId: string): Promise<{ provider: string; model: string } | null> {
-  const { supabase } = await import('../supabase');
-
-  const { data: providers } = await supabase
-    .from('organization_ai_providers')
-    .select('provider, model_preference, is_default')
-    .eq('organization_id', orgId)
-    .order('is_default', { ascending: false })
-    .limit(1);
-
-  if (!providers?.length) return null;
-  const row = providers[0];
-  const model = row.model_preference || (DEFAULT_MODELS as Record<string, string>)[row.provider] || 'gpt-4o';
-  return { provider: row.provider, model };
-}
 
 class PlatformStubProvider implements AIProvider {
   async chat(): Promise<ChatResult> {
@@ -113,9 +28,4 @@ export function getPlatformProvider(): AIProvider {
 
   platformProvider = new GoogleProvider(apiKey, 'gemini-2.5-flash');
   return platformProvider;
-}
-
-export function createProviderFromKey(providerName: string, apiKey: string, model?: string, baseURL?: string): AIProvider {
-  const defaultModel = (DEFAULT_MODELS as Record<string, string>)[providerName];
-  return createProvider(providerName, apiKey, model || defaultModel, baseURL);
 }

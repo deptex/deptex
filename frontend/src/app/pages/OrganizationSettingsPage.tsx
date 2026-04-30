@@ -13,7 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle } from 'lucide-react';
+import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle, Sparkles } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
@@ -34,11 +34,10 @@ import PoliciesPage from './PoliciesPage';
 import StatusesSection from '@/components/StatusesSection';
 import NotificationRulesSection from './NotificationRulesSection';
 import NotificationHistorySection from './NotificationHistorySection';
-import AIConfigurationSection from '../../components/settings/AIConfigurationSection';
-import ReachabilitySection from '../../components/settings/ReachabilitySection';
-import { AegisManagementConsole } from '../../components/settings/AegisManagementConsole';
 import { CODE_BLOCK_BG } from '../../components/policy-monaco-setup';
 import SLAConfigurationSection from '../../components/settings/SLAConfigurationSection';
+import AISection from '../../components/settings/AISection';
+import ReachabilitySection from '../../components/settings/ReachabilitySection';
 
 interface OrganizationContextType {
   organization: Organization | null;
@@ -151,7 +150,7 @@ type WebhookCacheSnapshot = {
 };
 const orgWebhooksCache: Record<string, WebhookCacheSnapshot> = {};
 
-const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'integrations', 'webhooks', 'notifications', 'policies', 'statuses', 'security_slas', 'audit_logs', 'sso', 'mfa', 'ip_allowlist', 'usage', 'plan', 'ai_configuration', 'aegis_management', 'reachability']);
+const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'ai', 'reachability', 'integrations', 'webhooks', 'notifications', 'policies', 'statuses', 'security_slas', 'audit_logs', 'sso', 'mfa', 'ip_allowlist', 'usage', 'plan']);
 
 /** Renders a tab-specific content skeleton for the org settings loading state. */
 function OrgSettingsTabSkeleton({ section }: { section: string }) {
@@ -1656,6 +1655,8 @@ export default function OrganizationSettingsPage() {
     interact_with_security_agent: true,
     interact_with_aegis: true,
     manage_aegis: true,
+    view_ai_spending: true,
+    manage_organization_settings: true,
     view_members: true,
     add_members: true,
     edit_roles: true,
@@ -1666,9 +1667,6 @@ export default function OrganizationSettingsPage() {
     manage_notifications: true,
   } : (basePermissions ? { ...basePermissions, interact_with_aegis: basePermissions.interact_with_aegis ?? false } : null);
   const canManageCompliance = effectivePermissions?.manage_compliance ?? (effectivePermissions as { view_compliance?: boolean; edit_policies?: boolean } | undefined)?.view_compliance ?? (effectivePermissions as { view_compliance?: boolean; edit_policies?: boolean } | undefined)?.edit_policies;
-
-  const planGateAegisChat = usePlan().getPlanGate('aegis_chat');
-  const planGateAegisManagement = usePlan().getPlanGate('aegis_management');
 
   // Any org member can open Settings; individual sections are gated by their permissions (sidebar + redirects)
   useEffect(() => {
@@ -2676,6 +2674,17 @@ export default function OrganizationSettingsPage() {
       label: 'Roles',
       icon: <Users className="h-4 w-4 tab-icon-shake" />,
     }] : []),
+    {
+      id: 'ai',
+      label: 'AI',
+      icon: <Sparkles className="h-4 w-4 tab-icon-shake" />,
+    },
+    // Reachability — gated on manage_organization_settings (PATCH writes monthly_budget_usd)
+    ...(effectivePermissions?.manage_organization_settings ? [{
+      id: 'reachability',
+      label: 'Reachability',
+      icon: <Network className="h-4 w-4 tab-icon-shake" />,
+    }] : []),
     // Show Integrations section if user can manage integrations
     ...(effectivePermissions?.manage_integrations ? [{
       id: 'integrations',
@@ -2730,33 +2739,6 @@ export default function OrganizationSettingsPage() {
       { id: 'mfa', label: 'Multi-Factor Authentication', icon: <Smartphone className="h-4 w-4 tab-icon-shake" /> },
       { id: 'ip_allowlist', label: 'IP Allowlist', icon: <Globe className="h-4 w-4 tab-icon-shake" /> },
     ] : []),
-
-    // AI & Automation Category
-    ...((effectivePermissions?.manage_aegis || effectivePermissions?.interact_with_aegis) ? [{
-      id: 'category_ai',
-      label: 'AI & Automation',
-      isCategory: true as const,
-    }] : []),
-    ...(effectivePermissions?.manage_aegis ? [{
-      id: 'aegis_management',
-      label: 'Aegis',
-      icon: (
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 tab-icon-shake shrink-0" aria-hidden>
-          <path d="M12 2L4 6v5c0 5 4 8 8 10 4-2 8-5 8-10V6l-8-4z" />
-          <path d="M12 9l1 2 2 1-1 2-2 1-1-2-2-1 1-2 2-1z" fill="currentColor" stroke="none" />
-        </svg>
-      ),
-    }] : []),
-    ...(effectivePermissions?.manage_aegis ? [{
-      id: 'ai_configuration',
-      label: 'AI Configuration',
-      icon: <Zap className="h-4 w-4 tab-icon-shake" />,
-    }] : []),
-    ...(effectivePermissions?.manage_aegis ? [{
-      id: 'reachability',
-      label: 'Reachability',
-      icon: <Network className="h-4 w-4 tab-icon-shake" />,
-    }] : []),
 
     // Plan Category - only show if user has manage_billing permission
     ...(effectivePermissions?.manage_billing ? [{
@@ -3512,6 +3494,23 @@ export default function OrganizationSettingsPage() {
                     </div>
                   )}
                 </div>
+              )}
+
+              {activeSection === 'ai' && id && (
+                <div className="pt-8">
+                  <AISection
+                    organizationId={id}
+                    canManageSettings={!!effectivePermissions?.manage_organization_settings || !!effectivePermissions?.edit_roles}
+                    canViewSpending={!!effectivePermissions?.view_ai_spending}
+                  />
+                </div>
+              )}
+
+              {activeSection === 'reachability' && id && (
+                <ReachabilitySection
+                  organizationId={id}
+                  canManage={!!effectivePermissions?.manage_organization_settings}
+                />
               )}
 
               {/* Keep Integrations mounted after first visit so it doesn't reload when switching tabs (like Members) */}
@@ -4314,75 +4313,6 @@ export default function OrganizationSettingsPage() {
                   <div style={{ display: notifSubTab === 'history' ? undefined : 'none' }}>
                     <NotificationHistorySection organizationId={id} />
                   </div>
-                </div>
-              )}
-
-              {activeSection === 'ai_configuration' && id && (
-                <div className="pt-8">
-                  {!planGateAegisChat.allowed ? (
-                    <div className="space-y-6">
-                      <h2 className="text-2xl font-bold text-foreground">AI Configuration</h2>
-                      <div className="rounded-lg border border-border bg-background-card p-6">
-                        <div className="flex gap-3">
-                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
-                            <Info className="h-4 w-4 text-foreground-secondary" />
-                          </div>
-                          <div className="flex-1 space-y-2">
-                            <h3 className="text-sm font-semibold text-foreground">Upgrade to unlock AI Configuration</h3>
-                            <p className="text-sm text-foreground-secondary">
-                              Connect your own API keys for Aegis and Aider. Your keys are encrypted at rest and never shared.
-                            </p>
-                            <Button
-                              onClick={() => navigate(planGateAegisChat.upgradeUrl || (id ? `/organizations/${id}/settings/plan` : '#'))}
-                              className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm px-4"
-                            >
-                              Upgrade to {planGateAegisChat.requiredTier === 'free' ? 'Pro' : TIER_DISPLAY[planGateAegisChat.requiredTier]}
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <AIConfigurationSection organizationId={id} />
-                  )}
-                </div>
-              )}
-
-              {activeSection === 'reachability' && id && (
-                <ReachabilitySection
-                  organizationId={id}
-                  canManage={!!effectivePermissions?.manage_aegis || isOrgOwner}
-                />
-              )}
-
-              {activeSection === 'aegis_management' && id && (
-                <div className="pt-8">
-                  {!planGateAegisManagement.allowed ? (
-                    <div className="space-y-6">
-                      <h2 className="text-2xl font-bold text-foreground">Aegis</h2>
-                      <div className="rounded-lg border border-border bg-background-card p-6">
-                        <div className="flex gap-3">
-                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
-                            <Info className="h-4 w-4 text-foreground-secondary" />
-                          </div>
-                          <div className="flex-1 space-y-2">
-                            <h3 className="text-sm font-semibold text-foreground">Upgrade to unlock Aegis</h3>
-                            <p className="text-sm text-foreground-secondary">
-                              Configure Aegis&apos;s behavior, permissions, and spending limits. Chat with Aegis and run automations.
-                            </p>
-                            <Button
-                              onClick={() => navigate(planGateAegisManagement.upgradeUrl || (id ? `/organizations/${id}/settings/plan` : '#'))}
-                              className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm px-4"
-                            >
-                              Upgrade to {planGateAegisManagement.requiredTier === 'free' ? 'Pro' : TIER_DISPLAY[planGateAegisManagement.requiredTier]}
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <AegisManagementConsole organizationId={id} userPermissions={effectivePermissions} />
-                  )}
                 </div>
               )}
 
