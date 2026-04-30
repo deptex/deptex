@@ -4156,6 +4156,14 @@ export default function OrganizationVulnerabilitiesPage() {
               >
 {projectSidebarTab === 'vulnerabilities' && (
                   <div className="space-y-4">
+                    {projectStats?.malicious_packages?.scan_status === 'partial' && (
+                      <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                        <span className="font-semibold">Partial coverage:</span> the malicious-package scan
+                        completed with gaps — some packages could not be scanned this run. Findings shown below
+                        are still accurate; investigate <span className="font-mono">extraction_step_errors</span> for
+                        the affected packages.
+                      </div>
+                    )}
                     {selectedProjectEffectiveIsInitialExtracting ? (
                       <ExtractionProgressCard
                         title="Project extraction still in progress"

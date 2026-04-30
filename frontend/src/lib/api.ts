@@ -4095,6 +4095,13 @@ export interface ProjectStats {
   compliance: { percent: number; compliant: number; failing: number; not_evaluated: number; total: number };
   vulnerabilities: { total: number; critical: number; high: number; medium: number; low: number; reachable_count: number };
   code_findings: { semgrep_count: number; secret_count: number; verified_secret_count: number };
+  malicious_packages?: {
+    total: number;
+    critical: number;
+    high: number;
+    medium: number;
+    scan_status: 'complete' | 'partial' | 'failed' | null;
+  };
   dependencies: { total: number; direct: number; transitive: number; outdated: number; healthy?: number; vulnerable?: number };
   sync: { status: string; extraction_step: string | null; last_synced: string | null; last_error: string | null; branch: string };
   action_items: ActionItem[];
@@ -4102,7 +4109,7 @@ export interface ProjectStats {
 }
 
 export interface ActionItem {
-  type: 'critical_vuln' | 'high_vuln' | 'non_compliant' | 'policy_violation' | 'outdated_critical' | 'code_finding';
+  type: 'critical_vuln' | 'high_vuln' | 'non_compliant' | 'policy_violation' | 'outdated_critical' | 'code_finding' | 'malicious_packages';
   title: string;
   description: string;
   count: number;
