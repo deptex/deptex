@@ -37,10 +37,168 @@ export interface BuildPromptArgs {
   compact?: boolean;
 }
 
-const PROMPT_VERSION = 'rulegen-v8';
+const PROMPT_VERSION = 'rulegen-v9';
 
 export function getPromptVersion(): string {
   return PROMPT_VERSION;
+}
+
+export type VulnClass =
+  | 'redos'
+  | 'proto-pollution'
+  | 'options-bag-shape'
+  | 'library-internal'
+  | 'config-default'
+  | 'deserialization'
+  | 'ssti'
+  | 'command-injection'
+  | 'path-traversal'
+  | 'none';
+
+/**
+ * Coarse vulnerability-class classifier used to prepend a per-shape playbook
+ * hint to the rule-generation prompt. Pure heuristic over OSV text + diff —
+ * no LLM call. Misclassification just means the model gets a slightly less
+ * targeted hint; it never blocks rule generation. Order matters: more
+ * specific classes are checked before broader ones (e.g. options-bag-shape
+ * wins over library-internal when the diff shows an added option key).
+ */
+export function detectVulnClass(args: {
+  osvSummary: string;
+  osvDetails: string;
+  patchDiff: string;
+}): VulnClass {
+  const text = `${args.osvSummary}\n${args.osvDetails}`.toLowerCase();
+  const diff = args.patchDiff;
+
+  if (/regular\s*expression|redos|catastrophic\s*backtrack|exponential\s*time|quadratic\s*time/.test(text)) {
+    return 'redos';
+  }
+  if (/prototype\s*pollution|__proto__|object\.prototype|polluting\s*the\s*prototype/.test(text)) {
+    return 'proto-pollution';
+  }
+  if (/template\s*injection|server[-\s]*side\s*template|ssti|jinja|handlebars\s*injection/.test(text)) {
+    return 'ssti';
+  }
+  if (/deserializ|unsafe\s*yaml|pickle|object\s*injection|gadget\s*chain/.test(text)) {
+    return 'deserialization';
+  }
+  if (/command\s*injection|shell\s*injection|os\s*command|cwe[-\s]*78|cwe[-\s]*77/.test(text)) {
+    return 'command-injection';
+  }
+  if (/path\s*traversal|directory\s*traversal|zip\s*slip|cwe[-\s]*22|\.\.\/|\.\.\\/.test(text)) {
+    return 'path-traversal';
+  }
+
+  // Diff-shape signals — only fire when the OSV text is mostly silent on
+  // mechanism. options-bag-shape: the patch adds a new key to an options
+  // object literal. config-default: the patch flips a default flag.
+  if (/^\+.*\b(verify|validate|secure|strict|loader|algorithms?|allowlist|allow[-_]?list)\s*[=:]\s*(true|false|safeloader|fullloader)/im.test(diff)) {
+    return 'config-default';
+  }
+  if (/^\+\s*[A-Za-z_][A-Za-z0-9_]*\s*:\s*\[[^\]]*\]/m.test(diff) || /^\+\s*[A-Za-z_][A-Za-z0-9_]*\s*:\s*\{[^}]*\}/m.test(diff)) {
+    return 'options-bag-shape';
+  }
+
+  // No callsite-shape signal; check whether the patch touches only
+  // library-internal files (no test fixtures, no examples) — those CVEs
+  // tend to be physically undetectable from app-code static rules.
+  const plusFiles = diff.match(/^\+\+\+ b\/(.+)$/gm) ?? [];
+  if (plusFiles.length > 0 && plusFiles.every((line) => !/test|example|doc|fixture/i.test(line))) {
+    // Only call it library-internal if the diff has zero callsite-API surface
+    // changes — otherwise let the model decide.
+    if (!/\bdef\s+|\bfunction\s+|\bclass\s+|\bfunc\s+\w+\(/i.test(diff)) {
+      return 'library-internal';
+    }
+  }
+
+  return 'none';
+}
+
+const VULN_CLASS_PLAYBOOK: Record<Exclude<VulnClass, 'none'>, string[]> = {
+  redos: [
+    `# Vuln-class hint: REGEX DENIAL-OF-SERVICE (ReDoS).`,
+    `# This CVE triggers catastrophic backtracking on a regex applied to user`,
+    `# input. The right rule is \`mode: taint\` — sources are HTTP request`,
+    `# bodies / query params, sink is the specific function the patch fixed`,
+    `# (e.g. lines_with_leading_tabs_expanded, semver.parse, cookie.split).`,
+    `# Do NOT try to express the regex itself in Semgrep; just match the`,
+    `# callsite that feeds untrusted data to the vulnerable function.`,
+  ],
+  'proto-pollution': [
+    `# Vuln-class hint: PROTOTYPE POLLUTION.`,
+    `# The bug is "untrusted key/path is merged into a target object". Use`,
+    `# \`mode: taint\` with HTTP-body sources flowing into the merge/set/extend`,
+    `# sink (\`_.merge\`, \`_.set\`, \`Object.assign\`, package-specific equivalents).`,
+    `# Sanitizers are EITHER a named function call (then declare it in`,
+    `# pattern-sanitizers) OR pass a static literal in safe_fixture.`,
+  ],
+  'options-bag-shape': [
+    `# Vuln-class hint: OPTIONS-BAG SHAPE (missing/wrong key).`,
+    `# The patch adds a new key to an options object passed to a library API.`,
+    `# Use \`mode: search\`. Bind the options object with metavariable, then`,
+    `# constrain it with metavariable-pattern + pattern-not to require the`,
+    `# safe key be present. Do NOT use \`mode: taint\` — there is no source/sink`,
+    `# data flow here, only a callsite shape. The safe_fixture should call`,
+    `# the same API with the missing key supplied so pattern-not excludes it.`,
+  ],
+  'library-internal': [
+    `# Vuln-class hint: LIBRARY-INTERNAL bug.`,
+    `# The patch only changes library internals — there is NO callsite shape`,
+    `# in user code that distinguishes vulnerable from patched usage. Do NOT`,
+    `# write a rule that just matches every consumer of the library; that's a`,
+    `# guaranteed false-positive on the safe_fixture. Instead, anchor the rule`,
+    `# on the SPECIFIC public API entry point that exercises the buggy path,`,
+    `# even if every caller of that API is technically affected. Use search`,
+    `# mode and keep the pattern as narrow as the patch context allows.`,
+  ],
+  'config-default': [
+    `# Vuln-class hint: INSECURE-DEFAULT CONFIG.`,
+    `# The patch flips a default flag (verify=, Loader=, validate=, etc.) or`,
+    `# adds a security-relevant constructor argument. Use \`mode: search\` and`,
+    `# match the API call with the insecure literal value, e.g.`,
+    `# \`requests.get($URL, verify=False, ...)\`, \`yaml.load($X)\` (no Loader=),`,
+    `# \`tls.Config{InsecureSkipVerify: true}\`. The safe_fixture must call the`,
+    `# same API with the secure value so it does NOT match.`,
+  ],
+  deserialization: [
+    `# Vuln-class hint: UNSAFE DESERIALIZATION.`,
+    `# Untrusted bytes flow into a deserializer that can instantiate arbitrary`,
+    `# objects / execute gadgets. Use \`mode: taint\`: source is request body`,
+    `# / file upload bytes, sink is the deserializer (\`yaml.load\`, \`pickle.loads\`,`,
+    `# \`ObjectMapper.readValue\`, \`Marshal.load\`, \`unserialize\`). If the patch`,
+    `# adds a SafeLoader-style allowlist that's the sanitizer; otherwise prefer`,
+    `# the static-literal safe_fixture to avoid declaring a sanitizer.`,
+  ],
+  ssti: [
+    `# Vuln-class hint: SERVER-SIDE TEMPLATE INJECTION (SSTI).`,
+    `# Untrusted input flows into a template engine's compile/render API`,
+    `# (\`Template(s).render()\`, \`engine.compile(s)\`, \`Mustache.render(s)\`).`,
+    `# Use \`mode: taint\` with HTTP sources. The fix usually adds escaping or`,
+    `# switches to a safer API; match the unsafe entry point, not the engine`,
+    `# internals.`,
+  ],
+  'command-injection': [
+    `# Vuln-class hint: COMMAND INJECTION.`,
+    `# Untrusted input flows into a shell-spawning API (\`exec\`, \`spawn\`,`,
+    `# \`system\`, \`Runtime.exec\`, \`os.system\`, \`subprocess.Popen(shell=True)\`).`,
+    `# Use \`mode: taint\` with HTTP sources. If the patch added an allow-list`,
+    `# function call as sanitizer, declare it; otherwise keep the safe_fixture`,
+    `# using a static literal command.`,
+  ],
+  'path-traversal': [
+    `# Vuln-class hint: PATH TRAVERSAL / ZIP SLIP.`,
+    `# Untrusted path components flow into file APIs without traversal`,
+    `# normalization. Use \`mode: taint\` with HTTP sources flowing into the`,
+    `# file API (\`fs.readFile\`, \`open\`, \`Path.resolve\`, archive extract).`,
+    `# Sanitizer is usually a path-validation helper added in the patch —`,
+    `# declare it in pattern-sanitizers if you reference it in the safe_fixture.`,
+  ],
+};
+
+function renderVulnClassHint(klass: VulnClass): string {
+  if (klass === 'none') return '';
+  return VULN_CLASS_PLAYBOOK[klass].join('\n');
 }
 
 const SEMGREP_LANGUAGE_BY_ECOSYSTEM: Record<string, string> = {
@@ -67,6 +225,11 @@ export function buildGenerationPrompt(args: BuildPromptArgs): string {
 
   const filesSection = args.changedFiles.slice(0, fileBudget).map((f) => renderFile(f, blobBudget)).join('\n\n');
   const fewShotSection = renderFewShotSection(args.fewShotExamples ?? [], args.compact === true);
+  const vulnClassHint = renderVulnClassHint(detectVulnClass({
+    osvSummary: args.osvSummary ?? '',
+    osvDetails: args.osvDetails ?? '',
+    patchDiff: args.patchDiff ?? '',
+  }));
 
   return [
     `You are a senior application-security engineer writing a Semgrep taint-tracking rule for a real, published CVE patch.`,
@@ -89,6 +252,7 @@ export function buildGenerationPrompt(args: BuildPromptArgs): string {
     filesSection || '(none included — diff above is the only source signal)',
     ``,
     ...(fewShotSection ? [fewShotSection, ``] : []),
+    ...(vulnClassHint ? [vulnClassHint, ``] : []),
     `# Your task`,
     `Generate a Semgrep rule that **matches code that calls the vulnerable API** in a way the patch fixes — i.e. the rule must hit the pre-patch behavior and miss the post-patch behavior. Keep the rule narrow: pattern variables are fine, but avoid matching every call to the package's public surface.`,
     ``,

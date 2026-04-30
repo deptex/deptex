@@ -8,6 +8,7 @@ import {
   buildGenerationPrompt,
   semgrepLanguageFor,
   getPromptVersion,
+  detectVulnClass,
 } from '../rule-generator/prompt-builder';
 import {
   parseAndValidate,
@@ -347,6 +348,59 @@ describe('generate.estimateCostUsd', () => {
 
   it('zero tokens returns zero', () => {
     expect(estimateCostUsd('gpt-4o', 0, 0)).toBe(0);
+  });
+});
+
+describe('detectVulnClass', () => {
+  const blank = { osvSummary: '', osvDetails: '', patchDiff: '' };
+
+  it('detects redos from regex/backtracking phrasing', () => {
+    expect(detectVulnClass({ ...blank, osvSummary: 'A regular expression DoS in foo' })).toBe('redos');
+    expect(detectVulnClass({ ...blank, osvDetails: 'catastrophic backtracking on input' })).toBe('redos');
+    expect(detectVulnClass({ ...blank, osvDetails: 'quadratic time complexity in encode' })).toBe('redos');
+  });
+
+  it('detects prototype pollution', () => {
+    expect(detectVulnClass({ ...blank, osvSummary: 'Prototype pollution via merge' })).toBe('proto-pollution');
+    expect(detectVulnClass({ ...blank, osvDetails: 'sets __proto__ on the target' })).toBe('proto-pollution');
+  });
+
+  it('detects SSTI', () => {
+    expect(detectVulnClass({ ...blank, osvSummary: 'Server-Side Template Injection in Jinja2' })).toBe('ssti');
+  });
+
+  it('detects deserialization', () => {
+    expect(detectVulnClass({ ...blank, osvSummary: 'unsafe yaml deserialization in load' })).toBe('deserialization');
+    expect(detectVulnClass({ ...blank, osvDetails: 'gadget chain via pickle.loads' })).toBe('deserialization');
+  });
+
+  it('detects command injection', () => {
+    expect(detectVulnClass({ ...blank, osvSummary: 'OS Command Injection via spawn' })).toBe('command-injection');
+  });
+
+  it('detects path traversal', () => {
+    expect(detectVulnClass({ ...blank, osvSummary: 'Directory traversal via zip slip' })).toBe('path-traversal');
+  });
+
+  it('detects config-default from diff additions', () => {
+    const diff = `+++ b/foo.py\n+    return yaml.load(data, Loader=SafeLoader)\n`;
+    expect(detectVulnClass({ ...blank, patchDiff: diff })).toBe('config-default');
+  });
+
+  it('detects options-bag-shape from diff dict-value addition', () => {
+    const diff = `+++ b/foo.js\n+  algorithms: ['HS256'],\n`;
+    expect(detectVulnClass({ ...blank, patchDiff: diff })).toBe('options-bag-shape');
+  });
+
+  it('falls through to none when no signals match', () => {
+    expect(detectVulnClass(blank)).toBe('none');
+    expect(detectVulnClass({ ...blank, osvSummary: 'something completely opaque' })).toBe('none');
+  });
+
+  it('text-class signals beat diff-shape signals (more specific)', () => {
+    // Diff would suggest options-bag-shape, but summary says ReDoS — class-text wins.
+    const diff = `+++ b/foo.js\n+  algorithms: ['HS256'],\n`;
+    expect(detectVulnClass({ ...blank, osvSummary: 'regular expression denial of service', patchDiff: diff })).toBe('redos');
   });
 });
 
