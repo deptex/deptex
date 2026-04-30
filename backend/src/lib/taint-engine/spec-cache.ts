@@ -133,7 +133,14 @@ export async function storeUserEdit(args: {
   modelId: string;
   userId: string;
   spec: FrameworkSpec;
-}): Promise<FrameworkModel> {
+}): Promise<FrameworkModel | null> {
+  // Pre-fetch so a cross-org probe (org A admin patches a modelId belonging
+  // to org B) returns 404 instead of a PGRST116 500 — the WHERE clause
+  // already prevents the write, but the divergent error code was a usable
+  // existence oracle.
+  const existing = await getById(args.organizationId, args.modelId);
+  if (!existing) return null;
+
   const { data, error } = await supabase
     .from('taint_engine_framework_models')
     .update({
@@ -151,11 +158,16 @@ export async function storeUserEdit(args: {
   return data as FrameworkModel;
 }
 
-export async function softDelete(organizationId: string, modelId: string): Promise<void> {
+export async function softDelete(organizationId: string, modelId: string): Promise<boolean> {
+  // Pre-fetch so a cross-org probe doesn't get a false-positive 200 OK.
+  const existing = await getById(organizationId, modelId);
+  if (!existing) return false;
+
   const { error } = await supabase
     .from('taint_engine_framework_models')
     .update({ is_active: false, updated_at: new Date().toISOString() })
     .eq('organization_id', organizationId)
     .eq('id', modelId);
   if (error) throw error;
+  return true;
 }

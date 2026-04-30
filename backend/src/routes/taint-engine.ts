@@ -1,25 +1,24 @@
-// @ts-nocheck
 /**
  * Taint engine admin routes (Phase 6 / M6).
  *
  * Two surfaces:
  *
- *   /api/orgs/:orgId/taint-engine/settings
+ *   /api/organizations/:orgId/taint-engine/settings
  *     GET  — read taint_engine_settings row (cost cap, killswitch state, etc.)
  *     PATCH — update cost cap / AI layer toggle / untyped-JS toggle / vuln_classes_enabled
- *   /api/orgs/:orgId/taint-engine/killswitch/release
+ *   /api/organizations/:orgId/taint-engine/killswitch/release
  *     POST — clear the auto-engaged killswitch (admin recovery)
- *   /api/orgs/:orgId/taint-engine/runs
+ *   /api/organizations/:orgId/taint-engine/runs
  *     GET — paginated taint_engine_runs telemetry for debugging
  *
- *   /api/orgs/:orgId/taint-engine/framework-models
+ *   /api/organizations/:orgId/taint-engine/framework-models
  *     GET — list (no spec body)
  *     POST — add new framework + run AI inference
- *   /api/orgs/:orgId/taint-engine/framework-models/:modelId
+ *   /api/organizations/:orgId/taint-engine/framework-models/:modelId
  *     GET — full row including spec body
  *     PATCH — update spec body (admin edit; flips source_type to 'user_edited')
  *     DELETE — soft delete (is_active = false)
- *   /api/orgs/:orgId/taint-engine/framework-models/:modelId/refresh
+ *   /api/organizations/:orgId/taint-engine/framework-models/:modelId/refresh
  *     POST — re-run AI inference for this framework
  *
  * RBAC:
@@ -98,13 +97,20 @@ const DEFAULT_VULN_CLASSES = [
 router.get('/:orgId/settings', requirePerm('view_ai_spending'), async (req: AuthRequest, res) => {
   try {
     const orgId = req.params.orgId;
+    // Surface the caller's manage permission alongside the row so the
+    // admin page can hide write-only buttons (Edit cap / Add framework /
+    // Delete / Refresh / Release killswitch) for read-only viewers. The
+    // backend remains the source of truth — every mutation route
+    // re-checks manage_aegis — but UX-wise we prefer not to render
+    // buttons that always 403.
+    const canManage = await hasOrgPermission(orgId, req.user!.id, 'manage_aegis');
     const { data, error } = await supabase
       .from('taint_engine_settings')
       .select('*')
       .eq('organization_id', orgId)
       .maybeSingle();
     if (error) throw error;
-    if (data) return res.json(data);
+    if (data) return res.json({ ...data, can_manage: canManage });
     // Synthesize default row when no settings exist yet (per phase26 DEFAULTs).
     return res.json({
       organization_id: orgId,
@@ -116,6 +122,7 @@ router.get('/:orgId/settings', requirePerm('view_ai_spending'), async (req: Auth
       killswitch_active: false,
       killswitch_reason: null,
       killswitch_activated_at: null,
+      can_manage: canManage,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message ?? 'Failed to fetch settings' });
@@ -321,6 +328,7 @@ router.patch('/:orgId/framework-models/:modelId', requirePerm('manage_aegis'), a
       userId: req.user!.id,
       spec,
     });
+    if (!row) return res.status(404).json({ error: 'framework model not found' });
     res.json(row);
   } catch (err: any) {
     res.status(500).json({ error: err.message ?? 'Failed to update spec' });
@@ -329,7 +337,8 @@ router.patch('/:orgId/framework-models/:modelId', requirePerm('manage_aegis'), a
 
 router.delete('/:orgId/framework-models/:modelId', requirePerm('manage_aegis'), async (req: AuthRequest, res) => {
   try {
-    await softDelete(req.params.orgId, req.params.modelId);
+    const ok = await softDelete(req.params.orgId, req.params.modelId);
+    if (!ok) return res.status(404).json({ error: 'framework model not found' });
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message ?? 'Failed to delete' });

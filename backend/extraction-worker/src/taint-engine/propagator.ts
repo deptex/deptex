@@ -42,6 +42,8 @@ export interface PropagateOptions {
   /** Cap on worklist iterations as a runaway-loop safety net. Default: 50× function count. */
   maxIterations?: number;
   onWarn?: (msg: string) => void;
+  /** Forwarded to the worklist core; aborts cleanly between iterations. */
+  signal?: AbortSignal;
 }
 
 export interface PropagateStats {
@@ -108,6 +110,7 @@ export async function propagate(options: PropagateOptions): Promise<PropagateRes
     maxPathLength: options.maxPathLength,
     maxIterations: options.maxIterations,
     onWarn,
+    signal: options.signal,
   });
 
   return {

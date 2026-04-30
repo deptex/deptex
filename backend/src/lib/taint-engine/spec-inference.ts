@@ -9,7 +9,7 @@
  * hand-rolled validator that loads YAML specs in the engine.
  *
  * Used by:
- *   - POST /api/orgs/:orgId/taint-engine/framework-models/:id/refresh
+ *   - POST /api/organizations/:orgId/taint-engine/framework-models/:id/refresh
  *     (admin-triggered re-inference)
  *   - The "add framework" admin flow (initial inference for a brand-new
  *     framework not yet in the cache)

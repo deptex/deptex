@@ -22,6 +22,8 @@ export interface PropagateJavaOptions {
   maxPathLength?: number;
   maxIterations?: number;
   onWarn?: (msg: string) => void;
+  /** Forwarded to the worklist core; aborts cleanly between iterations. */
+  signal?: AbortSignal;
 }
 
 export interface PropagateJavaStats {
@@ -97,6 +99,7 @@ export async function propagateJava(options: PropagateJavaOptions): Promise<Prop
     maxPathLength: options.maxPathLength,
     maxIterations: options.maxIterations,
     onWarn,
+    signal: options.signal,
   });
 
   return {

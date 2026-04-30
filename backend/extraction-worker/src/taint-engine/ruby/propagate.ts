@@ -24,6 +24,8 @@ export interface PropagateRubyOptions {
   /** Cap on worklist iterations. Default 50× function count. */
   maxIterations?: number;
   onWarn?: (msg: string) => void;
+  /** Forwarded to the worklist core; aborts cleanly between iterations. */
+  signal?: AbortSignal;
 }
 
 export interface PropagateRubyResult {
@@ -88,6 +90,7 @@ export async function propagateRuby(
     maxPathLength: options.maxPathLength,
     maxIterations: options.maxIterations,
     onWarn,
+    signal: options.signal,
   });
 
   return {

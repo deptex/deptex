@@ -43,6 +43,8 @@ interface TaintEngineSettings {
   killswitch_active: boolean;
   killswitch_reason: string | null;
   killswitch_activated_at: string | null;
+  /** Backend-resolved manage_aegis flag for the calling user — drives client-side gating of write actions. */
+  can_manage: boolean;
 }
 
 interface FrameworkModelRow {
@@ -100,7 +102,9 @@ function formatRelative(iso: string | null): string {
 // ---------------------------------------------------------------------------
 
 export default function TaintEngineSettingsPage() {
-  const { orgId } = useParams<{ orgId: string }>();
+  // Route is /organizations/:id (see frontend/src/app/routes.tsx); the
+  // taint-engine API is mounted under /api/organizations/:orgId, so we alias here.
+  const { id: orgId } = useParams<{ id: string }>();
   const { toast } = useToast();
 
   const [settings, setSettings] = useState<TaintEngineSettings | null>(null);
@@ -121,9 +125,9 @@ export default function TaintEngineSettingsPage() {
     setLoading(true);
     try {
       const [s, c, m] = await Promise.all([
-        fetchWithAuth(`/api/orgs/${orgId}/taint-engine/settings`) as Promise<TaintEngineSettings>,
-        fetchWithAuth(`/api/orgs/${orgId}/taint-engine/cost`) as Promise<CostCapState>,
-        fetchWithAuth(`/api/orgs/${orgId}/taint-engine/framework-models`) as Promise<FrameworkModelRow[]>,
+        fetchWithAuth(`/api/organizations/${orgId}/taint-engine/settings`) as Promise<TaintEngineSettings>,
+        fetchWithAuth(`/api/organizations/${orgId}/taint-engine/cost`) as Promise<CostCapState>,
+        fetchWithAuth(`/api/organizations/${orgId}/taint-engine/framework-models`) as Promise<FrameworkModelRow[]>,
       ]);
       setSettings(s);
       setCostCap(c);
@@ -154,7 +158,7 @@ export default function TaintEngineSettingsPage() {
     }
     setSavingCap(true);
     try {
-      const next = await fetchWithAuth(`/api/orgs/${orgId}/taint-engine/settings`, {
+      const next = await fetchWithAuth(`/api/organizations/${orgId}/taint-engine/settings`, {
         method: 'PATCH',
         body: JSON.stringify({ monthly_ai_cost_cap_usd: v }),
       });
@@ -162,7 +166,7 @@ export default function TaintEngineSettingsPage() {
       setEditingCap(false);
       toast({ title: 'Cost cap updated', description: `New monthly cap: ${formatDollars(next.monthly_ai_cost_cap_usd)}` });
       // Refresh cost state since the cap changed.
-      const c = await fetchWithAuth(`/api/orgs/${orgId}/taint-engine/cost`);
+      const c = await fetchWithAuth(`/api/organizations/${orgId}/taint-engine/cost`);
       setCostCap(c);
     } catch (err: any) {
       toast({ title: 'Save failed', description: err.message ?? 'Unknown error', variant: 'destructive' });
@@ -175,7 +179,7 @@ export default function TaintEngineSettingsPage() {
     if (!orgId) return;
     setReleasingKillswitch(true);
     try {
-      await fetchWithAuth(`/api/orgs/${orgId}/taint-engine/killswitch/release`, { method: 'POST' });
+      await fetchWithAuth(`/api/organizations/${orgId}/taint-engine/killswitch/release`, { method: 'POST' });
       toast({ title: 'Killswitch released', description: 'Engine will resume on the next extraction.' });
       await reload();
     } catch (err: any) {
@@ -189,7 +193,7 @@ export default function TaintEngineSettingsPage() {
     if (!orgId) return;
     if (!window.confirm(`Remove ${name} from the framework models cache? The next extraction will need to re-infer it.`)) return;
     try {
-      await fetchWithAuth(`/api/orgs/${orgId}/taint-engine/framework-models/${modelId}`, { method: 'DELETE' });
+      await fetchWithAuth(`/api/organizations/${orgId}/taint-engine/framework-models/${modelId}`, { method: 'DELETE' });
       toast({ title: 'Removed', description: name });
       await reload();
     } catch (err: any) {
@@ -200,7 +204,7 @@ export default function TaintEngineSettingsPage() {
   const openEdit = async (modelId: string) => {
     if (!orgId) return;
     try {
-      const detail = (await fetchWithAuth(`/api/orgs/${orgId}/taint-engine/framework-models/${modelId}`)) as FrameworkModelDetail;
+      const detail = (await fetchWithAuth(`/api/organizations/${orgId}/taint-engine/framework-models/${modelId}`)) as FrameworkModelDetail;
       setEditOpen(detail);
     } catch (err: any) {
       toast({ title: 'Failed to load model', description: err.message ?? 'Unknown error', variant: 'destructive' });
@@ -208,6 +212,11 @@ export default function TaintEngineSettingsPage() {
   };
 
   if (!orgId) return null;
+
+  // Backend resolves this from organization_roles.permissions.manage_aegis;
+  // every mutation route also re-checks. UI gates here are pure UX so
+  // read-only viewers don't see write buttons that always 403.
+  const canManage = settings?.can_manage === true;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
@@ -225,6 +234,7 @@ export default function TaintEngineSettingsPage() {
           activatedAt={settings.killswitch_activated_at}
           onRelease={releaseKillswitch}
           releasing={releasingKillswitch}
+          canManage={canManage}
         />
       )}
 
@@ -239,6 +249,7 @@ export default function TaintEngineSettingsPage() {
         onCancel={() => setEditingCap(false)}
         onChange={setPendingCap}
         onSave={saveCap}
+        canManage={canManage}
       />
 
       <FrameworkModelsTable
@@ -247,9 +258,10 @@ export default function TaintEngineSettingsPage() {
         onAdd={() => setAddOpen(true)}
         onEdit={openEdit}
         onDelete={handleDelete}
+        canManage={canManage}
       />
 
-      {addOpen && (
+      {addOpen && canManage && (
         <AddFrameworkModal
           orgId={orgId}
           onClose={() => setAddOpen(false)}
@@ -260,7 +272,7 @@ export default function TaintEngineSettingsPage() {
         />
       )}
 
-      {editOpen && (
+      {editOpen && canManage && (
         <EditFrameworkModal
           orgId={orgId}
           model={editOpen}
@@ -284,11 +296,13 @@ function KillswitchBanner({
   activatedAt,
   onRelease,
   releasing,
+  canManage,
 }: {
   reason: string | null;
   activatedAt: string | null;
   onRelease: () => void;
   releasing: boolean;
+  canManage: boolean;
 }) {
   return (
     <section className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">
@@ -302,9 +316,11 @@ function KillswitchBanner({
             {activatedAt ? <> Engaged at {new Date(activatedAt).toLocaleString()}.</> : null}
           </p>
         </div>
-        <Button size="sm" variant="outline" onClick={onRelease} disabled={releasing}>
-          {releasing ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Release'}
-        </Button>
+        {canManage && (
+          <Button size="sm" variant="outline" onClick={onRelease} disabled={releasing}>
+            {releasing ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Release'}
+          </Button>
+        )}
       </div>
     </section>
   );
@@ -325,6 +341,7 @@ function CostCapCard({
   onCancel,
   onChange,
   onSave,
+  canManage,
 }: {
   settings: TaintEngineSettings | null;
   costCap: CostCapState | null;
@@ -336,6 +353,7 @@ function CostCapCard({
   onCancel: () => void;
   onChange: (v: string) => void;
   onSave: () => void;
+  canManage: boolean;
 }) {
   const cap = settings?.monthly_ai_cost_cap_usd ?? 0;
   const spent = costCap?.spentUsdThisMonth ?? 0;
@@ -352,7 +370,7 @@ function CostCapCard({
             Enforced server-side before each AI call.
           </p>
         </div>
-        {!editing && (
+        {!editing && canManage && (
           <Button size="sm" variant="outline" onClick={onBegin} disabled={loading}>
             <Pencil className="mr-1.5 h-3.5 w-3.5" />
             Edit
@@ -418,12 +436,14 @@ function FrameworkModelsTable({
   onAdd,
   onEdit,
   onDelete,
+  canManage,
 }: {
   models: FrameworkModelRow[];
   loading: boolean;
   onAdd: () => void;
   onEdit: (id: string) => void;
   onDelete: (id: string, name: string) => void;
+  canManage: boolean;
 }) {
   return (
     <section className="rounded-lg border border-border bg-background-card overflow-hidden">
@@ -434,10 +454,12 @@ function FrameworkModelsTable({
             AI-inferred + admin-edited specs for frameworks not in the bundled set (Express, Fastify, NestJS, Next.js, Hono).
           </p>
         </div>
-        <Button size="sm" onClick={onAdd}>
-          <Plus className="mr-1.5 h-3.5 w-3.5" />
-          Add framework
-        </Button>
+        {canManage && (
+          <Button size="sm" onClick={onAdd}>
+            <Plus className="mr-1.5 h-3.5 w-3.5" />
+            Add framework
+          </Button>
+        )}
       </header>
 
       {loading ? (
@@ -486,12 +508,18 @@ function FrameworkModelsTable({
                   {m.inferred_cost_usd != null ? `$${Number(m.inferred_cost_usd).toFixed(4)}` : '—'}
                 </td>
                 <td className="px-5 py-3 text-right">
-                  <Button variant="outline" size="sm" className="mr-1.5" onClick={() => onEdit(m.id)}>
-                    <Pencil className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => onDelete(m.id, m.framework_name)}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  {canManage ? (
+                    <>
+                      <Button variant="outline" size="sm" className="mr-1.5" onClick={() => onEdit(m.id)}>
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => onDelete(m.id, m.framework_name)}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </>
+                  ) : (
+                    <span className="text-xs text-foreground-muted">—</span>
+                  )}
                 </td>
               </tr>
             ))}
@@ -529,7 +557,7 @@ function AddFrameworkModal({
     }
     setSubmitting(true);
     try {
-      await fetchWithAuth(`/api/orgs/${orgId}/taint-engine/framework-models`, {
+      await fetchWithAuth(`/api/organizations/${orgId}/taint-engine/framework-models`, {
         method: 'POST',
         body: JSON.stringify({
           framework_name: name.trim(),
@@ -622,7 +650,7 @@ function EditFrameworkModal({
     setParseError(null);
     setSubmitting(true);
     try {
-      await fetchWithAuth(`/api/orgs/${orgId}/taint-engine/framework-models/${model.id}`, {
+      await fetchWithAuth(`/api/organizations/${orgId}/taint-engine/framework-models/${model.id}`, {
         method: 'PATCH',
         body: JSON.stringify({ spec: parsed }),
       });
@@ -642,7 +670,7 @@ function EditFrameworkModal({
     }
     setRefreshing(true);
     try {
-      const next = (await fetchWithAuth(`/api/orgs/${orgId}/taint-engine/framework-models/${model.id}/refresh`, {
+      const next = (await fetchWithAuth(`/api/organizations/${orgId}/taint-engine/framework-models/${model.id}/refresh`, {
         method: 'POST',
         body: JSON.stringify({
           code_samples: [{ path: 'pasted-refresh.ts', content: refreshSamples }],

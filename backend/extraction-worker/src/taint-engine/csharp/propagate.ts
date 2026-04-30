@@ -23,6 +23,8 @@ export interface PropagateCSharpOptions {
   maxPathLength?: number;
   maxIterations?: number;
   onWarn?: (msg: string) => void;
+  /** Forwarded to the worklist core; aborts cleanly between iterations. */
+  signal?: AbortSignal;
 }
 
 export interface PropagateCSharpStats {
@@ -116,6 +118,7 @@ export async function propagateCSharp(options: PropagateCSharpOptions): Promise<
     maxPathLength: options.maxPathLength,
     maxIterations: options.maxIterations,
     onWarn,
+    signal: options.signal,
   });
 
   return {

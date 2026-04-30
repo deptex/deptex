@@ -5,7 +5,7 @@
  * window of taint_engine_runs). When a run fails, maybeEngageKillswitch
  * decides whether to flip taint_engine_settings.killswitch_active = true so
  * subsequent extractions skip the engine until an admin manually clears the
- * killswitch (POST /api/orgs/:orgId/taint-engine/killswitch/release, M6).
+ * killswitch (POST /api/organizations/:orgId/taint-engine/killswitch/release, M6).
  *
  * Parameters intentionally match the phase26 RPC defaults: 60-minute window,
  * 5% failure threshold, 5-run minimum sample size before the breaker can
@@ -33,8 +33,11 @@ export interface CircuitBreakerState {
 /**
  * Calls check_taint_engine_circuit_breaker and normalizes its row-set return
  * (Postgres functions returning TABLE come back as a single-element array
- * via PostgREST). Returns shouldRun=true on RPC error so a transient backend
- * blip never silently disables the engine fleet-wide.
+ * via PostgREST). Returns shouldRun=true on transient RPC error so a backend
+ * blip doesn't silently disable the engine fleet-wide — but FALLS BACK to a
+ * direct read of taint_engine_settings.killswitch_active so an explicitly
+ * admin-engaged killswitch still wins even when the RPC is unreachable
+ * (e.g., self-host that hasn't applied phase26_4 yet).
  */
 export async function checkCircuitBreaker(
   storage: Storage,
@@ -46,25 +49,11 @@ export async function checkCircuitBreaker(
     p_failure_threshold_pct: CIRCUIT_BREAKER_FAILURE_THRESHOLD_PCT,
   });
   if (error) {
-    return {
-      shouldRun: true,
-      recentRuns: 0,
-      recentFailures: 0,
-      failurePct: 0,
-      killswitchActive: false,
-      blockedReason: null,
-    };
+    return await readKillswitchFallback(storage, organizationId);
   }
   const row = Array.isArray(data) ? data[0] : data;
   if (!row) {
-    return {
-      shouldRun: true,
-      recentRuns: 0,
-      recentFailures: 0,
-      failurePct: 0,
-      killswitchActive: false,
-      blockedReason: null,
-    };
+    return await readKillswitchFallback(storage, organizationId);
   }
   const shouldRun = Boolean(row.should_run);
   const killswitchActive = Boolean(row.killswitch_active);
@@ -75,6 +64,35 @@ export async function checkCircuitBreaker(
     failurePct: Number(row.failure_pct ?? 0),
     killswitchActive,
     blockedReason: shouldRun ? null : killswitchActive ? 'killswitch' : 'failure_rate',
+  };
+}
+
+/**
+ * Direct-read fallback when check_taint_engine_circuit_breaker is unreachable
+ * or returns no row. Preserves the "transient RPC blip shouldn't disable
+ * the fleet" default for failure-rate, but still respects an explicitly
+ * admin-engaged killswitch (taint_engine_settings.killswitch_active=true).
+ *
+ * If the settings table read also errors, we fail-open the same way the
+ * RPC error path used to — there's no signal we can trust to do otherwise.
+ */
+async function readKillswitchFallback(
+  storage: Storage,
+  organizationId: string,
+): Promise<CircuitBreakerState> {
+  const { data, error } = await storage
+    .from('taint_engine_settings')
+    .select('killswitch_active')
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  const killswitchActive = !error && Boolean((data as { killswitch_active?: boolean } | null)?.killswitch_active);
+  return {
+    shouldRun: !killswitchActive,
+    recentRuns: 0,
+    recentFailures: 0,
+    failurePct: 0,
+    killswitchActive,
+    blockedReason: killswitchActive ? 'killswitch' : null,
   };
 }
 

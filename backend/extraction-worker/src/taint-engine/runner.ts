@@ -71,9 +71,11 @@ export interface RunEngineOptions {
   /** Optional cap on iterations; default 50× function count. */
   maxIterations?: number;
   /**
-   * Cancellation signal from withTimeout. Long-running propagation
-   * checks this after each pass via the worklist's natural break points.
-   * (M4: not yet plumbed into propagate(); M5+ refinement.)
+   * Cancellation signal from withTimeout. Threaded into each per-language
+   * propagator's worklist core, which checks signal.aborted between
+   * iterations and bails out cleanly with whatever flows had aggregated.
+   * Without this the engine could ignore checkCancelled for up to the full
+   * 30-min hard timeout on a large monorepo.
    */
   signal?: AbortSignal;
   /** Optional warning sink. */
@@ -207,6 +209,7 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
         specs,
         maxIterations: options.maxIterations,
         onWarn,
+        signal: options.signal,
       });
       break;
     case 'java':
@@ -215,6 +218,7 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
         specs,
         maxIterations: options.maxIterations,
         onWarn,
+        signal: options.signal,
       });
       break;
     case 'go':
@@ -223,6 +227,7 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
         specs,
         maxIterations: options.maxIterations,
         onWarn,
+        signal: options.signal,
       });
       break;
     case 'ruby':
@@ -231,6 +236,7 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
         specs,
         maxIterations: options.maxIterations,
         onWarn,
+        signal: options.signal,
       });
       break;
     case 'php':
@@ -239,6 +245,7 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
         specs,
         maxIterations: options.maxIterations,
         onWarn,
+        signal: options.signal,
       });
       break;
     case 'rust':
@@ -247,6 +254,7 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
         specs,
         maxIterations: options.maxIterations,
         onWarn,
+        signal: options.signal,
       });
       break;
     case 'csharp':
@@ -255,6 +263,7 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
         specs,
         maxIterations: options.maxIterations,
         onWarn,
+        signal: options.signal,
       });
       break;
     case 'js':
@@ -264,6 +273,7 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
         specs,
         maxIterations: options.maxIterations,
         onWarn,
+        signal: options.signal,
       });
       break;
   }

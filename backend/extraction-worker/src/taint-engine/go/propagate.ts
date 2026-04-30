@@ -29,6 +29,8 @@ export interface PropagateGoOptions {
   maxPathLength?: number;
   maxIterations?: number;
   onWarn?: (msg: string) => void;
+  /** Forwarded to the worklist core; aborts cleanly between iterations. */
+  signal?: AbortSignal;
 }
 
 export interface PropagateGoResult {
@@ -94,6 +96,7 @@ export async function propagateGo(options: PropagateGoOptions): Promise<Propagat
     maxPathLength: options.maxPathLength,
     maxIterations: options.maxIterations,
     onWarn,
+    signal: options.signal,
   });
 
   return {
