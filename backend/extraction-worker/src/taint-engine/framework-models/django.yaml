@@ -1,0 +1,453 @@
+# Django framework spec — Deptex cross-file taint engine.
+#
+# Sources are Django request data accessors and route kwargs. Sinks cover
+# the common Python vuln classes (SQL injection, XSS, command injection,
+# path traversal, SSRF, deserialization, open redirect, log injection).
+# Generic Python stdlib sinks (subprocess, os.system, open, pickle, eval)
+# also live here so a Django request flowing into a stdlib sink is
+# detected even when only the Django spec is loaded.
+
+framework: django
+language: python
+version: "*"
+
+sources:
+  # Django HttpRequest API
+  - pattern: request.GET.*
+    taint_kind: http_input
+    description: Django request.GET (query string params)
+  - pattern: request.POST.*
+    taint_kind: http_input
+    description: Django request.POST (form body)
+  - pattern: request.body
+    taint_kind: http_input
+    description: Django raw request body bytes
+  - pattern: request.COOKIES.*
+    taint_kind: http_input
+    description: Django request cookies
+  - pattern: request.META.*
+    taint_kind: http_input
+    description: Django request META (headers + WSGI env)
+  - pattern: request.FILES.*
+    taint_kind: http_input
+    description: Django uploaded files
+  - pattern: request.headers.*
+    taint_kind: http_input
+    description: Django request.headers (3.2+)
+  - pattern: request.path
+    taint_kind: http_input
+    description: Django request path
+  - pattern: request.path_info
+    taint_kind: http_input
+    description: Django request path_info
+  - pattern: request.query_string
+    taint_kind: http_input
+    description: Django request raw query string
+  # URL route kwargs are passed positionally + keyword to view functions.
+  - pattern: kwargs.*
+    taint_kind: http_input
+    description: Django URL pattern kwargs
+
+  # Call-shape accessors
+  - pattern: request.GET.get(*)
+    taint_kind: http_input
+    description: Django request.GET.get()
+  - pattern: request.POST.get(*)
+    taint_kind: http_input
+    description: Django request.POST.get()
+  - pattern: request.COOKIES.get(*)
+    taint_kind: http_input
+    description: Django request.COOKIES.get()
+  - pattern: request.META.get(*)
+    taint_kind: http_input
+    description: Django request.META.get()
+  - pattern: request.headers.get(*)
+    taint_kind: http_input
+    description: Django request.headers.get()
+
+sinks:
+  # ---------- SQL injection ----------
+  - pattern: cursor.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Django DB cursor.execute()
+  - pattern: cursor.executemany(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Django DB cursor.executemany()
+  - pattern: connection.cursor.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Django connection.cursor().execute()
+  - pattern: "*.execute(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Generic DBAPI execute (cursor / connection)
+  - pattern: "*.raw(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Django Manager.raw() — raw SQL query
+  - pattern: RawSQL(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Django RawSQL expression
+  - pattern: connection.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Django connection.execute()
+  - pattern: extra(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Django QuerySet.extra() — known SQL injection vector
+
+  # ---------- XSS ----------
+  - pattern: HttpResponse(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Django HttpResponse — body
+  - pattern: HttpResponseBadRequest(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Django HttpResponseBadRequest body
+  - pattern: HttpResponseServerError(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Django HttpResponseServerError body
+  - pattern: mark_safe(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Django mark_safe — bypasses autoescape
+  - pattern: SafeString(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Django SafeString constructor
+  - pattern: format_html(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Django format_html — first arg is template; raw subsequent args are also dangerous if not using {} placeholders
+  - pattern: render_to_string(*)
+    vuln_class: xss
+    argument_indices: [1]
+    description: Django render_to_string — context dict
+  - pattern: Template.render(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Django Template.render — context dict
+
+  # ---------- Path traversal ----------
+  - pattern: open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: builtin open()
+  - pattern: io.open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: io.open()
+  - pattern: os.open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: os.open()
+  - pattern: os.path.join(*)
+    vuln_class: path_traversal
+    argument_indices: [0, 1]
+    description: os.path.join — when an attacker arg can break out via ../
+  - pattern: pathlib.Path(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: pathlib.Path with user input
+  - pattern: Path(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: pathlib.Path bare import
+  - pattern: send_file(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Django sendfile / X-Sendfile-style helper
+  - pattern: FileResponse(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Django FileResponse with attacker-controlled file
+  - pattern: shutil.copy(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: shutil.copy
+  - pattern: shutil.copyfile(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: shutil.copyfile
+  - pattern: os.remove(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: os.remove
+  - pattern: os.unlink(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: os.unlink
+
+  # ---------- Command injection ----------
+  - pattern: os.system(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: os.system — direct shell
+  - pattern: os.popen(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: os.popen — direct shell
+  - pattern: subprocess.call(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: subprocess.call
+  - pattern: subprocess.run(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: subprocess.run
+  - pattern: subprocess.Popen(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: subprocess.Popen
+  - pattern: subprocess.check_call(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: subprocess.check_call
+  - pattern: subprocess.check_output(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: subprocess.check_output
+  - pattern: subprocess.getoutput(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: subprocess.getoutput
+  - pattern: commands.getoutput(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: legacy commands.getoutput
+
+  # ---------- SSRF ----------
+  - pattern: requests.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.get
+  - pattern: requests.post(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.post
+  - pattern: requests.put(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.put
+  - pattern: requests.delete(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.delete
+  - pattern: requests.request(*)
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: requests.request(method, url, ...) — url is arg 1
+  - pattern: urllib.request.urlopen(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: urllib.request.urlopen
+  - pattern: urllib.urlopen(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: legacy urllib.urlopen
+  - pattern: urlopen(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: bare urlopen
+  - pattern: httpx.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: httpx.get
+  - pattern: httpx.post(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: httpx.post
+  - pattern: aiohttp.ClientSession.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: aiohttp ClientSession.get
+
+  # ---------- Deserialization ----------
+  - pattern: pickle.loads(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: pickle.loads — known RCE
+  - pattern: pickle.load(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: pickle.load
+  - pattern: cPickle.loads(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: cPickle.loads
+  - pattern: yaml.load(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: yaml.load (unsafe, pre-default-safe)
+  - pattern: yaml.unsafe_load(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: yaml.unsafe_load
+  - pattern: yaml.full_load(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: yaml.full_load (5.x — still permits arbitrary tags)
+  - pattern: marshal.loads(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: marshal.loads
+  - pattern: shelve.open(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: shelve.open — unpickles backing store
+  - pattern: eval(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: builtin eval
+  - pattern: exec(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: builtin exec
+  - pattern: compile(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: compile() with attacker-controlled source
+
+  # ---------- Open redirect ----------
+  - pattern: HttpResponseRedirect(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Django HttpResponseRedirect
+  - pattern: HttpResponsePermanentRedirect(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Django HttpResponsePermanentRedirect
+  - pattern: redirect(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Django shortcuts.redirect
+
+  # ---------- ReDoS ----------
+  - pattern: re.compile(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: re.compile — pattern from user input
+  - pattern: re.match(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: re.match — pattern from user input
+  - pattern: re.search(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: re.search — pattern from user input
+
+  # ---------- Log injection ----------
+  - pattern: logger.info(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logger.info
+  - pattern: logger.error(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logger.error
+  - pattern: logger.warning(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logger.warning
+  - pattern: logger.debug(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logger.debug
+  - pattern: logging.info(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logging.info
+  - pattern: logging.error(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logging.error
+  - pattern: logging.warning(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logging.warning
+
+sanitizers:
+  # ---------- XSS ----------
+  - pattern: escape(*)
+    vuln_classes: [xss]
+    description: django.utils.html.escape — HTML entity encoding
+  - pattern: django.utils.html.escape(*)
+    vuln_classes: [xss]
+    description: django.utils.html.escape (qualified)
+  - pattern: html.escape(*)
+    vuln_classes: [xss]
+    description: stdlib html.escape
+  - pattern: bleach.clean(*)
+    vuln_classes: [xss]
+    description: bleach.clean — HTML sanitizer
+  - pattern: strip_tags(*)
+    vuln_classes: [xss]
+    description: django.utils.html.strip_tags
+  - pattern: conditional_escape(*)
+    vuln_classes: [xss]
+    description: django.utils.html.conditional_escape
+
+  # ---------- SQL ----------
+  - pattern: connection.ops.quote_name(*)
+    vuln_classes: [sql_injection]
+    description: Django connection.ops.quote_name — identifier quoting
+  - pattern: quote_name(*)
+    vuln_classes: [sql_injection]
+    description: bare quote_name
+
+  # ---------- Path traversal ----------
+  - pattern: os.path.basename(*)
+    vuln_classes: [path_traversal]
+    description: os.path.basename — strips directory components
+  - pattern: os.path.normpath(*)
+    vuln_classes: [path_traversal]
+    description: os.path.normpath — collapses ../
+  - pattern: posixpath.basename(*)
+    vuln_classes: [path_traversal]
+    description: posixpath.basename
+  - pattern: secure_filename(*)
+    vuln_classes: [path_traversal, file_upload]
+    description: werkzeug.utils.secure_filename
+
+  # ---------- Command injection ----------
+  - pattern: shlex.quote(*)
+    vuln_classes: [command_injection]
+    description: shlex.quote — shell metacharacter escape
+  - pattern: shlex.split(*)
+    vuln_classes: [command_injection]
+    description: shlex.split — argv splitter (returned list is safe to pass to exec without shell=True)
+  - pattern: pipes.quote(*)
+    vuln_classes: [command_injection]
+    description: legacy pipes.quote
+
+  # ---------- SSRF / open redirect ----------
+  - pattern: is_safe_url(*)
+    vuln_classes: [ssrf, open_redirect]
+    description: Django is_safe_url
+  - pattern: url_has_allowed_host_and_scheme(*)
+    vuln_classes: [ssrf, open_redirect]
+    description: Django url_has_allowed_host_and_scheme (3.0+)
+
+  # ---------- Deserialization ----------
+  - pattern: yaml.safe_load(*)
+    vuln_classes: [deserialization]
+    description: yaml.safe_load — restricted constructors
+
+  # ---------- ReDoS ----------
+  - pattern: re.escape(*)
+    vuln_classes: [redos]
+    description: re.escape — escape regex metacharacters
+
+  # ---------- Cross-class numeric coercion ----------
+  - pattern: int(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: int() coercion
+  - pattern: float(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: float() coercion
