@@ -10,6 +10,7 @@ import SSOCallbackPage from "./pages/SSOCallbackPage";
 import OrganizationsLanding from "./pages/OrganizationsLanding";
 import OrganizationLayout from "./pages/OrganizationLayout";
 import OrganizationSettingsPage from "./pages/OrganizationSettingsPage";
+import TaintEngineSettingsPage from "./pages/orgs/taint-engine/TaintEngineSettingsPage";
 
 import PoliciesPage from "./pages/PoliciesPage";
 import CompliancePage from "./pages/CompliancePage";
@@ -33,6 +34,8 @@ import PublicRoute from "../components/PublicRoute";
 import NotFoundRedirect from "../components/NotFoundRedirect";
 import OrganizationVulnerabilitiesPage from "./pages/OrganizationVulnerabilitiesPage";
 import AegisPage from "./pages/AegisPage";
+import OrganizationFlowsPage from "./pages/OrganizationFlowsPage";
+import FlowEditorPage from "./pages/FlowEditorPage";
 import AdminGate from "../components/AdminGate";
 import ExtractionFailuresPage from "./pages/admin/ExtractionFailuresPage";
 
@@ -125,6 +128,10 @@ export const router = createBrowserRouter([
         element: <OrganizationSettingsPage />,
       },
       {
+        path: "settings/taint-engine",
+        element: <TaintEngineSettingsPage />,
+      },
+      {
         path: "policies",
         element: <PoliciesPage />,
       },
@@ -141,8 +148,20 @@ export const router = createBrowserRouter([
         element: <AegisPage />,
       },
       {
+        path: "aegis/routines",
+        element: <AegisPage />,
+      },
+      {
         path: "aegis/:threadId",
         element: <AegisPage />,
+      },
+      {
+        path: "flows",
+        element: <OrganizationFlowsPage />,
+      },
+      {
+        path: "flows/:flowId",
+        element: <FlowEditorPage />,
       },
       {
         path: ":tab",

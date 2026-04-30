@@ -1,3 +1,11 @@
+export type FixStatusForBadge =
+  | 'awaiting_approval'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'refused'
+  | 'rejected';
+
 export interface AegisThread {
   id: string;
   organizationId: string;
@@ -10,6 +18,8 @@ export interface AegisThread {
   updatedAt: string;
   pinnedAt: string | null;
   archivedAt: string | null;
+  /** Set when the thread is linked to a fix (context_type='fix'). */
+  fixStatus: FixStatusForBadge | null;
 }
 
 export type TextPart = { type: 'text'; text: string };
@@ -59,6 +69,8 @@ export interface ThreadRow {
   title: string;
   created_at: string;
   updated_at: string;
+  context_type: string | null;
+  context_id: string | null;
 }
 
 export interface UserStateRow {
@@ -66,11 +78,42 @@ export interface UserStateRow {
   archived_at: string | null;
 }
 
+/**
+ * Map a `project_security_fixes` row to the icon bucket the sidebar renders.
+ * Real DB status values (per `FixStatus` in plan-types):
+ *   planning | awaiting_approval | approved | executing | completed | failed | rejected
+ * A "refused" plan is stored as status='failed' with error_message='Refusal: ...';
+ * we tease those apart to show a distinct Ban icon vs AlertTriangle.
+ */
+export function mapFixStatusToBadge(
+  raw: string | null | undefined,
+  errorMessage: string | null | undefined = null,
+): FixStatusForBadge | null {
+  if (!raw) return null;
+  switch (raw) {
+    case 'planning':
+    case 'awaiting_approval':
+      return 'awaiting_approval';
+    case 'approved':
+    case 'executing':
+      return 'running';
+    case 'completed':
+      return 'succeeded';
+    case 'failed':
+      return errorMessage?.startsWith('Refusal:') ? 'refused' : 'failed';
+    case 'rejected':
+      return 'rejected';
+    default:
+      return null;
+  }
+}
+
 export function rowToThread(
   row: ThreadRow,
   viewerId: string,
   userState: UserStateRow | null,
   participantCount: number,
+  fixStatus: FixStatusForBadge | null = null,
 ): AegisThread {
   return {
     id: row.id,
@@ -84,6 +127,7 @@ export function rowToThread(
     updatedAt: row.updated_at,
     pinnedAt: userState?.pinned_at ?? null,
     archivedAt: userState?.archived_at ?? null,
+    fixStatus,
   };
 }
 

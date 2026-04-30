@@ -3,7 +3,7 @@ import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { supabase } from '../lib/supabase';
 import { validateExternalUrl } from '../lib/url-guard';
 import { startDastMachine } from '../lib/fly-machines';
-import { checkProjectAccess, checkProjectManagePermission } from './projects';
+import { checkProjectAccess, checkProjectManagePermission } from '../lib/project-access';
 import type {
   DastConfigDTO,
   DastFindingDTO,

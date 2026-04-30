@@ -65,13 +65,15 @@ export async function writeOutputs(
 ): Promise<WriteOutputsResult> {
   fs.mkdirSync(opts.outputDir, { recursive: true });
 
-  const [depsRaw, vulnsRaw, semgrepRaw, secretsRaw, flowsRaw, entryPointsRaw] = await Promise.all([
+  const [depsRaw, vulnsRaw, semgrepRaw, secretsRaw, flowsRaw, entryPointsRaw, generatedRulesRaw, jobsRaw] = await Promise.all([
     fetchRows(storage, 'project_dependencies', 'project_id', opts.projectId),
     fetchRows(storage, 'project_dependency_vulnerabilities', 'project_id', opts.projectId),
     fetchRows(storage, 'project_semgrep_findings', 'project_id', opts.projectId),
     fetchRows(storage, 'project_secret_findings', 'project_id', opts.projectId),
     fetchRows(storage, 'project_reachable_flows', 'project_id', opts.projectId),
     fetchRows(storage, 'project_entry_points', 'project_id', opts.projectId),
+    fetchRows(storage, 'organization_generated_rules', 'organization_id', opts.organizationId),
+    fetchRows(storage, 'extraction_jobs', 'project_id', opts.projectId),
   ]);
 
   const vulns = opts.severityFilter
@@ -105,7 +107,50 @@ export async function writeOutputs(
   writeJson(path.join(opts.outputDir, 'reachable_flows.json'), sortRows(flowsRaw));
   writeJson(path.join(opts.outputDir, 'entry_points.json'), sortRows(entryPointsRaw));
 
+  // Phase 5: per-org AI rule generation outputs. Only emitted when at least
+  // one row exists so we don't pollute the output dir for non-generation runs.
+  if (generatedRulesRaw.length > 0 || hasRuleGenTelemetry(jobsRaw)) {
+    writeJson(
+      path.join(opts.outputDir, 'generated_rules.json'),
+      sortRows(generatedRulesRaw),
+    );
+    writeJson(
+      path.join(opts.outputDir, 'rule_generation_telemetry.json'),
+      extractRuleGenTelemetry(jobsRaw),
+    );
+  }
+
   return { summary, vulns, deps: depsRaw, semgrep: semgrepRaw, secrets: secretsRaw };
+}
+
+function hasRuleGenTelemetry(jobs: any[]): boolean {
+  return jobs.some((j) =>
+    j?.reachability_rules_total_detectable != null
+    || j?.reachability_rules_matched != null
+    || j?.reachability_rules_generated_this_scan != null
+    || j?.reachability_generation_cost_usd != null
+    || j?.reachability_validation_breakdown != null,
+  );
+}
+
+function extractRuleGenTelemetry(jobs: any[]): unknown {
+  return jobs
+    .map((j) => ({
+      extraction_run_id: j?.extraction_run_id ?? null,
+      status: j?.status ?? null,
+      rules_total_detectable: j?.reachability_rules_total_detectable ?? null,
+      rules_matched: j?.reachability_rules_matched ?? null,
+      generated_this_scan: j?.reachability_rules_generated_this_scan ?? null,
+      generation_cost_usd: j?.reachability_generation_cost_usd ?? null,
+      validation_breakdown: j?.reachability_validation_breakdown ?? null,
+    }))
+    .filter((j) =>
+      j.rules_total_detectable !== null
+      || j.rules_matched !== null
+      || j.generated_this_scan !== null
+      || j.generation_cost_usd !== null
+      || j.validation_breakdown !== null,
+    );
 }
 
 async function fetchRows(

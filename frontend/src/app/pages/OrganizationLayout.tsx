@@ -491,7 +491,7 @@ export default function OrganizationLayout() {
                 id ? 'pl-12' : 'px-6',
               )}
             >
-              <Outlet context={{ organization, reloadOrganization }} />
+              <Outlet context={{ organization, reloadOrganization, userPermissions }} />
             </main>
           </div>
         </PlanProvider>

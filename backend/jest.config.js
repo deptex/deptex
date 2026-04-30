@@ -13,6 +13,8 @@ module.exports = {
     '^(\\.\\./)+lib/supabase$': supabaseMockPath,
     '^(\\.\\./)+backend/src/lib/supabase$': supabaseMockPath,
     '^.*backend/src/lib/supabase$': supabaseMockPath,
+    // Sibling-of-lib imports — `lib/aegis/foo.ts` imports `'../supabase'`.
+    '^\\.\\./supabase$': supabaseMockPath,
     '^supertest$': require.resolve('supertest'),
   },
   transform: {
