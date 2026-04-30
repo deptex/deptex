@@ -28,6 +28,7 @@ import { fetchGhsaVulnerabilitiesBatch, filterGhsaVulnsByVersion, ghsaSeverityTo
 import { getVulnCountsBatch, getVulnCountsForVersion, getVulnCountsForVersionsBatch, VulnCounts } from '../lib/vuln-counts';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
 import { getActiveExtractionId } from '../lib/active-extraction';
+import { checkProjectAccess, checkProjectManagePermission } from '../lib/project-access';
 import { emitEvent } from '../lib/event-bus';
 import {
   registerGitLabWebhook,
@@ -400,112 +401,7 @@ router.use(authenticateUser);
 // Helper function to check if user has access to a project
 // Access is granted if user is org owner, has manage_teams_and_projects permission,
 // is a direct project member, or is in a team assigned to the project
-async function checkProjectAccess(userId: string, organizationId: string, projectId: string): Promise<{
-  hasAccess: boolean;
-  orgMembership: { role: string } | null;
-  projectMembership: { role_id: string } | null;
-  orgRole: { permissions: any; display_order: number } | null;
-  isInProjectTeam: boolean;
-  error?: { status: number; message: string };
-}> {
-  // Check if user is a member of the organization
-  const { data: orgMembership, error: orgMembershipError } = await supabase
-    .from('organization_members')
-    .select('role')
-    .eq('organization_id', organizationId)
-    .eq('user_id', userId)
-    .single();
-
-  if (orgMembershipError || !orgMembership) {
-    return {
-      hasAccess: false,
-      orgMembership: null,
-      projectMembership: null,
-      orgRole: null,
-      isInProjectTeam: false,
-      error: { status: 404, message: 'Organization not found or access denied' }
-    };
-  }
-
-  // Get user's org role permissions
-  const { data: orgRole } = await supabase
-    .from('organization_roles')
-    .select('permissions, display_order')
-    .eq('organization_id', organizationId)
-    .eq('name', orgMembership.role)
-    .single();
-
-  // Check if user is org owner or has manage_teams_and_projects permission
-  const isOrgOwner = orgMembership.role === 'owner';
-  const hasOrgPermission = orgRole?.permissions?.manage_teams_and_projects === true;
-
-  // If org owner or has permission, grant access immediately
-  if (isOrgOwner || hasOrgPermission) {
-    return {
-      hasAccess: true,
-      orgMembership,
-      projectMembership: null,
-      orgRole,
-      isInProjectTeam: false
-    };
-  }
-
-  // Check if user is a direct project member
-  const { data: projectMembership } = await supabase
-    .from('project_members')
-    .select('role_id')
-    .eq('project_id', projectId)
-    .eq('user_id', userId)
-    .single();
-
-  if (projectMembership) {
-    return {
-      hasAccess: true,
-      orgMembership,
-      projectMembership,
-      orgRole,
-      isInProjectTeam: false
-    };
-  }
-
-  // Check if user is in a team assigned to this project
-  // First get user's teams
-  const { data: userTeams } = await supabase
-    .from('team_members')
-    .select('team_id')
-    .eq('user_id', userId);
-
-  const userTeamIds = (userTeams || []).map((t: any) => t.team_id);
-
-  if (userTeamIds.length > 0) {
-    // Check if any of user's teams are assigned to this project
-    const { data: projectTeams } = await supabase
-      .from('project_teams')
-      .select('team_id')
-      .eq('project_id', projectId)
-      .in('team_id', userTeamIds);
-
-    if (projectTeams && projectTeams.length > 0) {
-      return {
-        hasAccess: true,
-        orgMembership,
-        projectMembership: null,
-        orgRole,
-        isInProjectTeam: true
-      };
-    }
-  }
-
-  // User has no access
-  return {
-    hasAccess: false,
-    orgMembership,
-    projectMembership: null,
-    orgRole,
-    isInProjectTeam: false,
-    error: { status: 403, message: 'You do not have access to this project' }
-  };
-}
+// checkProjectAccess and checkProjectManagePermission moved to ../lib/project-access.ts
 
 /** Project IDs visible to the user within an org (same rules as GET /:id/projects). */
 async function getAccessibleProjectIdsInOrganization(
@@ -577,57 +473,7 @@ async function getAccessibleProjectIdsInOrganization(
   return { projectIds: (scopedProjects || []).map((p: any) => p.id) };
 }
 
-/** Check if user can manage a project (enable integrations, suppress findings, accept risk, etc.).
- * Requires org-level manage_teams_and_projects OR team-level manage_projects (owner team). */
-async function checkProjectManagePermission(userId: string, organizationId: string, projectId: string): Promise<boolean> {
-  const { data: membership } = await supabase
-    .from('organization_members')
-    .select('role')
-    .eq('organization_id', organizationId)
-    .eq('user_id', userId)
-    .single();
-
-  if (!membership) return false;
-
-  if (membership.role === 'owner' || membership.role === 'admin') return true;
-
-  const { data: orgRole } = await supabase
-    .from('organization_roles')
-    .select('permissions')
-    .eq('organization_id', organizationId)
-    .eq('name', membership.role)
-    .single();
-
-  if (orgRole?.permissions?.manage_teams_and_projects === true) return true;
-
-  const { data: projectTeams } = await supabase
-    .from('project_teams')
-    .select('is_owner, team_id')
-    .eq('project_id', projectId);
-
-  const ownerEntry = projectTeams?.find((pt: any) => pt.is_owner);
-  const ownerTeamId = ownerEntry?.team_id;
-
-  if (!ownerTeamId) return false;
-
-  const { data: ownerTeamMembership } = await supabase
-    .from('team_members')
-    .select('role')
-    .eq('team_id', ownerTeamId)
-    .eq('user_id', userId)
-    .single();
-
-  if (!ownerTeamMembership) return false;
-
-  const { data: teamRole } = await supabase
-    .from('team_roles')
-    .select('permissions')
-    .eq('team_id', ownerTeamId)
-    .eq('name', ownerTeamMembership.role)
-    .single();
-
-  return teamRole?.permissions?.manage_projects === true;
-}
+// checkProjectManagePermission moved to ../lib/project-access.ts
 
 // GET /api/organizations/:id/projects - Get all projects for an organization
 router.get('/:id/projects', async (req: AuthRequest, res) => {
