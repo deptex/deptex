@@ -1,0 +1,90 @@
+{
+  "name": "deptex-test-repos-v1",
+  "ecosystems": ["npm", "pypi", "maven", "gomod"],
+  "projects": [
+    {
+      "id": "deptex-test-npm",
+      "ecosystem": "npm",
+      "path": "C:/Coding/deptex-test-repos/deptex-test-npm",
+      "expectedFindings": [
+        {
+          "cve": "CVE-2021-23337",
+          "vulnClass": "command_injection",
+          "sinkFile": "src/index.js",
+          "sinkPattern": "_.template"
+        },
+        {
+          "cve": "CVE-2022-23529",
+          "vulnClass": "deserialization",
+          "sinkFile": "src/index.js",
+          "sinkPattern": "jwt.verify"
+        },
+        {
+          "cve": "CVE-2021-3749",
+          "vulnClass": "ssrf",
+          "sinkFile": "src/index.js",
+          "sinkPattern": "axios.get"
+        },
+        {
+          "cve": "CVE-2022-0235",
+          "vulnClass": "ssrf",
+          "sinkFile": "src/index.js",
+          "sinkPattern": "fetch"
+        },
+        {
+          "cve": "CVE-2021-44906",
+          "vulnClass": "prototype_pollution",
+          "sinkFile": "src/index.js",
+          "sinkPattern": "minimist"
+        }
+      ],
+      "meta": {
+        "framework": "express",
+        "rationale": "five Express handlers each routing user input through req.query.* or req.body.* to a vulnerable dependency function. Engine should match req.* sources via express.yaml + sinks via node-stdlib.yaml or per-package wildcard patterns."
+      }
+    },
+    {
+      "id": "deptex-test-go",
+      "ecosystem": "gomod",
+      "path": "C:/Coding/deptex-test-repos/deptex-test-go",
+      "expectedFindings": [
+        {
+          "cve": "CVE-2022-32149",
+          "vulnClass": "redos",
+          "sinkFile": "main.go",
+          "sinkPattern": "language.Parse"
+        },
+        {
+          "cve": "CVE-2023-3978",
+          "vulnClass": "xss",
+          "sinkFile": "main.go",
+          "sinkPattern": "html.Parse"
+        }
+      ],
+      "meta": {
+        "framework": "gin",
+        "rationale": "two Gin route handlers — c.Param('lang') and c.GetRawData() — flow into vulnerable golang.org/x/* package functions. Engine should match Gin sources via gin.yaml."
+      }
+    },
+    {
+      "id": "deptex-test-python",
+      "ecosystem": "pypi",
+      "path": "C:/Coding/deptex-test-repos/deptex-test-python",
+      "expectedFindings": [],
+      "meta": {
+        "framework": null,
+        "rationale": "Plain Python script with no Flask/Django/FastAPI handlers — no framework-recognized source. Loader/runner smoke only; expected zero flows. Used to validate the engine doesn't crash on framework-less Python projects. Real Python recall measurement happens via per-language fixture matrix (Unit 2)."
+      }
+    },
+    {
+      "id": "deptex-test-java",
+      "ecosystem": "maven",
+      "path": "C:/Coding/deptex-test-repos/deptex-test-java",
+      "expectedFindings": [],
+      "meta": {
+        "framework": null,
+        "rationale": "Plain Java main() with no Spring controller — no framework-recognized source. Loader/runner smoke only; expected zero flows. Real Java recall measurement happens via per-language fixture matrix (Unit 2)."
+      }
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+module UserRepo
+  def self.find_by_name(name)
+    User.where("name = '#{name}'")
+  end
+end

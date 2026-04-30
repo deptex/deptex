@@ -3,6 +3,7 @@
  */
 
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { execSync, spawn, spawnSync } from 'child_process';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
@@ -16,11 +17,20 @@ import { storeEntryPoints } from './framework-rules/storage';
 import { ExtractionLogger } from './logger';
 import { parsePurl, resolvePurlToDependencyId, buildPurl } from './purl';
 import { parseReachableFlows, parseUsageSlices, parseLlmPrompts, updateReachabilityLevels, computeImportCountsFromUsageSlices } from './reachability';
-import { loadAllRulesWithSkipped, selectRulesForCves, runReachabilityRules } from './reachability-rules';
+import { loadAllRulesWithSkipped, loadOrgGeneratedRules, selectRulesForCves, runReachabilityRules } from './reachability-rules';
 import { updateJobPayloadCommit, updateJobStatus } from './job-db';
 import { applyEpdScoringFallback, EpdBudgetExceededError } from './epd';
 import { withTimeout, logStepError, classifyError } from './with-timeout';
 import { runIaCAndContainerScans, type ScannerSummary } from './scanners/orchestrator';
+import {
+  runEngine as runTaintEngine,
+  shouldRunForOrg as shouldRunTaintEngineForOrg,
+  writeFlows as writeTaintEngineFlows,
+  writeRun as writeTaintEngineRun,
+  checkCircuitBreaker as checkTaintEngineCircuitBreaker,
+  maybeEngageKillswitch as maybeEngageTaintEngineKillswitch,
+} from './taint-engine';
+import { runRuleGenerationStep, makePlatformRulesDir, type PipelineVulnRow } from './rule-generation-step';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
@@ -335,6 +345,8 @@ const INSTALL_HINTS: Record<string, string> = {
     "Semgrep not found — the Dockerfile bundles it, so this likely means the image is misbuilt or you are running the worker outside the container. Static analysis skipped.",
   trufflehog:
     "TruffleHog not found — the Dockerfile bundles it, so this likely means the image is misbuilt or you are running the worker outside the container. Secret scanning skipped.",
+  guarddog:
+    "GuardDog binary not found at /opt/guarddog-venv/bin/guarddog — the Dockerfile installs it into an isolated venv, so this likely means the image is misbuilt or you are running the worker outside the container. Malicious-package source-code analysis skipped (feed lookup still runs).",
 };
 
 function classifyCloneError(message: string): string {
@@ -884,6 +896,10 @@ export async function runPipeline(
       }
     }
 
+    // (taint_engine step runs later — after reachability_rules — so its
+    //  flows land in the same finalize cluster as atom + reachability_rules.
+    //  See "STEP: Cross-file taint engine" below.)
+
     // Fetch asset tier for depscore calculations (used by vuln scan, semgrep, and trufflehog)
     const VALID_ASSET_TIERS: AssetTier[] = ['CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION'];
     let assetTier: AssetTier = 'EXTERNAL';
@@ -1358,6 +1374,119 @@ export async function runPipeline(
       if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] reachability step failed: ${atomStepErr.message}`);
     }
 
+    // === STEP: AI rule generation (Phase 5) ===
+    // For each CVE in this scan that matches the org's trigger policy AND
+    // doesn't already have a rule (platform or org-generated), draft +
+    // validate a Semgrep rule via the org's BYOK provider. Validated rules
+    // land in organization_generated_rules and the next step
+    // (reachability_rules) loads them into the same Semgrep pass that
+    // matches the platform-shipped 20.
+    //
+    // Block-and-wait by design (see plan): scans wait for generation to
+    // complete. Per-CVE timeout is 90s, with overall step bounded by the
+    // org's max_wait_seconds. Concurrency is p-limit(5) — generation is
+    // network-bound (AI calls) so a single Fly machine handles 5 in flight
+    // without blowing CPU. Failures of one CVE never block others — they
+    // log to extraction_step_errors at warn and the others continue.
+    //
+    // Skipped silently when:
+    //   - no Semgrep binary (validation requires it)
+    //   - no organization_reachability_settings row OR auto_generate_enabled=false
+    //   - no BYOK key for the org's chosen provider
+    //   - no candidate CVEs after trigger filter + dedup
+    if (!(checkCancelled && await checkCancelled())) {
+      if (binaryAvailable('semgrep')) {
+        try {
+          const candidatesQuery = await supabase
+            .from('project_dependency_vulnerabilities')
+            .select('osv_id, severity, cisa_kev, reachability_level, aliases, project_dependency_id')
+            .eq('project_id', projectId)
+            .eq('extraction_run_id', runId);
+          if (candidatesQuery.error) throw new Error(candidatesQuery.error.message);
+
+          const pdvRows = (candidatesQuery.data ?? []) as Array<{
+            osv_id: string | null;
+            severity: string | null;
+            cisa_kev: boolean | null;
+            reachability_level: string | null;
+            aliases: string[] | null;
+            project_dependency_id: string | null;
+          }>;
+
+          // Resolve project_dependency_id → name + version + namespace +
+          // ecosystem in a single batch so we can build purls without
+          // per-vuln round trips.
+          const pdIds = Array.from(new Set(pdvRows.map((r) => r.project_dependency_id).filter((x): x is string => !!x)));
+          const pdMap = new Map<string, { name: string; version: string | null; namespace: string | null; dependency_id: string | null }>();
+          if (pdIds.length > 0) {
+            const { data: pdRows } = await supabase
+              .from('project_dependencies')
+              .select('id, name, version, namespace, dependency_id')
+              .in('id', pdIds);
+            for (const r of (pdRows ?? []) as Array<{ id: string; name: string; version: string | null; namespace: string | null; dependency_id: string | null }>) {
+              pdMap.set(r.id, { name: r.name, version: r.version, namespace: r.namespace, dependency_id: r.dependency_id });
+            }
+          }
+
+          const depIds = Array.from(new Set(Array.from(pdMap.values()).map((r) => r.dependency_id).filter((x): x is string => !!x)));
+          const ecoMap = new Map<string, string>();
+          if (depIds.length > 0) {
+            const { data: depRows } = await supabase
+              .from('dependencies')
+              .select('id, ecosystem')
+              .in('id', depIds);
+            for (const r of (depRows ?? []) as Array<{ id: string; ecosystem: string }>) {
+              ecoMap.set(r.id, r.ecosystem);
+            }
+          }
+
+          const pipelineVulns: PipelineVulnRow[] = pdvRows.map((r) => {
+            const pd = r.project_dependency_id ? pdMap.get(r.project_dependency_id) : undefined;
+            const eco = pd?.dependency_id ? ecoMap.get(pd.dependency_id) ?? null : null;
+            const purl = pd && eco ? buildPurl(eco, pd.name, pd.version) : null;
+            return {
+              osv_id: r.osv_id,
+              aliases: r.aliases,
+              severity: r.severity,
+              cisa_kev: r.cisa_kev,
+              reachability_level: r.reachability_level,
+              ecosystem: eco,
+              package_purl: purl,
+              package_name: pd?.name ?? null,
+            };
+          });
+
+          await runRuleGenerationStep(
+            {
+              organizationId,
+              projectId,
+              runId,
+              jobId: job.jobId,
+              supabase,
+              log,
+              platformRulesDir: makePlatformRulesDir(),
+            },
+            pipelineVulns,
+          );
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          if (job.jobId) {
+            const { code, message, stack } = classifyError(e);
+            await logStepError(supabase, {
+              jobId: job.jobId,
+              projectId,
+              step: 'rule_generation',
+              code,
+              message,
+              stack,
+              severity: 'warn',
+            });
+          }
+          await log.warn('rule_generation', `Step failed: ${msg}`);
+        }
+      }
+    }
+
     // === STEP: Reachability rules (Semgrep taint) ===
     // Per-CVE hand-authored Semgrep taint rules that upgrade matching vulns
     // from heuristic reachability (module/function/data_flow) to `confirmed`.
@@ -1369,6 +1498,10 @@ export async function runPipeline(
         await log.warn('reachability_rules', INSTALL_HINTS.semgrep);
       } else {
         const reachStart = Date.now();
+        // Phase 5: tmp dir for materialized DB rules. Declared here so the
+        // outer finally can clean it up even when the try block throws
+        // before the assignment below.
+        let orgRulesCleanupDir: string | null = null;
         try {
           // Startup probe: confirm the phase23 migration is applied before we
           // attempt to write semgrep_taint rows. If the column doesn't exist
@@ -1397,7 +1530,25 @@ export async function runPipeline(
           // relative to this file so both tsx (src/) and compiled (dist/)
           // layouts find it.
           const reachabilityRulesDir = path.resolve(__dirname, '..', 'reachability-rules');
-          const { loaded: allRules, skipped } = await loadAllRulesWithSkipped(reachabilityRulesDir);
+          const { loaded: platformRules, skipped: platformSkipped } = await loadAllRulesWithSkipped(reachabilityRulesDir);
+
+          // Phase 5: also load the org's enabled + validated AI-generated
+          // rules from organization_generated_rules and merge them into
+          // the same Semgrep pass. The newly-generated rules from the
+          // rule_generation step above appear here in the same scan.
+          orgRulesCleanupDir = fs.mkdtempSync(path.join(os.tmpdir(), `deptex-org-rules-${runId}-`));
+          let orgRules: typeof platformRules = [];
+          let orgSkipped: typeof platformSkipped = [];
+          try {
+            const orgLoad = await loadOrgGeneratedRules(organizationId, supabase, orgRulesCleanupDir);
+            orgRules = orgLoad.loaded;
+            orgSkipped = orgLoad.skipped;
+          } catch (orgErr: any) {
+            await log.warn('reachability_rules', `Failed to load org generated rules: ${orgErr?.message ?? orgErr}`);
+          }
+
+          const allRules = [...platformRules, ...orgRules];
+          const skipped = [...platformSkipped, ...orgSkipped];
 
           if (skipped.length > 0) {
             // Surface so a broken rule pack doesn't ship silently. One
@@ -1677,6 +1828,196 @@ export async function runPipeline(
             }
             await log.warn('reachability_rules', `Step failed: ${msg}`);
           }
+        } finally {
+          // Tear down the materialized org-rules tmp dir regardless of
+          // whether the step succeeded, was bailed by phase23 probe, or
+          // threw mid-run.
+          if (orgRulesCleanupDir) {
+            try { fs.rmSync(orgRulesCleanupDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
+          }
+        }
+      }
+    }
+
+    // === STEP: Cross-file taint engine (Phase 6, shadow mode) ===
+    //
+    // Runs the deterministic forward-propagation taint engine against the
+    // cloned workspace. Output goes to project_reachable_flows with
+    // reachability_source='taint_engine' and is picked up by the
+    // updateReachabilityLevels classifier the same way atom flows are.
+    //
+    // Sits AFTER reachability_rules so the engine's flow writes land in
+    // the same finalize cluster as atom + reachability_rules. Earlier
+    // (pre-dep-scan) placement orphaned engine rows when a later step
+    // failed and finalize_extraction never ran.
+    //
+    // Policy (locked decisions from feature-brief):
+    //   - HARD-FAIL: any engine exception aborts the extraction. Soft
+    //     degradation only via the staged rollout pct + circuit breaker.
+    //   - 30-minute hard timeout (the engine's M2 perf budget is 2min on a
+    //     medium project — 30min covers M5+ AI passes too).
+    //   - Circuit breaker: org-scoped failure-rate killswitch. Skips if
+    //     >5% of last 60min failed (≥5-run minimum sample).
+    //   - Rollout pct: DEPTEX_TAINT_ENGINE_ROLLOUT_PCT gates the engine
+    //     across the fleet. Default 0 in production until M8 retirement
+    //     gates are met.
+    if (checkCancelled && await checkCancelled()) return;
+    {
+      const stepStart = Date.now();
+      await updateStep(supabase, projectId, 'taint_engine');
+
+      if (!(await shouldRunTaintEngineForOrg(supabase, organizationId))) {
+        await log.info('taint_engine', 'Skipped: rollout pct gate (DEPTEX_TAINT_ENGINE_ROLLOUT_PCT or rollout_pct_override)');
+        await writeTaintEngineRun(supabase, {
+          projectId,
+          organizationId,
+          extractionRunId: runId,
+          status: 'skipped',
+          totalMs: Date.now() - stepStart,
+          errorCode: 'rollout_gate',
+        });
+      } else {
+        const breaker = await checkTaintEngineCircuitBreaker(supabase, organizationId);
+        if (!breaker.shouldRun) {
+          await log.warn(
+            'taint_engine',
+            `Skipped: circuit breaker ${breaker.blockedReason} (${breaker.recentFailures}/${breaker.recentRuns} failures = ${breaker.failurePct.toFixed(1)}%)`,
+          );
+          await writeTaintEngineRun(supabase, {
+            projectId,
+            organizationId,
+            extractionRunId: runId,
+            status: 'skipped',
+            totalMs: Date.now() - stepStart,
+            errorCode: breaker.blockedReason ?? 'circuit_breaker',
+          });
+        } else {
+          // Mark the run as 'running' first so a crash mid-engine still
+          // leaves a row the breaker can see. The terminal upsert below
+          // overwrites status + telemetry on success/failure.
+          await writeTaintEngineRun(supabase, {
+            projectId,
+            organizationId,
+            extractionRunId: runId,
+            status: 'running',
+          });
+          try {
+            const engineResult = await withTimeout(
+              async (signal) => runTaintEngine({
+                workspaceRoot,
+                ecosystem: job.ecosystem,
+                signal,
+                onWarn: (m) => { void log.warn('taint_engine', m); },
+                fpFilter: {
+                  storage: supabase,
+                  organizationId,
+                  // No human triggered this extraction; we attribute the
+                  // platform AI spend to the org owner (the cost-cap
+                  // aggregator filters by organization_id, not user_id).
+                  userId: organizationId,
+                  projectId,
+                  extractionRunId: runId,
+                },
+              }),
+              30 * 60_000,
+              'taint_engine',
+            );
+
+            if (!engineResult.ran || !engineResult.propagation) {
+              await log.warn('taint_engine', `No-op: ${engineResult.skippedReason ?? 'unknown'}`);
+              await writeTaintEngineRun(supabase, {
+                projectId,
+                organizationId,
+                extractionRunId: runId,
+                status: 'skipped',
+                totalMs: Date.now() - stepStart,
+                errorCode: 'no_specs_loaded',
+              });
+            } else {
+              const { propagation, frameworksLoaded, flowsAfterFilter, aiFilter } = engineResult;
+              const survivors = flowsAfterFilter ?? propagation.flows;
+              const writeResult = await writeTaintEngineFlows(supabase, {
+                projectId,
+                extractionRunId: runId,
+                flows: survivors,
+                filterVerdicts: aiFilter?.verdicts,
+              });
+              for (const e of writeResult.errors) {
+                await log.warn('taint_engine', `flow write: ${e}`);
+              }
+              await writeTaintEngineRun(supabase, {
+                projectId,
+                organizationId,
+                extractionRunId: runId,
+                status: 'completed',
+                callgraphBuildMs: propagation.stats.callgraphMs,
+                taintPropagationMs: propagation.stats.propagationMs,
+                aiFpFilterMs: aiFilter?.invoked ? aiFilter.durationMs : undefined,
+                totalMs: Date.now() - stepStart,
+                flowsEmitted: propagation.flows.length,
+                flowsAfterAiFilter: survivors.length,
+                aiCostUsd: aiFilter?.costUsd ?? 0,
+                frameworksDetected: frameworksLoaded,
+                isTypedJsProject: propagation.callgraph.isTypedJsProject,
+                typedFilesPct: propagation.callgraph.typedFilesPct,
+              });
+              if (aiFilter?.invoked) {
+                await log.success(
+                  'taint_engine',
+                  `Emitted ${propagation.flows.length} flows; AI filter checked ${aiFilter.flowsChecked}, rejected ${aiFilter.flowsRejected} (kept ${survivors.length}). Cost $${aiFilter.costUsd.toFixed(4)}. ${propagation.stats.totalMs}ms total.`,
+                  Date.now() - stepStart,
+                );
+              } else {
+                const reason = aiFilter?.skippedReason ? ` (filter skipped: ${aiFilter.skippedReason})` : '';
+                await log.success(
+                  'taint_engine',
+                  `Emitted ${propagation.flows.length} flows from ${frameworksLoaded.length} framework spec(s) in ${propagation.stats.totalMs}ms${reason}`,
+                  Date.now() - stepStart,
+                );
+              }
+            }
+          } catch (err: unknown) {
+            // HARD-FAIL: log telemetry, maybe engage killswitch, then rethrow.
+            const { code, message, stack } = classifyError(err);
+            await writeTaintEngineRun(supabase, {
+              projectId,
+              organizationId,
+              extractionRunId: runId,
+              status: 'failed',
+              totalMs: Date.now() - stepStart,
+              errorCode: code,
+              errorMessage: message,
+            });
+            // Killswitch is best-effort — never let an RPC error here
+            // shadow the original engine failure being reported below.
+            try {
+              const engaged = await maybeEngageTaintEngineKillswitch(
+                supabase,
+                organizationId,
+                `taint_engine ${code}: ${message.slice(0, 200)}`,
+              );
+              if (engaged) {
+                await log.warn('taint_engine', 'Killswitch engaged: failure rate exceeded threshold');
+              }
+            } catch (killswitchErr: unknown) {
+              const ksMsg = killswitchErr instanceof Error ? killswitchErr.message : String(killswitchErr);
+              await log.warn('taint_engine', `Killswitch RPC failed: ${ksMsg}`);
+            }
+            if (job.jobId) {
+              await logStepError(supabase, {
+                jobId: job.jobId,
+                projectId,
+                step: 'taint_engine',
+                code,
+                message,
+                stack,
+                durationMs: Date.now() - stepStart,
+                severity: 'error',
+              });
+            }
+            await setError(supabase, projectId, `Taint engine failed: ${message}`);
+            throw err;
+          }
         }
       }
     }
@@ -1816,6 +2157,151 @@ export async function runPipeline(
           stack,
           severity: 'warn',
         });
+      }
+    }
+
+    // === STEP: Malicious-package scan (OPTIONAL, soft-fail) ===
+    if (checkCancelled && await checkCancelled()) return;
+    {
+      const malStart = Date.now();
+      try {
+        const { data: pdRows, error: pdErr } = await supabase
+          .from('project_dependencies')
+          .select('id, name, version, dependency_id')
+          .eq('project_id', projectId)
+          .eq('last_seen_extraction_run_id', runId);
+        if (pdErr) throw new Error(`malicious-scan failed to load dependencies: ${pdErr.message}`);
+
+        const pdRowList = (pdRows ?? []) as Array<{
+          id: string;
+          name: string;
+          version: string | null;
+          dependency_id: string | null;
+        }>;
+        const depIds = Array.from(
+          new Set(pdRowList.map((r) => r.dependency_id).filter((x): x is string => !!x)),
+        );
+        const ecoById = new Map<string, string>();
+        if (depIds.length > 0) {
+          const { data: depRows } = await supabase
+            .from('dependencies')
+            .select('id, ecosystem')
+            .in('id', depIds);
+          for (const d of (depRows ?? []) as Array<{ id: string; ecosystem: string }>) {
+            ecoById.set(d.id, d.ecosystem);
+          }
+        }
+
+        const packages = pdRowList
+          .filter((r) => !!r.dependency_id && !!r.version)
+          .map((r) => ({
+            project_dependency_id: r.id,
+            dependency_id: r.dependency_id as string,
+            name: r.name,
+            ecosystem: ecoById.get(r.dependency_id as string) ?? jobEcosystem,
+            version: r.version,
+          }));
+
+        const { runMaliciousScan, eventDeduplicationKey } = await import('./malicious-scan');
+        const result = await runMaliciousScan({
+          supabase,
+          projectId,
+          organizationId,
+          extractionRunId: runId,
+          jobId: job.jobId ?? runId,
+          packages,
+          log,
+          checkCancelled,
+          heartbeat,
+        });
+
+        // Emit one batched event per (org, project, run). Idempotent via
+        // dedup key — second extraction with no new findings emits nothing
+        // because the upsert RPC returned 0.
+        if (result.inserted_findings > 0) {
+          try {
+            const dedupKey = eventDeduplicationKey(organizationId, projectId, runId);
+            const { data: insertedEvent, error: insertErr } = await supabase
+              .from('notification_events')
+              .insert({
+                event_type: 'malicious_package_detected',
+                organization_id: organizationId,
+                project_id: projectId,
+                payload: {
+                  organization_id: organizationId,
+                  project_id: projectId,
+                  extraction_run_id: runId,
+                  feed_hits: result.feed_hits,
+                  guarddog_hits: result.guarddog_hits,
+                  inserted_findings: result.inserted_findings,
+                },
+                source: 'extraction_worker',
+                priority: 'critical',
+                deduplication_key: dedupKey,
+                status: 'pending',
+              })
+              .select('id')
+              .single();
+
+            // Trigger immediate dispatch via backend internal endpoint.
+            // Without this, the row sits at status='pending' and only fires
+            // when the reconcile-stuck-notifications cron sweeps it (≤10m
+            // delay). For a critical-class event that delay is unacceptable.
+            // If the dispatch call fails we leave the row pending and rely
+            // on the reconciler — same eventual safety net, slower path.
+            if (!insertErr && insertedEvent?.id) {
+              try {
+                const backendBaseUrl = process.env.BACKEND_URL || process.env.API_BASE_URL || 'http://localhost:3001';
+                const internalKey = process.env.INTERNAL_API_KEY;
+                if (internalKey) {
+                  const url = `${backendBaseUrl.replace(/\/$/, '')}/api/workers/dispatch-notification`;
+                  await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'X-Internal-Api-Key': internalKey,
+                    },
+                    body: JSON.stringify({ eventId: insertedEvent.id }),
+                  });
+                }
+              } catch (dispatchErr: any) {
+                await log.warn('malicious_scan', `Dispatch trigger failed (reconciler will retry): ${dispatchErr?.message ?? dispatchErr}`);
+              }
+            } else if (insertErr && (insertErr as any).code !== '23505') {
+              // 23505 = dedup hit on (org, dedup_key) — expected on idempotent re-run.
+              await log.warn('malicious_scan', `Event emission failed: ${insertErr.message ?? insertErr}`);
+            }
+          } catch (eventErr: any) {
+            // Non-fatal — findings are already in the DB; the dispatcher
+            // can still surface them on read.
+            await log.warn('malicious_scan', `Event emission failed: ${eventErr?.message ?? eventErr}`);
+          }
+        }
+
+        // Persist scan_status onto scan_jobs for the soft-fail UI banner.
+        if (job.jobId) {
+          try {
+            await supabase
+              .from('scan_jobs')
+              .update({ malicious_scan_status: result.status })
+              .eq('id', job.jobId);
+          } catch { /* column landed in malicious_packages_scan_status.sql */ }
+        }
+      } catch (err: any) {
+        if (job.jobId) {
+          const { code, message, stack } = classifyError(err);
+          await logStepError(supabase, {
+            jobId: job.jobId,
+            projectId,
+            step: 'malicious_scan',
+            code,
+            message,
+            stack,
+            durationMs: Date.now() - malStart,
+            severity: 'warn',
+          });
+        }
+        await log.warn('malicious_scan', `Malicious-package scan failed: ${err?.message ?? err}`);
       }
     }
 
