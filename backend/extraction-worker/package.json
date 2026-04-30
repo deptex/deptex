@@ -16,10 +16,14 @@
     "test:storage": "tsx test/storage-pglite.test.ts",
     "test:finalize": "tsx test/finalize-extraction.test.ts",
     "test:reachability-rules-e2e": "tsx test/reachability-rules-e2e.test.ts",
+    "test:rule-generation-step-pglite": "tsx test/rule-generation-step-pglite.test.ts",
     "docker:prepare": "mkdir -p .schema && cp ../database/schema.sql .schema/schema.sql",
     "docker:build": "npm run docker:prepare && docker build -t deptex-cli:local .",
     "scan": "./bin/deptex-scan",
-    "test:fixtures": "tsx test/snapshot.ts"
+    "test:fixtures": "tsx test/snapshot.ts",
+    "bench:rule-generation": "tsx test/rule-generation-bench.ts",
+    "iterate": "tsx test/iterate/cli.ts",
+    "iterate:tournament": "tsx test/iterate/tournament.ts"
   },
   "keywords": [
     "extraction",
@@ -35,9 +39,11 @@
     "@upstash/redis": "^1.25.0",
     "dotenv": "^16.3.1",
     "js-yaml": "^4.1.1",
+    "p-limit": "^3.1.0",
     "simple-git": "^3.22.0",
     "stream-json": "^1.8.0",
-    "web-tree-sitter": "^0.26.8"
+    "web-tree-sitter": "^0.26.8",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
