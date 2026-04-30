@@ -1,42 +1,38 @@
 import { jsonSchema } from 'ai';
+import { resolveProject, resolveProjectVulnerability } from './resolvers';
 import type { AegisToolEntry } from '../tool-types';
 
 const getProjectVulnerabilities: AegisToolEntry<{
-  projectId: string;
+  projectName: string;
   severity?: 'critical' | 'high' | 'medium' | 'low';
   reachableOnly?: boolean;
   limit?: number;
 }> = {
   name: 'get_project_vulnerabilities',
   description:
-    'List vulnerabilities for a project. Each row includes OSV id, CVE aliases, severity, CVSS, EPSS, KEV flag, reachability level, depscore, the affected dependency@version, and fixed versions. Optional filters: severity and reachableOnly.',
+    'Vulnerabilities for a project. Each row includes OSV id, CVE aliases, severity, CVSS, EPSS, KEV flag, reachability level, depscore, the affected dependency@version, and fixed versions. Pass the project name exactly as the user said it.',
   danger: 'safe',
   inputSchema: jsonSchema({
     type: 'object',
     properties: {
-      projectId: { type: 'string', format: 'uuid' },
+      projectName: { type: 'string', minLength: 1, description: 'Project name as the user said it.' },
       severity: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
       reachableOnly: { type: 'boolean' },
       limit: { type: 'integer', minimum: 1, maximum: 500 },
     },
-    required: ['projectId'],
+    required: ['projectName'],
     additionalProperties: false,
   }),
-  execute: async ({ projectId, severity, reachableOnly, limit }, ctx) => {
-    const { data: project } = await ctx.supabase
-      .from('projects')
-      .select('id, organization_id')
-      .eq('id', projectId)
-      .single();
-    if (!project) return { error: 'Project not found' };
-    if (project.organization_id !== ctx.orgId) return { error: 'Project not in current organization' };
+  execute: async ({ projectName, severity, reachableOnly, limit }, ctx) => {
+    const resolved = await resolveProject(projectName, ctx.orgId, ctx.supabase);
+    if ('error' in resolved) return resolved;
 
     let query = ctx.supabase
       .from('project_dependency_vulnerabilities')
       .select(
-        'id, osv_id, severity, summary, aliases, fixed_versions, is_reachable, reachability_level, epss_score, cvss_score, cisa_kev, depscore, published_at, project_dependency_id',
+        'osv_id, severity, summary, aliases, fixed_versions, is_reachable, reachability_level, epss_score, cvss_score, cisa_kev, depscore, published_at, project_dependency_id',
       )
-      .eq('project_id', projectId)
+      .eq('project_id', resolved.id)
       .order('depscore', { ascending: false, nullsFirst: false })
       .limit(limit ?? 200);
 
@@ -45,7 +41,9 @@ const getProjectVulnerabilities: AegisToolEntry<{
 
     const { data: vulns, error } = await query;
     if (error) return { error: error.message };
-    if (!vulns || vulns.length === 0) return { vulnerabilities: [], totalReturned: 0 };
+    if (!vulns || vulns.length === 0) {
+      return { project: resolved.name, vulnerabilities: [], totalReturned: 0 };
+    }
 
     const pdIds = Array.from(new Set(vulns.map((v: any) => v.project_dependency_id)));
     const { data: pds } = await ctx.supabase
@@ -56,10 +54,10 @@ const getProjectVulnerabilities: AegisToolEntry<{
     for (const pd of pds ?? []) pdById.set(pd.id, pd);
 
     return {
+      project: resolved.name,
       vulnerabilities: vulns.map((v: any) => {
         const pd = pdById.get(v.project_dependency_id);
         return {
-          id: v.id,
           osvId: v.osv_id,
           cveAliases: (v.aliases ?? []).filter((a: string) => a.startsWith('CVE-')),
           aliases: v.aliases ?? [],
@@ -73,7 +71,7 @@ const getProjectVulnerabilities: AegisToolEntry<{
           publishedAt: v.published_at,
           summary: v.summary,
           fixedVersions: v.fixed_versions ?? [],
-          dependency: pd ? { id: pd.id, name: pd.name, version: pd.version } : null,
+          dependency: pd ? { name: pd.name, version: pd.version } : null,
         };
       }),
       totalReturned: vulns.length,
@@ -84,7 +82,7 @@ const getProjectVulnerabilities: AegisToolEntry<{
 const getSecurityPosture: AegisToolEntry<Record<string, never>> = {
   name: 'get_security_posture',
   description:
-    'Org-wide aggregate. Returns project count, vulnerability totals by severity (incl. reachable and KEV), average health score, and a count of projects in violation.',
+    'Org-wide aggregate. Returns project count, vulnerability totals by severity (incl. reachable and KEV), average health score, and a count of projects in violation. Takes no arguments.',
   danger: 'safe',
   inputSchema: jsonSchema({ type: 'object', properties: {}, additionalProperties: false }),
   execute: async (_input, ctx) => {
@@ -142,31 +140,27 @@ const getSecurityPosture: AegisToolEntry<Record<string, never>> = {
 };
 
 const getVulnerabilityDetail: AegisToolEntry<{
-  cveId?: string;
-  osvId?: string;
-  vulnerabilityId?: string;
+  cveOrOsvId: string;
 }> = {
   name: 'get_vulnerability_detail',
   description:
-    'Full detail for a vulnerability. Lookup by CVE id (e.g. CVE-2024-1234), OSV id (e.g. GHSA-xxxx), or project_dependency_vulnerabilities.id. Returns severity, CVSS, EPSS, KEV, published date, affected dependencies across the org, and fixed versions.',
+    'Full detail for a vulnerability across the whole org. Lookup by CVE id (e.g. CVE-2024-1234) or OSV id (e.g. GHSA-xxxx). Returns severity, CVSS, EPSS, KEV, published date, fixed versions, and every project + dependency it affects.',
   danger: 'safe',
   inputSchema: jsonSchema({
     type: 'object',
     properties: {
-      cveId: { type: 'string', description: 'CVE id like CVE-2024-1234.' },
-      osvId: { type: 'string', description: 'OSV id like GHSA-xxxx-xxxx.' },
-      vulnerabilityId: {
+      cveOrOsvId: {
         type: 'string',
-        format: 'uuid',
-        description: 'A project_dependency_vulnerabilities.id.',
+        minLength: 1,
+        description: 'CVE id (CVE-YYYY-NNNN) or OSV id (GHSA-xxxx).',
       },
     },
+    required: ['cveOrOsvId'],
     additionalProperties: false,
   }),
-  execute: async ({ cveId, osvId, vulnerabilityId }, ctx) => {
-    if (!cveId && !osvId && !vulnerabilityId) {
-      return { error: 'Provide cveId, osvId, or vulnerabilityId.' };
-    }
+  execute: async ({ cveOrOsvId }, ctx) => {
+    const trimmed = (cveOrOsvId ?? '').trim();
+    if (!trimmed) return { error: 'cveOrOsvId is required.' };
 
     const { data: orgProjects } = await ctx.supabase
       .from('projects')
@@ -179,17 +173,21 @@ const getVulnerabilityDetail: AegisToolEntry<{
     let query = ctx.supabase
       .from('project_dependency_vulnerabilities')
       .select(
-        'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, is_reachable, reachability_level, epss_score, cvss_score, cisa_kev, depscore, published_at',
+        'project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, is_reachable, reachability_level, epss_score, cvss_score, cisa_kev, depscore, published_at',
       )
       .in('project_id', orgProjectIds);
 
-    if (vulnerabilityId) query = query.eq('id', vulnerabilityId);
-    else if (osvId) query = query.eq('osv_id', osvId);
-    else if (cveId) query = (query as any).contains('aliases', [cveId]);
+    if (trimmed.toUpperCase().startsWith('CVE-')) {
+      query = (query as any).contains('aliases', [trimmed.toUpperCase()]);
+    } else {
+      query = query.eq('osv_id', trimmed);
+    }
 
     const { data: rows, error } = await query.limit(50);
     if (error) return { error: error.message };
-    if (!rows || rows.length === 0) return { error: 'Vulnerability not found in this organization' };
+    if (!rows || rows.length === 0) {
+      return { error: `Vulnerability "${trimmed}" not found in this organization.` };
+    }
 
     const first = rows[0] as any;
     const pdIds = Array.from(new Set(rows.map((r: any) => r.project_dependency_id)));
@@ -214,8 +212,6 @@ const getVulnerabilityDetail: AegisToolEntry<{
       affectedProjects: rows.map((r: any) => {
         const pd = pdById.get(r.project_dependency_id);
         return {
-          vulnerabilityId: r.id,
-          projectId: r.project_id,
           projectName: projectNameById.get(r.project_id) ?? null,
           dependency: pd ? { name: pd.name, version: pd.version } : null,
           isReachable: !!r.is_reachable,
@@ -228,39 +224,37 @@ const getVulnerabilityDetail: AegisToolEntry<{
   },
 };
 
-const getReachabilityFlows: AegisToolEntry<{ vulnerabilityId: string }> = {
+const getReachabilityFlows: AegisToolEntry<{
+  projectName: string;
+  cveOrOsvId: string;
+}> = {
   name: 'get_reachability_flows',
   description:
-    'Return reachability flow paths (entry point → sink) for a vulnerability. Input is a project_dependency_vulnerabilities.id. Each flow has an entry point file/method/line, a sink file/method/line, and a chain of nodes.',
+    'Reachability flow paths (entry point → sink) for a vulnerability inside a specific project. Returns each flow with entry-point file/method/line, sink file/method/line, and the chain of nodes between them.',
   danger: 'safe',
   inputSchema: jsonSchema({
     type: 'object',
     properties: {
-      vulnerabilityId: {
+      projectName: { type: 'string', minLength: 1, description: 'Project name as the user said it.' },
+      cveOrOsvId: {
         type: 'string',
-        format: 'uuid',
-        description: 'project_dependency_vulnerabilities.id (from get_project_vulnerabilities).',
+        minLength: 1,
+        description: 'CVE id (CVE-YYYY-NNNN) or OSV id (GHSA-xxxx) — from get_project_vulnerabilities.',
       },
     },
-    required: ['vulnerabilityId'],
+    required: ['projectName', 'cveOrOsvId'],
     additionalProperties: false,
   }),
-  execute: async ({ vulnerabilityId }, ctx) => {
+  execute: async ({ projectName, cveOrOsvId }, ctx) => {
+    const ref = await resolveProjectVulnerability(projectName, cveOrOsvId, ctx.orgId, ctx.supabase);
+    if ('error' in ref) return ref;
+
     const { data: vuln } = await ctx.supabase
       .from('project_dependency_vulnerabilities')
       .select('id, project_id, osv_id, reachability_level, reachability_details, project_dependency_id')
-      .eq('id', vulnerabilityId)
+      .eq('id', ref.vulnerabilityId)
       .single();
     if (!vuln) return { error: 'Vulnerability not found' };
-
-    const { data: project } = await ctx.supabase
-      .from('projects')
-      .select('id, organization_id')
-      .eq('id', vuln.project_id)
-      .single();
-    if (!project || project.organization_id !== ctx.orgId) {
-      return { error: 'Project not in current organization' };
-    }
 
     const { data: pd } = await ctx.supabase
       .from('project_dependencies')
@@ -281,13 +275,12 @@ const getReachabilityFlows: AegisToolEntry<{ vulnerabilityId: string }> = {
       : flows ?? [];
 
     return {
-      vulnerabilityId: vuln.id,
+      project: ref.projectName,
       osvId: vuln.osv_id,
       reachabilityLevel: vuln.reachability_level,
       reachabilityDetails: vuln.reachability_details ?? null,
       dependency: pd ? { name: pd.name, version: pd.version } : null,
       flows: packageMatch.map((f: any) => ({
-        id: f.id,
         purl: f.purl,
         entryPoint: {
           file: f.entry_point_file,
