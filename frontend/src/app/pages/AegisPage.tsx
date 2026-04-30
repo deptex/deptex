@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
 import { aegisApi, type AegisThread } from '../../lib/aegis-api';
 import type { Organization } from '../../lib/api';
 import { ThreadList } from '../../components/aegis/ThreadList';
 import { ChatPane } from '../../components/aegis/ChatPane';
 import { SearchChatsModal } from '../../components/aegis/SearchChatsModal';
 import { PlanCard } from '../../components/aegis/PlanCard';
+import { RoutinesPanel } from '../../components/aegis/RoutinesPanel';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
 
@@ -17,6 +18,8 @@ interface OrgOutlet {
 export default function AegisPage() {
   const { id: orgId, threadId: activeThreadId } = useParams<{ id: string; threadId?: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const routinesActive = location.pathname.endsWith('/aegis/routines');
   const [searchParams] = useSearchParams();
   const fixIdParam = searchParams.get('fix');
   const { organization } = useOutletContext<OrgOutlet>();
@@ -259,6 +262,8 @@ export default function AegisPage() {
           onSetPinned={handleSetPinned}
           onSetArchived={handleSetArchived}
           onOpenSearch={() => setSearchOpen(true)}
+          onOpenRoutines={() => orgId && navigate(`/organizations/${orgId}/aegis/routines`)}
+          routinesActive={routinesActive}
         />
         <div
           onMouseDown={startSidebarResize}
@@ -269,22 +274,28 @@ export default function AegisPage() {
         />
       </aside>
       <main className="flex-1 flex flex-col min-w-0">
-        {fixIdParam && (
-          <div className="px-4 pt-4">
-            <div className="mx-auto max-w-3xl">
-              <PlanCard fixId={fixIdParam} />
-            </div>
-          </div>
+        {routinesActive ? (
+          <RoutinesPanel />
+        ) : (
+          <>
+            {fixIdParam && (
+              <div className="px-4 pt-4">
+                <div className="mx-auto max-w-3xl">
+                  <PlanCard fixId={fixIdParam} />
+                </div>
+              </div>
+            )}
+            <ChatPane
+              key={chatKey}
+              organizationId={orgId}
+              threadId={activeThreadId}
+              currentUserId={user?.id ?? ''}
+              displayName={displayName}
+              onThreadCreated={handleThreadCreated}
+              onThreadUpdated={handleThreadUpdated}
+            />
+          </>
         )}
-        <ChatPane
-          key={chatKey}
-          organizationId={orgId}
-          threadId={activeThreadId}
-          currentUserId={user?.id ?? ''}
-          displayName={displayName}
-          onThreadCreated={handleThreadCreated}
-          onThreadUpdated={handleThreadUpdated}
-        />
       </main>
 
       <SearchChatsModal
