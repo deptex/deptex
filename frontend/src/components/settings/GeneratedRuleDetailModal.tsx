@@ -235,7 +235,7 @@ export default function GeneratedRuleDetailModal({
             </div>
             <div>
               <p className="text-foreground-secondary mb-0.5">Generation cost</p>
-              <p className="text-foreground tabular-nums">${rule.generation_cost_usd.toFixed(4)}</p>
+              <p className="text-foreground tabular-nums">{rule.generation_cost_usd != null ? `$${rule.generation_cost_usd.toFixed(4)}` : '—'}</p>
             </div>
             <div>
               <p className="text-foreground-secondary mb-0.5">Used in scans</p>
@@ -504,7 +504,7 @@ function PreviousVersionRow({ version, expanded, onToggle }: PreviousVersionRowP
             </pre>
           </div>
           <div className="grid gap-1 text-xs text-foreground-secondary">
-            <span>Generation cost: <span className="text-foreground tabular-nums">${version.generation_cost_usd.toFixed(4)}</span></span>
+            <span>Generation cost: <span className="text-foreground tabular-nums">{version.generation_cost_usd != null ? `$${version.generation_cost_usd.toFixed(4)}` : '—'}</span></span>
             <span>Originally generated: <span className="text-foreground">{formatDate(version.generated_at)}</span></span>
           </div>
         </div>
