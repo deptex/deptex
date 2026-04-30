@@ -49,6 +49,14 @@ export interface RunWorklistOptions {
   /** Cap on worklist iterations as a runaway-loop safety net. Default: max(1000, 50× function count). */
   maxIterations?: number;
   onWarn?: (msg: string) => void;
+  /**
+   * Cancellation signal. Checked once per worklist iteration. When aborted,
+   * the loop bails out after the current item finishes (no mid-pass aborts;
+   * function analysis is sub-second so a clean iteration boundary is fine).
+   * The result still carries the partial flows accumulated so far so the
+   * caller can decide whether to surface them or discard.
+   */
+  signal?: AbortSignal;
 }
 
 export interface RunWorklistResult {
@@ -57,6 +65,8 @@ export interface RunWorklistResult {
   sourcesFound: number;
   sinksHit: number;
   stoppedEarly: boolean;
+  /** True if the signal aborted mid-loop. flows[] is whatever had been aggregated so far. */
+  aborted: boolean;
   propagationMs: number;
 }
 
@@ -72,8 +82,15 @@ export function runWorklistAndAggregate(opts: RunWorklistOptions): RunWorklistRe
   let iterations = 0;
   let sourcesFound = 0;
   let stoppedEarly = false;
+  let aborted = false;
 
   while (worklist.size > 0) {
+    if (opts.signal?.aborted) {
+      onWarn?.('taint propagator aborted via signal; stopping with partial state');
+      aborted = true;
+      stoppedEarly = true;
+      break;
+    }
     if (iterations >= maxIterations) {
       onWarn?.(`taint propagator hit maxIterations=${maxIterations}; stopping early`);
       stoppedEarly = true;
@@ -111,6 +128,7 @@ export function runWorklistAndAggregate(opts: RunWorklistOptions): RunWorklistRe
     sourcesFound,
     sinksHit: countSinks(opts.stateById),
     stoppedEarly,
+    aborted,
     propagationMs: Date.now() - propStart,
   };
 }

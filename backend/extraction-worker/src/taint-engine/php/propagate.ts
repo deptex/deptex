@@ -24,6 +24,8 @@ export interface PropagatePhpOptions {
   /** Cap on worklist iterations. Default 50× function count. */
   maxIterations?: number;
   onWarn?: (msg: string) => void;
+  /** Forwarded to the worklist core; aborts cleanly between iterations. */
+  signal?: AbortSignal;
 }
 
 export interface PropagatePhpResult {
@@ -90,6 +92,7 @@ export async function propagatePhp(
     maxPathLength: options.maxPathLength,
     maxIterations: options.maxIterations,
     onWarn,
+    signal: options.signal,
   });
 
   return {

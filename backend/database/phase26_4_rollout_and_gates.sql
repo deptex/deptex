@@ -49,4 +49,8 @@ AS $$
   WHERE created_at >= now() - (GREATEST(p_days, 1) || ' days')::interval;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.get_taint_engine_recent_runs(integer) TO service_role, authenticated;
+-- Worker-only RPC. Never grant to `authenticated` — function returns
+-- (organization_id, project_id, ai_cost_usd, ...) across every org with
+-- no caller-org filter; granting to signed-in tenants would leak
+-- fleet-wide run telemetry.
+GRANT EXECUTE ON FUNCTION public.get_taint_engine_recent_runs(integer) TO service_role;

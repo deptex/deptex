@@ -153,9 +153,19 @@ export async function writeFlows(
 function defaultResolveDep(_flow: Flow): { purl: string; dependencyId: string | null } | null {
   // M4 ships without callgraph→SBOM matching; tag the row as internal so
   // the classifier's per-PDV roll-up keys it under the synthetic 'internal'
-  // PURL bucket (which is harmless — no PDV gets promoted unless an SBOM
-  // dep matches that PURL, which it won't). M5 will replace this with a
-  // real resolver mapping sink callee to dep.
+  // PURL bucket. M5 will replace this with a real resolver mapping sink
+  // callee to dep.
+  //
+  // INVARIANT (verified 2026-04-30 critical-review):
+  // updateReachabilityLevels() in src/reachability.ts joins
+  // project_reachable_flows to project_dependency_vulnerabilities by exact
+  // purl match. 'pkg:internal/taint-engine' will never appear as a real
+  // SBOM purl (the 'internal' namespace is a private Deptex sentinel),
+  // so no PDV's reachability_level can be promoted by an engine flow until
+  // M5 lands the real resolver. Until then, engine output is a write-only
+  // shadow signal that downstream classification ignores. Do NOT change
+  // this PURL to a public-namespace string without reading reachability.ts
+  // — a collision would silently promote unrelated vulnerabilities.
   return { purl: 'pkg:internal/taint-engine', dependencyId: null };
 }
 

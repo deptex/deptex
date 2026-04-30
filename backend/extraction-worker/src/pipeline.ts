@@ -891,176 +891,9 @@ export async function runPipeline(
       }
     }
 
-    // === STEP: Cross-file taint engine (Phase 6, shadow mode) ===
-    //
-    // Runs the deterministic forward-propagation taint engine against the
-    // cloned workspace. Output goes to project_reachable_flows with
-    // reachability_source='taint_engine' and is picked up by the
-    // updateReachabilityLevels classifier the same way atom flows are.
-    //
-    // Policy (locked decisions from feature-brief):
-    //   - HARD-FAIL: any engine exception aborts the extraction. Soft
-    //     degradation only via the staged rollout pct + circuit breaker.
-    //   - 30-minute hard timeout (the engine's M2 perf budget is 2min on a
-    //     medium project — 30min covers M5+ AI passes too).
-    //   - Circuit breaker: org-scoped failure-rate killswitch. Skips if
-    //     >5% of last 60min failed (≥5-run minimum sample).
-    //   - Rollout pct: DEPTEX_TAINT_ENGINE_ROLLOUT_PCT gates the engine
-    //     across the fleet. Default 0 in production until M8 retirement
-    //     gates are met.
-    if (checkCancelled && await checkCancelled()) return;
-    {
-      const stepStart = Date.now();
-      await updateStep(supabase, projectId, 'taint_engine');
-
-      if (!(await shouldRunTaintEngineForOrg(supabase, organizationId))) {
-        await log.info('taint_engine', 'Skipped: rollout pct gate (DEPTEX_TAINT_ENGINE_ROLLOUT_PCT or rollout_pct_override)');
-        await writeTaintEngineRun(supabase, {
-          projectId,
-          organizationId,
-          extractionRunId: runId,
-          status: 'skipped',
-          totalMs: Date.now() - stepStart,
-          errorCode: 'rollout_gate',
-        });
-      } else {
-        const breaker = await checkTaintEngineCircuitBreaker(supabase, organizationId);
-        if (!breaker.shouldRun) {
-          await log.warn(
-            'taint_engine',
-            `Skipped: circuit breaker ${breaker.blockedReason} (${breaker.recentFailures}/${breaker.recentRuns} failures = ${breaker.failurePct.toFixed(1)}%)`,
-          );
-          await writeTaintEngineRun(supabase, {
-            projectId,
-            organizationId,
-            extractionRunId: runId,
-            status: 'skipped',
-            totalMs: Date.now() - stepStart,
-            errorCode: breaker.blockedReason ?? 'circuit_breaker',
-          });
-        } else {
-          // Mark the run as 'running' first so a crash mid-engine still
-          // leaves a row the breaker can see. The terminal upsert below
-          // overwrites status + telemetry on success/failure.
-          await writeTaintEngineRun(supabase, {
-            projectId,
-            organizationId,
-            extractionRunId: runId,
-            status: 'running',
-          });
-          try {
-            const engineResult = await withTimeout(
-              async (signal) => runTaintEngine({
-                workspaceRoot,
-                ecosystem: job.ecosystem,
-                signal,
-                onWarn: (m) => { void log.warn('taint_engine', m); },
-                fpFilter: {
-                  storage: supabase,
-                  organizationId,
-                  // No human triggered this extraction; we attribute the
-                  // platform AI spend to the org owner (the cost-cap
-                  // aggregator filters by organization_id, not user_id).
-                  userId: organizationId,
-                  projectId,
-                  extractionRunId: runId,
-                },
-              }),
-              30 * 60_000,
-              'taint_engine',
-            );
-
-            if (!engineResult.ran || !engineResult.propagation) {
-              await log.warn('taint_engine', `No-op: ${engineResult.skippedReason ?? 'unknown'}`);
-              await writeTaintEngineRun(supabase, {
-                projectId,
-                organizationId,
-                extractionRunId: runId,
-                status: 'skipped',
-                totalMs: Date.now() - stepStart,
-                errorCode: 'no_specs_loaded',
-              });
-            } else {
-              const { propagation, frameworksLoaded, flowsAfterFilter, aiFilter } = engineResult;
-              const survivors = flowsAfterFilter ?? propagation.flows;
-              const writeResult = await writeTaintEngineFlows(supabase, {
-                projectId,
-                extractionRunId: runId,
-                flows: survivors,
-                filterVerdicts: aiFilter?.verdicts,
-              });
-              for (const e of writeResult.errors) {
-                await log.warn('taint_engine', `flow write: ${e}`);
-              }
-              await writeTaintEngineRun(supabase, {
-                projectId,
-                organizationId,
-                extractionRunId: runId,
-                status: 'completed',
-                callgraphBuildMs: propagation.stats.callgraphMs,
-                taintPropagationMs: propagation.stats.propagationMs,
-                aiFpFilterMs: aiFilter?.invoked ? aiFilter.durationMs : undefined,
-                totalMs: Date.now() - stepStart,
-                flowsEmitted: propagation.flows.length,
-                flowsAfterAiFilter: survivors.length,
-                aiCostUsd: aiFilter?.costUsd ?? 0,
-                frameworksDetected: frameworksLoaded,
-                isTypedJsProject: propagation.callgraph.isTypedJsProject,
-                typedFilesPct: propagation.callgraph.typedFilesPct,
-              });
-              if (aiFilter?.invoked) {
-                await log.success(
-                  'taint_engine',
-                  `Emitted ${propagation.flows.length} flows; AI filter checked ${aiFilter.flowsChecked}, rejected ${aiFilter.flowsRejected} (kept ${survivors.length}). Cost $${aiFilter.costUsd.toFixed(4)}. ${propagation.stats.totalMs}ms total.`,
-                  Date.now() - stepStart,
-                );
-              } else {
-                const reason = aiFilter?.skippedReason ? ` (filter skipped: ${aiFilter.skippedReason})` : '';
-                await log.success(
-                  'taint_engine',
-                  `Emitted ${propagation.flows.length} flows from ${frameworksLoaded.length} framework spec(s) in ${propagation.stats.totalMs}ms${reason}`,
-                  Date.now() - stepStart,
-                );
-              }
-            }
-          } catch (err: unknown) {
-            // HARD-FAIL: log telemetry, maybe engage killswitch, then rethrow.
-            const { code, message, stack } = classifyError(err);
-            await writeTaintEngineRun(supabase, {
-              projectId,
-              organizationId,
-              extractionRunId: runId,
-              status: 'failed',
-              totalMs: Date.now() - stepStart,
-              errorCode: code,
-              errorMessage: message,
-            });
-            const engaged = await maybeEngageTaintEngineKillswitch(
-              supabase,
-              organizationId,
-              `taint_engine ${code}: ${message.slice(0, 200)}`,
-            );
-            if (engaged) {
-              await log.warn('taint_engine', 'Killswitch engaged: failure rate exceeded threshold');
-            }
-            if (job.jobId) {
-              await logStepError(supabase, {
-                jobId: job.jobId,
-                projectId,
-                step: 'taint_engine',
-                code,
-                message,
-                stack,
-                durationMs: Date.now() - stepStart,
-                severity: 'error',
-              });
-            }
-            await setError(supabase, projectId, `Taint engine failed: ${message}`);
-            throw err;
-          }
-        }
-      }
-    }
+    // (taint_engine step runs later — after reachability_rules — so its
+    //  flows land in the same finalize cluster as atom + reachability_rules.
+    //  See "STEP: Cross-file taint engine" below.)
 
     // Fetch asset tier for depscore calculations (used by vuln scan, semgrep, and trufflehog)
     const VALID_ASSET_TIERS: AssetTier[] = ['CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION'];
@@ -1854,6 +1687,189 @@ export async function runPipeline(
               });
             }
             await log.warn('reachability_rules', `Step failed: ${msg}`);
+          }
+        }
+      }
+    }
+
+    // === STEP: Cross-file taint engine (Phase 6, shadow mode) ===
+    //
+    // Runs the deterministic forward-propagation taint engine against the
+    // cloned workspace. Output goes to project_reachable_flows with
+    // reachability_source='taint_engine' and is picked up by the
+    // updateReachabilityLevels classifier the same way atom flows are.
+    //
+    // Sits AFTER reachability_rules so the engine's flow writes land in
+    // the same finalize cluster as atom + reachability_rules. Earlier
+    // (pre-dep-scan) placement orphaned engine rows when a later step
+    // failed and finalize_extraction never ran.
+    //
+    // Policy (locked decisions from feature-brief):
+    //   - HARD-FAIL: any engine exception aborts the extraction. Soft
+    //     degradation only via the staged rollout pct + circuit breaker.
+    //   - 30-minute hard timeout (the engine's M2 perf budget is 2min on a
+    //     medium project — 30min covers M5+ AI passes too).
+    //   - Circuit breaker: org-scoped failure-rate killswitch. Skips if
+    //     >5% of last 60min failed (≥5-run minimum sample).
+    //   - Rollout pct: DEPTEX_TAINT_ENGINE_ROLLOUT_PCT gates the engine
+    //     across the fleet. Default 0 in production until M8 retirement
+    //     gates are met.
+    if (checkCancelled && await checkCancelled()) return;
+    {
+      const stepStart = Date.now();
+      await updateStep(supabase, projectId, 'taint_engine');
+
+      if (!(await shouldRunTaintEngineForOrg(supabase, organizationId))) {
+        await log.info('taint_engine', 'Skipped: rollout pct gate (DEPTEX_TAINT_ENGINE_ROLLOUT_PCT or rollout_pct_override)');
+        await writeTaintEngineRun(supabase, {
+          projectId,
+          organizationId,
+          extractionRunId: runId,
+          status: 'skipped',
+          totalMs: Date.now() - stepStart,
+          errorCode: 'rollout_gate',
+        });
+      } else {
+        const breaker = await checkTaintEngineCircuitBreaker(supabase, organizationId);
+        if (!breaker.shouldRun) {
+          await log.warn(
+            'taint_engine',
+            `Skipped: circuit breaker ${breaker.blockedReason} (${breaker.recentFailures}/${breaker.recentRuns} failures = ${breaker.failurePct.toFixed(1)}%)`,
+          );
+          await writeTaintEngineRun(supabase, {
+            projectId,
+            organizationId,
+            extractionRunId: runId,
+            status: 'skipped',
+            totalMs: Date.now() - stepStart,
+            errorCode: breaker.blockedReason ?? 'circuit_breaker',
+          });
+        } else {
+          // Mark the run as 'running' first so a crash mid-engine still
+          // leaves a row the breaker can see. The terminal upsert below
+          // overwrites status + telemetry on success/failure.
+          await writeTaintEngineRun(supabase, {
+            projectId,
+            organizationId,
+            extractionRunId: runId,
+            status: 'running',
+          });
+          try {
+            const engineResult = await withTimeout(
+              async (signal) => runTaintEngine({
+                workspaceRoot,
+                ecosystem: job.ecosystem,
+                signal,
+                onWarn: (m) => { void log.warn('taint_engine', m); },
+                fpFilter: {
+                  storage: supabase,
+                  organizationId,
+                  // No human triggered this extraction; we attribute the
+                  // platform AI spend to the org owner (the cost-cap
+                  // aggregator filters by organization_id, not user_id).
+                  userId: organizationId,
+                  projectId,
+                  extractionRunId: runId,
+                },
+              }),
+              30 * 60_000,
+              'taint_engine',
+            );
+
+            if (!engineResult.ran || !engineResult.propagation) {
+              await log.warn('taint_engine', `No-op: ${engineResult.skippedReason ?? 'unknown'}`);
+              await writeTaintEngineRun(supabase, {
+                projectId,
+                organizationId,
+                extractionRunId: runId,
+                status: 'skipped',
+                totalMs: Date.now() - stepStart,
+                errorCode: 'no_specs_loaded',
+              });
+            } else {
+              const { propagation, frameworksLoaded, flowsAfterFilter, aiFilter } = engineResult;
+              const survivors = flowsAfterFilter ?? propagation.flows;
+              const writeResult = await writeTaintEngineFlows(supabase, {
+                projectId,
+                extractionRunId: runId,
+                flows: survivors,
+                filterVerdicts: aiFilter?.verdicts,
+              });
+              for (const e of writeResult.errors) {
+                await log.warn('taint_engine', `flow write: ${e}`);
+              }
+              await writeTaintEngineRun(supabase, {
+                projectId,
+                organizationId,
+                extractionRunId: runId,
+                status: 'completed',
+                callgraphBuildMs: propagation.stats.callgraphMs,
+                taintPropagationMs: propagation.stats.propagationMs,
+                aiFpFilterMs: aiFilter?.invoked ? aiFilter.durationMs : undefined,
+                totalMs: Date.now() - stepStart,
+                flowsEmitted: propagation.flows.length,
+                flowsAfterAiFilter: survivors.length,
+                aiCostUsd: aiFilter?.costUsd ?? 0,
+                frameworksDetected: frameworksLoaded,
+                isTypedJsProject: propagation.callgraph.isTypedJsProject,
+                typedFilesPct: propagation.callgraph.typedFilesPct,
+              });
+              if (aiFilter?.invoked) {
+                await log.success(
+                  'taint_engine',
+                  `Emitted ${propagation.flows.length} flows; AI filter checked ${aiFilter.flowsChecked}, rejected ${aiFilter.flowsRejected} (kept ${survivors.length}). Cost $${aiFilter.costUsd.toFixed(4)}. ${propagation.stats.totalMs}ms total.`,
+                  Date.now() - stepStart,
+                );
+              } else {
+                const reason = aiFilter?.skippedReason ? ` (filter skipped: ${aiFilter.skippedReason})` : '';
+                await log.success(
+                  'taint_engine',
+                  `Emitted ${propagation.flows.length} flows from ${frameworksLoaded.length} framework spec(s) in ${propagation.stats.totalMs}ms${reason}`,
+                  Date.now() - stepStart,
+                );
+              }
+            }
+          } catch (err: unknown) {
+            // HARD-FAIL: log telemetry, maybe engage killswitch, then rethrow.
+            const { code, message, stack } = classifyError(err);
+            await writeTaintEngineRun(supabase, {
+              projectId,
+              organizationId,
+              extractionRunId: runId,
+              status: 'failed',
+              totalMs: Date.now() - stepStart,
+              errorCode: code,
+              errorMessage: message,
+            });
+            // Killswitch is best-effort — never let an RPC error here
+            // shadow the original engine failure being reported below.
+            try {
+              const engaged = await maybeEngageTaintEngineKillswitch(
+                supabase,
+                organizationId,
+                `taint_engine ${code}: ${message.slice(0, 200)}`,
+              );
+              if (engaged) {
+                await log.warn('taint_engine', 'Killswitch engaged: failure rate exceeded threshold');
+              }
+            } catch (killswitchErr: unknown) {
+              const ksMsg = killswitchErr instanceof Error ? killswitchErr.message : String(killswitchErr);
+              await log.warn('taint_engine', `Killswitch RPC failed: ${ksMsg}`);
+            }
+            if (job.jobId) {
+              await logStepError(supabase, {
+                jobId: job.jobId,
+                projectId,
+                step: 'taint_engine',
+                code,
+                message,
+                stack,
+                durationMs: Date.now() - stepStart,
+                severity: 'error',
+              });
+            }
+            await setError(supabase, projectId, `Taint engine failed: ${message}`);
+            throw err;
           }
         }
       }

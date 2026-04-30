@@ -14,9 +14,17 @@
 ALTER TABLE public.taint_engine_settings
   ADD COLUMN IF NOT EXISTS ai_fp_filter_confidence_threshold numeric(3,2) DEFAULT 0.70;
 
-ALTER TABLE public.taint_engine_settings
-  ADD CONSTRAINT taint_engine_settings_threshold_chk
-    CHECK (ai_fp_filter_confidence_threshold >= 0 AND ai_fp_filter_confidence_threshold <= 1);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'taint_engine_settings_threshold_chk'
+  ) THEN
+    ALTER TABLE public.taint_engine_settings
+      ADD CONSTRAINT taint_engine_settings_threshold_chk
+        CHECK (ai_fp_filter_confidence_threshold >= 0 AND ai_fp_filter_confidence_threshold <= 1);
+  END IF;
+END$$;
 
 CREATE OR REPLACE FUNCTION public.get_taint_engine_monthly_spend(p_organization_id uuid)
 RETURNS numeric
@@ -31,4 +39,7 @@ AS $$
     AND created_at >= date_trunc('month', now() AT TIME ZONE 'UTC');
 $$;
 
-GRANT EXECUTE ON FUNCTION public.get_taint_engine_monthly_spend(uuid) TO service_role, authenticated;
+-- Worker-only RPC. Never grant to `authenticated` — caller-supplied
+-- p_organization_id with no membership check would expose every org's
+-- monthly AI spend to any signed-in tenant.
+GRANT EXECUTE ON FUNCTION public.get_taint_engine_monthly_spend(uuid) TO service_role;

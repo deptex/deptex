@@ -123,10 +123,9 @@ app.use('/api/internal/cron', cronDispatcherRouter);
 app.use('/api/feedback', feedbackRouter);
 app.use('/api/demo-request', demoRequestRouter);
 app.use('/api/enterprise-contact', enterpriseContactRouter);
-app.use('/api/orgs', taintEngineRouter);
-
 // API Routes (former EE - now merged)
 app.use('/api/organizations', organizationsRouter);
+app.use('/api/organizations', taintEngineRouter);
 app.use('/api/organizations', teamsRouter);
 app.use('/api/organizations', projectsRouter);
 app.use('/api/organizations', organizationCanvasRouter);
