@@ -56,13 +56,21 @@ export type ToolResultPart = {
 };
 export type MessagePart = TextPart | ToolCallPart | ToolResultPart;
 
+export type AegisChatErrorType = 'rate_limit' | 'transient' | 'cost_cap';
+
+export interface AegisChatError {
+  type: AegisChatErrorType;
+  statusCode: number | null;
+  message: string | null;
+}
+
 export interface AegisMessage {
   id: string;
   threadId: string;
   role: 'user' | 'assistant';
   userId: string | null;
   content: string;
-  metadata: { parts: MessagePart[] };
+  metadata: { parts: MessagePart[]; error?: AegisChatError };
   createdAt: string;
 }
 
@@ -117,6 +125,13 @@ export const aegisApi = {
 
   async truncateBelow(messageId: string): Promise<void> {
     await fetchWithAuth(`/api/aegis/messages/${messageId}/below`, { method: 'DELETE' });
+  },
+
+  async regenerate(threadId: string): Promise<{ threadId: string }> {
+    return fetchWithAuth('/api/aegis/chat/regenerate', {
+      method: 'POST',
+      body: JSON.stringify({ threadId }),
+    });
   },
 
   async autoTitle(threadId: string): Promise<AegisThread> {

@@ -7,6 +7,8 @@ import { userHasOrgPermission } from '../lib/permissions';
 import { rowToMessage, rowToThread, mapFixStatusToBadge, type ThreadRow, type UserStateRow, type FixStatusForBadge } from '../lib/aegis/types';
 import { getAegisModel } from '../lib/aegis/provider';
 import { generateAegisChat } from '../lib/aegis-v3/chat-generation';
+import { getProviderInfoForOrg } from '../lib/aegis/llm-provider';
+import { checkMonthlyCostCap } from '../lib/ai/cost-cap';
 import {
   isParticipant,
   isCreator,
@@ -25,6 +27,145 @@ const AEGIS_PERMISSION = 'interact_with_aegis';
 router.use(authenticateUser);
 
 const THREAD_COLUMNS = 'id, organization_id, user_id, created_by, title, created_at, updated_at, context_type, context_id';
+
+type ChatErrorClass = {
+  type: 'rate_limit' | 'transient' | 'cost_cap';
+  statusCode?: number;
+  message?: string;
+};
+
+function classifyChatError(err: any): ChatErrorClass {
+  const status = err?.statusCode ?? err?.lastError?.statusCode;
+  if (status === 429) return { type: 'rate_limit', statusCode: 429 };
+  return {
+    type: 'transient',
+    statusCode: typeof status === 'number' ? status : undefined,
+    message: err?.message ?? err?.lastError?.message,
+  };
+}
+
+function chatErrorUserText(error: ChatErrorClass): string {
+  if (error.type === 'cost_cap') return error.message ?? 'Monthly AI budget reached.';
+  return 'Something went wrong while generating a response.';
+}
+
+async function writeAegisChatError(threadId: string, error: ChatErrorClass): Promise<void> {
+  const text = chatErrorUserText(error);
+  try {
+    await Promise.all([
+      supabase.from('aegis_chat_messages').insert({
+        thread_id: threadId,
+        role: 'assistant',
+        user_id: null,
+        content: text,
+        metadata: {
+          parts: [{ type: 'text', text }],
+          error: {
+            type: error.type,
+            statusCode: error.statusCode ?? null,
+            message: error.message ?? null,
+          },
+        },
+      }),
+      supabase.from('aegis_chat_threads').update({ updated_at: new Date().toISOString() }).eq('id', threadId),
+    ]);
+  } catch (writeErr) {
+    console.error('[aegis] failed to persist chat error', writeErr);
+  }
+}
+
+// Background generation for /chat and /regenerate. Loads thread history,
+// invokes the agent, persists the assistant reply, and auto-titles on the
+// first exchange. On any failure, writes a structured error assistant
+// message so the client surfaces it instead of staring at silence.
+async function runBackgroundChatGeneration(args: {
+  organizationId: string;
+  userId: string;
+  threadId: string;
+  userText: string;
+}): Promise<void> {
+  const { organizationId, userId, threadId, userText } = args;
+  try {
+    const { data: rows } = await supabase
+      .from('aegis_chat_messages')
+      .select('role, content')
+      .eq('thread_id', threadId)
+      .order('created_at', { ascending: true });
+
+    const history = (rows ?? [])
+      .filter(
+        (r: { role: string; content: string }) =>
+          !(r.role === 'user' && r.content === userText),
+      )
+      .map((r: { role: string; content: string }) => ({
+        role: r.role as 'user' | 'assistant',
+        content: r.content,
+      }));
+
+    const { text, parts } = await generateAegisChat({
+      orgId: organizationId,
+      userId,
+      threadId,
+      userMessage: userText,
+      history,
+    });
+
+    const totalMessages = (rows ?? []).length + 1;
+    if (totalMessages <= 3) {
+      try {
+        const prompt = `Generate a short title (3-7 words, Title Case, no quotes, no trailing punctuation) for this conversation.
+
+Describe what the user is trying to accomplish — action + target. Use the project, package, or finding name when present in the conversation.
+Good examples:
+- "Fix Semgrep Finding in deptex-test"
+- "Investigate CVE-2024-12345 in api-server"
+- "Update Vulnerable Lodash Dependency"
+- "Audit Org Security Posture"
+- "Plan Reachability Migration"
+
+Avoid status/state words like "Awaiting", "Pending", "Discussion", "Plan Approval".
+Output only the title, no "Title:" prefix and no surrounding quotes.
+
+User: ${userText.slice(0, 800)}
+Assistant: ${text.slice(0, 800)}`;
+        const { text: titleText } = await generateText({ model: getAegisModel(), prompt, temperature: 0.3 });
+        const title = cleanGeneratedTitle(titleText);
+        await supabase.from('aegis_chat_threads').update({ title }).eq('id', threadId);
+      } catch (err) {
+        console.error('[aegis] auto-title failed', err);
+      }
+    }
+
+    await Promise.all([
+      supabase.from('aegis_chat_messages').insert({
+        thread_id: threadId,
+        role: 'assistant',
+        user_id: null,
+        content: text,
+        metadata: { parts },
+      }),
+      supabase.from('aegis_chat_threads').update({ updated_at: new Date().toISOString() }).eq('id', threadId),
+    ]);
+  } catch (err) {
+    console.error('[aegis] background generation failed', err);
+    await writeAegisChatError(threadId, classifyChatError(err));
+  }
+}
+
+// Strip leading "Title:" / "Chat title:" labels the model often parrots from
+// the prompt, plus surrounding quotes and trailing punctuation. Returns
+// "New chat" when nothing usable is left.
+function cleanGeneratedTitle(raw: string): string {
+  return (
+    raw
+      .trim()
+      .replace(/^(?:chat\s+)?title\s*[:\-]\s*/i, '')
+      .replace(/^["'`]|["'`]$/g, '')
+      .replace(/[.?!]+$/, '')
+      .trim()
+      .slice(0, 80) || 'New chat'
+  );
+}
 
 /** Batch-load fix status for any threads linked to fixes via context_type='fix'. */
 async function loadFixStatusesForThreads(
@@ -350,81 +491,74 @@ router.post('/chat', async (req: AuthRequest, res: Response) => {
     return res.status(500).json({ error: 'Failed to save message' });
   }
 
+  // Pre-flight cost cap. If the org is over budget, write a cost_cap error
+  // assistant message and skip the model call entirely — it would just fail
+  // when actual cost is recorded anyway.
+  try {
+    const info = await getProviderInfoForOrg(organizationId);
+    const cap = await checkMonthlyCostCap(
+      organizationId,
+      info.model,
+      [{ role: 'user', content: userText }],
+      info.monthlyCostCap,
+    );
+    if (!cap.allowed) {
+      await writeAegisChatError(threadId, { type: 'cost_cap', message: cap.message });
+      return res.json({ threadId });
+    }
+  } catch (err) {
+    console.warn('[aegis] cost cap pre-flight failed (allowing through)', err);
+  }
+
   // Return immediately — the AI reply will arrive via Supabase Realtime.
   res.json({ threadId });
 
   // Fire-and-forget: generate AI reply and save it to DB.
-  (async () => {
-    try {
-      const { data: rows } = await supabase
-        .from('aegis_chat_messages')
-        .select('role, content')
-        .eq('thread_id', threadId)
-        .order('created_at', { ascending: true });
+  void runBackgroundChatGeneration({ organizationId, userId, threadId, userText });
+});
 
-      // History excludes the user message we just inserted — generateAegisChat
-      // appends it itself so the agent loop sees it as the latest turn.
-      const history = (rows ?? [])
-        .filter(
-          (r: { role: string; content: string }) =>
-            !(r.role === 'user' && r.content === userText),
-        )
-        .map((r: { role: string; content: string }) => ({
-          role: r.role as 'user' | 'assistant',
-          content: r.content,
-        }));
+// POST /api/aegis/chat/regenerate { threadId }
+// Wipes the most recent assistant message (typically an error bubble) and
+// re-runs background generation against the last user message.
+router.post('/chat/regenerate', async (req: AuthRequest, res: Response) => {
+  const userId = req.user!.id;
+  const { threadId } = req.body ?? {};
+  if (!threadId || typeof threadId !== 'string') {
+    return res.status(400).json({ error: 'threadId is required' });
+  }
 
-      const { text, parts } = await generateAegisChat({
-        orgId: organizationId,
-        userId,
-        threadId,
-        userMessage: userText,
-        history,
-      });
+  const thread = await getThreadForParticipant(threadId, userId);
+  if (!thread) return res.status(404).json({ error: 'Thread not found' });
+  if (!(await userHasOrgPermission(userId, thread.organization_id, AEGIS_PERMISSION))) {
+    return res.status(403).json({ error: 'Permission denied: interact_with_aegis' });
+  }
 
-      // Auto-title on the first exchange (title before saving so the Realtime
-      // event fires after the title is already updated).
-      const totalMessages = (rows ?? []).length + 1;
-      if (totalMessages <= 3) {
-        try {
-          const prompt = `Generate a short title (3-7 words, Title Case, no quotes, no trailing punctuation) for this conversation.
+  // Find the last user message; everything after it gets wiped before retry.
+  const { data: lastUser } = await supabase
+    .from('aegis_chat_messages')
+    .select('id, content, created_at, user_id')
+    .eq('thread_id', threadId)
+    .eq('role', 'user')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!lastUser) return res.status(400).json({ error: 'No user message to regenerate from' });
 
-Describe what the user is trying to accomplish — action + target. Use the project, package, or finding name when present in the conversation.
-Good examples:
-- "Fix Semgrep Finding in deptex-test"
-- "Investigate CVE-2024-12345 in api-server"
-- "Update Vulnerable Lodash Dependency"
-- "Audit Org Security Posture"
-- "Plan Reachability Migration"
+  const { error: deleteErr } = await supabase
+    .from('aegis_chat_messages')
+    .delete()
+    .eq('thread_id', threadId)
+    .gt('created_at', lastUser.created_at);
+  if (deleteErr) return res.status(500).json({ error: deleteErr.message });
 
-Avoid status/state words like "Awaiting", "Pending", "Discussion", "Plan Approval".
+  res.json({ threadId });
 
-User: ${userText.slice(0, 800)}
-Assistant: ${text.slice(0, 800)}
-
-Title:`;
-          const { text: titleText } = await generateText({ model: getAegisModel(), prompt, temperature: 0.3 });
-          const title = titleText.trim().replace(/^["']|["']$/g, '').replace(/[.?!]+$/, '').slice(0, 80) || 'New chat';
-          await supabase.from('aegis_chat_threads').update({ title }).eq('id', threadId);
-        } catch (err) {
-          console.error('[aegis] auto-title failed', err);
-        }
-      }
-
-      await Promise.all([
-        supabase.from('aegis_chat_messages').insert({
-          thread_id: threadId,
-          role: 'assistant',
-          user_id: null,
-          content: text,
-          metadata: { parts },
-        }),
-        supabase.from('aegis_chat_threads').update({ updated_at: new Date().toISOString() }).eq('id', threadId),
-      ]);
-    } catch (err) {
-      console.error('[aegis] background generation failed', err);
-    }
-  })();
+  void runBackgroundChatGeneration({
+    organizationId: thread.organization_id,
+    userId,
+    threadId,
+    userText: lastUser.content ?? '',
+  });
 });
 
 // POST /api/aegis/threads/:id/auto-title
@@ -458,7 +592,7 @@ Title:`;
   let title: string;
   try {
     const { text } = await generateText({ model: getAegisModel(), prompt, temperature: 0.3 });
-    title = text.trim().replace(/^["']|["']$/g, '').replace(/[.?!]+$/, '').slice(0, 80) || 'New chat';
+    title = cleanGeneratedTitle(text);
   } catch (err: any) {
     return res.status(500).json({ error: err?.message ?? 'Auto-title failed' });
   }
