@@ -240,7 +240,14 @@ export async function runRuleGenerationStep(
   }
 
   // --- 5. Resolve BYOK key for the chosen provider ---
-  const apiKey = await (args.resolveApiKey ?? defaultResolveApiKey)(organizationId, settings.ai_provider);
+  // Pass the worker logger into the default resolver so a "BYOK ciphertext
+  // exists but won't decrypt" condition surfaces as a warn instead of being
+  // swallowed under the friendly "no key configured" message below. The test
+  // override (args.resolveApiKey) doesn't take a log; that's fine — tests
+  // don't exercise the decrypt path.
+  const apiKey = args.resolveApiKey
+    ? await args.resolveApiKey(organizationId, settings.ai_provider)
+    : await defaultResolveApiKey(organizationId, settings.ai_provider, log);
   if (!apiKey) {
     await log.warn(
       STEP_NAME,
@@ -404,6 +411,7 @@ export async function runRuleGenerationStep(
   await persistJobTelemetry({
     supabase,
     jobId,
+    organizationId,
     triggerMatched: triggerMatchedVulns.length,
     alreadyCovered,
     generatedThisScan: generatedCount,
@@ -521,8 +529,15 @@ async function applyBudgetCap(args: ApplyBudgetArgs): Promise<{ effectiveModel: 
       const v = typeof row.estimated_cost === 'string' ? parseFloat(row.estimated_cost) : row.estimated_cost ?? 0;
       monthlySpend += Number(v) || 0;
     }
-  } catch {
-    /* read failure is non-fatal */
+  } catch (err) {
+    // Read failure is non-fatal — fall back to zero monthly spend so a brief
+    // outage doesn't block legitimate generation. But log loudly: a sustained
+    // outage silently disables the per-org monthly_budget_usd cap, which is
+    // the only thing standing between us and a runaway BYOK bill.
+    await log.warn(
+      STEP_NAME,
+      `Failed to read ai_usage_logs for monthly budget cap; falling back to zero spent. Monthly budget enforcement is degraded until this recovers: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 
   const remaining = Math.max(0, settings.monthly_budget_usd - monthlySpend);
@@ -553,7 +568,7 @@ async function applyBudgetCap(args: ApplyBudgetArgs): Promise<{ effectiveModel: 
   return { effectiveModel: settings.ai_model, budgetSkipped: true };
 }
 
-async function defaultResolveApiKey(orgId: string, provider: AiProviderName): Promise<string | null> {
+async function defaultResolveApiKey(orgId: string, provider: AiProviderName, log?: LogLike): Promise<string | null> {
   // Mirror the same env-var escape EPD uses for the local CLI / self-host
   // path: when DEPTEX_LOCAL_CLI=1 and the matching env key is set, prefer
   // it. Cloud workers ignore this branch.
@@ -601,7 +616,18 @@ async function defaultResolveApiKey(orgId: string, provider: AiProviderName): Pr
   if (!row?.encrypted_api_key) return null;
   try {
     return decryptApiKey(row.encrypted_api_key, Number(row.encryption_key_version ?? 1));
-  } catch {
+  } catch (err) {
+    // Distinguish "BYOK row exists but ciphertext can't be decrypted" from the
+    // "no row" path above: same null return, but operator-visible warn so a
+    // rotated AI_ENCRYPTION_KEY (or corrupt ciphertext) doesn't masquerade
+    // as the friendly "no key configured" message that the upstream caller
+    // emits.
+    if (log) {
+      await log.warn(
+        STEP_NAME,
+        `BYOK key for org=${orgId} provider=${provider} exists but failed to decrypt. Likely a rotated AI_ENCRYPTION_KEY without AI_ENCRYPTION_KEY_PREV, or corrupt ciphertext. Re-save the key in Org Settings to recover. Original error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     return null;
   }
 }
@@ -710,7 +736,12 @@ async function persistGeneratedRule(
       const { error } = await supabase
         .from('organization_generated_rules')
         .update(baseRow)
-        .eq('id', (existing as { id: string }).id);
+        // Belt-and-braces tenant filter: existing.id was returned from a
+        // tenant-scoped read above, so this is already correct in practice.
+        // The redundant org filter survives future refactors that change how
+        // `existing` is sourced.
+        .eq('id', (existing as { id: string }).id)
+        .eq('organization_id', organizationId);
       if (error) throw new Error(error.message);
     } else {
       const { error } = await supabase
@@ -765,6 +796,7 @@ export function aggregateBreakdowns(breakdowns: ValidationBreakdown[]): Aggregat
 interface JobTelemetryArgs {
   supabase: Storage;
   jobId: string | undefined;
+  organizationId: string;
   triggerMatched: number;
   alreadyCovered: number;
   generatedThisScan: number;
@@ -788,7 +820,12 @@ async function persistJobTelemetry(args: JobTelemetryArgs): Promise<void> {
         reachability_generation_cost_usd: args.costUsd,
         reachability_validation_breakdown: args.validationBreakdown,
       })
-      .eq('id', args.jobId);
+      .eq('id', args.jobId)
+      // Belt-and-braces: jobId is the worker's own claimed job and ambient to
+      // this org's run, so this is correct in practice. The redundant
+      // organization_id filter prevents a future refactor that ever sources
+      // jobId externally from cross-tenant overwriting telemetry.
+      .eq('organization_id', args.organizationId);
   } catch (err) {
     await args.log.warn(STEP_NAME, `Failed to persist telemetry on extraction_jobs: ${err instanceof Error ? err.message : String(err)}`);
   }

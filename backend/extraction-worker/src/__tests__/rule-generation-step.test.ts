@@ -505,7 +505,7 @@ describe('runRuleGenerationStep — telemetry persistence', () => {
     );
     const jobUpdates = fs.updates.filter((u) => u.table === 'extraction_jobs');
     expect(jobUpdates.length).toBe(1);
-    expect(jobUpdates[0].filter).toEqual({ id: 'job-1' });
+    expect(jobUpdates[0].filter).toEqual({ id: 'job-1', organization_id: ORG_ID });
     expect(jobUpdates[0].values).toEqual({
       reachability_rules_total_detectable: 2,
       reachability_rules_matched: 0, // already_covered=0 + generated=0
