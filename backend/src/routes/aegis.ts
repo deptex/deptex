@@ -4,10 +4,6 @@ import { supabase } from '../lib/supabase';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { userHasOrgPermission } from '../lib/permissions';
 import { rowToMessage, rowToThread, mapFixStatusToBadge, type ThreadRow, type UserStateRow, type FixStatusForBadge } from '../lib/aegis/types';
-import { generateAegisChat } from '../lib/aegis-v3/chat-generation';
-import { getProviderInfoForOrg } from '../lib/aegis/llm-provider';
-import { checkMonthlyCostCap } from '../lib/ai/cost-cap';
-import { classifyChatError, writeAegisChatError } from '../lib/aegis-v3/errors';
 import { generateThreadTitle } from '../lib/aegis-v3/title';
 import {
   isParticipant,
@@ -27,63 +23,6 @@ const AEGIS_PERMISSION = 'interact_with_aegis';
 router.use(authenticateUser);
 
 const THREAD_COLUMNS = 'id, organization_id, user_id, created_by, title, created_at, updated_at, context_type, context_id';
-
-// Background generation for /chat and /regenerate. Loads thread history,
-// invokes the agent, persists the assistant reply, and auto-titles on the
-// first exchange. On any failure, writes a structured error assistant
-// message so the client surfaces it instead of staring at silence.
-async function runBackgroundChatGeneration(args: {
-  organizationId: string;
-  userId: string;
-  threadId: string;
-  userText: string;
-}): Promise<void> {
-  const { organizationId, userId, threadId, userText } = args;
-  try {
-    const { data: rows } = await supabase
-      .from('aegis_chat_messages')
-      .select('role, content')
-      .eq('thread_id', threadId)
-      .order('created_at', { ascending: true });
-
-    const history = (rows ?? [])
-      .filter(
-        (r: { role: string; content: string }) =>
-          !(r.role === 'user' && r.content === userText),
-      )
-      .map((r: { role: string; content: string }) => ({
-        role: r.role as 'user' | 'assistant',
-        content: r.content,
-      }));
-
-    const { text, parts } = await generateAegisChat({
-      orgId: organizationId,
-      userId,
-      threadId,
-      userMessage: userText,
-      history,
-    });
-
-    const totalMessages = (rows ?? []).length + 1;
-    if (totalMessages <= 3) {
-      await generateThreadTitle(threadId, userText, text);
-    }
-
-    await Promise.all([
-      supabase.from('aegis_chat_messages').insert({
-        thread_id: threadId,
-        role: 'assistant',
-        user_id: null,
-        content: text,
-        metadata: { parts },
-      }),
-      supabase.from('aegis_chat_threads').update({ updated_at: new Date().toISOString() }).eq('id', threadId),
-    ]);
-  } catch (err) {
-    console.error('[aegis] background generation failed', err);
-    await writeAegisChatError(threadId, classifyChatError(err));
-  }
-}
 
 /** Batch-load fix status for any threads linked to fixes via context_type='fix'. */
 async function loadFixStatusesForThreads(
@@ -351,132 +290,6 @@ router.delete('/messages/:id/below', async (req: AuthRequest, res: Response) => 
 
   if (error) return res.status(500).json({ error: error.message });
   res.status(204).send();
-});
-
-// POST /api/aegis/chat  { organizationId, threadId, message }
-// Saves the user message, returns { threadId } immediately, then generates
-// the AI reply in the background. The assistant message lands in DB and
-// triggers a Supabase Realtime event the client is already subscribed to.
-router.post('/chat', async (req: AuthRequest, res: Response) => {
-  const userId = req.user!.id;
-  const { organizationId, threadId: incomingThreadId, message } = req.body ?? {};
-
-  if (!organizationId || typeof message !== 'string' || !message.trim()) {
-    return res.status(400).json({ error: 'organizationId and message are required' });
-  }
-  if (!(await userHasOrgPermission(userId, organizationId, AEGIS_PERMISSION))) {
-    return res.status(403).json({ error: 'Permission denied: interact_with_aegis' });
-  }
-
-  const { data: org } = await supabase
-    .from('organizations')
-    .select('id, name')
-    .eq('id', organizationId)
-    .single();
-  if (!org) return res.status(404).json({ error: 'Organization not found' });
-
-  // Resolve existing thread or create a new one.
-  let threadId: string;
-  if (incomingThreadId) {
-    const thread = await getThreadForParticipant(incomingThreadId, userId);
-    if (!thread || thread.organization_id !== organizationId) {
-      return res.status(404).json({ error: 'Thread not found' });
-    }
-    threadId = thread.id;
-  } else {
-    const { data: created, error: createErr } = await supabase
-      .from('aegis_chat_threads')
-      .insert({ organization_id: organizationId, user_id: userId, created_by: userId, title: 'New chat' })
-      .select('id')
-      .single();
-    if (createErr || !created) return res.status(500).json({ error: createErr?.message ?? 'Thread create failed' });
-    threadId = created.id;
-    await addParticipant(threadId, userId);
-  }
-
-  const userText = message.trim();
-
-  // Save user message synchronously so it's in DB before we return.
-  const { error: msgErr } = await supabase.from('aegis_chat_messages').insert({
-    thread_id: threadId,
-    role: 'user',
-    user_id: userId,
-    content: userText,
-    metadata: { parts: [{ type: 'text', text: userText }] },
-  });
-  if (msgErr) {
-    console.error('[aegis] save user message failed', msgErr);
-    return res.status(500).json({ error: 'Failed to save message' });
-  }
-
-  // Pre-flight cost cap. If the org is over budget, write a cost_cap error
-  // assistant message and skip the model call entirely — it would just fail
-  // when actual cost is recorded anyway.
-  try {
-    const info = await getProviderInfoForOrg(organizationId);
-    const cap = await checkMonthlyCostCap(
-      organizationId,
-      info.model,
-      [{ role: 'user', content: userText }],
-      info.monthlyCostCap,
-    );
-    if (!cap.allowed) {
-      await writeAegisChatError(threadId, { type: 'cost_cap', message: cap.message });
-      return res.json({ threadId });
-    }
-  } catch (err) {
-    console.warn('[aegis] cost cap pre-flight failed (allowing through)', err);
-  }
-
-  // Return immediately — the AI reply will arrive via Supabase Realtime.
-  res.json({ threadId });
-
-  // Fire-and-forget: generate AI reply and save it to DB.
-  void runBackgroundChatGeneration({ organizationId, userId, threadId, userText });
-});
-
-// POST /api/aegis/chat/regenerate { threadId }
-// Wipes the most recent assistant message (typically an error bubble) and
-// re-runs background generation against the last user message.
-router.post('/chat/regenerate', async (req: AuthRequest, res: Response) => {
-  const userId = req.user!.id;
-  const { threadId } = req.body ?? {};
-  if (!threadId || typeof threadId !== 'string') {
-    return res.status(400).json({ error: 'threadId is required' });
-  }
-
-  const thread = await getThreadForParticipant(threadId, userId);
-  if (!thread) return res.status(404).json({ error: 'Thread not found' });
-  if (!(await userHasOrgPermission(userId, thread.organization_id, AEGIS_PERMISSION))) {
-    return res.status(403).json({ error: 'Permission denied: interact_with_aegis' });
-  }
-
-  // Find the last user message; everything after it gets wiped before retry.
-  const { data: lastUser } = await supabase
-    .from('aegis_chat_messages')
-    .select('id, content, created_at, user_id')
-    .eq('thread_id', threadId)
-    .eq('role', 'user')
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (!lastUser) return res.status(400).json({ error: 'No user message to regenerate from' });
-
-  const { error: deleteErr } = await supabase
-    .from('aegis_chat_messages')
-    .delete()
-    .eq('thread_id', threadId)
-    .gt('created_at', lastUser.created_at);
-  if (deleteErr) return res.status(500).json({ error: deleteErr.message });
-
-  res.json({ threadId });
-
-  void runBackgroundChatGeneration({
-    organizationId: thread.organization_id,
-    userId,
-    threadId,
-    userText: lastUser.content ?? '',
-  });
 });
 
 // POST /api/aegis/threads/:id/auto-title
