@@ -17,7 +17,16 @@ RUN apt-get update && apt-get install -y \
   python3 \
   python3-pip \
   python3-venv \
+  python-is-python3 \
   xmlstarlet \
+  xvfb \
+  xauth \
+  fontconfig \
+  libxi6 \
+  libxtst6 \
+  libxrender1 \
+  xfonts-base \
+  xfonts-encodings \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Eclipse Temurin JDK 21 (full JDK for Maven + atom)
@@ -87,6 +96,12 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 RUN useradd -m -s /bin/bash worker
 
 RUN mkdir -p /data /data/cache && chown -R worker:worker /data
+
+# /zap/wrk is the only directory ZAP's helper scripts will accept as a target
+# for `-J / -r / -w / -x / -c / -g` (see zap-baseline.py:374, the script bails
+# with `'/zap/wrk' is not mounted` otherwise). The runner writes report+stub
+# files there. Owned by `worker` so the runtime user can mkdtempSync into it.
+RUN mkdir -p /zap/wrk && chown worker:worker /zap/wrk
 
 ENV VDB_HOME=/data
 ENV DEPSCAN_CACHE_DIR=/data/cache

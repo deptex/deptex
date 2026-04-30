@@ -266,21 +266,46 @@ async function loadPdvsForProject(
   supabase: Storage,
   projectId: string
 ): Promise<{ pdvByPurl: Map<string, PdvRow[]>; projectDependencyByPurl: Map<string, ProjectDependencyRow> }> {
-  // First fetch project_dependencies → purl mapping.
-  const { data: pdData, error: pdError } = await supabase
-    .from('project_dependencies')
-    .select('id, dependency_id, purl')
-    .eq('project_id', projectId);
-  if (pdError || !pdData) {
+  // project_dependencies has no `purl` column (purl lives only on
+  // project_reachable_flows). Derive the purl ↔ project_dependency mapping by
+  // joining flows.dependency_id → project_dependencies.dependency_id, since
+  // both rows refer to the same global `dependencies.id`.
+  const [{ data: pdData, error: pdError }, { data: flowDepData, error: flowDepError }] = await Promise.all([
+    supabase
+      .from('project_dependencies')
+      .select('id, dependency_id')
+      .eq('project_id', projectId),
+    supabase
+      .from('project_reachable_flows')
+      .select('purl, dependency_id')
+      .eq('project_id', projectId),
+  ]);
+  if (pdError || !pdData || flowDepError || !flowDepData) {
     return { pdvByPurl: new Map(), projectDependencyByPurl: new Map() };
   }
-  const projectDeps = pdData as ProjectDependencyRow[];
-
-  const projectDependencyByPurl = new Map<string, ProjectDependencyRow>();
-  for (const pd of projectDeps) projectDependencyByPurl.set(pd.purl, pd);
+  const projectDeps = pdData as Array<{ id: string; dependency_id: string | null }>;
+  const flowDeps = flowDepData as Array<{ purl: string | null; dependency_id: string | null }>;
 
   if (projectDeps.length === 0) {
-    return { pdvByPurl: new Map(), projectDependencyByPurl };
+    return { pdvByPurl: new Map(), projectDependencyByPurl: new Map() };
+  }
+
+  // dependency_id (global registry id) → project_dependencies row
+  const pdByDepId = new Map<string, { id: string; dependency_id: string }>();
+  for (const pd of projectDeps) {
+    if (pd.dependency_id) pdByDepId.set(pd.dependency_id, { id: pd.id, dependency_id: pd.dependency_id });
+  }
+
+  // Build projectDependencyByPurl by walking flows.dependency_id back to a
+  // project_dep. A purl can map to multiple project_deps if the same package
+  // is installed in multiple workspaces; first wins (matches the in-prod
+  // behaviour we'd see if we'd had a `purl` column to key on).
+  const projectDependencyByPurl = new Map<string, ProjectDependencyRow>();
+  for (const f of flowDeps) {
+    if (!f.purl || !f.dependency_id) continue;
+    if (projectDependencyByPurl.has(f.purl)) continue;
+    const pd = pdByDepId.get(f.dependency_id);
+    if (pd) projectDependencyByPurl.set(f.purl, { id: pd.id, dependency_id: pd.dependency_id, purl: f.purl });
   }
 
   const pdIds = projectDeps.map((p) => p.id);
@@ -292,8 +317,9 @@ async function loadPdvsForProject(
     return { pdvByPurl: new Map(), projectDependencyByPurl };
   }
 
+  // PDVs are keyed by project_dependency_id; flip to purl via the map we just built.
   const pdIdToPurl = new Map<string, string>();
-  for (const pd of projectDeps) pdIdToPurl.set(pd.id, pd.purl);
+  for (const [purl, pd] of projectDependencyByPurl) pdIdToPurl.set(pd.id, purl);
 
   const pdvByPurl = new Map<string, PdvRow[]>();
   for (const pdv of pdvData as Array<PdvRow & { severity?: string }>) {
@@ -456,19 +482,46 @@ export async function runDastPipeline(
   });
   console.log(`${tag} Cross-linked ${crossLinkedCount} of ${inserts.length} findings to SCA`);
 
-  await insertFindings(supabase, inserts);
+  // Dedupe non-cross-linked findings against the partial unique index
+  // `project_dast_findings_unresolved` on
+  // (project_id, dast_run_id, rule_id, endpoint_url, http_method, vulnerability_type)
+  // WHERE handler_file_path IS NULL. ZAP can report the same alert against the
+  // same URL twice (e.g. multiple form/AJAX instances on one page) and that
+  // would fail the batch insert. Cross-linked rows are exempt — the partial
+  // index doesn't fire when handler_file_path is set.
+  const seen = new Set<string>();
+  const dedupedInserts: DastFindingInsert[] = [];
+  let dropped = 0;
+  for (const row of inserts) {
+    if (row.handler_file_path !== null) {
+      dedupedInserts.push(row);
+      continue;
+    }
+    const key = `${row.rule_id ?? ''}|${row.endpoint_url}|${row.http_method}|${row.vulnerability_type}`;
+    if (seen.has(key)) {
+      dropped++;
+      continue;
+    }
+    seen.add(key);
+    dedupedInserts.push(row);
+  }
+  if (dropped > 0) {
+    console.log(`${tag} Dropped ${dropped} duplicate non-cross-linked findings`);
+  }
+
+  await insertFindings(supabase, dedupedInserts);
 
   // Atomic pointer flip — visibility gated by projects.active_dast_run_id.
   await commitDastRun(supabase, job.project_id, dastRunId);
 
   const durationSeconds = Math.round((Date.now() - startedAt) / 1000);
-  await finalizeJob(supabase, job.id, inserts.length, durationSeconds);
+  await finalizeJob(supabase, job.id, dedupedInserts.length, durationSeconds);
 
-  console.log(`${tag} DAST scan completed: ${inserts.length} findings, ${durationSeconds}s`);
+  console.log(`${tag} DAST scan completed: ${dedupedInserts.length} findings, ${durationSeconds}s`);
 
   return {
     dast_run_id: dastRunId,
-    findings_count: inserts.length,
+    findings_count: dedupedInserts.length,
     duration_seconds: durationSeconds,
     cross_linked_count: crossLinkedCount,
   };
