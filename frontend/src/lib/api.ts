@@ -2946,7 +2946,169 @@ export const api = {
       body: JSON.stringify({ fixOutcomeId, rating }),
     });
   },
+
+  // ---------- Flows ----------
+
+  async listFlows(params: {
+    organizationId: string;
+    flowType?: FlowType;
+    scope?: FlowScope;
+    scopeId?: string;
+  }): Promise<Flow[]> {
+    const qs = new URLSearchParams({ organization_id: params.organizationId });
+    if (params.flowType) qs.set('flow_type', params.flowType);
+    if (params.scope) qs.set('scope', params.scope);
+    if (params.scopeId) qs.set('scope_id', params.scopeId);
+    return fetchWithAuth(`/api/flows?${qs}`);
+  },
+
+  async getFlow(flowId: string): Promise<Flow> {
+    return fetchWithAuth(`/api/flows/${flowId}`);
+  },
+
+  async createFlow(input: CreateFlowInput): Promise<Flow> {
+    return fetchWithAuth(`/api/flows`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+
+  async updateFlow(flowId: string, input: UpdateFlowInput): Promise<Flow> {
+    return fetchWithAuth(`/api/flows/${flowId}`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+
+  async deleteFlow(flowId: string): Promise<void> {
+    await fetchWithAuth(`/api/flows/${flowId}`, { method: 'DELETE' });
+  },
+
+  async setFlowActive(flowId: string, active: boolean): Promise<Flow> {
+    return fetchWithAuth(`/api/flows/${flowId}/active`, {
+      method: 'PATCH',
+      body: JSON.stringify({ active }),
+    });
+  },
+
+  async setFlowDryRun(flowId: string, dryRun: boolean): Promise<Flow> {
+    return fetchWithAuth(`/api/flows/${flowId}/dry-run`, {
+      method: 'PATCH',
+      body: JSON.stringify({ dry_run: dryRun }),
+    });
+  },
+
+  async snoozeFlow(flowId: string, snoozedUntil: string | null): Promise<Flow> {
+    return fetchWithAuth(`/api/flows/${flowId}/snooze`, {
+      method: 'PATCH',
+      body: JSON.stringify({ snoozed_until: snoozedUntil }),
+    });
+  },
+
+  async listFlowVersions(flowId: string): Promise<FlowVersionSummary[]> {
+    return fetchWithAuth(`/api/flows/${flowId}/versions`);
+  },
+
+  async revertFlowVersion(flowId: string, version: number): Promise<Flow> {
+    return fetchWithAuth(`/api/flows/${flowId}/revert`, {
+      method: 'POST',
+      body: JSON.stringify({ version }),
+    });
+  },
+
+  async validateFlowCode(input: {
+    flowId: string;
+    nodeType: string;
+    eventType: string;
+    code: string;
+    customContext?: unknown;
+  }): Promise<FlowCodeValidationResult> {
+    return fetchWithAuth(`/api/flows/validate-code`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
 };
+
+export interface FlowCodeValidationResult {
+  syntaxOk: boolean;
+  runOk: boolean;
+  returnValue?: unknown;
+  error?: { stage: 'parse' | 'run' | 'returnShape' | 'returnSize'; message: string; line?: number };
+  durationMs: number;
+  cached?: boolean;
+}
+
+// ---------- Flows ----------
+
+export type FlowType = 'notification' | 'pr_check' | 'policy' | 'status';
+export type FlowScope = 'organization' | 'team' | 'project';
+
+export interface FlowGraph {
+  version: 1;
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+}
+
+export interface FlowNode {
+  id: string;
+  type: string;
+  position: { x: number; y: number };
+  config: Record<string, unknown>;
+}
+
+export interface FlowEdge {
+  id: string;
+  source: string;
+  sourceHandle: string;
+  target: string;
+  targetHandle: string;
+}
+
+export interface Flow {
+  id: string;
+  flow_type: FlowType;
+  scope: FlowScope;
+  scope_id: string;
+  organization_id: string;
+  name: string;
+  description: string | null;
+  graph: FlowGraph;
+  version: number;
+  active: boolean;
+  dry_run: boolean;
+  snoozed_until: string | null;
+  created_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateFlowInput {
+  organization_id: string;
+  flow_type: FlowType;
+  scope: FlowScope;
+  scope_id: string;
+  name: string;
+  description?: string;
+  graph?: FlowGraph;
+}
+
+export interface UpdateFlowInput {
+  name?: string;
+  description?: string | null;
+  graph?: FlowGraph;
+  change_summary?: string;
+}
+
+export interface FlowVersionSummary {
+  id: string;
+  flow_id: string;
+  version: number;
+  name: string;
+  change_summary: string | null;
+  changed_by_user_id: string | null;
+  created_at: string;
+}
 
 export interface Team {
   id: string;

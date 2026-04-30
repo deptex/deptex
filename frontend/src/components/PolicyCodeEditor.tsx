@@ -288,6 +288,62 @@ function computeFitHeight(value: string): number {
   return (lines + 1) * LINE_HEIGHT + PADDING_TOP + PADDING_BOTTOM;
 }
 
+/** Skeleton placeholder shown while Monaco's chunks are loading. Mimics
+ *  line-numbered code with shimmering bars instead of saying "Loading…". */
+function CodeEditorSkeleton({ height }: { height: string }) {
+  // Pseudo-random but stable widths so each render shows the same "shape".
+  const lines: { width: string | null }[] = [
+    { width: '52%' },
+    { width: '36%' },
+    { width: null }, // blank line
+    { width: '68%' },
+    { width: '24%' },
+    { width: '44%' },
+    { width: '60%' },
+    { width: null },
+    { width: '40%' },
+  ];
+  return (
+    <div
+      style={{
+        minHeight: height,
+        backgroundColor: CODE_BLOCK_BG,
+        paddingTop: PADDING_TOP,
+        paddingBottom: PADDING_BOTTOM,
+      }}
+      aria-busy="true"
+      aria-label="Loading editor"
+    >
+      {lines.map((line, i) => (
+        <div
+          key={i}
+          className="flex items-center gap-3"
+          style={{ height: LINE_HEIGHT, paddingLeft: 12, paddingRight: 16 }}
+        >
+          <span
+            style={{
+              width: 16,
+              fontFamily: "Consolas, 'Courier New', monospace",
+              fontSize: 13,
+              color: '#3a3a3a',
+              textAlign: 'right',
+              lineHeight: `${LINE_HEIGHT}px`,
+            }}
+          >
+            {i + 1}
+          </span>
+          {line.width !== null && (
+            <div
+              className="h-2.5 rounded bg-muted animate-pulse"
+              style={{ width: line.width }}
+            />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 interface PolicyCodeEditorProps {
   value: string;
   onChange: (value: string) => void;
@@ -558,21 +614,7 @@ export function PolicyCodeEditor({
         height={height}
         language={POLICY_LANGUAGE_ID}
         theme="deptex"
-        loading={
-          <div
-            style={{
-              minHeight: height,
-              backgroundColor: CODE_BLOCK_BG,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#A0A6AD',
-              fontSize: 13,
-            }}
-          >
-            Loading...
-          </div>
-        }
+        loading={<CodeEditorSkeleton height={height} />}
         value={value}
         onChange={(v) => onChange(v ?? '')}
         beforeMount={handleBeforeMount}
