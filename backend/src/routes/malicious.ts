@@ -286,10 +286,87 @@ router.patch('/:id/projects/:projectId/malicious-findings/:findingId', async (re
 
 // ---------------------------------------------------------------------------
 // POST .../malicious-findings/:findingId/explain
-//
-// Implementation lives in M2.2 (`backend/src/lib/malicious/explain.ts`).
-// The route handler is registered there; this file is unchanged for M1.4.
 // ---------------------------------------------------------------------------
+
+router.post('/:id/projects/:projectId/malicious-findings/:findingId/explain', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, findingId } = req.params;
+
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    // Pull finding + package + cached evidence so explain.ts has snippets.
+    const { data: finding } = await supabase
+      .from('project_malicious_findings')
+      .select('id, project_dependency_id, dependency_id, scanner, rule_id, message, project_id, organization_id')
+      .eq('id', findingId)
+      .maybeSingle();
+    if (!finding || finding.project_id !== projectId || finding.organization_id !== id) {
+      return res.status(404).json({ error: 'Finding not found' });
+    }
+
+    const { data: pd } = await supabase
+      .from('project_dependencies')
+      .select('id, version, dependency_id')
+      .eq('id', finding.project_dependency_id)
+      .single();
+    if (!pd || !pd.dependency_id || !pd.version) {
+      return res.status(404).json({ error: 'Project dependency not found' });
+    }
+
+    const { data: dep } = await supabase
+      .from('dependencies')
+      .select('name, ecosystem')
+      .eq('id', pd.dependency_id)
+      .single();
+    if (!dep) return res.status(404).json({ error: 'Dependency not found' });
+
+    let snippets: Array<{ file_path: string; snippet: string }> = [];
+    if (finding.scanner === 'guarddog') {
+      const { data: cache } = await supabase
+        .from('package_security_cache')
+        .select('findings')
+        .eq('package_name', dep.name)
+        .eq('version', pd.version)
+        .eq('ecosystem', dep.ecosystem)
+        .eq('scanner', 'guarddog')
+        .maybeSingle();
+      const cachedRules = (cache as any)?.findings ?? [];
+      const matching = Array.isArray(cachedRules)
+        ? cachedRules.find((c: any) => c.rule_id === finding.rule_id || finding.rule_id.endsWith(c.rule_id))
+        : null;
+      if (matching?.evidence) {
+        snippets = (matching.evidence as Array<{ file_path: string; snippet: string }>).slice(0, 4);
+      }
+    }
+
+    const { explainMaliciousFinding } = await import('../lib/malicious/explain');
+    const outcome = await explainMaliciousFinding({
+      organizationId: id,
+      userId,
+      projectId,
+      findingId,
+      packageName: dep.name,
+      packageVersion: pd.version,
+      ecosystem: dep.ecosystem,
+      scanner: finding.scanner,
+      ruleId: finding.rule_id,
+      ruleMessage: finding.message,
+      rawSourceSnippets: snippets,
+    });
+
+    if (!outcome.ok) {
+      return res.status(outcome.status).json({ error: outcome.reason });
+    }
+    res.json(outcome.result);
+  } catch (error: any) {
+    console.error('Error explaining malicious finding:', error);
+    res.status(500).json({ error: error.message || 'Failed to explain malicious finding' });
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Internal routes (INTERNAL_API_KEY only)
