@@ -288,7 +288,7 @@ export function ChatPane({
             <ChatInput onSubmit={handleSubmit} placeholder={placeholder} autoFocus />
           </div>
           {sendError && (
-            <div className="mt-3 text-sm text-red-500">{sendError}</div>
+            <div className="mt-3 text-sm text-foreground/60">{sendError}</div>
           )}
         </div>
       </div>
@@ -328,7 +328,7 @@ export function ChatPane({
           )}
           {sendError && !isStreaming && (
             <div className="px-4 py-3">
-              <div className="mx-auto max-w-3xl text-sm text-red-500">{sendError}</div>
+              <div className="mx-auto max-w-3xl text-sm text-foreground/60">{sendError}</div>
             </div>
           )}
           <div ref={bottomRef} />
