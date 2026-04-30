@@ -49,7 +49,7 @@ describe('claimJob', () => {
 
     expect(mockRpc).toHaveBeenCalledWith('claim_scan_job', {
       p_machine_id: machineId,
-      p_supported_types: ['extraction'],
+      p_supported_types: ['extraction', 'dast'],
     });
     expect(result).toEqual(job);
   });
