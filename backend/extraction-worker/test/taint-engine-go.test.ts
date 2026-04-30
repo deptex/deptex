@@ -63,6 +63,16 @@ const CASES: FixtureCase[] = [
     expectVulnClass: null,
     description: 'Gin handler coerces request param via strconv before exec',
   },
+  {
+    fixture: 'gin-path-traversal-vuln',
+    expectVulnClass: 'path_traversal',
+    description: 'Gin handler passes raw c.Query into cross-file os.ReadFile',
+  },
+  {
+    fixture: 'gin-path-traversal-safe',
+    expectVulnClass: null,
+    description: 'Gin handler strips path components via filepath.Base before read',
+  },
 ];
 
 function summarizeFlows(flows: Flow[]): string {

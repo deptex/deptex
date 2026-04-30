@@ -47,6 +47,7 @@ interface FixtureCase {
 const FIXTURE_PAIRS: FixtureCase[] = [
   { name: 'spring-sql-injection', expectVuln: 'sql_injection' },
   { name: 'spring-command-injection', expectVuln: 'command_injection' },
+  { name: 'spring-path-traversal', expectVuln: 'path_traversal' },
 ];
 
 async function runFixture(fixtureDir: string) {
