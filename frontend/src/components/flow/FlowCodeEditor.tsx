@@ -2,10 +2,12 @@
  * Editor primitive for code-mode flow nodes.
  *
  * Hosts a Monaco JavaScript editor with TS-flavored autocomplete sourced from
- * `EVENT_SCHEMAS` + the contract registry. Pinned signature header makes the
- * function shape obvious; users edit only the body. A Test button hits the
- * backend's `/api/flows/validate-code` (same engine the runtime uses) so the
- * load-bearing promise — "Save = passes Test = runs at runtime" — stays true.
+ * `EVENT_SCHEMAS` + the contract registry. The Test button hits the backend's
+ * `/api/flows/validate-code` (same engine the runtime uses) so the load-bearing
+ * promise — "Save = passes Test = runs at runtime" — stays true.
+ *
+ * Visual chrome (theme, padding, wrapper) matches `<PolicyCodeEditor>` so the
+ * code block reads identically across the policies page and the flow builder.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -14,16 +16,13 @@ import type { editor, IDisposable } from 'monaco-editor';
 import { Loader2, Play, ChevronDown, ChevronRight, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { api, type FlowCodeValidationResult } from '../../lib/api';
 import { cn } from '../../lib/utils';
-import {
-  buildFlowCodeDts,
-  buildContractSignature,
-  NODE_CODE_CONTRACTS,
-} from './flow-code-typedefs';
+import { CODE_BLOCK_BG, beforeMountPolicyMonaco } from '../policy-monaco-setup';
+import { JsLangBadge } from '../JsLangBadge';
+import { buildFlowCodeDts, NODE_CODE_CONTRACTS } from './flow-code-typedefs';
 
-const EDITOR_BG = '#0a0a0a';
 const LINE_HEIGHT = 20;
 const PADDING_TOP = 8;
-const PADDING_BOTTOM = 8;
+const PADDING_BOTTOM = 2;
 const MIN_LINES = 3;
 
 interface FlowCodeEditorProps {
@@ -34,7 +33,7 @@ interface FlowCodeEditorProps {
   onChange: (value: string) => void;
   /** Notified after each validate-code response. Parent can store last result for save-gate UX. */
   onValidationChange?: (result: FlowCodeValidationResult | null) => void;
-  /** Examples surfaced in the collapsible. Falls back to contract.exampleBodies if undefined. */
+  /** Examples surfaced in the collapsible. */
   exampleBodies?: Array<{ label: string; body: string }>;
 }
 
@@ -83,15 +82,10 @@ export function FlowCodeEditor({
   const [showCustomContext, setShowCustomContext] = useState(false);
   const [customContextJson, setCustomContextJson] = useState('');
 
-  const contract = NODE_CODE_CONTRACTS[nodeType];
-  const signature = eventType
-    ? buildContractSignature(nodeType, eventType)
-    : `function ${contract?.functionName ?? 'evaluate'}(${contract?.paramName ?? 'context'}: unknown): ${contract?.returnTypeTs ?? 'unknown'}`;
-
   const examples = exampleBodies ?? (nodeType === 'condition' ? CONDITION_EXAMPLES : []);
 
-  // Clear any stale test result when code changes — staleness is real but we
-  // surface "untested" vs "passed" via the absence/presence of lastResult.
+  // Clear stale test result on edit. We surface "untested" via the absence of
+  // lastResult and "passed" via its presence.
   useEffect(() => {
     if (lastResult !== null) {
       setLastResult(null);
@@ -117,36 +111,18 @@ export function FlowCodeEditor({
   }, [nodeType, eventType]);
 
   const handleBeforeMount: BeforeMount = (monaco) => {
-    monacoRef.current = monaco;
+    // Same theme + diagnostics setup the policies page uses.
+    beforeMountPolicyMonaco(monaco);
 
-    monaco.editor.defineTheme('deptex-flow', {
-      base: 'vs-dark',
-      inherit: true,
-      rules: [],
-      colors: {
-        'editor.background': EDITOR_BG,
-        'editorGutter.background': EDITOR_BG,
-        'editorLineNumber.foreground': '#525252',
-        'editorLineNumber.activeForeground': '#a1a1a1',
-      },
-    });
-
-    // Surface unknown-property errors when the user references a field that
-    // doesn't exist on the typed context. Syntax validation is always on.
+    // Override semantic validation back ON so users see "field doesn't exist"
+    // errors against the typed event context. (PolicyCodeEditor turns it off
+    // because its custom monarch language doesn't drive the TS service.)
     (monaco.languages as any).typescript.javascriptDefaults.setDiagnosticsOptions({
       noSemanticValidation: false,
       noSyntaxValidation: false,
     });
-    const tsAny = (monaco.languages as any).typescript;
-    tsAny.javascriptDefaults.setCompilerOptions({
-      target: tsAny.ScriptTarget.ESNext,
-      allowNonTsExtensions: true,
-      allowJs: true,
-      checkJs: true,
-      strict: false,
-      noImplicitAny: false,
-    });
 
+    monacoRef.current = monaco;
     if (eventType) {
       const dts = buildFlowCodeDts(nodeType, eventType);
       const lib = (monaco.languages as any).typescript.javascriptDefaults.addExtraLib(
@@ -211,62 +187,63 @@ export function FlowCodeEditor({
   };
 
   const editorHeight = fitHeight(value);
+  const functionLabel = NODE_CODE_CONTRACTS[nodeType]?.functionName ?? 'function';
 
   return (
     <div className="flex flex-col gap-2">
-      {/* Pinned signature line */}
-      <div
-        className="flex items-center justify-between rounded-t-lg border border-b-0 border-border bg-background-card-header px-3 py-2"
-      >
-        <code className="font-mono text-[12px] text-foreground-secondary">{signature} {'{'}</code>
-        <button
-          type="button"
-          onClick={runTest}
-          disabled={testing || !eventType}
-          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background-card px-2.5 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-background-subtle disabled:cursor-not-allowed disabled:opacity-50"
+      {/* Code block — matches the org-settings policies page chrome exactly:
+          bordered card with a function-name header and the editor below. */}
+      <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+        <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center gap-2">
+          <JsLangBadge className="text-xs" />
+          <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
+            {functionLabel}
+          </span>
+          <div className="ml-auto flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={runTest}
+              disabled={testing || !eventType}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background-card px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-background-subtle disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {testing ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Play className="h-3 w-3" strokeWidth={2.5} />
+              )}
+              {testing ? 'Testing…' : 'Test'}
+            </button>
+          </div>
+        </div>
+        <div
+          className="policy-code-editor w-full overscroll-auto"
+          style={{ backgroundColor: CODE_BLOCK_BG, fontSize: 16 }}
         >
-          {testing ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          ) : (
-            <Play className="h-3 w-3" strokeWidth={2.5} />
-          )}
-          {testing ? 'Testing…' : 'Test'}
-        </button>
-      </div>
-
-      {/* Editor */}
-      <div
-        className="flow-code-editor border-x border-border"
-        style={{ backgroundColor: EDITOR_BG }}
-      >
-        <MonacoEditor
-          width="100%"
-          height={`${editorHeight}px`}
-          language="javascript"
-          theme="deptex-flow"
-          value={value}
-          onChange={(v) => onChange(v ?? '')}
-          beforeMount={handleBeforeMount}
-          onMount={handleMount}
-          options={{
-            minimap: { enabled: false },
-            fontSize: 13,
-            lineHeight: LINE_HEIGHT,
-            fontFamily: "Consolas, 'Courier New', monospace",
-            lineNumbers: 'on',
-            lineNumbersMinChars: 2,
-            scrollBeyondLastLine: false,
-            automaticLayout: true,
-            tabSize: 2,
-            wordWrap: 'off',
-            padding: { top: PADDING_TOP, bottom: PADDING_BOTTOM },
-          }}
-        />
-      </div>
-
-      {/* Closing brace */}
-      <div className="rounded-b-lg border border-t-0 border-border bg-background-card-header px-3 py-2">
-        <code className="font-mono text-[12px] text-foreground-secondary">{'}'}</code>
+          <MonacoEditor
+            width="100%"
+            height={`${editorHeight}px`}
+            language="javascript"
+            theme="deptex"
+            value={value}
+            onChange={(v) => onChange(v ?? '')}
+            beforeMount={handleBeforeMount}
+            onMount={handleMount}
+            options={{
+              theme: 'deptex',
+              minimap: { enabled: false },
+              fontSize: 13,
+              lineHeight: LINE_HEIGHT,
+              fontFamily: "Consolas, 'Courier New', monospace",
+              lineNumbers: 'on',
+              lineNumbersMinChars: 2,
+              scrollBeyondLastLine: false,
+              automaticLayout: true,
+              tabSize: 2,
+              wordWrap: 'off',
+              padding: { top: PADDING_TOP, bottom: PADDING_BOTTOM },
+            }}
+          />
+        </div>
       </div>
 
       {/* Status panel */}
