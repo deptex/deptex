@@ -2,7 +2,8 @@ import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from 'rea
 import { createPortal } from 'react-dom';
 import { useOutletContext, useNavigate, useParams, useLocation, Link, useSearchParams } from 'react-router-dom';
 import { cn } from '../../lib/utils';
-import { Settings, Trash2, Shield, Bell, ChevronDown, Users, Plus, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, BookOpen, Clock, Loader2, Eye, Ban, Mail, Webhook, GitBranch, Info, RefreshCw, GitCommit, AlertTriangle, PauseCircle } from 'lucide-react';
+import { Settings, Trash2, Shield, Bell, ChevronDown, Users, Plus, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, BookOpen, Clock, Loader2, Eye, Ban, Mail, Webhook, GitBranch, Info, RefreshCw, GitCommit, AlertTriangle, PauseCircle, Radar } from 'lucide-react';
+import { DastScanningTab } from '../../components/dast/DastScanningTab';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -291,7 +292,7 @@ function formatRunDuration(createdAt: string, completedAt: string | null, status
   return `${Math.floor(m / 60)}h`;
 }
 
-const VALID_PROJECT_SETTINGS_SECTIONS = new Set(['general', 'repository', 'access', 'notifications', 'policies']);
+const VALID_PROJECT_SETTINGS_SECTIONS = new Set(['general', 'repository', 'access', 'notifications', 'policies', 'scanning']);
 
 const ASSET_TIER_LABEL: Record<AssetTier, string> = {
   CROWN_JEWELS: 'Crown Jewels',
@@ -536,6 +537,27 @@ function ProjectSettingsTabSkeleton({ section }: { section: string }) {
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+        </div>
+      );
+    case 'scanning':
+      return (
+        <div className="space-y-6">
+          <div className={`h-8 w-32 ${pulse}`} />
+          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+            <div className="px-4 py-3 border-b border-border">
+              <div className={`h-4 w-20 ${pulse}`} />
+            </div>
+            <div className="p-4 space-y-4">
+              <div className={`h-10 w-full max-w-xl ${pulse}`} />
+              <div className={`h-10 w-full max-w-xl ${pulse}`} />
+            </div>
+          </div>
+          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+              <div className={`h-4 w-24 ${pulse}`} />
+              <div className={`h-8 w-24 ${pulse}`} />
             </div>
           </div>
         </div>
@@ -1593,6 +1615,11 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
       id: 'policies',
       label: 'Policies',
       icon: <BookOpen className="h-4 w-4 tab-icon-shake" />,
+    },
+    {
+      id: 'scanning',
+      label: 'Scanning',
+      icon: <Radar className="h-4 w-4 tab-icon-shake" />,
     },
   ];
 
@@ -3692,6 +3719,13 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                   </div>
                 )}
               </div>
+            )}
+
+            {activeSection === 'scanning' && projectId && (
+              <DastScanningTab
+                projectId={projectId}
+                canManage={!!userPermissions?.edit_settings}
+              />
             )}
           </div>
         </div>

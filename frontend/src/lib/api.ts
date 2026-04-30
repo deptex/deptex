@@ -1815,6 +1815,30 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/extraction/runs`);
   },
 
+  // ------------------------- DAST -------------------------
+  async getDastConfig(projectId: string): Promise<DastConfigDTO> {
+    return fetchWithAuth(`/api/projects/${projectId}/dast/config`);
+  },
+
+  async saveDastConfig(projectId: string, config: DastConfigDTO): Promise<DastConfigDTO> {
+    return fetchWithAuth(`/api/projects/${projectId}/dast/config`, {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    });
+  },
+
+  async triggerDastScan(projectId: string): Promise<DastScanTriggerResponse> {
+    return fetchWithAuth(`/api/projects/${projectId}/dast/scan`, { method: 'POST' });
+  },
+
+  async getDastJobs(projectId: string, limit = 20): Promise<DastJobDTO[]> {
+    return fetchWithAuth(`/api/projects/${projectId}/dast/jobs?limit=${limit}`);
+  },
+
+  async getDastFindings(projectId: string, limit = 100): Promise<DastFindingDTO[]> {
+    return fetchWithAuth(`/api/projects/${projectId}/dast/findings?limit=${limit}`);
+  },
+
   async getProjectVulnerabilities(
     organizationId: string,
     projectId: string
@@ -3148,6 +3172,68 @@ export interface ExtractionLog {
   message: string;
   duration_ms: number | null;
   metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
+// DAST DTOs — mirror the backend types in backend/src/types/dast.ts.
+export type DastScanProfile = 'auto' | 'quick' | 'full' | 'api';
+export type DastSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+export type DastFindingStatus = 'open' | 'suppressed' | 'risk_accepted' | 'fixed';
+export type DastConfidence = 'confirmed' | 'high' | 'medium' | 'low';
+export type ScanJobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled';
+
+export interface DastConfigDTO {
+  enabled: boolean;
+  target_url: string | null;
+  scan_profile: DastScanProfile;
+  scan_timeout_minutes: number;
+}
+
+export interface DastJobDTO {
+  id: string;
+  status: ScanJobStatus;
+  trigger_source: string | null;
+  target_url: string | null;
+  scan_profile: DastScanProfile | null;
+  findings_count: number | null;
+  duration_seconds: number | null;
+  started_at: string | null;
+  completed_at: string | null;
+  error: string | null;
+  error_category: string | null;
+  attempts: number;
+  created_at: string;
+}
+
+export interface DastFindingDTO {
+  id: string;
+  endpoint_url: string;
+  http_method: string;
+  vulnerability_type: string;
+  severity: DastSeverity;
+  cwe_id: string | null;
+  owasp_top10_ref: string | null;
+  rule_id: string | null;
+  message: string | null;
+  payload_redacted: string | null;
+  response_evidence_redacted: string | null;
+  confidence: DastConfidence;
+  handler_file_path: string | null;
+  handler_function_name: string | null;
+  handler_line: number | null;
+  linked_sca_osv_id: string | null;
+  linked_sca_project_dependency_id: string | null;
+  confirmed_exploitable: boolean;
+  status: DastFindingStatus;
+  risk_accepted_reason: string | null;
+  created_at: string;
+}
+
+export interface DastScanTriggerResponse {
+  jobId: string;
+  status: ScanJobStatus;
+  target_url: string;
+  scan_profile: DastScanProfile;
   created_at: string;
 }
 
