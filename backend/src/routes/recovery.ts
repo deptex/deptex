@@ -43,9 +43,23 @@ router.post('/extraction-jobs', async (_req, res) => {
     const requeuedCount = Array.isArray(requeued) ? requeued.length : 0;
     const failedCount = Array.isArray(failed) ? failed.length : 0;
 
-    // Log recovery actions to extraction_logs
+    // Resolve fly-machines lazily so the recovery cron still runs in CE/local
+    // mode where Fly is not configured.
+    let stopFlyMachine: ((app: string, machineId: string) => Promise<void>) | null = null;
+    let dastApp: string | null = null;
+    try {
+      const flyMachines = require('../lib/fly-machines');
+      stopFlyMachine = flyMachines.stopFlyMachine;
+      dastApp = flyMachines.DAST_CONFIG?.app ?? null;
+    } catch {
+      // fly-machines not available
+    }
+
+    // Log recovery actions to extraction_logs (extraction-only — DAST has no
+    // log stream in v1; the failure surfaces on scan_jobs.error directly).
     if (Array.isArray(requeued)) {
       for (const job of requeued) {
+        if (job.type !== 'extraction') continue;
         await supabase.from('extraction_logs').insert({
           project_id: job.project_id,
           run_id: job.run_id,
@@ -58,23 +72,37 @@ router.post('/extraction-jobs', async (_req, res) => {
 
     if (Array.isArray(failed)) {
       for (const job of failed) {
-        await supabase.from('extraction_logs').insert({
-          project_id: job.project_id,
-          run_id: job.run_id,
-          step: 'complete',
-          level: 'error',
-          message: `Extraction failed after ${job.attempts} attempts — machine crashed or timed out. Try re-syncing from project settings.`,
-        }).then(() => {});
+        if (job.type === 'extraction') {
+          await supabase.from('extraction_logs').insert({
+            project_id: job.project_id,
+            run_id: job.run_id,
+            step: 'complete',
+            level: 'error',
+            message: `Extraction failed after ${job.attempts} attempts — machine crashed or timed out. Try re-syncing from project settings.`,
+          }).then(() => {});
 
-        await supabase
-          .from('project_repositories')
-          .update({
-            status: 'error',
-            extraction_error: `Extraction failed after ${job.attempts} attempts`,
-            extraction_step: null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('project_id', job.project_id);
+          await supabase
+            .from('project_repositories')
+            .update({
+              status: 'error',
+              extraction_error: `Extraction failed after ${job.attempts} attempts`,
+              extraction_step: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('project_id', job.project_id);
+        }
+
+        // Best-effort Fly machine stop. DAST scans burn billable seconds
+        // until the host machine stops — extraction does too, but the
+        // existing pool reuse path keeps cost bounded. This belt-and-braces
+        // call is logged but never fails the recovery iteration.
+        if (stopFlyMachine && dastApp && job.machine_id) {
+          try {
+            await stopFlyMachine(dastApp, job.machine_id);
+          } catch (e: any) {
+            console.warn(`[RECOVERY] Failed to stop Fly machine ${job.machine_id} for ${job.type} job ${job.id}: ${e?.message ?? e}`);
+          }
+        }
       }
     }
 
