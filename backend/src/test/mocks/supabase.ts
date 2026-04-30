@@ -52,6 +52,7 @@ export const createMockSupabase = (registry: TableRegistry = {}, rpcRegistry: Rp
     }),
     order: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
+    range: jest.fn().mockReturnThis(),
     upsert: jest.fn().mockReturnThis(),
     then: jest.fn().mockImplementation(function (this: any, resolve: any) {
       const r = registry[this._table]?.then;
