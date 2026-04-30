@@ -1,9 +1,12 @@
-# fly.toml app configuration file generated for deptex-extraction-worker on 2026-03-01T13:41:19-08:00
+# fly.toml app configuration for the depscanner Fly app.
+# Originally `deptex-extraction-worker`; renamed to `deptex-depscanner` in
+# Phase 23 to reflect that the worker now hosts multiple scanner types
+# (extraction + DAST + future iac/container/malicious-pkg).
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'deptex-extraction-worker'
+app = 'deptex-depscanner'
 primary_region = 'ewr'
 
 [build]
@@ -22,7 +25,7 @@ initial_size = "50gb"
 [http_service]
   internal_port = 3000
   force_https = true
-  # Worker exits after 60s idle (see extraction-worker/src/index.ts); we rely on that for
+  # Worker exits after 60s idle (see depscanner/src/index.ts); we rely on that for
   # scale-to-zero. Fly must not stop the machine based on HTTP traffic (we have none).
   auto_stop_machines = 'off'
   auto_start_machines = true

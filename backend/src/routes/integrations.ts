@@ -1809,9 +1809,10 @@ async function handleRepositoryDeletedEvent(payload: any) {
 
   for (const repo of repos || []) {
     await supabase
-      .from('extraction_jobs')
+      .from('scan_jobs')
       .update({ status: 'cancelled' })
       .eq('project_id', repo.project_id)
+      .eq('type', 'extraction')
       .in('status', ['queued', 'processing']);
   }
 

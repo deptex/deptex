@@ -95,7 +95,7 @@ jobs:
         run: |
           echo "::error::This PR touches backend/database/*.sql migration files but does NOT update backend/database/schema.sql, and at least one new identifier from the migration is missing from schema.sql at HEAD."
           echo ""
-          echo "Run \`npm run schema:dump\` in backend/extraction-worker/ after applying your migration to Supabase, then commit the regenerated schema.sql."
+          echo "Run \`npm run schema:dump\` in backend/depscanner/ after applying your migration to Supabase, then commit the regenerated schema.sql."
           echo ""
           echo "Migration files changed:"
           echo "${{ steps.diff.outputs.migrations_touched }}"

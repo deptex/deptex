@@ -8,8 +8,14 @@ export interface FlyMachineConfig {
   region?: string;
 }
 
-export const EXTRACTION_CONFIG: FlyMachineConfig = {
-  app: process.env.FLY_EXTRACTION_APP || 'deptex-extraction-worker',
+// Phase 23: extraction-worker → depscanner. The new Fly app name is `deptex-depscanner`.
+// During the rollover window we still read FLY_EXTRACTION_APP so existing deployments
+// keep pointing at the old app until Henry creates the new one and flips the env var.
+export const DEPSCANNER_CONFIG: FlyMachineConfig = {
+  app:
+    process.env.FLY_DEPSCANNER_APP ||
+    process.env.FLY_EXTRACTION_APP ||
+    'deptex-depscanner',
   guest: { cpus: 8, memory_mb: 65536, cpu_kind: 'performance' },
   maxBurst: parseInt(process.env.FLY_MAX_BURST_MACHINES || '5', 10),
 };
@@ -180,5 +186,7 @@ export async function startFlyMachine(config: FlyMachineConfig): Promise<string 
   return null;
 }
 
-export const startExtractionMachine = () => startFlyMachine(EXTRACTION_CONFIG);
+export const startDepscannerMachine = () => startFlyMachine(DEPSCANNER_CONFIG);
+// Back-compat alias — extraction is one of several scan types depscanner runs.
+export const startExtractionMachine = startDepscannerMachine;
 export const startFixMachine = () => startFlyMachine(FIX_CONFIG);

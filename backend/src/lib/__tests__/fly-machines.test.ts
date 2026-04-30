@@ -17,7 +17,8 @@ afterAll(() => {
 beforeEach(() => {
   jest.clearAllMocks();
   process.env.FLY_API_TOKEN = 'test-token';
-  process.env.FLY_EXTRACTION_APP = 'deptex-extraction-worker';
+  delete process.env.FLY_EXTRACTION_APP;
+  process.env.FLY_DEPSCANNER_APP = 'deptex-depscanner';
   process.env.FLY_MAX_BURST_MACHINES = '5';
 });
 

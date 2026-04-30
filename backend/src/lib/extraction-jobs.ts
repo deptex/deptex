@@ -2,7 +2,7 @@ import { supabase } from './supabase';
 import { startExtractionMachine } from './fly-machines';
 
 // Extraction job queue — Supabase-based job persistence.
-// Jobs stored in the extraction_jobs table; survives machine crashes.
+// Jobs stored in the scan_jobs table (type='extraction'); survives machine crashes.
 
 export interface ExtractionJob {
   projectId: string;
@@ -27,7 +27,7 @@ export type ExtractionJobMeta = {
 };
 
 /**
- * Queue an extraction job by inserting into Supabase extraction_jobs table
+ * Queue an extraction job by inserting into Supabase scan_jobs (type='extraction')
  * and starting a Fly.io machine to process it.
  */
 export async function queueExtractionJob(
@@ -48,9 +48,10 @@ export async function queueExtractionJob(
     const runId = crypto.randomUUID();
 
     const { data: existingJob } = await supabase
-      .from('extraction_jobs')
+      .from('scan_jobs')
       .select('id, status')
       .eq('project_id', projectId)
+      .eq('type', 'extraction')
       .in('status', ['queued', 'processing'])
       .maybeSingle();
 
@@ -95,9 +96,10 @@ export async function queueExtractionJob(
       if (meta.commit_author) payload.commit_author = meta.commit_author;
     }
 
-    const { error: insertError } = await supabase.from('extraction_jobs').insert({
+    const { error: insertError } = await supabase.from('scan_jobs').insert({
       project_id: projectId,
       organization_id: organizationId,
+      type: 'extraction',
       status: 'queued',
       run_id: runId,
       payload,
@@ -178,9 +180,10 @@ export async function cancelExtractionJob(
   projectId: string
 ): Promise<{ success: boolean; error?: string }> {
   const { data: job } = await supabase
-    .from('extraction_jobs')
+    .from('scan_jobs')
     .select('id, status')
     .eq('project_id', projectId)
+    .eq('type', 'extraction')
     .in('status', ['queued', 'processing'])
     .order('created_at', { ascending: false })
     .limit(1)
@@ -188,9 +191,10 @@ export async function cancelExtractionJob(
 
   if (!job) {
     const { data: latest } = await supabase
-      .from('extraction_jobs')
+      .from('scan_jobs')
       .select('status')
       .eq('project_id', projectId)
+      .eq('type', 'extraction')
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -205,7 +209,7 @@ export async function cancelExtractionJob(
   }
 
   const { error } = await supabase
-    .from('extraction_jobs')
+    .from('scan_jobs')
     .update({
       status: 'cancelled',
       completed_at: new Date().toISOString(),

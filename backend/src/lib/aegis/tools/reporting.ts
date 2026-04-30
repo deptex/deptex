@@ -76,7 +76,7 @@ registerAegisTool(
         supabase.from('projects').select('name, status_id, policy_evaluated_at').eq('id', projectId).single(),
         supabase.from('project_dependencies').select('id, name, version, license, policy_result').eq('project_id', projectId).is('removed_at', null),
         supabase.from('project_repositories').select('last_extracted_at, status').eq('project_id', projectId).single(),
-        supabase.from('extraction_jobs').select('completed_at').eq('project_id', projectId).eq('status', 'completed').order('completed_at', { ascending: false }).limit(1).single(),
+        supabase.from('scan_jobs').select('completed_at').eq('project_id', projectId).eq('type', 'extraction').eq('status', 'completed').order('completed_at', { ascending: false }).limit(1).single(),
       ]);
       if (!project) return JSON.stringify({ error: 'Project not found' });
       const violations = (deps ?? []).filter((d: any) => (d.policy_result as any)?.allowed === false);

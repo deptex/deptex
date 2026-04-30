@@ -30,12 +30,12 @@ router.post('/extraction-jobs', async (_req, res) => {
   try {
     const supabase = getSupabaseClient;
 
-    const { data: requeued, error: requeueError } = await supabase.rpc('recover_stuck_extraction_jobs');
+    const { data: requeued, error: requeueError } = await supabase.rpc('recover_stuck_scan_jobs');
     if (requeueError) {
       console.error('[RECOVERY] Failed to recover stuck jobs:', requeueError.message);
     }
 
-    const { data: failed, error: failError } = await supabase.rpc('fail_exhausted_extraction_jobs');
+    const { data: failed, error: failError } = await supabase.rpc('fail_exhausted_scan_jobs');
     if (failError) {
       console.error('[RECOVERY] Failed to fail exhausted jobs:', failError.message);
     }
@@ -81,8 +81,9 @@ router.post('/extraction-jobs', async (_req, res) => {
     // Start machines for orphaned queued jobs
     let machinesStarted = 0;
     const { data: orphanedJobs } = await supabase
-      .from('extraction_jobs')
+      .from('scan_jobs')
       .select('id')
+      .eq('type', 'extraction')
       .eq('status', 'queued')
       .order('created_at', { ascending: true })
       .limit(5);

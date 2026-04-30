@@ -2,7 +2,7 @@
  * PGLite smoke test: verify PGLite can run all 192 migrations from
  * backend/database/*.sql and execute finalize_extraction end-to-end.
  *
- * Critical risk gate for M1 of the local-extraction-worker plan. If this
+ * Critical risk gate for M1 of the local-depscanner (formerly local-extraction-worker) plan. If this
  * passes, Postgres parity is good enough to build the storage abstraction on.
  *
  * Run: npx tsx test/smoke-pglite.ts

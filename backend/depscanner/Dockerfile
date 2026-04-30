@@ -79,7 +79,7 @@ COPY reachability-rules ./reachability-rules
 
 # Local CLI mode reads schema.sql via PGLiteStorage at runtime. The
 # `docker:build` npm script stages the backend/database folder into
-# extraction-worker/.schema before invoking docker build so we can COPY it
+# depscanner/.schema before invoking docker build so we can COPY it
 # in here. On Fly.io (which uses Supabase, not PGLite) this dir is unused.
 COPY .schema/schema.sql /database/schema.sql
 

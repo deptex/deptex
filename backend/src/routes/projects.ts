@@ -892,7 +892,7 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
       // overview / project lists stay consistent with extraction run history.
       if (projectIds.length > 0) {
         const { data: activeJobs } = await supabase
-          .from('extraction_jobs')
+          .from('scan_jobs')
           .select('project_id')
           .in('project_id', projectIds)
           .in('status', ['queued', 'processing']);
@@ -4132,7 +4132,7 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
       }
       if (effectiveStatus === 'ready') {
         const { data: activeJob } = await supabase
-          .from('extraction_jobs')
+          .from('scan_jobs')
           .select('id')
           .eq('project_id', projectId)
           .in('status', ['queued', 'processing'])
@@ -4351,7 +4351,7 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
     }
 
     const { data: activeJob } = await supabase
-      .from('extraction_jobs')
+      .from('scan_jobs')
       .select('id')
       .eq('project_id', projectId)
       .in('status', ['queued', 'processing'])
@@ -4411,7 +4411,7 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
         })
         .eq('project_id', projectId);
       return res.status(502).json({
-        error: queueResult.error ?? 'Failed to queue extraction job. Set UPSTASH_REDIS_URL and UPSTASH_REDIS_TOKEN, then run extraction-worker.',
+        error: queueResult.error ?? 'Failed to queue extraction job. Set UPSTASH_REDIS_URL and UPSTASH_REDIS_TOKEN, then run depscanner.',
       });
     }
 
@@ -4543,7 +4543,7 @@ router.get('/:id/projects/:projectId/extraction/logs', async (req: AuthRequest, 
       query = query.eq('run_id', runId);
     } else {
       const { data: latestJob } = await supabase
-        .from('extraction_jobs')
+        .from('scan_jobs')
         .select('run_id')
         .eq('project_id', projectId)
         .order('created_at', { ascending: false })
@@ -4579,14 +4579,14 @@ router.get('/:id/projects/:projectId/extraction/runs', async (req: AuthRequest, 
     const runs = (runsFromLogs ?? []) as Array<{ run_id: string; started_at: string }>;
     const runIds = runs.map((r) => r.run_id);
     const { data: allJobRows } = runIds.length > 0
-      ? await supabase.from('extraction_jobs').select('run_id, status, attempts, created_at, completed_at, error, payload').eq('project_id', projectId).in('run_id', runIds)
+      ? await supabase.from('scan_jobs').select('run_id, status, attempts, created_at, completed_at, error, payload').eq('project_id', projectId).in('run_id', runIds)
       : { data: [] };
 
     if (rpcError) {
       const rpcMissing = /function.*does not exist|PGRST202/i.test(rpcError.message || '');
       if (rpcMissing) {
         const { data: fallback } = await supabase
-          .from('extraction_jobs')
+          .from('scan_jobs')
           .select('run_id, status, attempts, created_at, completed_at, error, payload')
           .eq('project_id', projectId)
           .order('created_at', { ascending: false })
@@ -8964,7 +8964,7 @@ router.get('/:id/projects/:projectId/sbom', async (req: AuthRequest, res) => {
     }
 
     const { data: latestJob } = await supabase
-      .from('extraction_jobs')
+      .from('scan_jobs')
       .select('id, project_id, completed_at')
       .eq('project_id', projectId)
       .eq('status', 'completed')
@@ -10678,7 +10678,7 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__'),
       supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__').eq('verified', true),
       supabase.from('project_repositories').select('status, extraction_step, updated_at, default_branch').eq('project_id', projectId).single().then(r => r.data),
-      supabase.from('extraction_jobs').select('error, created_at').eq('project_id', projectId).eq('status', 'failed').order('created_at', { ascending: false }).limit(1).single().then(r => r.data),
+      supabase.from('scan_jobs').select('error, created_at').eq('project_id', projectId).eq('status', 'failed').order('created_at', { ascending: false }).limit(1).single().then(r => r.data),
     ]);
 
     // Status & tier lookups
@@ -10899,7 +10899,7 @@ router.get('/:id/projects/:projectId/recent-activity', async (req: AuthRequest, 
         .order('created_at', { ascending: false })
         .limit(20),
       supabase
-        .from('extraction_jobs')
+        .from('scan_jobs')
         .select('id, status, error, created_at, completed_at')
         .eq('project_id', projectId)
         .in('status', ['completed', 'failed', 'processing'])
@@ -11000,7 +11000,7 @@ router.post('/:id/projects/:projectId/sync', async (req: AuthRequest, res) => {
     }
 
     const { data: existingJob } = await supabase
-      .from('extraction_jobs')
+      .from('scan_jobs')
       .select('id')
       .eq('project_id', projectId)
       .in('status', ['queued', 'processing'])
