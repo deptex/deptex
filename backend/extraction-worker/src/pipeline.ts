@@ -20,6 +20,7 @@ import { loadAllRulesWithSkipped, selectRulesForCves, runReachabilityRules } fro
 import { updateJobPayloadCommit, updateJobStatus } from './job-db';
 import { applyEpdScoringFallback, EpdBudgetExceededError } from './epd';
 import { withTimeout, logStepError, classifyError } from './with-timeout';
+import { runIaCAndContainerScans, type ScannerSummary } from './scanners/orchestrator';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
@@ -1760,6 +1761,64 @@ export async function runPipeline(
     // --- Final vuln scan summary ---
     await log.success('vuln_scan', 'Vulnerability scan complete', Date.now() - scanStart);
 
+    // === STEP: IaC + Container scanning (OPTIONAL) ===
+    // Detects Terraform / Kubernetes / Dockerfile in the cloned tree, runs
+    // Checkov for IaC misconfig, runs Trivy config for Dockerfile misconfig,
+    // and runs Trivy image on the Dockerfile FINAL-stage base image (with
+    // Patch C namespace check for ghcr.io). Non-blocking — failures log a
+    // warn step_error and the pipeline continues.
+    let scannerSummary: ScannerSummary | null = null;
+    if (checkCancelled && await checkCancelled()) return;
+    try {
+      // Resolve the org's GitHub App installation id once (used by ghcr.io
+      // namespace check during container scan). Failure to resolve is OK —
+      // the scanner will conservatively skip ghcr.io images.
+      let installationId: string | null = null;
+      try {
+        const { data: orgRow } = await supabase
+          .from('organizations')
+          .select('github_installation_id')
+          .eq('id', organizationId)
+          .single();
+        installationId =
+          (orgRow as { github_installation_id?: string | null } | null)
+            ?.github_installation_id ?? null;
+      } catch { /* non-fatal */ }
+
+      scannerSummary = await runIaCAndContainerScans({
+        supabase: supabase as any,
+        projectId,
+        organizationId,
+        jobId: job.jobId ?? null,
+        runId,
+        repoPath: workspaceRoot,
+        githubInstallationId: installationId,
+        logger: {
+          info: async (step: string, msg: string) => log.info(step, msg),
+          warn: async (step: string, msg: string) => log.warn(step, msg),
+        },
+        onHeartbeat: async () => {
+          if (heartbeat) await heartbeat();
+        },
+      });
+    } catch (err: any) {
+      // Top-level orchestrator failure (shouldn't happen — orchestrator
+      // catches per-scanner failures internally — but defensive).
+      await log.warn('iac_scan', `IaC + container scan failed: ${err?.message ?? err}`);
+      if (job.jobId) {
+        const { code, message, stack } = classifyError(err);
+        await logStepError(supabase, {
+          jobId: job.jobId,
+          projectId,
+          step: 'iac_container_scan',
+          code,
+          message,
+          stack,
+          severity: 'warn',
+        });
+      }
+    }
+
     // === STEP: Semgrep (OPTIONAL) ===
     if (checkCancelled && await checkCancelled()) return;
     if (!binaryAvailable('semgrep')) {
@@ -2144,6 +2203,22 @@ export async function runPipeline(
       }
       await log.error('finalize', `Atomic commit failed: ${finalizeErr.message}`);
       throw finalizeErr;
+    }
+
+    // Post-finalize: write detected infra types onto the projects row. This
+    // happens AFTER finalize_extraction returns success (architect-f5: NOT
+    // inside the RPC) so a worker crash between finalize and this UPDATE
+    // results in infra_types lagging one extraction at most. Acceptable
+    // since infra_types feeds UI tiles, not security-critical paths.
+    if (scannerSummary && scannerSummary.infraTypes.length > 0) {
+      const { error: infraErr } = await supabase
+        .from('projects')
+        .update({ infra_types: scannerSummary.infraTypes })
+        .eq('id', projectId)
+        .eq('organization_id', organizationId);
+      if (infraErr) {
+        await log.warn('iac_scan', `infra_types update failed: ${infraErr.message}`);
+      }
     }
 
   } catch (error: any) {
