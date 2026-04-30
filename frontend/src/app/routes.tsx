@@ -33,6 +33,8 @@ import PublicRoute from "../components/PublicRoute";
 import NotFoundRedirect from "../components/NotFoundRedirect";
 import OrganizationVulnerabilitiesPage from "./pages/OrganizationVulnerabilitiesPage";
 import AegisPage from "./pages/AegisPage";
+import OrganizationFlowsPage from "./pages/OrganizationFlowsPage";
+import FlowEditorPage from "./pages/FlowEditorPage";
 import AdminGate from "../components/AdminGate";
 import ExtractionFailuresPage from "./pages/admin/ExtractionFailuresPage";
 
@@ -143,6 +145,14 @@ export const router = createBrowserRouter([
       {
         path: "aegis/:threadId",
         element: <AegisPage />,
+      },
+      {
+        path: "flows",
+        element: <OrganizationFlowsPage />,
+      },
+      {
+        path: "flows/:flowId",
+        element: <FlowEditorPage />,
       },
       {
         path: ":tab",

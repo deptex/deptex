@@ -14,6 +14,7 @@ Deptex is an AI-powered open-core dependency security platform. It combines depe
 - See `DEVELOPERS.md` for full setup, `CONTRIBUTING.md` for PR flow, `fly.md` for Fly.io deployment
 - See `.cursor/skills/add-new-features/SKILL.md` for where to add routes and libs
 - See `.cursor/skills/frontend-design/SKILL.md` and `.cursor/skills/ui-principles/SKILL.md` for UI standards
+- See `docs/flow-code-sandbox.md` before changing the flow / policy code execution sandbox (isolated-vm setup, exposed helpers, return cap)
 - Roadmap: `.cursor/plans/deptex_projects_roadmap_index.plan.md`
 
 ---

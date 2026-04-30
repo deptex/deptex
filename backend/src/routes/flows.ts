@@ -1,6 +1,12 @@
+import * as crypto from 'crypto';
 import express from 'express';
 import { supabase } from '../lib/supabase';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
+import { runFlowCode } from '../lib/flow-code/sandbox';
+import { getContract } from '../lib/flow-code/contracts';
+import { SAMPLE_CONTEXTS } from '../lib/flow-code/sample-contexts';
+import { EVENT_SCHEMAS } from '../lib/flow-code/event-schemas';
+import { getRedisClient } from '../lib/cache';
 import type {
   Flow,
   FlowGraph,
@@ -264,7 +270,15 @@ router.post('/', async (req: AuthRequest, res) => {
   }
 });
 
-// PUT /api/flows/:id — update name/description/graph; bumps version + writes flow_versions row
+// PUT /api/flows/:id — update name/description/graph; bumps version + writes flow_versions row.
+//
+// Save-time validation: walks `graph.nodes` and runs every code-mode node
+// through the same sandbox the runtime uses. Fail-CLOSED — if the sandbox
+// itself throws, return 503 and refuse to save (no silent runtime breakage).
+// `ALLOW_UNVALIDATED_SAVE=true` env override is logged to activities for audit.
+//
+// Optimistic concurrency: pass `expected_updated_at` to detect concurrent edits.
+// Returns 409 on mismatch; the frontend prompts "reload?".
 router.put('/:id', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
@@ -274,7 +288,16 @@ router.put('/:id', async (req: AuthRequest, res) => {
       return res.status(403).json({ error: 'You do not have permission to manage this flow type' });
     }
 
-    const body = req.body as UpdateFlowRequest;
+    const body = req.body as UpdateFlowRequest & { expected_updated_at?: string };
+
+    // Optimistic concurrency check before doing any sandboxing.
+    if (body.expected_updated_at !== undefined && body.expected_updated_at !== flow.updated_at) {
+      return res.status(409).json({
+        error: 'flow_modified_elsewhere',
+        current_updated_at: flow.updated_at,
+      });
+    }
+
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
     let nextGraph: FlowGraph = flow.graph;
     let graphChanged = false;
@@ -303,6 +326,91 @@ router.put('/:id', async (req: AuthRequest, res) => {
       nextGraph = v.graph;
       updates.graph = nextGraph;
       graphChanged = true;
+    }
+
+    // Save-time code validation. Walks every code-mode node and runs its body
+    // through the sandbox against the trigger event's sample context.
+    if (graphChanged) {
+      const triggerEventType = findTriggerEventType(nextGraph);
+      const errors: Array<{ nodeId: string; stage: string; message: string; line?: number }> = [];
+
+      for (const n of nextGraph.nodes) {
+        const cfg = (n.config ?? {}) as { mode?: string; code?: string };
+        if (cfg.mode !== 'code' || !cfg.code) continue;
+
+        // Map node.type → contract. Today only `condition` has one; other code-mode
+        // nodes are skipped (they'll get contracts when their UI lands).
+        const contractType = mapNodeTypeToContract(n.type);
+        if (!contractType) continue;
+        const contract = getContract(contractType);
+        if (!contract) continue;
+
+        if (!triggerEventType || !(triggerEventType in EVENT_SCHEMAS)) {
+          errors.push({
+            nodeId: n.id,
+            stage: 'parse',
+            message: 'Code-mode node requires a trigger with a configured event type',
+          });
+          continue;
+        }
+
+        const sample = SAMPLE_CONTEXTS[triggerEventType];
+        if (!sample) {
+          errors.push({
+            nodeId: n.id,
+            stage: 'parse',
+            message: `No sample context registered for '${triggerEventType}'`,
+          });
+          continue;
+        }
+
+        try {
+          const result = await runFlowCode({
+            contract,
+            code: cfg.code,
+            context: sample,
+            organizationId: flow.organization_id,
+            timeoutMs: 5_000,
+            source: 'save_validation',
+          });
+          if (result.ok === false) {
+            const e = result.error;
+            errors.push({
+              nodeId: n.id,
+              stage: e.stage,
+              message: e.message,
+              line: e.line,
+            });
+          }
+        } catch (err: any) {
+          // Sandbox itself crashed. Fail-CLOSED unless the operator escape hatch is on.
+          const escapeHatch = process.env.ALLOW_UNVALIDATED_SAVE === 'true';
+          if (!escapeHatch) {
+            console.error('[flows.put] save-validation engine crash:', err);
+            return res.status(503).json({ error: 'sandbox_unavailable' });
+          }
+          // Escape hatch path: log to activities for audit, then continue.
+          // eslint-disable-next-line no-console
+          console.warn(
+            '[flows.put] ALLOW_UNVALIDATED_SAVE bypass for flow', flow.id, 'user', userId,
+            'engine error:', err?.message,
+          );
+          await supabase.from('activities').insert({
+            organization_id: flow.organization_id,
+            user_id: userId,
+            activity_type: 'flow_save_unvalidated',
+            description: `Flow ${flow.id} saved without sandbox validation (ALLOW_UNVALIDATED_SAVE)`,
+            metadata: { flow_id: flow.id, node_id: n.id, error: err?.message },
+          }).then(() => undefined, () => undefined);
+        }
+      }
+
+      if (errors.length > 0) {
+        return res.status(400).json({
+          error: 'code_validation_failed',
+          errors,
+        });
+      }
     }
 
     // Bump version when graph changes (history is per-graph-state, not per-name-edit).
@@ -335,6 +443,32 @@ router.put('/:id', async (req: AuthRequest, res) => {
     res.status(500).json({ error: error.message || 'Failed to update flow' });
   }
 });
+
+/**
+ * Find the trigger node's `event_type`. Today flow graphs have a single
+ * trigger; if multiple triggers ever appear we'll need per-branch eventType
+ * resolution, but the runtime doesn't support that yet either.
+ */
+function findTriggerEventType(graph: FlowGraph): string | null {
+  for (const n of graph.nodes) {
+    if (n.type === 'trigger' || n.type.startsWith('trigger.')) {
+      const cfg = (n.config ?? {}) as { event_type?: string; event_types?: string[] };
+      if (typeof cfg.event_type === 'string') return cfg.event_type;
+      if (Array.isArray(cfg.event_types) && cfg.event_types.length > 0) return cfg.event_types[0];
+    }
+  }
+  return null;
+}
+
+/**
+ * Map a graph node type → contract registry key. Today only `condition` has a
+ * code contract; this exists so future filter/switch/transform nodes plug in
+ * with one line each.
+ */
+function mapNodeTypeToContract(nodeType: string): string | null {
+  if (nodeType === 'condition') return 'condition';
+  return null;
+}
 
 // DELETE /api/flows/:id — hard delete (cascades to versions + runs)
 router.delete('/:id', async (req: AuthRequest, res) => {
@@ -512,6 +646,166 @@ router.post('/:id/revert', async (req: AuthRequest, res) => {
   } catch (error: any) {
     console.error('Error reverting flow:', error);
     res.status(500).json({ error: error.message || 'Failed to revert flow' });
+  }
+});
+
+// ---------- POST /api/flows/validate-code ----------
+//
+// Test-button + save-gate validator. Identical engine to the runtime, so a
+// passing validation means the code will run at runtime against the live event.
+//
+// Body: { flowId, nodeType, eventType, code, customContext? }
+//   flowId       — required for RBAC scope (canManageFlow)
+//   nodeType     — must match a NODE_CODE_CONTRACTS key (today: 'condition')
+//   eventType    — must match an EVENT_SCHEMAS key
+//   code         — body string, ≤50KB
+//   customContext — optional override; bypasses the result cache
+//
+// Response shape (always 200 unless auth/RBAC/quota fails):
+//   { syntaxOk, runOk, returnValue?, error?, durationMs, cached? }
+//
+// Rate limit: per-user in-flight lock (max 1 concurrent). Sandbox CPU cap
+// already bounds throughput; an explicit per-minute counter is unnecessary
+// churn until ops asks for it.
+
+const VALIDATE_CODE_LENGTH_CAP = 50_000;
+const VALIDATE_CODE_CACHE_TTL_S = 300; // 5 minutes
+const VALIDATE_CODE_VALIDATION_TIMEOUT_MS = 5_000;
+
+interface ValidateCodeRequest {
+  flowId?: unknown;
+  nodeType?: unknown;
+  eventType?: unknown;
+  code?: unknown;
+  customContext?: unknown;
+}
+
+interface ValidateCodeResponse {
+  syntaxOk: boolean;
+  runOk: boolean;
+  returnValue?: unknown;
+  error?: { stage: string; message: string; line?: number };
+  durationMs: number;
+  cached?: boolean;
+}
+
+function hashCacheKey(nodeType: string, eventType: string, code: string): string {
+  return crypto.createHash('sha256').update(`${nodeType}|${eventType}|${code}`).digest('hex').slice(0, 32);
+}
+
+router.post('/validate-code', async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const body = req.body as ValidateCodeRequest;
+  const { flowId, nodeType, eventType, code, customContext } = body;
+
+  if (typeof flowId !== 'string' || !flowId) {
+    return res.status(400).json({ error: 'flowId is required' });
+  }
+  if (typeof nodeType !== 'string' || !nodeType) {
+    return res.status(400).json({ error: 'nodeType is required' });
+  }
+  if (typeof eventType !== 'string' || !eventType) {
+    return res.status(400).json({ error: 'eventType is required' });
+  }
+  if (typeof code !== 'string') {
+    return res.status(400).json({ error: 'code must be a string' });
+  }
+  if (code.length > VALIDATE_CODE_LENGTH_CAP) {
+    return res.status(400).json({
+      error: `code exceeds ${VALIDATE_CODE_LENGTH_CAP}-char cap (got ${code.length})`,
+    });
+  }
+
+  const contract = getContract(nodeType);
+  if (!contract) {
+    return res.status(400).json({ error: `Unknown nodeType '${nodeType}'` });
+  }
+  if (!(eventType in EVENT_SCHEMAS)) {
+    return res.status(400).json({ error: `Unknown eventType '${eventType}'` });
+  }
+
+  const flow = await loadFlow(flowId);
+  if (!flow) return res.status(404).json({ error: 'Flow not found' });
+  if (!(await canManageFlow(flow.organization_id, userId, flow.flow_type))) {
+    return res.status(403).json({ error: 'You do not have permission to manage this flow type' });
+  }
+
+  // In-flight lock: 1 concurrent validate-code per user.
+  const redis = getRedisClient();
+  const lockKey = `flow:validate-code:lock:${userId}`;
+  let lockAcquired = false;
+  if (redis) {
+    const acquired = await redis.set(lockKey, '1', { nx: true, ex: 30 });
+    if (!acquired) {
+      return res.status(429).json({ error: 'A validate-code request is already in flight for this user' });
+    }
+    lockAcquired = true;
+  }
+
+  try {
+    const useCustomCtx = customContext !== undefined && customContext !== null;
+    const ctx = useCustomCtx
+      ? (customContext as Record<string, unknown>)
+      : SAMPLE_CONTEXTS[eventType];
+
+    if (!ctx) {
+      // Schema declares the event but we don't have a sample (shouldn't happen
+      // post-conformance test, but we surface a clean error rather than running
+      // the user's code against undefined).
+      return res.status(500).json({ error: `No sample context registered for '${eventType}'` });
+    }
+
+    // Result cache (only when not using customContext — that path is ephemeral).
+    const cacheKey = `flow:validate-code:${hashCacheKey(nodeType, eventType, code)}`;
+    if (!useCustomCtx && redis) {
+      const cached = await redis.get<ValidateCodeResponse>(cacheKey);
+      if (cached) {
+        return res.json({ ...cached, cached: true });
+      }
+    }
+
+    const result = await runFlowCode({
+      contract,
+      code,
+      context: ctx,
+      organizationId: flow.organization_id,
+      timeoutMs: VALIDATE_CODE_VALIDATION_TIMEOUT_MS,
+      source: 'editor_test',
+    });
+
+    let response: ValidateCodeResponse;
+    if (result.ok === true) {
+      response = {
+        syntaxOk: true,
+        runOk: true,
+        returnValue: result.value,
+        durationMs: result.durationMs,
+      };
+    } else {
+      const err = result.error;
+      response = {
+        syntaxOk: err.stage !== 'parse',
+        runOk: false,
+        error: err,
+        durationMs: result.durationMs,
+      };
+    }
+
+    if (!useCustomCtx && redis) {
+      // Cache the response sans `cached` flag so subsequent hits flip it themselves.
+      try { await redis.set(cacheKey, response, { ex: VALIDATE_CODE_CACHE_TTL_S }); } catch { /* cache best-effort */ }
+    }
+
+    return res.json(response);
+  } catch (err: any) {
+    // Engine itself crashed — distinct from user-code failures, which return 200
+    // with runOk: false. This path means isolated-vm or our wrapper threw.
+    console.error('[flows/validate-code] engine error:', err);
+    return res.status(503).json({ error: 'Validation engine unavailable; try again' });
+  } finally {
+    if (lockAcquired && redis) {
+      try { await redis.del(lockKey); } catch { /* lock will TTL out */ }
+    }
   }
 });
 
