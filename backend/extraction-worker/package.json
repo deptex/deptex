@@ -34,6 +34,7 @@
     "test:taint-engine-integration": "tsx test/taint-engine-integration.test.ts",
     "test:taint-engine-fp-filter": "tsx test/taint-engine-fp-filter.test.ts",
     "test:taint-engine-benchmark": "tsx test/taint-engine-benchmark.test.ts",
+    "test:taint-engine-all": "tsx scripts/taint-engine-preflight.ts",
     "smoke:pglite": "tsx test/smoke-pglite.ts",
     "test:storage": "tsx test/storage-pglite.test.ts",
     "test:finalize": "tsx test/finalize-extraction.test.ts",
