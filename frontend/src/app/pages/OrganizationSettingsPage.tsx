@@ -37,6 +37,7 @@ import NotificationHistorySection from './NotificationHistorySection';
 import { CODE_BLOCK_BG } from '../../components/policy-monaco-setup';
 import SLAConfigurationSection from '../../components/settings/SLAConfigurationSection';
 import AISection from '../../components/settings/AISection';
+import ReachabilitySection from '../../components/settings/ReachabilitySection';
 
 interface OrganizationContextType {
   organization: Organization | null;
@@ -149,7 +150,7 @@ type WebhookCacheSnapshot = {
 };
 const orgWebhooksCache: Record<string, WebhookCacheSnapshot> = {};
 
-const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'ai', 'integrations', 'webhooks', 'notifications', 'policies', 'statuses', 'security_slas', 'audit_logs', 'sso', 'mfa', 'ip_allowlist', 'usage', 'plan']);
+const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'ai', 'reachability', 'integrations', 'webhooks', 'notifications', 'policies', 'statuses', 'security_slas', 'audit_logs', 'sso', 'mfa', 'ip_allowlist', 'usage', 'plan']);
 
 /** Renders a tab-specific content skeleton for the org settings loading state. */
 function OrgSettingsTabSkeleton({ section }: { section: string }) {
@@ -2678,6 +2679,12 @@ export default function OrganizationSettingsPage() {
       label: 'AI',
       icon: <Sparkles className="h-4 w-4 tab-icon-shake" />,
     },
+    // Reachability — gated on manage_organization_settings (PATCH writes monthly_budget_usd)
+    ...(effectivePermissions?.manage_organization_settings ? [{
+      id: 'reachability',
+      label: 'Reachability',
+      icon: <Network className="h-4 w-4 tab-icon-shake" />,
+    }] : []),
     // Show Integrations section if user can manage integrations
     ...(effectivePermissions?.manage_integrations ? [{
       id: 'integrations',
@@ -3497,6 +3504,13 @@ export default function OrganizationSettingsPage() {
                     canViewSpending={!!effectivePermissions?.view_ai_spending}
                   />
                 </div>
+              )}
+
+              {activeSection === 'reachability' && id && (
+                <ReachabilitySection
+                  organizationId={id}
+                  canManage={!!effectivePermissions?.manage_organization_settings}
+                />
               )}
 
               {/* Keep Integrations mounted after first visit so it doesn't reload when switching tabs (like Members) */}

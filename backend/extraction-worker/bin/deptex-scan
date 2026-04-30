@@ -157,6 +157,78 @@ if [ -n "${EPD_MAX_VULNS_PER_RUN:-}" ]; then
   ENV_FLAGS+=(-e "EPD_MAX_VULNS_PER_RUN=$EPD_MAX_VULNS_PER_RUN")
 fi
 
+# Phase 5 — per-org AI rule generation. The seed helper inserts an
+# organization_reachability_settings row only when DEPTEX_RULE_GENERATION_ENABLED=1
+# is set; the rule_generation pipeline step then picks up the BYOK key from
+# ANTHROPIC_API_KEY (forwarded above) via the same DEPTEX_LOCAL_CLI escape EPD
+# uses. DEPTEX_RULE_PROVIDER / DEPTEX_RULE_MODEL / DEPTEX_RULE_BUDGET_USD are
+# optional knobs for cheaper test runs (e.g. claude-haiku-4-5-20251001).
+if [ -n "${DEPTEX_RULE_GENERATION_ENABLED:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_RULE_GENERATION_ENABLED=$DEPTEX_RULE_GENERATION_ENABLED")
+fi
+if [ -n "${DEPTEX_RULE_PROVIDER:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_RULE_PROVIDER=$DEPTEX_RULE_PROVIDER")
+fi
+if [ -n "${DEPTEX_RULE_MODEL:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_RULE_MODEL=$DEPTEX_RULE_MODEL")
+fi
+if [ -n "${DEPTEX_RULE_BUDGET_USD:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_RULE_BUDGET_USD=$DEPTEX_RULE_BUDGET_USD")
+fi
+if [ -n "${DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR=$DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR")
+fi
+
+# OpenAI-compatible third-party hosts (DeepInfra, OpenRouter, Alibaba). When
+# DEPTEX_RULE_BASE_URL is set, the rule_generation step routes the openai-
+# style call to that host instead of api.openai.com. Forward the matching
+# host-specific API key by name; the in-container resolver picks the right
+# one based on which host the base URL points at. Like ANTHROPIC_API_KEY
+# above we use `-e VAR` (no =value) so secrets stay off docker's argv.
+if [ -n "${DEPTEX_RULE_BASE_URL:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_RULE_BASE_URL=$DEPTEX_RULE_BASE_URL")
+fi
+if [ -n "${DEEPINFRA_API_KEY:-}" ]; then
+  export DEEPINFRA_API_KEY
+  ENV_FLAGS+=(-e DEEPINFRA_API_KEY)
+fi
+if [ -n "${OPENROUTER_API_KEY:-}" ]; then
+  export OPENROUTER_API_KEY
+  ENV_FLAGS+=(-e OPENROUTER_API_KEY)
+fi
+if [ -n "${DASHSCOPE_API_KEY:-}" ]; then
+  export DASHSCOPE_API_KEY
+  ENV_FLAGS+=(-e DASHSCOPE_API_KEY)
+fi
+if [ -n "${OPENAI_API_KEY:-}" ]; then
+  export OPENAI_API_KEY
+  ENV_FLAGS+=(-e OPENAI_API_KEY)
+fi
+if [ -n "${GOOGLE_API_KEY:-}" ]; then
+  export GOOGLE_API_KEY
+  ENV_FLAGS+=(-e GOOGLE_API_KEY)
+fi
+if [ -n "${GOOGLE_AI_API_KEY:-}" ]; then
+  export GOOGLE_AI_API_KEY
+  ENV_FLAGS+=(-e GOOGLE_AI_API_KEY)
+fi
+
+# Forward a GitHub token (PAT or App installation) so patch-fetch hits the
+# 5000/hr authenticated rate limit instead of 60/hr anonymous. Without this,
+# busy local CLI sessions burn through the anon quota and every CVE fails
+# with `patch_fetch: GitHub commit metadata returned 403`. Like
+# ANTHROPIC_API_KEY above we use `-e VAR` (no =value) to keep the secret off
+# docker's argv. GITHUB_TOKEN is the canonical name; GITHUB_PAT is accepted
+# as a fallback so a single env file works for both backend and CLI use.
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  export GITHUB_TOKEN
+  ENV_FLAGS+=(-e GITHUB_TOKEN)
+fi
+if [ -n "${GITHUB_PAT:-}" ]; then
+  export GITHUB_PAT
+  ENV_FLAGS+=(-e GITHUB_PAT)
+fi
+
 exec docker run --rm -i "${TTY_FLAG[@]}" "${USER_FLAG[@]}" "${ENV_FLAGS[@]}" \
   -v "$ABS_WS:/workspace" \
   -v "$ABS_OUT:/output" \
