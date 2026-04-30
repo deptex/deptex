@@ -1,0 +1,11 @@
+app = 'deptex-fix-worker'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[[vm]]
+  memory = '8gb'
+  cpu_kind = 'shared'
+  cpus = 4
+  memory_mb = 8192
