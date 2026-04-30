@@ -113,11 +113,23 @@ async function analyzeNewDependency(
   const totalAffected =
     vulnCounts.critical_vulns + vulnCounts.high_vulns + vulnCounts.medium_vulns + vulnCounts.low_vulns;
 
-  const riskScore = dep.is_malicious
+  // Cross-reference the global feed (org-agnostic — cache is global by design).
+  const ecoLookup = (dep.ecosystem ?? 'npm').toLowerCase();
+  const { data: feedHits } = await supabase
+    .from('known_malicious_packages')
+    .select('source, source_id, severity')
+    .eq('package_name', dep.name)
+    .eq('ecosystem', ecoLookup)
+    .is('withdrawn_at', null);
+  const feedFlagged = (feedHits ?? []).length > 0;
+
+  const isMalicious = (dep.is_malicious ?? false) || feedFlagged;
+
+  const riskScore = isMalicious
     ? 100
     : Math.min(100, critical * 25 + high * 10 + (dep.score != null ? 100 - dep.score : 30));
 
-  const recommendation = dep.is_malicious
+  const recommendation = isMalicious
     ? 'DO NOT ADD — flagged as malicious'
     : critical > 0
       ? 'High risk — has critical vulnerabilities'
@@ -135,7 +147,7 @@ async function analyzeNewDependency(
     vulnCount: totalAffected,
     criticalCount: vulnCounts.critical_vulns,
     highCount: vulnCounts.high_vulns,
-    isMalicious: dep.is_malicious ?? false,
+    isMalicious,
     riskScore,
     recommendation,
     policyCompliant,

@@ -25,14 +25,43 @@ RUN curl -sL https://go.dev/dl/go1.22.10.linux-amd64.tar.gz \
   | tar xz -C /usr/local
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-# Install dep-scan and Semgrep. semgrep is exact-pinned because it ships
-# breaking changes frequently. dep-scan is major-version-pinned (6.*) to allow
-# patch uptake while blocking the 6→7 breaking-change class.
+# Install dep-scan and Semgrep into the system Python. semgrep is exact-pinned
+# because it ships breaking changes frequently. dep-scan is major-version-pinned
+# (6.*) to allow patch uptake while blocking the 6→7 breaking-change class.
 RUN pip3 install --no-cache-dir --break-system-packages \
   owasp-depscan==6.* \
   semgrep==1.160.0 \
   && depscan --help >/dev/null \
   && semgrep --version
+
+# Install Checkov in an isolated venv at /opt/checkov-venv. Checkov pins
+# packageurl-python<0.14.0 while owasp-depscan pins >=0.16.0 — the two cannot
+# coexist in the same Python environment. Pinning Checkov to the 3.2.x line —
+# the rule library is what we depend on; 3.x→4.x will be a deliberate bump with
+# bench re-runs. The /usr/local/bin symlink keeps `checkov` on PATH.
+RUN python3 -m venv /opt/checkov-venv \
+  && /opt/checkov-venv/bin/pip install --no-cache-dir checkov==3.2.420 \
+  && ln -s /opt/checkov-venv/bin/checkov /usr/local/bin/checkov \
+  && checkov --version
+
+# Install Trivy (Aquasec) for Dockerfile misconfig + container CVE scanning.
+# Pin to a specific release tarball (no install.sh / curl-pipe-sh) for the
+# same supply-chain reasons as TruffleHog below.
+RUN curl -sSfL https://github.com/aquasecurity/trivy/releases/download/v0.69.3/trivy_0.69.3_Linux-64bit.tar.gz \
+  -o /tmp/trivy.tar.gz \
+  && tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy \
+  && rm /tmp/trivy.tar.gz \
+  && chmod +x /usr/local/bin/trivy \
+  && trivy --version
+
+# Install GuardDog into an isolated venv. GuardDog ships its own pinned
+# Semgrep dependency that conflicts with the version above; dropping it into
+# /opt/guarddog-venv keeps the conflicts contained to the malicious-package
+# scan step. The malicious-scan worker invokes /opt/guarddog-venv/bin/guarddog
+# explicitly (never the global PATH).
+RUN python3 -m venv /opt/guarddog-venv \
+  && /opt/guarddog-venv/bin/pip install --no-cache-dir guarddog==2.9.0 \
+  && /opt/guarddog-venv/bin/guarddog --version
 
 # Install cdxgen globally (dep-scan invokes it for SBOM generation + atom reachability)
 # and atom (reachability engine used by dep-scan --profile research)

@@ -172,12 +172,37 @@ registerAegisTool(
         .eq('dependency_id', dep.id);
       const critical = (vulns ?? []).filter((v: any) => v.severity === 'critical').length;
       const high = (vulns ?? []).filter((v: any) => v.severity === 'high').length;
-      const riskScore = dep.is_malicious ? 100 : Math.min(100, (critical * 25) + (high * 10) + (dep.score != null ? 100 - dep.score : 30));
-      const recommendation = dep.is_malicious ? 'DO NOT ADD - flagged as malicious'
+
+      // Pull global malicious-package context: feed match + cached AI narrative.
+      // Cache reads are org-agnostic by design (no org-derived data leaks
+      // per multi-tenant invariant #2).
+      const ecoLookup = (dep.ecosystem ?? ecosystem ?? 'npm') as string;
+      const { data: feedHits } = await supabase
+        .from('known_malicious_packages')
+        .select('source, source_id, severity, description')
+        .eq('package_name', dep.name)
+        .eq('ecosystem', ecoLookup.toLowerCase())
+        .is('withdrawn_at', null);
+      const { data: aiCache } = await supabase
+        .from('package_security_cache')
+        .select('ai_narrative, risk_level, scanned_at')
+        .eq('package_name', dep.name)
+        .eq('ecosystem', ecoLookup.toLowerCase())
+        .eq('scanner', 'ai_review')
+        .order('scanned_at', { ascending: false })
+        .limit(1);
+
+      const feedHitCount = (feedHits ?? []).length;
+      const topFeedHit = (feedHits ?? [])[0] ?? null;
+      const latestNarrative = (aiCache ?? [])[0] ?? null;
+
+      const riskScore = dep.is_malicious || feedHitCount > 0 ? 100 : Math.min(100, (critical * 25) + (high * 10) + (dep.score != null ? 100 - dep.score : 30));
+      const recommendation = dep.is_malicious || feedHitCount > 0 ? 'DO NOT ADD - flagged as malicious'
         : critical > 0 ? 'High risk - has critical vulnerabilities'
         : high > 0 ? 'Moderate risk - has high severity vulnerabilities'
         : (dep.score ?? 50) < 40 ? 'Caution - low reputation score'
         : 'Generally acceptable - review license and maintenance';
+
       return JSON.stringify({
         packageName: dep.name,
         ecosystem: dep.ecosystem ?? ecosystem,
@@ -189,6 +214,13 @@ registerAegisTool(
         criticalCount: critical,
         highCount: high,
         isMalicious: dep.is_malicious ?? false,
+        maliciousFeedHits: feedHitCount,
+        topMaliciousFeedHit: topFeedHit
+          ? { source: topFeedHit.source, source_id: topFeedHit.source_id, severity: topFeedHit.severity, description: topFeedHit.description }
+          : null,
+        latestAiNarrative: latestNarrative
+          ? { narrative: (latestNarrative as any).ai_narrative, risk_level: (latestNarrative as any).risk_level, cached_at: (latestNarrative as any).scanned_at }
+          : null,
         riskScore,
         recommendation,
       });

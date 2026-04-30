@@ -530,6 +530,53 @@ export async function buildNotificationContext(
           projectDepData = pd;
         }
 
+        // Hydrate top malicious finding for this project + dep, if any.
+        // Filter strictly by event.project_id; assert org match as a
+        // defence-in-depth tenant-isolation backstop (multi-tenant invariant #5).
+        let topMalicious: { id: string; rule_id: string; scanner: string; severity: string } | null = null;
+        if (event.project_id && event.organization_id) {
+          const { data: mfRow } = await supabase
+            .from('project_malicious_findings')
+            .select('id, rule_id, scanner, severity, organization_id')
+            .eq('project_id', event.project_id)
+            .eq('dependency_id', dep.id)
+            .eq('suppressed', false)
+            .eq('risk_accepted', false)
+            .order('severity', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+          if (mfRow) {
+            if ((mfRow as any).organization_id !== event.organization_id) {
+              notificationLog('warn', 'Dropped malicious_indicator: org mismatch on finding row', {
+                eventOrg: event.organization_id,
+                findingOrg: (mfRow as any).organization_id,
+              });
+            } else {
+              topMalicious = {
+                id: (mfRow as any).id,
+                rule_id: (mfRow as any).rule_id,
+                scanner: (mfRow as any).scanner,
+                severity: (mfRow as any).severity,
+              };
+            }
+          }
+        }
+
+        // Build malicious_indicator: legacy keys preserved (source/confidence/reason),
+        // new keys additive (scanner/severity/top_finding_id).
+        const baseIndicator = (event.payload.malicious_indicator as any) ?? null;
+        const isMalicious = (dep.is_malicious ?? false) || topMalicious !== null;
+        const malicious_indicator = isMalicious
+          ? {
+              source: baseIndicator?.source ?? 'deptex',
+              confidence: baseIndicator?.confidence ?? 'high',
+              reason: baseIndicator?.reason ?? topMalicious?.rule_id ?? 'Flagged as malicious',
+              scanner: baseIndicator?.scanner ?? topMalicious?.scanner ?? null,
+              severity: baseIndicator?.severity ?? topMalicious?.severity ?? null,
+              top_finding_id: baseIndicator?.top_finding_id ?? topMalicious?.id ?? null,
+            }
+          : null;
+
         context.dependency = {
           name: dep.name,
           version,
@@ -541,9 +588,7 @@ export async function buildNotificationContext(
           dependency_score: dep.score ?? 0,
           openssf_score: dep.openssf_score ?? null,
           weekly_downloads: dep.weekly_downloads ?? null,
-          malicious_indicator: dep.is_malicious
-            ? (event.payload.malicious_indicator || { source: 'deptex', confidence: 'high', reason: 'Flagged as malicious' })
-            : null,
+          malicious_indicator,
           slsa_level: versionData?.slsa_level ?? 0,
           vulnerabilities: (vulns || []).map((v: any) => ({
             osv_id: v.osv_id,

@@ -1,4 +1,5 @@
 import type { Storage } from './storage';
+import { spawn } from 'child_process';
 
 /**
  * Thrown when a pipeline step exceeds its budget.
@@ -116,6 +117,141 @@ export async function logStepError(
       code: opts.code,
     });
   }
+}
+
+export interface ScannerSubprocessLogger {
+  info: (step: string, msg: string) => Promise<void>;
+  warn: (step: string, msg: string) => Promise<void>;
+}
+
+export interface ScannerSubprocessOptions {
+  exe: string;
+  args: string[];
+  cwd?: string;
+  logger?: ScannerSubprocessLogger;
+  /** Step tag for verbose logs. Required when verboseLogStep is true. */
+  verboseLogStep?: string;
+  /** When true, stream stripped stdout to logger.info(verboseLogStep, ...). Mirrors DEPSCAN_VERBOSE_LOG. */
+  verboseLog?: boolean;
+  heartbeatIntervalMs?: number;
+  onHeartbeat?: () => Promise<void> | void;
+  /** External signal — when aborted, the child receives SIGTERM. */
+  signal?: AbortSignal;
+  /** Internal hard timeout. The shared withTimeout() typically supplies this via signal too;
+   *  pass when the helper is used outside withTimeout (e.g. tests). */
+  timeoutMs?: number;
+  /** Extra env to merge over process.env. Used for DOCKER_AUTH_CONFIG, etc. */
+  env?: Record<string, string | undefined>;
+}
+
+/**
+ * Spawn a scanner binary, collect stdout/stderr, run a heartbeat on a fixed
+ * interval, kill the child on abort or timeout. Returns the raw streams; each
+ * scanner module parses its own JSON.
+ *
+ * Logger and verbose-log behaviour mirror runDepScan's DEPSCAN_VERBOSE_LOG
+ * pattern so per-scanner verbose env (e.g. DEPTEX_TRIVY_VERBOSE_LOG) can drop
+ * subprocess output into extraction_logs for in-flight debugging.
+ *
+ * Heartbeat is interval-based (default 60s) and independent of stdout chunks,
+ * so a long-running silent scanner still keeps the extraction-job heartbeat
+ * alive.
+ */
+export function runScannerSubprocess(
+  opts: ScannerSubprocessOptions
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const heartbeatIntervalMs = opts.heartbeatIntervalMs ?? 60_000;
+  const verboseLog =
+    opts.verboseLog === true && !!opts.logger && !!opts.verboseLogStep;
+
+  return new Promise((resolve, reject) => {
+    if (opts.signal?.aborted) {
+      reject(new Error(`${opts.exe} aborted before start`));
+      return;
+    }
+
+    const childEnv = opts.env
+      ? { ...process.env, ...opts.env }
+      : process.env;
+
+    const child = spawn(opts.exe, opts.args, {
+      cwd: opts.cwd,
+      stdio: 'pipe',
+      env: childEnv as NodeJS.ProcessEnv,
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data: Buffer) => {
+      const chunk = data.toString();
+      stdout += chunk;
+      if (verboseLog && opts.logger && opts.verboseLogStep) {
+        const trimmed = chunk
+          .replace(/\[[0-9;]*m/g, '')
+          .trim();
+        if (trimmed) {
+          opts.logger.info(opts.verboseLogStep, trimmed).catch(() => {});
+        }
+      }
+    });
+    child.stderr.on('data', (data: Buffer) => {
+      stderr += data.toString();
+    });
+
+    const heartbeatInterval = opts.onHeartbeat
+      ? setInterval(async () => {
+          try {
+            await opts.onHeartbeat!();
+          } catch {
+            /* heartbeat failure is non-fatal */
+          }
+        }, heartbeatIntervalMs)
+      : null;
+
+    let internalTimeout: NodeJS.Timeout | null = null;
+    if (opts.timeoutMs) {
+      internalTimeout = setTimeout(() => {
+        try {
+          child.kill('SIGTERM');
+        } catch {
+          /* already dead */
+        }
+        reject(
+          new Error(
+            `${opts.exe} timed out after ${opts.timeoutMs} ms (internal)`
+          )
+        );
+      }, opts.timeoutMs);
+    }
+
+    // External abort: kill the child only. Don't reject — the outer withTimeout
+    // owns the timeout error class. (Mirrors runDepScan rationale.)
+    const onAbort = () => {
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        /* already dead */
+      }
+    };
+    if (opts.signal) {
+      opts.signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    child.on('close', (code: number | null) => {
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+      if (internalTimeout) clearTimeout(internalTimeout);
+      opts.signal?.removeEventListener('abort', onAbort);
+      resolve({ stdout, stderr, exitCode: code ?? 1 });
+    });
+
+    child.on('error', (err: Error) => {
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+      if (internalTimeout) clearTimeout(internalTimeout);
+      opts.signal?.removeEventListener('abort', onAbort);
+      reject(err);
+    });
+  });
 }
 
 /**

@@ -43,6 +43,31 @@ interface MarkdownRendererProps {
   content: string;
 }
 
+// Models occasionally emit prose with leading whitespace (4+ spaces or a
+// tab), which CommonMark turns into an "indented code block" — the wrapped
+// gray block you see when the agent says "I found several critical
+// vulnerabilities..." with stray leading indent. Strip leading whitespace
+// from any line that isn't inside a fenced code block, isn't a list marker
+// continuation, and isn't a blockquote. Preserves intentional structure,
+// kills accidental indents that look like code.
+function dedentProse(content: string): string {
+  const lines = content.split('\n');
+  let inFence = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    // Preserve list items and blockquotes — they need their leading marker
+    // (and modest indent) to render correctly.
+    if (/^(\s{0,3}[-*+]\s|\s{0,3}\d+\.\s|\s{0,3}>)/.test(line)) continue;
+    lines[i] = line.replace(/^[ \t]+/, '');
+  }
+  return lines.join('\n');
+}
+
 function CodeBlock({ language, children }: { language?: string; children: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -87,6 +112,7 @@ function CodeBlock({ language, children }: { language?: string; children: string
 }
 
 export function MarkdownRenderer({ content }: MarkdownRendererProps) {
+  const normalized = dedentProse(content);
   return (
     <div className="text-sm leading-relaxed text-foreground/90 space-y-3">
       <ReactMarkdown
@@ -183,7 +209,7 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
           },
         }}
       >
-        {content}
+        {normalized}
       </ReactMarkdown>
     </div>
   );

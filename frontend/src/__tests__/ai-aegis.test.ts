@@ -1,7 +1,7 @@
 /**
  * AI / Aegis Frontend Test Suite
- * 24 tests: AegisPanel (1-8), Streaming (9-12), BYOK UI (13-17),
- *           Rate Limits & Usage (18-21), Safety (22-24).
+ * AegisPanel, Streaming, Rate Limits & Usage, Safety.
+ * (BYOK UI tests retired with the AIConfigurationSection cleanup.)
  */
 
 import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
@@ -24,12 +24,7 @@ vi.mock('../lib/api', () => ({
       byFeature: {},
       byUser: [],
     }),
-    getAIProviders: vi.fn().mockResolvedValue([]),
     getAIUsageLogs: vi.fn().mockResolvedValue({ logs: [], total: 0 }),
-    testAIProvider: vi.fn().mockResolvedValue({ success: true }),
-    addAIProvider: vi.fn().mockResolvedValue({}),
-    setDefaultAIProvider: vi.fn().mockResolvedValue({ message: 'ok' }),
-    deleteAIProvider: vi.fn().mockResolvedValue({ message: 'ok' }),
     streamAegisMessage: vi.fn().mockResolvedValue({ body: null }),
   },
 }));
@@ -57,7 +52,6 @@ vi.mock('../hooks/use-toast', () => ({
 import { api } from '../lib/api';
 import { streamAegisMessage, sanitizeStreamingMarkdown } from '../lib/aegis-stream';
 import { AegisPanel } from '../components/aegis/AegisPanel';
-import AIConfigurationSection from '../components/settings/AIConfigurationSection';
 
 // ────────────────────────────────────────────────────────────────
 //  Helpers
@@ -271,83 +265,7 @@ describe('Streaming', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-//  13-17  BYOK UI
-// ═══════════════════════════════════════════════════════════════
-
-describe('BYOK UI', () => {
-  function renderConfig() {
-    return render(React.createElement(AIConfigurationSection, { organizationId: 'org-1' }));
-  }
-
-  it('13 — AI Configuration section renders provider cards in org settings', async () => {
-    renderConfig();
-    expect(await screen.findByText('AI Configuration')).toBeInTheDocument();
-    expect(await screen.findByText('Add providers')).toBeInTheDocument();
-    expect(screen.getAllByText('OpenAI').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('Anthropic').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('Google').length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('14 — connect modal: password input and Connect action', async () => {
-    renderConfig();
-    const buttons = await screen.findAllByText('Connect');
-    fireEvent.click(buttons[0]);
-
-    const keyInput = await screen.findByPlaceholderText('sk-...');
-    expect(keyInput.getAttribute('type')).toBe('password');
-    expect(screen.getByRole('button', { name: /^Connect$/ })).toBeInTheDocument();
-  });
-
-  it('15 — connect flow calls addAIProvider when saving from modal', async () => {
-    vi.mocked(api.addAIProvider).mockResolvedValue({} as any);
-    renderConfig();
-
-    const buttons = await screen.findAllByText('Connect');
-    fireEvent.click(buttons[0]);
-
-    const keyInput = await screen.findByPlaceholderText('sk-...');
-    fireEvent.change(keyInput, { target: { value: 'sk-key-123' } });
-    const connectFooterButtons = screen.getAllByRole('button', { name: /^Connect$/ });
-    fireEvent.click(connectFooterButtons[connectFooterButtons.length - 1]);
-
-    await waitFor(() => {
-      expect(api.addAIProvider).toHaveBeenCalled();
-    });
-  });
-
-  it('16 — non-admin users (without manage_integrations) cannot see AI Configuration', () => {
-    const permissions = { manage_integrations: false };
-    const shouldRender = permissions.manage_integrations;
-
-    render(
-      shouldRender
-        ? React.createElement(AIConfigurationSection, { organizationId: 'org-1' })
-        : React.createElement('div', null, 'Restricted'),
-    );
-
-    expect(screen.queryByText('AI Configuration')).not.toBeInTheDocument();
-    expect(screen.getByText('Restricted')).toBeInTheDocument();
-  });
-
-  it('17 — Usage tab shows monthly cost cap from API', async () => {
-    vi.mocked(api.getAIUsage).mockResolvedValue({
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
-      totalEstimatedCost: 0,
-      monthlyCostCap: 100,
-      byFeature: {},
-      byUser: [],
-    } as any);
-    renderConfig();
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Usage' }));
-    expect(await screen.findByText('Monthly cost cap')).toBeInTheDocument();
-    expect(screen.getByText('$100.00')).toBeInTheDocument();
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════
-//  18-21  Rate Limits and Usage
+//  Rate Limits and Usage
 // ═══════════════════════════════════════════════════════════════
 
 describe('Rate Limits and Usage', () => {
@@ -391,38 +309,6 @@ describe('Rate Limits and Usage', () => {
     ).toBe(true);
   });
 
-  it('20 — Usage tab renders cost and cap from API', async () => {
-    vi.mocked(api.getAIUsage).mockResolvedValue({
-      totalInputTokens: 150_000,
-      totalOutputTokens: 50_000,
-      totalEstimatedCost: 12.5,
-      monthlyCostCap: 100,
-      byFeature: { aegis_chat: { tokens: 100_000, cost: 8.5, count: 45 } },
-      byUser: [{ userId: 'u-1', tokens: 100_000, cost: 8.5, count: 45 }],
-    } as any);
-
-    render(React.createElement(AIConfigurationSection, { organizationId: 'org-1' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Usage' }));
-
-    expect(await screen.findByText('Estimated cost')).toBeInTheDocument();
-    expect(screen.getByText('$12.50')).toBeInTheDocument();
-    expect(screen.getByText('$100.00')).toBeInTheDocument();
-  });
-
-  it('21 — Usage tab label present when section renders', async () => {
-    render(React.createElement(AIConfigurationSection, { organizationId: 'org-1' }));
-    expect(await screen.findByRole('button', { name: 'Usage' })).toBeInTheDocument();
-    cleanup();
-
-    const hasManageIntegrations = false;
-    render(
-      hasManageIntegrations
-        ? React.createElement(AIConfigurationSection, { organizationId: 'org-1' })
-        : React.createElement('div', null, 'Access denied'),
-    );
-    expect(screen.queryByRole('button', { name: 'Usage' })).not.toBeInTheDocument();
-    expect(screen.getByText('Access denied')).toBeInTheDocument();
-  });
 });
 
 // ═══════════════════════════════════════════════════════════════

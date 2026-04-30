@@ -25,6 +25,7 @@
     "@ai-sdk/anthropic": "^3.0.50",
     "@ai-sdk/google": "^3.0.34",
     "@ai-sdk/openai": "^3.0.37",
+    "@ai-sdk/openai-compatible": "^2.0.41",
     "@anthropic-ai/sdk": "^0.39.0",
     "@google/generative-ai": "^0.24.0",
     "@node-saml/node-saml": "^5.1.0",
@@ -42,12 +43,14 @@
     "ipaddr.js": "^2.3.0",
     "isolated-vm": "^5.0.4",
     "jsonwebtoken": "^9.0.2",
+    "node-stream-zip": "^1.15.0",
     "nodemailer": "^7.0.11",
     "openai": "^4.20.0",
     "pacote": "^21.3.1",
     "semver": "^7.7.4",
     "simple-git": "^3.22.0",
-    "stripe": "^20.4.0"
+    "stripe": "^20.4.0",
+    "zod": "^4.1.8"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
@@ -67,5 +70,8 @@
     "ts-node": "^10.9.2",
     "tsx": "^4.7.0",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "zod": "$zod"
   }
 }
