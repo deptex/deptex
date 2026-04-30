@@ -1,0 +1,134 @@
+# Spring Boot / Spring MVC framework spec — Deptex cross-file taint engine.
+#
+# Spring-specific sources + framework helpers live here. Generic Java stdlib
+# sinks (JDBC, Runtime.exec, file I/O, ObjectInputStream, RegExp) live in
+# java-stdlib.yaml — both load together so taint introduced by Spring source
+# annotations can flow to a stdlib sink.
+
+framework: spring-boot
+language: java
+version: "*"
+
+sources:
+  # Controller method parameters — handled via the IR lowerer, which emits a
+  # synthetic `source` step assigning the parameter from the matching pattern.
+  - pattern: "@RequestParam"
+    taint_kind: http_input
+    description: Spring @RequestParam controller parameter
+  - pattern: "@PathVariable"
+    taint_kind: http_input
+    description: Spring @PathVariable controller parameter
+  - pattern: "@RequestBody"
+    taint_kind: http_input
+    description: Spring @RequestBody controller parameter
+  - pattern: "@RequestHeader"
+    taint_kind: http_input
+    description: Spring @RequestHeader controller parameter
+  - pattern: "@CookieValue"
+    taint_kind: http_input
+    description: Spring @CookieValue controller parameter
+  - pattern: "@ModelAttribute"
+    taint_kind: http_input
+    description: Spring @ModelAttribute controller parameter
+
+  # HttpServletRequest accessors — call-shape sources because they're method
+  # invocations, not property reads.
+  - pattern: "*.getParameter(*)"
+    taint_kind: http_input
+    description: HttpServletRequest.getParameter
+  - pattern: "*.getParameterValues(*)"
+    taint_kind: http_input
+    description: HttpServletRequest.getParameterValues
+  - pattern: "*.getParameterMap(*)"
+    taint_kind: http_input
+    description: HttpServletRequest.getParameterMap
+  - pattern: "*.getHeader(*)"
+    taint_kind: http_input
+    description: HttpServletRequest.getHeader
+  - pattern: "*.getHeaders(*)"
+    taint_kind: http_input
+    description: HttpServletRequest.getHeaders
+  - pattern: "*.getCookies(*)"
+    taint_kind: http_input
+    description: HttpServletRequest.getCookies
+  - pattern: "*.getInputStream(*)"
+    taint_kind: http_input
+    description: HttpServletRequest.getInputStream
+  - pattern: "*.getReader(*)"
+    taint_kind: http_input
+    description: HttpServletRequest.getReader
+  - pattern: "*.getQueryString(*)"
+    taint_kind: http_input
+    description: HttpServletRequest.getQueryString
+  - pattern: "*.getRequestURI(*)"
+    taint_kind: http_input
+    description: HttpServletRequest.getRequestURI
+  - pattern: "*.getRequestURL(*)"
+    taint_kind: http_input
+    description: HttpServletRequest.getRequestURL
+  - pattern: "*.getRemoteAddr(*)"
+    taint_kind: http_input
+    description: HttpServletRequest.getRemoteAddr
+  - pattern: "*.getRemoteHost(*)"
+    taint_kind: http_input
+    description: HttpServletRequest.getRemoteHost
+  - pattern: "*.getPathInfo(*)"
+    taint_kind: http_input
+    description: HttpServletRequest.getPathInfo
+
+sinks:
+  # XSS via raw HTML response writers.
+  - pattern: "*.getWriter(*)"
+    vuln_class: xss
+    argument_indices: []
+    description: HttpServletResponse.getWriter (raw HTML)
+  - pattern: "ResponseEntity.ok(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: ResponseEntity.ok with potentially unsafe payload
+  - pattern: "*.println(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: PrintWriter.println — typically used to write raw HTML
+
+  # Open redirect — sendRedirect with attacker-controlled URL.
+  - pattern: "*.sendRedirect(*)"
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: HttpServletResponse.sendRedirect
+
+  # SSRF — Spring's RestTemplate.
+  - pattern: "*.getForObject(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: RestTemplate.getForObject
+  - pattern: "*.getForEntity(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: RestTemplate.getForEntity
+  - pattern: "*.postForObject(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: RestTemplate.postForObject
+  - pattern: "*.postForEntity(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: RestTemplate.postForEntity
+  - pattern: "*.exchange(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: RestTemplate.exchange
+
+sanitizers:
+  - pattern: "HtmlUtils.htmlEscape(*)"
+    vuln_classes: [xss]
+    description: org.springframework.web.util.HtmlUtils.htmlEscape
+  - pattern: "*.htmlEscape(*)"
+    vuln_classes: [xss]
+    description: HtmlUtils.htmlEscape (instance receiver)
+  - pattern: "StringEscapeUtils.escapeHtml4(*)"
+    vuln_classes: [xss]
+    description: Apache Commons StringEscapeUtils.escapeHtml4
+  - pattern: "StringEscapeUtils.escapeHtml(*)"
+    vuln_classes: [xss]
+    description: Apache Commons StringEscapeUtils.escapeHtml

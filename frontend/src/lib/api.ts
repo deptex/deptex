@@ -1252,6 +1252,71 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/aegis-tools/breakdown?days=${days}&limit=${limit}`);
   },
 
+  // ============================================================
+  // Reachability rule generation (Phase 5)
+  // ============================================================
+
+  async getReachabilitySettings(orgId: string): Promise<ReachabilitySettings> {
+    return fetchWithAuth(`/api/organizations/${orgId}/reachability-settings`);
+  },
+
+  async updateReachabilitySettings(
+    orgId: string,
+    patch: Partial<ReachabilitySettings>,
+  ): Promise<ReachabilitySettings> {
+    return fetchWithAuth(`/api/organizations/${orgId}/reachability-settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+  },
+
+  async listGeneratedRules(
+    orgId: string,
+    opts?: { page?: number; perPage?: number; status?: GeneratedRuleStatus; enabled?: boolean; search?: string },
+  ): Promise<{
+    rules: GeneratedRuleSummary[];
+    pagination: { page: number; per_page: number; total: number; total_pages: number };
+  }> {
+    const params = new URLSearchParams();
+    if (opts?.page) params.set('page', String(opts.page));
+    if (opts?.perPage) params.set('per_page', String(opts.perPage));
+    if (opts?.status) params.set('status', opts.status);
+    if (opts?.enabled != null) params.set('enabled', String(opts.enabled));
+    if (opts?.search) params.set('search', opts.search);
+    const qs = params.toString();
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules${qs ? `?${qs}` : ''}`);
+  },
+
+  async getGeneratedRule(orgId: string, ruleId: string): Promise<GeneratedRuleDetail> {
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules/${ruleId}`);
+  },
+
+  async updateGeneratedRule(
+    orgId: string,
+    ruleId: string,
+    patch: { enabled?: boolean; validation_status?: 'manual_override' },
+  ): Promise<GeneratedRuleDetail> {
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules/${ruleId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+  },
+
+  async deleteGeneratedRule(orgId: string, ruleId: string): Promise<void> {
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules/${ruleId}`, { method: 'DELETE' });
+  },
+
+  async regenerateGeneratedRule(
+    orgId: string,
+    ruleId: string,
+    body: { provider: 'anthropic' | 'openai' | 'google'; model: string },
+  ): Promise<{ rule: GeneratedRuleDetail; message: string }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules/${ruleId}/regenerate`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+
   async streamAegisMessage(
     orgId: string,
     threadId: string | null,
@@ -1926,6 +1991,145 @@ export const api = {
     perPage = 50
   ): Promise<PaginatedResponse<SecretFinding>> {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/secret-findings?page=${page}&per_page=${perPage}`);
+  },
+
+  async getProjectIaCFindings(
+    organizationId: string,
+    projectId: string,
+    opts: {
+      page?: number;
+      perPage?: number;
+      severity?: string;
+      status?: 'open' | 'ignored' | 'all';
+      framework?: string;
+    } = {}
+  ): Promise<PaginatedResponse<IaCFinding>> {
+    const params = new URLSearchParams();
+    params.set('page', String(opts.page ?? 1));
+    params.set('per_page', String(opts.perPage ?? 50));
+    if (opts.severity) params.set('severity', opts.severity);
+    if (opts.status && opts.status !== 'all') params.set('status', opts.status);
+    if (opts.framework) params.set('framework', opts.framework);
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/iac-findings?${params.toString()}`
+    );
+  },
+
+  async getProjectContainerFindings(
+    organizationId: string,
+    projectId: string,
+    opts: {
+      page?: number;
+      perPage?: number;
+      severity?: string;
+      status?: 'open' | 'ignored' | 'all';
+    } = {}
+  ): Promise<PaginatedResponse<ContainerFinding>> {
+    const params = new URLSearchParams();
+    params.set('page', String(opts.page ?? 1));
+    params.set('per_page', String(opts.perPage ?? 50));
+    if (opts.severity) params.set('severity', opts.severity);
+    if (opts.status && opts.status !== 'all') params.set('status', opts.status);
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/container-findings?${params.toString()}`
+    );
+  },
+
+  async getProjectScannerSummary(
+    organizationId: string,
+    projectId: string
+  ): Promise<ScannerSummary> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/scanner-summary`
+    );
+  },
+
+  async toggleIaCFindingIgnore(
+    organizationId: string,
+    projectId: string,
+    findingId: string,
+    ignored: boolean
+  ): Promise<{ success: boolean; status: string }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/iac-findings/${findingId}/ignore`,
+      { method: 'PATCH', body: JSON.stringify({ ignored }) }
+    );
+  },
+
+  async setIaCFindingRiskAccepted(
+    organizationId: string,
+    projectId: string,
+    findingId: string,
+    accepted: boolean,
+    reason?: string
+  ): Promise<{ success: boolean }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/iac-findings/${findingId}/risk-accept`,
+      { method: 'PATCH', body: JSON.stringify({ accepted, reason }) }
+    );
+  },
+
+  async toggleContainerFindingIgnore(
+    organizationId: string,
+    projectId: string,
+    findingId: string,
+    ignored: boolean
+  ): Promise<{ success: boolean; status: string }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/container-findings/${findingId}/ignore`,
+      { method: 'PATCH', body: JSON.stringify({ ignored }) }
+    );
+  },
+
+  async setContainerFindingRiskAccepted(
+    organizationId: string,
+    projectId: string,
+    findingId: string,
+    accepted: boolean,
+    reason?: string
+  ): Promise<{ success: boolean }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/container-findings/${findingId}/risk-accept`,
+      { method: 'PATCH', body: JSON.stringify({ accepted, reason }) }
+    );
+  },
+
+  maliciousFindings: {
+    async list(
+      organizationId: string,
+      projectId: string,
+      page = 1,
+      perPage = 50
+    ): Promise<PaginatedResponse<MaliciousFinding>> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/malicious-findings?page=${page}&per_page=${perPage}`);
+    },
+    async get(
+      organizationId: string,
+      projectId: string,
+      findingId: string
+    ): Promise<MaliciousFinding> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/malicious-findings/${findingId}`);
+    },
+    async updateStatus(
+      organizationId: string,
+      projectId: string,
+      findingId: string,
+      body: { suppressed?: boolean; suppressed_reason?: string; risk_accepted?: boolean; risk_accepted_reason?: string }
+    ): Promise<{ success: true }> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/malicious-findings/${findingId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      });
+    },
+    async explain(
+      organizationId: string,
+      projectId: string,
+      findingId: string
+    ): Promise<{ narrative: string; risk_level: MaliciousSeverity | 'none'; cached: boolean }> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/malicious-findings/${findingId}/explain`, {
+        method: 'POST',
+      });
+    },
   },
 
   async getVulnerabilityDetail(
@@ -3753,6 +3957,108 @@ export interface LicenseViolation {
   depscore: number | null;
 }
 
+export interface IaCFinding {
+  id: string;
+  project_id: string;
+  organization_id: string;
+  extraction_run_id: string;
+  scanner: 'trivy' | 'checkov';
+  scanner_version: string | null;
+  rule_id: string;
+  framework: 'terraform' | 'kubernetes' | 'dockerfile';
+  file_path: string;
+  start_line: number | null;
+  end_line: number | null;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO' | null;
+  depscore: number | null;
+  message: string | null;
+  description: string | null;
+  cwe_ids: string[];
+  code_snippet: string | null;
+  rule_doc_url: string | null;
+  iac_fingerprint: string | null;
+  status: 'open' | 'ignored';
+  suppressed: boolean;
+  risk_accepted: boolean;
+  risk_accepted_reason: string | null;
+  created_at: string;
+  project_name?: string;
+  project_framework?: string | null;
+}
+
+export interface ContainerFinding {
+  id: string;
+  project_id: string;
+  organization_id: string;
+  extraction_run_id: string;
+  scanner_version: string | null;
+  image_reference: string;
+  image_digest: string;
+  image_source: 'dockerfile_base';
+  os_package_name: string;
+  os_package_version: string;
+  os_package_ecosystem: string | null;
+  osv_id: string | null;
+  cve_id: string | null;
+  vulnerability_id: string;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO' | null;
+  cvss_score: number | null;
+  epss_score: number | null;
+  is_kev: boolean;
+  fix_versions: string[];
+  layer_digest: string | null;
+  depscore: number | null;
+  description: string | null;
+  rule_doc_url: string | null;
+  status: 'open' | 'ignored';
+  suppressed: boolean;
+  risk_accepted: boolean;
+  risk_accepted_reason: string | null;
+  created_at: string;
+  project_name?: string;
+  project_framework?: string | null;
+}
+
+export interface ScannerSummary {
+  iac: { critical: number; high: number; medium: number; low: number; info: number; ignored: number };
+  container: { critical: number; high: number; medium: number; low: number; info: number; ignored: number };
+  infra_types: Array<'terraform' | 'kubernetes' | 'dockerfile'>;
+  last_scan_at: string | null;
+  skipped_images: Array<{ image: string; reason: string }>;
+}
+
+export type MaliciousScanner = 'feed' | 'guarddog';
+export type MaliciousSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+
+export interface MaliciousFinding {
+  id: string;
+  project_id: string;
+  organization_id: string;
+  extraction_run_id: string;
+  project_dependency_id: string;
+  dependency_id: string;
+  rule_id: string;
+  scanner: MaliciousScanner;
+  severity: MaliciousSeverity;
+  message: string | null;
+  depscore: number | null;
+  suppressed: boolean;
+  suppressed_by: string | null;
+  suppressed_at: string | null;
+  suppressed_reason: string | null;
+  risk_accepted: boolean;
+  risk_accepted_by: string | null;
+  risk_accepted_at: string | null;
+  risk_accepted_reason: string | null;
+  created_at: string;
+  package_name?: string | null;
+  ecosystem?: string | null;
+  package_version?: string | null;
+  evidence?: { file_path: string; lines: [number, number]; snippet: string }[];
+  ai_narrative?: string | null;
+  ai_narrative_cached_at?: string | null;
+}
+
 export interface VulnerabilityEvent {
   id: string;
   project_id: string;
@@ -3965,6 +4271,68 @@ export type EpdStatus =
   | 'ai_error_fallback'
   | 'budget_exceeded';
 
+/** Per-org reachability rule generation policy (Phase 5). */
+export interface ReachabilitySettings {
+  organization_id: string;
+  auto_generate_enabled: boolean;
+  trigger_severities: Array<'critical' | 'high' | 'medium' | 'low'>;
+  trigger_kev: boolean;
+  trigger_asset_tier_max_rank: number;
+  trigger_newly_discovered: boolean;
+  trigger_reevaluate_existing: boolean;
+  ai_provider: 'anthropic' | 'openai' | 'google';
+  ai_model: string;
+  monthly_budget_usd: number;
+  on_budget_exhaustion: 'skip' | 'fall_back_to_haiku';
+  max_wait_seconds: number;
+  updated_at?: string;
+  updated_by?: string | null;
+}
+
+export type GeneratedRuleStatus = 'pending' | 'validated' | 'failed_validation' | 'manual_override';
+
+export interface GeneratedRuleSummary {
+  id: string;
+  organization_id: string;
+  cve_id: string;
+  package_purl: string;
+  ecosystem: string;
+  affected_version_range: string | null;
+  reachability_level: string;
+  entry_point_class: string | null;
+  generated_with_provider: string;
+  generated_with_model: string;
+  generation_cost_usd: number | null;
+  validation_status: GeneratedRuleStatus;
+  enabled: boolean;
+  generated_at: string;
+  last_used_at: string | null;
+  use_count: number;
+}
+
+export interface GeneratedRulePreviousVersion {
+  rule_yaml: string;
+  vulnerable_fixture: string;
+  safe_fixture: string;
+  generated_with_provider: string;
+  generated_with_model: string;
+  generation_cost_usd: number | null;
+  validation_status: GeneratedRuleStatus;
+  validation_log: Record<string, unknown> | null;
+  generated_at: string;
+  replaced_at: string;
+  replaced_by_user_id: string | null;
+}
+
+export interface GeneratedRuleDetail extends GeneratedRuleSummary {
+  rule_yaml: string;
+  vulnerable_fixture: string;
+  safe_fixture: string;
+  validation_log: Record<string, unknown> | null;
+  previous_versions: GeneratedRulePreviousVersion[];
+}
+
+
 // PR & Commit tracking types
 
 export interface ProjectPullRequest {
@@ -4026,6 +4394,13 @@ export interface ProjectStats {
   compliance: { percent: number; compliant: number; failing: number; not_evaluated: number; total: number };
   vulnerabilities: { total: number; critical: number; high: number; medium: number; low: number; reachable_count: number };
   code_findings: { semgrep_count: number; secret_count: number; verified_secret_count: number };
+  malicious_packages?: {
+    total: number;
+    critical: number;
+    high: number;
+    medium: number;
+    scan_status: 'complete' | 'partial' | 'failed' | null;
+  };
   dependencies: { total: number; direct: number; transitive: number; outdated: number; healthy?: number; vulnerable?: number };
   sync: { status: string; extraction_step: string | null; last_synced: string | null; last_error: string | null; branch: string };
   action_items: ActionItem[];
@@ -4033,7 +4408,7 @@ export interface ProjectStats {
 }
 
 export interface ActionItem {
-  type: 'critical_vuln' | 'high_vuln' | 'non_compliant' | 'policy_violation' | 'outdated_critical' | 'code_finding';
+  type: 'critical_vuln' | 'high_vuln' | 'non_compliant' | 'policy_violation' | 'outdated_critical' | 'code_finding' | 'malicious_packages';
   title: string;
   description: string;
   count: number;

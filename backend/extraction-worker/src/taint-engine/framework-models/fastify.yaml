@@ -1,0 +1,57 @@
+# Fastify framework spec — Deptex cross-file taint engine.
+#
+# Fastify request shape: `request.body`, `request.query`, `request.params`,
+# `request.headers`, `request.cookies`. Reply object has its own send /
+# redirect surface. Generic Node.js sinks/sanitizers live in node-stdlib.yaml.
+
+framework: fastify
+version: "*"
+
+sources:
+  - pattern: request.body.*
+    taint_kind: http_input
+    description: Fastify request body
+  - pattern: request.query.*
+    taint_kind: http_input
+    description: Fastify request query string
+  - pattern: request.params.*
+    taint_kind: http_input
+    description: Fastify request route params
+  - pattern: request.headers.*
+    taint_kind: http_input
+    description: Fastify request headers
+  - pattern: request.cookies.*
+    taint_kind: http_input
+    description: Fastify request cookies (with @fastify/cookie)
+  - pattern: request.url
+    taint_kind: http_input
+    description: Fastify raw request URL
+  - pattern: request.hostname
+    taint_kind: http_input
+    description: Fastify request hostname header
+  - pattern: request.ip
+    taint_kind: http_input
+    description: Fastify request IP (X-Forwarded-For if trusted proxy)
+
+sinks:
+  # XSS — reply writers
+  - pattern: reply.send(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Fastify reply body
+  - pattern: reply.view(*)
+    vuln_class: xss
+    argument_indices: [1]
+    description: Fastify reply view (template + model)
+  - pattern: reply.html(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Fastify reply.html (with @fastify/view)
+
+  # Open redirect
+  - pattern: reply.redirect(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Fastify reply.redirect
+
+sanitizers: []
