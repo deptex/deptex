@@ -67,31 +67,32 @@ router.post('/fix-jobs', async (_req, res) => {
       }
     }
 
-    // Start machines for orphaned queued jobs (up to 3)
+    // Start fix-worker machines for orphaned approved jobs (up to 3).
+    // The new flow uses status='approved' rather than the legacy 'queued'.
     let machinesStarted = 0;
     const { data: orphanedJobs } = await supabase
       .from('project_security_fixes')
       .select('id')
-      .eq('status', 'queued')
-      .order('created_at', { ascending: true })
+      .eq('status', 'approved')
+      .order('approved_at', { ascending: true })
       .limit(3);
 
     if (orphanedJobs?.length) {
-      let startAiderMachine: (() => Promise<string | null>) | null = null;
+      let startFixMachine: (() => Promise<string | null>) | null = null;
       try {
         const flyMachines = require('../lib/fly-machines');
-        startAiderMachine = flyMachines.startAiderMachine;
+        startFixMachine = flyMachines.startFixMachine;
       } catch {
         // fly-machines not available
       }
 
-      if (startAiderMachine) {
+      if (startFixMachine) {
         for (const _job of orphanedJobs) {
           try {
-            await startAiderMachine();
+            await startFixMachine();
             machinesStarted++;
           } catch {
-            // logged inside startAiderMachine
+            // logged inside startFixMachine
           }
         }
       }

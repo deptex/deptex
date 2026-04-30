@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Sparkles, Bot, Cpu, Wand2, Loader2, Check } from 'lucide-react';
+import { Sparkles, Bot, Cpu, Wand2, Loader2, Check, Zap } from 'lucide-react';
 import {
   BarChart,
   Bar,
@@ -55,8 +55,15 @@ const PROVIDERS: ProviderMeta[] = [
     id: 'google',
     name: 'Google',
     modelLabel: 'Gemini 2.5 Flash',
-    blurb: 'Cheapest, large context window.',
+    blurb: 'Cheapest among hosted frontier providers.',
     Icon: Wand2,
+  },
+  {
+    id: 'deepinfra',
+    name: 'DeepInfra',
+    modelLabel: 'Qwen3 235B',
+    blurb: 'Open-weight (Qwen3 / DeepSeek). Lowest cost per token.',
+    Icon: Zap,
   },
 ];
 
@@ -195,7 +202,7 @@ export default function AISection({ organizationId, canManageSettings, canViewSp
             Aegis and other AI features will route through whichever provider you select.
           </p>
         </header>
-        <div className="grid grid-cols-1 gap-3 p-6 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 p-6 sm:grid-cols-2 lg:grid-cols-4">
           {PROVIDERS.map((p) => {
             const selected = defaultProvider?.provider === p.id;
             const saving = savingProvider === p.id;
