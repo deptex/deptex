@@ -1,6 +1,6 @@
 import { memo, useState, useMemo, useEffect } from 'react';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
-import { LayoutDashboard, Scale, ShieldAlert, Settings, Plus, Loader2, User, Mail, LogOut, MessageSquare } from 'lucide-react';
+import { LayoutDashboard, Scale, ShieldAlert, Settings, Plus, Loader2, User, Mail, LogOut, MessageSquare, Workflow } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { RolePermissions, Team, Project, api } from '../lib/api';
 import { useToast } from '../hooks/use-toast';
@@ -56,13 +56,14 @@ const allNavItems: NavItemDef[] = [
   { id: 'aegis', label: 'Aegis', path: 'aegis', icon: MessageSquare, requiredPermission: 'interact_with_aegis' },
   { id: 'vulnerabilities', label: 'Vulnerabilities', path: 'vulnerabilities', icon: ShieldAlert, requiredPermission: null },
   { id: 'compliance', label: 'Compliance', path: 'compliance', icon: Scale, requiredPermission: null },
+  { id: 'flows', label: 'Flows', path: 'flows', icon: Workflow, requiredPermission: null },
   // Settings visible to all org members; each tab inside is gated by its own permission
   { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: null },
 ];
 
 /** Section label and item ids. */
 const SIDEBAR_SECTIONS: { label: string; itemIds: string[] }[] = [
-  { label: 'Workspace', itemIds: ['overview', 'aegis', 'vulnerabilities', 'compliance'] },
+  { label: 'Workspace', itemIds: ['overview', 'aegis', 'vulnerabilities', 'compliance', 'flows'] },
   { label: 'Organization', itemIds: ['settings'] },
 ];
 
@@ -158,6 +159,7 @@ function OrganizationSidebar({
     }
     if (pathParts.includes('vulnerabilities')) return 'vulnerabilities';
     if (pathParts.includes('aegis')) return 'aegis';
+    if (pathParts.includes('flows')) return 'flows';
     if (currentTab === organizationId) {
       const overviewTab = visibleNavItems.find((tab) => tab.id === 'overview');
       return overviewTab ? 'overview' : 'overview';
