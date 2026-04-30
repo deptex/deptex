@@ -16,6 +16,11 @@
  * CHECK enum holds across heterogeneous source casings (OSV `PyPI`, GHSA
  * `RUBYGEMS`, GuardDog `github-action`).
  */
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import * as crypto from 'crypto';
+import StreamZip from 'node-stream-zip';
 import { supabase } from '../supabase';
 import { canonicalizeEcosystem } from './ecosystem';
 import type { MaliciousFeedSource, MaliciousFeedSyncState, MaliciousSeverity } from './types';
@@ -47,6 +52,7 @@ const OSV_ECOSYSTEMS: Array<{ raw: string; canonical: string }> = [
   { raw: 'Maven', canonical: 'maven' },
   { raw: 'Go', canonical: 'golang' },
   { raw: 'RubyGems', canonical: 'rubygems' },
+  { raw: 'GitHub Actions', canonical: 'github-actions' },
 ];
 
 export async function runMaliciousFeedSync(source: MaliciousFeedSource): Promise<FeedSyncResult> {
@@ -121,38 +127,56 @@ async function syncOsv(): Promise<{ entries_added: number; entries_withdrawn: nu
 }
 
 async function fetchOsvMaliciousForEcosystem(ecoRaw: string, canonical: string): Promise<UpsertEntry[]> {
-  // OSV ships per-ecosystem ZIPs at osv-vulnerabilities.storage.googleapis.com.
-  // For v1 we use the lighter index that lists IDs and let the API tell us
-  // about each. We only care about MAL-* prefixed IDs (the OSSF malicious
-  // dataset publishes those into OSV.dev).
-  const indexUrl = `https://osv-vulnerabilities.storage.googleapis.com/${encodeURIComponent(ecoRaw)}/all.json`;
-  const res = await fetch(indexUrl);
+  // OSV publishes per-ecosystem bulk archives at
+  //   https://osv-vulnerabilities.storage.googleapis.com/<eco>/all.zip
+  // each entry is a single advisory JSON. We only care about MAL-* IDs
+  // (OSSF's malicious dataset publishes those into OSV.dev), so we filter
+  // by entry name to skip parsing the bulk of CVE-* entries.
+  const zipUrl = `https://osv-vulnerabilities.storage.googleapis.com/${encodeURIComponent(ecoRaw)}/all.zip`;
+  const res = await fetch(zipUrl);
   if (!res.ok) {
     if (res.status === 404) return [];
-    throw new Error(`OSV ${ecoRaw} index fetch failed: ${res.status} ${res.statusText}`);
+    throw new Error(`OSV ${ecoRaw} zip fetch failed: ${res.status} ${res.statusText}`);
   }
+  const buf = Buffer.from(await res.arrayBuffer());
 
-  const ids = (await res.json()) as Array<{ id: string; modified?: string }>;
-  const malIds = ids
-    .filter((row) => typeof row.id === 'string' && row.id.startsWith('MAL-'))
-    .map((row) => row.id)
-    .slice(0, 1000); // belt-and-braces cap; OSV malicious set is small
+  // node-stream-zip can't read from a buffer directly — write to a temp
+  // file in /tmp, parse, and unlink.
+  const tmpFile = path.join(
+    os.tmpdir(),
+    `osv-${ecoRaw}-${crypto.randomBytes(6).toString('hex')}.zip`,
+  );
+  fs.writeFileSync(tmpFile, buf);
 
   const entries: UpsertEntry[] = [];
-  for (const id of malIds) {
-    const detail = await fetchOsvAdvisory(id);
-    if (!detail) continue;
-    for (const e of advisoryToEntries(detail, 'osv', canonical)) {
-      entries.push(e);
+  const zip = new StreamZip.async({ file: tmpFile });
+  try {
+    const zipEntries = await zip.entries();
+    let processed = 0;
+    for (const name of Object.keys(zipEntries)) {
+      // Each entry is named like "MAL-2024-1234.json" or "GHSA-xxxx.json" or
+      // "CVE-...json". We only want MAL-*. The npm dataset alone has ~212k
+      // MAL-* entries (most are historical OpenSSF batch submissions).
+      // Cap is high but finite to bound worst-case memory if upstream balloons.
+      if (!name.startsWith('MAL-') || !name.endsWith('.json')) continue;
+      if (processed >= 500_000) break;
+      processed += 1;
+      try {
+        const data = await zip.entryData(name);
+        const advisory = JSON.parse(data.toString('utf8'));
+        for (const e of advisoryToEntries(advisory, 'osv', canonical)) {
+          entries.push(e);
+        }
+      } catch {
+        // Skip malformed individual entries — one bad file shouldn't kill
+        // the whole sync run.
+      }
     }
+  } finally {
+    await zip.close();
+    try { fs.unlinkSync(tmpFile); } catch { /* best-effort */ }
   }
   return entries;
-}
-
-async function fetchOsvAdvisory(id: string): Promise<any | null> {
-  const res = await fetch(`https://api.osv.dev/v1/vulns/${encodeURIComponent(id)}`);
-  if (!res.ok) return null;
-  return res.json();
 }
 
 // ───────────────────────────── GHSA ────────────────────────────────────────
@@ -160,12 +184,12 @@ async function fetchOsvAdvisory(id: string): Promise<any | null> {
 async function syncGhsa(): Promise<{ entries_added: number; entries_withdrawn: number }> {
   const token = getGitHubToken();
   if (!token) {
-    // Without a token we hit unauthenticated rate limits almost
-    // immediately on the GraphQL endpoint. Skip cleanly with a warning;
-    // the run row records 'completed' with 0 entries so the watchdog
-    // doesn't fire.
-    console.warn('[malicious feed-sync] GHSA: no GITHUB_TOKEN — skipping run');
-    return { entries_added: 0, entries_withdrawn: 0 };
+    // Without a token we hit unauthenticated rate limits almost immediately
+    // on the GraphQL endpoint. We THROW so the run row records state='failed'
+    // — silently completing with 0 entries would tell the staleness watchdog
+    // everything is fine, when in fact GHSA is fully unsynced.
+    console.warn('[malicious feed-sync] GHSA: no GITHUB_TOKEN — failing run so the watchdog alerts');
+    throw new Error('GHSA sync skipped: GITHUB_TOKEN not configured');
   }
 
   let added = 0;
@@ -180,7 +204,12 @@ async function syncGhsa(): Promise<{ entries_added: number; entries_withdrawn: n
 
     const entries: UpsertEntry[] = [];
     for (const adv of page.advisories) {
-      const ecoRaw = adv.vulnerabilities?.[0]?.package?.ecosystem;
+      // GHSA's `vulnerabilities` is a GraphQL connection: { nodes: [...] }.
+      // The earlier `vulnerabilities?.[0]` indexed the connection object as if
+      // it were an array → always undefined → every advisory got skipped and
+      // entries_added came back 0 even though the API returned 5k advisories.
+      const firstNode = adv.vulnerabilities?.nodes?.[0];
+      const ecoRaw = firstNode?.package?.ecosystem;
       const canonical = canonicalizeEcosystem(ecoRaw ?? null);
       if (!canonical) continue;
       for (const e of advisoryToEntries(adv, 'ghsa', canonical)) {
@@ -310,8 +339,28 @@ async function upsertEntries(
 ): Promise<{ added: number; withdrawn: number }> {
   if (entries.length === 0) return { added: 0, withdrawn: 0 };
 
+  // Dedup on the natural key BEFORE the upsert. One advisory can list the
+  // same (package, ecosystem) twice with different vulnerableVersionRange
+  // strings — and since we collapse all ranges into version=null for v1,
+  // those become duplicate rows in the batch. Postgres rejects that with
+  // "ON CONFLICT DO UPDATE command cannot affect row a second time", so we
+  // must collapse to one row per natural key in JS first.
+  const dedup = new Map<string, UpsertEntry>();
+  for (const e of entries) {
+    const key = `${e.source}\x00${e.source_id}\x00${e.package_name}\x00${e.version ?? ''}\x00${e.ecosystem}`;
+    const prev = dedup.get(key);
+    if (!prev) {
+      dedup.set(key, e);
+    } else if (!prev.withdrawn && e.withdrawn) {
+      // Prefer withdrawn=true if the upstream withdrew this one — strictly
+      // safer than dropping the withdrawal signal.
+      dedup.set(key, e);
+    }
+  }
+  const deduped = Array.from(dedup.values());
+
   const now = new Date().toISOString();
-  const rows = entries.map((e) => ({
+  const rows = deduped.map((e) => ({
     package_name: e.package_name,
     version: e.version,
     ecosystem: e.ecosystem,
@@ -323,13 +372,22 @@ async function upsertEntries(
     withdrawn_at: e.withdrawn ? now : null,
   }));
 
-  const { error } = await supabase
-    .from('known_malicious_packages')
-    .upsert(rows, { onConflict: 'source,source_id' });
-  if (error) {
-    throw new Error(`known_malicious_packages upsert failed: ${error.message}`);
+  // Supabase / PostgREST chokes on huge single payloads (default body cap +
+  // single transaction lock). The npm OSV dataset alone is ~212k MAL-*
+  // entries. Batch in 1000-row chunks; each chunk is its own UPSERT.
+  const BATCH = 1000;
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const chunk = rows.slice(i, i + BATCH);
+    const { error } = await supabase
+      .from('known_malicious_packages')
+      .upsert(chunk, { onConflict: 'source,source_id,package_name,version,ecosystem' });
+    if (error) {
+      throw new Error(
+        `known_malicious_packages upsert failed at offset ${i}/${rows.length}: ${error.message}`,
+      );
+    }
   }
 
-  const withdrawnCount = entries.filter((e) => e.withdrawn).length;
-  return { added: entries.length - withdrawnCount, withdrawn: withdrawnCount };
+  const withdrawnCount = deduped.filter((e) => e.withdrawn).length;
+  return { added: deduped.length - withdrawnCount, withdrawn: withdrawnCount };
 }

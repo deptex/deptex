@@ -1559,7 +1559,6 @@ CREATE TABLE IF NOT EXISTS public.taint_engine_runs (
   flows_after_ai_filter integer DEFAULT 0,
   ai_cost_usd numeric(10,6) DEFAULT 0,
   frameworks_detected text[] DEFAULT '{}'::text[],
-  framework_models_used jsonb DEFAULT '{}'::jsonb,
   is_typed_js_project boolean,
   typed_files_pct numeric(5,2),
   vuln_classes_evaluated text[] DEFAULT '{}'::text[],
@@ -1905,7 +1904,7 @@ ALTER TABLE public.dependency_versions ADD CONSTRAINT dependency_versions_depend
 ALTER TABLE public.dependency_vulnerabilities ADD CONSTRAINT dependency_vulnerabilities_dependency_id_osv_id_key UNIQUE (dependency_id, osv_id);
 ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_flow_id_version_key UNIQUE (flow_id, version);
 ALTER TABLE public.invitation_teams ADD CONSTRAINT invitation_teams_invitation_id_team_id_key UNIQUE (invitation_id, team_id);
-ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_source_id_key UNIQUE (source, source_id);
+ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_natural_key UNIQUE NULLS NOT DISTINCT (source, source_id, package_name, version, ecosystem);
 ALTER TABLE public.license_obligations ADD CONSTRAINT license_obligations_license_spdx_id_key UNIQUE (license_spdx_id);
 ALTER TABLE public.organization_asset_tiers ADD CONSTRAINT organization_asset_tiers_organization_id_name_key UNIQUE (organization_id, name);
 ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_organization_id_cve_id_package_key UNIQUE (organization_id, cve_id, package_purl);
@@ -2640,13 +2639,6 @@ $function$
 ;
 
 CREATE OR REPLACE FUNCTION public.array_to_vector(integer[], integer, boolean)
- RETURNS vector
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/vector', $function$array_to_vector$function$
-;
-
-CREATE OR REPLACE FUNCTION public.array_to_vector(real[], integer, boolean)
  RETURNS vector
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
@@ -4403,6 +4395,22 @@ CREATE OR REPLACE FUNCTION public.l2_normalize(vector)
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
 AS '$libdir/vector', $function$l2_normalize$function$
+;
+
+CREATE OR REPLACE FUNCTION public.pg_catalog_dump_v1_all()
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+AS $function$
+  SELECT COALESCE(
+    jsonb_agg(
+      jsonb_build_object('kind', kind, 'ord', ord, 'ddl', ddl)
+      ORDER BY ord, ddl
+    ),
+    '[]'::jsonb
+  )
+  FROM public.pg_catalog_dump_v1();
+$function$
 ;
 
 CREATE OR REPLACE FUNCTION public.pg_catalog_dump_v1()

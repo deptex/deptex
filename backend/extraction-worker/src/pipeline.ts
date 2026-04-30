@@ -1823,23 +1823,56 @@ export async function runPipeline(
         if (result.inserted_findings > 0) {
           try {
             const dedupKey = eventDeduplicationKey(organizationId, projectId, runId);
-            await supabase.from('notification_events').insert({
-              event_type: 'malicious_package_detected',
-              organization_id: organizationId,
-              project_id: projectId,
-              payload: {
+            const { data: insertedEvent, error: insertErr } = await supabase
+              .from('notification_events')
+              .insert({
+                event_type: 'malicious_package_detected',
                 organization_id: organizationId,
                 project_id: projectId,
-                extraction_run_id: runId,
-                feed_hits: result.feed_hits,
-                guarddog_hits: result.guarddog_hits,
-                inserted_findings: result.inserted_findings,
-              },
-              source: 'extraction_worker',
-              priority: 'critical',
-              deduplication_key: dedupKey,
-              status: 'pending',
-            });
+                payload: {
+                  organization_id: organizationId,
+                  project_id: projectId,
+                  extraction_run_id: runId,
+                  feed_hits: result.feed_hits,
+                  guarddog_hits: result.guarddog_hits,
+                  inserted_findings: result.inserted_findings,
+                },
+                source: 'extraction_worker',
+                priority: 'critical',
+                deduplication_key: dedupKey,
+                status: 'pending',
+              })
+              .select('id')
+              .single();
+
+            // Trigger immediate dispatch via backend internal endpoint.
+            // Without this, the row sits at status='pending' and only fires
+            // when the reconcile-stuck-notifications cron sweeps it (≤10m
+            // delay). For a critical-class event that delay is unacceptable.
+            // If the dispatch call fails we leave the row pending and rely
+            // on the reconciler — same eventual safety net, slower path.
+            if (!insertErr && insertedEvent?.id) {
+              try {
+                const backendBaseUrl = process.env.BACKEND_URL || process.env.API_BASE_URL || 'http://localhost:3001';
+                const internalKey = process.env.INTERNAL_API_KEY;
+                if (internalKey) {
+                  const url = `${backendBaseUrl.replace(/\/$/, '')}/api/workers/dispatch-notification`;
+                  await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'X-Internal-Api-Key': internalKey,
+                    },
+                    body: JSON.stringify({ eventId: insertedEvent.id }),
+                  });
+                }
+              } catch (dispatchErr: any) {
+                await log.warn('malicious_scan', `Dispatch trigger failed (reconciler will retry): ${dispatchErr?.message ?? dispatchErr}`);
+              }
+            } else if (insertErr && (insertErr as any).code !== '23505') {
+              // 23505 = dedup hit on (org, dedup_key) — expected on idempotent re-run.
+              await log.warn('malicious_scan', `Event emission failed: ${insertErr.message ?? insertErr}`);
+            }
           } catch (eventErr: any) {
             // Non-fatal — findings are already in the DB; the dispatcher
             // can still surface them on read.
