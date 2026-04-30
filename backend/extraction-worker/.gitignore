@@ -6,6 +6,7 @@
 extraction-results/
 test-*-results/
 test-output-*/
+out/
 
 # Staged by docker:prepare for COPY into image
 .schema/
@@ -15,3 +16,8 @@ dist/
 
 # Node
 node_modules/
+
+# Iteration harness: tournament outputs and on-disk OSV+patch cache.
+bench-iterate/
+test/iterate/cache/
+

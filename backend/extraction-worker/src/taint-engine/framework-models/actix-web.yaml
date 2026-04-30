@@ -1,0 +1,398 @@
+# Actix-web framework spec — Deptex cross-file taint engine.
+#
+# Actix-web exposes request data through extractors (`web::Query<T>`,
+# `web::Json<T>`, `web::Path<T>`, `web::Form<T>`) and on `HttpRequest`
+# (`headers()`, `cookie()`, `match_info()`, `query_string()`). Sources here
+# match the call shape `web::Query.into_inner(*)` plus any property/method
+# read off the extractor type that lifts taint into a local.
+#
+# v1 limitations:
+#   - Synthesizing sources from parameter type annotations (e.g. a handler
+#     `async fn list(q: web::Query<Params>)` should mark `q` tainted on
+#     entry) is not implemented in M2 — the IR doesn't carry parameter
+#     types. We rely on the .into_inner() / field-read patterns below to
+#     catch most realistic flows. Handlers that write `params.cmd` directly
+#     into a sink without an intermediate `into_inner()` may be missed.
+#   - Trait-based extractors via `FromRequest` aren't enumerated; only the
+#     built-in ones are listed.
+#   - Generic resolution: `web::Json::<T>` matches the `web::Json` prefix
+#     only.
+#
+# Sinks duplicate the Rust stdlib set so a workspace using only actix-web
+# still detects flows into std::fs / std::process / sqlx / reqwest / etc.
+
+framework: actix-web
+language: rust
+version: "*"
+
+sources:
+  # ---------- Extractor `.into_inner()` calls ----------
+  - pattern: web::Query.into_inner(*)
+    taint_kind: http_input
+    description: actix-web Query<T>.into_inner()
+  - pattern: web::Json.into_inner(*)
+    taint_kind: http_input
+    description: actix-web Json<T>.into_inner()
+  - pattern: web::Path.into_inner(*)
+    taint_kind: http_input
+    description: actix-web Path<T>.into_inner()
+  - pattern: web::Form.into_inner(*)
+    taint_kind: http_input
+    description: actix-web Form<T>.into_inner()
+  - pattern: Query.into_inner(*)
+    taint_kind: http_input
+    description: bare Query<T>.into_inner()
+  - pattern: Json.into_inner(*)
+    taint_kind: http_input
+    description: bare Json<T>.into_inner()
+  - pattern: Path.into_inner(*)
+    taint_kind: http_input
+    description: bare Path<T>.into_inner()
+  - pattern: Form.into_inner(*)
+    taint_kind: http_input
+    description: bare Form<T>.into_inner()
+  # Wildcard receiver — the IR records the LOCAL variable name (e.g. `query`),
+  # not the static type. Without typed-callgraph info we accept any receiver
+  # calling .into_inner(); this catches the canonical Actix idiom at the cost
+  # of a small FP rate when a non-extractor type also exposes into_inner.
+  - pattern: "*.into_inner(*)"
+    taint_kind: http_input
+    description: any *.into_inner() — Actix extractor unwrap (wildcard receiver)
+
+  # ---------- HttpRequest accessors (call shape) ----------
+  - pattern: req.headers().get(*)
+    taint_kind: http_input
+    description: HttpRequest.headers().get()
+  - pattern: req.cookie(*)
+    taint_kind: http_input
+    description: HttpRequest.cookie()
+  - pattern: req.match_info().get(*)
+    taint_kind: http_input
+    description: HttpRequest.match_info().get()
+  - pattern: req.query_string(*)
+    taint_kind: http_input
+    description: HttpRequest.query_string()
+  - pattern: HttpRequest.headers(*)
+    taint_kind: http_input
+    description: HttpRequest.headers() (qualified)
+  - pattern: HttpRequest.cookie(*)
+    taint_kind: http_input
+    description: HttpRequest.cookie() (qualified)
+  - pattern: HttpRequest.query_string(*)
+    taint_kind: http_input
+    description: HttpRequest.query_string() (qualified)
+
+  # ---------- HttpRequest field/method reads (no-arg) ----------
+  - pattern: req.uri().path
+    taint_kind: http_input
+    description: HttpRequest.uri().path
+  - pattern: req.uri().path()
+    taint_kind: http_input
+    description: HttpRequest.uri().path()
+  - pattern: req.uri().query()
+    taint_kind: http_input
+    description: HttpRequest.uri().query()
+
+  # ---------- Field-access on extractor params (when seen as text) ----------
+  # Actix idiom: `async fn h(q: web::Query<Params>) { do(&q.name) }`. If a
+  # call resolves to `q.name`, the source matcher won't fire because we
+  # don't statically know `q` is tainted. The propagator handles the more
+  # common `into_inner()` pattern; field-reads on params are documented v1
+  # gaps.
+  - pattern: params.*
+    taint_kind: http_input
+    description: "handler-param-field read (fallback for params: web::Query<T> shape)"
+
+sinks:
+  # ---------- SQL injection ----------
+  - pattern: sqlx::query(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: sqlx::query — raw SQL string
+  - pattern: sqlx::query_as(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: sqlx::query_as — raw SQL string
+  - pattern: sqlx::query_scalar(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: sqlx::query_scalar — raw SQL string
+  - pattern: diesel::sql_query(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: diesel::sql_query — raw SQL string
+  - pattern: tokio_postgres::Client.query(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: tokio-postgres Client.query
+  - pattern: tokio_postgres::Client.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: tokio-postgres Client.execute
+  - pattern: "*.query(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Generic .query() — DB clients
+  - pattern: "*.execute(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Generic .execute() — DB clients, prepared statements
+  - pattern: "*.query_as(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Generic .query_as() — sqlx-style typed query
+  - pattern: "*.fetch_all(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Generic .fetch_all() — sqlx executor entrypoint
+
+  # ---------- Command injection ----------
+  - pattern: std::process::Command::new(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: std::process::Command::new — program name
+  - pattern: Command::new(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: Command::new — bare import
+  - pattern: "*.arg(*)"
+    vuln_class: command_injection
+    argument_indices: [1]
+    description: Command builder .arg(*) — first method arg is the appended argv element (engine IR puts receiver at args[0])
+  - pattern: "*.args(*)"
+    vuln_class: command_injection
+    argument_indices: [1]
+    description: Command builder .args(*) — first method arg is the appended argv slice
+  - pattern: tokio::process::Command::new(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: tokio::process::Command::new — async variant
+
+  # ---------- Path traversal ----------
+  - pattern: std::fs::File::open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: std::fs::File::open
+  - pattern: std::fs::File::create(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: std::fs::File::create
+  - pattern: File::open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: File::open — bare import
+  - pattern: File::create(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: File::create — bare import
+  - pattern: std::fs::read(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: std::fs::read
+  - pattern: std::fs::read_to_string(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: std::fs::read_to_string
+  - pattern: std::fs::write(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: std::fs::write
+  - pattern: tokio::fs::File::open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: tokio::fs::File::open
+  - pattern: tokio::fs::read(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: tokio::fs::read
+  - pattern: tokio::fs::read_to_string(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: tokio::fs::read_to_string
+  - pattern: tokio::fs::write(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: tokio::fs::write
+
+  # ---------- SSRF ----------
+  - pattern: reqwest::get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: reqwest::get
+  - pattern: reqwest::Client.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: reqwest Client.get
+  - pattern: reqwest::Client.post(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: reqwest Client.post
+  - pattern: reqwest::Client.request(*)
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: reqwest Client.request(method, url)
+  - pattern: hyper::Client.request(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: hyper Client.request
+
+  # ---------- XSS ----------
+  - pattern: HttpResponse::Ok().body(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: HttpResponse::Ok().body — best-effort raw response body
+  - pattern: HttpResponse.body(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: HttpResponse.body — generic body builder
+  - pattern: tera::Tera.render_str(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Tera.render_str — template from user input
+
+  # ---------- Open redirect ----------
+  - pattern: HttpResponse::Found().header(*)
+    vuln_class: open_redirect
+    argument_indices: [1]
+    description: HttpResponse::Found().header("Location", *)
+  - pattern: HttpResponse::SeeOther().header(*)
+    vuln_class: open_redirect
+    argument_indices: [1]
+    description: HttpResponse::SeeOther().header("Location", *)
+  - pattern: HttpResponse::TemporaryRedirect().header(*)
+    vuln_class: open_redirect
+    argument_indices: [1]
+    description: HttpResponse::TemporaryRedirect().header("Location", *)
+  - pattern: HttpResponse::PermanentRedirect().header(*)
+    vuln_class: open_redirect
+    argument_indices: [1]
+    description: HttpResponse::PermanentRedirect().header("Location", *)
+
+  # ---------- Deserialization ----------
+  - pattern: serde_json::from_str(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: serde_json::from_str — best-effort, only fires on http_input flows
+  - pattern: serde_json::from_slice(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: serde_json::from_slice
+  - pattern: bincode::deserialize(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: bincode::deserialize
+  - pattern: rmp_serde::from_slice(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: rmp-serde from_slice — MessagePack
+  - pattern: serde_yaml::from_str(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: serde_yaml::from_str
+
+  # ---------- Log injection ----------
+  - pattern: log::info!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: log::info!
+  - pattern: log::error!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: log::error!
+  - pattern: log::warn!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: log::warn!
+  - pattern: log::debug!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: log::debug!
+  - pattern: tracing::info!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: tracing::info!
+  - pattern: tracing::error!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: tracing::error!
+  - pattern: tracing::warn!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: tracing::warn!
+  - pattern: tracing::debug!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: tracing::debug!
+  - pattern: println!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: println!
+  - pattern: eprintln!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: eprintln!
+
+  # ---------- ReDoS ----------
+  - pattern: regex::Regex::new(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: regex::Regex::new with untrusted pattern
+  - pattern: Regex::new(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: Regex::new — bare import
+
+sanitizers:
+  # ---------- XSS ----------
+  - pattern: html_escape::encode_text(*)
+    vuln_classes: [xss]
+    description: html-escape encode_text
+  - pattern: html_escape::encode_safe(*)
+    vuln_classes: [xss]
+    description: html-escape encode_safe
+  - pattern: htmlescape::encode_minimal(*)
+    vuln_classes: [xss]
+    description: htmlescape encode_minimal
+  - pattern: ammonia::clean(*)
+    vuln_classes: [xss]
+    description: ammonia::clean — HTML sanitizer
+
+  # ---------- Path traversal ----------
+  - pattern: std::path::Path::file_name(*)
+    vuln_classes: [path_traversal]
+    description: Path.file_name — strips directory components
+  - pattern: "*.file_name(*)"
+    vuln_classes: [path_traversal]
+    description: Path-like .file_name()
+
+  # ---------- Command injection ----------
+  - pattern: shell_escape::escape(*)
+    vuln_classes: [command_injection]
+    description: shell-escape::escape — shell-quote for sh
+  - pattern: shell_escape::unix::escape(*)
+    vuln_classes: [command_injection]
+    description: shell-escape::unix::escape
+
+  # ---------- SSRF / open redirect ----------
+  - pattern: urlencoding::encode(*)
+    vuln_classes: [open_redirect, ssrf]
+    description: urlencoding::encode — best-effort, doesn't validate host
+  - pattern: percent_encoding::utf8_percent_encode(*)
+    vuln_classes: [open_redirect, ssrf]
+    description: percent-encoding utf8_percent_encode
+
+  # ---------- ReDoS ----------
+  - pattern: regex::escape(*)
+    vuln_classes: [redos]
+    description: regex::escape — escape regex metachars
+
+  # ---------- Cross-class numeric coercion ----------
+  - pattern: "*.parse(*)"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: str.parse::<T>() — numeric/typed coercion
+  - pattern: i32::from_str(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: i32::from_str
+  - pattern: u64::from_str(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: u64::from_str

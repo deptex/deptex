@@ -1,0 +1,161 @@
+# ASP.NET Core framework spec — Deptex cross-file taint engine.
+#
+# ASP.NET Core-specific sources + framework helpers live here. Generic .NET
+# stdlib sinks (SqlClient, Process.Start, File I/O, BinaryFormatter, Regex)
+# live in dotnet-stdlib.yaml — both load together so taint introduced by an
+# ASP.NET Core source attribute can flow to a stdlib sink.
+#
+# Pattern shapes (see ../spec.ts for grammar):
+#   - `Foo.bar`        exact text match (property/element access)
+#   - `Foo.bar.*`      prefix match (matches `Foo.bar`, `Foo.bar.x`, ...)
+#   - `Foo.bar(*)`     call expression where the callee text equals `Foo.bar`
+#   - `*.bar(*)`       call on any receiver — matches `obj.bar(...)` for any obj
+
+framework: aspnet-core
+language: csharp
+version: "*"
+
+sources:
+  # Controller method parameters — handled via the IR lowerer, which emits a
+  # synthetic `source` step assigning the parameter from the matching pattern.
+  - pattern: "[FromBody]"
+    taint_kind: http_input
+    description: ASP.NET Core [FromBody] controller parameter
+  - pattern: "[FromQuery]"
+    taint_kind: http_input
+    description: ASP.NET Core [FromQuery] controller parameter
+  - pattern: "[FromRoute]"
+    taint_kind: http_input
+    description: ASP.NET Core [FromRoute] controller parameter
+  - pattern: "[FromForm]"
+    taint_kind: http_input
+    description: ASP.NET Core [FromForm] controller parameter
+  - pattern: "[FromHeader]"
+    taint_kind: http_input
+    description: ASP.NET Core [FromHeader] controller parameter
+  - pattern: "[FromServices]"
+    taint_kind: http_input
+    description: ASP.NET Core [FromServices] DI binding (best-effort source)
+  # Implicit binding when the method itself has [HttpGet]/[HttpPost]/etc. and
+  # a parameter has no explicit binding attribute. The IR lowerer synthesizes
+  # a source step with this exact text.
+  - pattern: "@HttpRouteParameter"
+    taint_kind: http_input
+    description: ASP.NET Core implicit model-bound parameter on an HTTP action
+
+  # HttpRequest property accessors — property/element access shapes.
+  - pattern: "Request.Query.*"
+    taint_kind: http_input
+    description: HttpRequest.Query (querystring values)
+  - pattern: "Request.Form.*"
+    taint_kind: http_input
+    description: HttpRequest.Form (form-encoded body values)
+  - pattern: "Request.Cookies.*"
+    taint_kind: http_input
+    description: HttpRequest.Cookies (cookie values)
+  - pattern: "Request.Headers.*"
+    taint_kind: http_input
+    description: HttpRequest.Headers (request header values)
+  - pattern: "Request.RouteValues.*"
+    taint_kind: http_input
+    description: HttpRequest.RouteValues (route-bound segment values)
+  - pattern: "Request.Body"
+    taint_kind: http_input
+    description: HttpRequest.Body (raw request body stream)
+  - pattern: "Request.QueryString.Value"
+    taint_kind: http_input
+    description: HttpRequest.QueryString.Value (raw querystring)
+  # HttpContext-prefixed accessors — same matchers, prefixed.
+  - pattern: "HttpContext.Request.*"
+    taint_kind: http_input
+    description: HttpContext.Request (any nested request property)
+  - pattern: "this.Request.*"
+    taint_kind: http_input
+    description: Controller this.Request property (any nested)
+
+sinks:
+  # ---------- XSS via raw HTML output / Response writers ----------
+  - pattern: "HtmlString(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: Microsoft.AspNetCore.Html.HtmlString constructor (raw HTML)
+  - pattern: "MvcHtmlString(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: System.Web.Mvc.MvcHtmlString (legacy ASP.NET MVC raw HTML)
+  - pattern: "*.WriteAsync(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: HttpResponse.WriteAsync — raw response body write
+  - pattern: "Html.Raw(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: Razor IHtmlHelper.Raw — bypasses output encoding
+
+  # ---------- Open redirect ----------
+  - pattern: "Redirect(*)"
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Controller.Redirect action result with attacker-controlled URL
+  - pattern: "RedirectResult(*)"
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Microsoft.AspNetCore.Mvc.RedirectResult constructor
+  - pattern: "*.Redirect(*)"
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: HttpResponse.Redirect — raw redirect with user input
+
+sanitizers:
+  # ---------- XSS encoders ----------
+  - pattern: "HttpUtility.HtmlEncode(*)"
+    vuln_classes: [xss]
+    description: System.Web.HttpUtility.HtmlEncode
+  - pattern: "WebUtility.HtmlEncode(*)"
+    vuln_classes: [xss]
+    description: System.Net.WebUtility.HtmlEncode
+  - pattern: "HtmlEncoder.Default.Encode(*)"
+    vuln_classes: [xss]
+    description: System.Text.Encodings.Web.HtmlEncoder.Default.Encode
+  - pattern: "*.HtmlEncode(*)"
+    vuln_classes: [xss]
+    description: Generic HtmlEncode-shaped encoder (instance receiver)
+
+  # ---------- URL encoding ----------
+  - pattern: "HttpUtility.UrlEncode(*)"
+    vuln_classes: [open_redirect, ssrf]
+    description: System.Web.HttpUtility.UrlEncode
+  - pattern: "WebUtility.UrlEncode(*)"
+    vuln_classes: [open_redirect, ssrf]
+    description: System.Net.WebUtility.UrlEncode
+
+  # ---------- Path traversal ----------
+  - pattern: "Path.GetFileName(*)"
+    vuln_classes: [path_traversal]
+    description: System.IO.Path.GetFileName — drops traversal segments
+
+  # ---------- Numeric / GUID coercion (cross-class) ----------
+  - pattern: "int.Parse(*)"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: int.Parse — numeric coercion gate
+  - pattern: "Int32.Parse(*)"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: Int32.Parse — numeric coercion gate
+  - pattern: "long.Parse(*)"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: long.Parse — numeric coercion gate
+  - pattern: "Int64.Parse(*)"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: Int64.Parse — numeric coercion gate
+  - pattern: "double.Parse(*)"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: double.Parse — numeric coercion gate
+  - pattern: "Convert.ToInt32(*)"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: Convert.ToInt32
+  - pattern: "Convert.ToInt64(*)"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: Convert.ToInt64
+  - pattern: "Guid.Parse(*)"
+    vuln_classes: [sql_injection, path_traversal]
+    description: Guid.Parse — strict UUID validation

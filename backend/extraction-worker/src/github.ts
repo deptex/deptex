@@ -45,7 +45,33 @@ function createGitHubAppJwt(): string {
   return `${unsignedToken}.${base64Url(signature)}`;
 }
 
-async function createInstallationToken(installationId: string): Promise<string> {
+/**
+ * Look up the installation account login (e.g. the GitHub org or user that
+ * the project's GitHub App is installed on). Used by the container-scan
+ * Dockerfile FROM namespace check to verify that ghcr.io/<owner>/... is
+ * inside the project's own org boundary.
+ */
+export async function getInstallationAccount(
+  installationId: string
+): Promise<{ login: string; account_type?: string } | null> {
+  const jwt = createGitHubAppJwt();
+  const response = await fetch(
+    `${GITHUB_API_BASE}/app/installations/${installationId}`,
+    {
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'Deptex-Extraction-Worker',
+      },
+    }
+  );
+  if (!response.ok) return null;
+  const data = (await response.json()) as { account?: { login?: string; type?: string } };
+  if (!data.account?.login) return null;
+  return { login: data.account.login, account_type: data.account.type };
+}
+
+export async function createInstallationToken(installationId: string): Promise<string> {
   const jwt = createGitHubAppJwt();
   const response = await fetch(
     `${GITHUB_API_BASE}/app/installations/${installationId}/access_tokens`,
