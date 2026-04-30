@@ -328,90 +328,9 @@ router.put('/:id', async (req: AuthRequest, res) => {
       graphChanged = true;
     }
 
-    // Save-time code validation. Walks every code-mode node and runs its body
-    // through the sandbox against the trigger event's sample context.
-    if (graphChanged) {
-      const triggerEventType = findTriggerEventType(nextGraph);
-      const errors: Array<{ nodeId: string; stage: string; message: string; line?: number }> = [];
-
-      for (const n of nextGraph.nodes) {
-        const cfg = (n.config ?? {}) as { mode?: string; code?: string };
-        if (cfg.mode !== 'code' || !cfg.code) continue;
-
-        // Map node.type → contract. Today only `condition` has one; other code-mode
-        // nodes are skipped (they'll get contracts when their UI lands).
-        const contractType = mapNodeTypeToContract(n.type);
-        if (!contractType) continue;
-        const contract = getContract(contractType);
-        if (!contract) continue;
-
-        if (!triggerEventType || !(triggerEventType in EVENT_SCHEMAS)) {
-          errors.push({
-            nodeId: n.id,
-            stage: 'parse',
-            message: 'Code-mode node requires a trigger with a configured event type',
-          });
-          continue;
-        }
-
-        const sample = SAMPLE_CONTEXTS[triggerEventType];
-        if (!sample) {
-          errors.push({
-            nodeId: n.id,
-            stage: 'parse',
-            message: `No sample context registered for '${triggerEventType}'`,
-          });
-          continue;
-        }
-
-        try {
-          const result = await runFlowCode({
-            contract,
-            code: cfg.code,
-            context: sample,
-            organizationId: flow.organization_id,
-            timeoutMs: 5_000,
-            source: 'save_validation',
-          });
-          if (result.ok === false) {
-            const e = result.error;
-            errors.push({
-              nodeId: n.id,
-              stage: e.stage,
-              message: e.message,
-              line: e.line,
-            });
-          }
-        } catch (err: any) {
-          // Sandbox itself crashed. Fail-CLOSED unless the operator escape hatch is on.
-          const escapeHatch = process.env.ALLOW_UNVALIDATED_SAVE === 'true';
-          if (!escapeHatch) {
-            console.error('[flows.put] save-validation engine crash:', err);
-            return res.status(503).json({ error: 'sandbox_unavailable' });
-          }
-          // Escape hatch path: log to activities for audit, then continue.
-          // eslint-disable-next-line no-console
-          console.warn(
-            '[flows.put] ALLOW_UNVALIDATED_SAVE bypass for flow', flow.id, 'user', userId,
-            'engine error:', err?.message,
-          );
-          await supabase.from('activities').insert({
-            organization_id: flow.organization_id,
-            user_id: userId,
-            activity_type: 'flow_save_unvalidated',
-            description: `Flow ${flow.id} saved without sandbox validation (ALLOW_UNVALIDATED_SAVE)`,
-            metadata: { flow_id: flow.id, node_id: n.id, error: err?.message },
-          }).then(() => undefined, () => undefined);
-        }
-      }
-
-      if (errors.length > 0) {
-        return res.status(400).json({
-          error: 'code_validation_failed',
-          errors,
-        });
-      }
-    }
+    // Save persists verbatim — code validation runs on the explicit Test button
+    // (`POST /api/flows/validate-code`), not on every autosave keystroke. Invalid
+    // code surfaces at Test time and again at runtime when the flow fires.
 
     // Bump version when graph changes (history is per-graph-state, not per-name-edit).
     if (graphChanged) {
@@ -443,32 +362,6 @@ router.put('/:id', async (req: AuthRequest, res) => {
     res.status(500).json({ error: error.message || 'Failed to update flow' });
   }
 });
-
-/**
- * Find the trigger node's `event_type`. Today flow graphs have a single
- * trigger; if multiple triggers ever appear we'll need per-branch eventType
- * resolution, but the runtime doesn't support that yet either.
- */
-function findTriggerEventType(graph: FlowGraph): string | null {
-  for (const n of graph.nodes) {
-    if (n.type === 'trigger' || n.type.startsWith('trigger.')) {
-      const cfg = (n.config ?? {}) as { event_type?: string; event_types?: string[] };
-      if (typeof cfg.event_type === 'string') return cfg.event_type;
-      if (Array.isArray(cfg.event_types) && cfg.event_types.length > 0) return cfg.event_types[0];
-    }
-  }
-  return null;
-}
-
-/**
- * Map a graph node type → contract registry key. Today only `condition` has a
- * code contract; this exists so future filter/switch/transform nodes plug in
- * with one line each.
- */
-function mapNodeTypeToContract(nodeType: string): string | null {
-  if (nodeType === 'condition') return 'condition';
-  return null;
-}
 
 // DELETE /api/flows/:id — hard delete (cascades to versions + runs)
 router.delete('/:id', async (req: AuthRequest, res) => {

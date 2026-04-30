@@ -61,7 +61,7 @@ import {
 } from '../../components/ui/select';
 import { EVENT_SCHEMAS, type EventField, type EventFieldType } from '../../lib/flow-event-schemas';
 import { FlowCodeEditor } from '../../components/flow/FlowCodeEditor';
-import { toBody, wrapBody } from '../../lib/code-body-helpers';
+import { toBody } from '../../lib/code-body-helpers';
 import { Tabs, TabsList, TabsTrigger } from '../../components/ui/tabs';
 
 const NODE_WIDTH = 60;
@@ -728,9 +728,21 @@ function ConditionSidebar({
   const conditions: ConditionRow[] =
     config.conditions && config.conditions.length > 0 ? config.conditions : [EMPTY_ROW];
   const combinator: 'and' | 'or' = config.combinator ?? 'and';
-  // Stored value can be body-only (new) or a full function declaration (legacy).
-  // toBody() returns the body either way; the editor is body-only going forward.
-  const codeBody = config.code ? toBody(config.code, 'evaluate') : DEFAULT_CONDITION_BODY;
+
+  // Local body state. Tying the editor's `value` directly to `config.code`
+  // forces Monaco to re-sync on every parent re-render — and re-syncing while
+  // the user is mid-keystroke clobbers the cursor and causes weird newline
+  // behavior. We seed from config when the selected node changes, and from
+  // there the editor owns the buffer and the autosave is fire-and-forget.
+  const [codeBody, setCodeBodyState] = useState<string>('');
+  useEffect(() => {
+    if (!node) return;
+    const seed = config.code ? toBody(config.code, 'evaluate') : DEFAULT_CONDITION_BODY;
+    setCodeBodyState(seed);
+    // Only re-seed when the user switches nodes — not on every config update
+    // (those mostly come from our own emits).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [node?.id]);
 
   const emit = (next: ConditionConfig) => {
     if (!node) return;
@@ -757,7 +769,8 @@ function ConditionSidebar({
       return;
     }
     // Fresh visual → code: seed with default body silently.
-    emit({ mode: 'code', code: wrapBody(DEFAULT_CONDITION_BODY, 'evaluate', 'context') });
+    setCodeBodyState(DEFAULT_CONDITION_BODY);
+    emit({ mode: 'code', code: DEFAULT_CONDITION_BODY });
   };
 
   const confirmModeSwitch = () => {
@@ -767,7 +780,8 @@ function ConditionSidebar({
       emit({ mode: 'visual', code: undefined });
     } else {
       // Code mode — replace existing body with default seed.
-      emit({ mode: 'code', code: wrapBody(DEFAULT_CONDITION_BODY, 'evaluate', 'context') });
+      setCodeBodyState(DEFAULT_CONDITION_BODY);
+      emit({ mode: 'code', code: DEFAULT_CONDITION_BODY });
     }
     setPendingMode(null);
   };
@@ -793,9 +807,13 @@ function ConditionSidebar({
   };
 
   const setCodeBody = (nextBody: string) => {
-    // Persist as a full function declaration so the runtime engine (and any
-    // legacy reader) sees the same shape it always has.
-    emit({ code: wrapBody(nextBody, 'evaluate', 'context') });
+    // Local state owns the editor buffer; emit body-only to the parent.
+    // Backend runtime accepts both bare bodies and full function declarations
+    // (`wrapBodyAsFunction` wraps as needed), so we don't lose anything by
+    // storing the body verbatim — and we avoid the wrap/unwrap round-trip
+    // that broke mid-typing when partial code didn't parse.
+    setCodeBodyState(nextBody);
+    emit({ code: nextBody });
   };
 
   return (
@@ -1324,6 +1342,10 @@ function FlowCanvas({
       nodesConnectable={false}
       edgesFocusable={false}
       panOnDrag
+      // Default 'Space' steals every spacebar press at the window level —
+      // including text input inside the Monaco editor in the condition sidebar.
+      // panOnDrag covers our actual panning need; we don't need a hold-to-pan key.
+      panActivationKeyCode={null}
       zoomOnScroll
       zoomOnPinch
       proOptions={{ hideAttribution: true }}
