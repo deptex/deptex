@@ -1,13 +1,18 @@
 import type { ReactNode } from 'react';
 import type { UIMessage } from 'ai';
+import { AlertCircle, RotateCcw } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ToolCallGroup, type ToolCallEntry } from './ToolCallCard';
 import { PlanCard } from './PlanCard';
 import { FixStatusCard } from './FixStatusCard';
+import type { AegisChatError } from '../../lib/aegis-api';
 
 interface MessageBubbleProps {
   message: UIMessage;
   currentUserId?: string;
+  organizationId?: string;
+  onRegenerate?: () => void;
+  isRegenerating?: boolean;
 }
 
 function extractText(message: UIMessage): string {
@@ -41,10 +46,28 @@ function toolNameFor(part: any): string {
   return 'tool';
 }
 
-export function MessageBubble({ message, currentUserId: _currentUserId }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  currentUserId: _currentUserId,
+  organizationId,
+  onRegenerate,
+  isRegenerating,
+}: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const parts = (message as any).parts ?? [];
   const text = extractText(message);
+  const error = (message as any).error as AegisChatError | undefined;
+
+  if (!isUser && error) {
+    return (
+      <ErrorBubble
+        error={error}
+        organizationId={organizationId}
+        onRegenerate={onRegenerate}
+        isRegenerating={isRegenerating}
+      />
+    );
+  }
 
   if (isUser) {
     return (
@@ -100,6 +123,57 @@ export function MessageBubble({ message, currentUserId: _currentUserId }: Messag
     <div className="px-4 py-2">
       <div className="mx-auto max-w-3xl">
         <div className="space-y-2">{elements}</div>
+      </div>
+    </div>
+  );
+}
+
+interface ErrorBubbleProps {
+  error: AegisChatError;
+  organizationId?: string;
+  onRegenerate?: () => void;
+  isRegenerating?: boolean;
+}
+
+function ErrorBubble({ error, organizationId, onRegenerate, isRegenerating }: ErrorBubbleProps) {
+  const isCostCap = error.type === 'cost_cap';
+  const message = isCostCap
+    ? error.message ?? 'Monthly AI budget reached.'
+    : 'Something went wrong while generating a response.';
+
+  return (
+    <div className="px-4 py-2">
+      <div className="mx-auto max-w-3xl">
+        <div className="flex items-start gap-2.5 rounded-lg border border-error/30 bg-error/[0.06] px-3 py-2.5 text-sm text-foreground/90">
+          <AlertCircle className="h-4 w-4 shrink-0 text-error/80 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="leading-relaxed">{message}</p>
+            <div className="mt-2 flex items-center gap-3">
+              {isCostCap ? (
+                organizationId && (
+                  <a
+                    href={`/organizations/${organizationId}/settings/ai`}
+                    className="text-xs font-medium text-foreground/80 hover:text-foreground underline underline-offset-2"
+                  >
+                    Manage AI budget
+                  </a>
+                )
+              ) : (
+                onRegenerate && (
+                  <button
+                    type="button"
+                    onClick={onRegenerate}
+                    disabled={isRegenerating}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-foreground/40 bg-transparent px-2 py-1 text-xs font-medium text-foreground hover:bg-foreground/10 transition-colors disabled:opacity-60"
+                  >
+                    <RotateCcw className={`h-3 w-3 ${isRegenerating ? 'animate-spin' : ''}`} />
+                    {isRegenerating ? 'Regenerating' : 'Regenerate'}
+                  </button>
+                )
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

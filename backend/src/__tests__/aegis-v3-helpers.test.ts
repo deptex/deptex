@@ -127,23 +127,23 @@ describe('aegis-v3 helpers', () => {
   });
 
   describe('buildAegisSystemPrompt', () => {
-    it('embeds the org name and id', () => {
+    it('embeds the org name and the never-invent-IDs guardrail', () => {
       const out = buildAegisSystemPrompt({
         orgName: 'Acme',
         organizationId: ORG_ID,
       });
       expect(out).toContain('Acme');
-      expect(out).toContain(ORG_ID);
+      expect(out).toContain('must not invent or pass UUIDs');
+      expect(out).toContain('Use names, never IDs');
     });
 
-    it('appends a project section when projectId context is set', () => {
+    it('appends a project context section when projectId is set', () => {
       const out = buildAegisSystemPrompt({
         orgName: 'Acme',
         organizationId: ORG_ID,
         context: { projectId: 'proj-123' },
       });
-      expect(out).toContain('Current Context: Project');
-      expect(out).toContain('proj-123');
+      expect(out).toContain('Current context: project');
     });
   });
 

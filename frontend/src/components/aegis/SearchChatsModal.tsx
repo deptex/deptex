@@ -1,7 +1,8 @@
 import { useMemo, useState, type KeyboardEvent } from 'react';
 import { Dialog, DialogContent } from '../ui/dialog';
-import { Search, MessageCircle, Users, X, Archive, ArchiveRestore } from 'lucide-react';
+import { Search, Users, X, ArchiveRestore } from 'lucide-react';
 import type { AegisThread } from '../../lib/aegis-api';
+import { ThreadIcon } from './ThreadIcon';
 
 interface SearchChatsModalProps {
   open: boolean;
@@ -65,21 +66,21 @@ export function SearchChatsModal({ open, onOpenChange, threads, onSelect, onSetA
       <DialogContent className="max-w-2xl p-0 gap-0">
         {/* Search bar */}
         <div className="relative flex items-center border-b border-border">
-          <Search className="absolute left-4 h-4 w-4 text-foreground/50 pointer-events-none" />
+          <Search className="absolute left-4 h-4 w-4 text-foreground/60 pointer-events-none" />
           <input
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
             placeholder="Search chats..."
-            className="w-full bg-transparent border-0 pl-11 pr-10 py-4 text-sm text-foreground placeholder:text-foreground/40 outline-none focus:outline-none focus:ring-0"
+            className="w-full bg-transparent border-0 pl-11 pr-10 py-4 text-sm text-foreground placeholder:text-foreground/60 outline-none focus:outline-none focus:ring-0"
             autoFocus
           />
           {query && (
             <button
               type="button"
               onClick={() => setQuery('')}
-              className="absolute right-3 flex h-6 w-6 items-center justify-center rounded text-foreground/50 hover:text-foreground transition-colors"
+              className="absolute right-3 flex h-6 w-6 items-center justify-center rounded text-foreground/60 hover:text-foreground transition-colors"
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -97,25 +98,24 @@ export function SearchChatsModal({ open, onOpenChange, threads, onSelect, onSetA
 
           {groups.map(({ label, items }) => (
             <div key={label}>
-              <div className="px-3 pt-3 pb-1 text-xs font-medium text-foreground/50">{label}</div>
+              <div className="px-3 pt-3 pb-1 text-[11px] font-medium text-foreground/60">{label}</div>
               <div className="space-y-0.5">
                 {items.map((t) => (
                   <div key={t.id} className="group relative">
                     <button
                       type="button"
                       onClick={() => handleSelect(t.id)}
-                      className="w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm text-left text-foreground hover:bg-white/[0.04]"
+                      className="w-full flex items-center gap-2 rounded-md px-3 py-1.5 text-[13px] text-left text-foreground/90 hover:bg-white/[0.04]"
                     >
-                      <MessageCircle className="h-4 w-4 flex-shrink-0 text-foreground/50" />
+                      <ThreadIcon fixStatus={t.fixStatus} archived={!!t.archivedAt} />
                       <span className="truncate flex-1">{t.title}</span>
-                      {t.archivedAt && <Archive className="h-3.5 w-3.5 flex-shrink-0 text-foreground/50" />}
                       {!t.archivedAt && t.participantCount > 1 && <Users className="h-3.5 w-3.5 flex-shrink-0 text-foreground/50" />}
                     </button>
                     {t.archivedAt && (
                       <button
                         type="button"
                         onClick={(e) => handleUnarchive(e, t.id)}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5 px-2 py-1 rounded-md border border-border bg-background-card text-foreground text-xs font-medium hover:bg-background-subtle transition-colors opacity-0 group-hover:opacity-100"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5 px-2 py-1 rounded-md border border-foreground/40 bg-transparent text-foreground text-xs font-medium hover:bg-foreground/10 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 focus:outline-none"
                       >
                         <ArchiveRestore className="h-3 w-3" />
                         Unarchive

@@ -1,14 +1,18 @@
 import { supabase } from '../../lib/supabase';
 import { logAIUsage } from '../ai/logging';
 import { getProviderInfoForOrg } from './provider';
+import type { MessagePart } from '../aegis/types';
+
+export interface SaveUserMessageOptions {
+  threadId: string;
+  userId: string;
+  content: string;
+}
 
 export interface SaveAssistantMessageOptions {
   threadId: string;
-  userMessage: string;
   assistantText: string;
-  steps: number;
-  promptTokens: number;
-  completionTokens: number;
+  parts: MessagePart[];
   totalTokens: number;
 }
 
@@ -26,19 +30,39 @@ export interface SaveToolExecutionOptions {
   tokensUsed: number;
 }
 
+// Insert the user turn synchronously before kicking off the model. This way a
+// refresh during streaming still shows the question in the thread; only the
+// in-flight assistant tokens are lost.
+export async function saveUserMessage(opts: SaveUserMessageOptions): Promise<void> {
+  const { threadId, userId, content } = opts;
+  const { error } = await supabase.from('aegis_chat_messages').insert({
+    thread_id: threadId,
+    role: 'user',
+    user_id: userId,
+    content,
+    metadata: { parts: [{ type: 'text', text: content }] },
+  });
+  if (error) {
+    console.error('[aegis-v3] Failed to save user message:', error);
+    throw new Error(`Failed to save user message: ${error.message}`);
+  }
+}
+
+// Persist the assistant turn after streaming completes. metadata.parts is the
+// rich representation (text + tool-call/tool-result pairs) that ChatPane
+// rebuilds into UIMessage parts on history reload, so a streamed turn
+// renders identically when revisited.
 export async function saveAssistantMessage(opts: SaveAssistantMessageOptions): Promise<void> {
-  const { threadId, userMessage, assistantText, steps, totalTokens } = opts;
+  const { threadId, assistantText, parts, totalTokens } = opts;
 
   try {
-    await supabase.from('aegis_chat_messages').insert([
-      { thread_id: threadId, role: 'user', content: userMessage },
-      {
-        thread_id: threadId,
-        role: 'assistant',
-        content: assistantText || 'No response generated.',
-        metadata: { steps, tokens: totalTokens },
-      },
-    ]);
+    await supabase.from('aegis_chat_messages').insert({
+      thread_id: threadId,
+      role: 'assistant',
+      user_id: null,
+      content: assistantText || 'No response generated.',
+      metadata: { parts },
+    });
 
     if (totalTokens > 0) {
       const { data: thread } = await supabase
@@ -53,6 +77,11 @@ export async function saveAssistantMessage(opts: SaveAssistantMessageOptions): P
           total_tokens_used: (thread?.total_tokens_used || 0) + totalTokens,
           updated_at: new Date().toISOString(),
         })
+        .eq('id', threadId);
+    } else {
+      await supabase
+        .from('aegis_chat_threads')
+        .update({ updated_at: new Date().toISOString() })
         .eq('id', threadId);
     }
   } catch (err) {

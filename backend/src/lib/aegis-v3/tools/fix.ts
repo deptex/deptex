@@ -76,6 +76,20 @@ const requestFix: AegisToolEntry<{
       return { error: insertError?.message ?? 'Failed to create fix request' };
     }
 
+    // Link this chat thread to the fix so the sidebar can render a status icon.
+    // Best-effort — failure here doesn't break the fix flow.
+    if (ctx.threadId) {
+      try {
+        await ctx.supabase
+          .from('aegis_chat_threads')
+          .update({ context_type: 'fix', context_id: created.id })
+          .eq('id', ctx.threadId)
+          .is('context_id', null);
+      } catch (err) {
+        console.error('[aegis-tool] failed to link thread to fix', ctx.threadId, created.id, err);
+      }
+    }
+
     let result;
     try {
       result = await generateFixPlan({
