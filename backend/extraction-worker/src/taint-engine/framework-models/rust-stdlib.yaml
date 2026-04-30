@@ -1,0 +1,386 @@
+# Cross-framework Rust stdlib + common-crate sinks + sanitizers — applied
+# alongside per-framework Rust specs (actix-web / axum).
+#
+# Convention: NO sources here. Sources are framework-specific (extractor
+# wrappers like `web::Query`, `Json`, `Path`, headers/cookies); this file
+# declares only sinks + sanitizers covering SQLi, command injection, path
+# traversal, SSRF, deserialization, log injection, ReDoS.
+#
+# v1 limitations:
+#   - No trait dispatch (we don't know which `Query` impl is in play; the
+#     wildcard `*.arg(*)`-style patterns approximate this).
+#   - No generic resolution (`sqlx::query::<_>(*)` matches the `sqlx::query`
+#     prefix only).
+#   - No macro expansion; macros are matched by `name!` text shape via the
+#     IR lowerer (`format!`, `println!`, `vec!`, etc.).
+#   - Lifetimes / borrows / `&` / `*` / `mut` are ignored at the IR level.
+
+framework: rust-stdlib
+language: rust
+version: "*"
+
+sources: []
+
+sinks:
+  # ---------- SQL injection ----------
+  - pattern: sqlx::query(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: sqlx::query — raw SQL string
+  - pattern: sqlx::query_as(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: sqlx::query_as — raw SQL string
+  - pattern: sqlx::query_scalar(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: sqlx::query_scalar — raw SQL string
+  - pattern: diesel::sql_query(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: diesel::sql_query — raw SQL string
+  - pattern: tokio_postgres::Client.query(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: tokio-postgres Client.query
+  - pattern: tokio_postgres::Client.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: tokio-postgres Client.execute
+  - pattern: postgres::Client.query(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: postgres Client.query
+  - pattern: postgres::Client.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: postgres Client.execute
+  - pattern: rusqlite::Connection.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: rusqlite Connection.execute
+  - pattern: rusqlite::Connection.query(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: rusqlite Connection.query
+  - pattern: "*.execute(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Generic .execute() — DB clients, prepared statements
+  - pattern: "*.query(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Generic .query() — DB clients
+  - pattern: "*.query_as(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Generic .query_as() — sqlx-style typed query
+  - pattern: "*.fetch_all(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Generic .fetch_all() — sqlx executor entrypoint
+
+  # ---------- Command injection ----------
+  - pattern: std::process::Command::new(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: std::process::Command::new — program name
+  - pattern: Command::new(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: Command::new — bare import
+  - pattern: "*.arg(*)"
+    vuln_class: command_injection
+    argument_indices: [1]
+    description: Command builder .arg(*) — first method arg is the appended argv element (engine IR puts receiver at args[0])
+  - pattern: "*.args(*)"
+    vuln_class: command_injection
+    argument_indices: [1]
+    description: Command builder .args(*) — first method arg is the appended argv slice
+  - pattern: tokio::process::Command::new(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: tokio::process::Command::new — async variant
+
+  # ---------- Path traversal ----------
+  - pattern: std::fs::File::open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: std::fs::File::open
+  - pattern: std::fs::File::create(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: std::fs::File::create
+  - pattern: File::open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: File::open — bare import
+  - pattern: File::create(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: File::create — bare import
+  - pattern: std::fs::read(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: std::fs::read
+  - pattern: std::fs::read_to_string(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: std::fs::read_to_string
+  - pattern: std::fs::write(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: std::fs::write
+  - pattern: std::fs::remove_file(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: std::fs::remove_file
+  - pattern: std::fs::remove_dir_all(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: std::fs::remove_dir_all
+  - pattern: std::fs::create_dir_all(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: std::fs::create_dir_all
+  - pattern: tokio::fs::File::open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: tokio::fs::File::open
+  - pattern: tokio::fs::read(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: tokio::fs::read
+  - pattern: tokio::fs::read_to_string(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: tokio::fs::read_to_string
+  - pattern: tokio::fs::write(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: tokio::fs::write
+
+  # ---------- SSRF ----------
+  - pattern: reqwest::get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: reqwest::get
+  - pattern: reqwest::Client.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: reqwest Client.get
+  - pattern: reqwest::Client.post(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: reqwest Client.post
+  - pattern: reqwest::Client.put(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: reqwest Client.put
+  - pattern: reqwest::Client.delete(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: reqwest Client.delete
+  - pattern: reqwest::Client.request(*)
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: reqwest Client.request(method, url)
+  - pattern: hyper::Client.request(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: hyper Client.request
+  - pattern: ureq::get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: ureq::get
+  - pattern: ureq::post(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: ureq::post
+
+  # ---------- XSS ----------
+  - pattern: tera::Tera.render_str(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Tera.render_str — template from user input
+  - pattern: handlebars::Handlebars.render_template(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Handlebars.render_template — template from user input
+
+  # ---------- Deserialization ----------
+  - pattern: serde_json::from_str(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: serde_json::from_str — best-effort, only fires on http_input flows
+  - pattern: serde_json::from_slice(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: serde_json::from_slice
+  - pattern: bincode::deserialize(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: bincode::deserialize
+  - pattern: rmp_serde::from_slice(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: rmp-serde from_slice — MessagePack
+  - pattern: rmp_serde::from_read(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: rmp-serde from_read
+  - pattern: serde_yaml::from_str(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: serde_yaml::from_str
+  - pattern: serde_yaml::from_slice(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: serde_yaml::from_slice
+  - pattern: ron::from_str(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: ron::from_str
+  - pattern: toml::from_str(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: toml::from_str
+
+  # ---------- Log injection ----------
+  - pattern: log::info!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: log::info!
+  - pattern: log::error!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: log::error!
+  - pattern: log::warn!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: log::warn!
+  - pattern: log::debug!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: log::debug!
+  - pattern: log::trace!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: log::trace!
+  - pattern: tracing::info!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: tracing::info!
+  - pattern: tracing::error!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: tracing::error!
+  - pattern: tracing::warn!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: tracing::warn!
+  - pattern: tracing::debug!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: tracing::debug!
+  - pattern: println!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: println! — stdout log channel
+  - pattern: eprintln!(*)
+    vuln_class: log_injection
+    argument_indices: []
+    description: eprintln! — stderr log channel
+
+  # ---------- ReDoS ----------
+  - pattern: regex::Regex::new(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: regex::Regex::new with untrusted pattern
+  - pattern: Regex::new(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: Regex::new — bare import
+  - pattern: regex::RegexBuilder::new(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: regex::RegexBuilder::new with untrusted pattern
+
+sanitizers:
+  # ---------- SQL injection ----------
+  - pattern: "*.bind(*)"
+    vuln_classes: [sql_injection]
+    description: sqlx/diesel .bind() — parameterized binding makes the value safe vs raw SQL interpolation
+  - pattern: "*.bind_all(*)"
+    vuln_classes: [sql_injection]
+    description: sqlx .bind_all() — bulk parameterized binding
+
+  # ---------- XSS ----------
+  - pattern: html_escape::encode_text(*)
+    vuln_classes: [xss]
+    description: html-escape encode_text
+  - pattern: html_escape::encode_safe(*)
+    vuln_classes: [xss]
+    description: html-escape encode_safe
+  - pattern: htmlescape::encode_minimal(*)
+    vuln_classes: [xss]
+    description: htmlescape encode_minimal
+  - pattern: htmlescape::encode_attribute(*)
+    vuln_classes: [xss]
+    description: htmlescape encode_attribute
+  - pattern: ammonia::clean(*)
+    vuln_classes: [xss]
+    description: ammonia::clean — HTML sanitizer
+
+  # ---------- Path traversal ----------
+  - pattern: std::path::Path::file_name(*)
+    vuln_classes: [path_traversal]
+    description: Path.file_name — strips directory components
+  - pattern: "*.file_name(*)"
+    vuln_classes: [path_traversal]
+    description: Path-like .file_name()
+  - pattern: Path::new(*)
+    vuln_classes: []
+    description: Path::new — not a sanitizer; included as no-op for clarity
+
+  # ---------- Command injection ----------
+  - pattern: shell_escape::escape(*)
+    vuln_classes: [command_injection]
+    description: shell-escape::escape — shell-quote for sh
+  - pattern: shell_escape::unix::escape(*)
+    vuln_classes: [command_injection]
+    description: shell-escape::unix::escape
+
+  # ---------- SSRF / open redirect ----------
+  - pattern: urlencoding::encode(*)
+    vuln_classes: [open_redirect, ssrf]
+    description: urlencoding::encode — best-effort, doesn't actually validate host
+  - pattern: percent_encoding::utf8_percent_encode(*)
+    vuln_classes: [open_redirect, ssrf]
+    description: percent-encoding utf8_percent_encode
+
+  # ---------- ReDoS ----------
+  - pattern: regex::escape(*)
+    vuln_classes: [redos]
+    description: regex::escape — escape regex metachars
+
+  # ---------- Cross-class numeric coercion ----------
+  # In Rust idiom: `s.parse::<i32>()` / `s.parse::<u64>()` — the IR lowerer
+  # emits these as `*.parse(*)` (turbofish stripped).
+  - pattern: "*.parse(*)"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: str.parse::<T>() — numeric/typed coercion
+  - pattern: i32::from_str(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: i32::from_str
+  - pattern: u64::from_str(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: u64::from_str
+  - pattern: usize::from_str(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: usize::from_str
+
+  # ---------- Log injection ----------
+  - pattern: strip_newlines(*)
+    vuln_classes: [log_injection]
+    description: hand-written newline stripper

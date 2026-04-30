@@ -92,7 +92,7 @@ export async function runScan(opts: ScanOptions): Promise<ScanResult> {
 
   try {
     log(opts, `seeding org + project...`);
-    const { organizationId, projectId } = await seedLocalDb(storage, {
+    const { organizationId, projectId, jobId } = await seedLocalDb(storage, {
       repoLabel: label,
       ecosystem,
     });
@@ -111,6 +111,7 @@ export async function runScan(opts: ScanOptions): Promise<ScanResult> {
     const job: ExtractionJob = {
       projectId,
       organizationId,
+      jobId,
       repo_full_name: `local/${label}`,
       installation_id: 'local',
       default_branch: 'main',

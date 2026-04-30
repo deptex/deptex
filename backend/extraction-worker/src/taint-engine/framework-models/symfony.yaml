@@ -1,0 +1,504 @@
+# Symfony framework spec — Deptex cross-file taint engine.
+#
+# Symfony exposes request data via the HttpFoundation Request object passed
+# into controller actions: `$request->query->get('q')`, `$request->request->get('q')`,
+# `$request->cookies->get('c')`, `$request->headers->get('h')`,
+# `$request->files->get('f')`, `$request->get('q')`. Bag accessors
+# (ParameterBag / HeaderBag / FileBag) are tracked individually.
+#
+# Sinks/sanitizers duplicate the laravel.yaml stdlib layer because PHP's
+# stdlib is the same regardless of framework — the propagator dedupes flow
+# emissions, so the duplication is safe.
+
+framework: symfony
+language: php
+version: "*"
+
+sources:
+  # request->bag->method(...)
+  - pattern: request->query->get(*)
+    taint_kind: http_input
+    description: Symfony request->query->get()
+  - pattern: request->query->all(*)
+    taint_kind: http_input
+    description: Symfony request->query->all()
+  - pattern: request->query->has(*)
+    taint_kind: http_input
+    description: Symfony request->query->has()
+  - pattern: request->request->get(*)
+    taint_kind: http_input
+    description: Symfony request->request->get() (POST body)
+  - pattern: request->request->all(*)
+    taint_kind: http_input
+    description: Symfony request->request->all()
+  - pattern: request->cookies->get(*)
+    taint_kind: http_input
+    description: Symfony request->cookies->get()
+  - pattern: request->cookies->all(*)
+    taint_kind: http_input
+    description: Symfony request->cookies->all()
+  - pattern: request->headers->get(*)
+    taint_kind: http_input
+    description: Symfony request->headers->get()
+  - pattern: request->headers->all(*)
+    taint_kind: http_input
+    description: Symfony request->headers->all()
+  - pattern: request->files->get(*)
+    taint_kind: http_input
+    description: Symfony request->files->get()
+  - pattern: request->files->all(*)
+    taint_kind: http_input
+    description: Symfony request->files->all()
+  - pattern: request->server->get(*)
+    taint_kind: http_input
+    description: Symfony request->server->get()
+  - pattern: request->attributes->get(*)
+    taint_kind: http_input
+    description: Symfony request->attributes->get() (route params)
+  - pattern: request->getContent(*)
+    taint_kind: http_input
+    description: Symfony request->getContent() (raw body)
+  - pattern: request->get(*)
+    taint_kind: http_input
+    description: Symfony request->get() (any param bag)
+  - pattern: request->getQueryString(*)
+    taint_kind: http_input
+    description: Symfony request->getQueryString()
+  - pattern: request->getPathInfo(*)
+    taint_kind: http_input
+    description: Symfony request->getPathInfo()
+  - pattern: request->getUri(*)
+    taint_kind: http_input
+    description: Symfony request->getUri()
+  - pattern: request->getRequestUri(*)
+    taint_kind: http_input
+    description: Symfony request->getRequestUri()
+
+  # Property access on bags (`->headers->{name}`, `->query->name` etc).
+  - pattern: request->query.*
+    taint_kind: http_input
+    description: Symfony request->query bag access
+  - pattern: request->request.*
+    taint_kind: http_input
+    description: Symfony request->request bag access
+  - pattern: request->cookies.*
+    taint_kind: http_input
+    description: Symfony request->cookies bag access
+  - pattern: request->headers.*
+    taint_kind: http_input
+    description: Symfony request->headers bag access
+  - pattern: request->files.*
+    taint_kind: http_input
+    description: Symfony request->files bag access
+  - pattern: request->server.*
+    taint_kind: http_input
+    description: Symfony request->server bag access
+  - pattern: request->attributes.*
+    taint_kind: http_input
+    description: Symfony request->attributes bag access
+
+  # PHP superglobals (raw)
+  - pattern: _GET.*
+    taint_kind: http_input
+    description: PHP $_GET superglobal
+  - pattern: _POST.*
+    taint_kind: http_input
+    description: PHP $_POST superglobal
+  - pattern: _REQUEST.*
+    taint_kind: http_input
+    description: PHP $_REQUEST superglobal
+  - pattern: _COOKIE.*
+    taint_kind: http_input
+    description: PHP $_COOKIE superglobal
+  - pattern: _SERVER.*
+    taint_kind: http_input
+    description: PHP $_SERVER superglobal
+  - pattern: _FILES.*
+    taint_kind: http_input
+    description: PHP $_FILES superglobal
+
+sinks:
+  # ---------- SQL injection ----------
+  - pattern: "*->query(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: PDO->query() / Doctrine Connection->query()
+  - pattern: "*->exec(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: PDO->exec() / Doctrine Connection->exec()
+  - pattern: "*->executeQuery(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Doctrine Connection->executeQuery()
+  - pattern: "*->executeStatement(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Doctrine Connection->executeStatement()
+  - pattern: "*->createQuery(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Doctrine ORM EntityManager->createQuery() with raw DQL
+  - pattern: "*->createNativeQuery(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Doctrine ORM EntityManager->createNativeQuery()
+  - pattern: "*->where(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Doctrine QueryBuilder ->where() with raw fragment
+  - pattern: "*->andWhere(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Doctrine QueryBuilder ->andWhere() with raw fragment
+  - pattern: "*->orWhere(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Doctrine QueryBuilder ->orWhere() with raw fragment
+  - pattern: "*->orderBy(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Doctrine QueryBuilder ->orderBy() with raw fragment
+  - pattern: mysqli_query(*)
+    vuln_class: sql_injection
+    argument_indices: [1]
+    description: mysqli_query()
+  - pattern: mysql_query(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: mysql_query() (deprecated)
+  - pattern: pg_query(*)
+    vuln_class: sql_injection
+    argument_indices: [1]
+    description: pg_query()
+
+  # ---------- Command injection ----------
+  - pattern: exec(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: PHP exec()
+  - pattern: system(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: PHP system()
+  - pattern: shell_exec(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: PHP shell_exec()
+  - pattern: passthru(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: PHP passthru()
+  - pattern: proc_open(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: PHP proc_open()
+  - pattern: popen(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: PHP popen()
+  - pattern: pcntl_exec(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: PHP pcntl_exec()
+  - pattern: Process::fromShellCommandline(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: Symfony Process::fromShellCommandline()
+  - pattern: new Process(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: Symfony new Process(['cmd', 'arg']) — array-form is safer but tainted args still flag
+
+  # ---------- Path traversal ----------
+  - pattern: fopen(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: PHP fopen()
+  - pattern: file_get_contents(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: PHP file_get_contents() (also see SSRF)
+  - pattern: file_put_contents(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: PHP file_put_contents()
+  - pattern: readfile(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: PHP readfile()
+  - pattern: file(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: PHP file()
+  - pattern: copy(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: PHP copy()
+  - pattern: unlink(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: PHP unlink()
+  - pattern: rename(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: PHP rename()
+  - pattern: BinaryFileResponse(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Symfony BinaryFileResponse() — file path arg
+  - pattern: new BinaryFileResponse(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Symfony new BinaryFileResponse()
+
+  # ---------- SSRF ----------
+  - pattern: curl_init(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: PHP curl_init()
+  - pattern: curl_setopt(*)
+    vuln_class: ssrf
+    argument_indices: [2]
+    description: PHP curl_setopt() — value when option is CURLOPT_URL
+  - pattern: fsockopen(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: PHP fsockopen()
+  - pattern: stream_socket_client(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: PHP stream_socket_client()
+  - pattern: file_get_contents(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: PHP file_get_contents() — URL stream wrapper
+  - pattern: "*->request(*)"
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: Symfony HttpClientInterface->request($method, $url, ...)
+  - pattern: HttpClient::create(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Symfony HttpClient::create() options with base_uri
+
+  # ---------- XSS ----------
+  - pattern: echo(*)
+    vuln_class: xss
+    argument_indices: []
+    description: echo statement (synthetic)
+  - pattern: print(*)
+    vuln_class: xss
+    argument_indices: []
+    description: print statement (synthetic)
+  - pattern: new Response(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Symfony new Response() — body
+  - pattern: Response::create(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Symfony Response::create() — body
+  - pattern: "*->setContent(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: Symfony Response->setContent()
+
+  # ---------- Open redirect ----------
+  - pattern: new RedirectResponse(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Symfony new RedirectResponse()
+  - pattern: RedirectResponse::create(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Symfony RedirectResponse::create()
+  - pattern: "*->redirect(*)"
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Symfony Controller->redirect()
+  - pattern: "*->redirectToRoute(*)"
+    vuln_class: open_redirect
+    argument_indices: [1]
+    description: Symfony Controller->redirectToRoute() — params
+  - pattern: header(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: "PHP header() — Location: header"
+
+  # ---------- Deserialization ----------
+  - pattern: unserialize(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: PHP unserialize()
+  - pattern: eval(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: PHP eval()
+  - pattern: assert(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: PHP assert() with string arg
+  - pattern: create_function(*)
+    vuln_class: deserialization
+    argument_indices: [1]
+    description: PHP create_function() (deprecated)
+  - pattern: include(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: PHP include() with dynamic path
+  - pattern: include_once(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: PHP include_once()
+  - pattern: require(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: PHP require()
+  - pattern: require_once(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: PHP require_once()
+  - pattern: Yaml::parse(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Symfony Yaml::parse() with PARSE_OBJECT or PARSE_OBJECT_FOR_MAP
+
+  # ---------- Log injection ----------
+  - pattern: "*->info(*)"
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: PSR-3 LoggerInterface->info()
+  - pattern: "*->error(*)"
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: PSR-3 LoggerInterface->error()
+  - pattern: "*->warning(*)"
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: PSR-3 LoggerInterface->warning()
+  - pattern: "*->debug(*)"
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: PSR-3 LoggerInterface->debug()
+  - pattern: "*->notice(*)"
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: PSR-3 LoggerInterface->notice()
+  - pattern: "*->critical(*)"
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: PSR-3 LoggerInterface->critical()
+  - pattern: "*->log(*)"
+    vuln_class: log_injection
+    argument_indices: [1]
+    description: PSR-3 LoggerInterface->log($level, $msg)
+  - pattern: error_log(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: PHP error_log()
+  - pattern: syslog(*)
+    vuln_class: log_injection
+    argument_indices: [1]
+    description: PHP syslog()
+
+  # ---------- ReDoS ----------
+  - pattern: preg_match(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: PHP preg_match()
+  - pattern: preg_match_all(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: PHP preg_match_all()
+  - pattern: preg_replace(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: PHP preg_replace()
+  - pattern: preg_replace_callback(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: PHP preg_replace_callback()
+  - pattern: preg_split(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: PHP preg_split()
+  - pattern: preg_grep(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: PHP preg_grep()
+
+sanitizers:
+  # ---------- XSS ----------
+  - pattern: htmlspecialchars(*)
+    vuln_classes: [xss]
+    description: PHP htmlspecialchars()
+  - pattern: htmlentities(*)
+    vuln_classes: [xss]
+    description: PHP htmlentities()
+  - pattern: strip_tags(*)
+    vuln_classes: [xss]
+    description: PHP strip_tags()
+  - pattern: twig_escape_filter(*)
+    vuln_classes: [xss]
+    description: Twig escape filter
+
+  # ---------- SQL ----------
+  - pattern: mysqli_real_escape_string(*)
+    vuln_classes: [sql_injection]
+    description: PHP mysqli_real_escape_string()
+  - pattern: addslashes(*)
+    vuln_classes: [sql_injection]
+    description: PHP addslashes() — best-effort
+  - pattern: PDO::quote(*)
+    vuln_classes: [sql_injection]
+    description: PDO::quote()
+  - pattern: "*->quote(*)"
+    vuln_classes: [sql_injection]
+    description: PDO->quote() / Doctrine Connection->quote()
+
+  # ---------- Command injection ----------
+  - pattern: escapeshellcmd(*)
+    vuln_classes: [command_injection]
+    description: PHP escapeshellcmd()
+  - pattern: escapeshellarg(*)
+    vuln_classes: [command_injection]
+    description: PHP escapeshellarg()
+
+  # ---------- Path traversal ----------
+  - pattern: basename(*)
+    vuln_classes: [path_traversal]
+    description: PHP basename()
+  - pattern: realpath(*)
+    vuln_classes: [path_traversal]
+    description: PHP realpath()
+  - pattern: pathinfo(*)
+    vuln_classes: [path_traversal]
+    description: PHP pathinfo()
+
+  # ---------- SSRF / open redirect ----------
+  - pattern: filter_var(*)
+    vuln_classes: [xss, ssrf, open_redirect]
+    description: PHP filter_var()
+  - pattern: parse_url(*)
+    vuln_classes: [ssrf, open_redirect]
+    description: PHP parse_url()
+
+  # ---------- Numeric coercion (cross-class) ----------
+  - pattern: intval(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: PHP intval()
+  - pattern: floatval(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: PHP floatval()
+  - pattern: doubleval(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: PHP doubleval()
+  - pattern: settype(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: PHP settype()
+
+  # ---------- ReDoS ----------
+  - pattern: preg_quote(*)
+    vuln_classes: [redos]
+    description: PHP preg_quote()

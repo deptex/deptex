@@ -1,0 +1,83 @@
+# Echo (Go) framework spec — Deptex cross-file taint engine.
+
+framework: echo
+language: go
+version: "*"
+
+sources:
+  - pattern: c.QueryParam(*)
+    taint_kind: http_input
+    description: Echo query string param
+  - pattern: c.QueryParams(*)
+    taint_kind: http_input
+    description: Echo all query params
+  - pattern: c.QueryString(*)
+    taint_kind: http_input
+    description: Echo raw query string
+  - pattern: c.FormValue(*)
+    taint_kind: http_input
+    description: Echo form value
+  - pattern: c.FormParams(*)
+    taint_kind: http_input
+    description: Echo form params
+  - pattern: c.FormFile(*)
+    taint_kind: http_input
+    description: Echo form file upload
+  - pattern: c.Param(*)
+    taint_kind: http_input
+    description: Echo route param
+  - pattern: c.ParamValues(*)
+    taint_kind: http_input
+    description: Echo route param values
+  - pattern: c.Bind(*)
+    taint_kind: http_input
+    description: Echo Bind — bound struct is tainted
+  - pattern: c.Cookie(*)
+    taint_kind: http_input
+    description: Echo cookie
+  - pattern: c.Cookies(*)
+    taint_kind: http_input
+    description: Echo all cookies
+  - pattern: c.Request(*)
+    taint_kind: http_input
+    description: Echo raw *http.Request — fields downstream are tainted
+
+sinks:
+  - pattern: c.HTML(*)
+    vuln_class: xss
+    argument_indices: [1]
+    description: Echo HTML response
+  - pattern: c.HTMLBlob(*)
+    vuln_class: xss
+    argument_indices: [1]
+    description: Echo HTMLBlob — raw bytes
+  - pattern: c.String(*)
+    vuln_class: xss
+    argument_indices: [1]
+    description: Echo String response
+  - pattern: c.Blob(*)
+    vuln_class: xss
+    argument_indices: [2]
+    description: Echo Blob — raw bytes response
+  - pattern: c.Stream(*)
+    vuln_class: xss
+    argument_indices: [2]
+    description: Echo Stream — raw stream response
+  - pattern: c.Redirect(*)
+    vuln_class: open_redirect
+    argument_indices: [1]
+    description: Echo Redirect URL
+  - pattern: c.File(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Echo File — filesystem path
+  - pattern: c.Attachment(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Echo Attachment — filesystem path
+  - pattern: c.Inline(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Echo Inline — filesystem path
+
+sanitizers: []
