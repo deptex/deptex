@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState } from 'react';
 import MonacoEditor, { type BeforeMount, type OnMount } from '@monaco-editor/react';
 import type { editor, IDisposable } from 'monaco-editor';
-import { Loader2, Play, ChevronDown, ChevronRight, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Loader2, Play, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { api, type FlowCodeValidationResult } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { CODE_BLOCK_BG, beforeMountPolicyMonaco } from '../policy-monaco-setup';
@@ -23,7 +23,6 @@ import { buildFlowCodeDts, NODE_CODE_CONTRACTS } from './flow-code-typedefs';
 const LINE_HEIGHT = 20;
 const PADDING_TOP = 8;
 const PADDING_BOTTOM = 2;
-const MIN_LINES = 3;
 
 interface FlowCodeEditorProps {
   flowId: string;
@@ -33,33 +32,10 @@ interface FlowCodeEditorProps {
   onChange: (value: string) => void;
   /** Notified after each validate-code response. Parent can store last result for save-gate UX. */
   onValidationChange?: (result: FlowCodeValidationResult | null) => void;
-  /** Examples surfaced in the collapsible. */
-  exampleBodies?: Array<{ label: string; body: string }>;
 }
 
-const CONDITION_EXAMPLES: Array<{ label: string; body: string }> = [
-  {
-    label: 'Critical or high severity only',
-    body: `  const sev = context.vulnerability?.severity;
-  return sev === 'critical' || sev === 'high';`,
-  },
-  {
-    label: 'Reachable + score >= 70',
-    body: `  const v = context.vulnerability;
-  return Boolean(v?.isReachable) && (v?.depscore ?? 0) >= 70;`,
-  },
-  {
-    label: 'Production tier projects',
-    body: `  return context.project?.tier === 'Production';`,
-  },
-  {
-    label: 'Direct dependencies only',
-    body: `  return context.dependency?.isDirect === true;`,
-  },
-];
-
 function fitHeight(value: string): number {
-  const lineCount = Math.max(MIN_LINES, value.split('\n').length || 1);
+  const lineCount = value.split('\n').length || 1;
   return (lineCount + 1) * LINE_HEIGHT + PADDING_TOP + PADDING_BOTTOM;
 }
 
@@ -70,7 +46,6 @@ export function FlowCodeEditor({
   value,
   onChange,
   onValidationChange,
-  exampleBodies,
 }: FlowCodeEditorProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const disposablesRef = useRef<IDisposable[]>([]);
@@ -78,11 +53,6 @@ export function FlowCodeEditor({
 
   const [testing, setTesting] = useState(false);
   const [lastResult, setLastResult] = useState<FlowCodeValidationResult | null>(null);
-  const [showExamples, setShowExamples] = useState(false);
-  const [showCustomContext, setShowCustomContext] = useState(false);
-  const [customContextJson, setCustomContextJson] = useState('');
-
-  const examples = exampleBodies ?? (nodeType === 'condition' ? CONDITION_EXAMPLES : []);
 
   // Clear stale test result on edit. We surface "untested" via the absence of
   // lastResult and "passed" via its presence.
@@ -140,30 +110,12 @@ export function FlowCodeEditor({
   const runTest = async () => {
     if (!eventType) return;
     setTesting(true);
-    let parsedCustom: unknown = undefined;
-    if (showCustomContext && customContextJson.trim()) {
-      try {
-        parsedCustom = JSON.parse(customContextJson);
-      } catch (err: unknown) {
-        const result: FlowCodeValidationResult = {
-          syntaxOk: true,
-          runOk: false,
-          error: { stage: 'run', message: `Invalid custom context JSON: ${(err as Error).message}` },
-          durationMs: 0,
-        };
-        setLastResult(result);
-        onValidationChange?.(result);
-        setTesting(false);
-        return;
-      }
-    }
     try {
       const result = await api.validateFlowCode({
         flowId,
         nodeType,
         eventType,
         code: value,
-        customContext: parsedCustom,
       });
       setLastResult(result);
       onValidationChange?.(result);
@@ -179,11 +131,6 @@ export function FlowCodeEditor({
     } finally {
       setTesting(false);
     }
-  };
-
-  const insertExample = (body: string) => {
-    onChange(body);
-    setShowExamples(false);
   };
 
   const editorHeight = fitHeight(value);
@@ -289,61 +236,6 @@ export function FlowCodeEditor({
           </div>
         </div>
       )}
-
-      {/* Examples collapsible */}
-      {examples.length > 0 && (
-        <div className="rounded-lg border border-border bg-background-card-header">
-          <button
-            type="button"
-            onClick={() => setShowExamples((v) => !v)}
-            className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-medium text-foreground-secondary hover:text-foreground"
-          >
-            {showExamples ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-            Examples
-          </button>
-          {showExamples && (
-            <div className="border-t border-border">
-              {examples.map((ex, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => insertExample(ex.body)}
-                  className="flex w-full flex-col items-start gap-0.5 border-b border-border px-3 py-2 text-left last:border-b-0 hover:bg-background-subtle"
-                >
-                  <span className="text-[12px] font-medium text-foreground">{ex.label}</span>
-                  <code className="line-clamp-2 font-mono text-[11px] text-foreground-secondary">{ex.body.trim()}</code>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Custom context collapsible */}
-      <div className="rounded-lg border border-border bg-background-card-header">
-        <button
-          type="button"
-          onClick={() => setShowCustomContext((v) => !v)}
-          className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-medium text-foreground-secondary hover:text-foreground"
-        >
-          {showCustomContext ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-          Run with my own sample
-        </button>
-        {showCustomContext && (
-          <div className="border-t border-border p-3">
-            <textarea
-              value={customContextJson}
-              onChange={(e) => setCustomContextJson(e.target.value)}
-              placeholder='{"vulnerability": {"severity": "critical", ...}}'
-              rows={4}
-              className="w-full rounded-md border border-border bg-background-card px-2 py-1.5 font-mono text-[11px] text-foreground placeholder:text-foreground-secondary/60 focus:border-foreground/40 focus:outline-none"
-            />
-            <p className="mt-1 text-[11px] text-foreground-secondary">
-              JSON shape of an event payload — bypasses the cache.
-            </p>
-          </div>
-        )}
-      </div>
     </div>
   );
 }
