@@ -38,6 +38,7 @@ export const createMockSupabase = (registry: TableRegistry = {}, rpcRegistry: Rp
     in: jest.fn().mockReturnThis(),
     is: jest.fn().mockReturnThis(),
     gt: jest.fn().mockReturnThis(),
+    ilike: jest.fn().mockReturnThis(),
     contains: jest.fn().mockReturnThis(),
     or: jest.fn().mockReturnThis(),
     single: jest.fn().mockImplementation(function (this: any) {
