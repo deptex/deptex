@@ -411,20 +411,58 @@ Files: new `reachability-rules/`, new `reachability-rules.ts`, modified `pipelin
 
 Files: `epd.ts`, `pipeline.ts`
 
-**Phase 5: Scale Rules to 50+ (~2 weeks)**
-- Write rules for all CISA KEV dependency CVEs
-- Write rules for top EPSS CVEs per ecosystem
-- Adapt existing Semgrep community patterns where available
-- Add rule coverage metric to extraction logs
+**Phase 5: Autogrep-style AI Rule Generation (SHIPPED 2026-04-30)**
 
-### Month 3: AI Rule Generation (Phase 6)
+Pivoted mid-flight from the original "hand-write 50 rules" scope. What
+shipped is per-org, in-process AI rule generation inside the
+extraction-worker — the original Phase 5 + Phase 6 scope collapsed into
+one. See `reachability-phase5-rule-generation.plan.md` and
+`reachability-phase5b-rule-quality.plan.md` for the as-built design.
 
-**Phase 6: AI Rule Drafting Pipeline (~3 weeks)**
-- `tools/generate-rule.ts`: takes CVE ID → fetches advisory + patch diff → calls LLM → outputs draft YAML
-- `tools/test-rule.ts`: validates rules against known-vulnerable test code
-- Use Tier 1 Gemini Flash (free for us) for generation
-- Generate + review rules to reach 100+ total
-- Track `ai_generated: true` metadata on rules
+What shipped:
+- `extraction-worker/src/rule-generator/` — OSV fetch, GitHub patch fetch,
+  multi-provider LLM call (Anthropic / OpenAI-compat / Google), four-stage
+  validator (Zod → semgrep --validate → vulnerable/safe fixture
+  round-trip → diff-targeted patch round-trip).
+- `extraction-worker/src/rule-generation-step.ts` — pipeline step between
+  dep-scan and reachability-rules. Filters trigger-eligible CVEs, applies
+  monthly $ cap with haiku fall-back, runs generation under p-limit, persists
+  rules to `organization_generated_rules` for the same scan to consume.
+- `phase25` + `phase25b` migrations — `organization_reachability_settings`
+  (per-org policy: trigger severities, KEV gate, asset-tier cap, AI provider
+  + model, monthly_budget_usd, on_budget_exhaustion behavior),
+  `organization_generated_rules` (rule_yaml + fixtures + previous_versions
+  LIFO at 10 + validation_log JSONB), and reachability telemetry columns on
+  `extraction_jobs`.
+- Settings UI: GET/PATCH `/api/organizations/:id/reachability-settings`,
+  GET/PATCH/DELETE/regenerate `/api/organizations/:id/generated-rules`,
+  three new components in `frontend/src/components/settings/`.
+- Bench harness in `extraction-worker/test/iterate/` — 88-CVE Qwen
+  validation corpus, locked at 72.7% (up from 67% baseline) after the
+  Phase A→B→C→D prompt iteration. Per-eco variance now exceeds per-phase
+  signal — corpus expansion is the next leverage path, not more prompt edits.
+
+Phase 5 fold-in:
+- `Scale Rules to 50+` is no longer a separate phase. The platform corpus
+  (`backend/extraction-worker/reachability-rules/`) sits alongside the
+  per-org AI-generated rules; both are loaded by `reachability-rules.ts`
+  via `loadAllRulesWithSkipped` + `loadOrgGeneratedRules`. Continued
+  hand-authored growth happens organically alongside AI generation.
+- The original `Phase 6: AI Rule Drafting Pipeline` (offline tool) is
+  obsolete — generation is per-org, in-process, and online.
+
+### Month 3: Cross-File Reachability Promotion (Phase 6 / 6.5)
+
+**Phase 6: Cross-File Taint Engine (built on `worktree-cross-file-taint-engine`,
+shadow-mergeable as of 2026-04-29).** Framework-generic cross-file taint
+tracking inside the extraction-worker. 27 commits awaiting Phase 5 merge
+first to avoid migration-number collision.
+
+**Phase 6.5: CVE-targeted cross-file (planned, ~1 week).** Bridges Phase 5's
+per-CVE rules with Phase 6's cross-file engine — lift the Phase 5 sinks into
+Phase 6 and tag flows with `osv_id` so the classifier promotes matches to
+`confirmed`. Prereqs: Phase 5 merged + Phase 6 merged + ~2 weeks of shadow
+data. Stub in this plan; full design in `phase6_5_cross_file_cve_targeted.md`.
 
 ### Month 4: AI Cross-File Analysis (Phase 7)
 

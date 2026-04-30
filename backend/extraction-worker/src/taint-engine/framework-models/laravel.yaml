@@ -1,0 +1,586 @@
+# Laravel framework spec — Deptex cross-file taint engine.
+#
+# Laravel exposes request data through the `$request` instance (typically an
+# Illuminate\Http\Request injected into controller actions) and the static
+# Request / Input facades. Sources cover input(), all(), query(), get(),
+# post(), cookie(), header(), json(), file(). Sinks cover SQL injection
+# (DB::raw, *->whereRaw, raw DB::select/statement), command injection
+# (exec/system/shell_exec/passthru/proc_open/popen/pcntl_exec), path
+# traversal (fopen, file_get_contents, file_put_contents, readfile,
+# Storage::get/download), SSRF (curl_init/Http::get/Http::post,
+# file_get_contents on URLs), XSS (echo + Blade::raw), open redirect
+# (redirect, header()), deserialization (unserialize, eval, assert,
+# create_function), log injection (Log::*, error_log), redos (preg_*).
+#
+# Generic PHP-stdlib sinks are duplicated across the laravel + symfony yamls
+# so a workspace using only one of them still detects stdlib-targeting flows.
+
+framework: laravel
+language: php
+version: "*"
+
+sources:
+  # Member-call shape: $request->method(*)
+  - pattern: request->input(*)
+    taint_kind: http_input
+    description: Laravel $request->input()
+  - pattern: request->all(*)
+    taint_kind: http_input
+    description: Laravel $request->all()
+  - pattern: request->all.*
+    taint_kind: http_input
+    description: Laravel $request->all()['k']
+  - pattern: request->query(*)
+    taint_kind: http_input
+    description: Laravel $request->query()
+  - pattern: request->get(*)
+    taint_kind: http_input
+    description: Laravel $request->get()
+  - pattern: request->post(*)
+    taint_kind: http_input
+    description: Laravel $request->post()
+  - pattern: request->cookie(*)
+    taint_kind: http_input
+    description: Laravel $request->cookie()
+  - pattern: request->header(*)
+    taint_kind: http_input
+    description: Laravel $request->header()
+  - pattern: request->json(*)
+    taint_kind: http_input
+    description: Laravel $request->json()
+  - pattern: request->file(*)
+    taint_kind: http_input
+    description: Laravel $request->file()
+  - pattern: request->only(*)
+    taint_kind: http_input
+    description: Laravel $request->only()
+  - pattern: request->except(*)
+    taint_kind: http_input
+    description: Laravel $request->except()
+  - pattern: request->bearerToken(*)
+    taint_kind: http_input
+    description: Laravel $request->bearerToken()
+  - pattern: request->fullUrl(*)
+    taint_kind: http_input
+    description: Laravel $request->fullUrl()
+
+  # Property access: $request->prop / $request->prop['k']
+  - pattern: request->input.*
+    taint_kind: http_input
+    description: Laravel $request->input attribute
+  - pattern: request->query.*
+    taint_kind: http_input
+    description: Laravel $request->query attribute
+  - pattern: request->cookies.*
+    taint_kind: http_input
+    description: Laravel $request->cookies attribute
+  - pattern: request->headers.*
+    taint_kind: http_input
+    description: Laravel $request->headers attribute
+
+  # Static facades: Input::*, Request::*
+  - pattern: Input::get(*)
+    taint_kind: http_input
+    description: Laravel Input::get
+  - pattern: Input::all(*)
+    taint_kind: http_input
+    description: Laravel Input::all
+  - pattern: Input::only(*)
+    taint_kind: http_input
+    description: Laravel Input::only
+  - pattern: Input::except(*)
+    taint_kind: http_input
+    description: Laravel Input::except
+  - pattern: Input::has(*)
+    taint_kind: http_input
+    description: Laravel Input::has
+  - pattern: Request::input(*)
+    taint_kind: http_input
+    description: Laravel Request::input
+  - pattern: Request::all(*)
+    taint_kind: http_input
+    description: Laravel Request::all
+  - pattern: Request::query(*)
+    taint_kind: http_input
+    description: Laravel Request::query
+  - pattern: Request::get(*)
+    taint_kind: http_input
+    description: Laravel Request::get
+  - pattern: Request::post(*)
+    taint_kind: http_input
+    description: Laravel Request::post
+  - pattern: Request::cookie(*)
+    taint_kind: http_input
+    description: Laravel Request::cookie
+  - pattern: Request::header(*)
+    taint_kind: http_input
+    description: Laravel Request::header
+  - pattern: Request::file(*)
+    taint_kind: http_input
+    description: Laravel Request::file
+
+  # PHP superglobals (raw)
+  - pattern: _GET.*
+    taint_kind: http_input
+    description: PHP $_GET superglobal
+  - pattern: _POST.*
+    taint_kind: http_input
+    description: PHP $_POST superglobal
+  - pattern: _REQUEST.*
+    taint_kind: http_input
+    description: PHP $_REQUEST superglobal
+  - pattern: _COOKIE.*
+    taint_kind: http_input
+    description: PHP $_COOKIE superglobal
+  - pattern: _SERVER.*
+    taint_kind: http_input
+    description: PHP $_SERVER superglobal
+  - pattern: _FILES.*
+    taint_kind: http_input
+    description: PHP $_FILES superglobal
+
+sinks:
+  # ---------- SQL injection ----------
+  - pattern: DB::raw(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Laravel DB::raw()
+  - pattern: DB::select(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Laravel DB::select() with raw SQL
+  - pattern: DB::statement(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Laravel DB::statement()
+  - pattern: DB::unprepared(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Laravel DB::unprepared()
+  - pattern: DB::insert(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Laravel DB::insert() with raw SQL
+  - pattern: DB::update(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Laravel DB::update() with raw SQL
+  - pattern: DB::delete(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Laravel DB::delete() with raw SQL
+  - pattern: "*->whereRaw(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Eloquent Builder ->whereRaw()
+  - pattern: "*->orWhereRaw(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Eloquent Builder ->orWhereRaw()
+  - pattern: "*->orderByRaw(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Eloquent Builder ->orderByRaw()
+  - pattern: "*->selectRaw(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Eloquent Builder ->selectRaw()
+  - pattern: "*->havingRaw(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Eloquent Builder ->havingRaw()
+  - pattern: "*->groupByRaw(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Eloquent Builder ->groupByRaw()
+  - pattern: "*->raw(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Generic raw() helper
+  - pattern: mysqli_query(*)
+    vuln_class: sql_injection
+    argument_indices: [1]
+    description: mysqli_query()
+  - pattern: mysql_query(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: mysql_query() (deprecated)
+  - pattern: pg_query(*)
+    vuln_class: sql_injection
+    argument_indices: [1]
+    description: pg_query()
+  - pattern: "*->query(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: PDO->query()
+  - pattern: "*->exec(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: PDO->exec()
+
+  # ---------- Command injection ----------
+  - pattern: exec(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: PHP exec()
+  - pattern: system(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: PHP system()
+  - pattern: shell_exec(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: PHP shell_exec()
+  - pattern: passthru(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: PHP passthru()
+  - pattern: proc_open(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: PHP proc_open()
+  - pattern: popen(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: PHP popen()
+  - pattern: pcntl_exec(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: PHP pcntl_exec()
+  - pattern: Process::fromShellCommandline(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: Symfony Process::fromShellCommandline (re-exported by Laravel)
+
+  # ---------- Path traversal ----------
+  - pattern: fopen(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: PHP fopen()
+  - pattern: file_get_contents(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: PHP file_get_contents() (also see SSRF)
+  - pattern: file_put_contents(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: PHP file_put_contents()
+  - pattern: readfile(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: PHP readfile()
+  - pattern: file(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: PHP file() (read into array)
+  - pattern: copy(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: PHP copy()
+  - pattern: unlink(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: PHP unlink()
+  - pattern: rename(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: PHP rename()
+  - pattern: Storage::get(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Laravel Storage::get()
+  - pattern: Storage::download(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Laravel Storage::download()
+  - pattern: Storage::put(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Laravel Storage::put()
+  - pattern: Storage::delete(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Laravel Storage::delete()
+  - pattern: File::get(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Laravel File::get()
+  - pattern: File::put(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Laravel File::put()
+
+  # ---------- SSRF ----------
+  - pattern: curl_init(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: PHP curl_init() with URL arg
+  - pattern: curl_setopt(*)
+    vuln_class: ssrf
+    argument_indices: [2]
+    description: PHP curl_setopt() — value when option is CURLOPT_URL
+  - pattern: Http::get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Laravel Http::get()
+  - pattern: Http::post(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Laravel Http::post()
+  - pattern: Http::put(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Laravel Http::put()
+  - pattern: Http::delete(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Laravel Http::delete()
+  - pattern: Http::patch(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Laravel Http::patch()
+  - pattern: Http::head(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Laravel Http::head()
+  - pattern: Http::send(*)
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: Laravel Http::send(method, url, ...)
+  - pattern: fsockopen(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: PHP fsockopen()
+  - pattern: stream_socket_client(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: PHP stream_socket_client()
+  # file_get_contents is dual-classed: when given a URL it's SSRF.
+  - pattern: file_get_contents(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: PHP file_get_contents() — URL stream wrapper
+
+  # ---------- XSS ----------
+  - pattern: echo(*)
+    vuln_class: xss
+    argument_indices: []
+    description: echo statement (synthetic) — any tainted arg is XSS
+  - pattern: print(*)
+    vuln_class: xss
+    argument_indices: []
+    description: print statement (synthetic)
+  - pattern: Blade::raw(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Laravel Blade::raw() — emits unescaped HTML
+  - pattern: "*->withErrors(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: Reflected error message — best-effort
+  - pattern: response(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Laravel response() helper — body
+  - pattern: View::make(*)
+    vuln_class: xss
+    argument_indices: [1]
+    description: View::make($view, $data) — data array
+
+  # ---------- Open redirect ----------
+  - pattern: redirect(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Laravel redirect() helper
+  - pattern: Redirect::to(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Laravel Redirect::to()
+  - pattern: Redirect::away(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Laravel Redirect::away()
+  - pattern: header(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: "PHP header() — Location: header is open-redirect-shaped"
+
+  # ---------- Deserialization ----------
+  - pattern: unserialize(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: PHP unserialize()
+  - pattern: eval(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: PHP eval()
+  - pattern: assert(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: PHP assert() with string arg
+  - pattern: create_function(*)
+    vuln_class: deserialization
+    argument_indices: [1]
+    description: PHP create_function() (deprecated; eval-shaped)
+  - pattern: include(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: PHP include() with dynamic path
+  - pattern: include_once(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: PHP include_once() with dynamic path
+  - pattern: require(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: PHP require() with dynamic path
+  - pattern: require_once(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: PHP require_once() with dynamic path
+
+  # ---------- Log injection ----------
+  - pattern: Log::info(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: Laravel Log::info()
+  - pattern: Log::error(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: Laravel Log::error()
+  - pattern: Log::warning(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: Laravel Log::warning()
+  - pattern: Log::debug(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: Laravel Log::debug()
+  - pattern: Log::notice(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: Laravel Log::notice()
+  - pattern: Log::critical(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: Laravel Log::critical()
+  - pattern: Log::alert(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: Laravel Log::alert()
+  - pattern: Log::emergency(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: Laravel Log::emergency()
+  - pattern: error_log(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: PHP error_log()
+  - pattern: syslog(*)
+    vuln_class: log_injection
+    argument_indices: [1]
+    description: PHP syslog()
+
+  # ---------- ReDoS ----------
+  - pattern: preg_match(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: PHP preg_match() with untrusted pattern
+  - pattern: preg_match_all(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: PHP preg_match_all()
+  - pattern: preg_replace(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: PHP preg_replace()
+  - pattern: preg_replace_callback(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: PHP preg_replace_callback()
+  - pattern: preg_split(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: PHP preg_split()
+  - pattern: preg_grep(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: PHP preg_grep()
+
+sanitizers:
+  # ---------- XSS ----------
+  - pattern: htmlspecialchars(*)
+    vuln_classes: [xss]
+    description: PHP htmlspecialchars()
+  - pattern: htmlentities(*)
+    vuln_classes: [xss]
+    description: PHP htmlentities()
+  - pattern: strip_tags(*)
+    vuln_classes: [xss]
+    description: PHP strip_tags()
+  - pattern: e(*)
+    vuln_classes: [xss]
+    description: Laravel e() helper (htmlspecialchars wrapper)
+
+  # ---------- SQL ----------
+  - pattern: mysqli_real_escape_string(*)
+    vuln_classes: [sql_injection]
+    description: PHP mysqli_real_escape_string()
+  - pattern: addslashes(*)
+    vuln_classes: [sql_injection]
+    description: PHP addslashes() — best-effort
+  - pattern: PDO::quote(*)
+    vuln_classes: [sql_injection]
+    description: PDO::quote()
+  - pattern: "*->quote(*)"
+    vuln_classes: [sql_injection]
+    description: PDO->quote()
+
+  # ---------- Command injection ----------
+  - pattern: escapeshellcmd(*)
+    vuln_classes: [command_injection]
+    description: PHP escapeshellcmd()
+  - pattern: escapeshellarg(*)
+    vuln_classes: [command_injection]
+    description: PHP escapeshellarg()
+
+  # ---------- Path traversal ----------
+  - pattern: basename(*)
+    vuln_classes: [path_traversal]
+    description: PHP basename()
+  - pattern: realpath(*)
+    vuln_classes: [path_traversal]
+    description: PHP realpath()
+  - pattern: pathinfo(*)
+    vuln_classes: [path_traversal]
+    description: PHP pathinfo()
+
+  # ---------- SSRF / open redirect ----------
+  - pattern: filter_var(*)
+    vuln_classes: [xss, ssrf, open_redirect]
+    description: PHP filter_var() — best-effort URL/email validation
+  - pattern: parse_url(*)
+    vuln_classes: [ssrf, open_redirect]
+    description: PHP parse_url() — used for host allowlisting
+  - pattern: URL::isValidUrl(*)
+    vuln_classes: [ssrf, open_redirect]
+    description: Laravel URL::isValidUrl()
+
+  # ---------- Numeric coercion (cross-class) ----------
+  - pattern: intval(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: PHP intval()
+  - pattern: floatval(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: PHP floatval()
+  - pattern: doubleval(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: PHP doubleval() (alias)
+  - pattern: settype(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: PHP settype()
+
+  # ---------- ReDoS ----------
+  - pattern: preg_quote(*)
+    vuln_classes: [redos]
+    description: PHP preg_quote()

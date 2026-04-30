@@ -1,0 +1,474 @@
+# FastAPI framework spec — Deptex cross-file taint engine.
+#
+# FastAPI's tainted-input model is dependency injection: route handlers
+# receive Pydantic models, Query/Body/Form/Path/Header/Cookie/File
+# annotations, and Request objects as parameters. Unlike Django/Flask, the
+# request data isn't accessed via a request global — it arrives as the
+# function's parameter. The engine's IR doesn't carry annotations, so we
+# can't tag specific params from the spec. Practical mitigation:
+#
+#   1. Treat anything pulled off a `request.*` Request object as tainted
+#      (when the user opts into the Request-object pattern).
+#   2. Use call-shape sources for Query()/Body()/Form()/Path()/Header()/
+#      Cookie()/File() — these appear in source as parameter defaults
+#      and the lowerer emits them as call expressions if they're inside
+#      function bodies. Coverage is partial in v1.
+#   3. Sources that mirror request-attribute access on Starlette's
+#      `request.query_params`, `request.path_params`, etc.
+
+framework: fastapi
+language: python
+version: "*"
+
+sources:
+  # Starlette Request object (FastAPI inherits Starlette's Request)
+  - pattern: request.query_params.*
+    taint_kind: http_input
+    description: FastAPI/Starlette Request.query_params
+  - pattern: request.path_params.*
+    taint_kind: http_input
+    description: FastAPI/Starlette Request.path_params
+  - pattern: request.headers.*
+    taint_kind: http_input
+    description: FastAPI/Starlette Request.headers
+  - pattern: request.cookies.*
+    taint_kind: http_input
+    description: FastAPI/Starlette Request.cookies
+  - pattern: request.url
+    taint_kind: http_input
+    description: FastAPI Request.url
+  - pattern: request.url.*
+    taint_kind: http_input
+    description: FastAPI Request.url.path / .query / etc.
+  - pattern: request.client
+    taint_kind: http_input
+    description: FastAPI Request.client (host/port from headers)
+  - pattern: request.client.*
+    taint_kind: http_input
+    description: FastAPI Request.client.host
+  - pattern: request.scope.*
+    taint_kind: http_input
+    description: FastAPI Request.scope
+  - pattern: request.method
+    taint_kind: http_input
+    description: FastAPI Request.method
+  - pattern: request.base_url
+    taint_kind: http_input
+    description: FastAPI Request.base_url
+
+  # Call-shape sources — async accessors
+  - pattern: request.json(*)
+    taint_kind: http_input
+    description: FastAPI Request.json()
+  - pattern: request.body(*)
+    taint_kind: http_input
+    description: FastAPI Request.body() — raw body bytes
+  - pattern: request.form(*)
+    taint_kind: http_input
+    description: FastAPI Request.form()
+  - pattern: request.stream(*)
+    taint_kind: http_input
+    description: FastAPI Request.stream()
+  - pattern: request.query_params.get(*)
+    taint_kind: http_input
+    description: query_params.get()
+  - pattern: request.headers.get(*)
+    taint_kind: http_input
+    description: headers.get()
+  - pattern: request.cookies.get(*)
+    taint_kind: http_input
+    description: cookies.get()
+  - pattern: request.path_params.get(*)
+    taint_kind: http_input
+    description: path_params.get()
+
+  # FastAPI parameter declaration markers — used in defaults: `q: str = Query(...)`.
+  # If the user reassigns or constructs these inside the body, the call-shape
+  # source pattern fires.
+  - pattern: Query(*)
+    taint_kind: http_input
+    description: FastAPI Query() parameter
+  - pattern: Body(*)
+    taint_kind: http_input
+    description: FastAPI Body() parameter
+  - pattern: Form(*)
+    taint_kind: http_input
+    description: FastAPI Form() parameter
+  - pattern: Path(*)
+    taint_kind: http_input
+    description: FastAPI Path() parameter (routes)
+  - pattern: Header(*)
+    taint_kind: http_input
+    description: FastAPI Header() parameter
+  - pattern: Cookie(*)
+    taint_kind: http_input
+    description: FastAPI Cookie() parameter
+  - pattern: File(*)
+    taint_kind: http_input
+    description: FastAPI File() parameter
+  - pattern: Depends(*)
+    taint_kind: http_input
+    description: FastAPI Depends() — only flagged when the dependency itself returns request-derived data
+
+  # Pydantic model attribute access (`item.field`) — best-effort: when the
+  # parameter is a Pydantic model, attribute access on it is request-derived.
+  - pattern: item.*
+    taint_kind: http_input
+    description: FastAPI Pydantic model parameter (commonly named `item`/`payload`)
+  - pattern: payload.*
+    taint_kind: http_input
+    description: FastAPI Pydantic model parameter `payload`
+  - pattern: body.*
+    taint_kind: http_input
+    description: FastAPI Pydantic model parameter `body`
+
+sinks:
+  # ---------- SQL injection ----------
+  - pattern: cursor.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: DBAPI cursor.execute
+  - pattern: cursor.executemany(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: DBAPI cursor.executemany
+  - pattern: "*.execute(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Generic execute (cursor / engine / connection / async session)
+  - pattern: db.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: SQLAlchemy db.execute
+  - pattern: session.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: SQLAlchemy session.execute
+  - pattern: text(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: SQLAlchemy text() with attacker-controlled string
+  - pattern: engine.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: SQLAlchemy engine.execute
+  - pattern: connection.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: SQLAlchemy connection.execute
+  - pattern: database.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: encode/databases — async raw query
+
+  # ---------- XSS ----------
+  - pattern: HTMLResponse(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: FastAPI HTMLResponse — body
+  - pattern: PlainTextResponse(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: FastAPI PlainTextResponse — body (same XSS surface in browsers misinterpreting Content-Type)
+  - pattern: Response(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: FastAPI Response — body
+  - pattern: Markup(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: markupsafe.Markup — bypass autoescape (when used in HTML rendering)
+  - pattern: Template(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: jinja2.Template constructor with user input
+  - pattern: jinja2.Template(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: jinja2.Template (qualified)
+  - pattern: render_template_string(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: jinja2 template-from-string
+
+  # ---------- Path traversal ----------
+  - pattern: open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: builtin open
+  - pattern: io.open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: io.open
+  - pattern: os.open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: os.open
+  - pattern: aiofiles.open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: aiofiles.open — async file I/O
+  - pattern: FileResponse(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: FastAPI FileResponse
+  - pattern: pathlib.Path(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: pathlib.Path with user input
+  - pattern: shutil.copy(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: shutil.copy
+  - pattern: shutil.copyfile(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: shutil.copyfile
+  - pattern: os.remove(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: os.remove
+  - pattern: os.unlink(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: os.unlink
+
+  # ---------- Command injection ----------
+  - pattern: os.system(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: os.system
+  - pattern: os.popen(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: os.popen
+  - pattern: subprocess.call(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: subprocess.call
+  - pattern: subprocess.run(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: subprocess.run
+  - pattern: subprocess.Popen(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: subprocess.Popen
+  - pattern: subprocess.check_call(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: subprocess.check_call
+  - pattern: subprocess.check_output(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: subprocess.check_output
+  - pattern: subprocess.getoutput(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: subprocess.getoutput
+  - pattern: asyncio.create_subprocess_shell(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: asyncio.create_subprocess_shell
+  - pattern: asyncio.create_subprocess_exec(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: asyncio.create_subprocess_exec — executable arg
+
+  # ---------- SSRF ----------
+  - pattern: requests.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.get
+  - pattern: requests.post(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.post
+  - pattern: requests.put(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.put
+  - pattern: requests.delete(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.delete
+  - pattern: requests.request(*)
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: requests.request(method, url, ...)
+  - pattern: httpx.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: httpx.get
+  - pattern: httpx.post(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: httpx.post
+  - pattern: httpx.AsyncClient.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: httpx.AsyncClient.get
+  - pattern: aiohttp.ClientSession.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: aiohttp.ClientSession.get
+  - pattern: aiohttp.ClientSession.post(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: aiohttp.ClientSession.post
+  - pattern: urllib.request.urlopen(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: urllib.request.urlopen
+  - pattern: urlopen(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: bare urlopen
+
+  # ---------- Deserialization ----------
+  - pattern: pickle.loads(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: pickle.loads
+  - pattern: pickle.load(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: pickle.load
+  - pattern: cPickle.loads(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: cPickle.loads
+  - pattern: yaml.load(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: yaml.load (unsafe)
+  - pattern: yaml.unsafe_load(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: yaml.unsafe_load
+  - pattern: marshal.loads(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: marshal.loads
+  - pattern: eval(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: builtin eval
+  - pattern: exec(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: builtin exec
+  - pattern: compile(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: compile()
+
+  # ---------- Open redirect ----------
+  - pattern: RedirectResponse(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: FastAPI/Starlette RedirectResponse
+
+  # ---------- ReDoS ----------
+  - pattern: re.compile(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: re.compile
+  - pattern: re.match(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: re.match
+  - pattern: re.search(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: re.search
+
+  # ---------- Log injection ----------
+  - pattern: logger.info(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logger.info
+  - pattern: logger.error(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logger.error
+  - pattern: logger.warning(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logger.warning
+  - pattern: logger.debug(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logger.debug
+  - pattern: logging.info(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logging.info
+  - pattern: logging.error(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logging.error
+  - pattern: logging.warning(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logging.warning
+
+sanitizers:
+  # ---------- XSS ----------
+  - pattern: markupsafe.escape(*)
+    vuln_classes: [xss]
+    description: markupsafe.escape (qualified)
+  - pattern: html.escape(*)
+    vuln_classes: [xss]
+    description: stdlib html.escape
+  - pattern: bleach.clean(*)
+    vuln_classes: [xss]
+    description: bleach.clean
+
+  # ---------- Path traversal ----------
+  - pattern: os.path.basename(*)
+    vuln_classes: [path_traversal]
+    description: os.path.basename
+  - pattern: os.path.normpath(*)
+    vuln_classes: [path_traversal]
+    description: os.path.normpath
+  - pattern: secure_filename(*)
+    vuln_classes: [path_traversal, file_upload]
+    description: werkzeug.utils.secure_filename
+
+  # ---------- Command injection ----------
+  - pattern: shlex.quote(*)
+    vuln_classes: [command_injection]
+    description: shlex.quote
+  - pattern: shlex.split(*)
+    vuln_classes: [command_injection]
+    description: shlex.split
+
+  # ---------- SSRF / open redirect ----------
+  - pattern: validate_url(*)
+    vuln_classes: [ssrf, open_redirect]
+    description: validate_url helper
+  - pattern: is_safe_url(*)
+    vuln_classes: [ssrf, open_redirect]
+    description: is_safe_url helper
+
+  # ---------- Deserialization ----------
+  - pattern: yaml.safe_load(*)
+    vuln_classes: [deserialization]
+    description: yaml.safe_load
+  - pattern: json.loads(*)
+    vuln_classes: [deserialization]
+    description: json.loads — data-only
+
+  # ---------- ReDoS ----------
+  - pattern: re.escape(*)
+    vuln_classes: [redos]
+    description: re.escape
+
+  # ---------- Cross-class numeric coercion ----------
+  - pattern: int(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: int() coercion
+  - pattern: float(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: float() coercion

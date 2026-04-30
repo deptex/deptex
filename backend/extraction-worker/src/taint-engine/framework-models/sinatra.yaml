@@ -1,0 +1,523 @@
+# Sinatra framework spec — Deptex cross-file taint engine.
+#
+# Sinatra exposes request data through `params`, `request`, `cookies`, and
+# `env`. Sources cover those plus common request-object accessors. Sinks
+# duplicate the Ruby stdlib set from rails.yaml so a workspace using only
+# Sinatra still detects stdlib-targeting flows.
+
+framework: sinatra
+language: ruby
+version: "*"
+
+sources:
+  # Sinatra params / request
+  - pattern: params.*
+    taint_kind: http_input
+    description: Sinatra params accessor
+  - pattern: params[*]
+    taint_kind: http_input
+    description: Sinatra params subscript
+  - pattern: params
+    taint_kind: http_input
+    description: bare params reference
+  - pattern: request.*
+    taint_kind: http_input
+    description: Sinatra request accessor
+  - pattern: request.params.*
+    taint_kind: http_input
+    description: Sinatra request.params accessor
+  - pattern: request.params
+    taint_kind: http_input
+    description: Sinatra request.params
+  - pattern: request.body.read
+    taint_kind: http_input
+    description: Sinatra request.body.read
+  - pattern: request.body
+    taint_kind: http_input
+    description: Sinatra request.body
+  - pattern: request.GET.*
+    taint_kind: http_input
+    description: Sinatra request.GET (Rack)
+  - pattern: request.POST.*
+    taint_kind: http_input
+    description: Sinatra request.POST (Rack)
+  - pattern: request.headers.*
+    taint_kind: http_input
+    description: Sinatra request.headers
+  - pattern: request.cookies.*
+    taint_kind: http_input
+    description: Sinatra request.cookies
+  - pattern: request.url
+    taint_kind: http_input
+    description: Sinatra request.url
+  - pattern: request.path
+    taint_kind: http_input
+    description: Sinatra request.path
+  - pattern: request.path_info
+    taint_kind: http_input
+    description: Sinatra request.path_info
+  - pattern: request.host
+    taint_kind: http_input
+    description: Sinatra request.host
+  - pattern: request.referer
+    taint_kind: http_input
+    description: Sinatra request.referer
+  - pattern: request.user_agent
+    taint_kind: http_input
+    description: Sinatra request.user_agent
+  - pattern: env.*
+    taint_kind: http_input
+    description: Rack env accessor
+  - pattern: env[*]
+    taint_kind: http_input
+    description: Rack env subscript
+  - pattern: cookies.*
+    taint_kind: http_input
+    description: Sinatra cookies accessor
+  - pattern: cookies[*]
+    taint_kind: http_input
+    description: Sinatra cookies subscript
+  - pattern: session.*
+    taint_kind: http_input
+    description: Sinatra session accessor
+  - pattern: session[*]
+    taint_kind: http_input
+    description: Sinatra session subscript
+
+  # Call-shape sources
+  - pattern: params.fetch(*)
+    taint_kind: http_input
+    description: params.fetch()
+  - pattern: params.dig(*)
+    taint_kind: http_input
+    description: params.dig()
+  - pattern: request.body.read(*)
+    taint_kind: http_input
+    description: request.body.read()
+
+sinks:
+  # ---------- SQL injection ----------
+  - pattern: "*.where(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: ActiveRecord/Sequel where with raw SQL string
+  - pattern: "*.find_by_sql(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: ActiveRecord find_by_sql
+  - pattern: "*.exists?(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: ActiveRecord exists? with raw SQL string
+  - pattern: "*.order(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: ORM order with raw SQL fragment
+  - pattern: "*.group(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: ORM group with raw SQL fragment
+  - pattern: "*.having(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: ORM having with raw SQL fragment
+  - pattern: "*.joins(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: ORM joins with raw SQL fragment
+  - pattern: "*.select(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: ORM select with raw SQL fragment
+  - pattern: ActiveRecord.Base.connection.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: ActiveRecord::Base.connection.execute
+  - pattern: connection.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: ActiveRecord connection.execute
+  - pattern: "*.execute(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Generic connection.execute (Sequel / pg etc.)
+  - pattern: db.run(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Sequel DB#run
+  - pattern: DB.run(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Sequel DB#run (qualified)
+  - pattern: db[*]
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Sequel DB#[] dataset literal SQL
+
+  # ---------- Command injection ----------
+  - pattern: system(*)
+    vuln_class: command_injection
+    argument_indices: []
+    description: Kernel#system
+  - pattern: exec(*)
+    vuln_class: command_injection
+    argument_indices: []
+    description: Kernel#exec
+  - pattern: Kernel.system(*)
+    vuln_class: command_injection
+    argument_indices: []
+    description: Kernel.system (qualified)
+  - pattern: Kernel.exec(*)
+    vuln_class: command_injection
+    argument_indices: []
+    description: Kernel.exec (qualified)
+  - pattern: "`(*)"
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: Backtick command — `cmd`
+  - pattern: Kernel.`(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: Kernel.` — backtick command
+  - pattern: Process.spawn(*)
+    vuln_class: command_injection
+    argument_indices: []
+    description: Process.spawn
+  - pattern: IO.popen(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: IO.popen
+  - pattern: Open3.capture3(*)
+    vuln_class: command_injection
+    argument_indices: []
+    description: Open3.capture3
+  - pattern: Open3.capture2(*)
+    vuln_class: command_injection
+    argument_indices: []
+    description: Open3.capture2
+  - pattern: Open3.popen3(*)
+    vuln_class: command_injection
+    argument_indices: []
+    description: Open3.popen3
+  - pattern: Open3.pipeline(*)
+    vuln_class: command_injection
+    argument_indices: []
+    description: Open3.pipeline
+
+  # ---------- Path traversal ----------
+  - pattern: File.open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: File.open
+  - pattern: File.read(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: File.read
+  - pattern: File.write(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: File.write
+  - pattern: File.delete(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: File.delete
+  - pattern: File.unlink(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: File.unlink
+  - pattern: File.new(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: File.new
+  - pattern: File.binread(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: File.binread
+  - pattern: File.readlines(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: File.readlines
+  - pattern: IO.read(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: IO.read
+  - pattern: IO.readlines(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: IO.readlines
+  - pattern: IO.write(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: IO.write
+  - pattern: send_file(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Sinatra send_file
+  - pattern: Pathname.new(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Pathname.new
+  - pattern: Dir.glob(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Dir.glob
+
+  # ---------- SSRF ----------
+  - pattern: Net.HTTP.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Net::HTTP.get
+  - pattern: Net.HTTP.get_response(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Net::HTTP.get_response
+  - pattern: Net.HTTP.post(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Net::HTTP.post
+  - pattern: Net.HTTP.start(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Net::HTTP.start
+  - pattern: URI.open(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: URI.open (open-uri)
+  - pattern: open(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Kernel#open with URL (open-uri)
+  - pattern: HTTParty.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: HTTParty.get
+  - pattern: HTTParty.post(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: HTTParty.post
+  - pattern: HTTP.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: http.rb HTTP.get
+  - pattern: HTTP.post(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: http.rb HTTP.post
+  - pattern: Faraday.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Faraday.get
+  - pattern: Faraday.post(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Faraday.post
+  - pattern: RestClient.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: RestClient.get
+
+  # ---------- XSS ----------
+  - pattern: erb(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Sinatra erb — template rendering with attacker-controlled body
+  - pattern: haml(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Sinatra haml
+  - pattern: slim(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Sinatra slim
+  - pattern: ERB.new(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: ERB.new
+  - pattern: html_safe
+    vuln_class: xss
+    argument_indices: []
+    description: String#html_safe — bypasses escape
+  - pattern: "*.html_safe"
+    vuln_class: xss
+    argument_indices: []
+    description: String#html_safe (receiver form)
+  - pattern: raw(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: raw helper — bypasses escape
+
+  # ---------- Open redirect ----------
+  - pattern: redirect(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Sinatra redirect
+
+  # ---------- Deserialization ----------
+  - pattern: Marshal.load(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Marshal.load
+  - pattern: Marshal.restore(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Marshal.restore
+  - pattern: YAML.load(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: YAML.load (unsafe)
+  - pattern: YAML.unsafe_load(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: YAML.unsafe_load
+  - pattern: YAML.load_file(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: YAML.load_file
+  - pattern: Psych.load(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Psych.load (unsafe)
+  - pattern: Psych.unsafe_load(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Psych.unsafe_load
+  - pattern: eval(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Kernel#eval
+  - pattern: instance_eval(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: instance_eval
+  - pattern: class_eval(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: class_eval
+  - pattern: module_eval(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: module_eval
+
+  # ---------- Log injection ----------
+  - pattern: logger.info(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logger.info
+  - pattern: logger.error(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logger.error
+  - pattern: logger.warn(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logger.warn
+  - pattern: logger.debug(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logger.debug
+  - pattern: settings.logger.info(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: Sinatra settings.logger.info
+
+  # ---------- ReDoS ----------
+  - pattern: Regexp.new(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: Regexp.new with untrusted pattern
+  - pattern: Regexp.compile(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: Regexp.compile
+
+sanitizers:
+  # ---------- SQL ----------
+  - pattern: ActiveRecord.Base.sanitize_sql(*)
+    vuln_classes: [sql_injection]
+    description: ActiveRecord::Base.sanitize_sql
+  - pattern: sanitize_sql(*)
+    vuln_classes: [sql_injection]
+    description: bare sanitize_sql
+  - pattern: connection.quote(*)
+    vuln_classes: [sql_injection]
+    description: ActiveRecord connection.quote
+  - pattern: db.literal(*)
+    vuln_classes: [sql_injection]
+    description: Sequel DB#literal
+
+  # ---------- XSS ----------
+  - pattern: ERB.Util.html_escape(*)
+    vuln_classes: [xss]
+    description: ERB::Util.html_escape
+  - pattern: html_escape(*)
+    vuln_classes: [xss]
+    description: html_escape helper
+  - pattern: h(*)
+    vuln_classes: [xss]
+    description: h() escape helper
+  - pattern: CGI.escapeHTML(*)
+    vuln_classes: [xss]
+    description: CGI.escapeHTML
+  - pattern: ERB.Util.h(*)
+    vuln_classes: [xss]
+    description: ERB::Util.h
+
+  # ---------- Open redirect / SSRF ----------
+  - pattern: CGI.escape(*)
+    vuln_classes: [xss, open_redirect]
+    description: CGI.escape
+  - pattern: URI.encode_www_form_component(*)
+    vuln_classes: [xss, open_redirect]
+    description: URI.encode_www_form_component
+  - pattern: URI.parse(*)
+    vuln_classes: [ssrf]
+    description: URI.parse — best-effort URL validation
+
+  # ---------- Command injection ----------
+  - pattern: Shellwords.escape(*)
+    vuln_classes: [command_injection]
+    description: Shellwords.escape
+  - pattern: Shellwords.split(*)
+    vuln_classes: [command_injection]
+    description: Shellwords.split
+  - pattern: shellescape(*)
+    vuln_classes: [command_injection]
+    description: String#shellescape (alias)
+
+  # ---------- Path traversal ----------
+  - pattern: File.basename(*)
+    vuln_classes: [path_traversal]
+    description: File.basename — strips directory
+  - pattern: File.expand_path(*)
+    vuln_classes: [path_traversal]
+    description: File.expand_path with explicit base dir
+
+  # ---------- Cross-class numeric coercion ----------
+  - pattern: Integer(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: Integer() coercion
+  - pattern: Float(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: Float() coercion
+  - pattern: to_i
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: String#to_i
+  - pattern: "*.to_i"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: String#to_i (receiver form)
+
+  # ---------- Deserialization ----------
+  - pattern: YAML.safe_load(*)
+    vuln_classes: [deserialization]
+    description: YAML.safe_load
+  - pattern: Psych.safe_load(*)
+    vuln_classes: [deserialization]
+    description: Psych.safe_load
+  - pattern: JSON.parse(*)
+    vuln_classes: [deserialization]
+    description: JSON.parse — well-defined data-only deserializer
+
+  # ---------- ReDoS ----------
+  - pattern: Regexp.escape(*)
+    vuln_classes: [redos]
+    description: Regexp.escape

@@ -36,6 +36,7 @@ export interface RolePermissions {
   trigger_fix?: boolean;
   manage_incidents?: boolean;
   view_ai_spending?: boolean;
+  manage_organization_settings?: boolean;
   view_members: boolean;
   add_members: boolean;
   edit_roles: boolean;
@@ -184,6 +185,73 @@ export interface OrganizationMember {
   full_name?: string;
   avatar_url?: string | null;
   teams?: Array<{ id: string; name: string }>;
+}
+
+// Aegis Fix Agent types — mirror the backend's plan-types.ts.
+export type FindingType = 'vulnerability' | 'semgrep' | 'secret';
+export type FixStatus =
+  | 'planning'
+  | 'awaiting_approval'
+  | 'approved'
+  | 'executing'
+  | 'completed'
+  | 'failed'
+  | 'rejected';
+export type PlanLanguage =
+  | 'js' | 'ts' | 'python' | 'go' | 'java' | 'ruby' | 'php' | 'rust' | 'csharp';
+export type PlanDiffSize = 'small' | 'medium' | 'large';
+
+export interface PlanFileChange {
+  path: string;
+  action: 'modify' | 'create' | 'delete';
+  description: string;
+}
+
+export interface FixPlan {
+  summary: string;
+  finding: { type: FindingType; id: string; severity?: string };
+  currentState: string[];
+  desiredState: string[];
+  fileChanges: PlanFileChange[];
+  testCommand: string;
+  language: PlanLanguage;
+  estimatedDiffSize: PlanDiffSize;
+  wallClockBudgetSec: number;
+  refusal?: { reason: string; manualSuggestion?: string };
+}
+
+export interface FixRecord {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  status: FixStatus;
+  finding: { type: FindingType; id: string };
+  plan: FixPlan | null;
+  planGeneratedAt: string | null;
+  planBaseSha: string | null;
+  planBaseBranch: string | null;
+  approvalToken: string | null;
+  approvedAt: string | null;
+  rejectedAt: string | null;
+  prUrl: string | null;
+  prNumber: number | null;
+  diffSummary: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+}
+
+export interface RequestFixResponse {
+  fixId: string;
+  status: FixStatus;
+  plan: FixPlan;
+  fix?: FixRecord | null;
+}
+
+export interface FixStalenessResponse {
+  isStale: boolean;
+  currentHeadSha: string | null;
+  baseSha: string | null;
+  baseBranch: string | null;
 }
 
 export async function getAuthToken(): Promise<string | null> {
@@ -1148,79 +1216,8 @@ export const api = {
   },
 
   // ============================================================
-  // AI Provider Management (BYOK)
+  // AI usage + default platform provider
   // ============================================================
-
-  async getAIProviders(orgId: string): Promise<AIProviderConfig[]> {
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers`);
-  },
-
-  async addAIProvider(
-    orgId: string,
-    provider: string,
-    apiKey: string,
-    opts?: { model_preference?: string; monthly_cost_cap?: number; display_name?: string; api_base_url?: string },
-  ): Promise<AIProviderConfig> {
-    const body: Record<string, unknown> = {
-      provider,
-      api_key: apiKey,
-      model_preference: opts?.model_preference,
-      monthly_cost_cap: opts?.monthly_cost_cap,
-    };
-    if (provider === 'custom' && opts) {
-      if (opts.display_name != null) body.display_name = opts.display_name;
-      if (opts.api_base_url != null) body.api_base_url = opts.api_base_url;
-    }
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-  },
-
-  async updateAIProvider(
-    orgId: string,
-    providerId: string,
-    updates: { model_preference?: string | null; display_name?: string | null; api_base_url?: string | null },
-  ): Promise<AIProviderConfig> {
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers/${providerId}`, {
-      method: 'PATCH',
-      body: JSON.stringify(updates),
-    });
-  },
-
-  async deleteAIProvider(orgId: string, providerId: string): Promise<{ message: string; warning?: string }> {
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers/${providerId}`, { method: 'DELETE' });
-  },
-
-  async testAIProvider(
-    orgId: string,
-    provider: string,
-    apiKey: string,
-    opts?: { model?: string; api_base_url?: string },
-  ): Promise<{ success: boolean; model?: string; error?: string; code?: string }> {
-    const body: Record<string, unknown> = { provider, api_key: apiKey };
-    if (opts?.model != null) body.model = opts.model;
-    if (provider === 'custom' && opts?.api_base_url != null) body.api_base_url = opts.api_base_url;
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers/test`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-  },
-
-  async setDefaultAIProvider(orgId: string, providerId: string): Promise<{ message: string }> {
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-providers/${providerId}/default`, { method: 'PATCH' });
-  },
-
-  async getOrgAISettings(orgId: string): Promise<OrgAISettings> {
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-settings`);
-  },
-
-  async updateOrgAISettings(orgId: string, patch: Partial<OrgAISettings>): Promise<OrgAISettings> {
-    return fetchWithAuth(`/api/organizations/${orgId}/ai-settings`, {
-      method: 'PATCH',
-      body: JSON.stringify(patch),
-    });
-  },
 
   async getAIUsage(orgId: string, period?: string): Promise<AIUsageSummary> {
     const params = period ? `?period=${period}` : '';
@@ -1233,6 +1230,90 @@ export const api = {
     if (perPage) params.set('per_page', String(perPage));
     const qs = params.toString();
     return fetchWithAuth(`/api/organizations/${orgId}/ai-usage/logs${qs ? `?${qs}` : ''}`);
+  },
+
+  async getAIDefaultProvider(orgId: string): Promise<AIDefaultProvider> {
+    return fetchWithAuth(`/api/organizations/${orgId}/ai-default-provider`);
+  },
+
+  async setAIDefaultProvider(orgId: string, provider: PlatformAIProvider): Promise<AIDefaultProvider> {
+    return fetchWithAuth(`/api/organizations/${orgId}/ai-default-provider`, {
+      method: 'PATCH',
+      body: JSON.stringify({ provider }),
+    });
+  },
+
+  async getAIUsageDaily(orgId: string, days = 30): Promise<DailyUsageResponse> {
+    return fetchWithAuth(`/api/organizations/${orgId}/ai-usage/daily?days=${days}`);
+  },
+
+  async getAegisToolBreakdown(orgId: string, days = 30, limit = 10): Promise<AegisToolBreakdownResponse> {
+    return fetchWithAuth(`/api/organizations/${orgId}/aegis-tools/breakdown?days=${days}&limit=${limit}`);
+  },
+
+  // ============================================================
+  // Reachability rule generation (Phase 5)
+  // ============================================================
+
+  async getReachabilitySettings(orgId: string): Promise<ReachabilitySettings> {
+    return fetchWithAuth(`/api/organizations/${orgId}/reachability-settings`);
+  },
+
+  async updateReachabilitySettings(
+    orgId: string,
+    patch: Partial<ReachabilitySettings>,
+  ): Promise<ReachabilitySettings> {
+    return fetchWithAuth(`/api/organizations/${orgId}/reachability-settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+  },
+
+  async listGeneratedRules(
+    orgId: string,
+    opts?: { page?: number; perPage?: number; status?: GeneratedRuleStatus; enabled?: boolean; search?: string },
+  ): Promise<{
+    rules: GeneratedRuleSummary[];
+    pagination: { page: number; per_page: number; total: number; total_pages: number };
+  }> {
+    const params = new URLSearchParams();
+    if (opts?.page) params.set('page', String(opts.page));
+    if (opts?.perPage) params.set('per_page', String(opts.perPage));
+    if (opts?.status) params.set('status', opts.status);
+    if (opts?.enabled != null) params.set('enabled', String(opts.enabled));
+    if (opts?.search) params.set('search', opts.search);
+    const qs = params.toString();
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules${qs ? `?${qs}` : ''}`);
+  },
+
+  async getGeneratedRule(orgId: string, ruleId: string): Promise<GeneratedRuleDetail> {
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules/${ruleId}`);
+  },
+
+  async updateGeneratedRule(
+    orgId: string,
+    ruleId: string,
+    patch: { enabled?: boolean; validation_status?: 'manual_override' },
+  ): Promise<GeneratedRuleDetail> {
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules/${ruleId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+  },
+
+  async deleteGeneratedRule(orgId: string, ruleId: string): Promise<void> {
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules/${ruleId}`, { method: 'DELETE' });
+  },
+
+  async regenerateGeneratedRule(
+    orgId: string,
+    ruleId: string,
+    body: { provider: 'anthropic' | 'openai' | 'google'; model: string },
+  ): Promise<{ rule: GeneratedRuleDetail; message: string }> {
+    return fetchWithAuth(`/api/organizations/${orgId}/generated-rules/${ruleId}/regenerate`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
   },
 
   async streamAegisMessage(
@@ -1909,6 +1990,145 @@ export const api = {
     perPage = 50
   ): Promise<PaginatedResponse<SecretFinding>> {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/secret-findings?page=${page}&per_page=${perPage}`);
+  },
+
+  async getProjectIaCFindings(
+    organizationId: string,
+    projectId: string,
+    opts: {
+      page?: number;
+      perPage?: number;
+      severity?: string;
+      status?: 'open' | 'ignored' | 'all';
+      framework?: string;
+    } = {}
+  ): Promise<PaginatedResponse<IaCFinding>> {
+    const params = new URLSearchParams();
+    params.set('page', String(opts.page ?? 1));
+    params.set('per_page', String(opts.perPage ?? 50));
+    if (opts.severity) params.set('severity', opts.severity);
+    if (opts.status && opts.status !== 'all') params.set('status', opts.status);
+    if (opts.framework) params.set('framework', opts.framework);
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/iac-findings?${params.toString()}`
+    );
+  },
+
+  async getProjectContainerFindings(
+    organizationId: string,
+    projectId: string,
+    opts: {
+      page?: number;
+      perPage?: number;
+      severity?: string;
+      status?: 'open' | 'ignored' | 'all';
+    } = {}
+  ): Promise<PaginatedResponse<ContainerFinding>> {
+    const params = new URLSearchParams();
+    params.set('page', String(opts.page ?? 1));
+    params.set('per_page', String(opts.perPage ?? 50));
+    if (opts.severity) params.set('severity', opts.severity);
+    if (opts.status && opts.status !== 'all') params.set('status', opts.status);
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/container-findings?${params.toString()}`
+    );
+  },
+
+  async getProjectScannerSummary(
+    organizationId: string,
+    projectId: string
+  ): Promise<ScannerSummary> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/scanner-summary`
+    );
+  },
+
+  async toggleIaCFindingIgnore(
+    organizationId: string,
+    projectId: string,
+    findingId: string,
+    ignored: boolean
+  ): Promise<{ success: boolean; status: string }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/iac-findings/${findingId}/ignore`,
+      { method: 'PATCH', body: JSON.stringify({ ignored }) }
+    );
+  },
+
+  async setIaCFindingRiskAccepted(
+    organizationId: string,
+    projectId: string,
+    findingId: string,
+    accepted: boolean,
+    reason?: string
+  ): Promise<{ success: boolean }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/iac-findings/${findingId}/risk-accept`,
+      { method: 'PATCH', body: JSON.stringify({ accepted, reason }) }
+    );
+  },
+
+  async toggleContainerFindingIgnore(
+    organizationId: string,
+    projectId: string,
+    findingId: string,
+    ignored: boolean
+  ): Promise<{ success: boolean; status: string }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/container-findings/${findingId}/ignore`,
+      { method: 'PATCH', body: JSON.stringify({ ignored }) }
+    );
+  },
+
+  async setContainerFindingRiskAccepted(
+    organizationId: string,
+    projectId: string,
+    findingId: string,
+    accepted: boolean,
+    reason?: string
+  ): Promise<{ success: boolean }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/container-findings/${findingId}/risk-accept`,
+      { method: 'PATCH', body: JSON.stringify({ accepted, reason }) }
+    );
+  },
+
+  maliciousFindings: {
+    async list(
+      organizationId: string,
+      projectId: string,
+      page = 1,
+      perPage = 50
+    ): Promise<PaginatedResponse<MaliciousFinding>> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/malicious-findings?page=${page}&per_page=${perPage}`);
+    },
+    async get(
+      organizationId: string,
+      projectId: string,
+      findingId: string
+    ): Promise<MaliciousFinding> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/malicious-findings/${findingId}`);
+    },
+    async updateStatus(
+      organizationId: string,
+      projectId: string,
+      findingId: string,
+      body: { suppressed?: boolean; suppressed_reason?: string; risk_accepted?: boolean; risk_accepted_reason?: string }
+    ): Promise<{ success: true }> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/malicious-findings/${findingId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      });
+    },
+    async explain(
+      organizationId: string,
+      projectId: string,
+      findingId: string
+    ): Promise<{ narrative: string; risk_level: MaliciousSeverity | 'none'; cached: boolean }> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/malicious-findings/${findingId}/explain`, {
+        method: 'POST',
+      });
+    },
   },
 
   async getVulnerabilityDetail(
@@ -2640,45 +2860,49 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/teams/${teamId}/stats`);
   },
 
-  // AI Fix
-  async requestFix(orgId: string, projectId: string, body: {
-    strategy: string;
-    vulnerabilityOsvId?: string;
-    dependencyId?: string;
-    projectDependencyId?: string;
-    targetVersion?: string;
-    semgrepFindingId?: string;
-    secretFindingId?: string;
-  }): Promise<{ success: boolean; jobId?: string; error?: string; errorCode?: string }> {
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fix`, {
+  // Aegis Fix Agent (plan-then-approve flow). Replaces the legacy aider-worker
+  // direct-execute fix API; that worker is being retired.
+  async requestFix(body: {
+    organizationId: string;
+    projectId: string;
+    findingType: FindingType;
+    findingId: string;
+  }): Promise<RequestFixResponse> {
+    return fetchWithAuth('/api/aegis/fix/request', {
       method: 'POST',
       body: JSON.stringify(body),
     });
   },
 
-  async getFixStatus(orgId: string, projectId: string): Promise<FixJob[]> {
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fix-status`);
+  async getFix(fixId: string): Promise<{ fix: FixRecord }> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}`);
   },
 
-  async getFixes(orgId: string, projectId: string, params?: {
-    osvId?: string;
-    semgrepFindingId?: string;
-    secretFindingId?: string;
-    status?: string;
-  }): Promise<FixJob[]> {
-    const search = new URLSearchParams();
-    if (params?.osvId) search.set('osvId', params.osvId);
-    if (params?.semgrepFindingId) search.set('semgrepFindingId', params.semgrepFindingId);
-    if (params?.secretFindingId) search.set('secretFindingId', params.secretFindingId);
-    if (params?.status) search.set('status', params.status);
-    const qs = search.toString();
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fixes${qs ? `?${qs}` : ''}`);
+  async getFixStaleness(fixId: string): Promise<FixStalenessResponse> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}/staleness`);
   },
 
-  async cancelFix(orgId: string, projectId: string, fixId: string): Promise<{ success: boolean }> {
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/fixes/${fixId}/cancel`, {
-      method: 'POST',
+  async approveFix(fixId: string, token: string): Promise<{ fix: FixRecord }> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}/approve`, {
+      method: 'PATCH',
+      body: JSON.stringify({ token }),
     });
+  },
+
+  async rejectFix(fixId: string, reason?: string): Promise<{ fix: FixRecord }> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}/reject`, {
+      method: 'PATCH',
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
+  },
+
+  async regenerateFixPlan(fixId: string): Promise<RequestFixResponse> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}/regenerate`, { method: 'POST' });
+  },
+
+  async getPendingFixes(organizationId: string): Promise<{ fixes: FixRecord[] }> {
+    const qs = new URLSearchParams({ organizationId });
+    return fetchWithAuth(`/api/aegis/fix/pending?${qs.toString()}`);
   },
 
   // Learning
@@ -3655,19 +3879,6 @@ export interface AegisInboxMessage {
   created_at: string;
 }
 
-export interface AIProviderConfig {
-  id: string;
-  provider: 'openai' | 'anthropic' | 'google' | 'custom';
-  model_preference: string | null;
-  is_default: boolean;
-  monthly_cost_cap: number;
-  connected: boolean;
-  display_name?: string | null;
-  api_base_url?: string | null;
-  created_at?: string;
-  updated_at?: string;
-}
-
 export interface AIUsageSummary {
   totalInputTokens: number;
   totalOutputTokens: number;
@@ -3675,6 +3886,37 @@ export interface AIUsageSummary {
   monthlyCostCap: number;
   byFeature: Record<string, { tokens: number; cost: number; count: number }>;
   byUser: Array<{ userId: string; tokens: number; cost: number; count: number }>;
+}
+
+export type PlatformAIProvider = 'openai' | 'anthropic' | 'google' | 'deepinfra';
+
+export interface AIDefaultProvider {
+  provider: PlatformAIProvider;
+  model: string;
+}
+
+export interface DailyUsagePoint {
+  date: string;
+  tokens: number;
+  cost_cents: number;
+}
+
+export interface DailyUsageResponse {
+  days: number;
+  points: DailyUsagePoint[];
+}
+
+export interface AegisToolBreakdownRow {
+  tool_name: string;
+  executions: number;
+  total_tokens: number;
+  total_cost_cents: number;
+}
+
+export interface AegisToolBreakdownResponse {
+  days: number;
+  limit: number;
+  tools: AegisToolBreakdownRow[];
 }
 
 export interface ProjectPolicyException {
@@ -3874,6 +4116,108 @@ export interface LicenseViolation {
   reasons: string[];
   dependency_id: string | null;
   depscore: number | null;
+}
+
+export interface IaCFinding {
+  id: string;
+  project_id: string;
+  organization_id: string;
+  extraction_run_id: string;
+  scanner: 'trivy' | 'checkov';
+  scanner_version: string | null;
+  rule_id: string;
+  framework: 'terraform' | 'kubernetes' | 'dockerfile';
+  file_path: string;
+  start_line: number | null;
+  end_line: number | null;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO' | null;
+  depscore: number | null;
+  message: string | null;
+  description: string | null;
+  cwe_ids: string[];
+  code_snippet: string | null;
+  rule_doc_url: string | null;
+  iac_fingerprint: string | null;
+  status: 'open' | 'ignored';
+  suppressed: boolean;
+  risk_accepted: boolean;
+  risk_accepted_reason: string | null;
+  created_at: string;
+  project_name?: string;
+  project_framework?: string | null;
+}
+
+export interface ContainerFinding {
+  id: string;
+  project_id: string;
+  organization_id: string;
+  extraction_run_id: string;
+  scanner_version: string | null;
+  image_reference: string;
+  image_digest: string;
+  image_source: 'dockerfile_base';
+  os_package_name: string;
+  os_package_version: string;
+  os_package_ecosystem: string | null;
+  osv_id: string | null;
+  cve_id: string | null;
+  vulnerability_id: string;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO' | null;
+  cvss_score: number | null;
+  epss_score: number | null;
+  is_kev: boolean;
+  fix_versions: string[];
+  layer_digest: string | null;
+  depscore: number | null;
+  description: string | null;
+  rule_doc_url: string | null;
+  status: 'open' | 'ignored';
+  suppressed: boolean;
+  risk_accepted: boolean;
+  risk_accepted_reason: string | null;
+  created_at: string;
+  project_name?: string;
+  project_framework?: string | null;
+}
+
+export interface ScannerSummary {
+  iac: { critical: number; high: number; medium: number; low: number; info: number; ignored: number };
+  container: { critical: number; high: number; medium: number; low: number; info: number; ignored: number };
+  infra_types: Array<'terraform' | 'kubernetes' | 'dockerfile'>;
+  last_scan_at: string | null;
+  skipped_images: Array<{ image: string; reason: string }>;
+}
+
+export type MaliciousScanner = 'feed' | 'guarddog';
+export type MaliciousSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+
+export interface MaliciousFinding {
+  id: string;
+  project_id: string;
+  organization_id: string;
+  extraction_run_id: string;
+  project_dependency_id: string;
+  dependency_id: string;
+  rule_id: string;
+  scanner: MaliciousScanner;
+  severity: MaliciousSeverity;
+  message: string | null;
+  depscore: number | null;
+  suppressed: boolean;
+  suppressed_by: string | null;
+  suppressed_at: string | null;
+  suppressed_reason: string | null;
+  risk_accepted: boolean;
+  risk_accepted_by: string | null;
+  risk_accepted_at: string | null;
+  risk_accepted_reason: string | null;
+  created_at: string;
+  package_name?: string | null;
+  ecosystem?: string | null;
+  package_version?: string | null;
+  evidence?: { file_path: string; lines: [number, number]; snippet: string }[];
+  ai_narrative?: string | null;
+  ai_narrative_cached_at?: string | null;
 }
 
 export interface VulnerabilityEvent {
@@ -4088,11 +4432,67 @@ export type EpdStatus =
   | 'ai_error_fallback'
   | 'budget_exceeded';
 
-/** Org-level EPD knobs. Both NULL means "inherit the worker's env var defaults". */
-export interface OrgAISettings {
-  epd_max_run_cost_usd: number | null;
-  epd_budget_exceeded_behavior: 'fail_job' | 'continue_with_fallback' | null;
+/** Per-org reachability rule generation policy (Phase 5). */
+export interface ReachabilitySettings {
+  organization_id: string;
+  auto_generate_enabled: boolean;
+  trigger_severities: Array<'critical' | 'high' | 'medium' | 'low'>;
+  trigger_kev: boolean;
+  trigger_asset_tier_max_rank: number;
+  trigger_newly_discovered: boolean;
+  trigger_reevaluate_existing: boolean;
+  ai_provider: 'anthropic' | 'openai' | 'google';
+  ai_model: string;
+  monthly_budget_usd: number;
+  on_budget_exhaustion: 'skip' | 'fall_back_to_haiku';
+  max_wait_seconds: number;
+  updated_at?: string;
+  updated_by?: string | null;
 }
+
+export type GeneratedRuleStatus = 'pending' | 'validated' | 'failed_validation' | 'manual_override';
+
+export interface GeneratedRuleSummary {
+  id: string;
+  organization_id: string;
+  cve_id: string;
+  package_purl: string;
+  ecosystem: string;
+  affected_version_range: string | null;
+  reachability_level: string;
+  entry_point_class: string | null;
+  generated_with_provider: string;
+  generated_with_model: string;
+  generation_cost_usd: number | null;
+  validation_status: GeneratedRuleStatus;
+  enabled: boolean;
+  generated_at: string;
+  last_used_at: string | null;
+  use_count: number;
+}
+
+export interface GeneratedRulePreviousVersion {
+  rule_yaml: string;
+  vulnerable_fixture: string;
+  safe_fixture: string;
+  generated_with_provider: string;
+  generated_with_model: string;
+  generation_cost_usd: number | null;
+  validation_status: GeneratedRuleStatus;
+  validation_log: Record<string, unknown> | null;
+  generated_at: string;
+  replaced_at: string;
+  replaced_by_user_id: string | null;
+}
+
+export interface GeneratedRuleDetail extends GeneratedRuleSummary {
+  rule_yaml: string;
+  vulnerable_fixture: string;
+  safe_fixture: string;
+  validation_log: Record<string, unknown> | null;
+  previous_versions: GeneratedRulePreviousVersion[];
+}
+
 
 // PR & Commit tracking types
 
@@ -4155,6 +4555,13 @@ export interface ProjectStats {
   compliance: { percent: number; compliant: number; failing: number; not_evaluated: number; total: number };
   vulnerabilities: { total: number; critical: number; high: number; medium: number; low: number; reachable_count: number };
   code_findings: { semgrep_count: number; secret_count: number; verified_secret_count: number };
+  malicious_packages?: {
+    total: number;
+    critical: number;
+    high: number;
+    medium: number;
+    scan_status: 'complete' | 'partial' | 'failed' | null;
+  };
   dependencies: { total: number; direct: number; transitive: number; outdated: number; healthy?: number; vulnerable?: number };
   sync: { status: string; extraction_step: string | null; last_synced: string | null; last_error: string | null; branch: string };
   action_items: ActionItem[];
@@ -4162,7 +4569,7 @@ export interface ProjectStats {
 }
 
 export interface ActionItem {
-  type: 'critical_vuln' | 'high_vuln' | 'non_compliant' | 'policy_violation' | 'outdated_critical' | 'code_finding';
+  type: 'critical_vuln' | 'high_vuln' | 'non_compliant' | 'policy_violation' | 'outdated_critical' | 'code_finding' | 'malicious_packages';
   title: string;
   description: string;
   count: number;

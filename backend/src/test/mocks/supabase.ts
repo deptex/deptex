@@ -38,6 +38,8 @@ export const createMockSupabase = (registry: TableRegistry = {}, rpcRegistry: Rp
     in: jest.fn().mockReturnThis(),
     is: jest.fn().mockReturnThis(),
     gt: jest.fn().mockReturnThis(),
+    contains: jest.fn().mockReturnThis(),
+    or: jest.fn().mockReturnThis(),
     single: jest.fn().mockImplementation(function (this: any) {
       const r = consumeSingle(registry, this._table);
       if (r !== undefined) return Promise.resolve(r);
@@ -50,6 +52,10 @@ export const createMockSupabase = (registry: TableRegistry = {}, rpcRegistry: Rp
     }),
     order: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
+    range: jest.fn().mockReturnThis(),
+    gte: jest.fn().mockReturnThis(),
+    lte: jest.fn().mockReturnThis(),
+    ilike: jest.fn().mockReturnThis(),
     upsert: jest.fn().mockReturnThis(),
     then: jest.fn().mockImplementation(function (this: any, resolve: any) {
       const r = registry[this._table]?.then;

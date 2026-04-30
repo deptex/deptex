@@ -205,6 +205,7 @@ function extractionStepLabel(step: string | null | undefined): string {
     deps_synced: 'Syncing dependencies...',
     usage_extraction: 'Analyzing imports...',
     framework_detection: 'Detecting entry points...',
+    taint_engine: 'Running cross-file taint analysis...',
     scanning: 'Scanning for vulnerabilities...',
     uploading: 'Uploading results...',
     completed: 'Finishing up...',

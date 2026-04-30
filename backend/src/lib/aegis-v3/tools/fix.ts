@@ -1,0 +1,274 @@
+import { jsonSchema } from 'ai';
+import type { AegisToolEntry } from '../tool-types';
+import { generateFixPlan } from '../fix-planner';
+import { signApprovalToken, verifyApprovalToken } from '../approval-token';
+import {
+  FINDING_TYPES,
+  type FindingType,
+  type FixPlan,
+  type FixStatus,
+} from '../plan-types';
+
+function strategyForFindingType(findingType: FindingType): string {
+  if (findingType === 'semgrep') return 'fix_semgrep';
+  if (findingType === 'secret') return 'remediate_secret';
+  return 'code_patch';
+}
+
+function fixTypeColumn(findingType: FindingType): 'osv_id' | 'semgrep_finding_id' | 'secret_finding_id' {
+  if (findingType === 'vulnerability') return 'osv_id';
+  if (findingType === 'semgrep') return 'semgrep_finding_id';
+  return 'secret_finding_id';
+}
+
+const requestFix: AegisToolEntry<{
+  findingType: FindingType;
+  findingId: string;
+  projectId: string;
+}, {
+  fixId?: string;
+  status?: FixStatus;
+  plan?: FixPlan;
+  refusal?: { reason: string; manualSuggestion?: string };
+  error?: string;
+}> = {
+  name: 'request_fix',
+  description:
+    'Generate a fix plan for a security finding (vulnerability / Semgrep / secret). The plan must be approved before execution. Returns the plan, status (awaiting_approval | failed if refusal), and a fix id. Does not open a PR.',
+  permission: 'trigger_fix',
+  danger: 'medium',
+  inputSchema: jsonSchema({
+    type: 'object',
+    properties: {
+      findingType: { type: 'string', enum: [...FINDING_TYPES] },
+      findingId: { type: 'string', minLength: 1 },
+      projectId: { type: 'string', format: 'uuid' },
+    },
+    required: ['findingType', 'findingId', 'projectId'],
+    additionalProperties: false,
+  }),
+  execute: async ({ findingType, findingId, projectId }, ctx) => {
+    const { data: project } = await ctx.supabase
+      .from('projects')
+      .select('id, organization_id')
+      .eq('id', projectId)
+      .single();
+    if (!project) return { error: 'Project not found' };
+    if (project.organization_id !== ctx.orgId) return { error: 'Project not in current organization' };
+
+    const insertRow = {
+      project_id: projectId,
+      organization_id: ctx.orgId,
+      fix_type: findingType,
+      strategy: strategyForFindingType(findingType),
+      status: 'planning' as FixStatus,
+      triggered_by: ctx.userId,
+      [fixTypeColumn(findingType)]: findingId,
+      payload: { source: 'aegis_tool_request_fix' },
+    };
+
+    const { data: created, error: insertError } = await ctx.supabase
+      .from('project_security_fixes')
+      .insert(insertRow)
+      .select('id')
+      .single();
+    if (insertError || !created) {
+      return { error: insertError?.message ?? 'Failed to create fix request' };
+    }
+
+    let result;
+    try {
+      result = await generateFixPlan({
+        organizationId: ctx.orgId,
+        projectId,
+        findingType,
+        findingId,
+        triggeredByUserId: ctx.userId,
+      });
+    } catch (err: any) {
+      await ctx.supabase
+        .from('project_security_fixes')
+        .update({
+          status: 'failed',
+          error_message: `Plan generation failed: ${err?.message ?? 'unknown error'}`,
+          completed_at: new Date().toISOString(),
+        })
+        .eq('id', created.id);
+      return { fixId: created.id, status: 'failed', error: err?.message ?? 'Plan generation failed' };
+    }
+
+    const generatedAt = new Date().toISOString();
+    const isRefusal = !!result.plan.refusal;
+    const status: FixStatus = isRefusal ? 'failed' : 'awaiting_approval';
+    const approvalToken = isRefusal
+      ? null
+      : signApprovalToken(created.id, ctx.orgId, generatedAt);
+
+    await ctx.supabase
+      .from('project_security_fixes')
+      .update({
+        status,
+        plan: result.plan,
+        plan_generated_at: generatedAt,
+        plan_base_sha: result.baseSha,
+        plan_base_branch: result.baseBranch,
+        approval_token: approvalToken,
+        error_message: isRefusal ? `Refusal: ${result.plan.refusal?.reason}` : null,
+        completed_at: isRefusal ? generatedAt : null,
+      })
+      .eq('id', created.id);
+
+    return {
+      fixId: created.id,
+      status,
+      plan: result.plan,
+      refusal: result.plan.refusal,
+    };
+  },
+};
+
+const approveFix: AegisToolEntry<{ fixId: string; token?: string }, {
+  fixId?: string;
+  status?: FixStatus;
+  message?: string;
+  error?: string;
+}> = {
+  name: 'approve_fix',
+  description:
+    'Approve a fix plan that is in awaiting_approval status. The fix-worker will then claim and execute it. Requires the user to have already seen the plan; the chat surface signs the approval automatically using the stored token.',
+  permission: 'trigger_fix',
+  danger: 'high',
+  inputSchema: jsonSchema({
+    type: 'object',
+    properties: {
+      fixId: { type: 'string', format: 'uuid' },
+      token: { type: 'string' },
+    },
+    required: ['fixId'],
+    additionalProperties: false,
+  }),
+  execute: async ({ fixId, token }, ctx) => {
+    const { data: row } = await ctx.supabase
+      .from('project_security_fixes')
+      .select('id, organization_id, status, plan_generated_at, approval_token')
+      .eq('id', fixId)
+      .maybeSingle();
+    if (!row) return { error: 'Fix not found' };
+    if (row.organization_id !== ctx.orgId) return { error: 'Fix not in current organization' };
+    if (row.status !== 'awaiting_approval') {
+      return { error: `Fix is in status '${row.status}' and cannot be approved` };
+    }
+    if (!row.plan_generated_at || !row.approval_token) {
+      return { error: 'Fix has no approval token to validate' };
+    }
+
+    const presented = token ?? row.approval_token;
+    if (presented !== row.approval_token) return { error: 'Invalid approval token' };
+    if (!verifyApprovalToken(presented, row.id, row.organization_id, row.plan_generated_at)) {
+      return { error: 'Invalid approval token' };
+    }
+
+    const { error: updateError } = await ctx.supabase
+      .from('project_security_fixes')
+      .update({
+        status: 'approved',
+        approved_at: new Date().toISOString(),
+        approved_by_user_id: ctx.userId,
+      })
+      .eq('id', fixId)
+      .eq('status', 'awaiting_approval');
+    if (updateError) return { error: updateError.message };
+
+    return {
+      fixId,
+      status: 'approved',
+      message: 'Fix approved. The fix-worker will pick it up shortly.',
+    };
+  },
+};
+
+const rejectFix: AegisToolEntry<{ fixId: string; reason?: string }, {
+  fixId?: string;
+  status?: FixStatus;
+  message?: string;
+  error?: string;
+}> = {
+  name: 'reject_fix',
+  description:
+    'Reject a fix plan that is in planning or awaiting_approval status. Optional reason is recorded for the audit trail.',
+  permission: 'trigger_fix',
+  danger: 'low',
+  inputSchema: jsonSchema({
+    type: 'object',
+    properties: {
+      fixId: { type: 'string', format: 'uuid' },
+      reason: { type: 'string', maxLength: 1000 },
+    },
+    required: ['fixId'],
+    additionalProperties: false,
+  }),
+  execute: async ({ fixId, reason }, ctx) => {
+    const { data: row } = await ctx.supabase
+      .from('project_security_fixes')
+      .select('id, organization_id, status')
+      .eq('id', fixId)
+      .maybeSingle();
+    if (!row) return { error: 'Fix not found' };
+    if (row.organization_id !== ctx.orgId) return { error: 'Fix not in current organization' };
+    if (!['planning', 'awaiting_approval'].includes(row.status)) {
+      return { error: `Fix is in status '${row.status}' and cannot be rejected` };
+    }
+
+    const { error: updateError } = await ctx.supabase
+      .from('project_security_fixes')
+      .update({
+        status: 'rejected',
+        rejected_at: new Date().toISOString(),
+        rejected_by_user_id: ctx.userId,
+        rejection_reason: reason ?? null,
+      })
+      .eq('id', fixId);
+    if (updateError) return { error: updateError.message };
+
+    return { fixId, status: 'rejected', message: 'Fix rejected.' };
+  },
+};
+
+const checkFixStatus: AegisToolEntry<{ fixId: string }, {
+  fixId?: string;
+  status?: FixStatus;
+  prUrl?: string | null;
+  prNumber?: number | null;
+  errorMessage?: string | null;
+  error?: string;
+}> = {
+  name: 'check_fix_status',
+  description: 'Read the current status of a fix job by id. Includes PR url + number when complete.',
+  danger: 'safe',
+  inputSchema: jsonSchema({
+    type: 'object',
+    properties: {
+      fixId: { type: 'string', format: 'uuid' },
+    },
+    required: ['fixId'],
+    additionalProperties: false,
+  }),
+  execute: async ({ fixId }, ctx) => {
+    const { data: row } = await ctx.supabase
+      .from('project_security_fixes')
+      .select('id, organization_id, status, pr_url, pr_number, error_message')
+      .eq('id', fixId)
+      .maybeSingle();
+    if (!row) return { error: 'Fix not found' };
+    if (row.organization_id !== ctx.orgId) return { error: 'Fix not in current organization' };
+    return {
+      fixId: row.id,
+      status: row.status,
+      prUrl: row.pr_url,
+      prNumber: row.pr_number,
+      errorMessage: row.error_message,
+    };
+  },
+};
+
+export const fixTools: AegisToolEntry[] = [requestFix, approveFix, rejectFix, checkFixStatus];
