@@ -47,6 +47,7 @@ import learningRouter from './routes/learning';
 import incidentsRouter from './routes/incidents';
 import gitlabWebhooksRouter from './routes/gitlab-webhooks';
 import bitbucketWebhooksRouter from './routes/bitbucket-webhooks';
+import maliciousRouter, { maliciousInternalRouter } from './routes/malicious';
 import reachabilitySettingsRouter from './routes/reachability-settings';
 import generatedRulesRouter from './routes/generated-rules';
 
@@ -131,6 +132,8 @@ app.use('/api/organizations', organizationsRouter);
 app.use('/api/organizations', taintEngineRouter);
 app.use('/api/organizations', teamsRouter);
 app.use('/api/organizations', projectsRouter);
+app.use('/api/organizations', maliciousRouter);
+app.use('/api/internal/malicious', maliciousInternalRouter);
 app.use('/api/organizations', organizationCanvasRouter);
 app.use('/api/organizations', activitiesRouter);
 app.use('/api/organizations', reachabilitySettingsRouter);

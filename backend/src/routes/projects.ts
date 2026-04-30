@@ -10670,6 +10670,8 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       verifiedSecretResult,
       repoRow,
       lastFailedJob,
+      maliciousResult,
+      latestJobMaliciousStatus,
     ] = await Promise.all([
       supabase.from('projects').select('health_score, status_id, asset_tier_id').eq('id', projectId).single().then(r => r.data),
       supabase.from('project_dependencies').select('id, is_direct, policy_result, is_outdated, dependency_id').eq('project_id', projectId).is('removed_at', null).then(r => r.data ?? []),
@@ -10679,6 +10681,8 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__').eq('verified', true),
       supabase.from('project_repositories').select('status, extraction_step, updated_at, default_branch').eq('project_id', projectId).single().then(r => r.data),
       supabase.from('extraction_jobs').select('error, created_at').eq('project_id', projectId).eq('status', 'failed').order('created_at', { ascending: false }).limit(1).single().then(r => r.data),
+      supabase.from('project_malicious_findings').select('severity', { count: 'exact' }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__').eq('suppressed', false).eq('risk_accepted', false).then(r => ({ data: r.data ?? [], count: r.count ?? 0 })),
+      supabase.from('scan_jobs').select('malicious_scan_status').eq('project_id', projectId).order('created_at', { ascending: false }).limit(1).single().then(r => r.data),
     ]);
 
     // Status & tier lookups
@@ -10787,6 +10791,23 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
     const slaTotalResolved = slaMet + slaResolvedLate;
     const slaCompliancePercent = slaTotalResolved > 0 ? Math.round((slaMet / slaTotalResolved) * 100) : 100;
 
+    // Malicious-package summary
+    const maliciousRows = (maliciousResult as any)?.data ?? [];
+    const maliciousTotal = (maliciousResult as any)?.count ?? maliciousRows.length;
+    const maliciousCritical = maliciousRows.filter((m: any) => m.severity === 'critical').length;
+    const maliciousHigh = maliciousRows.filter((m: any) => m.severity === 'high').length;
+    const maliciousMedium = maliciousRows.filter((m: any) => m.severity === 'medium').length;
+    const maliciousScanStatus = (latestJobMaliciousStatus as any)?.malicious_scan_status ?? null;
+    if (maliciousCritical > 0) {
+      actionItems.push({
+        type: 'malicious_packages',
+        title: `${maliciousCritical} confirmed malicious package${maliciousCritical === 1 ? '' : 's'}`,
+        description: 'Confirmed malicious packages must be removed immediately',
+        count: maliciousCritical,
+        link: `/organizations/${organizationId}/projects/${projectId}/security`,
+      });
+    }
+
     const result = {
       health_score: projectRow?.health_score ?? 0,
       status,
@@ -10794,6 +10815,13 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       compliance: { percent: compliancePercent, compliant, failing, not_evaluated: notEvaluated, total: depsRows.length },
       vulnerabilities: { total: vulnRows.length, critical: vulnCritical, high: vulnHigh, medium: vulnMedium, low: vulnLow, reachable_count: reachableCount },
       code_findings: { semgrep_count: semgrepCount, secret_count: secretCount, verified_secret_count: verifiedSecretCount },
+      malicious_packages: {
+        total: maliciousTotal,
+        critical: maliciousCritical,
+        high: maliciousHigh,
+        medium: maliciousMedium,
+        scan_status: maliciousScanStatus,
+      },
       dependencies: { total: depsRows.length, direct: directDeps.length, transitive: transitiveDeps.length, outdated, healthy, vulnerable },
       sync: {
         status: repoRow?.status ?? 'not_connected',
