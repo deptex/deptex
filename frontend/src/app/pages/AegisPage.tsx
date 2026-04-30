@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
 import { aegisApi, type AegisThread } from '../../lib/aegis-api';
-import type { Organization } from '../../lib/api';
+import type { Organization, RolePermissions } from '../../lib/api';
 import { ThreadList } from '../../components/aegis/ThreadList';
 import { ChatPane } from '../../components/aegis/ChatPane';
 import { SearchChatsModal } from '../../components/aegis/SearchChatsModal';
@@ -13,6 +13,7 @@ import { useToast } from '../../hooks/use-toast';
 interface OrgOutlet {
   organization: Organization | null;
   reloadOrganization: () => Promise<void>;
+  userPermissions: RolePermissions | null;
 }
 
 export default function AegisPage() {
@@ -22,7 +23,7 @@ export default function AegisPage() {
   const routinesActive = location.pathname.endsWith('/aegis/routines');
   const [searchParams] = useSearchParams();
   const fixIdParam = searchParams.get('fix');
-  const { organization } = useOutletContext<OrgOutlet>();
+  const { userPermissions } = useOutletContext<OrgOutlet>();
   const { user } = useAuth();
   const { toast } = useToast();
 
@@ -88,7 +89,12 @@ export default function AegisPage() {
     setChatKey(activeThreadId ?? `new-${Date.now()}`);
   }, [activeThreadId]);
 
-  const canUseAegis = organization?.permissions?.interact_with_aegis === true;
+  // userPermissions === null means "still resolving" (cache miss + dbPermissions
+  // still in flight). Only treat the absence of `interact_with_aegis` as a true
+  // denial once we actually have a permissions object — otherwise the gate
+  // flashes on every refresh before OrganizationLayout finishes loading.
+  const permissionsLoading = userPermissions === null;
+  const canUseAegis = userPermissions?.interact_with_aegis === true;
 
   const refreshThreads = useCallback(async () => {
     if (!orgId) return;
@@ -231,6 +237,12 @@ export default function AegisPage() {
   }, [activeThreadId, orgId, navigate, toast]);
 
   if (!orgId) return null;
+  // While permissions resolve, render an empty shell rather than the denial
+  // gate. The OrganizationLayout sidebar/header is already on screen, so a
+  // blank main pane is the least jarring intermediate state.
+  if (permissionsLoading) {
+    return <div className="h-[calc(100vh-3rem)] bg-background" />;
+  }
   if (!canUseAegis) {
     return (
       <div className="flex h-[calc(100vh-3rem)] items-center justify-center p-12">
