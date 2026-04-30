@@ -118,3 +118,18 @@ export interface FrameworkSpec {
   sinks: FrameworkSink[];
   sanitizers: FrameworkSanitizer[];
 }
+
+/**
+ * Filter a spec set to only those applicable to one language. Each per-language
+ * propagator calls this at entry so cross-language sanitizers/sinks/sources can
+ * never leak (e.g. Rails' `JSON.parse(*)` sanitizer cancelling a Node.js
+ * `JSON.parse(*)` deser sink). `runner.ts` already applies the same filter
+ * before dispatch, so this is defence-in-depth for any other call site
+ * (validate harness, benchmark, ad-hoc scripts).
+ */
+export function filterSpecsByLanguage(
+  specs: FrameworkSpec[],
+  language: FrameworkLanguage,
+): FrameworkSpec[] {
+  return specs.filter((s) => (s.language ?? 'js') === language);
+}
