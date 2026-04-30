@@ -41,7 +41,10 @@ function frameworkOf(raw: CheckovRawCheck, reportType: string | undefined): IaCF
 }
 
 function buildFingerprint(raw: CheckovRawCheck): string | null {
-  const ruleId = raw.bc_check_id ?? raw.check_id;
+  // Prefer Checkov's canonical CKV_* check_id over the BridgeCrew-mapped
+  // bc_check_id. Real Checkov output sets these to different prefixes
+  // (CKV_AWS_145 vs BC_AWS_GENERAL_56); only CKV_* satisfies the regex below.
+  const ruleId = raw.check_id ?? raw.bc_check_id;
   const target = raw.resource_address || raw.resource;
   if (!ruleId || !target) return null;
   const fp = `checkov:${ruleId}:${target}`;
@@ -70,7 +73,7 @@ function parseSingleReport(report: CheckovRawReport, version: string): IaCFindin
   for (const c of checks) {
     const framework = frameworkOf(c, report.check_type);
     if (!framework) continue;
-    const ruleId = c.bc_check_id ?? c.check_id;
+    const ruleId = c.check_id ?? c.bc_check_id;
     if (!ruleId) continue;
     const filePath = (c.file_path ?? '').replace(/^\//, '');
     if (!filePath) continue;
