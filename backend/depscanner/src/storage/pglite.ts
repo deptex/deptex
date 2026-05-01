@@ -84,6 +84,25 @@ function defaultSchemaPath(): string {
 }
 
 /**
+ * Strip schema-dump-helper functions from schema.sql before feeding it to PGLite.
+ *
+ * pg_catalog_dump_v1() / pg_catalog_dump_v1_all() are introspection helpers used
+ * exclusively by `npm run schema:dump` (production Supabase) — they're never
+ * called from depscanner runtime. PGLite eagerly compiles function bodies at
+ * CREATE time, so the forward reference inside _all() ("FROM pg_catalog_dump_v1()")
+ * fails before the inner function is defined. Production Postgres tolerates
+ * this; PGLite doesn't. Safe to drop entirely for local mode.
+ */
+function stripPgliteIncompatible(sql: string): string {
+  // Match the full CREATE OR REPLACE FUNCTION block ending at `$function$;`.
+  // Both functions use the dollar-quoted body delimiter `$function$`.
+  return sql.replace(
+    /CREATE OR REPLACE FUNCTION public\.pg_catalog_dump_v1(_all)?\([^)]*\)[\s\S]*?\$function\$\s*;\s*/g,
+    '',
+  );
+}
+
+/**
  * Create a Storage backed by an in-memory PGLite.
  *
  * Booting the DB, installing extensions, applying Supabase stubs and loading
@@ -111,7 +130,7 @@ export async function createPGLiteStorage(
       );
     }
     const schemaSql = fs.readFileSync(schemaPath, 'utf8');
-    await db.exec(schemaSql);
+    await db.exec(stripPgliteIncompatible(schemaSql));
   }
 
   return new PGLiteStorage(db, outputDir);
