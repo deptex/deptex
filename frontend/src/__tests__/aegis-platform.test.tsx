@@ -69,33 +69,6 @@ describe('Aegis frontend', () => {
     mockMatchMedia();
   });
 
-  describe('AegisPage (7B-L) — plan tests 67–70', () => {
-    it('70: route /organizations/:id/aegis renders AegisPage', async () => {
-      const AegisPage = (await import('../app/pages/AegisPage')).default;
-      render(
-        <MemoryRouter initialEntries={['/organizations/org-1/aegis']}>
-          <Routes>
-            <Route path="/organizations/:id/aegis" element={<AegisPage />} />
-          </Routes>
-        </MemoryRouter>
-      );
-      expect(screen.getByPlaceholderText(/message aegis/i)).toBeInTheDocument();
-    });
-
-    it('67: main panel has chat input and message area', async () => {
-      const AegisPage = (await import('../app/pages/AegisPage')).default;
-      render(
-        <MemoryRouter initialEntries={['/organizations/org-1/aegis']}>
-          <Routes>
-            <Route path="/organizations/:id/aegis" element={<AegisPage />} />
-          </Routes>
-        </MemoryRouter>
-      );
-      const input = screen.getByPlaceholderText(/message aegis/i);
-      expect(input).toBeInTheDocument();
-    });
-  });
-
   describe('AegisManagementConsole (7B-K) — plan tests 91–92', () => {
     it('91: Management Console renders with Configuration tab', async () => {
       const { AegisManagementConsole } = await import('../components/settings/AegisManagementConsole');

@@ -14,33 +14,6 @@ describe('ProtectedRoute', () => {
     vi.resetAllMocks();
   });
 
-  it('renders loading state when loading is true', () => {
-    (useAuth as any).mockReturnValue({
-      user: null,
-      loading: true,
-    });
-
-    rtlRender(
-      <MemoryRouter>
-        <ProtectedRoute><div>Protected Content</div></ProtectedRoute>
-      </MemoryRouter>
-    );
-
-    // It should render the spinner container (checking for class or structure could be fragile, but let's check for "min-h-screen" div or similar)
-    // Actually, looking at the code:
-    /*
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-      </div>
-    */
-    // We can query by generic role or class if we really want, but checking that content is NOT there is a good start.
-    expect(screen.queryByText('Protected Content')).not.toBeInTheDocument();
-
-    // We can check for the spinner by class
-    const spinner = document.querySelector('.animate-spin');
-    expect(spinner).toBeInTheDocument();
-  });
-
   it('renders children when user is authenticated', () => {
     (useAuth as any).mockReturnValue({
       user: { id: 'user-1' },

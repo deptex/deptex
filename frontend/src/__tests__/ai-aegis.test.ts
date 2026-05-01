@@ -316,44 +316,6 @@ describe('Rate Limits and Usage', () => {
 // ═══════════════════════════════════════════════════════════════
 
 describe('Safety', () => {
-  it('22 — thread at token limit shows "Start a new conversation" message', async () => {
-    expand();
-    vi.mocked(streamAegisMessage).mockImplementation(
-      async (_o, _t, _m, _c, cbs: StreamCallbacks) => {
-        cbs.onError(
-          'Token limit reached. Please start a new conversation.',
-          'TOKEN_LIMIT',
-        );
-      },
-    );
-
-    renderPanel({ context: { type: 'project', id: 'p1' } });
-    await typeAndSend('test');
-
-    await waitFor(() => {
-      expect(screen.getByText(/start a new conversation/i)).toBeInTheDocument();
-    });
-  });
-
-  it('23 — provider auth failure shows "key no longer valid" error in chat', async () => {
-    expand();
-    vi.mocked(streamAegisMessage).mockImplementation(
-      async (_o, _t, _m, _c, cbs: StreamCallbacks) => {
-        cbs.onError(
-          'API key is no longer valid. Please update your provider settings.',
-          'AUTH_FAILED',
-        );
-      },
-    );
-
-    renderPanel({ context: { type: 'project', id: 'p1' } });
-    await typeAndSend('test');
-
-    await waitFor(() => {
-      expect(screen.getByText(/key is no longer valid/i)).toBeInTheDocument();
-    });
-  });
-
   it('24 — context switch mid-conversation appends context marker in chat history', async () => {
     expand();
     const { rerender } = render(

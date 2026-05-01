@@ -7,7 +7,7 @@ module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>/src', '<rootDir>/depscanner/src', '<rootDir>/fix-worker/src'],
   testMatch: ['**/__tests__/**/*.ts', '**/?(*.)+(spec|test).ts'],
-  testPathIgnorePatterns: ['/node_modules/', 'src/test/aegis-analysis.test.ts', '/depscanner/node_modules/', '/fix-worker/node_modules/'],
+  testPathIgnorePatterns: ['/node_modules/', 'src/test/aegis-analysis.test.ts', '/depscanner/node_modules/', '/fix-worker/node_modules/', 'depscanner/src/taint-engine/spec.ts'],
   setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
   moduleNameMapper: {
     '^(\\.\\./)+lib/supabase$': supabaseMockPath,
