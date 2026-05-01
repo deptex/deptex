@@ -21,7 +21,9 @@ describe('withTimeout', () => {
       const err = e as StepTimeoutError;
       expect(err.step).toBe('my_step');
       expect(err.timeoutMs).toBe(20);
-      expect(err.elapsedMs).toBeGreaterThanOrEqual(20);
+      // Allow 2ms slack — Node's timer scheduling + clock resolution
+      // can fire setTimeout(20) at ~18-19ms on some CI hosts.
+      expect(err.elapsedMs).toBeGreaterThanOrEqual(18);
       expect(err.message).toMatch(/timed out/);
     }
   });
