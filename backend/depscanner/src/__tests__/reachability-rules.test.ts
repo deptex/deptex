@@ -439,10 +439,10 @@ semgrepDescribe('runReachabilityRules (live semgrep)', () => {
   // (a rule that loads but no longer matches is the same failure mode
   // as a broken rule from the user's perspective).
   //
-  // KNOWN_FP_SAFE_FIXTURE: rule packs whose safe fixture currently matches
-  // (false positive in the rule itself). Tracked separately so the
-  // smoke stays green while we iterate on rule precision. See
-  // memory: future_reachability_rule_fps.md.
+  // KNOWN_FP_SAFE_FIXTURE: rule packs that don't pass their own parameterised
+  // smoke (either safe fixture matches when it shouldn't, or vulnerable fixture
+  // doesn't match when it should). Tracked separately so the smoke stays green
+  // while we iterate on rule precision. See memory: future_reachability_rule_fps.md.
   const KNOWN_FP_SAFE_FIXTURE = new Set([
     // Source→sink flow present in safe fixture; rule doesn't gate on enableDefaultTyping.
     'CVE-2019-12384-jackson-databind-polymorphic',
@@ -452,6 +452,9 @@ semgrepDescribe('runReachabilityRules (live semgrep)', () => {
     'CVE-2022-1471-snakeyaml-unsafe-load',
     // Taint mode firing on Http::get(constant_url) despite no source. Semgrep 1.160.0 behaviour.
     'CVE-2024-13918-laravel-http-ssrf',
+    // Vulnerable fixture (`$request->query->get('env')` → `getenv($name)`) NOT matching —
+    // semgrep PHP not picking up chained property-method source through getenv sink.
+    'CVE-2024-50340-symfony-env-override',
   ]);
   const allBundled = SEMGREP_PRESENT ? fs.readdirSync(RULES_DIR, { withFileTypes: true })
     .filter((e) => e.isDirectory() && e.name.startsWith('CVE-') && !KNOWN_FP_SAFE_FIXTURE.has(e.name))
