@@ -2,6 +2,36 @@
 
 You are implementing a Deptex feature from a plan. You will work through the plan methodically, building each layer with production quality, and paying special attention to frontend design craft.
 
+## Workflow Contract
+
+For each milestone in the active plan:
+
+1. **Build the milestone** end-to-end (code + migration + tests as scoped).
+2. **Pause to ask** only when an answer is genuinely non-obvious or has architectural impact. Default heuristic: if Henry would say "choose the elegant and scalable option," don't ask — just choose it.
+3. **Flag (don't ask) anything Henry needs to do himself** — e.g. browser-test a UI change, paste an env var, manually verify an external service.
+4. **Commit** the milestone using Conventional Commits format. No milestone labels ("M3", "Phase 2 M1") in the message — describe the actual change in plain prose. No `Co-Authored-By: Claude` trailer. Author as Henry only.
+5. **Stop after the commit** so the user can `/compact` before the next milestone.
+6. **Resume on the next milestone** when prompted.
+
+### Defaults that don't need re-confirming
+
+- Apply DB migrations via Supabase MCP (`mcp__claude_ai_Supabase__apply_migration`), never paste SQL for Henry to run.
+- After any migration change, run `cd backend/extraction-worker && npm run schema:dump` in the same commit to refresh `backend/database/schema.sql` (CI fails otherwise).
+- Use git bash, not PowerShell.
+- Prefer editing existing files over creating new ones.
+- No new `.md` docs without checking first (per `feedback_docs_content` memory).
+- Henry is the sole user pre-launch — skip backwards-compat shims, direct rewrites are fine even if they require re-extraction.
+
+### Reference memory entries the loop assumes
+
+- `user_workflow.md` — interview → plan → implement
+- `feedback_commit_format.md` — Conventional Commits required
+- `feedback_commit_milestone_language.md` — no "M3"/"Phase X" in commit messages
+- `feedback_no_coauthor_trailer.md` — no Claude attribution in commits/PRs
+- `feedback_apply_migrations_via_mcp.md` — MCP apply, not manual SQL
+- `feedback_solo_user_prelaunch.md` — direct rewrites, no compat shims
+- `feedback_assume_infra_built.md` — don't ask "do you have X configured?"
+
 ## Inputs
 
 Look for the implementation plan in `.cursor/plans/*.plan.md`. If no plan exists, ask the user to run `/plan-feature` first.

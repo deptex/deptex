@@ -184,3 +184,7 @@ Existing patterns we're following, reusable code identified, integration points,
 - If something is unclear, call it out in "Open Questions" rather than guessing
 - **Always do the competitive research** — this is the difference between a mediocre feature and one that's informed by the market
 - **Always do the deep codebase analysis** — plans that don't read the actual code produce implementation surprises
+
+## After Writing the Plan
+
+Before handing off to `/implement`, suggest the user run `/review-plan <plan-slug>`. This spawns a multi-agent debate-and-vote review of the plan itself — different lenses (skeptic, pragmatist, scope-cutter, architect, data-model auditor, etc.) read the plan, debate each other's findings, and vote on whether it's ready to build. Catches missed scope, wrong assumptions, and architectural mistakes before `/implement` burns time on them. The skill is opt-in — for small/obvious plans the user can skip straight to `/implement`.

@@ -51,13 +51,10 @@ Optional: a short description of the change from the user. If not provided, deri
    - On first push, surface the "pull/new/..." URL to the user and suggest:
      - Title: the same Conventional Commits commit subject
      - Base: `main`
-     - Body (markdown):
+     - Body (markdown): a `## Summary` section only — describe what changed and why. Skip "Test plan" / verification checklists; Henry doesn't want them in PR descriptions.
        ```
        ## Summary
-       <1-3 bullets>
-
-       ## Test plan
-       - [ ] <checks>
+       <bullets describing what was added / changed / fixed>
        ```
      - No Claude footer in the PR body either.
    - On subsequent pushes to the same branch, no URL is needed — the existing PR updates automatically.
