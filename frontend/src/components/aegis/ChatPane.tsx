@@ -1,12 +1,13 @@
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Trash2 } from 'lucide-react';
-import { aegisApi, type AegisMessage, type MessagePart } from '../../lib/aegis-api';
+import { ChevronRight, Trash2 } from 'lucide-react';
+import { aegisApi, type AegisMessage, type AegisThread, type MessagePart } from '../../lib/aegis-api';
 import { api, getAuthToken, type AIModelMetadata } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { MessageBubble } from './MessageBubble';
 import { ChatInput } from './ChatInput';
+import { ThreadIcon } from './ThreadIcon';
 
 const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:3001';
 
@@ -22,6 +23,25 @@ const AEGIS_PROMPTS = [
 const TYPE_MS = 55;
 const BACKSPACE_MS = 30;
 const HOLD_MS = 2400;
+
+function formatRelative(iso: string): string {
+  const ts = Date.parse(iso);
+  if (!Number.isFinite(ts)) return '';
+  const diffMs = Date.now() - ts;
+  const sec = Math.max(0, Math.floor(diffMs / 1000));
+  if (sec < 60) return 'just now';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 7) return `${day}d ago`;
+  const wk = Math.floor(day / 7);
+  if (wk < 5) return `${wk}w ago`;
+  const mo = Math.floor(day / 30);
+  if (mo < 12) return `${mo}mo ago`;
+  return `${Math.floor(day / 365)}y ago`;
+}
 
 function useTypewriterPlaceholder(phrases: string[], enabled: boolean) {
   const [index, setIndex] = useState(0);
@@ -59,6 +79,10 @@ interface ChatPaneProps {
   displayName: string;
   onThreadCreated: (threadId: string) => void;
   onThreadUpdated?: () => void;
+  // Threads to show in the landing screen's Recents list. Filtered + sorted
+  // here so we don't duplicate logic between sidebar and landing.
+  recents?: AegisThread[];
+  onSelectRecent?: (threadId: string) => void;
 }
 
 function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
@@ -112,6 +136,8 @@ export function ChatPane({
   displayName,
   onThreadCreated,
   onThreadUpdated,
+  recents,
+  onSelectRecent,
 }: ChatPaneProps) {
   // We track the thread ID that THIS mount is working with. The prop may arrive
   // later (after a silent URL update). We never reset state just because the
@@ -485,12 +511,17 @@ export function ChatPane({
   const placeholder = useTypewriterPlaceholder(AEGIS_PROMPTS, showLanding);
 
   if (showLanding) {
+    const visibleRecents = (recents ?? [])
+      .filter((t) => !t.archivedAt)
+      .slice()
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, 3);
     return (
-      <div className="flex h-full flex-col items-center justify-center px-6">
-        <div className="w-full max-w-2xl -mt-12">
-          <div className="mb-8">
-            <div className="text-base text-foreground/60 mb-1">Hi {displayName}</div>
-            <h1 className="text-3xl font-semibold text-foreground tracking-tight">
+      <div className="h-full overflow-y-auto px-6 pt-20 pb-12">
+        <div className="mx-auto w-full max-w-2xl">
+          <div className="mb-6">
+            <div className="text-sm text-foreground/60 mb-1">Hi {displayName}</div>
+            <h1 className="text-2xl font-semibold text-foreground tracking-tight">
               What can I help you secure?
             </h1>
           </div>
@@ -508,6 +539,38 @@ export function ChatPane({
           </div>
           {sendError && (
             <div className="mt-3 text-sm text-foreground/60">{sendError}</div>
+          )}
+
+          {visibleRecents.length > 0 && onSelectRecent && (
+            <div className="mt-10">
+              <div className="flex items-baseline justify-between mb-3">
+                <h2 className="text-xs font-medium uppercase tracking-wider text-foreground/60">
+                  Recents
+                </h2>
+              </div>
+              <ul className="flex flex-col gap-2">
+                {visibleRecents.map((t) => (
+                  <li key={t.id}>
+                    <button
+                      type="button"
+                      onClick={() => onSelectRecent(t.id)}
+                      className="group w-full flex items-center gap-3.5 rounded-xl border border-border bg-background-card px-4 py-3.5 text-left transition-all hover:border-foreground/20 hover:bg-background-card/60 hover:shadow-sm"
+                    >
+                      <ThreadIcon fixStatus={t.fixStatus} archived={!!t.archivedAt} />
+                      <span className="flex-1 min-w-0 flex flex-col">
+                        <span className="truncate text-sm font-medium text-foreground leading-snug">
+                          {t.title || 'Untitled chat'}
+                        </span>
+                        <span className="text-xs text-foreground/55 tabular-nums leading-snug mt-0.5">
+                          {formatRelative(t.updatedAt)}
+                        </span>
+                      </span>
+                      <ChevronRight className="h-4 w-4 shrink-0 text-foreground/30 transition-all group-hover:text-foreground/70 group-hover:translate-x-0.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </div>
       </div>

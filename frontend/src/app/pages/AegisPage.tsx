@@ -344,6 +344,8 @@ export default function AegisPage() {
                   displayName={displayName}
                   onThreadCreated={handleThreadCreated}
                   onThreadUpdated={handleThreadUpdated}
+                  recents={threads}
+                  onSelectRecent={handleSelect}
                 />
               </>
             )}
