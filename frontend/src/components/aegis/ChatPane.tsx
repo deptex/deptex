@@ -466,7 +466,9 @@ export function ChatPane({
   // Show the thinking dot only while there's nothing visible to indicate
   // progress yet — i.e. between submission and the first text token, or in
   // the gap after a tool call before the next text segment streams. Once
-  // text is actively appearing, the streaming text itself signals activity.
+  // text is actively appearing OR the last part is a request_fix tool (which
+  // renders as the PlanCardSkeleton, already signaling progress), suppress
+  // the dot.
   const showThinkingDot = useMemo(() => {
     if (status === 'submitted') return true;
     if (status !== 'streaming') return false;
@@ -476,6 +478,9 @@ export function ChatPane({
     if (parts.length === 0) return true;
     const lastPart = parts[parts.length - 1];
     if (lastPart?.type === 'text' && (lastPart.text ?? '').length > 0) return false;
+    const lastPartType = typeof lastPart?.type === 'string' ? lastPart.type : '';
+    const lastToolName = lastPart?.toolName ?? (lastPartType.startsWith('tool-') ? lastPartType.replace(/^tool-/, '') : '');
+    if (lastToolName === 'request_fix' && lastPart?.state !== 'output-error') return false;
     return true;
   }, [status, messages]);
 

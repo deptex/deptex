@@ -361,6 +361,7 @@ router.get('/:fixId', async (req: AuthRequest, res) => {
   return res.json({ fix: shapeFixRow(row) });
 });
 
+
 router.get('/:fixId/staleness', async (req: AuthRequest, res) => {
   const userId = req.user!.id;
   const row = await loadFixRow(req.params.fixId);

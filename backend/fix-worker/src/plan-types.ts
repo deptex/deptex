@@ -13,6 +13,11 @@ export interface PlanFileChange {
   description: string;
 }
 
+export interface PlanTodo {
+  title: string;
+  detail?: string;
+}
+
 export interface VerificationStep {
   command: string;
   description: string;
@@ -27,6 +32,8 @@ export interface FixPlan {
   summary: string;
   finding: { type: FindingType; id: string; severity?: string };
   description: string;
+  issue?: string;
+  todos?: PlanTodo[];
   fileChanges: PlanFileChange[];
   testCommand: string;
   verification?: string;

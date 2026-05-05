@@ -130,8 +130,13 @@ PLANNING RULES:
 5. wallClockBudgetSec defaults to 300. Increase only when the language toolchain is slow (e.g., Java/Maven up to 600).
 6. fileChanges should list each touched file with a one-sentence rationale. Do not include diffs — those are produced during execution.
 7. summary is one short title-style sentence a developer can scan in two seconds (e.g. "Fix exposed AWS key in src/config.js" — verb + object, ≤80 chars).
-8. description is 1-2 short sentences naming the issue and the specific change. Do NOT just restate the summary — the description must add a fact the title alone doesn't convey. No bullet points. Verification details belong in verificationSteps, not here.
-9. verificationSteps is an array of 1-4 concrete checks the user should expect to pass before merging. Each step is { command, description }:
+8. description is 1-2 short sentences explaining WHAT THE FIX DOES — the plan, in plain English. Do NOT just restate the summary; add a fact the title alone doesn't convey. No bullet points. The issue itself goes in \`issue\`, not here. Verification details go in verificationSteps.
+8a. issue is markdown explaining WHAT THE PROBLEM IS — the user reads this to understand why a fix is needed. Aim for 2-4 sentences. When the finding has affected source code (Semgrep findings, secrets, sometimes reachable vulnerabilities), include a fenced code block with the relevant excerpt INSIDE the issue field. Use the actual snippet from the context (do NOT fabricate code). Use language tags that match the file extension (\`\`\`ts, \`\`\`py, \`\`\`go, etc.) and immediately precede or follow the fence with one line citing the file and line (e.g. \`src/api.ts:42\`). For dependency vulnerabilities where there's no specific file excerpt to show, omit the code fence and instead describe the package + advisory in prose. Keep the whole field under 4000 characters. Never paraphrase identifiers or pretend data exists that isn't in the context.
+9. todos is an ordered list of short imperative steps the user reads to understand WHAT will happen. Use as many or as few as the change actually requires — a one-line bump is one todo, a multi-step refactor may be many. Each todo is { title, detail? }:
+   - title: an imperative sentence ≤80 chars naming the action ("Bump axios from 1.5.0 to 1.6.0", "Move the hardcoded API key to an environment variable", "Update the lockfile and re-run installs"). NOT a file path — file-level work belongs in fileChanges.
+   - detail: OPTIONAL one-sentence elaboration when the title alone would be ambiguous. Omit when the title is self-explanatory.
+   These are the user-facing plan; fileChanges is the executor's work breakdown. Do not pad with filler ("Review the change", "Make sure tests pass" — verification belongs in verificationSteps).
+10. verificationSteps is an array of 1-4 concrete checks the user should expect to pass before merging. Each step is { command, description }:
    - command: the exact shell command we'd run, named with the tool this project actually uses (look at the context — package.json scripts, language ecosystem, lockfiles). Examples: "npm test", "npm run lint", "tsc --noEmit", "ruff check .", "mypy src/", "go vet ./...", "go test ./...".
    - description: ONE sentence explaining WHAT this check covers and why it's relevant to THIS fix (not a generic "runs the test suite" filler).
    The first step MUST match testCommand (so the worker's verification step is represented). Add lint / type check / build steps when the project clearly uses those tools. If the change is too small or isolated for tests to meaningfully cover (e.g. removing a hardcoded secret, deleting a single line), still include testCommand but be honest in its description ("the secret removal is a one-line delete; tests confirm nothing else broke") and lean on lint/type-check.
@@ -218,6 +223,35 @@ function normalizePlanShape(raw: any, input: PlannerInput): any {
     const key = out.language.toLowerCase().trim();
     if (langAliases[key]) out.language = langAliases[key];
   }
+
+  // todos normalization. Cheap models often emit strings instead of
+  // { title, detail } objects, or wrap them under `steps` / `plan` keys.
+  if (!Array.isArray(out.todos)) {
+    if (Array.isArray(out.steps)) out.todos = out.steps;
+    else if (Array.isArray(out.plan)) out.todos = out.plan;
+  }
+  if (Array.isArray(out.todos)) {
+    out.todos = out.todos
+      .map((t: any) => {
+        if (typeof t === 'string') return { title: t };
+        if (t && typeof t === 'object') {
+          const title = t.title ?? t.step ?? t.name ?? t.summary;
+          if (typeof title === 'string' && title.trim().length > 0) {
+            const detail = typeof t.detail === 'string' && t.detail.trim().length > 0
+              ? t.detail
+              : typeof t.description === 'string' && t.description.trim().length > 0
+                ? t.description
+                : undefined;
+            return detail ? { title, detail } : { title };
+          }
+        }
+        return null;
+      })
+      .filter((t: any) => t !== null);
+    if (out.todos.length === 0) delete out.todos;
+  }
+  delete out.steps;
+  delete out.plan;
 
   // fileChanges normalization. Drop entries with empty paths, accept
   // `rationale` as `description`, default unknown actions to "modify".
@@ -307,7 +341,12 @@ async function generatePlanWithRetry(
       '{',
       '  "summary": "<short title sentence, verb + object, ≤80 chars>",',
       `  "finding": { "type": "${input.findingType}", "id": "${input.findingId}" },`,
-      '  "description": "<1-2 short sentences naming the issue and the specific change, adding info the summary doesn\'t convey>",',
+      '  "description": "<1-2 sentences describing WHAT THE FIX DOES>",',
+      '  "issue": "<markdown describing WHAT THE PROBLEM IS, optionally with a fenced code block from the context>",',
+      '  "todos": [',
+      '    { "title": "<imperative step, ≤80 chars, NO file paths>", "detail": "<optional one-sentence clarifier>" },',
+      '    { "title": "<imperative step>" }',
+      '  ],',
       '  "fileChanges": [ { "path": "src/foo.ts", "action": "modify", "description": "..." } ],',
       '  "testCommand": "npm test",',
       '  "verificationSteps": [',

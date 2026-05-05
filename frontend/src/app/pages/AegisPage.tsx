@@ -7,8 +7,8 @@ import { ChatPane } from '../../components/aegis/ChatPane';
 import { SearchChatsModal } from '../../components/aegis/SearchChatsModal';
 import { PlanCard } from '../../components/aegis/PlanCard';
 import { RoutinesPanel } from '../../components/aegis/RoutinesPanel';
-import { PlanPanelProvider } from '../../components/aegis/PlanPanelContext';
-import { PlanPanelHost } from '../../components/aegis/PlanPanelHost';
+import { FixPanelProvider } from '../../components/aegis/FixPanelContext';
+import { FixPanelHost } from '../../components/aegis/FixPanelHost';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
 
@@ -322,7 +322,7 @@ export default function AegisPage() {
           className="absolute top-0 right-0 h-full w-1 -mr-0.5 cursor-col-resize hover:bg-foreground/15 active:bg-foreground/25 transition-colors z-10"
         />
       </aside>
-      <PlanPanelProvider resetKey={`${activeThreadId ?? 'home'}|${routinesActive ? 'routines' : 'chat'}`}>
+      <FixPanelProvider resetKey={`${activeThreadId ?? 'home'}|${routinesActive ? 'routines' : 'chat'}`}>
         <main className="flex-1 flex min-w-0">
           <div className="flex-1 flex flex-col min-w-0">
             {routinesActive ? (
@@ -350,9 +350,9 @@ export default function AegisPage() {
               </>
             )}
           </div>
-          <PlanPanelHost />
+          <FixPanelHost />
         </main>
-      </PlanPanelProvider>
+      </FixPanelProvider>
 
       <SearchChatsModal
         open={searchOpen}

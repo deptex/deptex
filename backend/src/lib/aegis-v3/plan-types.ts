@@ -35,6 +35,11 @@ export interface PlanFileChange {
   description: string;
 }
 
+export interface PlanTodo {
+  title: string;
+  detail?: string;
+}
+
 export interface VerificationStep {
   command: string;
   description: string;
@@ -49,6 +54,8 @@ export interface FixPlan {
   summary: string;
   finding: { type: FindingType; id: string; severity?: string };
   description: string;
+  issue?: string;
+  todos?: PlanTodo[];
   fileChanges: PlanFileChange[];
   testCommand: string;
   verification?: string;
@@ -84,6 +91,11 @@ const fileChangeSchema = z.object({
   description: z.string().min(1),
 });
 
+const todoSchema = z.object({
+  title: z.string().min(1).max(160),
+  detail: z.string().max(500).optional(),
+});
+
 const verificationStepSchema = z.object({
   command: z.string().min(1),
   description: z.string().min(1),
@@ -102,6 +114,8 @@ export const fixPlanSchema = z.object({
     severity: z.string().optional(),
   }),
   description: z.string().min(1),
+  issue: z.string().min(1).max(4000).optional(),
+  todos: z.array(todoSchema).min(1).max(50).optional(),
   fileChanges: z.array(fileChangeSchema),
   testCommand: z.string().min(1),
   verification: z.string().min(1).optional(),

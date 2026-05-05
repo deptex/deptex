@@ -239,6 +239,8 @@ export interface FixPlan {
   summary: string;
   finding: { type: FindingType; id: string; severity?: string };
   description: string;
+  issue?: string;
+  todos?: { title: string; detail?: string }[];
   fileChanges: PlanFileChange[];
   testCommand: string;
   verification?: string;

@@ -3,7 +3,7 @@ import type { UIMessage } from 'ai';
 import { AlertCircle, RotateCcw } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ToolCallGroup, type ToolCallEntry } from './ToolCallCard';
-import { PlanCard } from './PlanCard';
+import { PlanCard, PlanCardSkeleton } from './PlanCard';
 import { FixStatusCard } from './FixStatusCard';
 import type { AegisChatError } from '../../lib/aegis-api';
 
@@ -83,9 +83,10 @@ export function MessageBubble({
 
   // Group consecutive tool-call parts so the bubble shows one
   // expandable "N tool calls" block per cluster instead of a row per call.
-  // Exception: request_fix / approve_fix tool calls render as full PlanCard /
-  // FixStatusCard blocks alongside the gray pill — those write tools deserve
-  // visual prominence.
+  // request_fix and approve_fix bypass the gray pill entirely: request_fix
+  // renders as a PlanCardSkeleton while running and a PlanCard once
+  // resolved; approve_fix renders as FixStatusCard. Errors fall through to
+  // the gray pill so the user still sees the failure.
   const elements: ReactNode[] = [];
   let toolBuffer: ToolCallEntry[] = [];
   const flushTools = () => {
@@ -103,17 +104,25 @@ export function MessageBubble({
     }
     if (isToolPart(part)) {
       const toolName = toolNameFor(part);
+      const output = part.output as { fixId?: string } | undefined;
+      const isError = part.state === 'output-error';
+      const resolved = part.state === 'output-available' && output?.fixId;
+
+      if (toolName === 'request_fix' && !isError) {
+        flushTools();
+        if (resolved) {
+          elements.push(
+            <PlanCard key={`plan-${i}`} fixId={output.fixId!} organizationId={organizationId} />,
+          );
+        } else {
+          elements.push(<PlanCardSkeleton key={`plan-skel-${i}`} />);
+        }
+        return;
+      }
+
       toolBuffer.push({ toolName, state: mapState(part.state) });
 
-      // When a write tool resolves with a fixId, surface a dedicated card.
-      const output = part.output as { fixId?: string } | undefined;
-      const resolved = part.state === 'output-available' && output?.fixId;
-      if (resolved && toolName === 'request_fix') {
-        flushTools();
-        elements.push(
-          <PlanCard key={`plan-${i}`} fixId={output.fixId!} organizationId={organizationId} />,
-        );
-      } else if (resolved && toolName === 'approve_fix') {
+      if (resolved && toolName === 'approve_fix') {
         flushTools();
         elements.push(<FixStatusCard key={`status-${i}`} fixId={output.fixId!} />);
       }

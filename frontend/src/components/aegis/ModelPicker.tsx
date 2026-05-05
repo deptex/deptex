@@ -41,19 +41,19 @@ export function ModelPicker({ models, selectedModelId, onSelect }: ModelPickerPr
                   setOpen(false);
                 }}
                 className={cn(
-                  'w-full flex items-start gap-2.5 rounded-md px-2 py-2 text-left transition-colors',
+                  'w-full flex items-center gap-2.5 rounded-md px-2 py-2 text-left transition-colors',
                   'hover:bg-background-subtle',
                   isSelected && 'bg-background-subtle',
                 )}
               >
-                <AIProviderIcon brand={brandForModel(m)} size={16} className="mt-0.5 shrink-0" />
+                <AIProviderIcon brand={brandForModel(m)} size={16} className="shrink-0" />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-foreground truncate">{m.label}</span>
                   </div>
                   <p className="text-xs text-foreground-secondary line-clamp-1">{m.description}</p>
                 </div>
-                {isSelected && <Check className="h-4 w-4 text-foreground mt-0.5 shrink-0" />}
+                {isSelected && <Check className="h-4 w-4 text-foreground shrink-0" />}
               </button>
             );
           })}
