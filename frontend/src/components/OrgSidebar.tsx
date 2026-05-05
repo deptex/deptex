@@ -21,6 +21,7 @@ import {
   Zap,
   Pencil,
   Trash2,
+  Bookmark,
   Pin,
   PinOff,
   Archive,
@@ -346,7 +347,7 @@ export default function OrgSidebar({
                     {thread.title}
                   </span>
                   {isPinned && (
-                    <Pin className="h-3 w-3 text-foreground/40 flex-shrink-0 group-hover/thread:hidden" />
+                    <Bookmark className="h-3 w-3 text-foreground/40 flex-shrink-0 group-hover/thread:hidden" />
                   )}
                 </SidebarMenuButton>
               </TooltipTrigger>
