@@ -4221,6 +4221,23 @@ export const IAC_FRAMEWORKS = [
 
 export type IaCFramework = (typeof IAC_FRAMEWORKS)[number];
 
+const IAC_FRAMEWORK_LABELS: Record<IaCFramework, string> = {
+  terraform: 'Terraform',
+  kubernetes: 'Kubernetes',
+  dockerfile: 'Dockerfile',
+  helm: 'Helm',
+  cloudformation: 'CloudFormation',
+  arm: 'Azure ARM',
+  bicep: 'Bicep',
+  serverless: 'Serverless',
+  github_actions: 'GitHub Actions',
+};
+
+export function frameworkLabel(framework: IaCFramework | string | null | undefined): string {
+  if (!framework) return '';
+  return IAC_FRAMEWORK_LABELS[framework as IaCFramework] ?? String(framework);
+}
+
 export interface IaCFinding {
   id: string;
   project_id: string;
