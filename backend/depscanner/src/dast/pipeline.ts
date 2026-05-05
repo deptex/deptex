@@ -1,71 +1,137 @@
-// Phase 23b PR 3: DAST pipeline. Owns the full lifecycle of a DAST scan from a
-// claimed scan_jobs row → ZAP run → cross-link to SCA findings → atomic-commit
-// of project_dast_findings.
+// Phase 24a (v2.1a): DAST pipeline rewrite.
 //
-// Stable-identity cross-link (v1: SCA only):
-//   1. For each ZAP finding, normalize endpoint_url against
-//      project_entry_points.route_pattern via lib/route-matcher.ts
-//   2. Match populates handler_file_path / handler_function_name / handler_line
-//   3. Join project_reachable_flows on
-//      (entry_point_file = handler_file_path AND entry_point_method = handler_function_name)
-//   4. From flow.purl + flow.dependency_id we look up
-//      project_dependency_vulnerabilities to produce linked_sca_osv_id +
-//      linked_sca_project_dependency_id.
+// New flow:
 //
-// SAST cross-link is deferred to v2 (project_semgrep_findings doesn't yet
-// store containing_function_name).
+//   1. Resolve target_id (NULL → first target row by created_at; legacy v1
+//      pathway during shadow window).
+//   2. Tenant-guard: SELECT target + project + scan_jobs in parallel; assert
+//      all three organization_id values match. Abort with
+//      `error_category='tenant_drift_detected'` BEFORE any decrypt if not.
+//   3. Credential load: if target.has_credentials=true,
+//        a. assert isDastEncryptionConfigured() — abort with
+//           `error_category='dast_credential_key_missing'` if not.
+//        b. assert credential row's encrypted_payload SHA-256 matches the
+//           credential_payload_hash captured at queue time — abort with
+//           `error_category='dast_credential_rotated'` if not.
+//        c. decrypt; on failure (current+previous key both rejected), abort
+//           with `error_category='dast_credential_key_stale'`.
+//      The pipeline NEVER falls back to anonymous when has_credentials=true
+//      (non-negotiable invariant — see plan §Task 7).
+//   4. Build AF YAML (form auth → context.users; jwt/cookie → replacer).
+//   5. Spawn ZAP via control-plane.spawnExternal — pipeline holds the abort
+//      handle and triggers it on (a) cancellation poll between phases,
+//      (b) auth-lost watcher reaching threshold, (c) scan timeout.
+//   6. Plaintext credential buffer is zeroed via Buffer.fill(0) IMMEDIATELY
+//      after the YAML is written to disk; YAML itself is unlinked after
+//      spawn (success or failure).
+//   7. Parse report → cross-link to SCA findings → atomic-commit via the
+//      target-scoped commit_dast_target_run RPC.
+//
+// `auth_state` populated on every finding:
+//   * 'authenticated'        — cred loaded, watcher never tripped threshold
+//   * 'authentication_lost'  — watcher tripped during the run; findings
+//                              collected before the trip stay 'authenticated'
+//                              and findings collected after stay
+//                              'authentication_lost' (per-finding tag, not a
+//                              synthetic finding row)
+//   * 'anonymous'            — no credential
 
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
+import {
+  decryptCredential,
+  isDastEncryptionConfigured,
+  wipePlaintext,
+} from './encryption';
 import type { Storage } from '../storage';
 import type { ExtractionJobRow } from '../job-db';
-import { matchRoute } from './route-matcher';
-import { runZap, type DastFindingRaw, type DastEntryPointInput, type DastScanProfile } from './runner';
+import { isJobCancelled, sendHeartbeat } from '../job-db';
+import {
+  buildAutomationYaml,
+  type AfScanProfile,
+  type DetectedRuntime,
+  type ScopeConfig,
+} from './yaml-builder';
+import {
+  buildAuthForStrategy,
+  type CredentialPayload,
+  type DastAuthStrategy,
+} from './auth-config';
+import {
+  parseZapReport,
+  redactCredentials,
+  ZAP_DEFAULT_TIMEOUT_MS,
+  type DastFindingRaw,
+  type DastScanProfile,
+} from './runner';
+import {
+  spawnExternal,
+  createAuthLostWatcher,
+  type SpawnExternalHandle,
+} from './control-plane';
+import {
+  crossLinkFinding,
+  getActiveExtractionRunId,
+  loadEntryPoints,
+  loadPdvsForProject,
+  loadReachableFlows,
+  type EntryPointRow,
+  type PdvRow,
+  type ProjectDependencyRow,
+  type ReachableFlowRow,
+} from './cross-link';
 
 // ---------------------------------------------------------------------------
-// Types
+// Public types
 // ---------------------------------------------------------------------------
 
 interface DastJobPayload {
-  // Mirrored from scan_jobs columns into payload at queue time so the worker
-  // doesn't need a per-type column read. queue_scan_job populates these.
   target_url?: string;
   scan_profile?: DastScanProfile;
   scan_timeout_minutes?: number;
 }
 
-interface EntryPointRow {
-  framework: string;
-  http_method: string | null;
-  route_pattern: string | null;
-  handler_name: string | null;
-  file_path: string;
-  line_number: number;
-}
+export type DastAuthState = 'anonymous' | 'authenticated' | 'authentication_lost';
 
-interface ReachableFlowRow {
-  entry_point_file: string | null;
-  entry_point_method: string | null;
-  purl: string;
-  dependency_id: string | null;
-}
-
-interface PdvRow {
+interface ScanJobRow {
   id: string;
-  project_dependency_id: string;
-  osv_id: string;
+  organization_id: string;
+  project_id: string;
+  target_id: string | null;
+  credential_id: string | null;
+  credential_payload_hash: string | null;
 }
 
-interface ProjectDependencyRow {
+interface TargetRow {
   id: string;
-  // dependency_id keeps us from having to round-trip the dependencies table
-  // when matching reachable_flows.dependency_id back to project_dependencies.
-  dependency_id: string;
-  purl: string;
+  project_id: string;
+  organization_id: string;
+  target_url: string;
+  detected_runtime: DetectedRuntime;
+  enabled: boolean;
+}
+
+interface CredentialRow {
+  id: string;
+  target_id: string;
+  organization_id: string;
+  auth_strategy: DastAuthStrategy;
+  encrypted_payload: string;
+  encryption_key_version: number;
+  logged_in_indicator: string | null;
+  logged_out_indicator: string | null;
+}
+
+interface ProjectRow {
+  id: string;
+  organization_id: string;
 }
 
 interface DastFindingInsert {
   project_id: string;
   organization_id: string;
+  target_id: string;
   dast_run_id: string;
   endpoint_url: string;
   http_method: string;
@@ -84,12 +150,39 @@ interface DastFindingInsert {
   linked_sca_osv_id: string | null;
   linked_sca_project_dependency_id: string | null;
   cross_link_metadata: Record<string, unknown>;
+  auth_state: DastAuthState;
+  engine: 'zap';
   status: 'open';
 }
 
+export type DastErrorCategory =
+  | 'tenant_drift_detected'
+  | 'dast_credential_key_missing'
+  | 'dast_credential_key_stale'
+  | 'dast_credential_rotated'
+  | 'auth_failed'
+  | 'timeout'
+  | 'engine_crash'
+  | 'unknown';
+
+export class DastPipelineAbortError extends Error {
+  constructor(
+    public errorCategory: DastErrorCategory,
+    public errorPayload: Record<string, unknown> | null,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'DastPipelineAbortError';
+  }
+}
+
 export interface RunDastPipelineOptions {
-  // Allow tests to inject a runZap stub.
-  runZapImpl?: typeof runZap;
+  /** Test seam — substitute the spawn implementation. */
+  spawnImpl?: typeof import('child_process').spawn;
+  /** Test seam — override the work dir; production uses /zap/wrk. */
+  zapWorkDir?: string;
+  /** Test seam — override the cancellation poll interval. */
+  cancellationPollMs?: number;
 }
 
 export interface DastPipelineResult {
@@ -97,245 +190,393 @@ export interface DastPipelineResult {
   findings_count: number;
   duration_seconds: number;
   cross_linked_count: number;
+  auth_state_summary: DastAuthState;
 }
 
 // ---------------------------------------------------------------------------
-// Cross-link
+// Tenant guard
 // ---------------------------------------------------------------------------
 
-interface CrossLinkInput {
-  finding: DastFindingRaw;
-  entryPoints: EntryPointRow[];
-  flows: ReachableFlowRow[];
-  pdvByPurl: Map<string, PdvRow[]>;
-  projectDependencyByPurl: Map<string, ProjectDependencyRow>;
+interface TenantGuardLoad {
+  scanJob: ScanJobRow;
+  target: TargetRow;
+  project: ProjectRow;
 }
 
-interface CrossLinkOutput {
-  handler_file_path: string | null;
-  handler_function_name: string | null;
-  handler_line: number | null;
-  linked_sca_osv_id: string | null;
-  linked_sca_project_dependency_id: string | null;
-  cross_link_metadata: Record<string, unknown>;
+async function loadTenantGuardRows(
+  supabase: Storage,
+  jobId: string,
+  callerOrgId: string,
+): Promise<TenantGuardLoad> {
+  const { data: jobData, error: jobErr } = await supabase
+    .from('scan_jobs')
+    .select('id, organization_id, project_id, target_id, credential_id, credential_payload_hash')
+    .eq('id', jobId)
+    .single();
+  if (jobErr || !jobData) {
+    throw new DastPipelineAbortError(
+      'unknown',
+      { stage: 'load_scan_job' },
+      `Failed to load scan_jobs row: ${jobErr?.message ?? 'not found'}`,
+    );
+  }
+  const scanJob = jobData as ScanJobRow;
+
+  // Resolve target_id during the shadow window. Phase 24b drops the NULL path.
+  let targetId = scanJob.target_id;
+  if (!targetId) {
+    const { data: legacyTarget } = await supabase
+      .from('project_dast_targets')
+      .select('id')
+      .eq('project_id', scanJob.project_id)
+      .limit(1)
+      .single();
+    targetId = (legacyTarget as { id?: string } | null)?.id ?? null;
+  }
+  if (!targetId) {
+    throw new DastPipelineAbortError(
+      'unknown',
+      { stage: 'resolve_target_id', project_id: scanJob.project_id },
+      'No DAST target row found for this project',
+    );
+  }
+
+  const [{ data: targetData, error: targetErr }, { data: projectData, error: projectErr }] =
+    await Promise.all([
+      supabase
+        .from('project_dast_targets')
+        .select('id, project_id, organization_id, target_url, detected_runtime, enabled')
+        .eq('id', targetId)
+        .single(),
+      supabase
+        .from('projects')
+        .select('id, organization_id')
+        .eq('id', scanJob.project_id)
+        .single(),
+    ]);
+  if (targetErr || !targetData) {
+    throw new DastPipelineAbortError(
+      'unknown',
+      { stage: 'load_target' },
+      `Failed to load target row: ${targetErr?.message ?? 'not found'}`,
+    );
+  }
+  if (projectErr || !projectData) {
+    throw new DastPipelineAbortError(
+      'unknown',
+      { stage: 'load_project' },
+      `Failed to load project row: ${projectErr?.message ?? 'not found'}`,
+    );
+  }
+
+  const target = targetData as TargetRow;
+  const project = projectData as ProjectRow;
+
+  // Tenant-drift assertion. ALL THREE org ids must match. The route layer
+  // (loadTargetOrDeny) and the queue_scan_job RPC already enforce this; the
+  // worker check is defense-in-depth against TOCTOU races.
+  if (
+    target.organization_id !== callerOrgId ||
+    project.organization_id !== callerOrgId ||
+    scanJob.organization_id !== callerOrgId ||
+    target.project_id !== scanJob.project_id
+  ) {
+    throw new DastPipelineAbortError(
+      'tenant_drift_detected',
+      {
+        // Don't surface foreign org ids — leaking them would defeat the point.
+        expected_org_id: callerOrgId,
+        expected_project_id: scanJob.project_id,
+      },
+      'tenant drift detected between scan_jobs / project_dast_targets / projects',
+    );
+  }
+
+  return { scanJob, target, project };
 }
 
-/**
- * Resolve a DAST finding's endpoint_url to a (handler_file, handler_function,
- * handler_line) tuple by matching against project_entry_points.route_pattern.
- * Then look up the same handler in project_reachable_flows to find a vulnerable
- * dep, and surface the SCA OSV ID + project_dependency_id pair.
- *
- * On no match, returns nulls and `cross_link_metadata.match_method = 'none'`.
- * Failures here are non-fatal — DAST findings without a cross-link still ship.
- */
-export function crossLinkFinding(input: CrossLinkInput): CrossLinkOutput {
-  const { finding, entryPoints, flows, pdvByPurl, projectDependencyByPurl } = input;
+// ---------------------------------------------------------------------------
+// Credential load
+// ---------------------------------------------------------------------------
 
-  // Try each entry point. First HTTP-method-and-path match wins; on tie within
-  // that, the first one we iterate. Future iterations can rank by classifier
-  // (PUBLIC_UNAUTH > AUTH_INTERNAL etc.) but v1 keeps it simple.
-  let matchedEp: EntryPointRow | null = null;
-  for (const ep of entryPoints) {
-    if (!ep.route_pattern) continue;
-    if (ep.http_method && ep.http_method.toUpperCase() !== finding.http_method.toUpperCase()) continue;
-    if (matchRoute(finding.endpoint_url, ep.route_pattern, ep.framework)) {
-      matchedEp = ep;
-      break;
+interface LoadedCredential {
+  credentialRow: CredentialRow;
+  plaintextBuffer: Buffer;
+  payload: CredentialPayload;
+}
+
+async function loadCredentialOrAbort(
+  supabase: Storage,
+  scanJob: ScanJobRow,
+  target: TargetRow,
+): Promise<LoadedCredential | null> {
+  const { data: credData } = await supabase
+    .from('project_dast_credentials')
+    .select(
+      'id, target_id, organization_id, auth_strategy, encrypted_payload, encryption_key_version, logged_in_indicator, logged_out_indicator',
+    )
+    .eq('target_id', target.id)
+    .maybeSingle();
+
+  if (!credData) {
+    // No credentials → anonymous scan. This is allowed.
+    return null;
+  }
+  const credRow = credData as CredentialRow;
+
+  // Defense-in-depth: target row didn't say has_credentials but a row exists.
+  // Run the credentialed scan anyway — scan_jobs.credential_id captured at
+  // queue time is the source of truth for "this run was supposed to be auth'd".
+  if (scanJob.credential_id && scanJob.credential_id !== credRow.id) {
+    throw new DastPipelineAbortError(
+      'dast_credential_rotated',
+      { credential_id_at_queue: scanJob.credential_id, credential_id_now: credRow.id },
+      'credential row was replaced between queue time and worker spawn',
+    );
+  }
+
+  // Compare credential_payload_hash captured at queue time.
+  const currentHash = createHash('sha256').update(credRow.encrypted_payload).digest('hex');
+  if (scanJob.credential_payload_hash && scanJob.credential_payload_hash !== currentHash) {
+    throw new DastPipelineAbortError(
+      'dast_credential_rotated',
+      { hash_at_queue: scanJob.credential_payload_hash, hash_now: currentHash },
+      'credential payload was rotated between queue time and worker spawn',
+    );
+  }
+
+  if (!isDastEncryptionConfigured()) {
+    throw new DastPipelineAbortError(
+      'dast_credential_key_missing',
+      { key_version_attempted: credRow.encryption_key_version },
+      'DAST_CREDENTIAL_KEY not configured but credential row exists',
+    );
+  }
+
+  let plaintext: string;
+  try {
+    plaintext = decryptCredential(credRow.encrypted_payload, credRow.encryption_key_version);
+  } catch (e) {
+    throw new DastPipelineAbortError(
+      'dast_credential_key_stale',
+      { key_version_attempted: credRow.encryption_key_version },
+      `Credential decrypt failed under current+previous keys: ${(e as Error).message}`,
+    );
+  }
+
+  const plaintextBuffer = Buffer.from(plaintext, 'utf-8');
+  let payload: CredentialPayload;
+  try {
+    payload = JSON.parse(plaintext) as CredentialPayload;
+  } catch (e) {
+    wipePlaintext(plaintextBuffer);
+    throw new DastPipelineAbortError(
+      'dast_credential_key_stale',
+      null,
+      `Credential payload JSON malformed: ${(e as Error).message}`,
+    );
+  }
+
+  return { credentialRow: credRow, plaintextBuffer, payload };
+}
+
+// ---------------------------------------------------------------------------
+// ZAP spawn via control-plane
+// ---------------------------------------------------------------------------
+
+interface ZapRunInputs {
+  targetUrl: string;
+  scanProfile: AfScanProfile;
+  detectedRuntime: DetectedRuntime;
+  scope?: ScopeConfig;
+  authStrategy?: DastAuthStrategy;
+  authPayload?: CredentialPayload;
+  loggedInIndicator?: string;
+  loggedOutIndicator?: string;
+  scanTimeoutMinutes: number;
+  zapWorkDir: string;
+  spawnImpl?: typeof import('child_process').spawn;
+}
+
+interface ZapRunOutputs {
+  findings: DastFindingRaw[];
+  durationMs: number;
+  exitCode: number | null;
+  aborted: boolean;
+  authLostState: ReturnType<ReturnType<typeof createAuthLostWatcher>['state']>;
+  attachAbort: (handle: SpawnExternalHandle) => void;
+}
+
+async function runZapWithControlPlane(
+  inputs: ZapRunInputs,
+  options: {
+    /** Heartbeat tick called from cancellation-poll loop. */
+    onHeartbeat: () => Promise<void>;
+    /** Returns true to trigger pipeline abort with reason 'cancellation_requested'. */
+    isCancelled: () => Promise<boolean>;
+    /** Polling cadence for cancellation+heartbeat. */
+    pollIntervalMs: number;
+  },
+): Promise<ZapRunOutputs> {
+  const yamlText = buildAutomationYaml({
+    targetUrl: inputs.targetUrl,
+    scanProfile: inputs.scanProfile,
+    detectedRuntime: inputs.detectedRuntime,
+    reportRelativePath: 'zap-report.json',
+    scope: inputs.scope,
+    authStrategy: inputs.authStrategy,
+    authPayload: inputs.authPayload,
+    loggedInIndicator: inputs.loggedInIndicator,
+    loggedOutIndicator: inputs.loggedOutIndicator,
+    scanTimeoutMinutes: inputs.scanTimeoutMinutes,
+  });
+
+  const tmpDir = fs.mkdtempSync(path.join(inputs.zapWorkDir, 'deptex-dast-af-'));
+  const yamlPath = path.join(tmpDir, 'automation.yaml');
+  const reportPath = path.join(tmpDir, 'zap-report.json');
+  fs.writeFileSync(yamlPath, yamlText, 'utf-8');
+
+  const watcher = createAuthLostWatcher({
+    onThresholdReached: () => {
+      handle.abort('auth_lost_threshold');
+    },
+  });
+
+  // ZAP doesn't tag stderr lines with "AUTH_LOST status=N url=U" today; the
+  // watcher stays dormant until the AF passive-scan rule (v2.1b) emits them.
+  // When it does, the line shape will be tab-separated and easy to parse here.
+  const handle = spawnExternal({
+    command: '/zap/zap.sh',
+    args: ['-cmd', '-autorun', yamlPath],
+    timeoutMs: inputs.scanTimeoutMinutes * 60_000,
+    spawnImpl: inputs.spawnImpl,
+    onStderr: (chunk) => {
+      // Forward stderr to our process for ops visibility, redacted.
+      process.stderr.write(`[zap-af] ${redactCredentials(chunk)}`);
+      const m = /AUTH_LOST\s+status=(\d+)\s+url=(\S+)/.exec(chunk);
+      if (m) watcher.recordHit(parseInt(m[1], 10), m[2]);
+      if (/AUTH_OK\b/.test(chunk)) watcher.recordIndicatorClear();
+    },
+  });
+
+  // Cancellation + heartbeat poll. Runs concurrently with the spawn promise;
+  // when cancellation is observed, we abort the handle. The timer is cleared
+  // in the finally block so a fast spawn-error path doesn't have to wait for
+  // the next poll tick.
+  let pollDone = false;
+  let pollTimer: NodeJS.Timeout | null = null;
+  async function pollOnce(): Promise<void> {
+    if (pollDone) return;
+    try {
+      await options.onHeartbeat();
+    } catch {
+      /* non-fatal */
+    }
+    if (pollDone) return;
+    let cancelled = false;
+    try {
+      cancelled = await options.isCancelled();
+    } catch {
+      cancelled = false;
+    }
+    if (pollDone) return;
+    if (cancelled) {
+      handle.abort('cancellation_requested');
+      return;
+    }
+    pollTimer = setTimeout(pollOnce, options.pollIntervalMs);
+    pollTimer.unref?.();
+  }
+  pollTimer = setTimeout(pollOnce, options.pollIntervalMs);
+  pollTimer.unref?.();
+
+  let result;
+  try {
+    result = await handle.done;
+  } finally {
+    pollDone = true;
+    if (pollTimer) clearTimeout(pollTimer);
+    // YAML can contain plaintext form credentials — drop it now even on abort.
+    try {
+      fs.unlinkSync(yamlPath);
+    } catch {
+      /* noop */
     }
   }
 
-  if (!matchedEp) {
-    return {
-      handler_file_path: null,
-      handler_function_name: null,
-      handler_line: null,
-      linked_sca_osv_id: null,
-      linked_sca_project_dependency_id: null,
-      cross_link_metadata: { match_method: 'none' },
-    };
+  // ZAP exit codes 0/1/2 are normal completions (with or without findings).
+  // 3+, null (signal-killed), or any abort with no clean exit are runner-level
+  // failures. An auth-lost-triggered abort is not a runner failure — pipeline
+  // upstream marks the job as auth_failed and we still parse partial findings.
+  if (
+    !result.aborted &&
+    result.exitCode !== 0 &&
+    result.exitCode !== 1 &&
+    result.exitCode !== 2
+  ) {
+    const tail = result.stderr.slice(-2_000);
+    throw new DastPipelineAbortError(
+      'engine_crash',
+      { exit_code: result.exitCode, signal: result.signal },
+      `ZAP AF exited with code ${result.exitCode}. stderr tail: ${redactCredentials(tail)}`,
+    );
   }
 
-  // Now JOIN project_reachable_flows on (entry_point_file = file_path AND
-  // entry_point_method = handler_name). The flow tells us which dep is
-  // reachable from this handler.
-  const matchedFlow = flows.find(
-    (f) =>
-      f.entry_point_file === matchedEp!.file_path &&
-      (matchedEp!.handler_name == null || f.entry_point_method === matchedEp!.handler_name)
-  );
-
-  if (!matchedFlow) {
-    return {
-      handler_file_path: matchedEp.file_path,
-      handler_function_name: matchedEp.handler_name,
-      handler_line: matchedEp.line_number,
-      linked_sca_osv_id: null,
-      linked_sca_project_dependency_id: null,
-      cross_link_metadata: { match_method: 'route_only', framework: matchedEp.framework },
-    };
+  // Cancellation aborts always surface up — never collect findings.
+  if (result.aborted && result.abortReason === 'cancellation_requested') {
+    throw new DastPipelineAbortError(
+      'unknown',
+      { aborted_reason: 'cancellation_requested' },
+      'DAST scan cancelled by user',
+    );
+  }
+  if (result.aborted && result.abortReason === 'scan_timeout') {
+    throw new DastPipelineAbortError(
+      'timeout',
+      { aborted_reason: 'scan_timeout', timeout_minutes: inputs.scanTimeoutMinutes },
+      `DAST scan exceeded scan_timeout_minutes=${inputs.scanTimeoutMinutes}`,
+    );
   }
 
-  // Pick the first vulnerability for this dep.
-  const pdvs = pdvByPurl.get(matchedFlow.purl) ?? [];
-  if (pdvs.length === 0) {
-    return {
-      handler_file_path: matchedEp.file_path,
-      handler_function_name: matchedEp.handler_name,
-      handler_line: matchedEp.line_number,
-      linked_sca_osv_id: null,
-      linked_sca_project_dependency_id: null,
-      cross_link_metadata: {
-        match_method: 'route_and_flow_no_vuln',
-        framework: matchedEp.framework,
-        purl: matchedFlow.purl,
-      },
-    };
+  // Auth-lost abort: still parse the partial report so findings collected
+  // before the trip ship.
+  let findings: DastFindingRaw[] = [];
+  if (fs.existsSync(reportPath)) {
+    try {
+      const report = JSON.parse(fs.readFileSync(reportPath, 'utf-8'));
+      findings = parseZapReport(report);
+    } catch {
+      // Partial report — surface zero findings rather than crash the pipeline.
+    }
+    try {
+      fs.unlinkSync(reportPath);
+    } catch {
+      /* noop */
+    }
+  }
+  try {
+    fs.rmdirSync(tmpDir);
+  } catch {
+    /* noop */
   }
 
-  // Severity-rank PDVs so the linked finding surfaces the worst one.
-  const SEVERITY_ORDER: Record<string, number> = {
-    critical: 4,
-    high: 3,
-    medium: 2,
-    low: 1,
-    info: 0,
-  };
-  pdvs.sort((a: any, b: any) => (SEVERITY_ORDER[b.severity ?? 'info'] ?? 0) - (SEVERITY_ORDER[a.severity ?? 'info'] ?? 0));
-
-  const projectDep = projectDependencyByPurl.get(matchedFlow.purl);
   return {
-    handler_file_path: matchedEp.file_path,
-    handler_function_name: matchedEp.handler_name,
-    handler_line: matchedEp.line_number,
-    linked_sca_osv_id: pdvs[0].osv_id,
-    linked_sca_project_dependency_id: projectDep?.id ?? null,
-    cross_link_metadata: {
-      match_method: 'route_flow_vuln',
-      framework: matchedEp.framework,
-      purl: matchedFlow.purl,
-      sca_candidates: pdvs.length,
-    },
+    findings,
+    durationMs: result.durationMs,
+    exitCode: result.exitCode,
+    aborted: result.aborted,
+    authLostState: watcher.state(),
+    attachAbort: () => undefined,
   };
 }
 
 // ---------------------------------------------------------------------------
-// DB helpers (scoped to this module — kept thin to make pipeline-level tests
-// possible by injecting a Storage stub)
+// Atomic-commit + finalization
 // ---------------------------------------------------------------------------
-
-async function getActiveExtractionRunId(supabase: Storage, projectId: string): Promise<string | null> {
-  const { data, error } = await supabase
-    .from('projects')
-    .select('active_extraction_run_id')
-    .eq('id', projectId)
-    .single();
-  if (error || !data) return null;
-  return (data as { active_extraction_run_id: string | null }).active_extraction_run_id ?? null;
-}
-
-async function loadEntryPoints(
-  supabase: Storage,
-  projectId: string,
-  extractionRunId: string
-): Promise<EntryPointRow[]> {
-  const { data, error } = await supabase
-    .from('project_entry_points')
-    .select('framework, http_method, route_pattern, handler_name, file_path, line_number')
-    .eq('project_id', projectId)
-    .eq('extraction_run_id', extractionRunId);
-  if (error || !data) return [];
-  return data as EntryPointRow[];
-}
-
-async function loadReachableFlows(
-  supabase: Storage,
-  projectId: string,
-  extractionRunId: string
-): Promise<ReachableFlowRow[]> {
-  const { data, error } = await supabase
-    .from('project_reachable_flows')
-    .select('entry_point_file, entry_point_method, purl, dependency_id')
-    .eq('project_id', projectId)
-    .eq('extraction_run_id', extractionRunId);
-  if (error || !data) return [];
-  return data as ReachableFlowRow[];
-}
-
-async function loadPdvsForProject(
-  supabase: Storage,
-  projectId: string
-): Promise<{ pdvByPurl: Map<string, PdvRow[]>; projectDependencyByPurl: Map<string, ProjectDependencyRow> }> {
-  // project_dependencies has no `purl` column (purl lives only on
-  // project_reachable_flows). Derive the purl ↔ project_dependency mapping by
-  // joining flows.dependency_id → project_dependencies.dependency_id, since
-  // both rows refer to the same global `dependencies.id`.
-  const [{ data: pdData, error: pdError }, { data: flowDepData, error: flowDepError }] = await Promise.all([
-    supabase
-      .from('project_dependencies')
-      .select('id, dependency_id')
-      .eq('project_id', projectId),
-    supabase
-      .from('project_reachable_flows')
-      .select('purl, dependency_id')
-      .eq('project_id', projectId),
-  ]);
-  if (pdError || !pdData || flowDepError || !flowDepData) {
-    return { pdvByPurl: new Map(), projectDependencyByPurl: new Map() };
-  }
-  const projectDeps = pdData as Array<{ id: string; dependency_id: string | null }>;
-  const flowDeps = flowDepData as Array<{ purl: string | null; dependency_id: string | null }>;
-
-  if (projectDeps.length === 0) {
-    return { pdvByPurl: new Map(), projectDependencyByPurl: new Map() };
-  }
-
-  // dependency_id (global registry id) → project_dependencies row
-  const pdByDepId = new Map<string, { id: string; dependency_id: string }>();
-  for (const pd of projectDeps) {
-    if (pd.dependency_id) pdByDepId.set(pd.dependency_id, { id: pd.id, dependency_id: pd.dependency_id });
-  }
-
-  // Build projectDependencyByPurl by walking flows.dependency_id back to a
-  // project_dep. A purl can map to multiple project_deps if the same package
-  // is installed in multiple workspaces; first wins (matches the in-prod
-  // behaviour we'd see if we'd had a `purl` column to key on).
-  const projectDependencyByPurl = new Map<string, ProjectDependencyRow>();
-  for (const f of flowDeps) {
-    if (!f.purl || !f.dependency_id) continue;
-    if (projectDependencyByPurl.has(f.purl)) continue;
-    const pd = pdByDepId.get(f.dependency_id);
-    if (pd) projectDependencyByPurl.set(f.purl, { id: pd.id, dependency_id: pd.dependency_id, purl: f.purl });
-  }
-
-  const pdIds = projectDeps.map((p) => p.id);
-  const { data: pdvData, error: pdvError } = await supabase
-    .from('project_dependency_vulnerabilities')
-    .select('id, project_dependency_id, osv_id, severity')
-    .in('project_dependency_id', pdIds);
-  if (pdvError || !pdvData) {
-    return { pdvByPurl: new Map(), projectDependencyByPurl };
-  }
-
-  // PDVs are keyed by project_dependency_id; flip to purl via the map we just built.
-  const pdIdToPurl = new Map<string, string>();
-  for (const [purl, pd] of projectDependencyByPurl) pdIdToPurl.set(pd.id, purl);
-
-  const pdvByPurl = new Map<string, PdvRow[]>();
-  for (const pdv of pdvData as Array<PdvRow & { severity?: string }>) {
-    const purl = pdIdToPurl.get(pdv.project_dependency_id);
-    if (!purl) continue;
-    const list = pdvByPurl.get(purl) ?? [];
-    list.push(pdv);
-    pdvByPurl.set(purl, list);
-  }
-
-  return { pdvByPurl, projectDependencyByPurl };
-}
 
 async function insertFindings(
   supabase: Storage,
-  rows: DastFindingInsert[]
+  rows: DastFindingInsert[],
 ): Promise<void> {
   if (rows.length === 0) return;
   const CHUNK_SIZE = 200;
@@ -348,17 +589,17 @@ async function insertFindings(
   }
 }
 
-async function commitDastRun(
+async function commitDastTargetRun(
   supabase: Storage,
-  projectId: string,
-  dastRunId: string
+  targetId: string,
+  dastRunId: string,
 ): Promise<void> {
-  const { error } = await supabase.rpc('commit_dast_run', {
-    p_project_id: projectId,
+  const { error } = await supabase.rpc('commit_dast_target_run', {
+    p_target_id: targetId,
     p_dast_run_id: dastRunId,
   });
   if (error) {
-    throw new Error(`commit_dast_run failed: ${error.message}`);
+    throw new Error(`commit_dast_target_run failed: ${error.message}`);
   }
 }
 
@@ -366,7 +607,7 @@ async function finalizeJob(
   supabase: Storage,
   jobId: string,
   findingsCount: number,
-  durationSeconds: number
+  durationSeconds: number,
 ): Promise<void> {
   const { error } = await supabase
     .from('scan_jobs')
@@ -382,83 +623,167 @@ async function finalizeJob(
   }
 }
 
+async function recordJobError(
+  supabase: Storage,
+  jobId: string,
+  category: DastErrorCategory,
+  payload: Record<string, unknown> | null,
+  message: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from('scan_jobs')
+    .update({
+      status: 'failed',
+      error: message,
+      error_category: category,
+      error_payload: payload,
+      completed_at: new Date().toISOString(),
+    })
+    .eq('id', jobId);
+  if (error) {
+    console.error(`[dast-${jobId}] Failed to record error_category=${category}: ${error.message}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
-// Public entry point
+// Main entry
 // ---------------------------------------------------------------------------
+
+const DEFAULT_CANCELLATION_POLL_MS = 5_000;
 
 export async function runDastPipeline(
   job: ExtractionJobRow,
   supabase: Storage,
-  options: RunDastPipelineOptions = {}
+  options: RunDastPipelineOptions = {},
 ): Promise<DastPipelineResult> {
   const startedAt = Date.now();
   const tag = `[dast-${job.id}]`;
   const payload = job.payload as DastJobPayload;
 
-  const targetUrl = payload.target_url;
-  const scanProfile = payload.scan_profile ?? 'auto';
-  const timeoutMinutes = payload.scan_timeout_minutes ?? 30;
-  if (!targetUrl) {
-    throw new Error('DAST job payload missing target_url');
+  const scanProfile: DastScanProfile = payload.scan_profile ?? 'auto';
+  const timeoutMinutes = payload.scan_timeout_minutes ?? Math.round(ZAP_DEFAULT_TIMEOUT_MS / 60_000);
+  const zapWorkDir = options.zapWorkDir ?? process.env.DAST_WORK_DIR ?? '/zap/wrk';
+
+  // Step 1: tenant-guard load (no decrypt yet).
+  let guard;
+  try {
+    guard = await loadTenantGuardRows(supabase, job.id, job.organization_id);
+  } catch (e) {
+    if (e instanceof DastPipelineAbortError) {
+      console.error(`${tag} aborted at tenant guard: ${e.errorCategory}`);
+      await recordJobError(supabase, job.id, e.errorCategory, e.errorPayload, e.message);
+      throw e;
+    }
+    throw e;
+  }
+  const { scanJob, target } = guard;
+
+  console.log(
+    `${tag} target ${target.id} (${target.target_url}) runtime=${target.detected_runtime} profile=${scanProfile}`,
+  );
+
+  // Step 2: credential load. Throws DastPipelineAbortError on missing/stale/rotated.
+  let cred: LoadedCredential | null = null;
+  try {
+    cred = await loadCredentialOrAbort(supabase, scanJob, target);
+  } catch (e) {
+    if (e instanceof DastPipelineAbortError) {
+      console.error(`${tag} aborted at cred load: ${e.errorCategory}`);
+      await recordJobError(supabase, job.id, e.errorCategory, e.errorPayload, e.message);
+      throw e;
+    }
+    throw e;
   }
 
-  console.log(`${tag} Starting DAST pipeline: ${scanProfile} profile against ${targetUrl}`);
-
-  // Cross-link prerequisites — we read entry points + flows from the LAST
-  // committed extraction. If extraction has never run, we skip cross-link with
-  // a clear log line and ship findings without handler metadata.
+  // Step 3: cross-link prerequisites. Loaded BEFORE the scan so we don't add
+  // wallclock to the credentialed window.
   const extractionRunId = await getActiveExtractionRunId(supabase, job.project_id);
   let entryPoints: EntryPointRow[] = [];
   let flows: ReachableFlowRow[] = [];
   let pdvByPurl = new Map<string, PdvRow[]>();
   let projectDependencyByPurl = new Map<string, ProjectDependencyRow>();
-
-  if (!extractionRunId) {
-    console.warn(`${tag} No active_extraction_run_id on project ${job.project_id} — skipping cross-link`);
-  } else {
+  if (extractionRunId) {
     [entryPoints, flows, { pdvByPurl, projectDependencyByPurl }] = await Promise.all([
       loadEntryPoints(supabase, job.project_id, extractionRunId),
       loadReachableFlows(supabase, job.project_id, extractionRunId),
       loadPdvsForProject(supabase, job.project_id),
     ]);
-    console.log(
-      `${tag} Loaded ${entryPoints.length} entry_points, ${flows.length} flows, ${pdvByPurl.size} pdv-purls for cross-link`
-    );
+  } else {
+    console.warn(`${tag} no active_extraction_run_id — skipping cross-link`);
   }
 
-  // Run ZAP. spawn-based, never blocks the event loop, heartbeat survives.
-  const runZapImpl = options.runZapImpl ?? runZap;
-  const zapInputs: DastEntryPointInput[] = entryPoints.map((ep) => ({
-    framework: ep.framework,
-    http_method: ep.http_method,
-    route_pattern: ep.route_pattern,
-    handler_name: ep.handler_name,
-  }));
-  const zapResult = await runZapImpl({
-    targetUrl,
-    scanProfile,
-    routes: zapInputs,
-    timeoutMs: timeoutMinutes * 60_000,
-  });
+  // Step 4: spawn ZAP via control-plane. The plaintext buffer is alive until
+  // buildAutomationYaml runs INSIDE runZapWithControlPlane → write to disk →
+  // we wipe immediately after.
+  const afProfile: AfScanProfile = scanProfile === 'api' ? 'auto' : (scanProfile as AfScanProfile);
+  let zapResult;
+  try {
+    zapResult = await runZapWithControlPlane(
+      {
+        targetUrl: target.target_url,
+        scanProfile: afProfile,
+        detectedRuntime: target.detected_runtime,
+        authStrategy: cred?.credentialRow.auth_strategy,
+        authPayload: cred?.payload,
+        loggedInIndicator: cred?.credentialRow.logged_in_indicator ?? undefined,
+        loggedOutIndicator: cred?.credentialRow.logged_out_indicator ?? undefined,
+        scanTimeoutMinutes: timeoutMinutes,
+        zapWorkDir,
+        spawnImpl: options.spawnImpl,
+      },
+      {
+        onHeartbeat: async () => {
+          try {
+            await sendHeartbeat(supabase, job.id);
+          } catch {
+            /* non-fatal */
+          }
+        },
+        isCancelled: async () => {
+          try {
+            return await isJobCancelled(supabase, job.id);
+          } catch {
+            return false;
+          }
+        },
+        pollIntervalMs: options.cancellationPollMs ?? DEFAULT_CANCELLATION_POLL_MS,
+      },
+    );
+  } catch (e) {
+    if (cred) wipePlaintext(cred.plaintextBuffer);
+    if (e instanceof DastPipelineAbortError) {
+      console.error(`${tag} aborted during scan: ${e.errorCategory}`);
+      await recordJobError(supabase, job.id, e.errorCategory, e.errorPayload, e.message);
+    }
+    throw e;
+  }
+  // Wipe plaintext buffer immediately after spawn returns. The YAML on disk
+  // (which contained the plaintext) was unlinked inside runZapWithControlPlane.
+  if (cred) wipePlaintext(cred.plaintextBuffer);
+
   console.log(
-    `${tag} ZAP ${zapResult.scriptUsed} returned ${zapResult.findings.length} findings in ${zapResult.durationMs}ms`
+    `${tag} ZAP returned ${zapResult.findings.length} findings in ${zapResult.durationMs}ms (auth_lost=${zapResult.authLostState.consecutiveLostCount})`,
   );
 
-  // Cross-link.
+  // Step 5: build inserts with auth_state per finding.
   const dastRunId = `dast_${randomUUID()}`;
+  const authLostThresholdHit = zapResult.aborted && zapResult.authLostState.consecutiveLostCount >= 4;
+  const baseAuthState: DastAuthState = cred ? 'authenticated' : 'anonymous';
+  // Findings collected after the trip carry 'authentication_lost'; we mark
+  // ALL findings 'authentication_lost' if the watcher tripped, since we don't
+  // get per-finding timestamps from the report. This is the same simplification
+  // the plan §"auth_state state machine" calls out — rule_state stays a
+  // run-level summary in v2.1a.
+  const findingAuthState: DastAuthState = authLostThresholdHit ? 'authentication_lost' : baseAuthState;
+
   let crossLinkedCount = 0;
   const inserts: DastFindingInsert[] = zapResult.findings.map((f) => {
-    const link = crossLinkFinding({
-      finding: f,
-      entryPoints,
-      flows,
-      pdvByPurl,
-      projectDependencyByPurl,
-    });
+    const link = crossLinkFinding({ finding: f, entryPoints, flows, pdvByPurl, projectDependencyByPurl });
     if (link.linked_sca_osv_id) crossLinkedCount++;
     return {
       project_id: job.project_id,
       organization_id: job.organization_id,
+      target_id: target.id,
       dast_run_id: dastRunId,
       endpoint_url: f.endpoint_url,
       http_method: f.http_method,
@@ -477,45 +802,50 @@ export async function runDastPipeline(
       linked_sca_osv_id: link.linked_sca_osv_id,
       linked_sca_project_dependency_id: link.linked_sca_project_dependency_id,
       cross_link_metadata: link.cross_link_metadata,
+      auth_state: findingAuthState,
+      engine: 'zap',
       status: 'open',
     };
   });
-  console.log(`${tag} Cross-linked ${crossLinkedCount} of ${inserts.length} findings to SCA`);
 
-  // Dedupe non-cross-linked findings against the partial unique index
-  // `project_dast_findings_unresolved` on
-  // (project_id, dast_run_id, rule_id, endpoint_url, http_method, vulnerability_type)
-  // WHERE handler_file_path IS NULL. ZAP can report the same alert against the
-  // same URL twice (e.g. multiple form/AJAX instances on one page) and that
-  // would fail the batch insert. Cross-linked rows are exempt — the partial
-  // index doesn't fire when handler_file_path is set.
+  // Dedupe non-cross-linked findings against the partial unique index.
   const seen = new Set<string>();
   const dedupedInserts: DastFindingInsert[] = [];
-  let dropped = 0;
   for (const row of inserts) {
     if (row.handler_file_path !== null) {
       dedupedInserts.push(row);
       continue;
     }
     const key = `${row.rule_id ?? ''}|${row.endpoint_url}|${row.http_method}|${row.vulnerability_type}`;
-    if (seen.has(key)) {
-      dropped++;
-      continue;
-    }
+    if (seen.has(key)) continue;
     seen.add(key);
     dedupedInserts.push(row);
-  }
-  if (dropped > 0) {
-    console.log(`${tag} Dropped ${dropped} duplicate non-cross-linked findings`);
   }
 
   await insertFindings(supabase, dedupedInserts);
 
-  // Atomic pointer flip — visibility gated by projects.active_dast_run_id.
-  await commitDastRun(supabase, job.project_id, dastRunId);
+  // Step 6: atomic-commit via the new target-scoped RPC.
+  await commitDastTargetRun(supabase, target.id, dastRunId);
 
+  // Step 7: finalize. Auth-lost trip → record as a JOB STATE (not a synthetic
+  // finding row); findings collected during the run still ship.
   const durationSeconds = Math.round((Date.now() - startedAt) / 1000);
-  await finalizeJob(supabase, job.id, dedupedInserts.length, durationSeconds);
+  if (authLostThresholdHit) {
+    await recordJobError(
+      supabase,
+      job.id,
+      'auth_failed',
+      {
+        consecutive_lost_count: zapResult.authLostState.consecutiveLostCount,
+        last_logged_out_url: zapResult.authLostState.lastLoggedOutUrl,
+        last_logged_out_at: zapResult.authLostState.lastLoggedOutAt,
+        findings_count: dedupedInserts.length,
+      },
+      'DAST authentication lost mid-scan',
+    );
+  } else {
+    await finalizeJob(supabase, job.id, dedupedInserts.length, durationSeconds);
+  }
 
   console.log(`${tag} DAST scan completed: ${dedupedInserts.length} findings, ${durationSeconds}s`);
 
@@ -524,5 +854,14 @@ export async function runDastPipeline(
     findings_count: dedupedInserts.length,
     duration_seconds: durationSeconds,
     cross_linked_count: crossLinkedCount,
+    auth_state_summary: findingAuthState,
   };
 }
+
+// Re-exports kept for back-compat with existing tests/callers that imported
+// crossLinkFinding from pipeline.ts.
+export { crossLinkFinding } from './cross-link';
+
+// Internal exports used by the pipeline test harness in Task 9.
+export { loadTenantGuardRows as __test_loadTenantGuardRows };
+export { loadCredentialOrAbort as __test_loadCredentialOrAbort };
