@@ -27,6 +27,7 @@ import {
   findRogueOsvIdInSinks,
 } from '../../depscanner/src/rule-generator/framework-spec-schema';
 import { FRAMEWORK_SPEC_FEW_SHOT_EXAMPLES } from '../../depscanner/src/rule-generator/few-shot-examples';
+import { validateRule, makeRuleGenWorkdir } from '../../depscanner/src/rule-generator/validate';
 import { ALL_VULN_CLASSES } from '../../depscanner/src/taint-engine/spec';
 
 describe('few-shot library — Gate 1 schema validation', () => {
@@ -91,11 +92,44 @@ describe('few-shot library — Gate 1 schema validation', () => {
     });
   });
 
-  // Gate 2 placeholder. The engine round-trip lives in validate.ts (M2b);
-  // once that's wired this test will switch from `test.todo` to a real
-  // assertion that each example produces ≥1 flow on its vulnerable fixture
-  // and 0 on its safe fixture.
-  test.todo('Gate 2 (M2b) — every example round-trips through Phase 6 engine on its fixtures');
+  // Gate 2 — engine round-trip — runs as a tsx script (not jest), because the
+  // per-language propagators load tree-sitter WASM via dynamic import and
+  // jest's vm-isolate sandbox refuses without --experimental-vm-modules.
+  //
+  // Canonical Gate 2 location:
+  //   `backend/depscanner/test/few-shot-roundtrip-gate2.ts`
+  //   `cd backend/depscanner && npm run test:few-shot-gate2`
+  //
+  // We still cover the JS fixture here (TS Compiler API doesn't need WASM)
+  // so jest catches the most common regression class — the all-language
+  // sweep is owned by the tsx script and runs in CI alongside it.
+  describe('Gate 2 (JS subset) — engine round-trip on TS Compiler API path', () => {
+    jest.setTimeout(60_000);
+    const jsExamples = FRAMEWORK_SPEC_FEW_SHOT_EXAMPLES.filter(
+      (ex) => ex.payload.framework_spec.language === 'js',
+    );
+    if (jsExamples.length === 0) {
+      test.todo('no JS examples in the few-shot library');
+    }
+    describe.each(jsExamples)('$cveId ($packageName, $ecosystem)', (ex) => {
+      test('round-trips: ≥1 flow on vulnerable, 0 on safe', async () => {
+        const result = await validateRule({
+          payload: ex.payload,
+          cveId: ex.cveId,
+          ecosystem: ex.ecosystem,
+          workDir: makeRuleGenWorkdir(),
+          runPatchValidation: false,
+        });
+        if (result.status !== 'validated') {
+          throw new Error(
+            `Gate 2 failed: pre=${result.log.fixture_pre_matches} post=${result.log.fixture_post_matches}; errors=${result.log.errors.join(' | ')}`,
+          );
+        }
+        expect(result.log.fixture_pre_matches).toBeGreaterThan(0);
+        expect(result.log.fixture_post_matches).toBe(0);
+      });
+    });
+  });
 });
 
 describe('osv_id substitution', () => {

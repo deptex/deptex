@@ -39,6 +39,10 @@ import {
   type GenerationResult,
   type ValidationBreakdown,
 } from './rule-generator';
+import {
+  withOsvIdsSubstituted,
+  FRAMEWORK_SPEC_PROMPT_VERSION,
+} from './rule-generator/framework-spec-schema';
 
 const STEP_NAME = 'rule_generation';
 // Bumped from 90s to accommodate up to 4 in-provider rate-limit retries
@@ -296,12 +300,39 @@ export async function runRuleGenerationStep(
   const overallStart = Date.now();
   const maxWaitMs = settings.max_wait_seconds * 1_000;
 
+  // Per-CVE retry with exponential backoff for transient provider errors
+  // (429, 5xx, network). Non-transient outcomes — schema failure, fixture
+  // round-trip failure, prompt_injection_suspect — are NOT retried (the
+  // model would deterministically return the same result). This sits OUTSIDE
+  // generateRuleForCve's inner withRateLimitRetry so a sustained provider
+  // outage that exhausts the inner 4-attempt loop still gets 3 fresh tries
+  // here (with 30s of cool-down spread across all in-flight CVEs on 429).
+  const PROVIDER_RETRY_DELAYS_MS = [1_000, 4_000, 16_000];
+  const RATE_LIMIT_GLOBAL_COOL_DOWN_MS = 30_000;
+  // Shared timestamp: when ANY in-flight candidate hits a 429, we bump this
+  // to `Date.now() + cool_down` and every candidate that's about to fire
+  // waits past it before issuing its next call. Keeps the bursts out of the
+  // window the provider's already throttled.
+  let globalRateLimitedUntil = 0;
+
+  const isTransientProviderError = (status: GenerationResult['status'], errors: string[]): boolean => {
+    if (status !== 'provider_error') return false;
+    // Surface code lives in the error message string — `withRateLimitRetry`
+    // exhausted prepends "Rate-limited after ..." and 5xx/network errors
+    // prepend their own labels. Match conservatively so deterministic
+    // failures don't slip into the retry path.
+    const blob = errors.join(' | ').toLowerCase();
+    return /rate.?limit|429|503|502|504|fetch failed|terminated|socket hang up|econnreset|network/.test(blob);
+  };
+
+  const isRateLimitErrors = (errors: string[]): boolean => {
+    return /rate.?limit|429/i.test(errors.join(' | '));
+  };
+
   const results = await Promise.all(
     candidates.map((vuln) =>
       limit(async () => {
-        // Bail if the overall step has already burned its budget — the
-        // outer pipeline timeout would have done this anyway, but bailing
-        // here lets us still write whatever finished.
+        // Bail if the overall step has already burned its budget.
         if (Date.now() - overallStart > maxWaitMs) {
           return {
             cveId: vuln.osv_id!,
@@ -309,48 +340,88 @@ export async function runRuleGenerationStep(
             reason: 'overall_max_wait_exceeded',
           };
         }
-        try {
-          const result = await withTimeout(
-            (innerSignal) =>
-              generateRuleForCve({
-                cveId: vuln.osv_id!,
-                packagePurl: vuln.package_purl!,
-                packageName: vuln.package_name!,
-                ecosystem: vuln.ecosystem!,
-                organizationId,
-                provider: settings!.ai_provider,
-                model: effectiveModel,
-                apiKey,
-                signal: combinedSignal(signal, innerSignal),
-                platformRulesDir: args.platformRulesDir,
-                githubToken: resolveGithubToken(),
-                baseUrl: resolveOpenAiCompatBaseUrl(settings!.ai_provider),
-              }),
-            PER_CVE_TIMEOUT_MS,
-            STEP_NAME,
-          );
-          return { cveId: vuln.osv_id!, skipped: false as const, result };
-        } catch (err) {
-          if (err instanceof StepTimeoutError) {
-            return { cveId: vuln.osv_id!, skipped: true as const, reason: 'timeout' };
+
+        let lastResult: GenerationResult | null = null;
+        for (let attempt = 0; attempt <= PROVIDER_RETRY_DELAYS_MS.length; attempt++) {
+          // Honour the global rate-limit cool-down so concurrent slots wait
+          // out the same window instead of racing each other into 429s.
+          if (Date.now() < globalRateLimitedUntil) {
+            const waitMs = globalRateLimitedUntil - Date.now();
+            await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
           }
-          if (jobId) {
-            const { code, message, stack } = classifyError(err);
-            await logStepError(supabase, {
-              jobId,
-              projectId,
-              step: STEP_NAME,
-              code,
-              message: `${vuln.osv_id}: ${message}`,
-              stack,
-              severity: 'warn',
-            });
+          try {
+            const result = await withTimeout(
+              (innerSignal) =>
+                generateRuleForCve({
+                  cveId: vuln.osv_id!,
+                  packagePurl: vuln.package_purl!,
+                  packageName: vuln.package_name!,
+                  ecosystem: vuln.ecosystem!,
+                  organizationId,
+                  provider: settings!.ai_provider,
+                  model: effectiveModel,
+                  apiKey,
+                  signal: combinedSignal(signal, innerSignal),
+                  githubToken: resolveGithubToken(),
+                  baseUrl: resolveOpenAiCompatBaseUrl(settings!.ai_provider),
+                }),
+              PER_CVE_TIMEOUT_MS,
+              STEP_NAME,
+            );
+            lastResult = result;
+            if (!isTransientProviderError(result.status, result.errors)) break;
+            if (attempt === PROVIDER_RETRY_DELAYS_MS.length) break;
+            if (isRateLimitErrors(result.errors)) {
+              globalRateLimitedUntil = Math.max(
+                globalRateLimitedUntil,
+                Date.now() + RATE_LIMIT_GLOBAL_COOL_DOWN_MS,
+              );
+            }
+            await new Promise<void>((resolve) => setTimeout(resolve, PROVIDER_RETRY_DELAYS_MS[attempt]));
+            continue;
+          } catch (err) {
+            if (err instanceof StepTimeoutError) {
+              return { cveId: vuln.osv_id!, skipped: true as const, reason: 'timeout' };
+            }
+            if (jobId) {
+              const { code, message, stack } = classifyError(err);
+              await logStepError(supabase, {
+                jobId,
+                projectId,
+                step: STEP_NAME,
+                code,
+                message: `${vuln.osv_id}: ${message}`,
+                stack,
+                severity: 'warn',
+              });
+            }
+            return { cveId: vuln.osv_id!, skipped: true as const, reason: 'generation_threw' };
           }
-          return { cveId: vuln.osv_id!, skipped: true as const, reason: 'generation_threw' };
         }
+        if (lastResult) return { cveId: vuln.osv_id!, skipped: false as const, result: lastResult };
+        return { cveId: vuln.osv_id!, skipped: true as const, reason: 'generation_threw' };
       }),
     ),
   );
+
+  // Surface a partial-failure summary log if a non-trivial fraction of CVEs
+  // ended in transient provider errors after retry — a systemic provider
+  // outage should be operator-visible, not silently recorded as 'failed'.
+  const errorClasses: Record<string, number> = {};
+  let providerErrorCount = 0;
+  for (const r of results) {
+    if (r.skipped) continue;
+    if (r.result.status === 'validated') continue;
+    errorClasses[`status:${r.result.status}`] = (errorClasses[`status:${r.result.status}`] ?? 0) + 1;
+    if (r.result.status === 'provider_error') providerErrorCount++;
+  }
+  if (providerErrorCount > 0 && providerErrorCount >= Math.max(3, Math.floor(candidates.length * 0.25))) {
+    await log.warn(
+      STEP_NAME,
+      `cve_spec_generation_partial: ${providerErrorCount}/${candidates.length} CVEs ended in provider_error after retries — likely a sustained provider outage`,
+      { error_classes: errorClasses, provider: settings.ai_provider, model: effectiveModel },
+    );
+  }
 
   // --- 8. Persist validated rules + tally stats ---
   let generatedCount = 0;
@@ -705,13 +776,41 @@ async function persistGeneratedRule(
     .eq('package_purl', result.packagePurl)
     .maybeSingle();
 
+  // Server-side osv_id substitution (Patch 5 / E1) — the persistence step is
+  // the SINGLE canonical assignment site for osv_id on a sink. The model
+  // never gets to set this; the DB-side framework_spec_osv_match_chk
+  // constraint (phase27a) enforces server-side as defense-in-depth.
+  const substitutedSpec = result.rule
+    ? withOsvIdsSubstituted(result.rule.framework_spec, result.cveId)
+    : null;
+
+  if (result.promptInjectionSuspect) {
+    await log.warn(
+      STEP_NAME,
+      `prompt_injection_suspect: ${result.cveId} model emitted osv_id on a sink. Row rejected.`,
+      {
+        cve_id: result.cveId,
+        provider: result.generatedWith.provider,
+        model: result.generatedWith.model,
+        attempts: result.attempts,
+      },
+    );
+  }
+
   const baseRow = {
     organization_id: organizationId,
     cve_id: result.cveId,
     package_purl: result.packagePurl,
     ecosystem: result.ecosystem,
     affected_version_range: result.affectedVersionRange ?? null,
-    rule_yaml: result.rule?.rule_yaml ?? '',
+    // M2b: write FrameworkSpec JSONB. Leave rule_yaml NULL on new rows —
+    // the phase27a migration dropped the NOT NULL on rule_yaml so we no
+    // longer need an empty-string placeholder. spec_format='framework_spec'
+    // is what the loader keys on; legacy 'semgrep_yaml' rows continue to
+    // load via the old path until M5 retires Phase 5 entirely.
+    rule_yaml: null,
+    framework_spec: substitutedSpec,
+    spec_format: 'framework_spec',
     vulnerable_fixture: result.rule?.vulnerable_fixture ?? '',
     safe_fixture: result.rule?.safe_fixture ?? '',
     reachability_level: result.rule?.reachability_level ?? 'function',
@@ -720,13 +819,22 @@ async function persistGeneratedRule(
     generated_with_model: result.generatedWith.model,
     generation_cost_usd: result.costUsd,
     validation_status: result.status === 'validated' ? 'validated' : 'failed_validation',
-    validation_log: result.validationLog ?? { errors: result.errors },
+    // prompt_version doesn't have a dedicated column on organization_generated_rules
+    // (the table predates Phase 5h's prompt-version tracking) — fold it into
+    // validation_log so the row still carries enough metadata to forensically
+    // disambiguate which generator authored it.
+    validation_log: {
+      ...(result.validationLog ?? { errors: result.errors }),
+      prompt_version: FRAMEWORK_SPEC_PROMPT_VERSION,
+      attempts: result.attempts,
+    },
     enabled: result.status === 'validated',
     generated_at: new Date().toISOString(),
   };
 
   // Drop empty-rule rows when there's nothing useful to persist (e.g.
-  // status=no_advisory) — the row would just be noise in the UI.
+  // status=no_advisory or prompt_injection_suspect with no payload) — the
+  // row would just be noise in the UI.
   if (!result.rule && result.status !== 'failed_validation') {
     return false;
   }

@@ -157,7 +157,8 @@ app = Flask(__name__)
 @app.route('/proxy')
 def proxy():
     target = request.args.get('url')
-    return requests.get(target, auth=('admin', 'hunter2')).text
+    response = requests.get(target)
+    return response.text
 `;
 
 const SAFE_2018_18074 = `from flask import Flask, request
@@ -168,7 +169,8 @@ app = Flask(__name__)
 
 @app.route('/proxy')
 def proxy():
-    return requests.get('https://api.internal/status', auth=('admin', 'hunter2')).text
+    response = requests.get('https://api.internal/status')
+    return response.text
 `;
 
 /**
@@ -239,41 +241,41 @@ const CVE_2022_32149: FrameworkSpecJson = {
 const VULN_2022_32149 = `package main
 
 import (
-\t"net/http"
-
+\t"github.com/gin-gonic/gin"
 \t"golang.org/x/text/language"
 )
 
-func handler(w http.ResponseWriter, r *http.Request) {
-\taccept := r.Header.Get("Accept-Language")
+func handler(c *gin.Context) {
+\taccept := c.GetHeader("Accept-Language")
 \ttags, _, _ := language.ParseAcceptLanguage(accept)
 \t_ = tags
 }
 
 func main() {
-\thttp.HandleFunc("/", handler)
-\thttp.ListenAndServe(":8080", nil)
+\tr := gin.Default()
+\tr.GET("/", handler)
+\tr.Run(":8080")
 }
 `;
 
 const SAFE_2022_32149 = `package main
 
 import (
-\t"net/http"
-
+\t"github.com/gin-gonic/gin"
 \t"golang.org/x/text/language"
 )
 
 var defaultTag = language.MustParse("en-US")
 
-func handler(w http.ResponseWriter, r *http.Request) {
+func handler(c *gin.Context) {
 \t_ = defaultTag
-\tw.Write([]byte("ok"))
+\tc.String(200, "ok")
 }
 
 func main() {
-\thttp.HandleFunc("/", handler)
-\thttp.ListenAndServe(":8080", nil)
+\tr := gin.Default()
+\tr.GET("/", handler)
+\tr.Run(":8080")
 }
 `;
 
