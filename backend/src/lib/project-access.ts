@@ -176,3 +176,35 @@ export async function checkProjectManagePermission(
 
   return teamRole?.permissions?.manage_projects === true;
 }
+
+/**
+ * Whether `userId` may manage credentials / integrations for the given
+ * project's organization. Org owners + admins always pass; otherwise the
+ * org-role permissions must include `manage_integrations`.
+ *
+ * Used by DAST credential routes (per pragmatist-r2-f15: closer to "handles
+ * secrets" than `manage_projects`).
+ */
+export async function checkOrgManageIntegrationsPermission(
+  userId: string,
+  organizationId: string,
+): Promise<boolean> {
+  const { data: membership } = await supabase
+    .from('organization_members')
+    .select('role')
+    .eq('organization_id', organizationId)
+    .eq('user_id', userId)
+    .single();
+
+  if (!membership) return false;
+  if (membership.role === 'owner' || membership.role === 'admin') return true;
+
+  const { data: orgRole } = await supabase
+    .from('organization_roles')
+    .select('permissions')
+    .eq('organization_id', organizationId)
+    .eq('name', membership.role)
+    .single();
+
+  return orgRole?.permissions?.manage_integrations === true;
+}
