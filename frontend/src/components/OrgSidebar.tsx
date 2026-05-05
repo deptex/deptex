@@ -13,6 +13,7 @@ import {
   LogOut,
   Loader2,
   Plus,
+  ChevronLeft,
 } from 'lucide-react';
 
 import {
@@ -21,6 +22,7 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
@@ -45,6 +47,11 @@ import OrganizationSwitcher from './OrganizationSwitcher';
 import FeedbackPopover from './FeedbackPopover';
 import { api, Organization, RolePermissions } from '../lib/api';
 import { useToast } from '../hooks/use-toast';
+import {
+  buildOrgSettingsSections,
+  computeEffectiveOrgPermissions,
+  OrgSettingsSectionEntry,
+} from '../lib/orgSettingsSections';
 
 interface OrgSidebarProps {
   organizationId: string;
@@ -144,6 +151,43 @@ export default function OrgSidebar({
     return 'overview';
   }, [location.pathname]);
 
+  const inSettings = useMemo(() => {
+    const parts = location.pathname.split('/').filter(Boolean);
+    // /organizations/:id/settings[/:section] — we only want this org's drilldown,
+    // not the personal /settings route.
+    return parts[0] === 'organizations' && parts[1] === organizationId && parts[2] === 'settings';
+  }, [location.pathname, organizationId]);
+
+  const settingsActiveSection = useMemo(() => {
+    if (!inSettings) return null;
+    const parts = location.pathname.split('/').filter(Boolean);
+    return parts[3] || 'general';
+  }, [inSettings, location.pathname]);
+
+  const effectivePerms = useMemo(
+    () => computeEffectiveOrgPermissions(organization?.role, userPermissions ?? null),
+    [organization?.role, userPermissions],
+  );
+
+  const settingsGroups = useMemo(() => {
+    if (!inSettings) return [] as { label: string | null; items: OrgSettingsSectionEntry[] }[];
+    const entries = buildOrgSettingsSections(effectivePerms);
+    const groups: { label: string | null; items: OrgSettingsSectionEntry[] }[] = [];
+    let current: { label: string | null; items: OrgSettingsSectionEntry[] } | null = null;
+    for (const entry of entries) {
+      if ('isCategory' in entry && entry.isCategory) {
+        current = { label: entry.label, items: [] };
+        groups.push(current);
+      } else if (current) {
+        current.items.push(entry);
+      } else {
+        current = { label: null, items: [entry] };
+        groups.push(current);
+      }
+    }
+    return groups;
+  }, [inSettings, effectivePerms]);
+
   const handleNavClick = (path: string) => {
     if (path === 'overview') {
       navigate(`/organizations/${organizationId}`);
@@ -152,13 +196,30 @@ export default function OrgSidebar({
     }
   };
 
+  const handleBackFromSettings = () => {
+    navigate(`/organizations/${organizationId}`);
+  };
+
+  const handleSettingsItemClick = (sectionId: string) => {
+    navigate(`/organizations/${organizationId}/settings/${sectionId}`);
+  };
+
   const displayName = user?.user_metadata?.full_name || user?.email || 'Account';
 
   return (
     <>
       <Sidebar collapsible="offcanvas">
         <SidebarHeader className="px-3 py-2.5">
-          {organization ? (
+          {inSettings ? (
+            <button
+              type="button"
+              onClick={handleBackFromSettings}
+              className="flex items-center gap-2 px-1 py-1 -ml-1 rounded-md text-sm text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50 transition-colors"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              <span className="font-medium text-foreground">Settings</span>
+            </button>
+          ) : organization ? (
             <OrganizationSwitcher
               currentOrganizationId={organization.id}
               currentOrganizationName={organization.name}
@@ -174,28 +235,55 @@ export default function OrgSidebar({
         </SidebarHeader>
 
         <SidebarContent>
-          <SidebarGroup>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {visibleNavItems.map((item) => {
-                  const Icon = item.icon;
-                  const isActive = activeNavId === item.id;
-                  return (
-                    <SidebarMenuItem key={item.id}>
-                      <SidebarMenuButton
-                        isActive={isActive}
-                        onClick={() => handleNavClick(item.path)}
-                        aria-current={isActive ? 'page' : undefined}
-                      >
-                        <Icon className="tab-icon-shake" />
-                        <span>{item.label}</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  );
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+          {inSettings ? (
+            settingsGroups.map((group, idx) => (
+              <SidebarGroup key={group.label ?? `unnamed-${idx}`}>
+                {group.label && <SidebarGroupLabel>{group.label}</SidebarGroupLabel>}
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {group.items.map((item) => {
+                      const isActive = settingsActiveSection === item.id;
+                      return (
+                        <SidebarMenuItem key={item.id}>
+                          <SidebarMenuButton
+                            isActive={isActive}
+                            onClick={() => handleSettingsItemClick(item.id)}
+                            aria-current={isActive ? 'page' : undefined}
+                          >
+                            {item.icon}
+                            <span>{item.label}</span>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      );
+                    })}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            ))
+          ) : (
+            <SidebarGroup>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {visibleNavItems.map((item) => {
+                    const Icon = item.icon;
+                    const isActive = activeNavId === item.id;
+                    return (
+                      <SidebarMenuItem key={item.id}>
+                        <SidebarMenuButton
+                          isActive={isActive}
+                          onClick={() => handleNavClick(item.path)}
+                          aria-current={isActive ? 'page' : undefined}
+                        >
+                          <Icon className="tab-icon-shake" />
+                          <span>{item.label}</span>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    );
+                  })}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          )}
         </SidebarContent>
 
         {user != null && (
