@@ -28,11 +28,17 @@ import { isGuardDogAvailable, runGuardDog, GUARDDOG_VERSION, type GuardDogRule }
 import { TarballCache } from './malicious/tarball-cache';
 import {
   insertFindingsBatch,
+  readCapabilityCache,
   severityForFeed,
   severityForGuardDogRule,
+  upsertCapabilityCache,
   upsertGuardDogCache,
   type PendingFinding,
 } from './malicious/insert-finding';
+import {
+  CAPABILITY_SCANNER_VERSION,
+  detectCapabilities,
+} from './malicious/capabilities';
 import {
   buildReachabilityIndex,
   computeReachability,
@@ -191,19 +197,30 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
           );
         }
 
-        // 2) GuardDog scan (cache-first)
-        if (guarddogAvailable) {
-          const cachedRules = await readGuardDogCache(ctx.supabase, pkg.name, pkg.version, canonical);
-          let rules: GuardDogRule[] = cachedRules;
+        // 2) Cache lookups for BOTH consumers — GuardDog and capability
+        //    scan share an unpacked tree to avoid downloading the tarball
+        //    twice. We check both caches up front and only unpack when at
+        //    least one consumer needs the source.
+        const cachedRules = guarddogAvailable
+          ? await readGuardDogCache(ctx.supabase, pkg.name, pkg.version, canonical)
+          : [];
+        const cachedCapabilities = await readCapabilityCache(ctx.supabase, pkg.name, pkg.version, canonical);
 
-          if (!cachedRules.length) {
-            const entry = await cache.fetch(canonical, pkg.name, pkg.version);
-            if (entry) {
+        const guarddogCacheHit = !guarddogAvailable || cachedRules.length > 0;
+        const capabilityCacheHit =
+          cachedCapabilities !== null &&
+          cachedCapabilities.scanner_version === CAPABILITY_SCANNER_VERSION;
+        const needsUnpack = !guarddogCacheHit || !capabilityCacheHit;
+
+        let rules: GuardDogRule[] = cachedRules;
+
+        if (needsUnpack) {
+          const entry = await cache.fetch(canonical, pkg.name, pkg.version);
+          if (entry) {
+            // GuardDog consumer
+            if (guarddogAvailable && !guarddogCacheHit) {
               const result = runGuardDog(entry.dir, canonical, pkg.name);
               rules = result.rules;
-
-              // Always upsert the cache (even on empty rules) so a
-              // second scan reads back from cache instead of re-running.
               await upsertGuardDogCache(ctx.supabase, {
                 package_name: pkg.name,
                 version: pkg.version,
@@ -214,8 +231,24 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
                 risk_level: rules.length === 0 ? 'none' : highestSeverity(rules),
               });
             }
-          }
 
+            // Capability consumer (soft-fail: errors land as scan_error
+            // on the cache row; pipeline still inserts findings normally)
+            if (!capabilityCacheHit) {
+              const capResult = detectCapabilities(entry.dir, canonical, pkg.name);
+              await upsertCapabilityCache(ctx.supabase, {
+                package_name: pkg.name,
+                version: pkg.version,
+                ecosystem: canonical,
+                scanner_version: capResult.scanner_version,
+                capabilities: capResult.capabilities,
+                scan_error: capResult.scan_error,
+              });
+            }
+          }
+        }
+
+        if (guarddogAvailable) {
           for (const rule of rules) {
             guarddogHits++;
             pending.push(

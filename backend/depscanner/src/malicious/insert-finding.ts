@@ -11,6 +11,8 @@ import type { Storage } from '../storage';
 import type { GuardDogRule } from './guarddog';
 import type { FeedHit } from './feeds';
 import type { ReachabilityLevel, ReachabilityDetails } from './reachability';
+import type { CanonicalEcosystem } from './ecosystem';
+import { CAPABILITY_KEYS, type CapabilitySet } from './capabilities/types';
 
 export type FindingSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 
@@ -83,6 +85,80 @@ export async function upsertGuardDogCache(
     .upsert(row as unknown as Record<string, unknown>, {
       onConflict: 'package_name,version,ecosystem,scanner',
     });
+}
+
+export interface CapabilityCacheRow {
+  package_name: string;
+  version: string;
+  ecosystem: CanonicalEcosystem;
+  scanner_version: string;
+  capabilities: CapabilitySet;
+  scan_error: string | null;
+}
+
+/**
+ * Returns the capability row for (package, version, ecosystem) if one
+ * exists, or null on miss / DB error. The row is global cache — same row
+ * is reused across orgs and projects.
+ */
+export async function readCapabilityCache(
+  supabase: Storage,
+  packageName: string,
+  version: string,
+  ecosystem: string,
+): Promise<CapabilityCacheRow | null> {
+  const { data, error } = await supabase
+    .from('package_capabilities')
+    .select(
+      [
+        'package_name',
+        'version',
+        'ecosystem',
+        'scanner_version',
+        'scan_error',
+        ...CAPABILITY_KEYS,
+      ].join(', '),
+    )
+    .eq('package_name', packageName)
+    .eq('version', version)
+    .eq('ecosystem', ecosystem)
+    .maybeSingle();
+  if (error || !data) return null;
+  const row = data as Record<string, unknown>;
+  const caps = {} as CapabilitySet;
+  for (const k of CAPABILITY_KEYS) caps[k] = row[k] === true;
+  return {
+    package_name: String(row.package_name),
+    version: String(row.version),
+    ecosystem: String(row.ecosystem) as CanonicalEcosystem,
+    scanner_version: String(row.scanner_version),
+    capabilities: caps,
+    scan_error: row.scan_error == null ? null : String(row.scan_error),
+  };
+}
+
+/**
+ * Upsert the capability row for (package, version, ecosystem). Replaces
+ * the existing row in place on scanner upgrade since `scanner_version` is
+ * NOT in the unique key.
+ */
+export async function upsertCapabilityCache(
+  supabase: Storage,
+  row: CapabilityCacheRow,
+): Promise<void> {
+  const payload: Record<string, unknown> = {
+    package_name: row.package_name,
+    version: row.version,
+    ecosystem: row.ecosystem,
+    scanner_version: row.scanner_version,
+    scan_error: row.scan_error,
+    scanned_at: new Date().toISOString(),
+  };
+  for (const k of CAPABILITY_KEYS) payload[k] = row.capabilities[k];
+
+  await supabase
+    .from('package_capabilities')
+    .upsert(payload, { onConflict: 'package_name,version,ecosystem' });
 }
 
 export async function insertFindingsBatch(

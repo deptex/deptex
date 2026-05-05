@@ -2183,6 +2183,19 @@ export const api = {
     },
   },
 
+  capabilities: {
+    async fetch(
+      organizationId: string,
+      ecosystem: string,
+      packageName: string,
+      version: string,
+    ): Promise<PackageCapabilities> {
+      return fetchWithAuth(
+        `/api/organizations/${organizationId}/packages/${encodeURIComponent(ecosystem)}/${encodeURIComponent(packageName)}/${encodeURIComponent(version)}/capabilities`,
+      );
+    },
+  },
+
   async getVulnerabilityDetail(
     organizationId: string,
     projectId: string,
@@ -4379,6 +4392,39 @@ export interface MaliciousFinding {
   reachability_details?: MaliciousReachabilityDetails | null;
   reachability_computed_at?: string | null;
 }
+
+/**
+ * Per-package capability tags (malicious-packages-v2 M1b). Global cache —
+ * the same row is returned for every org that has the package in scope.
+ * Locked at 15 boolean tags for v2.
+ */
+export interface PackageCapabilities {
+  package_name: string;
+  version: string;
+  ecosystem: string;
+  scanner_version: string;
+  scanned_at: string;
+  scan_error: string | null;
+  capabilities: {
+    spawns_processes: boolean;
+    network_io: boolean;
+    eval_dynamic: boolean;
+    native_addon_load: boolean;
+    filesystem_write: boolean;
+    crypto_operations: boolean;
+    serialization_deser: boolean;
+    install_script: boolean;
+    dns_query: boolean;
+    websocket: boolean;
+    process_signal: boolean;
+    encrypted_payload: boolean;
+    dynamic_import: boolean;
+    reads_env: boolean;
+    clipboard_access: boolean;
+  };
+}
+
+export type CapabilityKey = keyof PackageCapabilities['capabilities'];
 
 export interface VulnerabilityEvent {
   id: string;

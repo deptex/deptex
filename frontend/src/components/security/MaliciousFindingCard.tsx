@@ -11,6 +11,17 @@ interface MaliciousFindingCardProps {
   finding: MaliciousFinding;
   canManage: boolean;
   onStatusChange?: () => void;
+  /**
+   * When provided, the package name renders as a clickable button that
+   * fires this callback. Hosting pages typically use it to open a drawer
+   * showing the package's capability tags + other metadata.
+   */
+  onPackageClick?: (info: {
+    package_name: string;
+    package_version: string | null | undefined;
+    ecosystem: string | null | undefined;
+    project_dependency_id: string;
+  }) => void;
 }
 
 export function MaliciousFindingCard({
@@ -19,6 +30,7 @@ export function MaliciousFindingCard({
   finding,
   canManage,
   onStatusChange,
+  onPackageClick,
 }: MaliciousFindingCardProps) {
   const [explainState, setExplainState] = useState<
     | { kind: 'idle' }
@@ -87,9 +99,26 @@ export function MaliciousFindingCard({
             details={finding.reachability_details}
           />
           {finding.package_name && (
-            <span className="text-[11px] text-foreground-secondary font-mono">
-              {finding.package_name}@{finding.package_version} ({finding.ecosystem})
-            </span>
+            onPackageClick ? (
+              <button
+                type="button"
+                onClick={() =>
+                  onPackageClick({
+                    package_name: finding.package_name!,
+                    package_version: finding.package_version,
+                    ecosystem: finding.ecosystem,
+                    project_dependency_id: finding.project_dependency_id,
+                  })
+                }
+                className="text-[11px] text-foreground-secondary font-mono hover:text-foreground hover:underline underline-offset-2 transition-colors"
+              >
+                {finding.package_name}@{finding.package_version} ({finding.ecosystem})
+              </button>
+            ) : (
+              <span className="text-[11px] text-foreground-secondary font-mono">
+                {finding.package_name}@{finding.package_version} ({finding.ecosystem})
+              </span>
+            )
           )}
         </div>
         <div className="flex items-center gap-2">
