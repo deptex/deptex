@@ -1,9 +1,12 @@
 import * as fs from 'fs';
+import { execFile } from 'child_process';
 import { runScannerSubprocess, type ScannerSubprocessLogger } from '../with-timeout';
+import { resolveRegistryHostname } from './registry-auth';
 import type {
   ContainerFinding,
   IaCFinding,
   IaCFramework,
+  RegistryType,
   SkippedImage,
 } from './types';
 
@@ -372,8 +375,12 @@ export function parseTrivyImageOutput(
 
 export interface RunTrivyImageOptions {
   imageRef: string;
-  /** JSON string suitable for ~/.docker/config.json — written into a temp dir
-   *  via DOCKER_AUTH_CONFIG so the GitHub App token never ends up in argv. */
+  /** Per-scan ephemeral DOCKER_CONFIG dir (Patch 15). Trivy + crane both honor
+   *  $DOCKER_CONFIG and read its config.json for registry auth. Preferred over
+   *  the v1 dockerAuthConfig env var, which Trivy/crane do not consume. */
+  dockerConfigDir?: string;
+  /** Legacy: JSON string set as $DOCKER_AUTH_CONFIG. Kept until the M8 rewrite
+   *  retires the v1 ghcr-only auth path. New callers should use dockerConfigDir. */
   dockerAuthConfig?: string;
   signal?: AbortSignal;
   onHeartbeat?: () => Promise<void> | void;
@@ -387,6 +394,9 @@ export async function runTrivyImage(
   const warnings: string[] = [];
   const version = await trivyVersion();
   const env: Record<string, string | undefined> = {};
+  if (opts.dockerConfigDir) {
+    env.DOCKER_CONFIG = opts.dockerConfigDir;
+  }
   if (opts.dockerAuthConfig) {
     env.DOCKER_AUTH_CONFIG = opts.dockerAuthConfig;
   }
@@ -396,6 +406,11 @@ export async function runTrivyImage(
       'image',
       '--format', 'json',
       '--scanners=vuln',
+      // Pin platform so the manifest-list resolution is deterministic between
+      // the crane digest probe and the Trivy pull. Without this, the cache key
+      // (Trivy's RepoDigest) can diverge from the probe digest on multi-arch
+      // images and we'd spuriously skip cache writes (Patch 3).
+      '--platform', 'linux/amd64',
       opts.imageRef,
     ],
     signal: opts.signal,
@@ -440,3 +455,188 @@ async function trivyVersion(): Promise<string> {
 }
 
 export type { SkippedImage };
+
+// ============================================================
+// v2 — Digest normalization, pull strategy, and crane probe (M6)
+// ============================================================
+
+/**
+ * Canonicalize a docker image digest to its bare 64-hex form. Accepts:
+ *
+ *   abcdef…64-hex                          → abcdef…
+ *   sha256:abcdef…64-hex                   → abcdef…
+ *   repo/path@sha256:abcdef…               → abcdef…
+ *   registry.example/repo/path@sha256:…    → abcdef…
+ *
+ * The container_image_scan_cache primary key uses this canonical form. crane's
+ * digest output is `sha256:<hex>` and Trivy's RepoDigests are `<repo>@sha256:<hex>` —
+ * without normalization, lookups would miss every time. (Patch 3.)
+ */
+export function normalizeDigest(s: string): string {
+  const m = s.match(/(?:^|@sha256:|^sha256:)([a-f0-9]{64})$/);
+  if (!m) throw new Error(`invalid digest: ${s}`);
+  return m[1];
+}
+
+export type PullStrategy =
+  | { kind: 'public' }
+  | { kind: 'authenticated'; credId: string; hostname: string }
+  | { kind: 'skip'; reason: 'no_matching_cred' };
+
+export interface ConfiguredCredRef {
+  id: string;
+  registry_type: RegistryType;
+  registry_url: string | null;
+}
+
+const PUBLIC_PULL_HOSTS = new Set([
+  'docker.io',
+  'index.docker.io',
+  'registry-1.docker.io',
+  'public.ecr.aws',
+  'mcr.microsoft.com',
+]);
+
+function extractImageHost(imageRef: string): { host: string; isImplicitDockerHub: boolean } {
+  const noDigest = imageRef.split('@')[0];
+  const firstSlash = noDigest.indexOf('/');
+  if (firstSlash === -1) return { host: 'docker.io', isImplicitDockerHub: true };
+  const firstSegment = noDigest.slice(0, firstSlash);
+  const looksLikeHost =
+    firstSegment === 'localhost' ||
+    /\./.test(firstSegment) ||
+    /:\d+$/.test(firstSegment);
+  if (!looksLikeHost) return { host: 'docker.io', isImplicitDockerHub: true };
+  return { host: firstSegment, isImplicitDockerHub: false };
+}
+
+/**
+ * Resolve how the worker should pull a given image given the org's set of
+ * configured registry credentials. Replaces v1's ghcr-only special case;
+ * ghcr/quay/gcr now flow through the same cred-matching mechanism as ECR/ACR.
+ *
+ *   public          — anonymous pull (docker.io, public.ecr.aws, mcr.…)
+ *   authenticated   — a cred whose hostname matches the image's host exists;
+ *                     the cred id is returned for downstream decryption
+ *   skip            — neither public nor cred-backed; orchestrator records
+ *                     SkippedImage{ reason: 'private_registry_unsupported_at_v1' }
+ *                     (or its v2 equivalent) and moves on
+ */
+export function resolvePullStrategy(
+  imageRef: string,
+  configuredCreds: ReadonlyArray<ConfiguredCredRef>
+): PullStrategy {
+  const { host } = extractImageHost(imageRef);
+
+  if (PUBLIC_PULL_HOSTS.has(host)) {
+    return { kind: 'public' };
+  }
+
+  for (const cred of configuredCreds) {
+    let credHost: string;
+    try {
+      credHost = resolveRegistryHostname(cred.registry_type, cred.registry_url);
+    } catch {
+      // Misconfigured cred row (e.g. harbor/jfrog/custom with NULL registry_url).
+      // Skip it for matching; the orchestrator surfaces the row's bad-data
+      // separately via cred-validation.
+      continue;
+    }
+    if (credHost === host) {
+      return { kind: 'authenticated', credId: cred.id, hostname: host };
+    }
+  }
+
+  return { kind: 'skip', reason: 'no_matching_cred' };
+}
+
+export class RegistryUnavailableError extends Error {
+  readonly imageRef: string;
+  readonly cause?: string;
+  constructor(imageRef: string, cause?: string) {
+    super(`Registry unavailable for ${imageRef}${cause ? `: ${cause}` : ''}`);
+    this.name = 'RegistryUnavailableError';
+    this.imageRef = imageRef;
+    this.cause = cause;
+  }
+}
+
+export interface CraneRunResult {
+  stdout: string;
+  exitCode: number;
+}
+
+export type CraneRunner = (
+  imageRef: string,
+  options: { dockerConfigDir?: string; timeoutMs: number }
+) => Promise<CraneRunResult>;
+
+const CRANE_TIMEOUT_MS = 5000;
+const CRANE_MAX_BUFFER = 65536;
+
+/**
+ * Default crane runner. execFile with explicit timeout, SIGKILL on timeout,
+ * and a tight maxBuffer (FMH-r2-4): zombie risk eliminated, output capped so
+ * a malicious registry can't OOM the worker by streaming garbage.
+ */
+function defaultCraneRunner(
+  imageRef: string,
+  options: { dockerConfigDir?: string; timeoutMs: number }
+): Promise<CraneRunResult> {
+  return new Promise((resolve, reject) => {
+    const env = { ...process.env };
+    if (options.dockerConfigDir) env.DOCKER_CONFIG = options.dockerConfigDir;
+    execFile(
+      'crane',
+      ['digest', imageRef],
+      {
+        timeout: options.timeoutMs,
+        killSignal: 'SIGKILL',
+        maxBuffer: CRANE_MAX_BUFFER,
+        env,
+      },
+      (err, stdout) => {
+        if (err) {
+          const e = err as NodeJS.ErrnoException & { killed?: boolean; signal?: string };
+          if (e.killed || e.signal === 'SIGKILL' || e.code === 'ETIMEDOUT') {
+            reject(new RegistryUnavailableError(imageRef, 'crane probe timed out'));
+            return;
+          }
+          reject(err);
+          return;
+        }
+        resolve({ stdout, exitCode: 0 });
+      }
+    );
+  });
+}
+
+/**
+ * Resolve an image's content digest via `crane digest <imageRef>`. Used by
+ * the orchestrator before paying the Trivy pull, so a cache hit short-circuits
+ * the download. The returned digest is the canonical 64-hex form.
+ *
+ * Throws RegistryUnavailableError on timeout or crane failure; the orchestrator
+ * classifies these as registry_unavailable and falls through to a
+ * cache-bypassing Trivy run (or a skip, depending on kill switches).
+ */
+export async function resolveImageDigest(
+  imageRef: string,
+  options: { dockerConfigDir?: string; runner?: CraneRunner } = {}
+): Promise<string> {
+  const runner = options.runner ?? defaultCraneRunner;
+  let result: CraneRunResult;
+  try {
+    result = await runner(imageRef, {
+      dockerConfigDir: options.dockerConfigDir,
+      timeoutMs: CRANE_TIMEOUT_MS,
+    });
+  } catch (err) {
+    if (err instanceof RegistryUnavailableError) throw err;
+    throw new RegistryUnavailableError(imageRef, (err as Error).message);
+  }
+  if (result.exitCode !== 0) {
+    throw new RegistryUnavailableError(imageRef, `crane exit ${result.exitCode}`);
+  }
+  return normalizeDigest(result.stdout.trim());
+}
