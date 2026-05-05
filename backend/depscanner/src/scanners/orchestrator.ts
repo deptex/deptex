@@ -306,8 +306,11 @@ export async function runIaCAndContainerScans(
     await ctx.logger.warn('iac_scan', 'SCANNERS_IAC_ENABLED=false — skipping IaC scan');
   } else {
     const iacFindings: IaCFinding[] = [];
+    // Trivy owns dockerfile config scanning; everything else (the v2 IaC set:
+    // terraform / kubernetes / helm / cloudformation / arm / bicep / serverless
+    // / github_actions) goes to Checkov.
     const iacFrameworks: IaCFramework[] = infraTypes.filter(
-      (t): t is Exclude<IaCFramework, 'dockerfile'> => t === 'terraform' || t === 'kubernetes'
+      (t): t is Exclude<IaCFramework, 'dockerfile'> => t !== 'dockerfile'
     );
 
     const tasks: Array<Promise<void>> = [];
