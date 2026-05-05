@@ -66,8 +66,8 @@ export function DastFindingsSection({ organizationId, projectId }: DastFindingsS
     (async () => {
       try {
         const [j, f] = await Promise.all([
-          api.getDastJobs(projectId, 5),
-          api.getDastFindings(projectId, 200),
+          api.getDastJobs(projectId, { limit: 5 }),
+          api.getDastFindings(projectId, { limit: 200 }),
         ]);
         if (cancelled) return;
         setJobs(j);
