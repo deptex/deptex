@@ -614,14 +614,19 @@ export default function OrgSidebar({
               {aegisThreadsLoading && aegisThreads.length === 0 && (
                 <SidebarGroup>
                   <SidebarGroupContent>
-                    {[160, 112, 144, 96].map((w, i) => (
-                      <div key={i} className="px-3 py-2" style={{ opacity: 1 - i * 0.18 }}>
-                        <div
-                          className="h-3 rounded bg-foreground/[0.08] animate-pulse"
-                          style={{ width: w, animationDelay: `${i * 80}ms` }}
-                        />
-                      </div>
-                    ))}
+                    <SidebarMenu>
+                      {[120, 88, 104, 72, 96].map((w, i) => (
+                        <SidebarMenuItem key={i}>
+                          <div
+                            className="flex items-center gap-3 h-9 px-3"
+                            style={{ opacity: 1 - i * 0.15 }}
+                          >
+                            <div className="h-3.5 w-3.5 rounded-full bg-foreground/[0.08] animate-pulse flex-shrink-0" style={{ animationDelay: `${i * 60}ms` }} />
+                            <div className="h-2.5 rounded bg-foreground/[0.08] animate-pulse" style={{ width: w, animationDelay: `${i * 60}ms` }} />
+                          </div>
+                        </SidebarMenuItem>
+                      ))}
+                    </SidebarMenu>
                   </SidebarGroupContent>
                 </SidebarGroup>
               )}
