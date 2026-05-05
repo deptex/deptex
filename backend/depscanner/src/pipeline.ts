@@ -29,6 +29,9 @@ import {
   writeRun as writeTaintEngineRun,
   checkCircuitBreaker as checkTaintEngineCircuitBreaker,
   maybeEngageKillswitch as maybeEngageTaintEngineKillswitch,
+  loadCveSpecsForExtraction,
+  createOsvIdResolver,
+  type ResolvedDep,
 } from './taint-engine';
 import { runRuleGenerationStep, makePlatformRulesDir, type PipelineVulnRow } from './rule-generation-step';
 
@@ -1901,6 +1904,126 @@ export async function runPipeline(
             extractionRunId: runId,
             status: 'running',
           });
+          // Phase 6.5 — pull CVE-targeted FrameworkSpec rows from
+          // organization_generated_rules for the CVEs dep-scan detected
+          // this extraction, plus the (osv_id → dependency_id, purl) map
+          // the engine's writeFlows resolver needs to promote them to
+          // confirmed-tier in the classifier. Both happen before the
+          // engine call so a DB hiccup surfaces as a warn-and-continue
+          // rather than a mid-engine failure (the engine still runs the
+          // framework-generic pass with whatever specs validated).
+          const detectedCves = new Set<string>();
+          const depsByOsvId = new Map<string, ResolvedDep>();
+          {
+            const { data: pdvRows, error: pdvErr } = await supabase
+              .from('project_dependency_vulnerabilities')
+              .select('osv_id, project_dependency_id')
+              .eq('project_id', projectId)
+              .eq('extraction_run_id', runId);
+            if (pdvErr) {
+              await log.warn(
+                'taint_engine',
+                `cve-specs PDV preload failed: ${pdvErr.message} (continuing with framework-generic specs only)`,
+              );
+            } else {
+              const pdvList = (pdvRows ?? []) as Array<{
+                osv_id: string | null;
+                project_dependency_id: string | null;
+              }>;
+              const pdIds = new Set<string>();
+              for (const r of pdvList) {
+                if (r.osv_id) detectedCves.add(r.osv_id);
+                if (r.project_dependency_id) pdIds.add(r.project_dependency_id);
+              }
+              if (pdIds.size > 0) {
+                const { data: pdRows, error: pdErr } = await supabase
+                  .from('project_dependencies')
+                  .select('id, name, version, dependency_id')
+                  .in('id', Array.from(pdIds));
+                if (pdErr) {
+                  await log.warn(
+                    'taint_engine',
+                    `cve-specs project_dependencies lookup failed: ${pdErr.message} (CVE-tagged flows will fall through to unresolved)`,
+                  );
+                } else {
+                  const pdRowMap = new Map<
+                    string,
+                    { name: string; version: string | null; dependency_id: string | null }
+                  >();
+                  for (const r of (pdRows ?? []) as Array<{
+                    id: string;
+                    name: string;
+                    version: string | null;
+                    dependency_id: string | null;
+                  }>) {
+                    pdRowMap.set(r.id, {
+                      name: r.name,
+                      version: r.version,
+                      dependency_id: r.dependency_id,
+                    });
+                  }
+                  // Resolve dependency.ecosystem the same way the
+                  // reachability_rules step does — eco lives on the
+                  // dependencies table, not project_dependencies.
+                  const depIds = new Set<string>();
+                  for (const pd of pdRowMap.values()) {
+                    if (pd.dependency_id) depIds.add(pd.dependency_id);
+                  }
+                  const ecoByDepId = new Map<string, string>();
+                  if (depIds.size > 0) {
+                    const { data: depRows, error: depErr } = await supabase
+                      .from('dependencies')
+                      .select('id, ecosystem')
+                      .in('id', Array.from(depIds));
+                    if (depErr) {
+                      await log.warn(
+                        'taint_engine',
+                        `cve-specs dependencies lookup failed: ${depErr.message} (using project ecosystem fallback)`,
+                      );
+                    } else {
+                      for (const r of (depRows ?? []) as Array<{ id: string; ecosystem: string }>) {
+                        ecoByDepId.set(r.id, r.ecosystem);
+                      }
+                    }
+                  }
+                  for (const r of pdvList) {
+                    if (!r.osv_id || !r.project_dependency_id) continue;
+                    const pd = pdRowMap.get(r.project_dependency_id);
+                    if (!pd) continue;
+                    const eco =
+                      (pd.dependency_id ? ecoByDepId.get(pd.dependency_id) : undefined) ??
+                      job.ecosystem;
+                    if (!eco) continue;
+                    const purl = buildPurl(eco, pd.name, pd.version);
+                    if (!purl) continue;
+                    // First write wins: a single CVE on multiple PDs
+                    // (rare, e.g. a monorepo with two copies of a vulnerable
+                    // dep) will resolve to the first dep we see. Acceptable
+                    // for v1; M5 may add per-PD disambiguation.
+                    if (!depsByOsvId.has(r.osv_id)) {
+                      depsByOsvId.set(r.osv_id, {
+                        purl,
+                        dependencyId: pd.dependency_id,
+                      });
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          const cveSpecResult = await loadCveSpecsForExtraction({
+            storage: supabase,
+            organizationId,
+            detectedCves,
+            onWarn: (m) => { void log.warn('taint_engine', m); },
+          });
+          if (cveSpecResult.failed.length > 0) {
+            await log.warn(
+              'taint_engine',
+              `cve-specs: ${cveSpecResult.failed.length} row(s) failed schema validation (${cveSpecResult.failed.slice(0, 5).join(', ')}${cveSpecResult.failed.length > 5 ? ', …' : ''})`,
+            );
+          }
           try {
             const engineResult = await withTimeout(
               async (signal) => runTaintEngine({
@@ -1908,6 +2031,7 @@ export async function runPipeline(
                 ecosystem: job.ecosystem,
                 signal,
                 onWarn: (m) => { void log.warn('taint_engine', m); },
+                cveSpecs: cveSpecResult.specs,
                 fpFilter: {
                   storage: supabase,
                   organizationId,
@@ -1941,6 +2065,8 @@ export async function runPipeline(
                 extractionRunId: runId,
                 flows: survivors,
                 filterVerdicts: aiFilter?.verdicts,
+                workspaceRoot,
+                resolveDep: createOsvIdResolver(depsByOsvId),
               });
               for (const e of writeResult.errors) {
                 await log.warn('taint_engine', `flow write: ${e}`);

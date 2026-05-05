@@ -23,7 +23,7 @@ export type {
 export { propagate } from './propagator';
 export type { PropagateOptions, PropagateResult, PropagateStats } from './propagator';
 
-export { loadSpec, validateSpec, SpecValidationError } from './spec-loader';
+export { loadSpec, loadSpecFromJson, validateSpec, SpecValidationError } from './spec-loader';
 export type {
   FrameworkSpec,
   FrameworkSource,
@@ -34,6 +34,9 @@ export type {
 } from './spec';
 export { ALL_VULN_CLASSES } from './spec';
 
+export { loadCveSpecsForExtraction } from './cve-specs';
+export type { LoadCveSpecsOptions, LoadCveSpecsResult } from './cve-specs';
+
 export type { Flow, FlowNode, SinkHit, TaintTrace } from './flow';
 
 export type { IrFunction, Step, LocalVar, SourceLocation, CalleeRef } from './ir';
@@ -42,8 +45,21 @@ export { lowerFunction } from './ir';
 export { runEngine, shouldRunForRollout, shouldRunForOrg } from './runner';
 export type { RunEngineOptions, RunEngineResult } from './runner';
 
-export { writeFlows, writeRun } from './storage';
-export type { WriteFlowsOptions, WriteFlowsResult, WriteRunOptions, TaintEngineRunStatus } from './storage';
+export {
+  writeFlows,
+  writeRun,
+  createOsvIdResolver,
+  fallbackUnresolvedResolveDep,
+  computeFlowSignatureHash,
+  canonicalRepoPath,
+} from './storage';
+export type {
+  WriteFlowsOptions,
+  WriteFlowsResult,
+  WriteRunOptions,
+  TaintEngineRunStatus,
+  ResolvedDep,
+} from './storage';
 
 export {
   checkCircuitBreaker,

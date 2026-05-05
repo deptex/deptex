@@ -87,6 +87,19 @@ export interface RunEngineOptions {
    * runs deterministic-only — safe for self-host without keys.
    */
   fpFilter?: FpFilterContext;
+  /**
+   * Phase 6.5 — CVE-targeted FrameworkSpec rows loaded from
+   * `organization_generated_rules` for this extraction (the caller
+   * computed `detectedCves` from dep-scan output and ran
+   * `loadCveSpecsForExtraction`). Merged alongside the bundled
+   * framework-models/*.yaml before the language filter dispatch. Each
+   * spec's sinks carry `osv_id`, which the propagator stamps onto
+   * matched flows so the classifier can promote a PDV to `confirmed`.
+   *
+   * Empty / undefined → engine runs the Phase 6 framework-generic path
+   * unchanged (no CVE-targeted rows for this org/extraction).
+   */
+  cveSpecs?: FrameworkSpec[];
 }
 
 /** Map an SBOM-style ecosystem identifier to the framework spec language. */
@@ -182,6 +195,14 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
         onWarn?.(`failed to load spec ${entry}: ${(err as Error).message}`);
       }
     }
+  }
+
+  // Phase 6.5 — merge CVE-targeted FrameworkSpec rows (loaded from
+  // organization_generated_rules by the pipeline). Order doesn't matter for
+  // the propagator (it's a flat list of patterns); the language filter below
+  // drops any cve-spec whose language doesn't match the project ecosystem.
+  if (options.cveSpecs && options.cveSpecs.length > 0) {
+    allSpecs.push(...options.cveSpecs);
   }
 
   // Filter by language: a spec without an explicit language tag defaults to

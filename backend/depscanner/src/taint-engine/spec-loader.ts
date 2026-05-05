@@ -46,6 +46,18 @@ export function loadSpec(yamlPath: string): FrameworkSpec {
   return validateSpec(parsed, yamlPath);
 }
 
+/**
+ * Phase 6.5 — load a FrameworkSpec from an already-parsed JSON object (the
+ * `framework_spec` JSONB column of `organization_generated_rules`). Reuses
+ * the same hand-rolled validator as the YAML path so cve-targeted specs
+ * pass the same shape checks as bundled framework models. The optional
+ * `source` label appears in error messages so a malformed CVE-row points
+ * at the offending CVE id rather than `<root>`.
+ */
+export function loadSpecFromJson(json: unknown, source?: string): FrameworkSpec {
+  return validateSpec(json, source);
+}
+
 export function validateSpec(input: unknown, source?: string): FrameworkSpec {
   if (!isObject(input)) {
     throw new SpecValidationError('spec root must be an object', '$', source);
@@ -123,7 +135,22 @@ function validateSink(input: unknown, fieldPath: string, source?: string): Frame
       return v;
     });
   }
-  return { pattern, vuln_class: vuln_class as VulnClass, argument_indices, description };
+  // Phase 6.5: CVE-targeted FrameworkSpec rows carry osv_id on every sink
+  // (server-side substituted in rule-generation-step.ts; never trusted from
+  // model output). Hand-written framework-models/*.yaml leave it absent.
+  const osvIdRaw = (input as Record<string, unknown>).osv_id;
+  let osv_id: string | undefined;
+  if (osvIdRaw !== undefined) {
+    if (typeof osvIdRaw !== 'string' || osvIdRaw.length === 0) {
+      throw new SpecValidationError(
+        `osv_id must be a non-empty string when present, got ${JSON.stringify(osvIdRaw)}`,
+        `${fieldPath}.osv_id`,
+        source,
+      );
+    }
+    osv_id = osvIdRaw;
+  }
+  return { pattern, vuln_class: vuln_class as VulnClass, argument_indices, description, osv_id };
 }
 
 function validateSanitizer(input: unknown, fieldPath: string, source?: string): FrameworkSanitizer {
