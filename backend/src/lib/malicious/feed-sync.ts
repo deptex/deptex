@@ -22,9 +22,10 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import StreamZip from 'node-stream-zip';
 import { supabase } from '../supabase';
-import { canonicalizeEcosystem } from './ecosystem';
+import { canonicalizeEcosystem, type CanonicalEcosystem } from './ecosystem';
 import type { MaliciousFeedSource, MaliciousFeedSyncState, MaliciousSeverity } from './types';
 import { getGitHubToken } from '../ghsa';
+import { resolveVulnerableRange, makePackumentCache, type PackumentCache } from './version-range';
 
 export interface FeedSyncResult {
   source: MaliciousFeedSource;
@@ -117,8 +118,12 @@ export async function runMaliciousFeedSync(source: MaliciousFeedSource): Promise
 async function syncOsv(): Promise<{ entries_added: number; entries_withdrawn: number }> {
   let added = 0;
   let withdrawn = 0;
+  // OSV entries usually carry an explicit `versions` array, so the version-range
+  // resolver is rarely needed — but pass a cache anyway so the code path is uniform
+  // with GHSA. Cache is per-OSV-run, distinct from GHSA's.
+  const cache = makePackumentCache();
   for (const eco of OSV_ECOSYSTEMS) {
-    const entries = await fetchOsvMaliciousForEcosystem(eco.raw, eco.canonical);
+    const entries = await fetchOsvMaliciousForEcosystem(eco.raw, eco.canonical, cache);
     const summary = await upsertEntries(entries);
     added += summary.added;
     withdrawn += summary.withdrawn;
@@ -126,7 +131,11 @@ async function syncOsv(): Promise<{ entries_added: number; entries_withdrawn: nu
   return { entries_added: added, entries_withdrawn: withdrawn };
 }
 
-async function fetchOsvMaliciousForEcosystem(ecoRaw: string, canonical: string): Promise<UpsertEntry[]> {
+async function fetchOsvMaliciousForEcosystem(
+  ecoRaw: string,
+  canonical: string,
+  cache: PackumentCache,
+): Promise<UpsertEntry[]> {
   // OSV publishes per-ecosystem bulk archives at
   //   https://osv-vulnerabilities.storage.googleapis.com/<eco>/all.zip
   // each entry is a single advisory JSON. We only care about MAL-* IDs
@@ -164,7 +173,7 @@ async function fetchOsvMaliciousForEcosystem(ecoRaw: string, canonical: string):
       try {
         const data = await zip.entryData(name);
         const advisory = JSON.parse(data.toString('utf8'));
-        for (const e of advisoryToEntries(advisory, 'osv', canonical)) {
+        for (const e of await advisoryToEntries(advisory, 'osv', canonical, cache)) {
           entries.push(e);
         }
       } catch {
@@ -198,6 +207,10 @@ async function syncGhsa(): Promise<{ entries_added: number; entries_withdrawn: n
   let pages = 0;
   const maxPages = 50;
 
+  // Per-run version-list cache so the 12th typosquat advisory targeting
+  // `lodash` doesn't trigger a 12th packument fetch.
+  const cache = makePackumentCache();
+
   while (pages < maxPages) {
     const page = await fetchGhsaMalwarePage(cursor, token);
     if (!page || page.advisories.length === 0) break;
@@ -212,7 +225,7 @@ async function syncGhsa(): Promise<{ entries_added: number; entries_withdrawn: n
       const ecoRaw = firstNode?.package?.ecosystem;
       const canonical = canonicalizeEcosystem(ecoRaw ?? null);
       if (!canonical) continue;
-      for (const e of advisoryToEntries(adv, 'ghsa', canonical)) {
+      for (const e of await advisoryToEntries(adv, 'ghsa', canonical, cache)) {
         entries.push(e);
       }
     }
@@ -280,11 +293,12 @@ async function fetchGhsaMalwarePage(
 
 // ───────────────────────────── shared ──────────────────────────────────────
 
-function advisoryToEntries(
+async function advisoryToEntries(
   advisory: any,
   source: MaliciousFeedSource,
   canonical: string,
-): UpsertEntry[] {
+  cache: PackumentCache,
+): Promise<UpsertEntry[]> {
   const sourceId: string = advisory.id ?? advisory.ghsaId ?? '';
   if (!sourceId) return [];
   const description: string | null = advisory.summary ?? advisory.description ?? null;
@@ -300,7 +314,26 @@ function advisoryToEntries(
     const eco = canonicalizeEcosystem(ecoRaw ?? null) ?? canonical;
     const name = a?.package?.name ?? a?.name;
     if (!name) continue;
-    const versions: Array<string | null> = pickVersions(a) ?? [null];
+
+    // 1. Explicit version list (OSV publishes these for most MAL-* entries).
+    let versions: Array<string | null> | null = pickVersions(a);
+
+    // 2. GHSA's `vulnerableVersionRange` — expand to concrete versions via
+    //    per-ecosystem registry lookup. Falls through to `[null]` (= "all
+    //    versions") when the resolver can't enumerate.
+    if (!versions && typeof a?.vulnerableVersionRange === 'string' && a.vulnerableVersionRange.trim()) {
+      const resolved = await resolveVulnerableRange(
+        eco as CanonicalEcosystem,
+        name,
+        a.vulnerableVersionRange,
+        cache,
+      );
+      if (resolved && resolved.length > 0) versions = resolved.slice(0, 200);
+    }
+
+    // 3. Fallback: one row with version=null = matches every installed version.
+    versions = versions ?? [null];
+
     for (const v of versions) {
       entries.push({
         package_name: name,

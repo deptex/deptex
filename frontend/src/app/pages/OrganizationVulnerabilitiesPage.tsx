@@ -87,7 +87,11 @@ export default function OrganizationVulnerabilitiesTabPage() {
           <OrganizationVulnerabilitiesTableSkeleton />
         ) : (
           <>
-            <VulnerabilityExpandableTable organizationId={organizationId} vulnerabilities={vulns} />
+            <VulnerabilityExpandableTable
+              organizationId={organizationId}
+              vulnerabilities={vulns}
+              canManageFindings={!!organization?.permissions?.manage_teams_and_projects}
+            />
             {totalPages > 1 && (
               <div className="flex items-center justify-between gap-3 pt-2">
                 <span className="text-xs text-foreground-secondary">

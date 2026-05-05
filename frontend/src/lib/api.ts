@@ -2156,6 +2156,26 @@ export const api = {
     },
   },
 
+  maliciousAllowlist: {
+    async list(organizationId: string): Promise<{ data: MaliciousAllowlistEntry[] }> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/malicious-allowlist`);
+    },
+    async add(
+      organizationId: string,
+      body: { package_name: string; version: string | null; ecosystem: string; reason: string }
+    ): Promise<MaliciousAllowlistEntry> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/malicious-allowlist`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+    },
+    async revoke(organizationId: string, entryId: string): Promise<{ success: boolean }> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/malicious-allowlist/${entryId}`, {
+        method: 'DELETE',
+      });
+    },
+  },
+
   async getVulnerabilityDetail(
     organizationId: string,
     projectId: string,
@@ -4277,6 +4297,28 @@ export interface ScannerSummary {
 
 export type MaliciousScanner = 'feed' | 'guarddog';
 export type MaliciousSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+
+/**
+ * v2 canonical ecosystem set. Widened from v1's 7 to 10 for 8-language
+ * capability detector parity (composer/cargo/nuget added).
+ */
+export const MALICIOUS_ECOSYSTEMS = [
+  'npm', 'pypi', 'maven', 'golang', 'rubygems',
+  'composer', 'cargo', 'nuget', 'github-actions', 'vscode',
+] as const;
+export type MaliciousEcosystem = typeof MALICIOUS_ECOSYSTEMS[number];
+
+export interface MaliciousAllowlistEntry {
+  id: string;
+  package_name: string;
+  version: string | null;
+  ecosystem: string;
+  reason: string;
+  added_by: string | null;
+  added_by_email: string;
+  added_at: string;
+  revoked_at: string | null;
+}
 
 export interface MaliciousFinding {
   id: string;

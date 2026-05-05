@@ -13,7 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle, Sparkles } from 'lucide-react';
+import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, ShieldCheck, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle, Sparkles } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
@@ -38,6 +38,7 @@ import { CODE_BLOCK_BG } from '../../components/policy-monaco-setup';
 import SLAConfigurationSection from '../../components/settings/SLAConfigurationSection';
 import AISection from '../../components/settings/AISection';
 import ReachabilitySection from '../../components/settings/ReachabilitySection';
+import MaliciousAllowlistSection from '../../components/settings/MaliciousAllowlistSection';
 
 interface OrganizationContextType {
   organization: Organization | null;
@@ -150,7 +151,7 @@ type WebhookCacheSnapshot = {
 };
 const orgWebhooksCache: Record<string, WebhookCacheSnapshot> = {};
 
-const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'ai', 'reachability', 'integrations', 'webhooks', 'notifications', 'policies', 'statuses', 'security_slas', 'audit_logs', 'sso', 'mfa', 'ip_allowlist', 'usage', 'plan']);
+const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'ai', 'reachability', 'integrations', 'webhooks', 'notifications', 'policies', 'statuses', 'security_slas', 'malicious_allowlist', 'audit_logs', 'sso', 'mfa', 'ip_allowlist', 'usage', 'plan']);
 
 /** Renders a tab-specific content skeleton for the org settings loading state. */
 function OrgSettingsTabSkeleton({ section }: { section: string }) {
@@ -2727,6 +2728,13 @@ export default function OrganizationSettingsPage() {
       label: 'Security SLAs',
       icon: <Clock className="h-4 w-4 tab-icon-shake" />,
     }] : []),
+    // Malicious Allowlist — visible to anyone who can manage org settings
+    // (gates POST/DELETE); GET is open to every org member at the API level.
+    ...(effectivePermissions?.manage_organization_settings ? [{
+      id: 'malicious_allowlist',
+      label: 'Malicious Allowlist',
+      icon: <ShieldCheck className="h-4 w-4 tab-icon-shake" />,
+    }] : []),
     // Conditionally show Audit Logs section based on view_activity permission
     ...(effectivePermissions?.view_activity ? [{
       id: 'audit_logs',
@@ -4610,6 +4618,13 @@ export default function OrganizationSettingsPage() {
                 <div className="pt-8">
                   <SLAConfigurationSection organizationId={id} />
                 </div>
+              )}
+
+              {activeSection === 'malicious_allowlist' && id && (
+                <MaliciousAllowlistSection
+                  organizationId={id}
+                  canManage={!!effectivePermissions?.manage_organization_settings}
+                />
               )}
 
               {activeSection === 'audit_logs' && (

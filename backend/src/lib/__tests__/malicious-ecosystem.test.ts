@@ -48,15 +48,30 @@ describe('canonicalizeEcosystem', () => {
     expect(canonicalizeEcosystem(raw)).toBe(expected);
   });
 
+  // v2 widened the canonical set to 10 ecosystems for 8-language detector parity.
+  it.each([
+    ['composer', 'composer'],
+    ['packagist', 'composer'],
+    ['php', 'composer'],
+    ['cargo', 'cargo'],
+    ['rust', 'cargo'],
+    ['crates.io', 'cargo'],
+    ['nuget', 'nuget'],
+    ['csharp', 'nuget'],
+    ['dotnet', 'nuget'],
+    ['.net', 'nuget'],
+  ])('v2-added ecosystem %s -> %s', (raw, expected) => {
+    expect(canonicalizeEcosystem(raw)).toBe(expected);
+  });
+
   it('whitespace is trimmed before lookup', () => {
     expect(canonicalizeEcosystem('  npm  ')).toBe('npm');
     expect(canonicalizeEcosystem(' RubyGems ')).toBe('rubygems');
   });
 
   it('returns null for unknown ecosystems instead of guessing', () => {
-    expect(canonicalizeEcosystem('cargo')).toBeNull();
-    expect(canonicalizeEcosystem('nuget')).toBeNull();
-    expect(canonicalizeEcosystem('hex')).toBeNull();
+    expect(canonicalizeEcosystem('hex')).toBeNull();      // Elixir — not yet supported
+    expect(canonicalizeEcosystem('pub')).toBeNull();      // Dart — not yet supported
     expect(canonicalizeEcosystem('')).toBeNull();
     expect(canonicalizeEcosystem(null)).toBeNull();
     expect(canonicalizeEcosystem(undefined)).toBeNull();
@@ -71,8 +86,10 @@ describe('isCanonicalEcosystem', () => {
   });
 
   it('rejects non-canonical values', () => {
-    expect(isCanonicalEcosystem('gem')).toBe(false);
-    expect(isCanonicalEcosystem('NPM')).toBe(false);
-    expect(isCanonicalEcosystem('cargo')).toBe(false);
+    expect(isCanonicalEcosystem('gem')).toBe(false);     // alias, not canonical
+    expect(isCanonicalEcosystem('NPM')).toBe(false);     // canonical is lowercase
+    expect(isCanonicalEcosystem('php')).toBe(false);     // alias for composer, not canonical
+    expect(isCanonicalEcosystem('rust')).toBe(false);    // alias for cargo, not canonical
+    expect(isCanonicalEcosystem('hex')).toBe(false);     // unsupported ecosystem
   });
 });

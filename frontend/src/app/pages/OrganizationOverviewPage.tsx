@@ -3256,7 +3256,12 @@ export default function OrganizationVulnerabilitiesPage() {
                       </div>
                     ) : (
                       <>
-                        <VulnerabilityExpandableTable organizationId={orgId!} rows={securityRows} onStatusChange={() => void loadTeamVulns(1)} />
+                        <VulnerabilityExpandableTable
+                          organizationId={orgId!}
+                          rows={securityRows}
+                          onStatusChange={() => void loadTeamVulns(1)}
+                          canManageFindings={!!organization?.permissions?.manage_teams_and_projects}
+                        />
                         {Math.ceil(teamSidebarVulnsTotal / 50) > 1 && (
                           <div className="flex items-center justify-between gap-3 pt-2">
                             <span className="text-xs text-foreground-secondary">

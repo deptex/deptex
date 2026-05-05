@@ -14,6 +14,9 @@ export type CanonicalEcosystem =
   | 'maven'
   | 'golang'
   | 'rubygems'
+  | 'composer'
+  | 'cargo'
+  | 'nuget'
   | 'github-actions'
   | 'vscode';
 
@@ -26,6 +29,16 @@ const ALIASES: Record<string, CanonicalEcosystem> = {
   go: 'golang',
   rubygems: 'rubygems',
   gem: 'rubygems',
+  composer: 'composer',
+  packagist: 'composer',
+  php: 'composer',
+  cargo: 'cargo',
+  rust: 'cargo',
+  'crates.io': 'cargo',
+  nuget: 'nuget',
+  csharp: 'nuget',
+  dotnet: 'nuget',
+  '.net': 'nuget',
   'github-actions': 'github-actions',
   'github-action': 'github-actions',
   'github actions': 'github-actions',
@@ -40,6 +53,10 @@ export function canonicalizeEcosystem(raw: string | null | undefined): Canonical
 /**
  * GuardDog's CLI takes a different keyword for some ecosystems than the
  * canonical Deptex name. This maps canonical → guarddog-cli verb.
+ *
+ * GuardDog 2.9.0 doesn't ship rule packs for composer/cargo/nuget — those
+ * three return null and the GuardDog dispatch in the worker is short-circuited.
+ * Capability detection still runs for them via tree-sitter regardless.
  */
 const GUARDDOG_CLI: Partial<Record<CanonicalEcosystem, string>> = {
   npm: 'npm',

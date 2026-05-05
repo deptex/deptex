@@ -19,6 +19,9 @@ export type CanonicalEcosystem =
   | 'maven'
   | 'golang'
   | 'rubygems'
+  | 'composer'
+  | 'cargo'
+  | 'nuget'
   | 'github-actions'
   | 'vscode';
 
@@ -28,6 +31,9 @@ export const CANONICAL_ECOSYSTEMS: readonly CanonicalEcosystem[] = [
   'maven',
   'golang',
   'rubygems',
+  'composer',
+  'cargo',
+  'nuget',
   'github-actions',
   'vscode',
 ] as const;
@@ -46,6 +52,19 @@ const ALIASES: Record<string, CanonicalEcosystem> = {
   // rubygems  (Deptex-internal `gem` maps here; OSV `RubyGems` and GHSA `RUBYGEMS` lowercase to `rubygems`)
   rubygems: 'rubygems',
   gem: 'rubygems',
+  // composer (PHP) — packagist.org. v2-added for capability detector parity.
+  composer: 'composer',
+  packagist: 'composer',
+  php: 'composer',
+  // cargo (Rust) — crates.io.
+  cargo: 'cargo',
+  rust: 'cargo',
+  'crates.io': 'cargo',
+  // nuget (C# / .NET).
+  nuget: 'nuget',
+  csharp: 'nuget',
+  dotnet: 'nuget',
+  '.net': 'nuget',
   // github-actions (GuardDog ships `github-action` singular; OSV uses `GitHub Actions` plural)
   'github-actions': 'github-actions',
   'github-action': 'github-actions',
