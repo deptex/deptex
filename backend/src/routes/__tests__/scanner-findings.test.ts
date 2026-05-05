@@ -156,6 +156,66 @@ describe('scanner-findings happy paths', () => {
     expect(res.body.data[0].rule_id).toBe('CKV_AWS_20');
   });
 
+  it.each([
+    'terraform',
+    'kubernetes',
+    'dockerfile',
+    'helm',
+    'cloudformation',
+    'arm',
+    'bicep',
+    'serverless',
+    'github_actions',
+  ])('accepts framework=%s on the iac-findings list filter', async (framework) => {
+    setTableResponse('projects', 'single', {
+      data: { active_extraction_run_id: 'run-1' },
+      error: null,
+    });
+    setTableResponse('project_iac_findings', 'count_head', {
+      data: null,
+      error: null,
+      count: 0,
+    });
+    setTableResponse('project_iac_findings', 'then', {
+      data: [],
+      error: null,
+    });
+
+    const res = await request(app)
+      .get(
+        `/api/organizations/${orgId}/projects/${projectId}/iac-findings?framework=${framework}`
+      )
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ data: [], total: 0 });
+  });
+
+  it('ignores an unknown framework filter value (does not 400)', async () => {
+    // The filter is silently dropped when the value is outside the v2 set —
+    // unknown values fall through and return the unfiltered (project + run)
+    // row set rather than failing the request.
+    setTableResponse('projects', 'single', {
+      data: { active_extraction_run_id: 'run-1' },
+      error: null,
+    });
+    setTableResponse('project_iac_findings', 'count_head', {
+      data: null,
+      error: null,
+      count: 0,
+    });
+    setTableResponse('project_iac_findings', 'then', {
+      data: [],
+      error: null,
+    });
+
+    const res = await request(app)
+      .get(
+        `/api/organizations/${orgId}/projects/${projectId}/iac-findings?framework=ansible`
+      )
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+  });
+
   it('toggles IaC ignore status', async () => {
     // Default beforeEach already grants org owner + manage perms.
     // The mock's `.then` is shared with the data list endpoint, so the toggle

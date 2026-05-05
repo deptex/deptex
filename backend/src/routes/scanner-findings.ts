@@ -24,6 +24,22 @@ import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { checkProjectAccess, checkProjectManagePermission } from '../lib/project-access';
 import { getActiveExtractionId } from '../lib/active-extraction';
 
+// Mirror of `IAC_FRAMEWORKS` in `backend/depscanner/src/scanners/types.ts`.
+// Backend's tsconfig rootDir is ./src so cross-package import isn't possible;
+// kept in sync manually with the depscanner canonical export and the
+// `project_iac_findings.framework` CHECK constraint (phase27a migration).
+const IAC_FRAMEWORKS = [
+  'terraform',
+  'kubernetes',
+  'dockerfile',
+  'helm',
+  'cloudformation',
+  'arm',
+  'bicep',
+  'serverless',
+  'github_actions',
+] as const;
+
 const router = express.Router();
 router.use(authenticateUser);
 
@@ -80,7 +96,7 @@ router.get('/:id/projects/:projectId/iac-findings', async (req: AuthRequest, res
       countQuery = countQuery.eq('status', statusFilter);
       dataQuery = dataQuery.eq('status', statusFilter);
     }
-    if (['terraform', 'kubernetes', 'dockerfile'].includes(frameworkFilter)) {
+    if ((IAC_FRAMEWORKS as readonly string[]).includes(frameworkFilter)) {
       countQuery = countQuery.eq('framework', frameworkFilter);
       dataQuery = dataQuery.eq('framework', frameworkFilter);
     }
