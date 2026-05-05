@@ -321,7 +321,7 @@ export default function OrgSidebar({
     const isArchived = !!thread.archivedAt;
     return (
       <SidebarMenuItem key={thread.id}>
-        <div className="relative group w-full">
+        <div className="relative group/thread w-full">
           {isEditing ? (
             <input
               autoFocus
@@ -342,7 +342,7 @@ export default function OrgSidebar({
                   onClick={() => navigate(`/organizations/${organizationId}/aegis/${thread.id}`)}
                 >
                   <ThreadIcon fixStatus={thread.fixStatus} />
-                  <span className="block min-w-0 flex-1 whitespace-nowrap overflow-hidden [mask-image:linear-gradient(to_right,black_calc(100%-12px),transparent)] group-hover:[mask-image:linear-gradient(to_right,black_calc(100%-72px),transparent)]">
+                  <span className="block min-w-0 flex-1 whitespace-nowrap overflow-hidden [mask-image:linear-gradient(to_right,black_calc(100%-12px),transparent)] group-hover/thread:[mask-image:linear-gradient(to_right,black_calc(100%-72px),transparent)]">
                     {thread.title}
                   </span>
                 </SidebarMenuButton>
@@ -357,7 +357,7 @@ export default function OrgSidebar({
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  className="absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6 flex items-center justify-center rounded text-foreground/60 hover:text-foreground opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity z-10"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6 flex items-center justify-center rounded text-foreground/60 hover:text-foreground opacity-0 group-hover/thread:opacity-100 focus:opacity-100 transition-opacity z-10"
                   onClick={(e) => e.stopPropagation()}
                   aria-label="Thread actions"
                 >
