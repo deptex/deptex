@@ -1,3 +1,8 @@
+// AUTO-GENERATED — DO NOT EDIT.
+// Synced from backend/src/lib/ai/encryption.ts via scripts/sync-encryption.ts.
+// CI (.github/workflows/encryption-sync-check.yml) fails when this file drifts.
+// To change: edit the source file, then `npx tsx scripts/sync-encryption.ts`.
+
 import crypto from 'crypto';
 
 const ALGORITHM = 'aes-256-gcm';
@@ -68,72 +73,4 @@ export function decryptApiKey(encrypted: string, storedVersion: number): string 
   }
 
   throw new Error('Unable to decrypt API key — no valid encryption key available');
-}
-
-// === DEPSCANNER-SYNC: STOP ABOVE THIS LINE ===
-// Everything below uses the backend's Supabase client and is intentionally
-// excluded from the depscanner copy. scripts/sync-encryption.ts truncates at
-// the marker; .github/workflows/encryption-sync-check.yml fails the PR if the
-// committed copy at backend/depscanner/src/lib/encryption.ts diverges.
-
-async function rotateEncryptedTable(
-  supabase: any,
-  tableName: string,
-  encryptedColumn: string
-): Promise<{ rotated: number; failed: number }> {
-  const currentVersion = getCurrentKeyVersion();
-
-  const { data: rows, error } = await supabase
-    .from(tableName)
-    .select(`id, ${encryptedColumn}, encryption_key_version`)
-    .lt('encryption_key_version', currentVersion);
-
-  if (error || !rows?.length) return { rotated: 0, failed: 0 };
-
-  let rotated = 0;
-  let failed = 0;
-  const BATCH_SIZE = 50;
-
-  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-    const batch = rows.slice(i, i + BATCH_SIZE);
-    for (const row of batch) {
-      try {
-        const ciphertext = row[encryptedColumn];
-        const plaintext = decryptApiKey(ciphertext, row.encryption_key_version);
-        const { encrypted, version } = encryptApiKey(plaintext, currentVersion);
-
-        await supabase
-          .from(tableName)
-          .update({
-            [encryptedColumn]: encrypted,
-            encryption_key_version: version,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', row.id);
-
-        rotated++;
-      } catch (err: any) {
-        console.error(`[Encryption] Failed to rotate key for ${tableName} ${row.id}:`, err.message);
-        failed++;
-      }
-    }
-  }
-
-  return { rotated, failed };
-}
-
-export async function rotateEncryptionKeys(): Promise<{ rotated: number; failed: number }> {
-  const { supabase } = await import('../supabase');
-
-  const ai = await rotateEncryptedTable(supabase, 'organization_ai_providers', 'encrypted_api_key');
-  const creds = await rotateEncryptedTable(
-    supabase,
-    'organization_registry_credentials',
-    'encrypted_credentials'
-  );
-
-  return {
-    rotated: ai.rotated + creds.rotated,
-    failed: ai.failed + creds.failed,
-  };
 }
