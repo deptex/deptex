@@ -31,11 +31,40 @@ export const DEPSCANNER_CONFIG: FlyMachineConfig = {
 
 // Phase 23b: DAST scans run on the same depscanner Fly app but on a smaller
 // machine shape. ZAP doesn't need 65GB; 8GB shared-cpu-4x is plenty.
-export const DAST_CONFIG: FlyMachineConfig = {
-  app: depscannerApp(),
-  guest: { cpus: 4, memory_mb: 8192, cpu_kind: 'shared' },
-  maxBurst: parseInt(process.env.FLY_DAST_MAX_BURST || '3', 10),
-};
+//
+// Phase 24 (v2.1a): SPA scans run ZAP browserBased + headless Chromium and
+// need ~16GB to keep the AJAX spider alive on real apps. Classic scans stay
+// on the cheaper shared-cpu-4x 8GB shape. The route resolves the target's
+// `detected_runtime` before queueing and passes it to `startDastMachine` so
+// the right guest shape is provisioned at machine-start time.
+//
+// `unknown` is treated as SPA so the very first scan (before runtime is
+// classified) gets enough memory; once the worker classifies the target as
+// `classic` the next scan downsizes automatically.
+export type DetectedRuntime = 'unknown' | 'classic' | 'spa';
+
+const DAST_MAX_BURST = parseInt(process.env.FLY_DAST_MAX_BURST || '3', 10);
+
+export function getDastMachineConfig(detectedRuntime: DetectedRuntime): FlyMachineConfig {
+  if (detectedRuntime === 'classic') {
+    return {
+      app: depscannerApp(),
+      guest: { cpus: 4, memory_mb: 8192, cpu_kind: 'shared' },
+      maxBurst: DAST_MAX_BURST,
+    };
+  }
+  // 'unknown' or 'spa' → performance-4x 16GB.
+  return {
+    app: depscannerApp(),
+    guest: { cpus: 4, memory_mb: 16384, cpu_kind: 'performance' },
+    maxBurst: DAST_MAX_BURST,
+  };
+}
+
+// Back-compat: kept for `recovery.ts`, which only reads `.app`. The app name
+// is identical across runtimes (single Fly app, type-aware dispatch), so the
+// classic shape works as the recovery fallback.
+export const DAST_CONFIG: FlyMachineConfig = getDastMachineConfig('classic');
 
 export const FIX_CONFIG: FlyMachineConfig = {
   app: process.env.FLY_FIX_APP || 'deptex-fix-worker',
@@ -206,5 +235,6 @@ export async function startFlyMachine(config: FlyMachineConfig): Promise<string 
 export const startDepscannerMachine = () => startFlyMachine(DEPSCANNER_CONFIG);
 // Back-compat alias — extraction is one of several scan types depscanner runs.
 export const startExtractionMachine = startDepscannerMachine;
-export const startDastMachine = () => startFlyMachine(DAST_CONFIG);
+export const startDastMachine = (detectedRuntime: DetectedRuntime = 'unknown') =>
+  startFlyMachine(getDastMachineConfig(detectedRuntime));
 export const startFixMachine = () => startFlyMachine(FIX_CONFIG);

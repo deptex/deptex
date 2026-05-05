@@ -764,7 +764,10 @@ router.post('/:projectId/dast/scan', async (req: AuthRequest, res) => {
     }
 
     try {
-      await startDastMachine();
+      // Pass detected_runtime so SPA targets get a performance-4x 16GB
+      // machine; classic targets downsize to shared-cpu-4x 8GB. 'unknown'
+      // (first scan, no runtime cached) is treated as SPA for safety.
+      await startDastMachine(detectedRuntime);
     } catch (e: any) {
       console.warn(`[dast] startDastMachine failed (job stays queued): ${e?.message ?? e}`);
     }
