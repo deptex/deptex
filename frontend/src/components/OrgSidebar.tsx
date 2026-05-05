@@ -59,7 +59,7 @@ import FeedbackPopover from './FeedbackPopover';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import { cn } from '../lib/utils';
 import { api, Organization, RolePermissions } from '../lib/api';
-import { aegisApi, AegisThread } from '../lib/aegis-api';
+import { aegisApi, AegisThread, FixStatusForBadge } from '../lib/aegis-api';
 import { useToast } from '../hooks/use-toast';
 import { ThreadIcon } from './aegis/ThreadIcon';
 import {
@@ -76,6 +76,18 @@ interface OrgSidebarProps {
   user?: { email?: string | null; user_metadata?: { full_name?: string } } | null;
   avatarUrl?: string;
   onSignOut?: () => Promise<void>;
+}
+
+function fixStatusLabel(fixStatus: FixStatusForBadge | null): string | null {
+  switch (fixStatus) {
+    case 'awaiting_approval': return 'Awaiting approval';
+    case 'running': return 'Running';
+    case 'succeeded': return 'PR opened';
+    case 'failed': return 'Failed';
+    case 'refused': return 'Aegis refused';
+    case 'rejected': return 'Plan rejected';
+    default: return null;
+  }
 }
 
 type NavItemDef = {
@@ -351,7 +363,13 @@ export default function OrgSidebar({
                 </SidebarMenuButton>
               </TooltipTrigger>
               <TooltipContent side="right" sideOffset={8} className="max-w-xs whitespace-normal break-words">
-                {thread.title}
+                <div className="font-semibold text-foreground">{thread.title}</div>
+                {fixStatusLabel(thread.fixStatus) && (
+                  <div className="mt-1 flex items-center gap-1.5 text-foreground/60 text-xs">
+                    <ThreadIcon fixStatus={thread.fixStatus} className="h-3 w-3" />
+                    {fixStatusLabel(thread.fixStatus)}
+                  </div>
+                )}
               </TooltipContent>
             </Tooltip>
           )}
