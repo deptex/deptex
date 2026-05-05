@@ -37,7 +37,7 @@ jest.mock('../lib/url-guard', () => ({
 }));
 
 jest.mock('../lib/dast-spa-detect', () => ({
-  detectRuntime: jest.fn(async () => ({ runtime: 'classic', probed: true })),
+  detectRuntime: jest.fn(async () => ({ runtime: 'classic', confidence: 0.7, markers: [] })),
   nextRuntimeTtlIso: () => new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
   RUNTIME_TTL_MS: 30 * 24 * 3600 * 1000,
 }));

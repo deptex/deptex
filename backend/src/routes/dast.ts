@@ -289,8 +289,9 @@ router.post('/:projectId/dast/targets', async (req: AuthRequest, res) => {
     // SPA-detect probe synchronously (best-effort — 'unknown' on probe failure
     // gets retried on first scan).
     const probe = await detectRuntime(target_url);
-    const detectedAt = probe.probed ? new Date().toISOString() : null;
-    const detectedTtl = probe.probed ? nextRuntimeTtlIso() : null;
+    const probeSuccess = probe.runtime !== 'unknown';
+    const detectedAt = probeSuccess ? new Date().toISOString() : null;
+    const detectedTtl = probeSuccess ? nextRuntimeTtlIso() : null;
 
     const { data: inserted, error } = await supabase
       .from('project_dast_targets')
@@ -442,8 +443,9 @@ router.post(
       if (isLoadTargetDeny(guard)) return res.status(404).json({ error: 'target_not_found' });
 
       const probe = await detectRuntime(guard.target.target_url);
-      const detectedAt = probe.probed ? new Date().toISOString() : null;
-      const detectedTtl = probe.probed ? nextRuntimeTtlIso() : null;
+      const probeSuccess = probe.runtime !== 'unknown';
+      const detectedAt = probeSuccess ? new Date().toISOString() : null;
+      const detectedTtl = probeSuccess ? nextRuntimeTtlIso() : null;
 
       const { data: updated, error } = await supabase
         .from('project_dast_targets')
@@ -466,9 +468,9 @@ router.post(
       return res.json({
         target: targetRowToDto({ ...updated, has_credentials: false, auth_strategy: null }),
         probe: {
-          probed: probe.probed,
-          matched_markers: probe.matched_markers,
-          error_reason: probe.error_reason,
+          probed: probeSuccess,
+          confidence: probe.confidence,
+          markers: probe.markers,
         },
       });
     } catch (e: any) {
@@ -707,7 +709,7 @@ router.post('/:projectId/dast/scan', async (req: AuthRequest, res) => {
     const ttl = guard.target.detected_runtime_ttl_at;
     if (!ttl || new Date(ttl).getTime() < Date.now()) {
       const probe = await detectRuntime(guard.target.target_url);
-      if (probe.probed) {
+      if (probe.runtime !== 'unknown') {
         detectedRuntime = probe.runtime;
         await supabase
           .from('project_dast_targets')
