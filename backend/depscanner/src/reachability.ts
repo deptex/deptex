@@ -384,12 +384,31 @@ function readCodeSnippet(workspaceRoot: string, filePath: string, lineNumber: nu
   }
 }
 
+export interface UpdateReachabilityOptions {
+  /**
+   * Phase 6.5 — set of CVE ids whose FrameworkSpec actually loaded for this
+   * extraction (the keys of `cveSpecResult.specs[].sinks[].osv_id`). When a
+   * `taint_engine` flow's `osv_id` is NOT in this set, we treat it as data
+   * drift (CHECK disabled, dual-read window, manual SQL) and demote the
+   * promotion to `data_flow` instead of `confirmed`. Mismatches log a
+   * `osv_id_drift_rejected` security event.
+   *
+   * Optional: when undefined we skip the drift check entirely so legacy
+   * callers (CLI tests, snapshot harness) keep working — the M5 confirmed
+   * tier still promotes, just without the defense-in-depth guard.
+   */
+  validOsvIds?: Set<string>;
+  /** Organization id for audit-log writes when an `osv_id_drift_rejected` event fires. */
+  organizationId?: string;
+}
+
 export async function updateReachabilityLevels(
   projectId: string,
   runId: string,
   supabase: Storage,
   logger: LogLike,
   workspaceRoot?: string,
+  options: UpdateReachabilityOptions = {},
 ): Promise<void> {
   const { data: pdvs, error: pdvErr } = await supabase
     .from('project_dependency_vulnerabilities')
@@ -429,6 +448,7 @@ export async function updateReachabilityLevels(
     reachability_source?: string | null;
     osv_id?: string | null;
     rule_id?: string | null;
+    flow_signature_hash?: string | null;
     entry_point_file: string | null;
     entry_point_line: number | null;
     entry_point_tag: string | null;
@@ -437,7 +457,7 @@ export async function updateReachabilityLevels(
   {
     const { data, error } = await supabase
       .from('project_reachable_flows')
-      .select('dependency_id, reachability_source, osv_id, rule_id, entry_point_file, entry_point_line, entry_point_tag, sink_method')
+      .select('dependency_id, reachability_source, osv_id, rule_id, flow_signature_hash, entry_point_file, entry_point_line, entry_point_tag, sink_method')
       .eq('project_id', projectId)
       .eq('extraction_run_id', runId);
 
@@ -470,30 +490,117 @@ export async function updateReachabilityLevels(
     }
   }
 
-  // Flows are polymorphic over their source (Phase 23). `flowsByDep` preserves
-  // the original "any flow for this dep" semantics used by the data_flow
-  // branch — atom and semgrep-derived rows both count there, since either
-  // proves the dep is actually wired into the project's call graph.
+  // Phase 6.5 — fetch suppressions for this project so we can demote any
+  // confirmed-tier promotion whose flow_signature_hash matches a user
+  // suppression. Hash-keyed (Option B / OD-4): a re-extraction recomputes
+  // the same canonical hash and re-matches the suppression row.
+  const suppressedHashes = new Set<string>();
+  {
+    const { data: suppressions, error: suppErr } = await supabase
+      .from('project_reachable_flow_suppressions')
+      .select('flow_signature_hash')
+      .eq('project_id', projectId);
+    if (suppErr) {
+      // Pre-phase27a schema or table-missing. Continue without the
+      // suppression filter — confirmed-tier promotion still works; users
+      // simply can't suppress yet.
+      const code = (suppErr as { code?: string }).code ?? '';
+      const isMissing = code === '42P01' || /project_reachable_flow_suppressions/.test(suppErr.message ?? '');
+      if (!isMissing) {
+        await logger.warn('reachability', `flow suppression fetch failed: ${suppErr.message}`);
+      }
+    } else {
+      for (const row of (suppressions ?? []) as Array<{ flow_signature_hash: string | null }>) {
+        if (row.flow_signature_hash) suppressedHashes.add(row.flow_signature_hash);
+      }
+    }
+  }
+
+  // Flows are polymorphic over their source. `flowsByDep` preserves the
+  // original "any flow for this dep" semantics used by the data_flow branch
+  // — atom, semgrep-derived, and taint_engine rows all count there since
+  // any one of them proves the dep is actually wired into the project's
+  // call graph.
   //
-  // `taintByDepOsv` is the narrower index used by the new confirmed branch:
+  // `taintByDepOsv` is the narrower index used by the confirmed branch:
   // a match requires not just the right dep but the specific CVE the taint
-  // rule was authored for, so a semgrep hit on CVE-A can't promote a PDV
-  // for CVE-B on the same package.
+  // rule was authored for. Phase 6.5 / M5 task 27 extends this to also
+  // pick up `taint_engine` flows whose `osv_id` was stamped by a
+  // CVE-targeted FrameworkSpec sink (the new generator path), so the
+  // OR-clause matches both Phase 3 Semgrep packs (`semgrep_taint`) and
+  // the new cross-file engine path (`taint_engine`). Suppressed flows are
+  // excluded so a user-suppressed promotion stays out of `confirmed`.
   type StoredFlow = (typeof flows)[number];
   const flowsByDep = new Map<string, StoredFlow[]>();
   const taintByDepOsv = new Map<string, StoredFlow[]>();
+  let driftRejectedCount = 0;
   for (const flow of flows) {
     if (!flow.dependency_id) continue;
     const existing = flowsByDep.get(flow.dependency_id) ?? [];
     existing.push(flow);
     flowsByDep.set(flow.dependency_id, existing);
 
-    if (flow.reachability_source === 'semgrep_taint' && flow.osv_id) {
-      const key = `${flow.dependency_id}|${flow.osv_id}`;
-      const taintBucket = taintByDepOsv.get(key) ?? [];
-      taintBucket.push(flow);
-      taintByDepOsv.set(key, taintBucket);
+    const isSemgrepTaint = flow.reachability_source === 'semgrep_taint';
+    const isCveTargetedEngine =
+      flow.reachability_source === 'taint_engine' && !!flow.osv_id;
+    if (!flow.osv_id) continue;
+    if (!isSemgrepTaint && !isCveTargetedEngine) continue;
+
+    // Phase 6.5 / M5 task 27 — server-side osv_id drift guard. The osv_id
+    // on a `taint_engine` row was substituted server-side at engine-emission
+    // time from the loaded CVE spec. Mismatch at classifier time means the
+    // CHECK constraint was disabled, the dual-read window leaked, or someone
+    // ran manual SQL — i.e. data drift, not model hallucination. Demote the
+    // flow to data_flow tier and log a security event so the alert is
+    // attributable. We only run the check when the caller passed the spec
+    // set (M5 pipeline path); legacy callers without specs skip the guard
+    // and inherit the prior behaviour.
+    if (isCveTargetedEngine && options.validOsvIds && !options.validOsvIds.has(flow.osv_id)) {
+      driftRejectedCount++;
+      try {
+        await supabase.from('security_audit_logs').insert({
+          organization_id: options.organizationId ?? null,
+          action: 'osv_id_drift_rejected',
+          target_type: 'project_reachable_flow',
+          target_id: null,
+          severity: 'warn',
+          metadata: {
+            project_id: projectId,
+            extraction_run_id: runId,
+            flow_osv_id: flow.osv_id,
+            flow_dependency_id: flow.dependency_id,
+            flow_signature_hash: flow.flow_signature_hash ?? null,
+            reason: 'taint_engine flow osv_id not in loaded cve_spec set',
+          },
+        });
+      } catch (logErr) {
+        // Audit-log failure must not block the classifier; log a warn and
+        // continue with the demotion semantics.
+        const msg = logErr instanceof Error ? logErr.message : String(logErr);
+        await logger.warn('reachability', `osv_id_drift_rejected audit-log write failed: ${msg}`);
+      }
+      continue;
     }
+
+    // Suppression: a user-suppressed flow stays out of the confirmed-tier
+    // bucket. It still appears in `flowsByDep` for the data_flow branch
+    // (the dep is still wired into the call graph), so the PDV doesn't
+    // collapse all the way back to `module`/`unreachable` just because a
+    // user suppressed one specific flow.
+    if (flow.flow_signature_hash && suppressedHashes.has(flow.flow_signature_hash)) {
+      continue;
+    }
+
+    const key = `${flow.dependency_id}|${flow.osv_id}`;
+    const taintBucket = taintByDepOsv.get(key) ?? [];
+    taintBucket.push(flow);
+    taintByDepOsv.set(key, taintBucket);
+  }
+  if (driftRejectedCount > 0) {
+    await logger.warn(
+      'reachability',
+      `${driftRejectedCount} taint_engine flow(s) demoted: osv_id not in loaded cve_spec set (osv_id_drift_rejected)`,
+    );
   }
 
   const { data: usages, error: usagesErr } = await supabase
@@ -553,12 +660,21 @@ export async function updateReachabilityLevels(
     let details: any = null;
 
     if (taintMatches.length > 0) {
-      // A hand-authored Semgrep taint rule for this specific CVE fired on
-      // this specific dep — the highest-confidence signal we produce.
-      // Trumps the heuristic ladder below regardless of what atom thinks.
+      // A taint signal specific to this CVE on this specific dep —
+      // either a hand-authored Phase 3 Semgrep rule (`semgrep_taint`,
+      // legacy until M5 retires it) or a CVE-targeted FrameworkSpec
+      // sink in the cross-file engine (`taint_engine`, Phase 6.5).
+      // Trumps the heuristic ladder below regardless of usage slices.
       level = 'confirmed';
+      const sources = [
+        ...new Set(taintMatches.map((f) => f.reachability_source).filter((x): x is string => !!x)),
+      ];
       details = {
+        // rule_ids carry the Phase 3 rule id when present; taint_engine
+        // rows leave it null. Keep the field for backwards compat with
+        // any frontend reader that already iterates it.
         rule_ids: [...new Set(taintMatches.map((f) => f.rule_id).filter((x): x is string => !!x))],
+        sources,
         flow_count: taintMatches.length,
         entry_points: taintMatches.map((f) => `${f.entry_point_file}:${f.entry_point_line}`),
         sink_methods: [...new Set(taintMatches.map((f) => f.sink_method).filter((x): x is string => !!x))],

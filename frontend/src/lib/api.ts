@@ -4511,13 +4511,32 @@ export type ReachabilityLevel = 'unreachable' | 'module' | 'function' | 'data_fl
 /** EPD entry-point class. Drives the per-vuln badge in the security tables. */
 export type EpdEntryPointClassification = 'PUBLIC_UNAUTH' | 'AUTH_INTERNAL' | 'OFFLINE_WORKER' | 'UNKNOWN';
 
-/** EPD scoring lifecycle. `ai_verified` when BYOK ran end-to-end; other values drive the badge tooltip explanation. */
+/**
+ * EPD scoring lifecycle. The legacy values come from the original per-PDV
+ * Anthropic verifier (Phase 4). Phase 6.5 adds the new flow-aggregator path
+ * (`flow_aggregated` etc.) and the gated Anthropic fallback (`ai_verified_anthropic_fallback*`).
+ *
+ * `pending` is also an existing-backend value that wasn't surfaced here
+ * before — added now so consumers don't have to default-cast.
+ */
 export type EpdStatus =
+  // legacy (Phase 4)
   | 'ai_verified'
   | 'byok_missing'
   | 'fallback_no_ai'
   | 'ai_error_fallback'
-  | 'budget_exceeded';
+  | 'budget_exceeded'
+  | 'pending'
+  // Phase 6.5 — flow aggregator (M5)
+  | 'flow_aggregated'
+  | 'no_flows_evaluated'
+  | 'all_flows_suppressed'
+  | 'ai_truncated'
+  // Phase 6.5 — gated Anthropic fallback (OD-6)
+  | 'ai_verified_anthropic_fallback'
+  | 'ai_verified_anthropic_fallback_failed'
+  | 'ai_verified_anthropic_fallback_skipped_cost_cap'
+  | 'ai_verified_anthropic_fallback_skipped_burn_breaker';
 
 /** Per-org reachability rule generation policy (Phase 5). */
 export interface ReachabilitySettings {

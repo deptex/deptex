@@ -32,7 +32,6 @@ import * as path from 'path';
 import pLimit from 'p-limit';
 import type { Storage } from './storage';
 import { withTimeout, logStepError, classifyError, StepTimeoutError } from './with-timeout';
-import { loadAllRulesWithSkipped } from './reachability-rules';
 import {
   generateRuleForCve,
   type AiProviderName,
@@ -99,8 +98,6 @@ export interface RunRuleGenerationArgs {
   supabase: Storage;
   log: LogLike;
   signal?: AbortSignal;
-  /** Resolved at the call site so tests can pass a fake. */
-  platformRulesDir: string;
   /** Override the BYOK key resolver — exposed for tests. Production path
    *  reads from organization_ai_providers + AI_ENCRYPTION_KEY. */
   resolveApiKey?: (orgId: string, provider: AiProviderName) => Promise<string | null>;
@@ -217,10 +214,14 @@ export async function runRuleGenerationStep(
     return { ...ZERO_RESULT, ran: true, skipReasons };
   }
 
-  // --- 4. Subtract CVEs already covered (platform + org-existing) ---
-  const platformCves = await loadPlatformRuleCves(args.platformRulesDir, log);
+  // --- 4. Subtract CVEs already covered (org-existing only) ---
+  // Phase 6.5 / M5 — platform-shipped Semgrep rule packs were retired with
+  // the `reachability_rules` step. The new generator path emits FrameworkSpec
+  // (not Semgrep YAML), so the legacy "skip if a platform rule exists" guard
+  // would never have suppressed a generation attempt regardless. Any CVE the
+  // org has already validated stays in the skip set.
   const orgExistingCves = await loadOrgExistingRuleCves(organizationId, supabase);
-  const coveredCves = new Set([...platformCves, ...orgExistingCves]);
+  const coveredCves = new Set([...orgExistingCves]);
 
   const candidates: PipelineVulnRow[] = [];
   let alreadyCovered = 0;
@@ -541,16 +542,6 @@ function canonicalCveId(osvId: string, aliases: string[] | null): string | null 
     }
   }
   return null;
-}
-
-async function loadPlatformRuleCves(rulesDir: string, log: LogLike): Promise<Set<string>> {
-  try {
-    const { loaded } = await loadAllRulesWithSkipped(rulesDir);
-    return new Set(loaded.map((r) => r.metadata.cve));
-  } catch (err) {
-    await log.warn(STEP_NAME, `Could not enumerate platform-shipped rules at ${rulesDir}: ${err instanceof Error ? err.message : String(err)}`);
-    return new Set();
-  }
 }
 
 async function loadOrgExistingRuleCves(orgId: string, supabase: Storage): Promise<Set<string>> {
@@ -952,14 +943,6 @@ function combinedSignal(outer: AbortSignal | undefined, inner: AbortSignal): Abo
   return c.signal;
 }
 
-export function makePlatformRulesDir(): string {
-  // Allow self-host / local-CLI testing to point at an empty dir so an
-  // already-shipped platform rule doesn't shadow the AI-generation path
-  // we're trying to exercise.
-  const override = process.env.DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR;
-  if (override && override.length > 0) return override;
-  return path.resolve(__dirname, '..', 'reachability-rules');
-}
 
 export function makeStepWorkdir(prefix: string = 'deptex-rulegen-step-'): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));

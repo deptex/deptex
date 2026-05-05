@@ -16,8 +16,7 @@ import { storeUsageExtractionResults } from './tree-sitter-extractor/storage';
 import { storeEntryPoints } from './framework-rules/storage';
 import { ExtractionLogger } from './logger';
 import { parsePurl, resolvePurlToDependencyId, buildPurl } from './purl';
-import { parseReachableFlows, parseUsageSlices, parseLlmPrompts, updateReachabilityLevels, computeImportCountsFromUsageSlices } from './reachability';
-import { loadAllRulesWithSkipped, loadOrgGeneratedRules, selectRulesForCves, runReachabilityRules } from './reachability-rules';
+import { updateReachabilityLevels, computeImportCountsFromUsageSlices } from './reachability';
 import { updateJobPayloadCommit, updateJobStatus } from './job-db';
 import { applyEpdScoringFallback, EpdBudgetExceededError } from './epd';
 import { withTimeout, logStepError, classifyError } from './with-timeout';
@@ -33,7 +32,7 @@ import {
   createOsvIdResolver,
   type ResolvedDep,
 } from './taint-engine';
-import { runRuleGenerationStep, makePlatformRulesDir, type PipelineVulnRow } from './rule-generation-step';
+import { runRuleGenerationStep, type PipelineVulnRow } from './rule-generation-step';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
@@ -956,15 +955,20 @@ export async function runPipeline(
         }
       }
 
+      // Phase 6.5 / M5 task 34 — atom integration retired. The taint
+      // engine's CVE-targeted FrameworkSpec rules + cross-file taint
+      // engine replace atom's SemanticReachability path entirely. We
+      // keep dep-scan running for vulnerability detection (`-i` + `-t`),
+      // dropping `--deep` (atom-only flag) and `--reachability-analyzer
+      // SemanticReachability` (atom phase) so dep-scan stops paying the
+      // atom CPU/OOM cost. `--explain` is also dropped — the LLM-prompts
+      // path was atom-only.
       const depScanArgs = [
         '--profile', 'research',
         '-i', workspaceRoot,
         '--reports-dir', outArg,
         '-t', jobEcosystem,
         '--no-banner',
-        '--deep',
-        '--reachability-analyzer', 'SemanticReachability',
-        '--explain',
       ];
 
       // dep-scan command logged at debug level only
@@ -1320,62 +1324,12 @@ export async function runPipeline(
       await log.warn('vuln_scan', 'No vulnerability scan results available');
     }
 
-    // --- Sub-step: Atom reachability analysis (Java-only) ---
-    // Tree-sitter now covers usage extraction for all MVP ecosystems. Atom
-    // remains the source of truth for full data-flow reachable slices on
-    // Java — its Java CPG is materially better than anything we can
-    // produce from tree-sitter alone — so we keep it running for Maven
-    // projects and skip it everywhere else.
-    if (jobEcosystem === 'maven') try {
-      const atomLang = 'java';
-      const srcDir = fs.existsSync(path.join(workspaceRoot, 'src'))
-        ? path.join(workspaceRoot, 'src')
-        : workspaceRoot;
-
-      // Log what dep-scan produced so we can diagnose ecosystem-specific gaps
-      const depScanFiles = fs.readdirSync(reportsDir).filter(f => f.endsWith('.json'));
-      if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] dep-scan produced ${depScanFiles.length} JSON files in reports dir: ${depScanFiles.join(', ')}`);
-
-      let hasReachableSlices = depScanFiles.some(f => f.endsWith('-reachables.slices.json'));
-      let hasUsageSlices = depScanFiles.some(f => f.endsWith('-usages.slices.json'));
-
-      // Run atom reachables if dep-scan didn't produce them
-      if (!hasReachableSlices) {
-        const atomSlicesOut = path.join(reportsDir, 'app-reachables.slices.json');
-        try {
-          const out = execSync(`atom reachables -l ${atomLang} -s "${atomSlicesOut}" "${srcDir}" 2>&1`, { encoding: 'utf8', timeout: 600_000, maxBuffer: 50 * 1024 * 1024 });
-          hasReachableSlices = fs.existsSync(atomSlicesOut) && fs.statSync(atomSlicesOut).size > 10;
-          if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] reachables (${atomLang}): produced=${hasReachableSlices}, size=${hasReachableSlices ? fs.statSync(atomSlicesOut).size : 0}`);
-        } catch (atomErr: any) {
-          const msg = (atomErr.stderr || atomErr.message || '').slice(-500);
-          if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] reachables (${atomLang}) failed: ${msg}`);
-        }
-      }
-
-      // Run atom usages INDEPENDENTLY if dep-scan didn't produce them
-      if (!hasUsageSlices) {
-        const atomUsagesOut = path.join(reportsDir, 'app-usages.slices.json');
-        try {
-          const out = execSync(`atom usages -l ${atomLang} -s "${atomUsagesOut}" "${srcDir}" 2>&1`, { encoding: 'utf8', timeout: 600_000, maxBuffer: 50 * 1024 * 1024 });
-          hasUsageSlices = fs.existsSync(atomUsagesOut) && fs.statSync(atomUsagesOut).size > 10;
-          if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] usages (${atomLang}): produced=${hasUsageSlices}, size=${hasUsageSlices ? fs.statSync(atomUsagesOut).size : 0}`);
-        } catch (atomErr: any) {
-          const msg = (atomErr.stderr || atomErr.message || '').slice(-500);
-          if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] usages (${atomLang}) failed: ${msg}`);
-        }
-      }
-
-      if (hasReachableSlices) {
-        await parseReachableFlows(reportsDir, projectId, runId, supabase, log);
-        await parseLlmPrompts(reportsDir, projectId, runId, supabase, log);
-      }
-      if (hasUsageSlices) {
-        await parseUsageSlices(reportsDir, projectId, runId, jobEcosystem, supabase, log);
-      }
-
-    } catch (atomStepErr: any) {
-      if (process.env.DEPTEX_CLI_MODE !== '1') console.log(`[atom] reachability step failed: ${atomStepErr.message}`);
-    }
+    // Phase 6.5 / M5 task 34 — atom integration retired entirely. The
+    // cross-file taint engine + CVE-targeted FrameworkSpec rules replace
+    // atom's reachables + usages flow output for every ecosystem. Existing
+    // atom-shape rows in `project_reachable_flows` decay naturally as
+    // projects re-extract; no backfill needed. tree-sitter remains the
+    // source of truth for usage extraction on all MVP ecosystems.
 
     // === STEP: AI rule generation (Phase 5) ===
     // For each CVE in this scan that matches the org's trigger policy AND
@@ -1467,7 +1421,6 @@ export async function runPipeline(
               jobId: job.jobId,
               supabase,
               log,
-              platformRulesDir: makePlatformRulesDir(),
             },
             pipelineVulns,
           );
@@ -1490,357 +1443,14 @@ export async function runPipeline(
       }
     }
 
-    // === STEP: Reachability rules (Semgrep taint) ===
-    // Per-CVE hand-authored Semgrep taint rules that upgrade matching vulns
-    // from heuristic reachability (module/function/data_flow) to `confirmed`.
-    // Runs between atom's reachable flows and updateReachabilityLevels so the
-    // level classifier can see both atom-derived and semgrep-derived flows in
-    // the same fetch.
-    if (!(checkCancelled && await checkCancelled())) {
-      if (!binaryAvailable('semgrep')) {
-        await log.warn('reachability_rules', INSTALL_HINTS.semgrep);
-      } else {
-        const reachStart = Date.now();
-        // Phase 5: tmp dir for materialized DB rules. Declared here so the
-        // outer finally can clean it up even when the try block throws
-        // before the assignment below.
-        let orgRulesCleanupDir: string | null = null;
-        try {
-          // Startup probe: confirm the phase23 migration is applied before we
-          // attempt to write semgrep_taint rows. If the column doesn't exist
-          // (operator forgot the MCP migration step before promoting to prod)
-          // we bail cleanly with an explicit error log instead of letting
-          // every chunk upsert fail with a warn-only message.
-          const { error: probeErr } = await supabase
-            .from('project_reachable_flows')
-            .select('reachability_source')
-            .limit(1);
-          if (probeErr) {
-            const code = (probeErr as { code?: string }).code ?? '';
-            if (code === '42703' || /reachability_source/.test(probeErr.message ?? '')) {
-              await log.error(
-                'reachability_rules',
-                'phase23 migration not applied (reachability_source column missing); skipping taint rules',
-              );
-              // Fall through to updateReachabilityLevels below.
-              throw new Error('phase23_migration_missing');
-            }
-            // Any other probe error — surface and bail the step.
-            throw new Error(`probe failed: ${probeErr.message}`);
-          }
-
-          // reachability-rules/ sits at the worker package root. Resolve
-          // relative to this file so both tsx (src/) and compiled (dist/)
-          // layouts find it.
-          const reachabilityRulesDir = path.resolve(__dirname, '..', 'reachability-rules');
-          const { loaded: platformRules, skipped: platformSkipped } = await loadAllRulesWithSkipped(reachabilityRulesDir);
-
-          // Phase 5: also load the org's enabled + validated AI-generated
-          // rules from organization_generated_rules and merge them into
-          // the same Semgrep pass. The newly-generated rules from the
-          // rule_generation step above appear here in the same scan.
-          orgRulesCleanupDir = fs.mkdtempSync(path.join(os.tmpdir(), `deptex-org-rules-${runId}-`));
-          let orgRules: typeof platformRules = [];
-          let orgSkipped: typeof platformSkipped = [];
-          try {
-            const orgLoad = await loadOrgGeneratedRules(organizationId, supabase, orgRulesCleanupDir);
-            orgRules = orgLoad.loaded;
-            orgSkipped = orgLoad.skipped;
-          } catch (orgErr: any) {
-            await log.warn('reachability_rules', `Failed to load org generated rules: ${orgErr?.message ?? orgErr}`);
-          }
-
-          const allRules = [...platformRules, ...orgRules];
-          const skipped = [...platformSkipped, ...orgSkipped];
-
-          if (skipped.length > 0) {
-            // Surface so a broken rule pack doesn't ship silently. One
-            // aggregated line keeps the log readable even with many packs.
-            await log.warn(
-              'reachability_rules',
-              `Skipped ${skipped.length} rule(s): ${skipped.map((s) => `${s.folder} (${s.reason})`).join('; ')}`,
-            );
-          }
-
-          if (allRules.length === 0) {
-            // Zero rules discovered is normally only possible if the rules
-            // directory is missing from the deployed image — Dockerfile
-            // regression, pruned volume, etc. Make it loud so it's caught
-            // by alerting rather than silently producing zero confirmed
-            // promotions forever.
-            await log.warn(
-              'reachability_rules',
-              `No rules loaded from ${reachabilityRulesDir}; skipping step`,
-            );
-          } else {
-            const { data: cveRows, error: cveErr } = await supabase
-              .from('project_dependency_vulnerabilities')
-              .select('osv_id, aliases')
-              .eq('project_id', projectId)
-              .eq('extraction_run_id', runId);
-            if (cveErr) throw new Error(`CVE fetch failed: ${cveErr.message}`);
-
-            // detectedCves = primary CVE-shaped osv_ids + any CVE-shaped
-            // aliases. Some advisories (log4shell) arrive with GHSA as the
-            // primary id; without alias expansion, the matching rule would
-            // never fire. Anything that isn't CVE-shaped is ignored.
-            const detectedCves = new Set<string>();
-            for (const row of (cveRows ?? []) as Array<{ osv_id?: string | null; aliases?: string[] | null }>) {
-              if (typeof row.osv_id === 'string' && row.osv_id.startsWith('CVE-')) {
-                detectedCves.add(row.osv_id);
-              }
-              if (Array.isArray(row.aliases)) {
-                for (const a of row.aliases) {
-                  if (typeof a === 'string' && a.startsWith('CVE-')) detectedCves.add(a);
-                }
-              }
-            }
-
-            const selected = selectRulesForCves(allRules, detectedCves);
-
-            // Breadcrumb at step entry so every run has at least one log
-            // line regardless of outcome. Makes "did the step run?" a
-            // one-query answer.
-            await log.info(
-              'reachability_rules',
-              `Loaded ${allRules.length} rule(s); detected ${detectedCves.size} CVE(s); selected ${selected.length}`,
-            );
-
-            if (selected.length > 0) {
-              const findings = await withTimeout(
-                async (signal) =>
-                  runReachabilityRules({
-                    workspaceRoot,
-                    rules: selected,
-                    signal,
-                    timeoutMs: 15 * 60_000,
-                    runId,
-                  }),
-                15 * 60_000,
-                'reachability_rules',
-              );
-
-              // Resolve each rule's package back to (purl, dependency_id)
-              // tuples for this run. A rule may match multiple project_deps
-              // (monorepo with duplicate copies at different versions); emit
-              // one flow row per match. Skip findings whose package isn't
-              // actually installed in this run — we'd otherwise orphan rows
-              // that no PDV lookup could ever attach to.
-              type PackageMatch = { purl: string; dependencyId: string | null };
-              const packageCache = new Map<string, PackageMatch[]>();
-              const resolvePackage = async (
-                pkg: string,
-                ecosystem: string,
-              ): Promise<PackageMatch[]> => {
-                const key = `${ecosystem}::${pkg}`;
-                const cached = packageCache.get(key);
-                if (cached) return cached;
-
-                const { data: pdRows, error: pdErr } = await supabase
-                  .from('project_dependencies')
-                  .select('name, version, namespace, dependency_id')
-                  .eq('project_id', projectId)
-                  .eq('last_seen_extraction_run_id', runId)
-                  .eq('name', pkg);
-                if (pdErr) throw new Error(`project_dependencies lookup failed: ${pdErr.message}`);
-
-                const pds = (pdRows ?? []) as Array<{
-                  name: string;
-                  version: string | null;
-                  namespace: string | null;
-                  dependency_id: string | null;
-                }>;
-                const depIds = Array.from(
-                  new Set(pds.map((r) => r.dependency_id).filter((x): x is string => !!x)),
-                );
-
-                let ecoById = new Map<string, string>();
-                if (depIds.length > 0) {
-                  const { data: depRows, error: depErr } = await supabase
-                    .from('dependencies')
-                    .select('id, ecosystem')
-                    .in('id', depIds);
-                  if (depErr) throw new Error(`dependencies lookup failed: ${depErr.message}`);
-                  ecoById = new Map(
-                    ((depRows ?? []) as Array<{ id: string; ecosystem: string }>).map(
-                      (d) => [d.id, d.ecosystem],
-                    ),
-                  );
-                }
-
-                const matches: PackageMatch[] = [];
-                for (const row of pds) {
-                  const rowEco = row.dependency_id ? ecoById.get(row.dependency_id) : '';
-                  if (rowEco !== ecosystem) continue;
-                  const purl = buildPurl(rowEco, row.name, row.version ?? null);
-                  if (!purl) continue;
-                  matches.push({ purl, dependencyId: row.dependency_id });
-                }
-                packageCache.set(key, matches);
-                return matches;
-              };
-
-              const rulesById = new Map(selected.map((r) => [r.ruleId, r] as const));
-              type ReachableFlowRow = {
-                project_id: string;
-                extraction_run_id: string;
-                purl: string;
-                dependency_id: string | null;
-                reachability_source: 'semgrep_taint';
-                osv_id: string;
-                rule_id: string;
-                flow_nodes: Array<{ file: string; line: number; content: string }>;
-                entry_point_file: string;
-                entry_point_method: string | null;
-                entry_point_line: number;
-                entry_point_tag: string | null;
-                sink_file: string;
-                sink_method: string | null;
-                sink_line: number;
-                sink_is_external: boolean;
-                flow_length: number;
-                llm_prompt: string | null;
-              };
-              const rows: ReachableFlowRow[] = [];
-              let droppedNoPackage = 0;
-
-              for (const finding of findings) {
-                const rule = rulesById.get(finding.ruleId);
-                if (!rule) continue;
-                const matches = await resolvePackage(
-                  rule.metadata.package,
-                  rule.metadata.ecosystem,
-                );
-                if (matches.length === 0) {
-                  droppedNoPackage++;
-                  continue;
-                }
-
-                // flow_nodes mirrors the atom shape enough for consumers to
-                // render a source -> ... -> sink chain without knowing which
-                // engine produced the flow.
-                const flowNodes = [
-                  { file: finding.filePath, line: finding.sourceLine, content: finding.sourceContent ?? '' },
-                  ...finding.flowSteps,
-                  { file: finding.filePath, line: finding.sinkLine, content: finding.sinkContent ?? '' },
-                ];
-
-                // entry_point_tag feeds EPD's heuristic classifier in
-                // epd.ts:classifyFallbackEntryPoint. Default PUBLIC_UNAUTH
-                // because every shipped Phase 3 rule traces HTTP-request /
-                // env-var input — both attacker-reachable. Authors can
-                // override via `metadata.entry_point_class` in rule.yml.
-                // Format `framework-input:<class>` is matched by the
-                // classifier's substring routing (lowercased).
-                const entryClass = rule.metadata.entryPointClass ?? 'PUBLIC_UNAUTH';
-                const entryTag = `framework-input:${entryClass}`;
-
-                for (const match of matches) {
-                  rows.push({
-                    project_id: projectId,
-                    extraction_run_id: runId,
-                    purl: match.purl,
-                    dependency_id: match.dependencyId,
-                    reachability_source: 'semgrep_taint',
-                    osv_id: finding.cve,
-                    rule_id: finding.ruleId,
-                    flow_nodes: flowNodes,
-                    entry_point_file: finding.filePath,
-                    entry_point_method: null,
-                    entry_point_line: finding.sourceLine,
-                    entry_point_tag: entryTag,
-                    sink_file: finding.filePath,
-                    sink_method: finding.sinkMethod,
-                    sink_line: finding.sinkLine,
-                    sink_is_external: true,
-                    flow_length: flowNodes.length,
-                    llm_prompt: null,
-                  });
-                }
-              }
-
-              let chunkFailures = 0;
-              if (rows.length > 0) {
-                // Must match phase23.4's NULLS NOT DISTINCT UNIQUE keyed on
-                //   (project_id, extraction_run_id, purl,
-                //    entry_point_file, entry_point_line, sink_method,
-                //    osv_id, rule_id).
-                // Atom rows carry NULL osv_id/rule_id and dedup on coords
-                // alone; taint rows carry CVE+rule and dedup independently.
-                // Atom-vs-taint at same coords coexist — the classifier
-                // reads them separately via flowsByDep vs taintByDepOsv.
-                const TAINT_CONFLICT =
-                  'project_id,extraction_run_id,purl,entry_point_file,entry_point_line,sink_method,osv_id,rule_id';
-                for (let i = 0; i < rows.length; i += 100) {
-                  const chunk = rows.slice(i, i + 100);
-                  const { error: upsertErr } = await supabase
-                    .from('project_reachable_flows')
-                    .upsert(chunk, {
-                      onConflict: TAINT_CONFLICT,
-                      ignoreDuplicates: true,
-                    });
-                  if (upsertErr) {
-                    chunkFailures++;
-                    await log.warn(
-                      'reachability_rules',
-                      `Failed to write chunk ${Math.floor(i / 100)}: ${upsertErr.message}`,
-                    );
-                    if (job.jobId) {
-                      await logStepError(supabase, {
-                        jobId: job.jobId,
-                        projectId,
-                        step: 'reachability_rules',
-                        code: 'db_error',
-                        message: `Chunk upsert failed: ${upsertErr.message}`,
-                        severity: 'warn',
-                      });
-                    }
-                  }
-                }
-              }
-
-              const dropNote = droppedNoPackage > 0 ? ` (${droppedNoPackage} dropped: package not installed)` : '';
-              const chunkNote = chunkFailures > 0 ? `, ${chunkFailures} chunk(s) failed` : '';
-              await log.success(
-                'reachability_rules',
-                `${findings.length} taint finding(s) from ${selected.length} rule(s) → ${rows.length} flow row(s)${dropNote}${chunkNote}`,
-                Date.now() - reachStart,
-              );
-            }
-          }
-        } catch (e: unknown) {
-          // phase23_migration_missing is an expected-but-serious bail — we
-          // already emitted a log.error above, and the rest of the pipeline
-          // should continue. Don't double-log or record a step error.
-          const msg = e instanceof Error ? e.message : String(e);
-          if (msg === 'phase23_migration_missing') {
-            // no-op; already logged
-          } else {
-            if (job.jobId) {
-              const { code, message, stack } = classifyError(e);
-              await logStepError(supabase, {
-                jobId: job.jobId,
-                projectId,
-                step: 'reachability_rules',
-                code,
-                message,
-                stack,
-                durationMs: Date.now() - reachStart,
-                severity: 'warn',
-              });
-            }
-            await log.warn('reachability_rules', `Step failed: ${msg}`);
-          }
-        } finally {
-          // Tear down the materialized org-rules tmp dir regardless of
-          // whether the step succeeded, was bailed by phase23 probe, or
-          // threw mid-run.
-          if (orgRulesCleanupDir) {
-            try { fs.rmSync(orgRulesCleanupDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
-          }
-        }
-      }
-    }
+    // Phase 6.5 / M5 task 31 — `reachability_rules` step retired entirely.
+    // The Phase 3 hand-authored Semgrep taint rule packs (37 CVEs) and
+    // their org-generated counterparts have been replaced by the
+    // CVE-targeted FrameworkSpec generator + cross-file taint engine
+    // (the `taint_engine` step below). The `taint_engine` confirmed-tier
+    // OR-clause in `updateReachabilityLevels` reads `taint_engine` rows
+    // alongside any legacy `semgrep_taint` rows still in the DB, so
+    // existing data decays naturally as projects re-extract.
 
     // === STEP: Cross-file taint engine (Phase 6, shadow mode) ===
     //
@@ -1865,6 +1475,11 @@ export async function runPipeline(
     //     across the fleet. Default 0 in production until M8 retirement
     //     gates are met.
     if (checkCancelled && await checkCancelled()) return;
+    // Phase 6.5 / M5 — set of CVE ids whose FrameworkSpec actually loaded for
+    // this extraction. Lives outside the taint_engine block so the
+    // updateReachabilityLevels call below can validate that every promoted
+    // confirmed-tier flow has an osv_id matching a real loaded spec.
+    const validOsvIds = new Set<string>();
     {
       const stepStart = Date.now();
       await updateStep(supabase, projectId, 'taint_engine');
@@ -2024,6 +1639,15 @@ export async function runPipeline(
               `cve-specs: ${cveSpecResult.failed.length} row(s) failed schema validation (${cveSpecResult.failed.slice(0, 5).join(', ')}${cveSpecResult.failed.length > 5 ? ', …' : ''})`,
             );
           }
+          // Phase 6.5 / M5 task 27 — surface every osv_id the loaded specs
+          // tagged onto a sink. The classifier uses this to demote any
+          // confirmed-tier promotion whose osv_id isn't in the set
+          // (defense-in-depth for the JSONB CHECK + server-side substitution).
+          for (const spec of cveSpecResult.specs) {
+            for (const sink of spec.sinks) {
+              if (sink.osv_id) validOsvIds.add(sink.osv_id);
+            }
+          }
           try {
             const engineResult = await withTimeout(
               async (signal) => runTaintEngine({
@@ -2152,7 +1776,10 @@ export async function runPipeline(
     // tree-sitter's usage_slices (non-Java) or atom's slices + usages
     // (Java). files_importing_count is authoritative from the tree-sitter
     // storage write for non-Java; for Java we recompute from atom output.
-    await updateReachabilityLevels(projectId, runId, supabase, log, workspaceRoot);
+    await updateReachabilityLevels(projectId, runId, supabase, log, workspaceRoot, {
+      validOsvIds,
+      organizationId,
+    });
     if (jobEcosystem === 'maven') {
       await computeImportCountsFromUsageSlices(projectId, runId, jobEcosystem, supabase, log);
     }
