@@ -1081,7 +1081,7 @@ export function SupplyChainContent({ orgId, projectId, dependencyId, dependencyN
 
   if (!orgId || !projectId || !dependencyId) {
     return (
-      <main className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 bg-background-content min-h-[calc(100vh-3rem)]">
+      <main className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 bg-background-content min-h-[100vh]">
         <p className="text-foreground-secondary">Missing org, project, or dependency in URL.</p>
       </main>
     );
@@ -1089,7 +1089,7 @@ export function SupplyChainContent({ orgId, projectId, dependencyId, dependencyN
 
   if (!loading && (error || !data)) {
     return (
-      <main className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 bg-background-content min-h-[calc(100vh-3rem)]">
+      <main className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 bg-background-content min-h-[100vh]">
         <p className="text-destructive">{error ?? 'Failed to load supply chain data'}</p>
       </main>
     );
@@ -1351,7 +1351,7 @@ export default function DependencySupplyChainPage() {
   }>();
   if (!orgId || !projectId || !dependencyId) {
     return (
-      <main className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 bg-background-content min-h-[calc(100vh-3rem)]">
+      <main className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 bg-background-content min-h-[100vh]">
         <p className="text-foreground-secondary">Missing org, project, or dependency in URL.</p>
       </main>
     );

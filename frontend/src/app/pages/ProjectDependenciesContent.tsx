@@ -667,7 +667,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
       <main
         className={cn(
           'flex min-h-0',
-          embedInSidebar ? cn('h-full min-h-0 flex-1', embedShellBg) : 'h-[calc(100vh-3rem)]',
+          embedInSidebar ? cn('h-full min-h-0 flex-1', embedShellBg) : 'h-[100vh]',
           mainEmbedClass
         )}
       >
@@ -718,7 +718,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
     <main
       className={cn(
         'flex min-h-0 relative',
-        embedInSidebar ? cn('h-full min-h-0 flex-1', embedShellBg) : 'h-[calc(100vh-3rem)]',
+        embedInSidebar ? cn('h-full min-h-0 flex-1', embedShellBg) : 'h-[100vh]',
         mainEmbedClass
       )}
     >
