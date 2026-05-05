@@ -6663,14 +6663,15 @@ router.get('/:id/ai-default-provider', async (req: AuthRequest, res) => {
 
     const { data, error } = await supabase
       .from('organizations')
-      .select('default_ai_provider')
+      .select('default_ai_provider, default_model')
       .eq('id', orgId)
       .single();
     if (error) throw error;
 
     const provider = (data?.default_ai_provider ?? 'anthropic') as ValidAIProvider;
-    const { DEFAULT_MODELS } = await import('../lib/ai/models');
-    res.json({ provider, model: DEFAULT_MODELS[provider] });
+    const { DEFAULT_MODELS, getModelById } = await import('../lib/ai/models');
+    const model = (data?.default_model && getModelById(data.default_model)) ? data.default_model : DEFAULT_MODELS[provider];
+    res.json({ provider, model });
   } catch (error: any) {
     console.error('Error fetching default AI provider:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch default AI provider' });
@@ -6691,9 +6692,12 @@ router.patch('/:id/ai-default-provider', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: `provider must be one of: ${VALID_AI_PROVIDERS.join(', ')}` });
     }
 
+    // Switching provider clears the per-model default so the new provider's
+    // DEFAULT_MODELS[provider] takes effect (otherwise the stored
+    // default_model would still point at the old provider's catalog).
     const { error } = await supabase
       .from('organizations')
-      .update({ default_ai_provider: provider, updated_at: new Date().toISOString() })
+      .update({ default_ai_provider: provider, default_model: null, updated_at: new Date().toISOString() })
       .eq('id', orgId);
     if (error) throw error;
 
@@ -6702,6 +6706,108 @@ router.patch('/:id/ai-default-provider', async (req: AuthRequest, res) => {
   } catch (error: any) {
     console.error('Error updating default AI provider:', error);
     res.status(500).json({ error: error.message || 'Failed to update default AI provider' });
+  }
+});
+
+// Build the resolved AI-models response: catalog + this org's enabled list +
+// resolved default model. Used by both GET and PATCH so the client always
+// gets a consistent post-write view.
+async function resolveAIModelsForOrg(orgId: string) {
+  const { data, error } = await supabase
+    .from('organizations')
+    .select('default_ai_provider, default_model, enabled_models')
+    .eq('id', orgId)
+    .single();
+  if (error) throw error;
+
+  const { getAllModels, getModelById, DEFAULT_MODELS } = await import('../lib/ai/models');
+  const allModels = getAllModels();
+  const allIds = allModels.map((m) => m.id);
+  const provider = (data?.default_ai_provider ?? 'anthropic') as ValidAIProvider;
+
+  // NULL enabled_models = all enabled (backwards-compat).
+  const enabledModels: string[] = Array.isArray(data?.enabled_models)
+    ? (data!.enabled_models as string[]).filter((id) => allIds.includes(id))
+    : allIds;
+
+  // Stored default if valid + enabled, else provider's default if enabled,
+  // else first enabled, else first model.
+  let defaultModel: string | null = null;
+  if (data?.default_model && getModelById(data.default_model) && enabledModels.includes(data.default_model)) {
+    defaultModel = data.default_model;
+  } else if (enabledModels.includes(DEFAULT_MODELS[provider])) {
+    defaultModel = DEFAULT_MODELS[provider];
+  } else {
+    defaultModel = enabledModels[0] ?? allIds[0];
+  }
+
+  return { models: allModels, enabledModels, defaultModel, defaultProvider: provider };
+}
+
+// GET /api/organizations/:id/ai-models -- model catalog + per-org enabled/default state
+router.get('/:id/ai-models', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await isOrgMember(orgId, userId))) {
+      return res.status(403).json({ error: 'You are not a member of this organization' });
+    }
+    res.json(await resolveAIModelsForOrg(orgId));
+  } catch (error: any) {
+    console.error('Error fetching AI models:', error);
+    res.status(500).json({ error: 'Failed to fetch AI models' });
+  }
+});
+
+// PATCH /api/organizations/:id/ai-models -- update enabled list and/or default model
+router.patch('/:id/ai-models', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const orgId = req.params.id;
+    if (!(await hasOrgPermission(orgId, userId, 'manage_organization_settings'))) {
+      return res.status(403).json({ error: 'You do not have permission to manage organization settings' });
+    }
+
+    const { getAllModels, getModelById } = await import('../lib/ai/models');
+    const allIds = new Set(getAllModels().map((m) => m.id));
+    const update: Record<string, any> = { updated_at: new Date().toISOString() };
+
+    if (req.body?.enabledModels !== undefined) {
+      const list = req.body.enabledModels;
+      if (!Array.isArray(list) || !list.every((m) => typeof m === 'string' && allIds.has(m))) {
+        return res.status(400).json({ error: 'enabledModels must be an array of valid model ids' });
+      }
+      if (list.length === 0) {
+        return res.status(400).json({ error: 'At least one model must remain enabled' });
+      }
+      update.enabled_models = list;
+    }
+
+    if (req.body?.defaultModel !== undefined) {
+      const id = req.body.defaultModel;
+      const model = typeof id === 'string' ? getModelById(id) : undefined;
+      if (!model) return res.status(400).json({ error: 'defaultModel is not a known model id' });
+
+      let enabledList: string[] | null = update.enabled_models ?? null;
+      if (!enabledList) {
+        const { data } = await supabase.from('organizations').select('enabled_models').eq('id', orgId).single();
+        enabledList = (data?.enabled_models as string[] | null) ?? null;
+      }
+      if (Array.isArray(enabledList) && !enabledList.includes(id)) {
+        return res.status(400).json({ error: 'defaultModel must be in enabledModels' });
+      }
+
+      update.default_model = id;
+      update.default_ai_provider = model.provider;
+    }
+
+    const { error } = await supabase.from('organizations').update(update).eq('id', orgId);
+    if (error) throw error;
+
+    res.json(await resolveAIModelsForOrg(orgId));
+  } catch (error: any) {
+    console.error('Error updating AI models:', error);
+    res.status(500).json({ error: 'Failed to update AI models' });
   }
 });
 

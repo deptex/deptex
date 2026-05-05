@@ -7,7 +7,7 @@ import type { AegisToolEntry } from '../tool-types';
 const listProjects: AegisToolEntry<{ teamName?: string }> = {
   name: 'list_projects',
   description:
-    'List every project in the current organization with name, health_score, status, framework, and repo info. Pass `teamName` ONLY when the user explicitly named a team to filter by — otherwise leave it unset to list all projects.',
+    'List every project in the organization: each row includes `id` (required for chat embeds), `name`, health_score, status, framework, and repo info. In your follow-up message to the user, embed each project inline as `<project>UUID</project>` using those ids. Pass `teamName` ONLY when the user explicitly named a team — otherwise leave unset to list all projects.',
   danger: 'safe',
   inputSchema: jsonSchema({
     type: 'object',
@@ -41,8 +41,8 @@ const listProjects: AegisToolEntry<{ teamName?: string }> = {
       .from('projects')
       .select(
         `id, name, health_score, status_id, framework,
-         organization_statuses(name),
-         project_repositories(status, repo_full_name)`,
+         organization_statuses(name, is_passing),
+         project_repositories(status, repo_full_name, provider)`,
       )
       .eq('organization_id', ctx.orgId);
 
@@ -52,12 +52,18 @@ const listProjects: AegisToolEntry<{ teamName?: string }> = {
     if (error) return { error: error.message };
 
     const projects = (data ?? []).map((p: any) => ({
+      id: p.id,
       name: p.name,
       health_score: p.health_score,
       status: p.organization_statuses?.name ?? null,
+      status_is_passing:
+        typeof p.organization_statuses?.is_passing === 'boolean'
+          ? p.organization_statuses.is_passing
+          : null,
       framework: p.framework,
       repo_status: p.project_repositories?.[0]?.status ?? null,
       repo_full_name: p.project_repositories?.[0]?.repo_full_name ?? null,
+      provider: (p.project_repositories?.[0]?.provider as string | undefined) ?? null,
     }));
     return resolvedTeamName ? { team: resolvedTeamName, projects } : { projects };
   },

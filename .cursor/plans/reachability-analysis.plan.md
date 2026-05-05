@@ -473,6 +473,25 @@ data. Stub in this plan; full design in `phase6_5_cross_file_cve_targeted.md`.
 - Wire into pipeline after single-file Semgrep analysis
 - Update CodeImpactView frontend to show cross-file flow visualization
 
+### Phase 6.5 — Cross-File CVE-Targeted Taint (Bridge Phase 5 → Phase 6)
+
+**The gap.** Phase 5 produces high-precision per-CVE Semgrep rules but OSS Semgrep's taint mode is **intraprocedural only** — it can't follow taint across function boundaries, even within one file. So Phase 5's `confirmed`-tier signal misses any vulnerability where the source and the CVE's vulnerable sink are split across functions or files. Phase 6 (cross-file taint engine) handles cross-file flow but its specs are framework-generic, so its flows max out at `data_flow` tier — they don't feed `confirmed`.
+
+**The fix is plumbing, not a new engine.** Phase 6 already builds whole-program callgraphs and propagates taint across files for 8 languages. We just need its flows to carry `osv_id` when the path crosses a CVE-specific sink. Architecture:
+
+1. Extend Phase 5's AI generator to emit a Phase-6-format spec alongside the Semgrep YAML — same per-CVE sinks (`_.template`, `pickle.loads`, etc.), tagged with `osv_id: CVE-XXXX`.
+2. Phase 6's runner loads `cve-rules/*.yaml` alongside `framework-models/*.yaml`.
+3. When the engine matches a CVE-tagged sink, the emitted flow inherits the `osv_id`.
+4. The classifier (`updateReachabilityLevels`) already promotes flows with matching `dependency_id + osv_id` to `confirmed` — no change needed.
+
+Net effect: cross-file flows that touch a known-vulnerable function in a CVE-affected dep get promoted to `confirmed`, closing the gap between Phase 5 (single-function CVE-specific) and Phase 6 (cross-file framework-generic).
+
+**Effort: ~1 week.** Mostly Phase 5 generator output + a new YAML loader path in `runner.ts` + an `osv_id` field on the flow record. No new engine, no new algorithm.
+
+**Prerequisites:** Phase 5 merged + Phase 6 merged + Phase 6 in shadow long enough to know its cross-file flows are sound (couple weeks of shadow data).
+
+**Defers to Phase 7:** AI sanitizer suggestion. Once Phase 6.5 lands, the engine emits CVE-confirmed flows with full `flow_nodes` paths AND with detected sanitizers (or absence thereof) — that's exactly the input shape an AI fix agent needs to suggest "wrap line X with `validator.escape(...)`" and open a PR. Aegis Fix v2 territory.
+
 ### Month 5: Joern Integration + Malicious Package Detection (Phases 8-9)
 
 **Phase 8: Joern Multi-Language Integration (~3-4 weeks)**

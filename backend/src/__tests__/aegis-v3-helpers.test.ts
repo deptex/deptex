@@ -49,6 +49,7 @@ describe('aegis-v3 helpers', () => {
     it('aggregates the per-category tool arrays', () => {
       const names = ALL_AEGIS_TOOLS.map((t) => t.name);
       expect(names).toContain('list_projects');
+      expect(names).toContain('list_teams');
       expect(names).toContain('list_policies');
       expect(ALL_AEGIS_TOOLS.length).toBeGreaterThan(0);
     });
@@ -133,8 +134,8 @@ describe('aegis-v3 helpers', () => {
         organizationId: ORG_ID,
       });
       expect(out).toContain('Acme');
-      expect(out).toContain('must not invent or pass UUIDs');
-      expect(out).toContain('Use names, never IDs');
+      expect(out).toContain('Never invent identifiers');
+      expect(out).toContain('Prefer names over raw UUIDs');
     });
 
     it('appends a project context section when projectId is set', () => {

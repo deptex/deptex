@@ -13,7 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle, Sparkles } from 'lucide-react';
+import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle, Atom } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
@@ -2677,7 +2677,7 @@ export default function OrganizationSettingsPage() {
     {
       id: 'ai',
       label: 'AI',
-      icon: <Sparkles className="h-4 w-4 tab-icon-shake" />,
+      icon: <Atom className="h-4 w-4 tab-icon-shake" />,
     },
     // Reachability — gated on manage_organization_settings (PATCH writes monthly_budget_usd)
     ...(effectivePermissions?.manage_organization_settings ? [{

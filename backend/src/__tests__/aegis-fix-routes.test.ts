@@ -64,8 +64,7 @@ function happyPlan() {
   return {
     summary: 'Bump lodash 4.17.20 to 4.17.21',
     finding: { type: 'vulnerability', id: 'GHSA-abc-def-ghi', severity: 'high' },
-    currentState: ['lodash@4.17.20'],
-    desiredState: ['lodash@4.17.21'],
+    description: 'Bump lodash@4.17.20 to 4.17.21 (patched) in package.json.',
     fileChanges: [{ path: 'package.json', action: 'modify', description: 'Bump' }],
     testCommand: 'npm test',
     language: 'js',

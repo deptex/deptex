@@ -80,7 +80,7 @@ app.use(cors({
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  exposedHeaders: ['Authorization'],
+  exposedHeaders: ['Authorization', 'X-Thread-Id'],
 }));
 
 // Log all incoming requests for debugging

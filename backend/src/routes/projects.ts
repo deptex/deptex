@@ -1740,6 +1740,12 @@ router.get('/:id/projects/:projectId', async (req: AuthRequest, res) => {
       projectStatusColor = ost?.color ?? null;
     }
 
+    const { data: repoPrimary } = await supabase
+      .from('project_repositories')
+      .select('repo_full_name, provider')
+      .eq('project_id', projectId)
+      .maybeSingle();
+
     const formattedProject = {
       id: project.id,
       organization_id: project.organization_id,
@@ -1763,9 +1769,13 @@ router.get('/:id/projects/:projectId', async (req: AuthRequest, res) => {
       asset_tier_id: project.asset_tier_id ?? null,
       status_id: project.status_id ?? null,
       status_name: projectStatusName,
+      /** Matches organization_statuses.is_passing — used by Aegis embed cards */
+      status_is_passing: projectStatusPassing ?? null,
       status_color: projectStatusColor,
       policy_evaluated_at: project.policy_evaluated_at ?? null,
       status_violations: project.status_violations ?? [],
+      repo_full_name: repoPrimary?.repo_full_name ?? null,
+      repo_provider: repoPrimary?.provider ?? null,
     };
 
     res.json(formattedProject);

@@ -98,7 +98,7 @@ export function MessageBubble({
   parts.forEach((part: any, i: number) => {
     if (part.type === 'text') {
       flushTools();
-      elements.push(<MarkdownRenderer key={`text-${i}`} content={part.text ?? ''} />);
+      elements.push(<MarkdownRenderer key={`text-${i}`} content={part.text ?? ''} organizationId={organizationId} />);
       return;
     }
     if (isToolPart(part)) {
@@ -110,7 +110,9 @@ export function MessageBubble({
       const resolved = part.state === 'output-available' && output?.fixId;
       if (resolved && toolName === 'request_fix') {
         flushTools();
-        elements.push(<PlanCard key={`plan-${i}`} fixId={output.fixId!} />);
+        elements.push(
+          <PlanCard key={`plan-${i}`} fixId={output.fixId!} organizationId={organizationId} />,
+        );
       } else if (resolved && toolName === 'approve_fix') {
         flushTools();
         elements.push(<FixStatusCard key={`status-${i}`} fixId={output.fixId!} />);

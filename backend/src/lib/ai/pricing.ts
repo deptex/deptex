@@ -1,16 +1,22 @@
 const TOKEN_PRICING: Record<string, { input: number; output: number }> = {
-  'gpt-4o':                      { input: 2.50 / 1_000_000, output: 10.00 / 1_000_000 },
-  'gpt-4o-mini':                 { input: 0.15 / 1_000_000, output: 0.60 / 1_000_000 },
-  'gpt-4-turbo':                 { input: 10.00 / 1_000_000, output: 30.00 / 1_000_000 },
-  'gpt-4-turbo-preview':         { input: 10.00 / 1_000_000, output: 30.00 / 1_000_000 },
-  'o1':                          { input: 15.00 / 1_000_000, output: 60.00 / 1_000_000 },
-  'o1-mini':                     { input: 3.00 / 1_000_000, output: 12.00 / 1_000_000 },
-  'claude-sonnet-4-20250514':    { input: 3.00 / 1_000_000, output: 15.00 / 1_000_000 },
-  'claude-3-5-sonnet-20241022':  { input: 3.00 / 1_000_000, output: 15.00 / 1_000_000 },
-  'claude-3-haiku-20240307':     { input: 0.25 / 1_000_000, output: 1.25 / 1_000_000 },
-  'gemini-2.5-flash':            { input: 0.15 / 1_000_000, output: 0.60 / 1_000_000 },
-  'gemini-2.0-flash':            { input: 0.10 / 1_000_000, output: 0.40 / 1_000_000 },
-  'gemini-1.5-pro':              { input: 1.25 / 1_000_000, output: 5.00 / 1_000_000 },
+  // Anthropic
+  'claude-opus-4-7':                       { input: 5.00 / 1_000_000, output: 25.00 / 1_000_000 },
+  'claude-sonnet-4-6':                     { input: 3.00 / 1_000_000, output: 15.00 / 1_000_000 },
+  'claude-haiku-4-5-20251001':             { input: 1.00 / 1_000_000, output: 5.00 / 1_000_000 },
+  // OpenAI
+  'gpt-5.5':                               { input: 5.00 / 1_000_000,  output: 30.00 / 1_000_000 },
+  'gpt-5.5-pro':                           { input: 30.00 / 1_000_000, output: 180.00 / 1_000_000 },
+  'gpt-5.4':                               { input: 2.50 / 1_000_000,  output: 15.00 / 1_000_000 },
+  'gpt-5.4-nano':                          { input: 0.20 / 1_000_000,  output: 1.25 / 1_000_000 },
+  'gpt-5-nano':                            { input: 0.05 / 1_000_000,  output: 0.40 / 1_000_000 },
+  // Google
+  'gemini-3.1-pro':                        { input: 2.00 / 1_000_000, output: 12.00 / 1_000_000 },
+  'gemini-3-flash':                        { input: 0.50 / 1_000_000, output: 3.00 / 1_000_000 },
+  // DeepInfra (open-weight)
+  'deepseek-ai/DeepSeek-V4-Pro':           { input: 1.74 / 1_000_000, output: 3.48 / 1_000_000 },
+  'deepseek-ai/DeepSeek-V4-Flash':         { input: 0.14 / 1_000_000, output: 0.28 / 1_000_000 },
+  'Qwen/Qwen3.6-35B-A3B':                  { input: 0.15 / 1_000_000, output: 0.95 / 1_000_000 },
+  'moonshotai/Kimi-K2.6':                  { input: 0.75 / 1_000_000, output: 3.50 / 1_000_000 },
 };
 
 const DEFAULT_PRICING = { input: 3.00 / 1_000_000, output: 15.00 / 1_000_000 };

@@ -35,6 +35,11 @@ export interface PlanFileChange {
   description: string;
 }
 
+export interface VerificationStep {
+  command: string;
+  description: string;
+}
+
 export interface PlanRefusal {
   reason: string;
   manualSuggestion?: string;
@@ -43,10 +48,11 @@ export interface PlanRefusal {
 export interface FixPlan {
   summary: string;
   finding: { type: FindingType; id: string; severity?: string };
-  currentState: string[];
-  desiredState: string[];
+  description: string;
   fileChanges: PlanFileChange[];
   testCommand: string;
+  verification?: string;
+  verificationSteps?: VerificationStep[];
   language: PlanLanguage;
   estimatedDiffSize: PlanDiffSize;
   wallClockBudgetSec: number;
@@ -78,6 +84,11 @@ const fileChangeSchema = z.object({
   description: z.string().min(1),
 });
 
+const verificationStepSchema = z.object({
+  command: z.string().min(1),
+  description: z.string().min(1),
+});
+
 const refusalSchema = z.object({
   reason: z.string().min(1),
   manualSuggestion: z.string().optional(),
@@ -90,10 +101,11 @@ export const fixPlanSchema = z.object({
     id: z.string().min(1),
     severity: z.string().optional(),
   }),
-  currentState: z.array(z.string().min(1)).min(1),
-  desiredState: z.array(z.string().min(1)).min(1),
+  description: z.string().min(1),
   fileChanges: z.array(fileChangeSchema),
   testCommand: z.string().min(1),
+  verification: z.string().min(1).optional(),
+  verificationSteps: z.array(verificationStepSchema).min(1).max(6).optional(),
   language: z.enum(['js', 'ts', 'python', 'go', 'java', 'ruby', 'php', 'rust', 'csharp']),
   estimatedDiffSize: z.enum(['small', 'medium', 'large']),
   wallClockBudgetSec: z.number().int().positive().max(900),

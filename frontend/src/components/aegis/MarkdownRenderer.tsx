@@ -3,6 +3,11 @@ import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { useState } from 'react';
 import { Copy, Check } from 'lucide-react';
+import { splitAegisEmbedSegments } from './aegisProjectPlaceholders';
+import { ProjectEmbedCard } from './ProjectEmbedCard';
+import { TeamEmbedCard } from './TeamEmbedCard';
+import { MemberEmbedCard } from './MemberEmbedCard';
+import { MembersTable } from './MembersTable';
 
 // Custom theme: near-white base text, oneDark token colors, transparent bg
 const codeTheme: Record<string, React.CSSProperties> = {
@@ -40,6 +45,8 @@ const codeTheme: Record<string, React.CSSProperties> = {
 };
 
 interface MarkdownRendererProps {
+  /** When set with org id, parses inline `<project>…</project>` / `<team>…</team>` tokens into cards. */
+  organizationId?: string;
   content: string;
 }
 
@@ -50,6 +57,40 @@ interface MarkdownRendererProps {
 // from any line that isn't inside a fenced code block, isn't a list marker
 // continuation, and isn't a blockquote. Preserves intentional structure,
 // kills accidental indents that look like code.
+function InvalidEmbedNotice({
+  tag,
+  rawInner,
+}: {
+  tag: 'project' | 'team' | 'member';
+  rawInner: string;
+}) {
+  const toolHint =
+    tag === 'team'
+      ? 'list_teams'
+      : tag === 'member'
+        ? 'list_organization_members'
+        : 'list_projects';
+  return (
+    <div className="my-2 rounded-lg border border-warning/35 bg-warning/10 px-3 py-2 text-xs leading-relaxed text-foreground-secondary">
+      <p className="font-medium text-warning">Cannot show this {tag} card</p>
+      <p className="mt-1 text-foreground-muted">
+        The embedded id isn’t a valid UUID (Deptex IDs use only hexadecimal digits{' '}
+        <code className="rounded bg-background-subtle px-1 py-px font-mono text-[11px]">0-9</code>{' '}
+        and{' '}
+        <code className="rounded bg-background-subtle px-1 py-px font-mono text-[11px]">a-f</code> in the eight hyphen-separated groups).{' '}
+        Copy-paste each <code className="font-mono">id</code> field verbatim from the{' '}
+        <code className="font-mono">{toolHint}</code> tool JSON—not from memory or placeholder patterns like{' '}
+        <code className="font-mono">7g8h</code>.
+      </p>
+      {rawInner ? (
+        <p className="mt-2 font-mono text-[11px] text-foreground-muted/90" title={rawInner}>
+          Saw: &quot;{rawInner}&quot;
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function dedentProse(content: string): string {
   const lines = content.split('\n');
   let inFence = false;
@@ -111,106 +152,145 @@ function CodeBlock({ language, children }: { language?: string; children: string
   );
 }
 
-export function MarkdownRenderer({ content }: MarkdownRendererProps) {
+/** Renders a single markdown fragment (already dedented); no project embeds. */
+function ProseMarkdown({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        p: ({ children }) => (
+          <p className="text-sm leading-relaxed text-foreground/90">{children}</p>
+        ),
+
+        h1: ({ children }) => (
+          <h1 className="text-base font-semibold text-foreground mt-4 mb-2 first:mt-0">{children}</h1>
+        ),
+        h2: ({ children }) => (
+          <h2 className="text-[15px] font-semibold text-foreground mt-4 mb-2 first:mt-0">{children}</h2>
+        ),
+        h3: ({ children }) => (
+          <h3 className="text-sm font-semibold text-foreground mt-3 mb-1.5 first:mt-0">{children}</h3>
+        ),
+
+        ul: ({ children }) => (
+          <ul className="list-disc list-outside pl-5 space-y-1 text-foreground/90">{children}</ul>
+        ),
+        ol: ({ children }) => (
+          <ol className="list-decimal list-outside pl-5 space-y-1 text-foreground/90">{children}</ol>
+        ),
+        li: ({ children }) => (
+          <li className="text-sm leading-relaxed">{children}</li>
+        ),
+
+        strong: ({ children }) => (
+          <strong className="font-semibold text-foreground">{children}</strong>
+        ),
+        em: ({ children }) => (
+          <em className="italic text-foreground/80">{children}</em>
+        ),
+        a: ({ href, children }) => (
+          <a href={href} target="_blank" rel="noreferrer" className="text-blue-400 hover:text-blue-300 underline underline-offset-2">
+            {children}
+          </a>
+        ),
+
+        blockquote: ({ children }) => (
+          <blockquote className="border-l-2 border-foreground/20 pl-4 py-0.5 text-foreground/60 italic my-2">
+            {children}
+          </blockquote>
+        ),
+
+        hr: () => <hr className="border-border my-4" />,
+
+        table: ({ children }) => (
+          <div className="markdown-table my-4 w-full overflow-x-auto">
+            <table className="w-full text-sm border-collapse">{children}</table>
+          </div>
+        ),
+        thead: ({ children }) => (
+          <thead className="[&>tr]:border-b [&>tr]:border-foreground/20">{children}</thead>
+        ),
+        tbody: ({ children }) => (
+          <tbody className="[&>tr]:border-b [&>tr]:border-border/50 [&>tr:last-child]:border-b-0">{children}</tbody>
+        ),
+        tr: ({ children }) => <tr>{children}</tr>,
+        th: ({ children }) => (
+          <th className="py-2.5 pr-8 text-left text-sm font-semibold text-foreground">
+            {children}
+          </th>
+        ),
+        td: ({ children }) => (
+          <td className="py-2.5 pr-8 text-sm text-foreground/80">{children}</td>
+        ),
+
+        pre({ children }) {
+          const child = Array.isArray(children) ? children[0] : children;
+          if (child && typeof child === 'object' && 'props' in child) {
+            const { className, children: code } = (child as any).props;
+            const match = /language-(\w+)/.exec(className || '');
+            return (
+              <CodeBlock language={match?.[1]}>
+                {String(code).replace(/\n$/, '')}
+              </CodeBlock>
+            );
+          }
+          return <pre>{children}</pre>;
+        },
+
+        code({ children }) {
+          return (
+            <code className="text-[13px] bg-background-subtle text-foreground px-1.5 py-0.5 rounded font-mono">
+              {children}
+            </code>
+          );
+        },
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+}
+
+export function MarkdownRenderer({ content, organizationId }: MarkdownRendererProps) {
   const normalized = dedentProse(content);
+
+  const segments = organizationId
+    ? splitAegisEmbedSegments(normalized)
+    : [{ type: 'text' as const, value: normalized }];
+  const hasEmbeds = segments.some(
+    (s) =>
+      s.type === 'project' ||
+      s.type === 'team' ||
+      s.type === 'member' ||
+      s.type === 'members_group' ||
+      s.type === 'embed_invalid',
+  );
+
+  if (!organizationId || !hasEmbeds) {
+    return (
+      <div className="text-sm leading-relaxed text-foreground/90 space-y-3">
+        <ProseMarkdown content={normalized} />
+      </div>
+    );
+  }
+
   return (
     <div className="text-sm leading-relaxed text-foreground/90 space-y-3">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          p: ({ children }) => (
-            <p className="text-sm leading-relaxed text-foreground/90">{children}</p>
-          ),
-
-          h1: ({ children }) => (
-            <h1 className="text-base font-semibold text-foreground mt-4 mb-2 first:mt-0">{children}</h1>
-          ),
-          h2: ({ children }) => (
-            <h2 className="text-[15px] font-semibold text-foreground mt-4 mb-2 first:mt-0">{children}</h2>
-          ),
-          h3: ({ children }) => (
-            <h3 className="text-sm font-semibold text-foreground mt-3 mb-1.5 first:mt-0">{children}</h3>
-          ),
-
-          ul: ({ children }) => (
-            <ul className="list-disc list-outside pl-5 space-y-1 text-foreground/90">{children}</ul>
-          ),
-          ol: ({ children }) => (
-            <ol className="list-decimal list-outside pl-5 space-y-1 text-foreground/90">{children}</ol>
-          ),
-          li: ({ children }) => (
-            <li className="text-sm leading-relaxed">{children}</li>
-          ),
-
-          strong: ({ children }) => (
-            <strong className="font-semibold text-foreground">{children}</strong>
-          ),
-          em: ({ children }) => (
-            <em className="italic text-foreground/80">{children}</em>
-          ),
-          a: ({ href, children }) => (
-            <a href={href} target="_blank" rel="noreferrer" className="text-blue-400 hover:text-blue-300 underline underline-offset-2">
-              {children}
-            </a>
-          ),
-
-          blockquote: ({ children }) => (
-            <blockquote className="border-l-2 border-foreground/20 pl-4 py-0.5 text-foreground/60 italic my-2">
-              {children}
-            </blockquote>
-          ),
-
-          hr: () => <hr className="border-border my-4" />,
-
-          table: ({ children }) => (
-            <div className="markdown-table my-4 w-full overflow-x-auto">
-              <table className="w-full text-sm border-collapse">{children}</table>
-            </div>
-          ),
-          thead: ({ children }) => (
-            <thead className="[&>tr]:border-b [&>tr]:border-foreground/20">{children}</thead>
-          ),
-          tbody: ({ children }) => (
-            <tbody className="[&>tr]:border-b [&>tr]:border-border/50 [&>tr:last-child]:border-b-0">{children}</tbody>
-          ),
-          tr: ({ children }) => <tr>{children}</tr>,
-          th: ({ children }) => (
-            <th className="py-2.5 pr-8 text-left text-sm font-semibold text-foreground">
-              {children}
-            </th>
-          ),
-          td: ({ children }) => (
-            <td className="py-2.5 pr-8 text-sm text-foreground/80">{children}</td>
-          ),
-
-          // Block code: react-markdown always wraps fenced code in <pre><code>.
-          // Handling it in `pre` is the reliable way to distinguish from inline.
-          pre({ children }) {
-            const child = Array.isArray(children) ? children[0] : children;
-            if (child && typeof child === 'object' && 'props' in child) {
-              const { className, children: code } = (child as any).props;
-              const match = /language-(\w+)/.exec(className || '');
-              return (
-                <CodeBlock language={match?.[1]}>
-                  {String(code).replace(/\n$/, '')}
-                </CodeBlock>
-              );
-            }
-            return <pre>{children}</pre>;
-          },
-
-          // Inline code only (block is handled by `pre` above)
-          code({ children }) {
-            return (
-              <code className="text-[13px] bg-background-subtle text-foreground px-1.5 py-0.5 rounded font-mono">
-                {children}
-              </code>
-            );
-          },
-        }}
-      >
-        {normalized}
-      </ReactMarkdown>
+      {segments.map((seg, i) =>
+        seg.type === 'text' ? (
+          <ProseMarkdown key={`md-${i}`} content={seg.value} />
+        ) : seg.type === 'embed_invalid' ? (
+          <InvalidEmbedNotice key={`bad-${seg.tag}-${i}`} tag={seg.tag} rawInner={seg.rawInner} />
+        ) : seg.type === 'project' ? (
+          <ProjectEmbedCard key={`proj-${seg.id}-${i}`} organizationId={organizationId} projectId={seg.id} />
+        ) : seg.type === 'team' ? (
+          <TeamEmbedCard key={`team-${seg.id}-${i}`} organizationId={organizationId} teamId={seg.id} />
+        ) : seg.type === 'members_group' ? (
+          <MembersTable key={`members-${i}`} organizationId={organizationId} userIds={seg.ids} />
+        ) : (
+          <MemberEmbedCard key={`member-${seg.id}-${i}`} organizationId={organizationId} userId={seg.id} />
+        ),
+      )}
     </div>
   );
 }

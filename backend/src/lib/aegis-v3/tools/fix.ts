@@ -2,6 +2,7 @@ import { jsonSchema } from 'ai';
 import type { AegisToolEntry } from '../tool-types';
 import { generateFixPlan } from '../fix-planner';
 import { signApprovalToken, verifyApprovalToken } from '../approval-token';
+import { resolveProject } from './resolvers';
 import {
   FINDING_TYPES,
   type FindingType,
@@ -21,10 +22,57 @@ function fixTypeColumn(findingType: FindingType): 'osv_id' | 'semgrep_finding_id
   return 'secret_finding_id';
 }
 
+// Resolve a non-UUID handle from list_project_issues to the underlying row id
+// for semgrep / secret findings. Vulnerability handles are OSV ids and pass
+// through unchanged. Returns either `{ rowId }` or `{ error }`.
+async function resolveFindingHandle(
+  findingType: FindingType,
+  handle: string,
+  projectId: string,
+  supabase: any,
+): Promise<{ rowId: string } | { error: string }> {
+  if (findingType === 'vulnerability') {
+    return { rowId: handle };
+  }
+
+  const colon = handle.lastIndexOf(':');
+  if (colon < 1) {
+    return { error: `Invalid finding handle '${handle}'. Re-run list_project_issues to get a current handle.` };
+  }
+  const filePath = handle.slice(0, colon);
+  const lineRaw = handle.slice(colon + 1);
+  const line = parseInt(lineRaw, 10);
+  if (!filePath || !Number.isFinite(line)) {
+    return { error: `Invalid finding handle '${handle}'. Re-run list_project_issues to get a current handle.` };
+  }
+
+  const table = findingType === 'semgrep' ? 'project_semgrep_findings' : 'project_secret_findings';
+  let query = supabase
+    .from(table)
+    .select('id')
+    .eq('project_id', projectId)
+    .eq('file_path', filePath)
+    .eq('start_line', line)
+    .eq('status', 'open');
+  if (findingType === 'secret') query = query.eq('is_current', true);
+
+  const { data: rows, error } = await query;
+  if (error) return { error: `Failed to resolve finding handle: ${error.message}` };
+  if (!rows || rows.length === 0) {
+    return { error: `No open ${findingType} finding at ${filePath}:${line}. Re-run list_project_issues.` };
+  }
+  if (rows.length > 1) {
+    return {
+      error: `Multiple ${findingType} findings at ${filePath}:${line}. Ask the user which one (by rule/detector) before retrying.`,
+    };
+  }
+  return { rowId: (rows[0] as { id: string }).id };
+}
+
 const requestFix: AegisToolEntry<{
   findingType: FindingType;
-  findingId: string;
-  projectId: string;
+  findingHandle: string;
+  projectName: string;
 }, {
   fixId?: string;
   status?: FixStatus;
@@ -34,27 +82,27 @@ const requestFix: AegisToolEntry<{
 }> = {
   name: 'request_fix',
   description:
-    'Generate a fix plan for a security finding (vulnerability / Semgrep / secret). The plan must be approved before execution. Returns the plan, status (awaiting_approval | failed if refusal), and a fix id. Does not open a PR.',
+    "Generate a fix plan for a security issue (vulnerability / Semgrep / secret). Pass `projectName` exactly as the user said it (the resolver fuzzy-matches), `findingType` ('vulnerability' | 'semgrep' | 'secret'), and `findingHandle` exactly as returned in the `handle` field by `list_project_issues`. Always call `list_project_issues` first to obtain the right handle; never invent one. The plan must be approved (via `approve_fix`) before execution. Returns the plan, status (awaiting_approval | failed on refusal), and a fix id. Does not open a PR.",
   permission: 'trigger_fix',
   danger: 'medium',
   inputSchema: jsonSchema({
     type: 'object',
     properties: {
       findingType: { type: 'string', enum: [...FINDING_TYPES] },
-      findingId: { type: 'string', minLength: 1 },
-      projectId: { type: 'string', format: 'uuid' },
+      findingHandle: { type: 'string', minLength: 1, description: 'The `handle` from list_project_issues. Opaque — never paraphrase to the user.' },
+      projectName: { type: 'string', minLength: 1, description: 'Project name as the user said it.' },
     },
-    required: ['findingType', 'findingId', 'projectId'],
+    required: ['findingType', 'findingHandle', 'projectName'],
     additionalProperties: false,
   }),
-  execute: async ({ findingType, findingId, projectId }, ctx) => {
-    const { data: project } = await ctx.supabase
-      .from('projects')
-      .select('id, organization_id')
-      .eq('id', projectId)
-      .single();
-    if (!project) return { error: 'Project not found' };
-    if (project.organization_id !== ctx.orgId) return { error: 'Project not in current organization' };
+  execute: async ({ findingType, findingHandle, projectName }, ctx) => {
+    const resolved = await resolveProject(projectName, ctx.orgId, ctx.supabase);
+    if ('error' in resolved) return { error: resolved.error };
+    const projectId = resolved.id;
+
+    const handleResolution = await resolveFindingHandle(findingType, findingHandle, projectId, ctx.supabase);
+    if ('error' in handleResolution) return { error: handleResolution.error };
+    const findingId = handleResolution.rowId;
 
     const insertRow = {
       project_id: projectId,

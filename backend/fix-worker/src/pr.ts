@@ -31,11 +31,10 @@ function buildPRBody(plan: FixPlan, diffSummary: string): string {
   lines.push(`**Finding:** \`${plan.finding.type}/${plan.finding.id}\``);
   if (plan.finding.severity) lines.push(`**Severity:** ${plan.finding.severity}`);
   lines.push('');
-  lines.push('### Current state');
-  for (const b of plan.currentState) lines.push(`- ${b}`);
-  lines.push('');
-  lines.push('### Desired state');
-  for (const b of plan.desiredState) lines.push(`- ${b}`);
+  // Description field replaces the old currentState/desiredState bullet
+  // sections. Fall back to summary for plans persisted under the prior
+  // schema so old PRs don't render with empty sections.
+  lines.push(plan.description ?? plan.summary);
   lines.push('');
   lines.push('### Test command');
   lines.push('```');

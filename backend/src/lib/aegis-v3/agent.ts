@@ -6,7 +6,6 @@ import { buildAegisSystemPrompt, type SystemPromptContext } from './system-promp
 import { buildToolSet } from './tools';
 import { saveAssistantMessage, saveToolExecution, logChatUsage } from './persistence';
 import { stepsToMessageParts } from './parts';
-import { generateThreadTitle } from './title';
 import { recordActualCost } from '../ai/cost-cap';
 import type { AegisOperatingMode, AegisToolContext } from './tool-types';
 
@@ -20,6 +19,10 @@ export interface CreateAegisAgentOptions {
   priorMessageCount: number;
   context?: SystemPromptContext;
   memoryContext?: string;
+  // Per-request model override. Validated server-side against the org's
+  // enabled_models list inside resolveOrgModel; an unknown / disabled id
+  // throws before the agent is constructed.
+  modelId?: string;
 }
 
 const DEFAULT_OPERATING_MODE: AegisOperatingMode = 'propose';
@@ -45,7 +48,7 @@ async function getOperatingMode(orgId: string): Promise<AegisOperatingMode> {
 
 export async function createAegisAgent(opts: CreateAegisAgentOptions): Promise<ToolLoopAgent> {
   const [model, orgName, operatingMode] = await Promise.all([
-    getLanguageModelForOrg(opts.orgId),
+    getLanguageModelForOrg(opts.orgId, opts.modelId),
     getOrgName(opts.orgId),
     getOperatingMode(opts.orgId),
   ]);
@@ -72,6 +75,15 @@ export async function createAegisAgent(opts: CreateAegisAgentOptions): Promise<T
     instructions,
     tools: buildToolSet(ctx),
     stopWhen: stepCountIs(25),
+    // Without this, each step uses the SDK / provider default (often 1024-4096
+    // tokens), which truncates long answers — e.g. "list every issue on this
+    // project" cuts off mid-listing and fires a stream error. 32k matches
+    // what Claude Code / Cursor / ChatGPT effectively use for modern frontier
+    // models, and every model in DEFAULT_MODELS (Sonnet 4.6, Opus 4.7,
+    // GPT-5.4, Gemini 3, DeepSeek V4, Qwen3.6) supports at least 32k output.
+    // If a smaller model is added later that caps lower (e.g. 8k), Anthropic
+    // will 400 and we'll need per-model lookup via ModelMetadata.
+    maxOutputTokens: 32768,
     onStepFinish: async ({ toolCalls, toolResults }) => {
       if (!toolCalls?.length) return;
       const resultByCallId = new Map<string, unknown>();
@@ -101,6 +113,27 @@ export async function createAegisAgent(opts: CreateAegisAgentOptions): Promise<T
 
       const parts = stepsToMessageParts(steps ?? []);
 
+      // Race fix: pipeUIMessageStreamToResponse.onError can fire BEFORE this
+      // onFinish (e.g. when the SDK throws during pipe serialization but the
+      // model itself finished generating). The pipe handler writes a generic
+      // "Something went wrong" assistant row; if we then persist the real
+      // response, the user sees a phantom error bubble next to a successful
+      // answer and on follow-up the model thinks nothing went wrong (it sees
+      // its own correct response and the user's "what failed?" makes no
+      // sense). Clean up any pipe-error row from this turn before writing the
+      // real one. Scoped to >= startedAt so prior turn errors are untouched.
+      try {
+        await supabase
+          .from('aegis_chat_messages')
+          .delete()
+          .eq('thread_id', opts.threadId)
+          .eq('role', 'assistant')
+          .not('metadata->error', 'is', null)
+          .gte('created_at', new Date(startedAt).toISOString());
+      } catch (cleanupErr) {
+        console.warn('[aegis-v3] error-row cleanup failed', cleanupErr);
+      }
+
       await saveAssistantMessage({
         threadId: opts.threadId,
         assistantText: text ?? '',
@@ -122,18 +155,15 @@ export async function createAegisAgent(opts: CreateAegisAgentOptions): Promise<T
       // the input-only estimate booked at pre-flight. Errors are swallowed so
       // a Redis blip can't kill the chat reply.
       try {
-        const providerInfo = await getProviderInfoForOrg(opts.orgId);
+        const providerInfo = await getProviderInfoForOrg(opts.orgId, opts.modelId);
         await recordActualCost(opts.orgId, providerInfo.model, inputTokens, outputTokens, 0);
       } catch (err) {
         console.warn('[aegis-v3] recordActualCost failed', err);
       }
 
-      // Auto-title on the very first user/assistant exchange. priorMessageCount
-      // is captured at agent-creation time so a deliberate later rename never
-      // gets stomped on a subsequent turn.
-      if (opts.priorMessageCount === 0 && text && text.length > 0) {
-        await generateThreadTitle(opts.threadId, opts.userMessage, text);
-      }
+      // Title generation lives in the route (kicked off in parallel with the
+      // model stream) so it survives a Stop click — the user's intent to keep
+      // a thread is committed the moment they send the first message.
     },
   });
 }

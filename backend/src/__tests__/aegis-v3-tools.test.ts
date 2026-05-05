@@ -75,6 +75,7 @@ describe('registry shape', () => {
         'list_policies',
         'list_project_dependencies',
         'list_projects',
+        'list_teams',
         'reject_fix',
         'request_fix',
       ].sort(),
@@ -111,7 +112,7 @@ describe('registry shape', () => {
 });
 
 describe('list_projects', () => {
-  it('returns rows in the new flat shape with no UUIDs leaked', async () => {
+  it('returns rows with id and embedded fields used by the UI', async () => {
     setTableResponse('projects', 'then', {
       data: [
         {
@@ -130,17 +131,18 @@ describe('list_projects', () => {
     expect(out).toEqual({
       projects: [
         {
+          id: 'p1',
           name: 'Web',
           health_score: 90,
           status: 'OK',
+          status_is_passing: null,
           framework: 'next',
           repo_status: 'connected',
           repo_full_name: 'org/web',
+          provider: null,
         },
       ],
     });
-    // Sanity: no `id` field on the result row.
-    expect(out.projects[0].id).toBeUndefined();
   });
 
   it('returns multi-match error from resolveTeam when teamName is ambiguous', async () => {
@@ -155,6 +157,55 @@ describe('list_projects', () => {
     pushTableResponse('teams', { data: [], error: null });
     const out = (await tool('list_projects').execute({ teamName: 'platform' }, makeCtx())) as any;
     expect(out.error).toContain('Multiple teams match');
+  });
+});
+
+describe('list_teams', () => {
+  const TEAM_A = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  const TEAM_B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+
+  it('returns teams with ids and aggregated counts', async () => {
+    setTableResponse('teams', 'then', {
+      data: [
+        { id: TEAM_A, name: 'Alpha', description: 'First' },
+        { id: TEAM_B, name: 'Beta', description: null },
+      ],
+      error: null,
+    });
+    setTableResponse('team_members', 'then', {
+      data: [{ team_id: TEAM_A }, { team_id: TEAM_A }, { team_id: TEAM_B }],
+      error: null,
+    });
+    setTableResponse('project_teams', 'then', {
+      data: [{ team_id: TEAM_A }, { team_id: TEAM_B }, { team_id: TEAM_B }],
+      error: null,
+    });
+    const out = (await tool('list_teams').execute({}, makeCtx())) as any;
+    expect(out).toEqual({
+      team_count: 2,
+      teams: [
+        {
+          id: TEAM_A,
+          name: 'Alpha',
+          description: 'First',
+          member_count: 2,
+          project_count: 1,
+        },
+        {
+          id: TEAM_B,
+          name: 'Beta',
+          description: null,
+          member_count: 1,
+          project_count: 2,
+        },
+      ],
+    });
+  });
+
+  it('returns an empty array when no teams exist', async () => {
+    setTableResponse('teams', 'then', { data: [], error: null });
+    const out = (await tool('list_teams').execute({}, makeCtx())) as any;
+    expect(out).toEqual({ team_count: 0, teams: [] });
   });
 });
 

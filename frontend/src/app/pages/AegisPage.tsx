@@ -7,6 +7,8 @@ import { ChatPane } from '../../components/aegis/ChatPane';
 import { SearchChatsModal } from '../../components/aegis/SearchChatsModal';
 import { PlanCard } from '../../components/aegis/PlanCard';
 import { RoutinesPanel } from '../../components/aegis/RoutinesPanel';
+import { PlanPanelProvider } from '../../components/aegis/PlanPanelContext';
+import { PlanPanelHost } from '../../components/aegis/PlanPanelHost';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
 
@@ -125,6 +127,14 @@ export default function AegisPage() {
 
   const handleCreate = useCallback(() => {
     if (!orgId) return;
+    // Force a fresh chatKey synchronously. Without this, hitting "New chat"
+    // immediately after sending the first message of a new chat (silent URL
+    // update path: chatKey stays "new" while activeThreadId becomes the new
+    // id) won't remount ChatPane, because the only chatKey transition the
+    // useEffect would trigger is "new" -> `new-${ts}` which sometimes races
+    // with the navigate-driven param update. Setting it here guarantees a
+    // remount regardless of the effect ordering.
+    setChatKey(`new-${Date.now()}`);
     navigate(`/organizations/${orgId}/aegis`);
   }, [orgId, navigate]);
 
@@ -166,9 +176,36 @@ export default function AegisPage() {
 
   const handleThreadUpdated = useCallback(async () => {
     if (pendingTitleTimeoutRef.current) clearTimeout(pendingTitleTimeoutRef.current);
-    await refreshThreads();
-    setPendingTitleThreadId(null);
-  }, [refreshThreads]);
+    const list = await refreshThreads();
+    // The auto-title runs in the background on the server (fire-and-forget so
+    // the response stream closes immediately). On a brand-new thread the
+    // first refresh may still see the placeholder "New chat" — keep the
+    // skeleton up and poll a few times until the title lands or we hit the
+    // 20s ceiling.
+    const pendingId = pendingTitleThreadId;
+    const stillPlaceholder =
+      pendingId && list?.find((t) => t.id === pendingId)?.title === 'New chat';
+    if (!pendingId || !stillPlaceholder) {
+      setPendingTitleThreadId(null);
+      return;
+    }
+    let attempts = 0;
+    const poll = async () => {
+      attempts += 1;
+      const next = await refreshThreads();
+      const stillPending = next?.find((t) => t.id === pendingId)?.title === 'New chat';
+      if (!stillPending) {
+        setPendingTitleThreadId(null);
+        return;
+      }
+      if (attempts < 8) {
+        pendingTitleTimeoutRef.current = setTimeout(() => { void poll(); }, 1500);
+      } else {
+        setPendingTitleThreadId(null);
+      }
+    };
+    pendingTitleTimeoutRef.current = setTimeout(() => { void poll(); }, 800);
+  }, [refreshThreads, pendingTitleThreadId]);
 
   const handleRename = useCallback(async (threadId: string, title: string) => {
     let previous: AegisThread | undefined;
@@ -285,30 +322,35 @@ export default function AegisPage() {
           className="absolute top-0 right-0 h-full w-1 -mr-0.5 cursor-col-resize hover:bg-foreground/15 active:bg-foreground/25 transition-colors z-10"
         />
       </aside>
-      <main className="flex-1 flex flex-col min-w-0">
-        {routinesActive ? (
-          <RoutinesPanel />
-        ) : (
-          <>
-            {fixIdParam && (
-              <div className="px-4 pt-4">
-                <div className="mx-auto max-w-3xl">
-                  <PlanCard fixId={fixIdParam} />
-                </div>
-              </div>
+      <PlanPanelProvider resetKey={`${activeThreadId ?? 'home'}|${routinesActive ? 'routines' : 'chat'}`}>
+        <main className="flex-1 flex min-w-0">
+          <div className="flex-1 flex flex-col min-w-0">
+            {routinesActive ? (
+              <RoutinesPanel />
+            ) : (
+              <>
+                {fixIdParam && (
+                  <div className="px-4 pt-4">
+                    <div className="mx-auto max-w-3xl">
+                      <PlanCard fixId={fixIdParam} organizationId={orgId} />
+                    </div>
+                  </div>
+                )}
+                <ChatPane
+                  key={chatKey}
+                  organizationId={orgId}
+                  threadId={activeThreadId}
+                  currentUserId={user?.id ?? ''}
+                  displayName={displayName}
+                  onThreadCreated={handleThreadCreated}
+                  onThreadUpdated={handleThreadUpdated}
+                />
+              </>
             )}
-            <ChatPane
-              key={chatKey}
-              organizationId={orgId}
-              threadId={activeThreadId}
-              currentUserId={user?.id ?? ''}
-              displayName={displayName}
-              onThreadCreated={handleThreadCreated}
-              onThreadUpdated={handleThreadUpdated}
-            />
-          </>
-        )}
-      </main>
+          </div>
+          <PlanPanelHost />
+        </main>
+      </PlanPanelProvider>
 
       <SearchChatsModal
         open={searchOpen}

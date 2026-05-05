@@ -3,7 +3,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { DEFAULT_MODELS } from '../ai/models';
+import { DEFAULT_MODELS, getModelById } from '../ai/models';
 
 export type AIProvider = 'openai' | 'anthropic' | 'google' | 'deepinfra';
 
@@ -66,38 +66,68 @@ function envVarFor(provider: AIProvider): string {
   return `${provider.toUpperCase()}_API_KEY`;
 }
 
-async function getOrgDefaultProvider(organizationId: string): Promise<AIProvider> {
+// Resolve which model to run a request against. If a per-request override is
+// supplied (the user picked a model in the chat input), validate it's in the
+// org's enabled list — otherwise a malicious client could bypass the
+// enable/disable gate from settings. With no override, fall back to the org
+// default.
+async function resolveOrgModel(
+  organizationId: string,
+  requestedModelId?: string,
+): Promise<{ provider: AIProvider; model: string }> {
   const { supabase } = await import('../supabase');
   const { data, error } = await supabase
     .from('organizations')
-    .select('default_ai_provider')
+    .select('default_ai_provider, default_model, enabled_models')
     .eq('id', organizationId)
     .single();
   if (error) throw new Error(`Failed to load organization: ${error.message}`);
-  return (data?.default_ai_provider as AIProvider) ?? 'anthropic';
+
+  if (requestedModelId) {
+    const meta = getModelById(requestedModelId);
+    if (!meta) throw new Error(`Unknown model: ${requestedModelId}`);
+    const enabled: string[] | null = (data?.enabled_models as string[] | null) ?? null;
+    if (enabled && !enabled.includes(requestedModelId)) {
+      throw new Error(`Model not enabled for this organization: ${requestedModelId}`);
+    }
+    return { provider: meta.provider, model: meta.id };
+  }
+
+  if (data?.default_model) {
+    const meta = getModelById(data.default_model);
+    if (meta) return { provider: meta.provider, model: meta.id };
+  }
+
+  const provider = (data?.default_ai_provider as AIProvider) ?? 'anthropic';
+  return { provider, model: DEFAULT_MODELS[provider] };
 }
 
-export async function getLanguageModelForOrg(organizationId: string): Promise<LanguageModel> {
-  const provider = await getOrgDefaultProvider(organizationId);
+export async function getLanguageModelForOrg(
+  organizationId: string,
+  modelId?: string,
+): Promise<LanguageModel> {
+  const { provider, model } = await resolveOrgModel(organizationId, modelId);
   const apiKey = getPlatformKeyForProvider(provider);
   if (!apiKey) {
     throw new Error(
       `Platform API key for ${provider} is not configured. Set ${envVarFor(provider)} on the backend, or pick a different provider in Organization Settings > AI.`
     );
   }
-  const model = DEFAULT_MODELS[provider];
   return getLanguageModel({ providerType: provider, apiKey, model });
 }
 
-export async function getProviderInfoForOrg(organizationId: string): Promise<{
+export async function getProviderInfoForOrg(
+  organizationId: string,
+  modelId?: string,
+): Promise<{
   provider: AIProvider;
   model: string;
   monthlyCostCap: number;
 }> {
-  const provider = await getOrgDefaultProvider(organizationId);
+  const { provider, model } = await resolveOrgModel(organizationId, modelId);
   return {
     provider,
-    model: DEFAULT_MODELS[provider],
+    model,
     monthlyCostCap: DEFAULT_MONTHLY_COST_CAP_USD,
   };
 }

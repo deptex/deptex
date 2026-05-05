@@ -744,7 +744,9 @@ CREATE TABLE IF NOT EXISTS public.organizations (
   canvas_cursors_enabled boolean DEFAULT true,
   epd_max_run_cost_usd numeric(6,2),
   epd_budget_exceeded_behavior text,
-  default_ai_provider text NOT NULL DEFAULT 'anthropic'::text
+  default_ai_provider text NOT NULL DEFAULT 'anthropic'::text,
+  default_model text,
+  enabled_models jsonb
 );
 CREATE TABLE IF NOT EXISTS public.package_anomalies (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),

@@ -1,9 +1,9 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Folder, Loader2, Users } from 'lucide-react';
+import { Folder, Loader2 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { FrameworkIcon } from '../framework-icon';
-import { TeamIcon } from '../TeamIcon';
+import { OverviewTeamSatelliteChip, TeamIcon } from '../TeamIcon';
 import { type WorstSeverity } from './useVulnerabilitiesGraphLayout';
 import { GraphScopePill } from './GraphScopePill';
 import type { OrgSatelliteTargetEdge } from './overviewOrgLayout';
@@ -247,9 +247,7 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
         <div className="relative rounded-xl border border-border bg-background-card-header shadow-lg shadow-slate-500/5 h-full flex flex-col overflow-hidden cursor-pointer hover:border-border/80 transition-all">
           {/* Top: Team icon, name, scope pill */}
           <div className="px-4 py-3 flex items-center gap-3 min-w-0 flex-1">
-            <div className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 bg-[#1a1c1e] text-muted-foreground">
-              <TeamIcon />
-            </div>
+            <OverviewTeamSatelliteChip />
             <div className="min-w-0 flex-1">
               <p className="text-base font-semibold text-foreground truncate leading-tight" title={projectName}>
                 {projectName}

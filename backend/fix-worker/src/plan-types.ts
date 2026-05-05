@@ -13,6 +13,11 @@ export interface PlanFileChange {
   description: string;
 }
 
+export interface VerificationStep {
+  command: string;
+  description: string;
+}
+
 export interface PlanRefusal {
   reason: string;
   manualSuggestion?: string;
@@ -21,10 +26,11 @@ export interface PlanRefusal {
 export interface FixPlan {
   summary: string;
   finding: { type: FindingType; id: string; severity?: string };
-  currentState: string[];
-  desiredState: string[];
+  description: string;
   fileChanges: PlanFileChange[];
   testCommand: string;
+  verification?: string;
+  verificationSteps?: VerificationStep[];
   language: PlanLanguage;
   estimatedDiffSize: PlanDiffSize;
   wallClockBudgetSec: number;
