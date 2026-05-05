@@ -300,7 +300,7 @@ export default function CompliancePage() {
 
   return (
     <>
-      <div className="flex min-h-[calc(100vh-3rem)] overflow-hidden">
+      <div className="flex min-h-[100vh] overflow-hidden">
         <ComplianceSidepanel
           mode="organization"
           activeSection={activeSection}

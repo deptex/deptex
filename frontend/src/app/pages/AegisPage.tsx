@@ -241,11 +241,11 @@ export default function AegisPage() {
   // gate. The OrganizationLayout sidebar/header is already on screen, so a
   // blank main pane is the least jarring intermediate state.
   if (permissionsLoading) {
-    return <div className="h-[calc(100vh-3rem)] bg-background" />;
+    return <div className="h-[100vh] bg-background" />;
   }
   if (!canUseAegis) {
     return (
-      <div className="flex h-[calc(100vh-3rem)] items-center justify-center p-12">
+      <div className="flex h-[100vh] items-center justify-center p-12">
         <div className="max-w-md text-center">
           <h1 className="text-base font-semibold text-foreground mb-2">Aegis is not available</h1>
           <p className="text-sm text-foreground/80">
@@ -257,7 +257,7 @@ export default function AegisPage() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-3rem)] bg-background">
+    <div className="flex h-[100vh] bg-background">
       <aside
         className="relative flex-shrink-0 border-r border-border bg-background"
         style={{ width: sidebarWidth }}

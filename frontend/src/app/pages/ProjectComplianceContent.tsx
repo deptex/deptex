@@ -506,7 +506,7 @@ export function ProjectComplianceContent(props: ProjectComplianceContentProps) {
   if (!project) {
     return (
       <div className={cn(mainEmbedClass, embedInSidebar && embedShellBg)}>
-        <div className={cn('min-h-[calc(100vh-3rem)]', pagePadding)}>
+        <div className={cn('min-h-[100vh]', pagePadding)}>
           <div className={placeholderInnerClass}>
             <div className="h-8 w-48 bg-muted rounded animate-pulse mb-6" />
             <div className="h-64 bg-muted rounded-lg animate-pulse" />
@@ -521,7 +521,7 @@ export function ProjectComplianceContent(props: ProjectComplianceContentProps) {
     <>
       <div
         className={cn(
-          'flex min-h-[calc(100vh-3rem)] overflow-hidden',
+          'flex min-h-[100vh] overflow-hidden',
           embedInSidebar && 'min-h-0 h-full',
           embedInSidebar && embedShellBg,
           mainEmbedClass
