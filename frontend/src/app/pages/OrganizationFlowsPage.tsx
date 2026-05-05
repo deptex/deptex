@@ -12,6 +12,7 @@ import {
 } from '../../components/ui/dialog';
 import { useToast } from '../../hooks/use-toast';
 import { cn } from '../../lib/utils';
+import PageHeader from '../../components/PageHeader';
 
 interface OutletContext {
   organization: Organization | null;
@@ -51,21 +52,19 @@ export default function OrganizationFlowsPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-6 py-8">
-      <div className="mb-8 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-foreground">Flows</h1>
-          <p className="mt-1 text-sm text-foreground-secondary">
-            Visual automations for {organization?.name ?? 'this organization'}.
-          </p>
-        </div>
-        <Button onClick={() => setCreateOpen(true)} className="gap-1.5">
-          <Plus className="h-4 w-4" />
-          New flow
-        </Button>
-      </div>
-
-      {loading ? (
+    <>
+      <PageHeader
+        title="Flows"
+        description={`Visual automations for ${organization?.name ?? 'this organization'}.`}
+        actions={
+          <Button onClick={() => setCreateOpen(true)} className="gap-1.5">
+            <Plus className="h-4 w-4" />
+            New flow
+          </Button>
+        }
+      />
+      <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-6">
+        {loading ? (
         <div className="flex h-60 items-center justify-center">
           <Loader2 className="h-5 w-5 animate-spin text-foreground-secondary" />
         </div>
@@ -91,7 +90,8 @@ export default function OrganizationFlowsPage() {
           onCreated={handleCreated}
         />
       )}
-    </div>
+      </div>
+    </>
   );
 }
 

@@ -475,7 +475,7 @@ export default function FlowEditorPage() {
   return (
     <main
       ref={paneRef}
-      className="relative h-[calc(100vh-3rem)] w-full overflow-hidden bg-background text-foreground"
+      className="relative h-[100vh] w-full overflow-hidden bg-background text-foreground"
     >
       {error ? (
         <div className="absolute inset-0 flex items-center justify-center">

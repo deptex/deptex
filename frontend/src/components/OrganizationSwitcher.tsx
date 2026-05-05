@@ -54,6 +54,9 @@ interface OrganizationSwitcherProps {
   currentOrganizationId: string;
   currentOrganizationName: string;
   currentOrganizationAvatarUrl?: string | null;
+  currentOrganizationRole?: string | null;
+  currentOrganizationRoleDisplayName?: string | null;
+  currentOrganizationRoleColor?: string | null;
   showOrgName?: boolean;
   /** When "full", trigger shows avatar + name + chevron (for header). Default "icon" (chevron only). */
   triggerVariant?: 'full' | 'icon';
@@ -63,6 +66,9 @@ export default function OrganizationSwitcher({
   currentOrganizationId,
   currentOrganizationName,
   currentOrganizationAvatarUrl,
+  currentOrganizationRole,
+  currentOrganizationRoleDisplayName,
+  currentOrganizationRoleColor,
   showOrgName = false,
   triggerVariant = 'icon',
 }: OrganizationSwitcherProps) {
@@ -196,42 +202,8 @@ export default function OrganizationSwitcher({
     }
   };
 
-  const triggerContent =
-    triggerVariant === 'full' ? (
-      <button
-        type="button"
-        className="org-switcher-trigger flex items-center gap-2 min-w-0 rounded-md py-1 pr-1 -ml-1 hover:bg-background-subtle transition-colors text-left outline-none border-0 focus:outline-none focus:ring-0 focus:border-0 focus-visible:outline-none focus-visible:ring-0"
-      >
-        <img
-          src={currentOrganizationAvatarUrl || '/images/org_profile.png'}
-          alt=""
-          className="h-6 w-6 rounded-full object-cover flex-shrink-0 bg-transparent"
-        />
-        <span className="text-sm font-medium text-foreground truncate max-w-[140px]">
-          {currentOrganizationName}
-        </span>
-        <ChevronsUpDown className="h-4 w-4 text-foreground-secondary flex-shrink-0" />
-      </button>
-    ) : (
-      <button
-        type="button"
-        className="org-switcher-trigger flex items-center justify-center p-1 -ml-1.5 rounded hover:bg-background-subtle transition-colors outline-none border-0 focus:outline-none focus:ring-0 focus:border-0 focus-visible:outline-none focus-visible:ring-0"
-      >
-        <ChevronsUpDown className="h-4 w-4 text-foreground-secondary hover:text-foreground transition-colors" />
-      </button>
-    );
-
-  return (
-    <>
-      <div className="flex items-center gap-2">
-        {triggerVariant === 'icon' && showOrgName && (
-          <span className="text-foreground font-medium">{currentOrganizationName}</span>
-        )}
-        <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-          <DropdownMenuTrigger asChild>
-            {triggerContent}
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-[420px] min-h-[380px] p-0 flex flex-col">
+  const dropdownContent = (
+    <DropdownMenuContent align="start" className="w-[420px] min-h-[380px] p-0 flex flex-col">
             {/* Search bar ingrained at top — no card, just bar + Esc */}
             <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-transparent">
               <Search className="h-4 w-4 text-foreground-secondary flex-shrink-0" />
@@ -246,7 +218,7 @@ export default function OrganizationSwitcher({
               <button
                 type="button"
                 onClick={() => { setSearchQuery(''); setIsOpen(false); }}
-                className="flex-shrink-0 px-2 py-1 text-xs border border-border rounded text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50 transition-colors"
+                className="flex-shrink-0 px-2 py-1 text-xs border border-border rounded text-foreground-secondary hover:text-foreground hover:bg-background-subtle/75 transition-colors"
               >
                 Esc
               </button>
@@ -271,7 +243,7 @@ export default function OrganizationSwitcher({
                         <div className="group">
                           <button
                             onClick={() => handleSelectOrganization(currentOrganizationId)}
-                            className="w-full flex items-center justify-between px-3 py-2 rounded-md text-left hover:bg-background-subtle/50"
+                            className="w-full flex items-center justify-between px-3 py-2 rounded-md text-left hover:bg-background-subtle/75"
                           >
                             <div className="flex items-center gap-2 min-w-0">
                               <img
@@ -326,7 +298,7 @@ export default function OrganizationSwitcher({
                           <div key={org.id} className="group">
                             <button
                               onClick={() => handleSelectOrganization(org.id)}
-                              className="w-full flex items-center justify-between px-3 py-2 rounded-md text-left hover:bg-background-subtle/50"
+                              className="w-full flex items-center justify-between px-3 py-2 rounded-md text-left hover:bg-background-subtle/75"
                             >
                               <div className="flex items-center gap-2 min-w-0">
                                 <img
@@ -403,7 +375,7 @@ export default function OrganizationSwitcher({
                           navigate(`/invite/${invitation.id}`);
                           setIsOpen(false);
                         }}
-                        className="w-full flex items-center gap-2 px-3 py-2 rounded-md group text-left hover:bg-background-subtle/50"
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded-md group text-left hover:bg-background-subtle/75"
                       >
                         <Mail className="h-4 w-4 text-foreground-secondary group-hover:text-foreground transition-colors" />
                         <div className="flex-1 min-w-0">
@@ -424,7 +396,7 @@ export default function OrganizationSwitcher({
               <div className="border-t border-border mt-2 pt-2 px-2 pb-2">
                 <button
                   onClick={handleCreateOrganization}
-                  className="w-full flex items-center justify-start gap-2 px-3 py-2.5 text-foreground hover:bg-background-subtle/50 rounded-md transition-colors group text-left"
+                  className="w-full flex items-center justify-start gap-2 px-3 py-2.5 text-foreground hover:bg-background-subtle/75 rounded-md transition-colors group text-left"
                 >
                   <Plus className="h-4 w-4 flex-shrink-0 text-foreground" />
                   <div className="flex flex-col items-start min-w-0">
@@ -435,9 +407,60 @@ export default function OrganizationSwitcher({
                   </div>
                 </button>
               </div>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+    </DropdownMenuContent>
+  );
+
+  return (
+    <>
+      {triggerVariant === 'full' ? (
+        <div className="flex items-center gap-2 w-full pl-2 pr-0.5 py-2">
+          <img
+            src={currentOrganizationAvatarUrl || '/images/org_profile.png'}
+            alt=""
+            className="h-7 w-7 rounded-full object-cover flex-shrink-0 bg-transparent"
+          />
+          <span className="text-sm font-semibold text-foreground truncate flex-1 min-w-0">
+            {currentOrganizationName}
+          </span>
+          <div className="flex items-center gap-0.5 flex-shrink-0">
+            {currentOrganizationRole && (
+              <RoleBadge
+                role={currentOrganizationRole}
+                roleDisplayName={currentOrganizationRoleDisplayName}
+                roleColor={currentOrganizationRoleColor}
+              />
+            )}
+            <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="h-6 w-6 flex items-center justify-center rounded hover:bg-background-subtle/75 transition-colors outline-none border-0 focus-visible:outline-none focus-visible:ring-0"
+                >
+                  <ChevronsUpDown className="h-4 w-4 text-foreground-secondary" />
+                </button>
+              </DropdownMenuTrigger>
+              {dropdownContent}
+            </DropdownMenu>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2">
+          {showOrgName && (
+            <span className="text-foreground font-medium">{currentOrganizationName}</span>
+          )}
+          <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="org-switcher-trigger flex items-center justify-center p-1 -ml-1.5 rounded hover:bg-background-subtle/75 transition-colors outline-none border-0 focus:outline-none focus:ring-0 focus:border-0 focus-visible:outline-none focus-visible:ring-0"
+              >
+                <ChevronsUpDown className="h-4 w-4 text-foreground-secondary hover:text-foreground transition-colors" />
+              </button>
+            </DropdownMenuTrigger>
+            {dropdownContent}
+          </DropdownMenu>
+        </div>
+      )}
 
       <CreateOrganizationModal
         isOpen={isCreateModalOpen}
