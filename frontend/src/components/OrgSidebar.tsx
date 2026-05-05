@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -16,6 +16,15 @@ import {
   ChevronLeft,
   ChevronRight,
   Search,
+  SquarePen,
+  MoreHorizontal,
+  Zap,
+  Pencil,
+  Trash2,
+  Pin,
+  PinOff,
+  Archive,
+  ArchiveRestore,
 } from 'lucide-react';
 
 import {
@@ -49,7 +58,9 @@ import OrganizationSwitcher from './OrganizationSwitcher';
 import FeedbackPopover from './FeedbackPopover';
 import { cn } from '../lib/utils';
 import { api, Organization, RolePermissions } from '../lib/api';
+import { aegisApi, AegisThread } from '../lib/aegis-api';
 import { useToast } from '../hooks/use-toast';
+import { ThreadIcon } from './aegis/ThreadIcon';
 import {
   buildOrgSettingsSections,
   computeEffectiveOrgPermissions,
@@ -77,7 +88,7 @@ type NavItemDef = {
 
 const allNavItems: NavItemDef[] = [
   { id: 'overview', label: 'Overview', path: 'overview', icon: LayoutDashboard, requiredPermission: null },
-  { id: 'aegis', label: 'Aegis', path: 'aegis', icon: MessageSquare, requiredPermission: 'interact_with_aegis' },
+  { id: 'aegis', label: 'Aegis', path: 'aegis', icon: MessageSquare, requiredPermission: 'interact_with_aegis', drilldown: true },
   { id: 'vulnerabilities', label: 'Vulnerabilities', path: 'vulnerabilities', icon: ShieldAlert, requiredPermission: null },
   { id: 'compliance', label: 'Compliance', path: 'compliance', icon: Scale, requiredPermission: null },
   { id: 'flows', label: 'Flows', path: 'flows', icon: Workflow, requiredPermission: null },
@@ -168,6 +179,213 @@ export default function OrgSidebar({
     return parts[3] || 'general';
   }, [inSettings, location.pathname]);
 
+  const inAegis = useMemo(() => {
+    const parts = location.pathname.split('/').filter(Boolean);
+    return parts[0] === 'organizations' && parts[1] === organizationId && parts[2] === 'aegis';
+  }, [location.pathname, organizationId]);
+
+  const activeAegisThreadId = useMemo(() => {
+    if (!inAegis) return null;
+    const parts = location.pathname.split('/').filter(Boolean);
+    const seg = parts[3];
+    return seg && seg !== 'routines' ? seg : null;
+  }, [inAegis, location.pathname]);
+
+  const aegisRoutinesActive = useMemo(() => {
+    if (!inAegis) return false;
+    const parts = location.pathname.split('/').filter(Boolean);
+    return parts[3] === 'routines';
+  }, [inAegis, location.pathname]);
+
+  const canUseAegis = userPermissions?.interact_with_aegis === true;
+
+  const [aegisThreads, setAegisThreads] = useState<AegisThread[]>([]);
+  const [aegisThreadsLoading, setAegisThreadsLoading] = useState(false);
+  const [aegisEditingId, setAegisEditingId] = useState<string | null>(null);
+  const [aegisDraftTitle, setAegisDraftTitle] = useState('');
+  const [aegisConfirmDeleteId, setAegisConfirmDeleteId] = useState<string | null>(null);
+  const [aegisDeleting, setAegisDeleting] = useState(false);
+
+  const refreshAegisThreads = useCallback(async () => {
+    if (!organizationId) return;
+    try {
+      const list = await aegisApi.listThreads(organizationId);
+      setAegisThreads(list);
+    } catch {
+      setAegisThreads([]);
+    }
+  }, [organizationId]);
+
+  useEffect(() => {
+    if (!inAegis || !canUseAegis) {
+      setAegisThreads([]);
+      return;
+    }
+    let cancelled = false;
+    setAegisThreadsLoading(true);
+    refreshAegisThreads().then(() => {
+      if (!cancelled) setAegisThreadsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [inAegis, canUseAegis, refreshAegisThreads]);
+
+  useEffect(() => {
+    const handler = () => { if (inAegis && canUseAegis) void refreshAegisThreads(); };
+    window.addEventListener('aegis:threadListChanged', handler);
+    return () => window.removeEventListener('aegis:threadListChanged', handler);
+  }, [inAegis, canUseAegis, refreshAegisThreads]);
+
+  const handleAegisRename = useCallback(async (threadId: string, title: string) => {
+    let prev: AegisThread | undefined;
+    setAegisThreads((ts) => {
+      prev = ts.find((t) => t.id === threadId);
+      return ts.map((t) => (t.id === threadId ? { ...t, title } : t));
+    });
+    try {
+      await aegisApi.renameThread(threadId, title);
+      window.dispatchEvent(new CustomEvent('aegis:threadListChanged'));
+    } catch {
+      if (prev) setAegisThreads((ts) => ts.map((t) => (t.id === threadId ? prev! : t)));
+      toast({ title: 'Rename failed', variant: 'destructive' });
+    }
+  }, [toast]);
+
+  const handleAegisSetPinned = useCallback(async (threadId: string, pinned: boolean) => {
+    const now = new Date().toISOString();
+    let snapshot: AegisThread[] = [];
+    setAegisThreads((ts) => { snapshot = ts; return ts.map((t) => (t.id === threadId ? { ...t, pinnedAt: pinned ? now : null } : t)); });
+    try {
+      await aegisApi.setThreadPinned(threadId, pinned);
+      window.dispatchEvent(new CustomEvent('aegis:threadListChanged'));
+    } catch {
+      setAegisThreads(snapshot);
+      toast({ title: pinned ? 'Pin failed' : 'Unpin failed', variant: 'destructive' });
+    }
+  }, [toast]);
+
+  const handleAegisSetArchived = useCallback(async (threadId: string, archived: boolean) => {
+    const now = new Date().toISOString();
+    let snapshot: AegisThread[] = [];
+    setAegisThreads((ts) => { snapshot = ts; return ts.map((t) => (t.id === threadId ? { ...t, archivedAt: archived ? now : null } : t)); });
+    if (archived && activeAegisThreadId === threadId) navigate(`/organizations/${organizationId}/aegis`);
+    try {
+      await aegisApi.setThreadArchived(threadId, archived);
+      window.dispatchEvent(new CustomEvent('aegis:threadListChanged'));
+    } catch {
+      setAegisThreads(snapshot);
+      toast({ title: archived ? 'Archive failed' : 'Unarchive failed', variant: 'destructive' });
+    }
+  }, [activeAegisThreadId, organizationId, navigate, toast]);
+
+  const handleAegisDelete = useCallback(async () => {
+    const threadId = aegisConfirmDeleteId;
+    if (!threadId) return;
+    let snapshot: AegisThread[] = [];
+    setAegisThreads((ts) => { snapshot = ts; return ts.filter((t) => t.id !== threadId); });
+    if (activeAegisThreadId === threadId) navigate(`/organizations/${organizationId}/aegis`);
+    setAegisDeleting(true);
+    try {
+      await aegisApi.deleteThread(threadId);
+      setAegisConfirmDeleteId(null);
+      window.dispatchEvent(new CustomEvent('aegis:threadListChanged'));
+    } catch {
+      setAegisThreads(snapshot);
+      toast({ title: 'Delete failed', variant: 'destructive' });
+    } finally {
+      setAegisDeleting(false);
+    }
+  }, [aegisConfirmDeleteId, activeAegisThreadId, organizationId, navigate, toast]);
+
+  const commitAegisRename = () => {
+    if (!aegisEditingId) return;
+    const title = aegisDraftTitle.trim();
+    const id = aegisEditingId;
+    setAegisEditingId(null);
+    if (!title) return;
+    void handleAegisRename(id, title);
+  };
+
+  const { aegisPinned, aegisRecents } = useMemo(() => {
+    const pinned = aegisThreads.filter((t) => t.pinnedAt && !t.archivedAt);
+    const recents = aegisThreads.filter((t) => !t.pinnedAt && !t.archivedAt);
+    pinned.sort((a, b) => (b.pinnedAt ?? '').localeCompare(a.pinnedAt ?? ''));
+    recents.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return { aegisPinned: pinned, aegisRecents: recents };
+  }, [aegisThreads]);
+
+  const renderAegisThread = (thread: AegisThread) => {
+    const isActive = thread.id === activeAegisThreadId;
+    const isEditing = thread.id === aegisEditingId;
+    const isPinned = !!thread.pinnedAt;
+    const isArchived = !!thread.archivedAt;
+    return (
+      <SidebarMenuItem key={thread.id}>
+        <div className="relative group w-full">
+          {isEditing ? (
+            <input
+              autoFocus
+              value={aegisDraftTitle}
+              onChange={(e) => setAegisDraftTitle(e.target.value)}
+              onBlur={commitAegisRename}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); commitAegisRename(); }
+                else if (e.key === 'Escape') { e.preventDefault(); setAegisEditingId(null); }
+              }}
+              className="w-full bg-background-subtle px-3 py-2 text-sm text-foreground rounded-md border-0 ring-1 ring-border outline-none focus:ring-1 focus:!ring-foreground/30"
+            />
+          ) : (
+            <SidebarMenuButton
+              isActive={isActive}
+              onClick={() => navigate(`/organizations/${organizationId}/aegis/${thread.id}`)}
+            >
+              <ThreadIcon fixStatus={thread.fixStatus} />
+              <span className="truncate flex-1 min-w-0">{thread.title}</span>
+            </SidebarMenuButton>
+          )}
+          {!isEditing && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6 flex items-center justify-center rounded text-foreground/60 hover:text-foreground opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity z-10"
+                  onClick={(e) => e.stopPropagation()}
+                  aria-label="Thread actions"
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-40">
+                {thread.isCreator && (
+                  <DropdownMenuItem onClick={() => { setAegisEditingId(thread.id); setAegisDraftTitle(thread.title); }}>
+                    <Pencil className="h-4 w-4 mr-2" />
+                    Rename
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onClick={() => void handleAegisSetPinned(thread.id, !isPinned)}>
+                  {isPinned ? <PinOff className="h-4 w-4 mr-2" /> : <Pin className="h-4 w-4 mr-2" />}
+                  {isPinned ? 'Unpin' : 'Pin'}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => void handleAegisSetArchived(thread.id, !isArchived)}>
+                  {isArchived ? <ArchiveRestore className="h-4 w-4 mr-2" /> : <Archive className="h-4 w-4 mr-2" />}
+                  {isArchived ? 'Unarchive' : 'Archive'}
+                </DropdownMenuItem>
+                {thread.isCreator && (
+                  <DropdownMenuItem
+                    className="text-red-500 focus:text-red-500"
+                    onClick={() => setAegisConfirmDeleteId(thread.id)}
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
+      </SidebarMenuItem>
+    );
+  };
+
   const effectivePerms = useMemo(
     () => computeEffectiveOrgPermissions(organization?.role, userPermissions ?? null),
     [organization?.role, userPermissions],
@@ -245,77 +463,161 @@ export default function OrgSidebar({
           </button>
         </div>
 
-        <SidebarContent>
-          <div className="relative">
-            {/* Main nav — fades out left when entering settings */}
-            <div className={cn(
-              'transition-[opacity,transform] duration-150 ease-out',
-              inSettings ? 'opacity-0 -translate-x-2 pointer-events-none' : 'opacity-100 translate-x-0'
-            )}>
-              <SidebarGroup>
-                <SidebarGroupContent>
-                  <SidebarMenu>
-                    {visibleNavItems.map((item) => {
-                      const Icon = item.icon;
-                      const isActive = activeNavId === item.id;
-                      return (
-                        <SidebarMenuItem key={item.id}>
-                          <SidebarMenuButton
-                            isActive={isActive}
-                            onClick={() => handleNavClick(item.path)}
-                            aria-current={isActive ? 'page' : undefined}
-                          >
-                            <Icon className="tab-icon-shake" />
-                            <span>{item.label}</span>
-                            {item.drilldown && (
-                              <ChevronRight className="ml-auto h-3.5 w-3.5 text-foreground-secondary flex-shrink-0" />
-                            )}
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-                      );
-                    })}
-                  </SidebarMenu>
-                </SidebarGroupContent>
-              </SidebarGroup>
-            </div>
+        <SidebarContent className="relative">
+          {/* Main nav — fades out left when entering any drilldown */}
+          <div className={cn(
+            'transition-[opacity,transform] duration-150 ease-out',
+            (inSettings || inAegis)
+              ? 'absolute top-0 inset-x-0 opacity-0 -translate-x-2 pointer-events-none'
+              : 'opacity-100 translate-x-0'
+          )}>
+            <SidebarGroup>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {visibleNavItems.map((item) => {
+                    const Icon = item.icon;
+                    const isActive = activeNavId === item.id;
+                    return (
+                      <SidebarMenuItem key={item.id}>
+                        <SidebarMenuButton
+                          isActive={isActive}
+                          onClick={() => handleNavClick(item.path)}
+                          aria-current={isActive ? 'page' : undefined}
+                        >
+                          <Icon className="tab-icon-shake" />
+                          <span>{item.label}</span>
+                          {item.drilldown && (
+                            <ChevronRight className="ml-auto h-3.5 w-3.5 text-foreground-secondary flex-shrink-0" />
+                          )}
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    );
+                  })}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          </div>
 
-            {/* Settings nav — fades in from right */}
-            <div className={cn(
-              'absolute top-0 left-0 w-full transition-[opacity,transform] duration-150 ease-out',
-              inSettings ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-2 pointer-events-none'
-            )}>
+          {/* Settings nav — fades in from right */}
+          <div className={cn(
+            'absolute top-0 inset-x-0 transition-[opacity,transform] duration-150 ease-out',
+            inSettings ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-2 pointer-events-none'
+          )}>
+            <SidebarGroup>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <button
+                      onClick={handleBackFromSettings}
+                      className="nav-btn relative w-full flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium text-foreground-secondary hover:bg-background-subtle/75 hover:text-foreground transition-colors"
+                    >
+                      <ChevronLeft className="absolute left-3 h-5 w-5 tab-icon-shake" />
+                      <span>Settings</span>
+                    </button>
+                  </SidebarMenuItem>
+                  {settingsGroups.flatMap((group) => group.items).map((item) => {
+                    const isActive = settingsActiveSection === item.id;
+                    return (
+                      <SidebarMenuItem key={item.id}>
+                        <SidebarMenuButton
+                          isActive={isActive}
+                          onClick={() => handleSettingsItemClick(item.id)}
+                          aria-current={isActive ? 'page' : undefined}
+                        >
+                          {item.icon}
+                          <span>{item.label}</span>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    );
+                  })}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          </div>
+
+          {/* Aegis nav — conditionally rendered, in-flow so thread list scrolls properly */}
+          {inAegis && (
+            <div className="animate-in fade-in slide-in-from-right-2 duration-150">
               <SidebarGroup>
                 <SidebarGroupContent>
                   <SidebarMenu>
                     <SidebarMenuItem>
                       <button
-                        onClick={handleBackFromSettings}
+                        onClick={() => navigate(`/organizations/${organizationId}`)}
                         className="nav-btn relative w-full flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium text-foreground-secondary hover:bg-background-subtle/75 hover:text-foreground transition-colors"
                       >
                         <ChevronLeft className="absolute left-3 h-5 w-5 tab-icon-shake" />
-                        <span>Settings</span>
+                        <span>Aegis</span>
                       </button>
                     </SidebarMenuItem>
-                    {settingsGroups.flatMap((group) => group.items).map((item) => {
-                      const isActive = settingsActiveSection === item.id;
-                      return (
-                        <SidebarMenuItem key={item.id}>
-                          <SidebarMenuButton
-                            isActive={isActive}
-                            onClick={() => handleSettingsItemClick(item.id)}
-                            aria-current={isActive ? 'page' : undefined}
-                          >
-                            {item.icon}
-                            <span>{item.label}</span>
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-                      );
-                    })}
+                    <SidebarMenuItem>
+                      <SidebarMenuButton
+                        isActive={inAegis && !activeAegisThreadId && !aegisRoutinesActive}
+                        onClick={() => navigate(`/organizations/${organizationId}/aegis`)}
+                      >
+                        <SquarePen className="tab-icon-shake" />
+                        <span>New chat</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                    <SidebarMenuItem>
+                      <SidebarMenuButton
+                        isActive={aegisRoutinesActive}
+                        onClick={() => navigate(`/organizations/${organizationId}/aegis/routines`)}
+                      >
+                        <Zap className="tab-icon-shake" />
+                        <span>Routines</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                    <SidebarMenuItem>
+                      <SidebarMenuButton
+                        onClick={() => window.dispatchEvent(new CustomEvent('aegis:openSearch'))}
+                      >
+                        <Search className="tab-icon-shake" />
+                        <span>Search chats</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
                   </SidebarMenu>
                 </SidebarGroupContent>
               </SidebarGroup>
+
+              {aegisThreadsLoading && aegisThreads.length === 0 && (
+                <SidebarGroup>
+                  <SidebarGroupContent>
+                    {[160, 112, 144, 96].map((w, i) => (
+                      <div key={i} className="px-3 py-2" style={{ opacity: 1 - i * 0.18 }}>
+                        <div
+                          className="h-3 rounded bg-foreground/[0.08] animate-pulse"
+                          style={{ width: w, animationDelay: `${i * 80}ms` }}
+                        />
+                      </div>
+                    ))}
+                  </SidebarGroupContent>
+                </SidebarGroup>
+              )}
+
+              {aegisPinned.length > 0 && (
+                <SidebarGroup>
+                  <SidebarGroupLabel>Pinned</SidebarGroupLabel>
+                  <SidebarGroupContent>
+                    <SidebarMenu>
+                      {aegisPinned.map(renderAegisThread)}
+                    </SidebarMenu>
+                  </SidebarGroupContent>
+                </SidebarGroup>
+              )}
+
+              {aegisRecents.length > 0 && (
+                <SidebarGroup>
+                  <SidebarGroupLabel>Recents</SidebarGroupLabel>
+                  <SidebarGroupContent>
+                    <SidebarMenu>
+                      {aegisRecents.map(renderAegisThread)}
+                    </SidebarMenu>
+                  </SidebarGroupContent>
+                </SidebarGroup>
+              )}
             </div>
-          </div>
+          )}
         </SidebarContent>
 
         {user != null && (
@@ -429,6 +731,39 @@ export default function OrgSidebar({
       </Sidebar>
 
       <FeedbackPopover open={feedbackOpen} onOpenChange={setFeedbackOpen} hideTrigger />
+
+      <Dialog
+        open={!!aegisConfirmDeleteId}
+        onOpenChange={(open) => { if (!open && !aegisDeleting) setAegisConfirmDeleteId(null); }}
+      >
+        <DialogContent
+          hideClose
+          className="sm:max-w-[420px] bg-background p-0 gap-0 overflow-hidden"
+        >
+          <div className="px-6 pt-6 pb-4">
+            <DialogTitle>Delete chat?</DialogTitle>
+            <DialogDescription className="mt-1">
+              This will permanently delete the thread and its messages. This cannot be undone.
+            </DialogDescription>
+          </div>
+          <DialogFooter className="px-6 py-4 border-t border-border bg-background flex items-center justify-between">
+            <Button
+              variant="outline"
+              onClick={() => setAegisConfirmDeleteId(null)}
+              disabled={aegisDeleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleAegisDelete}
+              disabled={aegisDeleting}
+            >
+              {aegisDeleting ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Delete</> : 'Delete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={showCreateTeamModal}
