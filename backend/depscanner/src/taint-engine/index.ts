@@ -39,6 +39,36 @@ export type { LoadCveSpecsOptions, LoadCveSpecsResult } from './cve-specs';
 
 export type { Flow, FlowNode, SinkHit, TaintTrace } from './flow';
 
+export {
+  filterFlow,
+  parseTriple,
+  buildPrompt,
+  buildCandidateSanitizers,
+  validateSanitizerLine,
+  wasTruncated,
+  estimatePerFlowCostUsd,
+  createUsageLogger,
+  FP_FILTER_PROMPT_VERSION,
+} from './fp-filter';
+export type {
+  FilterTriple,
+  FilterErrorVerdict,
+  TripleResult,
+  ParsedTriple,
+  SanitizationVerdict,
+  EndpointVerdict,
+  EndpointClassification,
+  CandidateSanitizer,
+  FilterFlowOptions,
+  AiUsageLogger,
+} from './fp-filter';
+
+export {
+  HIDE_BELOW,
+  UNCERTAIN_UPPER,
+  MAX_VOTE_THRESHOLD,
+} from './confidence-thresholds';
+
 export type { IrFunction, Step, LocalVar, SourceLocation, CalleeRef } from './ir';
 export { lowerFunction } from './ir';
 

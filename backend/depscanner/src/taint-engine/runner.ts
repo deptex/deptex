@@ -39,7 +39,7 @@ import {
   filterFlow,
   estimatePerFlowCostUsd,
   createUsageLogger,
-  type FilterResult,
+  type TripleResult,
 } from './fp-filter';
 import type { Storage } from '../storage';
 
@@ -155,7 +155,9 @@ export interface AiFilterStats {
   /** Aggregate USD spend across this run's filter calls. */
   costUsd: number;
   /** Per-flow verdict map keyed by Flow.id, for storage embedding. */
-  verdicts: Map<string, FilterResult>;
+  verdicts: Map<string, TripleResult>;
+  /** Flows the model truncated (Patch 7 / max_tokens overflow). */
+  flowsTruncated: number;
   durationMs: number;
 }
 
@@ -308,6 +310,7 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
       propagation.flows,
       options.fpFilter,
       workspaceRoot,
+      specs,
       onWarn,
     );
     aiFilter = result.stats;
@@ -338,6 +341,7 @@ async function runFpFilterStage(
   flows: Flow[],
   fp: FpFilterContext,
   workspaceRoot: string,
+  specs: FrameworkSpec[],
   onWarn?: (msg: string) => void,
 ): Promise<FpFilterStageOutput> {
   const start = Date.now();
@@ -352,6 +356,7 @@ async function runFpFilterStage(
     flowsKeptOnError: 0,
     costUsd: 0,
     verdicts: new Map(),
+    flowsTruncated: 0,
     durationMs: 0,
   };
 
@@ -426,11 +431,11 @@ async function runFpFilterStage(
   }, onWarn);
 
   // Sequential calls so we don't overwhelm the rate limit on huge batches.
-  // ~25s timeout per call; for ≤100 flows the M7 perf budget allows this.
+  // ~60s timeout per call; for ≤100 flows the M7 perf budget allows this.
   const surviving: Flow[] = [...above];
   for (const f of below) {
     const result = await filterFlow(
-      { flow: f, workspaceRoot, apiKey, model: fp.model, onWarn },
+      { flow: f, workspaceRoot, apiKey, model: fp.model, specs, onWarn },
       logger,
       {
         organizationId: fp.organizationId,
@@ -440,8 +445,12 @@ async function runFpFilterStage(
       },
     );
     baseStats.verdicts.set(f.id, result);
-    if (result.verdict === 'kept_on_error') {
-      baseStats.flowsKeptOnError++;
+    if (result.verdict === 'kept_on_error' || result.verdict === 'ai_truncated') {
+      // Both error paths keep the flow but feed a synthetic ai_filter_verdict
+      // node downstream so the M5 aggregator can EXCLUDE the flow from the
+      // MAX vote (status precedence: ai_truncated > kept_on_error).
+      if (result.verdict === 'ai_truncated') baseStats.flowsTruncated++;
+      else baseStats.flowsKeptOnError++;
       baseStats.costUsd += result.costUsd;
       surviving.push(f);
       continue;

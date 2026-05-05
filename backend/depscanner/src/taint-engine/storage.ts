@@ -45,7 +45,11 @@ import { createHash } from 'crypto';
 import * as path from 'path';
 import type { Storage } from '../storage';
 import type { Flow } from './flow';
-import type { FilterResult } from './fp-filter';
+import type { FilterTriple, TripleResult } from './fp-filter';
+
+function isFilterTriple(v: TripleResult): v is FilterTriple {
+  return v.verdict === 'kept' || v.verdict === 'rejected';
+}
 
 const FLOW_BATCH_SIZE = 100;
 
@@ -79,12 +83,26 @@ export interface WriteFlowsOptions {
    */
   resolveDep?: (flow: Flow) => ResolvedDep | null;
   /**
-   * Optional per-flow AI filter verdicts (M7). Embedded into the
-   * flow_nodes JSONB so admins can see why a borderline flow survived
-   * (or, for rejected flows, this map skips them entirely upstream and
-   * we never see them here). Keyed by Flow.id.
+   * Optional per-flow AI filter verdicts (M7 → M4 triple). Embedded into the
+   * flow_nodes JSONB so admins can see why a borderline flow survived (or,
+   * for rejected flows, this map skips them entirely upstream and we never
+   * see them here). Keyed by Flow.id.
+   *
+   * Phase 6.5 / M4 expands one synthetic node into THREE:
+   *   - ai_filter_verdict      — keep/reject/kept_on_error/ai_truncated
+   *   - ai_sanitization_verdict — is_sanitized + reasoning + sanitizer_line + confidence
+   *   - ai_endpoint_verdict     — classification + reasoning
+   * All carry `synthetic: true` so revert paths and frontend filters can
+   * distinguish AI-generated nodes from real hops.
+   *
+   * Status precedence (locked, also documented at top of fp-filter.ts and
+   * planned for top of epd.ts when M5 lands):
+   *   'ai_truncated' > 'kept_on_error' > '_anthropic_fallback_failed' >
+   *   '_anthropic_fallback_skipped_cost_cap' >
+   *   '_anthropic_fallback_skipped_burn_breaker' > '_anthropic_fallback' >
+   *   'flow_aggregated'
    */
-  filterVerdicts?: Map<string, FilterResult>;
+  filterVerdicts?: Map<string, TripleResult>;
   /**
    * Phase 6.5 — workspace clone root, used to strip the random clone-dir
    * prefix from file paths before they're hashed into flow_signature_hash.
@@ -114,30 +132,55 @@ export async function writeFlows(
   for (const flow of flows) {
     const dep = resolveDep(flow);
     if (!dep) continue;
-    // Embed AI filter verdict (M7.5) into the JSONB so admins can see why
-    // a borderline flow survived. We append a synthetic node rather than
-    // adding a top-level column (keeps the project_reachable_flows schema
-    // identical between engine + atom + reachability_rules sources).
+    // Embed AI verdict triple (M4) into the JSONB so admins can see why a
+    // borderline flow survived. We append synthetic nodes rather than
+    // adding top-level columns (keeps the project_reachable_flows schema
+    // identical between engine + atom + reachability_rules sources). For
+    // error paths (kept_on_error / ai_truncated) only the ai_filter_verdict
+    // node is appended — sanitization + endpoint signals are unavailable.
     const v = verdicts?.get(flow.id);
     let flowNodesWithVerdict: unknown = flow.flow_nodes;
     if (v) {
-      flowNodesWithVerdict = [
-        ...flow.flow_nodes,
-        v.verdict === 'kept_on_error'
-          ? {
-              kind: 'ai_filter_verdict',
-              verdict: 'kept_on_error',
-              reasoning: v.reasoning,
-              error_message: v.errorMessage,
-            }
-          : {
-              kind: 'ai_filter_verdict',
-              verdict: v.verdict,
-              reasoning: v.reasoning,
-              confidence: v.confidence,
-              model: v.model,
-            },
-      ];
+      const appended: unknown[] = [...flow.flow_nodes];
+      if (isFilterTriple(v)) {
+        appended.push({
+          kind: 'ai_filter_verdict',
+          verdict: v.verdict,
+          reasoning: v.verdict_reasoning,
+          confidence: v.verdict_confidence,
+          model: v.model,
+          synthetic: true,
+        });
+        appended.push({
+          kind: 'ai_sanitization_verdict',
+          is_sanitized: v.sanitization.is_sanitized,
+          reasoning: v.sanitization.reasoning,
+          sanitizer_line: v.sanitization.sanitizer_line,
+          confidence: v.sanitization.confidence,
+          model: v.model,
+          synthetic: true,
+        });
+        appended.push({
+          kind: 'ai_endpoint_verdict',
+          classification: v.endpoint.classification,
+          reasoning: v.endpoint.reasoning,
+          model: v.model,
+          synthetic: true,
+        });
+      } else {
+        // kept_on_error | ai_truncated — only the error-shaped synthetic node.
+        appended.push({
+          kind: 'ai_filter_verdict',
+          verdict: v.verdict,
+          reasoning: v.reasoning,
+          error_message: v.errorMessage,
+          // M5 aggregator filters on epd_status; mirror the verdict so the
+          // status precedence ordering is readable from a single field.
+          epd_status: v.verdict,
+          synthetic: true,
+        });
+      }
+      flowNodesWithVerdict = appended;
     }
     rows.push({
       project_id: projectId,
