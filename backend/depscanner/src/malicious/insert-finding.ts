@@ -10,8 +10,17 @@
 import type { Storage } from '../storage';
 import type { GuardDogRule } from './guarddog';
 import type { FeedHit } from './feeds';
+import type { ReachabilityLevel, ReachabilityDetails } from './reachability';
 
 export type FindingSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+
+/**
+ * Scanner sources for malicious-package findings:
+ *  - 'feed': OSV / GHSA / OSSF malware feed match (v1)
+ *  - 'guarddog': GuardDog source-heuristic rules (v1)
+ *  - 'maintainer': maintainer / account-takeover signals (M1c)
+ */
+export type MaliciousScanner = 'feed' | 'guarddog' | 'maintainer';
 
 export interface PendingFinding {
   project_id: string;
@@ -20,10 +29,18 @@ export interface PendingFinding {
   project_dependency_id: string;
   dependency_id: string;
   rule_id: string;
-  scanner: 'feed' | 'guarddog';
+  scanner: MaliciousScanner;
   severity: FindingSeverity;
   message: string | null;
   depscore: number | null;
+  /**
+   * v2: per-finding reachability classification computed by
+   * `computeReachability()` against the workspace tree-sitter index.
+   * Null when the finding's package isn't classifiable (e.g. compute
+   * threw — soft-fail) or when the resolver hasn't run for this row.
+   */
+  reachability_level?: ReachabilityLevel | null;
+  reachability_details?: ReachabilityDetails | { error: string; message?: string } | null;
 }
 
 export function severityForFeed(hit: FeedHit): FindingSeverity {

@@ -3,6 +3,7 @@ import { Sparkles, ShieldAlert, Loader2 } from 'lucide-react';
 import { api, type MaliciousFinding } from '../../lib/api';
 import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
+import { ReachabilityBadge, type MaliciousReachabilityLevel } from './ReachabilityBadge';
 
 interface MaliciousFindingCardProps {
   organizationId: string;
@@ -79,8 +80,12 @@ export function MaliciousFindingCard({
             {finding.severity.toUpperCase()}
           </span>
           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-500/10 text-purple-300 border border-purple-500/20">
-            {finding.scanner === 'feed' ? 'Feed match' : 'GuardDog'}
+            {finding.scanner === 'feed' ? 'Feed match' : finding.scanner === 'maintainer' ? 'Maintainer signal' : 'GuardDog'}
           </span>
+          <ReachabilityBadge
+            level={(finding.reachability_level ?? null) as MaliciousReachabilityLevel | null}
+            details={finding.reachability_details}
+          />
           {finding.package_name && (
             <span className="text-[11px] text-foreground-secondary font-mono">
               {finding.package_name}@{finding.package_version} ({finding.ecosystem})

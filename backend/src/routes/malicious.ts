@@ -50,24 +50,56 @@ router.get('/:id/projects/:projectId/malicious-findings', async (req: AuthReques
     const perPage = Math.min(200, Math.max(1, parseInt(String(req.query.per_page ?? '50'), 10) || 50));
     const offset = (page - 1) * perPage;
 
+    // ?reachability= filter — single value or comma-separated list. The
+    // sentinel 'unknown' selects rows where reachability_level IS NULL
+    // (resolver soft-failed or pre-v2 rows). All other values must be one
+    // of the canonical levels; unrecognised values are silently dropped
+    // so a malformed URL doesn't 500 the page.
+    const VALID_LEVELS = ['function', 'module', 'imported_unused', 'unimported'];
+    const requested = String(req.query.reachability ?? '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    const reachabilityLevels = requested.filter(s => VALID_LEVELS.includes(s));
+    const includeUnknown = requested.includes('unknown');
+
     const activeExtractionId = await getActiveExtractionId(supabase, projectId);
 
-    const { count } = await supabase
-      .from('project_malicious_findings')
-      .select('id', { count: 'exact', head: true })
-      .eq('project_id', projectId)
-      .eq('organization_id', id)
-      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
+    const applyReachabilityFilter = <T extends { or: any; in: any; is: any }>(q: T): T => {
+      if (reachabilityLevels.length > 0 && includeUnknown) {
+        // mix of "function,unknown" — OR clause across the list + null check
+        const inList = reachabilityLevels.map(l => `"${l}"`).join(',');
+        return q.or(`reachability_level.in.(${inList}),reachability_level.is.null`);
+      }
+      if (reachabilityLevels.length > 0) {
+        return q.in('reachability_level', reachabilityLevels);
+      }
+      if (includeUnknown) {
+        return q.is('reachability_level', null);
+      }
+      return q;
+    };
 
-    const { data, error } = await supabase
-      .from('project_malicious_findings')
-      .select('*')
-      .eq('project_id', projectId)
-      .eq('organization_id', id)
-      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
-      .order('severity', { ascending: true })
-      .order('created_at', { ascending: false })
-      .range(offset, offset + perPage - 1);
+    const { count } = await applyReachabilityFilter(
+      supabase
+        .from('project_malicious_findings')
+        .select('id', { count: 'exact', head: true })
+        .eq('project_id', projectId)
+        .eq('organization_id', id)
+        .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
+    );
+
+    const { data, error } = await applyReachabilityFilter(
+      supabase
+        .from('project_malicious_findings')
+        .select('*')
+        .eq('project_id', projectId)
+        .eq('organization_id', id)
+        .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
+        .order('severity', { ascending: true })
+        .order('created_at', { ascending: false })
+        .range(offset, offset + perPage - 1)
+    );
 
     if (error) throw error;
 

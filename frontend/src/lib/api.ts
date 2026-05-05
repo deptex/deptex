@@ -2123,9 +2123,16 @@ export const api = {
       organizationId: string,
       projectId: string,
       page = 1,
-      perPage = 50
+      perPage = 50,
+      filters?: { reachability?: MaliciousReachabilityLevel | 'unknown' | null }
     ): Promise<PaginatedResponse<MaliciousFinding>> {
-      return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/malicious-findings?page=${page}&per_page=${perPage}`);
+      const qs = new URLSearchParams();
+      qs.set('page', String(page));
+      qs.set('per_page', String(perPage));
+      if (filters?.reachability) qs.set('reachability', filters.reachability);
+      return fetchWithAuth(
+        `/api/organizations/${organizationId}/projects/${projectId}/malicious-findings?${qs.toString()}`
+      );
     },
     async get(
       organizationId: string,
@@ -4295,7 +4302,7 @@ export interface ScannerSummary {
   skipped_images: Array<{ image: string; reason: string }>;
 }
 
-export type MaliciousScanner = 'feed' | 'guarddog';
+export type MaliciousScanner = 'feed' | 'guarddog' | 'maintainer';
 export type MaliciousSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 
 /**
@@ -4318,6 +4325,27 @@ export interface MaliciousAllowlistEntry {
   added_by_email: string;
   added_at: string;
   revoked_at: string | null;
+}
+
+/**
+ * Malicious-package reachability classification (v2). Distinct from the
+ * vulnerability ReachabilityLevel because malicious findings use a
+ * lightweight per-package callgraph, not the full taint engine.
+ */
+export type MaliciousReachabilityLevel =
+  | 'unimported'
+  | 'imported_unused'
+  | 'module'
+  | 'function';
+
+export interface MaliciousReachabilityDetails {
+  entry_points?: string[];
+  call_chain?: string[];
+  sink_file?: string;
+  sink_line?: number;
+  /** Set on soft-fail when the resolver threw — level will be null. */
+  error?: string;
+  message?: string;
 }
 
 export interface MaliciousFinding {
@@ -4347,6 +4375,9 @@ export interface MaliciousFinding {
   evidence?: { file_path: string; lines: [number, number]; snippet: string }[];
   ai_narrative?: string | null;
   ai_narrative_cached_at?: string | null;
+  reachability_level?: MaliciousReachabilityLevel | null;
+  reachability_details?: MaliciousReachabilityDetails | null;
+  reachability_computed_at?: string | null;
 }
 
 export interface VulnerabilityEvent {
