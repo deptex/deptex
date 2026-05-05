@@ -14,6 +14,8 @@ import {
   Loader2,
   Plus,
   ChevronLeft,
+  ChevronRight,
+  Search,
 } from 'lucide-react';
 
 import {
@@ -45,6 +47,7 @@ import {
 import { Button } from './ui/button';
 import OrganizationSwitcher from './OrganizationSwitcher';
 import FeedbackPopover from './FeedbackPopover';
+import { cn } from '../lib/utils';
 import { api, Organization, RolePermissions } from '../lib/api';
 import { useToast } from '../hooks/use-toast';
 import {
@@ -69,6 +72,7 @@ type NavItemDef = {
   path: string;
   icon: React.ComponentType<{ className?: string }>;
   requiredPermission: keyof RolePermissions | null;
+  drilldown?: boolean;
 };
 
 const allNavItems: NavItemDef[] = [
@@ -77,7 +81,7 @@ const allNavItems: NavItemDef[] = [
   { id: 'vulnerabilities', label: 'Vulnerabilities', path: 'vulnerabilities', icon: ShieldAlert, requiredPermission: null },
   { id: 'compliance', label: 'Compliance', path: 'compliance', icon: Scale, requiredPermission: null },
   { id: 'flows', label: 'Flows', path: 'flows', icon: Workflow, requiredPermission: null },
-  { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: null },
+  { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: null, drilldown: true },
 ];
 
 export default function OrgSidebar({
@@ -209,21 +213,15 @@ export default function OrgSidebar({
   return (
     <>
       <Sidebar collapsible="offcanvas">
-        <SidebarHeader className="px-3 py-2.5">
-          {inSettings ? (
-            <button
-              type="button"
-              onClick={handleBackFromSettings}
-              className="flex items-center gap-2 px-1 py-1 -ml-1 rounded-md text-sm text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50 transition-colors"
-            >
-              <ChevronLeft className="h-4 w-4" />
-              <span className="font-medium text-foreground">Settings</span>
-            </button>
-          ) : organization ? (
+        <SidebarHeader className="px-2 py-2">
+          {organization ? (
             <OrganizationSwitcher
               currentOrganizationId={organization.id}
               currentOrganizationName={organization.name}
               currentOrganizationAvatarUrl={organization.avatar_url}
+              currentOrganizationRole={organization.role}
+              currentOrganizationRoleDisplayName={organization.role_display_name}
+              currentOrganizationRoleColor={organization.role_color}
               triggerVariant="full"
             />
           ) : (
@@ -234,14 +232,71 @@ export default function OrgSidebar({
           )}
         </SidebarHeader>
 
+        <div className="px-2 pb-1">
+          <button
+            type="button"
+            className="w-full flex items-center gap-2 px-3 h-9 rounded-md bg-background-subtle/50 border border-border/50 text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors text-left"
+          >
+            <Search className="h-4 w-4 flex-shrink-0" />
+            <span className="text-sm flex-1">Find...</span>
+            <kbd className="flex items-center justify-center h-5 w-5 rounded border border-border text-[10px] font-medium text-foreground-secondary bg-background">
+              F
+            </kbd>
+          </button>
+        </div>
+
         <SidebarContent>
-          {inSettings ? (
-            settingsGroups.map((group, idx) => (
-              <SidebarGroup key={group.label ?? `unnamed-${idx}`}>
-                {group.label && <SidebarGroupLabel>{group.label}</SidebarGroupLabel>}
+          <div className="relative">
+            {/* Main nav — fades out left when entering settings */}
+            <div className={cn(
+              'transition-[opacity,transform] duration-150 ease-out',
+              inSettings ? 'opacity-0 -translate-x-2 pointer-events-none' : 'opacity-100 translate-x-0'
+            )}>
+              <SidebarGroup>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    {group.items.map((item) => {
+                    {visibleNavItems.map((item) => {
+                      const Icon = item.icon;
+                      const isActive = activeNavId === item.id;
+                      return (
+                        <SidebarMenuItem key={item.id}>
+                          <SidebarMenuButton
+                            isActive={isActive}
+                            onClick={() => handleNavClick(item.path)}
+                            aria-current={isActive ? 'page' : undefined}
+                          >
+                            <Icon className="tab-icon-shake" />
+                            <span>{item.label}</span>
+                            {item.drilldown && (
+                              <ChevronRight className="ml-auto h-3.5 w-3.5 text-foreground-secondary flex-shrink-0" />
+                            )}
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      );
+                    })}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            </div>
+
+            {/* Settings nav — fades in from right */}
+            <div className={cn(
+              'absolute top-0 left-0 w-full transition-[opacity,transform] duration-150 ease-out',
+              inSettings ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-2 pointer-events-none'
+            )}>
+              <SidebarGroup>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    <SidebarMenuItem>
+                      <button
+                        onClick={handleBackFromSettings}
+                        className="nav-btn relative w-full flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium text-foreground-secondary hover:bg-background-subtle/75 hover:text-foreground transition-colors"
+                      >
+                        <ChevronLeft className="absolute left-3 h-5 w-5 tab-icon-shake" />
+                        <span>Settings</span>
+                      </button>
+                    </SidebarMenuItem>
+                    {settingsGroups.flatMap((group) => group.items).map((item) => {
                       const isActive = settingsActiveSection === item.id;
                       return (
                         <SidebarMenuItem key={item.id}>
@@ -259,31 +314,8 @@ export default function OrgSidebar({
                   </SidebarMenu>
                 </SidebarGroupContent>
               </SidebarGroup>
-            ))
-          ) : (
-            <SidebarGroup>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {visibleNavItems.map((item) => {
-                    const Icon = item.icon;
-                    const isActive = activeNavId === item.id;
-                    return (
-                      <SidebarMenuItem key={item.id}>
-                        <SidebarMenuButton
-                          isActive={isActive}
-                          onClick={() => handleNavClick(item.path)}
-                          aria-current={isActive ? 'page' : undefined}
-                        >
-                          <Icon className="tab-icon-shake" />
-                          <span>{item.label}</span>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    );
-                  })}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-          )}
+            </div>
+          </div>
         </SidebarContent>
 
         {user != null && (
