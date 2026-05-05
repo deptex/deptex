@@ -346,7 +346,7 @@ export default function OrgSidebar({
                     {thread.title}
                   </span>
                   {isPinned && (
-                    <Pin className="h-1.5 w-1.5 text-foreground/40 flex-shrink-0 group-hover/thread:hidden" />
+                    <Pin className="flex-shrink-0 group-hover/thread:hidden text-foreground/40" style={{ width: 15, height: 15 }} />
                   )}
                 </SidebarMenuButton>
               </TooltipTrigger>
