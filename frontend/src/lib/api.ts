@@ -4205,6 +4205,22 @@ export interface LicenseViolation {
   depscore: number | null;
 }
 
+// Mirror of `IAC_FRAMEWORKS` in `backend/depscanner/src/scanners/types.ts`.
+// Kept in sync manually (frontend can't import from depscanner package).
+export const IAC_FRAMEWORKS = [
+  'terraform',
+  'kubernetes',
+  'dockerfile',
+  'helm',
+  'cloudformation',
+  'arm',
+  'bicep',
+  'serverless',
+  'github_actions',
+] as const;
+
+export type IaCFramework = (typeof IAC_FRAMEWORKS)[number];
+
 export interface IaCFinding {
   id: string;
   project_id: string;
@@ -4213,7 +4229,7 @@ export interface IaCFinding {
   scanner: 'trivy' | 'checkov';
   scanner_version: string | null;
   rule_id: string;
-  framework: 'terraform' | 'kubernetes' | 'dockerfile';
+  framework: IaCFramework;
   file_path: string;
   start_line: number | null;
   end_line: number | null;
@@ -4225,6 +4241,7 @@ export interface IaCFinding {
   code_snippet: string | null;
   rule_doc_url: string | null;
   iac_fingerprint: string | null;
+  compliance_refs: Record<string, string[]> | null;
   status: 'open' | 'ignored';
   suppressed: boolean;
   risk_accepted: boolean;
@@ -4270,7 +4287,7 @@ export interface ContainerFinding {
 export interface ScannerSummary {
   iac: { critical: number; high: number; medium: number; low: number; info: number; ignored: number };
   container: { critical: number; high: number; medium: number; low: number; info: number; ignored: number };
-  infra_types: Array<'terraform' | 'kubernetes' | 'dockerfile'>;
+  infra_types: Array<IaCFramework>;
   last_scan_at: string | null;
   skipped_images: Array<{ image: string; reason: string }>;
 }

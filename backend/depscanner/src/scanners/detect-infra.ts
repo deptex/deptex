@@ -1,7 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import type { IaCFramework } from './types';
 
-export type InfraType = 'terraform' | 'kubernetes' | 'dockerfile';
+// InfraType is structurally IaCFramework — kept as a re-export for callers that
+// import the legacy name. Detector logic only emits a subset of these values
+// today; M3 expands it to all 9.
+export type InfraType = IaCFramework;
 
 const SKIP_DIRS = new Set([
   'node_modules',

@@ -224,6 +224,7 @@ export function parseTrivyConfigOutput(stdout: string, version: string): IaCFind
         code_snippet: trivySnippet(m),
         rule_doc_url: m.PrimaryURL ?? null,
         iac_fingerprint: trivyFingerprint(m, target),
+        compliance_refs: null,
         metadata: null,
       });
     }

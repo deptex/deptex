@@ -99,6 +99,7 @@ function parseSingleReport(report: CheckovRawReport, version: string): IaCFindin
       code_snippet: snippet(c),
       rule_doc_url: c.guideline ?? null,
       iac_fingerprint: buildFingerprint(c),
+      compliance_refs: null,
       metadata: c.metadata ?? null,
     });
   }
@@ -136,7 +137,10 @@ export interface RunCheckovOptions {
   verboseLog?: boolean;
 }
 
-const FRAMEWORK_TO_CHECKOV: Record<IaCFramework, string> = {
+// Partial until M4 adds entries for helm/cloudformation/arm/bicep/serverless/
+// github_actions. Frameworks without a mapping are dropped from the Checkov
+// invocation by the .filter(Boolean) below.
+const FRAMEWORK_TO_CHECKOV: Partial<Record<IaCFramework, string>> = {
   terraform: 'terraform',
   kubernetes: 'kubernetes',
   dockerfile: 'dockerfile',

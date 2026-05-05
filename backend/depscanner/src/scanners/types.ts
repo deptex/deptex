@@ -1,4 +1,20 @@
-export type IaCFramework = 'terraform' | 'kubernetes' | 'dockerfile';
+// Canonical IaC framework list — single source of truth. All readers
+// (detect-infra, checkov, orchestrator, scanner-findings route, frontend api,
+// vulnerability table chips) import from here. Adding a value? Add it ONCE.
+// Note: kustomization.yaml surfaces as 'kubernetes' — no separate value.
+export const IAC_FRAMEWORKS = [
+  'terraform',
+  'kubernetes',
+  'dockerfile',
+  'helm',
+  'cloudformation',
+  'arm',
+  'bicep',
+  'serverless',
+  'github_actions',
+] as const;
+
+export type IaCFramework = (typeof IAC_FRAMEWORKS)[number];
 
 export type IaCScanner = 'trivy' | 'checkov';
 
@@ -18,6 +34,10 @@ export interface IaCFinding {
   rule_doc_url: string | null;
   /** Stable identifier for status carryover. NULL = decisions don't carry. */
   iac_fingerprint: string | null;
+  /** Compliance framework references extracted from Checkov metadata.benchmark
+   *  (CIS / SOC2 / NIST / PCI-DSS / HIPAA → list of control IDs).
+   *  NULL when no refs present. */
+  compliance_refs: Record<string, string[]> | null;
   metadata: Record<string, unknown> | null;
 }
 

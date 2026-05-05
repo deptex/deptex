@@ -21,6 +21,7 @@ interface IaCRow extends Record<string, unknown> {
   code_snippet: string | null;
   rule_doc_url: string | null;
   iac_fingerprint: string | null;
+  compliance_refs: Record<string, string[]> | null;
   metadata: Record<string, unknown> | null;
 }
 
@@ -100,6 +101,7 @@ export async function upsertIaCFindings(
     code_snippet: f.code_snippet,
     rule_doc_url: f.rule_doc_url,
     iac_fingerprint: f.iac_fingerprint,
+    compliance_refs: f.compliance_refs,
     metadata: f.metadata,
   }));
 
