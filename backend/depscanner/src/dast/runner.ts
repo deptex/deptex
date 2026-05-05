@@ -14,6 +14,14 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
+import {
+  buildAutomationYaml,
+  type AfScanProfile,
+  type DetectedRuntime,
+  type ScopeConfig,
+} from './yaml-builder';
+import type { CredentialPayload, DastAuthStrategy } from './auth-config';
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -42,16 +50,29 @@ export interface DastEntryPointInput {
 
 export type DastScanProfile = 'auto' | 'quick' | 'full' | 'api';
 
+export type DastRunnerMode = 'helper_script' | 'af';
+
 export interface RunZapOptions {
   targetUrl: string;
   scanProfile: DastScanProfile;
   routes: DastEntryPointInput[];
   timeoutMs?: number;
+
+  // v2.1a additions — only consumed by the AF dispatcher path. Optional so
+  // existing callers (pipeline.ts at v1) compile unchanged.
+  detectedRuntime?: DetectedRuntime;
+  scope?: ScopeConfig;
+  authStrategy?: DastAuthStrategy;
+  authPayload?: CredentialPayload;
+  loggedInIndicator?: string;
+  loggedOutIndicator?: string;
+  // Mode override for tests; production reads `DAST_RUNNER_MODE` env.
+  runnerMode?: DastRunnerMode;
 }
 
 export interface RunZapResult {
   findings: DastFindingRaw[];
-  scriptUsed: 'baseline' | 'full' | 'api';
+  scriptUsed: 'baseline' | 'full' | 'api' | 'af';
   exitCode: number | null;
   durationMs: number;
 }
@@ -374,12 +395,42 @@ export function spawnZap(
 }
 
 // ---------------------------------------------------------------------------
-// Public entry point
+// Public entry point — DUAL dispatcher (helper-script vs AF YAML)
 // ---------------------------------------------------------------------------
 
 export const ZAP_DEFAULT_TIMEOUT_MS = 30 * 60_000; // 30 min
 
+/**
+ * Resolve the runner mode for a given env value. Exported so unit tests can
+ * exercise the parser without touching `process.env`.
+ *
+ *   'af'              → AF YAML (zap.sh -cmd -autorun)
+ *   'helper_script'   → existing baseline / full / api helper scripts
+ *   anything else     → 'helper_script' (default for v2.1a; flips to 'af' in
+ *                       v2.1b when AF mode hits parity in production)
+ */
+export function pickRunnerMode(envValue: string | undefined | null): DastRunnerMode {
+  if (typeof envValue === 'string' && envValue.trim().toLowerCase() === 'af') {
+    return 'af';
+  }
+  return 'helper_script';
+}
+
+/**
+ * Top-level entry. Dispatches to either the helper-script path (v1, default)
+ * or the new AF YAML path. The api-scan profile is always served by the
+ * helper-script path because the AF YAML schema doesn't have a clean OpenAPI
+ * stub equivalent — that's a deliberate v2.1a boundary.
+ */
 export async function runZap(opts: RunZapOptions): Promise<RunZapResult> {
+  const mode = opts.runnerMode ?? pickRunnerMode(process.env.DAST_RUNNER_MODE);
+  if (mode === 'af' && opts.scanProfile !== 'api') {
+    return runZapAutomationFramework(opts);
+  }
+  return runZapHelperScript(opts);
+}
+
+async function runZapHelperScript(opts: RunZapOptions): Promise<RunZapResult> {
   const startedAt = Date.now();
   const timeoutMs = opts.timeoutMs ?? ZAP_DEFAULT_TIMEOUT_MS;
   const script = selectScript(opts.scanProfile, opts.routes.length > 0);
@@ -472,6 +523,95 @@ export async function runZap(opts: RunZapOptions): Promise<RunZapResult> {
   return {
     findings: parseZapReport(report),
     scriptUsed: script,
+    exitCode: result.exitCode,
+    durationMs: Date.now() - startedAt,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// AF YAML path (v2.1a) — invoked when DAST_RUNNER_MODE=af
+// ---------------------------------------------------------------------------
+
+/**
+ * Map a v1 DastScanProfile to the AF builder's narrower profile set.
+ * `api` is intentionally rejected — runZap routes it to the helper-script
+ * path before reaching this function.
+ */
+function toAfProfile(p: DastScanProfile): AfScanProfile {
+  if (p === 'api') {
+    throw new Error('runZapAutomationFramework: api profile uses helper-script path');
+  }
+  return p;
+}
+
+async function runZapAutomationFramework(opts: RunZapOptions): Promise<RunZapResult> {
+  const startedAt = Date.now();
+  const timeoutMs = opts.timeoutMs ?? ZAP_DEFAULT_TIMEOUT_MS;
+
+  const zapWorkDir = process.env.DAST_WORK_DIR || '/zap/wrk';
+  const tmpDir = fs.mkdtempSync(path.join(zapWorkDir, 'deptex-dast-af-'));
+  const yamlPath = path.join(tmpDir, 'automation.yaml');
+  const reportPath = path.join(tmpDir, 'zap-report.json');
+  // Report path inside the AF YAML must be relative to /zap/wrk (same caveat
+  // as the helper-script -J flag — AF joins reportDir+reportFile).
+  const reportRelativePath = path.relative(zapWorkDir, reportPath);
+
+  const yamlText = buildAutomationYaml({
+    targetUrl: opts.targetUrl,
+    scanProfile: toAfProfile(opts.scanProfile),
+    detectedRuntime: opts.detectedRuntime ?? 'unknown',
+    reportRelativePath,
+    scope: opts.scope,
+    authStrategy: opts.authStrategy,
+    authPayload: opts.authPayload,
+    loggedInIndicator: opts.loggedInIndicator,
+    loggedOutIndicator: opts.loggedOutIndicator,
+    scanTimeoutMinutes: Math.round(timeoutMs / 60_000),
+  });
+  fs.writeFileSync(yamlPath, yamlText, 'utf-8');
+
+  let result: SpawnResult;
+  try {
+    result = await spawnZap(
+      '/zap/zap.sh',
+      ['-cmd', '-autorun', yamlPath],
+      timeoutMs,
+      (chunk) => {
+        process.stderr.write(`[zap-af] ${redactCredentials(chunk)}`);
+      },
+    );
+  } finally {
+    // Drop the YAML even on failure — it can contain plaintext credentials
+    // (form auth context.users[].credentials). The subprocess has already
+    // read it; keeping it on disk is unnecessary risk.
+    try { fs.unlinkSync(yamlPath); } catch { /* noop */ }
+  }
+
+  if (result.exitCode !== 0 && result.exitCode !== 1 && result.exitCode !== 2) {
+    const tail = result.stderr.slice(-2_000);
+    throw new Error(
+      `ZAP AF exited with code ${result.exitCode}. stderr tail: ${redactCredentials(tail)}`,
+    );
+  }
+
+  if (!fs.existsSync(reportPath)) {
+    throw new Error(`ZAP AF produced no report at ${reportPath}`);
+  }
+
+  const reportRaw = fs.readFileSync(reportPath, 'utf-8');
+  let report: ZapReport;
+  try {
+    report = JSON.parse(reportRaw);
+  } catch (e) {
+    throw new Error(`Failed to parse ZAP AF JSON report: ${(e as Error).message}`);
+  }
+
+  try { fs.unlinkSync(reportPath); } catch { /* noop */ }
+  try { fs.rmdirSync(tmpDir); } catch { /* noop */ }
+
+  return {
+    findings: parseZapReport(report),
+    scriptUsed: 'af',
     exitCode: result.exitCode,
     durationMs: Date.now() - startedAt,
   };

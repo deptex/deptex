@@ -4,6 +4,7 @@ import {
   buildOpenApiStub,
   redactCredentials,
   parseZapReport,
+  pickRunnerMode,
 } from '../dast/runner';
 
 describe('selectScript', () => {
@@ -279,5 +280,40 @@ describe('parseZapReport', () => {
       site: [{ '@name': 'x', alerts: [{ name: 'crit', riskcode: '4', confidence: '4', instances: [{ uri: '/a', method: 'GET' }] }] }],
     };
     expect(parseZapReport(report)[0].severity).toBe('critical');
+  });
+});
+
+describe('pickRunnerMode (DAST_RUNNER_MODE dispatcher)', () => {
+  it("'af' → AF mode", () => {
+    expect(pickRunnerMode('af')).toBe('af');
+  });
+
+  it("'AF' (uppercase) → AF mode", () => {
+    expect(pickRunnerMode('AF')).toBe('af');
+  });
+
+  it("' af ' (whitespace) → AF mode", () => {
+    expect(pickRunnerMode(' af ')).toBe('af');
+  });
+
+  it("undefined → helper_script (v2.1a default)", () => {
+    expect(pickRunnerMode(undefined)).toBe('helper_script');
+  });
+
+  it("null → helper_script", () => {
+    expect(pickRunnerMode(null)).toBe('helper_script');
+  });
+
+  it("'' → helper_script", () => {
+    expect(pickRunnerMode('')).toBe('helper_script');
+  });
+
+  it("'helper_script' → helper_script (explicit)", () => {
+    expect(pickRunnerMode('helper_script')).toBe('helper_script');
+  });
+
+  it("any unrecognized value → helper_script (safe fallback)", () => {
+    expect(pickRunnerMode('zap2')).toBe('helper_script');
+    expect(pickRunnerMode('legacy')).toBe('helper_script');
   });
 });
