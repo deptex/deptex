@@ -345,6 +345,9 @@ export default function OrgSidebar({
                   <span className="block min-w-0 flex-1 whitespace-nowrap overflow-hidden [mask-image:linear-gradient(to_right,black_calc(100%-12px),transparent)] group-hover/thread:[mask-image:linear-gradient(to_right,black_calc(100%-72px),transparent)]">
                     {thread.title}
                   </span>
+                  {isPinned && (
+                    <Pin className="h-3 w-3 text-foreground/40 flex-shrink-0 group-hover/thread:hidden" />
+                  )}
                 </SidebarMenuButton>
               </TooltipTrigger>
               <TooltipContent side="right" sideOffset={8} className="max-w-xs whitespace-normal break-words">
@@ -605,23 +608,11 @@ export default function OrgSidebar({
                 </SidebarGroup>
               )}
 
-              {aegisPinned.length > 0 && (
+              {(aegisPinned.length > 0 || aegisRecents.length > 0) && (
                 <SidebarGroup>
-                  <SidebarGroupLabel>Pinned</SidebarGroupLabel>
                   <SidebarGroupContent>
                     <SidebarMenu>
-                      {aegisPinned.map(renderAegisThread)}
-                    </SidebarMenu>
-                  </SidebarGroupContent>
-                </SidebarGroup>
-              )}
-
-              {aegisRecents.length > 0 && (
-                <SidebarGroup>
-                  <SidebarGroupLabel>Recents</SidebarGroupLabel>
-                  <SidebarGroupContent>
-                    <SidebarMenu>
-                      {aegisRecents.map(renderAegisThread)}
+                      {[...aegisPinned, ...aegisRecents].map(renderAegisThread)}
                     </SidebarMenu>
                   </SidebarGroupContent>
                 </SidebarGroup>
