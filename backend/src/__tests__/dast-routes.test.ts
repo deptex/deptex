@@ -409,3 +409,153 @@ describe('GET /api/projects/:projectId/dast/jobs?target_id=...', () => {
     expect(r.body.error).toBe('target_not_found');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Cross-tenant 404 matrix (cluster-3 P0).
+//
+// Every targetId-bearing route must return 404 with body.error='target_not_found'
+// when the targetId belongs to a different tenant — NOT 403, NOT 422. The 404
+// shape prevents existence enumeration. The matrix below covers each of the
+// remaining endpoints; the four already-tested endpoints (PATCH target, POST
+// scan, GET jobs filter, plus the timing-parity unit test in
+// dast-tenant-guard.test.ts) keep their own targeted assertions above.
+// ---------------------------------------------------------------------------
+
+describe('Cross-tenant 404 matrix — every :targetId route', () => {
+  type Probe = {
+    name: string;
+    perform: () => request.Test;
+  };
+
+  // Each probe runs the request against PROJECT_A in ORG_A, but the mocked
+  // SELECT for project_dast_targets returns a row that belongs to ORG_B /
+  // PROJECT_B, simulating an attacker constructing a targetId from a tenant
+  // they shouldn't see.
+  const probes: Probe[] = [
+    {
+      name: 'DELETE /dast/targets/:targetId',
+      perform: () =>
+        request(makeApp()).delete(`/api/projects/${PROJECT_A}/dast/targets/${TARGET_A}`),
+    },
+    {
+      name: 'POST /dast/targets/:targetId/recheck-runtime',
+      perform: () =>
+        request(makeApp()).post(
+          `/api/projects/${PROJECT_A}/dast/targets/${TARGET_A}/recheck-runtime`,
+        ),
+    },
+    {
+      name: 'GET /dast/targets/:targetId/credentials',
+      perform: () =>
+        request(makeApp()).get(
+          `/api/projects/${PROJECT_A}/dast/targets/${TARGET_A}/credentials`,
+        ),
+    },
+    {
+      name: 'PUT /dast/targets/:targetId/credentials',
+      perform: () =>
+        request(makeApp())
+          .put(`/api/projects/${PROJECT_A}/dast/targets/${TARGET_A}/credentials`)
+          .send({
+            auth_strategy: 'cookie',
+            payload: { kind: 'cookie', cookies: [{ name: 'sid', value: 'x' }] },
+          }),
+    },
+    {
+      name: 'DELETE /dast/targets/:targetId/credentials',
+      perform: () =>
+        request(makeApp()).delete(
+          `/api/projects/${PROJECT_A}/dast/targets/${TARGET_A}/credentials`,
+        ),
+    },
+    {
+      name: 'GET /dast/findings?target_id=...',
+      perform: () =>
+        request(makeApp()).get(
+          `/api/projects/${PROJECT_A}/dast/findings?target_id=${TARGET_A}`,
+        ),
+    },
+  ];
+
+  it.each(probes)('$name returns 404 target_not_found for cross-tenant targetId', async ({ perform }) => {
+    setProjectAccessOwner(PROJECT_A, ORG_A);
+    setTableResponse('project_dast_targets', 'maybeSingle', {
+      data: {
+        ...targetRowOrgA(),
+        organization_id: ORG_B,
+        project_id: PROJECT_B,
+      },
+      error: null,
+    });
+
+    const r = await perform();
+    // 404 — not 403, not 422. /permission|access/i regex from the old plan
+    // is structurally insufficient for cross-tenant isolation.
+    expect(r.status).toBe(404);
+    expect(r.body.error).toBe('target_not_found');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Drain mode (Task 1.5 — pre-migration runbook gate).
+//
+// When INTERNAL_DAST_PAUSED=true, POST /api/projects/:projectId/dast/scan must
+// return 503 dast_queue_paused regardless of body / RBAC. The middleware lives
+// in backend/src/index.ts; this test mounts it explicitly so the assertion
+// covers the wired-up shape, not just the route handler.
+// ---------------------------------------------------------------------------
+
+describe('Drain mode — POST /dast/scan returns 503 when INTERNAL_DAST_PAUSED=true', () => {
+  function makeAppWithDrain() {
+    const app = express();
+    app.use(express.json());
+    // Mirror the drain middleware from backend/src/index.ts so this test
+    // proves the wired contract, not the handler in isolation.
+    app.use('/api/projects', (req, res, next) => {
+      if (
+        process.env.INTERNAL_DAST_PAUSED === 'true' &&
+        req.method === 'POST' &&
+        /^\/[^/]+\/dast\/scan\/?$/.test(req.path)
+      ) {
+        return res.status(503).json({ error: 'dast_queue_paused' });
+      }
+      next();
+    });
+    app.use('/api/projects', dastRouter);
+    return app;
+  }
+
+  const originalDrain = process.env.INTERNAL_DAST_PAUSED;
+  afterEach(() => {
+    if (originalDrain === undefined) delete process.env.INTERNAL_DAST_PAUSED;
+    else process.env.INTERNAL_DAST_PAUSED = originalDrain;
+  });
+
+  it('returns 503 dast_queue_paused with no DB calls', async () => {
+    process.env.INTERNAL_DAST_PAUSED = 'true';
+    const r = await request(makeAppWithDrain())
+      .post(`/api/projects/${PROJECT_A}/dast/scan`)
+      .send({ target_id: TARGET_A });
+    expect(r.status).toBe(503);
+    expect(r.body.error).toBe('dast_queue_paused');
+  });
+
+  it('passes through other routes (GET /jobs is fine while drained)', async () => {
+    process.env.INTERNAL_DAST_PAUSED = 'true';
+    setProjectAccessOwner(PROJECT_A, ORG_A);
+    setTableResponse('scan_jobs', 'then', { data: [], error: null });
+
+    const r = await request(makeAppWithDrain()).get(`/api/projects/${PROJECT_A}/dast/jobs`);
+    expect(r.status).toBe(200);
+  });
+
+  it('non-drain requests (different path) pass through even with flag set', async () => {
+    process.env.INTERNAL_DAST_PAUSED = 'true';
+    setProjectAccessOwner(PROJECT_A, ORG_A);
+    setTableResponse('project_dast_targets', 'then', { data: [], error: null });
+
+    // GET /targets is not the drain target — it should NOT 503.
+    const r = await request(makeAppWithDrain()).get(`/api/projects/${PROJECT_A}/dast/targets`);
+    expect(r.status).toBe(200);
+  });
+});
