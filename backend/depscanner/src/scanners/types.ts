@@ -71,3 +71,76 @@ export interface SkippedImage {
     | 'no_dockerfile'
     | 'parse_failed';
 }
+
+export type RegistryType =
+  | 'ghcr'
+  | 'ecr'
+  | 'gcr'
+  | 'acr'
+  | 'dockerhub'
+  | 'quay'
+  | 'harbor'
+  | 'jfrog'
+  | 'custom';
+
+export type CredentialShape =
+  | 'username_password'
+  | 'aws_keys'
+  | 'gcp_service_account_key'
+  | 'azure_service_principal'
+  | 'token';
+
+// Worker-side row shape for organization_registry_credentials. Includes
+// encrypted_credentials + encryption_key_version because M5 (registry auth
+// resolver) decrypts here. Never returned to clients — frontend mirror in
+// frontend/src/lib/api.ts omits the encrypted blob.
+export interface RegistryCredential {
+  id: string;
+  organization_id: string;
+  registry_type: RegistryType;
+  registry_url: string | null;
+  display_name: string;
+  credential_shape: CredentialShape;
+  encrypted_credentials: string;
+  encryption_key_version: number;
+  last_used_at: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Discriminated union over credential_shape. The decrypted plaintext shape
+// the worker passes to per-registry minters. The DecryptedCredential helper
+// type lives in registry-auth.ts (M5) and never reaches route files.
+export type CredentialPlaintext =
+  | { shape: 'username_password'; username: string; password: string }
+  | {
+      shape: 'aws_keys';
+      access_key_id: string;
+      secret_access_key: string;
+      session_token?: string;
+      region: string;
+    }
+  | { shape: 'gcp_service_account_key'; service_account_json: string }
+  | {
+      shape: 'azure_service_principal';
+      client_id: string;
+      client_secret: string;
+      tenant_id: string;
+    }
+  | { shape: 'token'; token: string };
+
+// Worker-side row shape for project_configured_images. organization_id is
+// re-derived by the BEFORE INSERT OR UPDATE trigger; readers MUST still chain
+// .eq('project_id', projectId) per the tenancy invariants.
+export interface ConfiguredImage {
+  id: string;
+  project_id: string;
+  organization_id: string;
+  image_reference: string;
+  credentials_id: string | null;
+  enabled: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
