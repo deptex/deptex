@@ -866,6 +866,18 @@ CREATE TABLE IF NOT EXISTS public.package_contributors (
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS public.package_maintainer_snapshots (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  package_name text NOT NULL,
+  version text NOT NULL,
+  ecosystem text NOT NULL,
+  observed_at timestamp with time zone NOT NULL DEFAULT now(),
+  maintainer_handles text[] NOT NULL DEFAULT '{}'::text[],
+  primary_maintainer_email text,
+  signing_config_hash text,
+  postinstall_hash text,
+  registry_metadata_raw jsonb
+);
 CREATE TABLE IF NOT EXISTS public.package_reputation_scores (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   dependency_id uuid NOT NULL,
@@ -1975,6 +1987,7 @@ ALTER TABLE public.package_anomalies ADD CONSTRAINT package_anomalies_pkey PRIMA
 ALTER TABLE public.package_capabilities ADD CONSTRAINT package_capabilities_pkey PRIMARY KEY (id);
 ALTER TABLE public.package_commits ADD CONSTRAINT package_commits_pkey PRIMARY KEY (id);
 ALTER TABLE public.package_contributors ADD CONSTRAINT package_contributors_pkey PRIMARY KEY (id);
+ALTER TABLE public.package_maintainer_snapshots ADD CONSTRAINT package_maintainer_snapshots_pkey PRIMARY KEY (id);
 ALTER TABLE public.package_reputation_scores ADD CONSTRAINT package_reputation_scores_pkey PRIMARY KEY (id);
 ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_pkey PRIMARY KEY (id);
 ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_pkey PRIMARY KEY (id);
@@ -2072,6 +2085,7 @@ ALTER TABLE public.package_capabilities ADD CONSTRAINT pc_natural_key UNIQUE (pa
 ALTER TABLE public.package_commit_touched_functions ADD CONSTRAINT package_commit_touched_functi_watched_package_id_commit_sha_key UNIQUE (watched_package_id, commit_sha, function_name);
 ALTER TABLE public.package_commits ADD CONSTRAINT package_commits_watched_package_id_sha_key UNIQUE (watched_package_id, sha);
 ALTER TABLE public.package_contributors ADD CONSTRAINT package_contributors_watched_package_id_author_email_key UNIQUE (watched_package_id, author_email);
+ALTER TABLE public.package_maintainer_snapshots ADD CONSTRAINT pms_natural_key UNIQUE NULLS NOT DISTINCT (package_name, version, ecosystem, observed_at);
 ALTER TABLE public.package_reputation_scores ADD CONSTRAINT package_reputation_scores_dependency_id_key UNIQUE (dependency_id);
 ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_key UNIQUE (package_name, version, ecosystem, scanner);
 ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_project_id_key UNIQUE (project_id);
@@ -2152,6 +2166,7 @@ ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_pol
 ALTER TABLE public.organizations ADD CONSTRAINT organizations_default_ai_provider_check CHECK ((default_ai_provider = ANY (ARRAY['openai'::text, 'anthropic'::text, 'google'::text, 'deepinfra'::text])));
 ALTER TABLE public.organizations ADD CONSTRAINT organizations_epd_budget_exceeded_behavior_check CHECK ((epd_budget_exceeded_behavior = ANY (ARRAY['fail_job'::text, 'continue_with_fallback'::text])));
 ALTER TABLE public.package_capabilities ADD CONSTRAINT pc_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'composer'::text, 'cargo'::text, 'nuget'::text, 'github-actions'::text, 'vscode'::text])));
+ALTER TABLE public.package_maintainer_snapshots ADD CONSTRAINT pms_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'composer'::text, 'cargo'::text, 'nuget'::text, 'github-actions'::text, 'vscode'::text])));
 ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'composer'::text, 'cargo'::text, 'nuget'::text, 'github-actions'::text, 'vscode'::text])));
 ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_scanner_chk CHECK ((scanner = ANY (ARRAY['guarddog'::text, 'ai_review'::text])));
 ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text])));
@@ -2612,6 +2627,7 @@ CREATE INDEX idx_pmf_org ON public.project_malicious_findings USING btree (organ
 CREATE INDEX idx_pmf_project_open ON public.project_malicious_findings USING btree (project_id, suppressed, risk_accepted);
 CREATE INDEX idx_pmf_project_run ON public.project_malicious_findings USING btree (project_id, extraction_run_id);
 CREATE INDEX idx_pmf_reachability ON public.project_malicious_findings USING btree (project_id, reachability_level) WHERE ((suppressed = false) AND (risk_accepted = false));
+CREATE INDEX idx_pms_lookup ON public.package_maintainer_snapshots USING btree (package_name, ecosystem, version, observed_at DESC);
 CREATE INDEX idx_policy_eval_jobs_org ON public.policy_evaluation_jobs USING btree (organization_id);
 CREATE INDEX idx_policy_eval_jobs_status ON public.policy_evaluation_jobs USING btree (organization_id, status);
 CREATE INDEX idx_prf_project_dep ON public.project_reachable_flows USING btree (project_id, dependency_id);

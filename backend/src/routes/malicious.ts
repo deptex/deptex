@@ -375,6 +375,68 @@ router.post('/:id/projects/:projectId/malicious-findings/:findingId/explain', as
       }
     }
 
+    // Maintainer findings need the latest signal-snapshot tuple inlined so
+    // the AI Explain prompt has concrete facts to narrate. We look up the
+    // most-recent snapshot for the package — older snapshots are pruned
+    // at 90 days; if the row's gone, we narrate without metadata strings
+    // (the signal booleans on the rule_id alone still produce a coherent
+    // explanation).
+    let maintainerContext: { signals: any; metadata: any } | undefined;
+    if (finding.scanner === 'maintainer') {
+      const { getLatestSnapshot } = await import('../lib/malicious/maintainer-snapshots');
+      const { computeMaintainerSignalsForPackage } = await import('../lib/malicious/maintainer-signals');
+      // We don't want a fresh registry pull on every Explain click, so just
+      // diff against the most-recent snapshot we have. The 30-day diff
+      // baseline lookup also goes against the same table.
+      const latest = await getLatestSnapshot(supabase, dep.name, pd.version, dep.ecosystem);
+      if (latest) {
+        // Re-run the signal compute using the latest snapshot as both the
+        // current-state proxy and the prior snapshot, then trust the
+        // pre-computed rule_id. This avoids a network call from the
+        // request path; the cron run is the source of truth for signals.
+        // For a richer narrative we could re-pull, but the cron-stored
+        // snapshot already has everything we need.
+        try {
+          // skipWriteSnapshot avoids re-upserting the same row on Explain.
+          const computed = await computeMaintainerSignalsForPackage(
+            supabase,
+            dep.name,
+            pd.version,
+            dep.ecosystem,
+            { skipWriteSnapshot: true },
+          );
+          if (computed) {
+            maintainerContext = {
+              signals: computed.signals,
+              metadata: {
+                maintainer_handles: latest.maintainer_handles ?? [],
+                primary_maintainer_email: latest.primary_maintainer_email ?? null,
+                observed_at: latest.observed_at,
+              },
+            };
+          }
+        } catch {
+          // Fall through with the snapshot data only — the signal booleans
+          // can be reconstructed from the rule_id slug if needed.
+          maintainerContext = {
+            signals: {
+              account_age_days: null,
+              install_script_present: finding.rule_id.includes('install_script') || finding.rule_id.includes('postinstall'),
+              email_changed_in_last_30d: finding.rule_id.includes('email_changed'),
+              maintainer_changed_in_last_30d: finding.rule_id.includes('maintainer_changed'),
+              signing_setup_changed: finding.rule_id.includes('signing_setup_changed'),
+              new_postinstall_added: finding.rule_id.includes('new_postinstall'),
+            },
+            metadata: {
+              maintainer_handles: latest.maintainer_handles ?? [],
+              primary_maintainer_email: latest.primary_maintainer_email ?? null,
+              observed_at: latest.observed_at,
+            },
+          };
+        }
+      }
+    }
+
     const { explainMaliciousFinding } = await import('../lib/malicious/explain');
     const outcome = await explainMaliciousFinding({
       organizationId: id,
@@ -388,6 +450,7 @@ router.post('/:id/projects/:projectId/malicious-findings/:findingId/explain', as
       ruleId: finding.rule_id,
       ruleMessage: finding.message,
       rawSourceSnippets: snippets,
+      maintainerContext,
     });
 
     if (!outcome.ok) {
@@ -431,6 +494,28 @@ internalRouter.post('/staleness-watchdog', async (req, res) => {
   } catch (error: any) {
     console.error('[malicious staleness-watchdog] failed:', error);
     res.status(500).json({ error: error?.message ?? 'watchdog failed' });
+  }
+});
+
+// M1c maintainer-signal sync. Runs once per day via the daily cron
+// dispatcher; pulls registry metadata for active deps, snapshots state,
+// emits findings on Shai-Hulud-class signal patterns. Cross-org fan-out
+// derives `organization_id` from `projects` per-row — never trust the
+// caller / job body / dependency table.
+internalRouter.post('/maintainer-signal-sync', async (req, res) => {
+  if (!verifyInternal(req)) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { runMaintainerSignalSync } = await import('../lib/malicious/maintainer-sync');
+    const limitParam = (req.body && typeof req.body === 'object' && (req.body as any).limit !== undefined)
+      ? Number((req.body as any).limit)
+      : undefined;
+    const result = await runMaintainerSignalSync(supabase, {
+      limit: Number.isFinite(limitParam) && (limitParam as number) > 0 ? (limitParam as number) : undefined,
+    });
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    console.error('[malicious maintainer-signal-sync] failed:', error);
+    res.status(500).json({ error: error?.message ?? 'maintainer-signal-sync failed' });
   }
 });
 
