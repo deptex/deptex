@@ -56,6 +56,7 @@ import {
 import { Button } from './ui/button';
 import OrganizationSwitcher from './OrganizationSwitcher';
 import FeedbackPopover from './FeedbackPopover';
+import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import { cn } from '../lib/utils';
 import { api, Organization, RolePermissions } from '../lib/api';
 import { aegisApi, AegisThread } from '../lib/aegis-api';
@@ -334,13 +335,22 @@ export default function OrgSidebar({
               className="w-full bg-background-subtle px-3 py-2 text-sm text-foreground rounded-md border-0 ring-1 ring-border outline-none focus:ring-1 focus:!ring-foreground/30"
             />
           ) : (
-            <SidebarMenuButton
-              isActive={isActive}
-              onClick={() => navigate(`/organizations/${organizationId}/aegis/${thread.id}`)}
-            >
-              <ThreadIcon fixStatus={thread.fixStatus} />
-              <span className="truncate flex-1 min-w-0">{thread.title}</span>
-            </SidebarMenuButton>
+            <Tooltip delayDuration={500}>
+              <TooltipTrigger asChild>
+                <SidebarMenuButton
+                  isActive={isActive}
+                  onClick={() => navigate(`/organizations/${organizationId}/aegis/${thread.id}`)}
+                >
+                  <ThreadIcon fixStatus={thread.fixStatus} />
+                  <span className="block min-w-0 flex-1 whitespace-nowrap overflow-hidden [mask-image:linear-gradient(to_right,black_calc(100%-12px),transparent)] group-hover:[mask-image:linear-gradient(to_right,black_calc(100%-72px),transparent)]">
+                    {thread.title}
+                  </span>
+                </SidebarMenuButton>
+              </TooltipTrigger>
+              <TooltipContent side="right" sideOffset={8} className="max-w-xs whitespace-normal break-words">
+                {thread.title}
+              </TooltipContent>
+            </Tooltip>
           )}
           {!isEditing && (
             <DropdownMenu>
