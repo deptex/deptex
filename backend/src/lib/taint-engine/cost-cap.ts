@@ -12,9 +12,9 @@
  */
 
 import { supabase } from '../supabase';
+import { DEFAULT_MONTHLY_AI_COST_CAP_USD } from '../taint-engine-defaults';
 
 const FEATURES = ['taint_engine_spec_inference', 'taint_engine_fp_filter'] as const;
-const DEFAULT_MONTHLY_CAP_USD = 50;
 
 export interface CostCapState {
   capUsd: number;
@@ -25,13 +25,15 @@ export interface CostCapState {
 }
 
 export async function getCostCapState(organizationId: string): Promise<CostCapState> {
-  // Cap (defaults to 50 if no row exists yet — matches taint_engine_settings DEFAULT)
+  // Cap defaults to DEFAULT_MONTHLY_AI_COST_CAP_USD if no row exists yet —
+  // single source of truth shared with the route synthesizer + frontend so
+  // the migration default and the synthesized fallback never diverge.
   const { data: settingsRow } = await supabase
     .from('taint_engine_settings')
     .select('monthly_ai_cost_cap_usd')
     .eq('organization_id', organizationId)
     .maybeSingle();
-  const capUsd = Number((settingsRow as { monthly_ai_cost_cap_usd?: number } | null)?.monthly_ai_cost_cap_usd ?? DEFAULT_MONTHLY_CAP_USD);
+  const capUsd = Number((settingsRow as { monthly_ai_cost_cap_usd?: number } | null)?.monthly_ai_cost_cap_usd ?? DEFAULT_MONTHLY_AI_COST_CAP_USD);
 
   // Spend this calendar month — reuse the same boundary getAIUsageSummary
   // implies (start of UTC current month).

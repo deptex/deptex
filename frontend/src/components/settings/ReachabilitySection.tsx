@@ -15,6 +15,7 @@ import {
 } from '../ui/select';
 import { useToast } from '../../hooks/use-toast';
 import { cn } from '../../lib/utils';
+import { DEFAULT_GENERATOR_MONTHLY_BUDGET_USD } from '../../lib/taint-engine-defaults';
 import GeneratedRulesTable from './GeneratedRulesTable';
 
 interface ReachabilitySectionProps {
@@ -85,7 +86,7 @@ export default function ReachabilitySection({ organizationId, canManage }: Reach
     try {
       const s = await api.getReachabilitySettings(organizationId);
       setSettings(s);
-      setBudgetInput(String(s.monthly_budget_usd ?? 10));
+      setBudgetInput(String(s.monthly_budget_usd ?? DEFAULT_GENERATOR_MONTHLY_BUDGET_USD));
       setWaitInput(String(s.max_wait_seconds ?? 300));
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to load settings';
