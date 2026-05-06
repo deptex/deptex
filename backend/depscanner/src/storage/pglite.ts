@@ -96,10 +96,21 @@ function defaultSchemaPath(): string {
 function stripPgliteIncompatible(sql: string): string {
   // Match the full CREATE OR REPLACE FUNCTION block ending at `$function$;`.
   // Both functions use the dollar-quoted body delimiter `$function$`.
-  return sql.replace(
+  let out = sql.replace(
     /CREATE OR REPLACE FUNCTION public\.pg_catalog_dump_v1(_all)?\([^)]*\)[\s\S]*?\$function\$\s*;\s*/g,
     '',
   );
+  // Drop the forward-referenced CHECK constraint on organization_generated_rules
+  // that calls framework_spec_osv_matches_cve(). The function is defined later
+  // in schema.sql, but PGLite parses CHECK predicates eagerly. Production Postgres
+  // tolerates this because the dump emits constraints + functions in one txn;
+  // PGLite executes statements one at a time. Dropping the CHECK is safe locally
+  // — the depscanner never inserts directly into organization_generated_rules.
+  out = out.replace(
+    /ALTER TABLE public\.organization_generated_rules ADD CONSTRAINT organization_generated_rules_framework_spec_osv_match_chk CHECK \(framework_spec_osv_matches_cve\([^)]*\)\);\s*/g,
+    '',
+  );
+  return out;
 }
 
 /**

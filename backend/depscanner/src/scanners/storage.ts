@@ -1,3 +1,5 @@
+import { createHash } from 'crypto';
+
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ContainerFinding, IaCFinding } from './types';
 
@@ -176,4 +178,219 @@ export async function upsertContainerFindings(
     inserted += batch.length;
   }
   return { inserted, staleDeleted: 0 };
+}
+
+// ============================================================================
+// container_image_scan_cache — global digest-keyed result cache (M7)
+//
+// Lookup is read-only and gated by:
+//   1. Composite-PK match: (image_digest, scanner, scanner_version,
+//      trivy_db_version_day). All four columns are equality-filtered; PGLite's
+//      Storage abstraction only supports eq/in, so freshness is checked in JS.
+//   2. 7-day TTL on `scanned_at` (cache rows live up to 30d via the reaper, but
+//      we only trust them for 7d so the Trivy CVE DB stays current).
+//   3. SHA-256 integrity check on scan_results vs. the column's stored hash —
+//      a mismatch logs `cache_integrity_mismatch` and surfaces as a miss so
+//      DB-level corruption can never leak into a project's findings table.
+//
+// Upsert uses ON CONFLICT DO NOTHING (`ignoreDuplicates: true`) so concurrent
+// orgs that simultaneously miss the cache and write the same key don't clobber
+// each other — and so first_scanned_by_org_id / first_scanned_run_id keep the
+// initial-writer attribution they were inserted with.
+//
+// Truncation: scan_results is bounded by a Postgres CHECK at 1 MB. If the
+// findings array serializes larger, we sort by severity desc and drop tail
+// findings until it fits, logging `cache_row_truncated`. The truncation is
+// transparent to readers — the cached array is the canonical scan result.
+// ============================================================================
+
+export type ContainerCacheScanner = 'trivy';
+
+export interface ContainerScanCacheKey {
+  /** Bare 64-hex digest (no `sha256:` prefix, no `<repo>@` prefix) — produced
+   *  by normalizeDigest() in trivy.ts. The CHECK constraint also accepts an
+   *  optional `+linux/amd64` suffix for manifest-list resolution. */
+  image_digest: string;
+  scanner: ContainerCacheScanner;
+  scanner_version: string;
+  /** UTC YYYY-MM-DD; the Trivy CVE DB version-day captured at scan time. */
+  trivy_db_version_day: string;
+}
+
+export interface ContainerScanCacheHit {
+  findings: ContainerFinding[];
+  scanner_version: string;
+}
+
+interface ContainerScanCacheRow extends Record<string, unknown> {
+  image_digest: string;
+  scanner: ContainerCacheScanner;
+  scanner_version: string;
+  trivy_db_version_day: string;
+  scan_results: ContainerFinding[];
+  scan_results_hash: string;
+  first_scanned_by_org_id: string | null;
+  first_scanned_run_id: string | null;
+}
+
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_CACHE_BYTES = 1_048_576;
+// Postgres's JSONB-to-text cast inserts `: ` after keys and `, ` between items,
+// expanding the byte count vs. JSON.stringify. We budget 100 KB of headroom so
+// that anything that fits the in-memory limit also fits the column's CHECK on
+// octet_length(scan_results::text).
+const EFFECTIVE_MAX_BYTES = MAX_CACHE_BYTES - 100_000;
+
+/** Severity rank used for truncation ordering. Higher = kept first. */
+function severityRank(severity: string | null | undefined): number {
+  switch ((severity ?? '').toUpperCase()) {
+    case 'CRITICAL':
+      return 5;
+    case 'HIGH':
+      return 4;
+    case 'MEDIUM':
+      return 3;
+    case 'LOW':
+      return 2;
+    case 'INFO':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+/** Recursive key-sort so JSON.stringify is byte-stable across runs. The hash
+ *  has to round-trip Postgres → Node, so any property-order drift would manifest
+ *  as a false `cache_integrity_mismatch`. */
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((v) => canonicalJson(v)).join(',')}]`;
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(',')}}`;
+}
+
+export function computeScanResultsHash(findings: ContainerFinding[]): string {
+  return createHash('sha256').update(canonicalJson(findings), 'utf8').digest('hex');
+}
+
+/** Trims `findings` to fit within MAX_CACHE_BYTES of JSON.stringify output by
+ *  dropping the lowest-severity tail first. Returns the (possibly identical)
+ *  array plus a flag the caller can log against. */
+export function truncateFindingsToFit(
+  findings: ContainerFinding[]
+): { findings: ContainerFinding[]; truncated: boolean } {
+  const initial = JSON.stringify(findings);
+  if (Buffer.byteLength(initial, 'utf8') <= EFFECTIVE_MAX_BYTES) {
+    return { findings, truncated: false };
+  }
+  // Stable sort: severity desc, then index asc so equal-severity rows keep
+  // their incoming order.
+  const sorted = [...findings]
+    .map((f, i) => ({ f, i }))
+    .sort((a, b) => severityRank(b.f.severity) - severityRank(a.f.severity) || a.i - b.i)
+    .map((x) => x.f);
+
+  let lo = 0;
+  let hi = sorted.length;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi + 1) / 2);
+    const candidate = JSON.stringify(sorted.slice(0, mid));
+    if (Buffer.byteLength(candidate, 'utf8') <= EFFECTIVE_MAX_BYTES) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return { findings: sorted.slice(0, lo), truncated: true };
+}
+
+export async function lookupContainerScanCache(
+  supabase: SupabaseClient,
+  key: ContainerScanCacheKey
+): Promise<ContainerScanCacheHit | null> {
+  const { data, error } = await supabase
+    .from('container_image_scan_cache')
+    .select('image_digest, scanner, scanner_version, trivy_db_version_day, scan_results, scan_results_hash, scanned_at')
+    .eq('image_digest', key.image_digest)
+    .eq('scanner', key.scanner)
+    .eq('scanner_version', key.scanner_version)
+    .eq('trivy_db_version_day', key.trivy_db_version_day)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`lookupContainerScanCache: ${error.message}`);
+  }
+  if (!data) {
+    return null;
+  }
+
+  const row = data as {
+    scan_results: ContainerFinding[];
+    scan_results_hash: string;
+    scanner_version: string;
+    scanned_at: string;
+  };
+
+  // 7-day TTL — checked here rather than via .gte() so PGLite (eq/in only) is
+  // a drop-in for tests.
+  const scannedAtMs = new Date(row.scanned_at).getTime();
+  if (Number.isNaN(scannedAtMs) || Date.now() - scannedAtMs > CACHE_TTL_MS) {
+    return null;
+  }
+
+  const expectedHash = computeScanResultsHash(row.scan_results);
+  if (expectedHash !== row.scan_results_hash) {
+    console.warn(
+      `cache_integrity_mismatch digest=${key.image_digest} scanner=${key.scanner} ` +
+        `version=${key.scanner_version} day=${key.trivy_db_version_day} ` +
+        `expected=${expectedHash} stored=${row.scan_results_hash}`
+    );
+    return null;
+  }
+
+  return { findings: row.scan_results, scanner_version: row.scanner_version };
+}
+
+export async function upsertContainerScanCache(
+  supabase: SupabaseClient,
+  key: ContainerScanCacheKey,
+  parsedFindings: ContainerFinding[],
+  orgId: string,
+  runId: string
+): Promise<void> {
+  const { findings, truncated } = truncateFindingsToFit(parsedFindings);
+  if (truncated) {
+    console.warn(
+      `cache_row_truncated digest=${key.image_digest} ` +
+        `original=${parsedFindings.length} kept=${findings.length}`
+    );
+  }
+
+  const row: ContainerScanCacheRow = {
+    image_digest: key.image_digest,
+    scanner: key.scanner,
+    scanner_version: key.scanner_version,
+    trivy_db_version_day: key.trivy_db_version_day,
+    scan_results: findings,
+    scan_results_hash: computeScanResultsHash(findings),
+    first_scanned_by_org_id: orgId,
+    first_scanned_run_id: runId,
+  };
+
+  // ON CONFLICT DO NOTHING preserves first_scanned_* attribution and is safe
+  // under concurrent cache-miss writes from different orgs.
+  const { error } = await supabase
+    .from('container_image_scan_cache')
+    .upsert(row, {
+      onConflict: 'image_digest,scanner,scanner_version,trivy_db_version_day',
+      ignoreDuplicates: true,
+    });
+  if (error) {
+    throw new Error(`upsertContainerScanCache: ${error.message}`);
+  }
 }
