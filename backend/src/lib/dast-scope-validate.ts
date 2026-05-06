@@ -5,9 +5,13 @@
 //     OR `/(token|secret|password|key)/i` are rejected with
 //     `error_code='sensitive_header_rejected'` (use credential panel instead).
 //   - Each regex pattern length capped at 256 chars.
-//   - Static check rejects nested unbounded quantifiers ((.+)+, (a*)*, etc.).
-//   - Each pattern compile + 100ms-timeout match against synthetic 1000-char URL;
-//     timeout → 422 'regex_pattern_too_expensive'.
+//   - safe-regex2 rejects ReDoS-prone patterns ((a+)+, (.+a){50}b, polynomial
+//     backtracking, alternation overlap). Replaces the pre-2.1a heuristic that
+//     only caught `(\\w+[+*])` shapes.
+//   - Array caps: 32 include / 32 exclude / 16 header_rules. Bounds the
+//     iterative-validation cost even if individual patterns are benign.
+
+import safeRegex from 'safe-regex2';
 
 import type { DastScopeConfig, DastScopeHeaderRule } from '../types/dast';
 
@@ -15,8 +19,7 @@ export type ScopeValidateError =
   | { error_code: 'invalid_scope_shape'; detail: string }
   | { error_code: 'sensitive_header_rejected'; detail: string; header_name?: string }
   | { error_code: 'regex_pattern_too_long'; detail: string; pattern?: string }
-  | { error_code: 'regex_pattern_unsafe'; detail: string; pattern?: string }
-  | { error_code: 'regex_pattern_too_expensive'; detail: string; pattern?: string };
+  | { error_code: 'regex_pattern_unsafe'; detail: string; pattern?: string };
 
 export type ScopeValidateResult =
   | { ok: true; value: DastScopeConfig }
@@ -26,14 +29,9 @@ const SENSITIVE_HEADER_NAMES = /^(Authorization|Cookie|X-Api-Key|X-Auth-Token|X-
 const SENSITIVE_HEADER_TOKENS = /(token|secret|password|key)/i;
 
 const MAX_PATTERN_LEN = 256;
-const COMPILE_TEST_INPUT = 'https://app.example.com/' + 'a'.repeat(1000);
-const COMPILE_TEST_TIMEOUT_MS = 100;
-
-// Heuristic: nested unbounded quantifiers are the canonical ReDoS source.
-// Catches (a+)+, (.+)*, (\\w*)+, etc. Not exhaustive — `safe-regex2` would be
-// stronger, but we don't want a runtime dep just for this. The runtime
-// timeout test below provides the real safety net.
-const RE_NESTED_QUANTIFIER = /\([^)]*[+*][^)]*\)[+*]/;
+const MAX_INCLUDE_PATTERNS = 32;
+const MAX_EXCLUDE_PATTERNS = 32;
+const MAX_HEADER_RULES = 16;
 
 function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === 'string');
@@ -47,41 +45,26 @@ function validatePattern(pattern: string): ScopeValidateError | null {
       pattern,
     };
   }
-  if (RE_NESTED_QUANTIFIER.test(pattern)) {
-    return {
-      error_code: 'regex_pattern_unsafe',
-      detail: 'Nested unbounded quantifiers (e.g. (.+)+) cause exponential backtracking.',
-      pattern,
-    };
-  }
-  let re: RegExp;
   try {
-    re = new RegExp(pattern);
+    new RegExp(pattern);
   } catch (e: any) {
+    // eslint-disable-next-line no-console
+    console.error('[dast-scope-validate] regex compile failed:', e?.message ?? e);
     return {
       error_code: 'regex_pattern_unsafe',
-      detail: `Pattern failed to compile: ${e?.message ?? 'unknown'}`,
+      detail: 'Pattern failed to compile.',
       pattern,
     };
   }
-  // Best-effort timeout test — Node has no native regex timeout, so we wrap
-  // a single match call with `Date.now()` deadline checks. A truly malicious
-  // pattern can blow past this on the first .test() call, but in practice
-  // most ReDoS inputs require many backtracking steps that we can interrupt
-  // by checking elapsed time — except we can't, because regex execution is
-  // single-shot. So this is more of a "did the call return quickly under
-  // benign input" smoke check than a hard guarantee.
-  const t0 = Date.now();
-  try {
-    re.test(COMPILE_TEST_INPUT);
-  } catch {
-    // shouldn't happen — compile already validated
-  }
-  const elapsed = Date.now() - t0;
-  if (elapsed > COMPILE_TEST_TIMEOUT_MS) {
+  // safe-regex2 rejects every ReDoS shape we care about: nested unbounded
+  // quantifiers, repeated-group backtracking ((.+a){50}b), polynomial cases
+  // (a*a*a*...b), alternation-overlap ((a|a)*b). The pre-2.1a heuristic only
+  // matched `(\\w*[+*])` shapes and let real attack patterns through (caught
+  // by the v2.1a critical review).
+  if (!safeRegex(pattern)) {
     return {
-      error_code: 'regex_pattern_too_expensive',
-      detail: `Pattern took ${elapsed}ms on a 1000-char synthetic input (cap: ${COMPILE_TEST_TIMEOUT_MS}ms).`,
+      error_code: 'regex_pattern_unsafe',
+      detail: 'Pattern is unsafe — potential catastrophic backtracking (ReDoS).',
       pattern,
     };
   }
@@ -105,6 +88,15 @@ export function validateScopeConfig(input: unknown): ScopeValidateResult {
         error: { error_code: 'invalid_scope_shape', detail: 'include_patterns must be string[]' },
       };
     }
+    if (raw.include_patterns.length > MAX_INCLUDE_PATTERNS) {
+      return {
+        ok: false,
+        error: {
+          error_code: 'invalid_scope_shape',
+          detail: `include_patterns exceeds ${MAX_INCLUDE_PATTERNS} entries`,
+        },
+      };
+    }
     for (const p of raw.include_patterns) {
       const err = validatePattern(p);
       if (err) return { ok: false, error: err };
@@ -119,6 +111,15 @@ export function validateScopeConfig(input: unknown): ScopeValidateResult {
         error: { error_code: 'invalid_scope_shape', detail: 'exclude_patterns must be string[]' },
       };
     }
+    if (raw.exclude_patterns.length > MAX_EXCLUDE_PATTERNS) {
+      return {
+        ok: false,
+        error: {
+          error_code: 'invalid_scope_shape',
+          detail: `exclude_patterns exceeds ${MAX_EXCLUDE_PATTERNS} entries`,
+        },
+      };
+    }
     for (const p of raw.exclude_patterns) {
       const err = validatePattern(p);
       if (err) return { ok: false, error: err };
@@ -131,6 +132,15 @@ export function validateScopeConfig(input: unknown): ScopeValidateResult {
       return {
         ok: false,
         error: { error_code: 'invalid_scope_shape', detail: 'header_rules must be an array' },
+      };
+    }
+    if (raw.header_rules.length > MAX_HEADER_RULES) {
+      return {
+        ok: false,
+        error: {
+          error_code: 'invalid_scope_shape',
+          detail: `header_rules exceeds ${MAX_HEADER_RULES} entries`,
+        },
       };
     }
     const rules: DastScopeHeaderRule[] = [];

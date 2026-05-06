@@ -2,6 +2,8 @@
 // optional form login probe, and the redacted payload summary returned by
 // GET /credentials.
 
+import safeRegex from 'safe-regex2';
+
 import {
   DastAuthStrategy,
   DastCredentialPayloadSummary,
@@ -9,6 +11,17 @@ import {
   DastCredentialUpsertPayload,
 } from '../types/dast';
 import { validateExternalUrl } from './url-guard';
+
+// Login-probe bounds. Each is independently load-bearing:
+//   - timeout defends against slow-loris upstreams holding the Express handler
+//   - body cap prevents OOM via huge upstream response
+//   - safe-regex pre-check on indicators prevents ReDoS via attacker-controlled
+//     pattern + attacker-controlled body (the user picks the indicator AND
+//     stands up the login_url).
+const PROBE_TIMEOUT_MS = 10_000;
+const PROBE_MAX_REDIRECTS = 3;
+const PROBE_MAX_BODY_BYTES = 1_000_000;
+const INDICATOR_MAX_LENGTH = 256;
 
 export type CredentialValidateError =
   | { error_code: 'invalid_credential_shape'; detail: string }
@@ -179,7 +192,12 @@ function validateJwtExp(token: string, scanTimeoutMinutes: number): CredentialVa
   try {
     claim = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
   } catch (e: any) {
-    return { error_code: 'jwt_decode_failed', detail: e?.message ?? 'payload b64 decode failed' };
+    // Generic detail — Node's JSON.parse messages embed an excerpt of the
+    // input ('Unexpected token \'o\', "not-actuall"...') which would echo
+    // ~11 chars of the user's pasted token to the API response.
+    // eslint-disable-next-line no-console
+    console.error('[dast-credential-validate] JWT payload decode failed:', e?.message ?? e);
+    return { error_code: 'jwt_decode_failed', detail: 'jwt payload is not valid base64-encoded JSON' };
   }
   if (typeof claim.exp !== 'number') {
     return { error_code: 'jwt_expired_too_soon', detail: 'JWT missing `exp` claim' };
@@ -207,6 +225,72 @@ export interface LoginProbeOptions {
   loggedOutIndicator?: string;
 }
 
+function checkIndicatorRegex(
+  raw: string,
+  fieldName: 'logged_in_indicator' | 'logged_out_indicator',
+): CredentialValidateError | null {
+  if (raw.length > INDICATOR_MAX_LENGTH) {
+    return {
+      error_code: 'login_probe_failed',
+      detail: `${fieldName} exceeds ${INDICATOR_MAX_LENGTH} chars`,
+    };
+  }
+  try {
+    new RegExp(raw);
+  } catch {
+    return {
+      error_code: 'login_probe_failed',
+      detail: `${fieldName} is not a valid regex`,
+    };
+  }
+  if (!safeRegex(raw)) {
+    return {
+      error_code: 'login_probe_failed',
+      detail: `${fieldName} regex is unsafe (potential catastrophic backtracking)`,
+    };
+  }
+  return null;
+}
+
+async function readBodyCapped(res: Response, capBytes: number): Promise<string> {
+  const cl = res.headers?.get?.('content-length');
+  if (cl) {
+    const declared = parseInt(cl, 10);
+    if (!isNaN(declared) && declared > capBytes) {
+      // Don't even start streaming — refuse a too-large response upfront.
+      return '';
+    }
+  }
+  // Prefer streaming so we abort midway on a chunked/no-CL response that
+  // exceeds the cap. Fallback to .text() for environments / mocks that don't
+  // expose a streaming body (jest fetch mocks).
+  const reader = (res as any).body?.getReader?.();
+  if (!reader) {
+    const text = await res.text();
+    return text.slice(0, capBytes);
+  }
+  const decoder = new TextDecoder('utf-8');
+  let total = 0;
+  let out = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > capBytes) {
+      try { await reader.cancel(); } catch { /* ignore */ }
+      // Decode whatever we collected before the cap. A partial body still
+      // produces a correct match for the indicator regex when it's near the
+      // top of the page.
+      out += decoder.decode(value.slice(0, Math.max(0, capBytes - (total - value.byteLength))), { stream: false });
+      break;
+    }
+    out += decoder.decode(value, { stream: true });
+  }
+  out += decoder.decode();
+  return out;
+}
+
 export async function probeFormLogin(
   payload: Extract<DastCredentialUpsertPayload, { kind: 'form' }>,
   opts: LoginProbeOptions = {},
@@ -215,6 +299,19 @@ export async function probeFormLogin(
   if (guard.valid === false) {
     return { error_code: 'login_url_invalid', detail: guard.reason };
   }
+
+  // ReDoS pre-check on user-supplied indicators. We compile against an
+  // attacker-controlled response below, so an unsafe pattern combined with a
+  // chosen body would peg the event loop.
+  if (opts.loggedInIndicator) {
+    const err = checkIndicatorRegex(opts.loggedInIndicator, 'logged_in_indicator');
+    if (err) return err;
+  }
+  if (opts.loggedOutIndicator) {
+    const err = checkIndicatorRegex(opts.loggedOutIndicator, 'logged_out_indicator');
+    if (err) return err;
+  }
+
   const fetchImpl = opts.fetchImpl ?? ((globalThis as any).fetch as typeof fetch);
   if (typeof fetchImpl !== 'function') {
     return { error_code: 'login_probe_failed', detail: 'fetch_unavailable' };
@@ -223,41 +320,88 @@ export async function probeFormLogin(
   body.set(payload.username_field, payload.username);
   body.set(payload.password_field, payload.password);
 
-  let res: Response;
+  // AbortSignal.timeout caps total wall-time across the redirect loop; a
+  // slow-loris upstream cannot starve Express threads.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+
   try {
-    res = await fetchImpl(payload.login_url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-    } as any);
-  } catch (e: any) {
-    return { error_code: 'login_probe_failed', detail: e?.message ?? 'fetch_error' };
-  }
-  if (!res.ok && res.status >= 500) {
-    return { error_code: 'login_probe_failed', detail: `login endpoint returned ${res.status}` };
-  }
-  const html = await res.text();
+    let currentUrl = payload.login_url;
+    let res: Response | null = null;
 
-  const inMatch = opts.loggedInIndicator
-    ? new RegExp(opts.loggedInIndicator).test(html)
-    : true;
-  const outMatch = opts.loggedOutIndicator
-    ? new RegExp(opts.loggedOutIndicator).test(html)
-    : false;
+    for (let i = 0; i <= PROBE_MAX_REDIRECTS; i++) {
+      const isInitial = i === 0;
+      try {
+        res = await fetchImpl(currentUrl, {
+          method: isInitial ? 'POST' : 'GET',
+          headers: isInitial
+            ? { 'Content-Type': 'application/x-www-form-urlencoded' }
+            : {},
+          body: isInitial ? body.toString() : undefined,
+          redirect: 'manual',
+          signal: controller.signal,
+        } as any);
+      } catch (e: any) {
+        // Map raw fetch errors to opaque detail. Node fetch errors embed
+        // resolved IPs/ports (e.g. `connect ECONNREFUSED 169.254.169.254:80`)
+        // which would let a tenant probe internal services via the 422
+        // response. Real cause goes to console.error for operator visibility.
+        // eslint-disable-next-line no-console
+        console.error('[dast-credential-validate] login probe fetch failed:', e?.message ?? e);
+        return { error_code: 'login_probe_failed', detail: 'login endpoint did not respond' };
+      }
 
-  if (opts.loggedInIndicator && !inMatch) {
-    return {
-      error_code: 'login_probe_failed',
-      detail: 'logged_in_indicator did not match the post-login response.',
-    };
+      // Manual redirect handling — re-validate every redirect destination
+      // against the SSRF guard so attacker.com cannot 302 to IMDS.
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers?.get?.('location');
+        if (!loc) break;
+        try {
+          currentUrl = new URL(loc, currentUrl).toString();
+        } catch {
+          return { error_code: 'login_url_invalid', detail: 'malformed redirect Location header' };
+        }
+        const r2 = await validateExternalUrl(currentUrl);
+        if (r2.valid === false) {
+          return { error_code: 'login_url_invalid', detail: 'redirect destination rejected by SSRF guard' };
+        }
+        continue;
+      }
+      break;
+    }
+
+    if (!res) {
+      return { error_code: 'login_probe_failed', detail: 'login endpoint did not respond' };
+    }
+    if (!res.ok && res.status >= 500) {
+      return { error_code: 'login_probe_failed', detail: `login endpoint returned ${res.status}` };
+    }
+
+    const html = await readBodyCapped(res, PROBE_MAX_BODY_BYTES);
+
+    const inMatch = opts.loggedInIndicator
+      ? new RegExp(opts.loggedInIndicator).test(html)
+      : true;
+    const outMatch = opts.loggedOutIndicator
+      ? new RegExp(opts.loggedOutIndicator).test(html)
+      : false;
+
+    if (opts.loggedInIndicator && !inMatch) {
+      return {
+        error_code: 'login_probe_failed',
+        detail: 'logged_in_indicator did not match the post-login response.',
+      };
+    }
+    if (opts.loggedInIndicator && opts.loggedOutIndicator && inMatch && outMatch) {
+      return {
+        error_code: 'login_probe_failed_indicator_collision',
+        detail: 'logged_out_indicator also matched the post-login response — fix your regex.',
+      };
+    }
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
-  if (opts.loggedInIndicator && opts.loggedOutIndicator && inMatch && outMatch) {
-    return {
-      error_code: 'login_probe_failed_indicator_collision',
-      detail: 'logged_out_indicator also matched the post-login response — fix your regex.',
-    };
-  }
-  return null;
 }
 
 // ---------------------------------------------------------------------------
