@@ -11,7 +11,13 @@ import type { CapabilityDetector, CapabilitySet } from './types';
 
 const EXTS = ['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts'];
 
-const RX_SPAWNS = /\b(child_process)\b|require\((['"])child_process\2\)|\b(execSync|execFileSync|spawnSync|spawn|exec|fork|execFile)\s*\(|\bBun\.spawn\s*\(/;
+// child_process linkage OR Bun.spawn — and nothing else. v1's looser regex
+// matched bare `\b(exec|spawn|fork)\s*\(`, which fires on every file that
+// uses `RegExp.prototype.exec()` (so: lodash, every parser, every
+// validator). Real spawning either imports child_process by name (in which
+// case `child_process` appears verbatim in the file source) or uses the
+// Bun runtime's globally-scoped `Bun.spawn(...)`.
+const RX_SPAWNS = /\b(child_process)\b|require\((['"])child_process\2\)|from\s+(['"])child_process\3|\bBun\.spawn\s*\(/;
 const RX_NETWORK = /\bfetch\s*\(|require\((['"])(?:http|https|node-fetch|axios|got|request|undici)\1\)|from\s+['"](?:axios|node-fetch|got|undici)['"]|\b(?:XMLHttpRequest|http\.request|https\.request|http\.get|https\.get)\b/;
 const RX_EVAL = /\beval\s*\(|new\s+Function\s*\(|\bvm\.(?:runIn|compile)|require\((['"])vm\1\)/;
 const RX_NATIVE = /require\((['"])[^'"]*\.node\1\)|\bprocess\.dlopen\s*\(|require\((['"])bindings\2\)|require\((['"])node-gyp-build\3\)/;

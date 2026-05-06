@@ -53,7 +53,7 @@ function emptyGhsaPage() {
     status: 200,
     json: async () => ({
       data: {
-        securityAdvisories: {
+        securityVulnerabilities: {
           pageInfo: { hasNextPage: false, endCursor: null },
           nodes: [],
         },
@@ -98,8 +98,13 @@ describe('GHSA per-ecosystem fan-out', () => {
     // Sample one query and verify it has the structural anchors we depend on.
     const npmQuery = queries.find((q) => /ecosystem:\s*NPM/.test(q));
     expect(npmQuery).toBeDefined();
+    // Schema-correct: the ecosystem filter lives on securityVulnerabilities,
+    // NOT securityAdvisories (the latter has no ecosystem arg per GitHub's
+    // GraphQL schema, verified live 2026-05-05).
+    expect(npmQuery!).toContain('securityVulnerabilities');
+    expect(npmQuery!).not.toContain('securityAdvisories');
     expect(npmQuery!).toContain('classifications: [MALWARE]');
-    expect(npmQuery!).toContain('orderBy: { field: PUBLISHED_AT, direction: DESC }');
+    expect(npmQuery!).toContain('orderBy: { field: UPDATED_AT, direction: DESC }');
   });
 
   it('retries on 429 with backoff and recovers the page', async () => {

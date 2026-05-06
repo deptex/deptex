@@ -234,11 +234,22 @@ async function syncGhsa(): Promise<{ entries_added: number; entries_withdrawn: n
 
     while (pages < GHSA_MAX_PAGES_PER_ECO) {
       const page = await fetchGhsaMalwarePage(cursor, token, eco.ghsa);
-      if (!page || page.advisories.length === 0) break;
+      if (!page || page.vulnerabilities.length === 0) break;
 
+      // Each `securityVulnerabilities` node is one (package, advisory) row.
+      // Reshape into the synthetic-advisory shape `advisoryToEntries` already
+      // understands so the OSV path can stay unchanged.
       const entries: UpsertEntry[] = [];
-      for (const adv of page.advisories) {
-        for (const e of await advisoryToEntries(adv, 'ghsa', eco.canonical, cache)) {
+      for (const vuln of page.vulnerabilities) {
+        const synthetic = {
+          ghsaId: vuln.advisory?.ghsaId,
+          summary: vuln.advisory?.summary,
+          description: vuln.advisory?.description,
+          severity: vuln.advisory?.severity,
+          withdrawnAt: vuln.advisory?.withdrawnAt,
+          vulnerabilities: { nodes: [vuln] },
+        };
+        for (const e of await advisoryToEntries(synthetic, 'ghsa', eco.canonical, cache)) {
           entries.push(e);
         }
       }
@@ -261,27 +272,28 @@ async function fetchGhsaMalwarePage(
   token: string,
   ghsaEcosystem: string,
   attempt = 0,
-): Promise<{ advisories: any[]; hasNextPage: boolean; endCursor: string | null } | null> {
+): Promise<{ vulnerabilities: any[]; hasNextPage: boolean; endCursor: string | null } | null> {
   const after = cursor ? `, after: ${JSON.stringify(cursor)}` : '';
-  // The advisory-level `ecosystem` filter is the M2.1 fan-out hinge: each
-  // call returns up to 5k MALWARE advisories scoped to one ecosystem,
-  // letting us page-walk per-eco without competing for the global 50-page
-  // cap. orderBy stays PUBLISHED_AT DESC so we always page through newest
-  // first — if we hit the cap, we miss old advisories rather than recent.
+  // SCHEMA NOTE — verified against api.github.com 2026-05-05:
+  //   `securityAdvisories` does NOT accept an `ecosystem` argument.
+  //   `securityVulnerabilities` DOES — it's the per-(package, advisory)
+  //    join shape with the filter we need. Each node arrives pre-joined,
+  //    so the M2.1 per-ecosystem fan-out works after a small reshape into
+  //    the synthetic-advisory shape advisoryToEntries already accepts.
+  // orderBy: securityVulnerabilities only exposes UPDATED_AT — that's
+  // fine since we run daily and pull newest-first.
   const query = `query {
-    securityAdvisories(first: 100${after}, classifications: [MALWARE], ecosystem: ${ghsaEcosystem}, orderBy: { field: PUBLISHED_AT, direction: DESC }) {
+    securityVulnerabilities(first: 100${after}, ecosystem: ${ghsaEcosystem}, classifications: [MALWARE], orderBy: { field: UPDATED_AT, direction: DESC }) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        ghsaId
-        summary
-        description
-        severity
-        withdrawnAt
-        vulnerabilities(first: 100) {
-          nodes {
-            package { ecosystem name }
-            vulnerableVersionRange
-          }
+        package { ecosystem name }
+        vulnerableVersionRange
+        advisory {
+          ghsaId
+          summary
+          description
+          severity
+          withdrawnAt
         }
       }
     }
@@ -313,12 +325,12 @@ async function fetchGhsaMalwarePage(
   if (json.errors) {
     throw new Error(`GHSA GraphQL errors (eco=${ghsaEcosystem}): ${JSON.stringify(json.errors)}`);
   }
-  const sa = json.data?.securityAdvisories;
-  if (!sa) return null;
+  const sv = json.data?.securityVulnerabilities;
+  if (!sv) return null;
   return {
-    advisories: sa.nodes ?? [],
-    hasNextPage: Boolean(sa.pageInfo?.hasNextPage),
-    endCursor: sa.pageInfo?.endCursor ?? null,
+    vulnerabilities: sv.nodes ?? [],
+    hasNextPage: Boolean(sv.pageInfo?.hasNextPage),
+    endCursor: sv.pageInfo?.endCursor ?? null,
   };
 }
 

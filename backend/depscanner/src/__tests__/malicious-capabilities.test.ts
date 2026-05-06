@@ -37,6 +37,30 @@ describe('jsDetector', () => {
     expect(r.spawns_processes).toBe(true);
   });
 
+  test('detects spawns_processes via ESM child_process import', () => {
+    const r = jsDetector.detect("import { spawn } from 'child_process'; spawn('ls');");
+    expect(r.spawns_processes).toBe(true);
+  });
+
+  test('detects spawns_processes via Bun.spawn', () => {
+    const r = jsDetector.detect("await Bun.spawn(['ls']);");
+    expect(r.spawns_processes).toBe(true);
+  });
+
+  test('does NOT flag spawns_processes on RegExp.prototype.exec usage (lodash _isMasked.js regression)', () => {
+    // v1 regex matched bare `\bexec\s*\(`, which fires on every npm package
+    // that uses regex.exec(). Real-world example caught via e2e test on
+    // lodash's _isMasked.js — the line below.
+    const r = jsDetector.detect("var uid = /[^.]+$/.exec(coreJsData && coreJsData.keys && coreJsData.keys.IE_PROTO || '');");
+    expect(r.spawns_processes).toBe(false);
+  });
+
+  test('does NOT flag spawns_processes on bare spawn/fork without child_process linkage', () => {
+    // Common in test mocks (`jest.spawn(...)`, fiber-like libraries, etc.)
+    const r = jsDetector.detect("const id = jest.spawn(); const child = thread.fork();");
+    expect(r.spawns_processes).toBe(false);
+  });
+
   test('detects eval_dynamic via new Function', () => {
     const r = jsDetector.detect('const f = new Function("return 42")();');
     expect(r.eval_dynamic).toBe(true);
