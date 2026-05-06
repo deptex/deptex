@@ -141,17 +141,28 @@ app.use('/api/organizations', projectsRouter);
 // blocked; reads, target CRUD, and credential CRUD continue to pass through
 // so the UI can still surface state and operators can clean up. See
 // docs/runbooks/dast-v2-1a-deploy.md for the full deploy DAG.
-app.use('/api/projects', (req, res, next) => {
+//
+// Exported so tests import the production wiring rather than re-implementing
+// the path regex inline (a divergence between test and prod is exactly the
+// failure mode this middleware exists to prevent).
+export const DAST_SCAN_DRAIN_PATH = /^\/[^/]+\/dast\/scan\/?$/;
+
+export function dastDrainMiddleware(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction,
+) {
   if (
     process.env.INTERNAL_DAST_PAUSED === 'true' &&
     req.method === 'POST' &&
-    /^\/[^/]+\/dast\/scan\/?$/.test(req.path)
+    DAST_SCAN_DRAIN_PATH.test(req.path)
   ) {
     return res.status(503).json({ error: 'dast_queue_paused' });
   }
   next();
-});
+}
 
+app.use('/api/projects', dastDrainMiddleware);
 app.use('/api/projects', dastRouter);
 app.use('/api/organizations', scannerFindingsRouter);
 app.use('/api/organizations', maliciousRouter);

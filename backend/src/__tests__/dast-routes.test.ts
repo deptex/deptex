@@ -506,21 +506,16 @@ describe('Cross-tenant 404 matrix — every :targetId route', () => {
 // ---------------------------------------------------------------------------
 
 describe('Drain mode — POST /dast/scan returns 503 when INTERNAL_DAST_PAUSED=true', () => {
+  // Import the production middleware rather than rebuilding it inline. A
+  // divergence between the test stub and the real wiring is exactly what
+  // this gate is supposed to prevent (path regex drift, write-method drift).
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { dastDrainMiddleware } = require('../index');
+
   function makeAppWithDrain() {
     const app = express();
     app.use(express.json());
-    // Mirror the drain middleware from backend/src/index.ts so this test
-    // proves the wired contract, not the handler in isolation.
-    app.use('/api/projects', (req, res, next) => {
-      if (
-        process.env.INTERNAL_DAST_PAUSED === 'true' &&
-        req.method === 'POST' &&
-        /^\/[^/]+\/dast\/scan\/?$/.test(req.path)
-      ) {
-        return res.status(503).json({ error: 'dast_queue_paused' });
-      }
-      next();
-    });
+    app.use('/api/projects', dastDrainMiddleware);
     app.use('/api/projects', dastRouter);
     return app;
   }
