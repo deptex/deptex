@@ -310,7 +310,7 @@ async function loadCredentialOrAbort(
   scanJob: ScanJobRow,
   target: TargetRow,
 ): Promise<LoadedCredential | null> {
-  const { data: credData } = await supabase
+  const { data: credData, error: credErr } = await supabase
     .from('project_dast_credentials')
     .select(
       'id, target_id, organization_id, auth_strategy, encrypted_payload, encryption_key_version, logged_in_indicator, logged_out_indicator',
@@ -318,11 +318,50 @@ async function loadCredentialOrAbort(
     .eq('target_id', target.id)
     .maybeSingle();
 
+  if (credErr) {
+    // Transient Supabase failure — never fall through to anonymous, because an
+    // authenticated scan may have been expected (scan_jobs.credential_id was
+    // captured at queue time and the operator typed credentials). Hard-abort
+    // so the run is retried instead of silently scanning unauthenticated.
+    throw new DastPipelineAbortError(
+      'unknown',
+      { stage: 'load_credential' },
+      `Failed to load credential row: ${credErr.message ?? 'unknown error'}`,
+    );
+  }
+
   if (!credData) {
-    // No credentials → anonymous scan. This is allowed.
+    // Missing row. If scan_jobs.credential_id was captured at queue time, the
+    // row was rotated/deleted between queue and worker — hard abort. Without
+    // a captured credential_id, this scan was queued anonymous, which is OK.
+    if (scanJob.credential_id) {
+      throw new DastPipelineAbortError(
+        'dast_credential_rotated',
+        { credential_id_at_queue: scanJob.credential_id },
+        'credential row missing — was rotated or deleted between queue time and worker spawn',
+      );
+    }
     return null;
   }
   const credRow = credData as CredentialRow;
+
+  // Cross-tenant defense-in-depth: the credential row's organization_id MUST
+  // match the target's organization_id. Worker uses service-role and bypasses
+  // RLS, so a credential row whose organization_id has drifted from its
+  // target (DB corruption, race during target re-parenting, RLS-bypassing
+  // INSERT) would otherwise get decrypted and emitted into ZAP YAML for a
+  // foreign-tenant scan. The 3-layer guard at loadTenantGuardRows above only
+  // covers (scan_jobs, project, target) — credentials need their own check.
+  if (credRow.organization_id !== target.organization_id) {
+    throw new DastPipelineAbortError(
+      'tenant_drift_detected',
+      {
+        stage: 'credential_org_mismatch',
+        expected_org_id: target.organization_id,
+      },
+      'credential row organization_id does not match target organization_id',
+    );
+  }
 
   // Defense-in-depth: target row didn't say has_credentials but a row exists.
   // Run the credentialed scan anyway — scan_jobs.credential_id captured at
@@ -370,10 +409,17 @@ async function loadCredentialOrAbort(
     payload = JSON.parse(plaintext) as CredentialPayload;
   } catch (e) {
     wipePlaintext(plaintextBuffer);
+    // Generic message — Node's JSON.parse errors embed an excerpt of the
+    // input, and at this stage `plaintext` is the user's decrypted credential
+    // payload. Surfacing the raw error to scan_jobs.error_payload would leak
+    // ~11 chars of credential plaintext into a column that may be displayed
+    // to other org members in the UI.
+    // eslint-disable-next-line no-console
+    console.error('[dast-pipeline] credential payload JSON malformed:', (e as Error).message);
     throw new DastPipelineAbortError(
       'dast_credential_key_stale',
       null,
-      `Credential payload JSON malformed: ${(e as Error).message}`,
+      'credential payload is not valid JSON (try rotating credentials)',
     );
   }
 

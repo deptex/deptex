@@ -505,7 +505,7 @@ router.get(
       const { data: cred, error } = await supabase
         .from('project_dast_credentials')
         .select(
-          'auth_strategy, encrypted_payload, encryption_key_version, logged_in_indicator, logged_out_indicator, updated_at',
+          'auth_strategy, encrypted_payload, encryption_key_version, organization_id, logged_in_indicator, logged_out_indicator, updated_at',
         )
         .eq('target_id', targetId)
         .maybeSingle();
@@ -514,6 +514,17 @@ router.get(
         return res.status(500).json({ error: 'Failed to load credentials' });
       }
       if (!cred) return res.status(404).json({ error: 'credentials_not_set' });
+
+      // Cross-tenant defense-in-depth. The default Supabase client uses
+      // service-role and bypasses RLS, so a credential row whose
+      // organization_id has drifted (FK race, manual SQL, RLS-bypassing
+      // INSERT) would be decrypted across tenants. loadTargetOrDeny verifies
+      // the target's tenancy upstream but doesn't read the credential row.
+      // Match the worker's invariant: refuse to decrypt if the row's org
+      // doesn't match the access-resolved org. 404 to avoid enumeration.
+      if ((cred as { organization_id: string }).organization_id !== access.organizationId) {
+        return res.status(404).json({ error: 'credentials_not_set' });
+      }
 
       // Decrypt only to derive the summary, then drop the plaintext from
       // memory immediately. We intentionally do NOT return raw plaintext.
