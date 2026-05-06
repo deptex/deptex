@@ -4,6 +4,7 @@ import { api, type Organization, type ProjectVulnerability } from '../../lib/api
 import VulnerabilityExpandableTable from '../../components/security/VulnerabilityExpandableTable';
 import OrganizationVulnerabilitiesTableSkeleton from '../../components/security/OrganizationVulnerabilitiesTableSkeleton';
 import { Button } from '../../components/ui/button';
+import PageHeader from '../../components/PageHeader';
 
 interface OrganizationContextType {
   organization: Organization | null;
@@ -64,19 +65,20 @@ export default function OrganizationVulnerabilitiesTabPage() {
 
   return (
     <main className="flex flex-col flex-1 min-h-0 w-full bg-background overflow-y-auto">
-      <div className="mx-auto max-w-7xl w-full px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-        <div>
-          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h1 className="text-lg font-semibold text-foreground">Vulnerabilities</h1>
+      <PageHeader
+        title={
+          <>
+            <span>Vulnerabilities</span>
             {!listLoading && (
-              <span className="text-sm tabular-nums text-muted-foreground">{total.toLocaleString()} open</span>
+              <span className="text-sm font-normal tabular-nums text-foreground-secondary">
+                {total.toLocaleString()} open
+              </span>
             )}
-          </div>
-          <p className="text-sm text-muted-foreground mt-1.5 max-w-2xl leading-relaxed">
-            Dependency advisories across your workspace.
-          </p>
-        </div>
-
+          </>
+        }
+        description="Dependency advisories across your workspace."
+      />
+      <div className="mx-auto max-w-7xl w-full px-4 sm:px-6 lg:px-8 py-6 space-y-6">
         {listError && (
           <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {listError}
