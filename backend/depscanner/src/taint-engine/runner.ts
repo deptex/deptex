@@ -41,6 +41,13 @@ import {
   createUsageLogger,
   type TripleResult,
 } from './fp-filter';
+import {
+  assertWithinCostCap,
+  refundReservation,
+  CostCapExceededError,
+  CostCapInfraError,
+  DEFAULT_MONTHLY_AI_COST_CAP_USD,
+} from './cost-cap';
 import type { Storage } from '../storage';
 
 export interface RunEngineOptions {
@@ -408,19 +415,16 @@ async function runFpFilterStage(
     return { stats: baseStats, flowsAfterFilter: flows };
   }
 
-  // Cost-cap pre-check: project the cost and bail (degrade to deterministic-only)
-  // if running the batch would push the org over its monthly cap.
-  const cap = Number(settings?.monthly_ai_cost_cap_usd ?? 50);
-  const spendNow = await readMonthlySpend(fp.storage, fp.organizationId, onWarn);
-  const projected = below.reduce((sum, f) => sum + estimatePerFlowCostUsd(f), 0);
-  if (Number.isFinite(cap) && spendNow + projected > cap) {
-    baseStats.skippedReason = 'cost_cap_exceeded';
-    baseStats.durationMs = Date.now() - start;
-    onWarn?.(
-      `fp-filter skipped: projected $${projected.toFixed(4)} on top of $${spendNow.toFixed(4)} would exceed cap $${cap.toFixed(2)}`,
-    );
-    return { stats: baseStats, flowsAfterFilter: flows };
-  }
+  // Per-call atomic cost-cap (Redis INCRBYFLOAT) replaces the old pre-batch
+  // SUM-based precheck. The previous design read monthlySpend from the RPC,
+  // projected the whole batch, and gated once — two concurrent extractions
+  // could both pass and both burn the cap. Redis check-and-increment makes
+  // each call serialized at the bucket key.
+  //
+  // Cap value comes from settings (with sane default); we read it once for
+  // the warn message but the actual cap is read inside assertWithinCostCap
+  // so a settings change mid-batch is honored on the next call.
+  const cap = Number(settings?.monthly_ai_cost_cap_usd ?? DEFAULT_MONTHLY_AI_COST_CAP_USD);
 
   baseStats.invoked = true;
   const logger = createUsageLogger(fp.storage, {
@@ -433,7 +437,45 @@ async function runFpFilterStage(
   // Sequential calls so we don't overwhelm the rate limit on huge batches.
   // ~60s timeout per call; for ≤100 flows the M7 perf budget allows this.
   const surviving: Flow[] = [...above];
+  let capExhausted = false;
+  let capInfraFailed = false;
   for (const f of below) {
+    if (capExhausted || capInfraFailed) {
+      // Once we hit the cap (or Redis is down), the remaining flows pass
+      // through unfiltered — same semantics as kept_on_error so they get
+      // graded by the deterministic engine alone, not silently dropped.
+      surviving.push(f);
+      continue;
+    }
+
+    const perFlowEstimate = estimatePerFlowCostUsd(f);
+
+    // Atomic reservation against the per-org Redis bucket. The cap is
+    // re-read inside assertWithinCostCap, so settings changes propagate.
+    try {
+      await assertWithinCostCap(fp.storage, fp.organizationId, perFlowEstimate);
+    } catch (err) {
+      if (err instanceof CostCapExceededError) {
+        capExhausted = true;
+        baseStats.skippedReason ??= 'cost_cap_exceeded_mid_batch';
+        onWarn?.(
+          `fp-filter cap exhausted at flow ${f.id}: $${err.spentUsd.toFixed(4)} of $${err.capUsd.toFixed(2)} (cap context $${cap.toFixed(2)})`,
+        );
+        surviving.push(f);
+        continue;
+      }
+      if (err instanceof CostCapInfraError) {
+        // Fail-closed on Redis outage. We surface a distinct skippedReason
+        // so admins can tell the difference from "cap actually blown".
+        capInfraFailed = true;
+        baseStats.skippedReason ??= 'cost_cap_unavailable';
+        onWarn?.(`fp-filter halted: cost-cap infrastructure unavailable: ${err.message}`);
+        surviving.push(f);
+        continue;
+      }
+      throw err;
+    }
+
     const result = await filterFlow(
       { flow: f, workspaceRoot, apiKey, model: fp.model, specs, onWarn },
       logger,
@@ -445,6 +487,15 @@ async function runFpFilterStage(
       },
     );
     baseStats.verdicts.set(f.id, result);
+
+    // Refund the difference between projected and actual so the bucket
+    // stays accurate when the call cost less than estimated (sanitizer
+    // pre-pass found candidates → smaller prompt, etc).
+    const overshoot = perFlowEstimate - result.costUsd;
+    if (overshoot > 0) {
+      await refundReservation(fp.organizationId, overshoot);
+    }
+
     if (result.verdict === 'kept_on_error' || result.verdict === 'ai_truncated') {
       // Both error paths keep the flow but feed a synthetic ai_filter_verdict
       // node downstream so the M5 aggregator can EXCLUDE the flow from the
@@ -475,31 +526,6 @@ function clampThreshold(raw: number | string | null | undefined): number {
   if (v < 0) return 0;
   if (v > 1) return 1;
   return v;
-}
-
-async function readMonthlySpend(
-  storage: Storage,
-  organizationId: string,
-  onWarn?: (msg: string) => void,
-): Promise<number> {
-  // Prefer the dedicated RPC (server-side SUM); fall back to 0 if it isn't
-  // installed (older self-host migrations) — the cap will then defer to the
-  // engine's deterministic output and the next admin migration will catch up.
-  try {
-    const { data, error } = await storage.rpc<number | string>(
-      'get_taint_engine_monthly_spend',
-      { p_organization_id: organizationId },
-    );
-    if (error) {
-      onWarn?.(`get_taint_engine_monthly_spend rpc failed: ${error.message}`);
-      return 0;
-    }
-    const v = typeof data === 'number' ? data : Number(data ?? 0);
-    return Number.isFinite(v) ? v : 0;
-  } catch (err) {
-    onWarn?.(`get_taint_engine_monthly_spend rpc threw: ${(err as Error).message}`);
-    return 0;
-  }
 }
 
 /**

@@ -330,6 +330,15 @@ export async function runRuleGenerationStep(
     return /rate.?limit|429/i.test(errors.join(' | '));
   };
 
+  // Per-CVE budget recheck. With pLimit(5), 5 concurrent CVEs can each pass
+  // a single pre-flight summation and burn the cap together. Re-reading
+  // monthlySpend before EACH pLimit task body picks up spend from sibling
+  // tasks that already wrote ai_usage_logs rows, so the 6th CVE in a batch
+  // sees 5 rows of new spend and bails. Same fail-closed semantics as
+  // applyBudgetCap: read failure → skip CVE.
+  const PER_CVE_PESSIMISTIC = 0.10;
+  const monthlyBudget = settings.monthly_budget_usd;
+
   const results = await Promise.all(
     candidates.map((vuln) =>
       limit(async () => {
@@ -339,6 +348,23 @@ export async function runRuleGenerationStep(
             cveId: vuln.osv_id!,
             skipped: true as const,
             reason: 'overall_max_wait_exceeded',
+          };
+        }
+
+        // Per-CVE cap recheck — fresh SUM read so concurrent slots converge.
+        const spendNow = await readRuleGenMonthlySpend(supabase, organizationId);
+        if (spendNow === null) {
+          return {
+            cveId: vuln.osv_id!,
+            skipped: true as const,
+            reason: 'budget_read_failed',
+          };
+        }
+        if (spendNow + PER_CVE_PESSIMISTIC > monthlyBudget) {
+          return {
+            cveId: vuln.osv_id!,
+            skipped: true as const,
+            reason: 'budget_exhausted_mid_batch',
           };
         }
 
@@ -564,21 +590,23 @@ interface ApplyBudgetArgs {
   log: LogLike;
 }
 
-async function applyBudgetCap(args: ApplyBudgetArgs): Promise<{ effectiveModel: string; budgetSkipped: boolean }> {
-  const { settings, organizationId, candidateCount, supabase, log } = args;
-
-  // Pull this calendar month's spend on rule_generation from ai_usage_logs.
-  // Best-effort — failure to read defaults to "no spend yet".
-  let monthlySpend = 0;
+/**
+ * Read this calendar month's `rule_generation` spend from ai_usage_logs.
+ * Returns the SUM in USD, or `null` when the read failed — callers MUST
+ * fail-closed on null (skip / error out) rather than fall back to $0,
+ * which would silently disable the per-org cap during a Supabase outage.
+ */
+async function readRuleGenMonthlySpend(
+  supabase: Storage,
+  organizationId: string,
+): Promise<number | null> {
   try {
     const monthStart = new Date();
     monthStart.setUTCDate(1);
     monthStart.setUTCHours(0, 0, 0, 0);
     // The Storage abstraction (used in PGLite local-mode) doesn't expose
-    // .gte for non-string types, so cast to any here. PGLite's adapter
-    // does support gte at runtime; this just sidesteps the narrowed type.
-    // Failure is non-fatal — we'll fall back to zero spend and rely on
-    // the per-CVE budget heuristic alone.
+    // .gte for non-string types, so cast here. PGLite's adapter does
+    // support gte at runtime; this just sidesteps the narrowed type.
     const builder = supabase
       .from('ai_usage_logs')
       .select('estimated_cost')
@@ -586,20 +614,32 @@ async function applyBudgetCap(args: ApplyBudgetArgs): Promise<{ effectiveModel: 
       .eq('feature', 'rule_generation') as unknown as {
         gte: (col: string, val: string) => Promise<{ data: unknown; error: unknown }>;
       };
-    const { data } = await builder.gte('created_at', monthStart.toISOString());
+    const { data, error } = await builder.gte('created_at', monthStart.toISOString());
+    if (error) return null;
+    let sum = 0;
     for (const row of (data as Array<{ estimated_cost?: number | string }> | null) ?? []) {
       const v = typeof row.estimated_cost === 'string' ? parseFloat(row.estimated_cost) : row.estimated_cost ?? 0;
-      monthlySpend += Number(v) || 0;
+      sum += Number(v) || 0;
     }
-  } catch (err) {
-    // Read failure is non-fatal — fall back to zero monthly spend so a brief
-    // outage doesn't block legitimate generation. But log loudly: a sustained
-    // outage silently disables the per-org monthly_budget_usd cap, which is
-    // the only thing standing between us and a runaway BYOK bill.
+    return sum;
+  } catch {
+    return null;
+  }
+}
+
+async function applyBudgetCap(args: ApplyBudgetArgs): Promise<{ effectiveModel: string; budgetSkipped: boolean }> {
+  const { settings, organizationId, candidateCount, supabase, log } = args;
+
+  // Fail-closed on read error: previously we fell back to monthlySpend=0 on
+  // a Supabase outage, which silently disabled the per-org cap — the only
+  // thing standing between us and a runaway BYOK bill. Now: skip generation.
+  const monthlySpend = await readRuleGenMonthlySpend(supabase, organizationId);
+  if (monthlySpend === null) {
     await log.warn(
       STEP_NAME,
-      `Failed to read ai_usage_logs for monthly budget cap; falling back to zero spent. Monthly budget enforcement is degraded until this recovers: ${err instanceof Error ? err.message : String(err)}`,
+      'Skipping rule generation: ai_usage_logs read failed; cannot enforce monthly budget cap. Generation will resume when Supabase recovers.',
     );
+    return { effectiveModel: settings.ai_model, budgetSkipped: true };
   }
 
   const remaining = Math.max(0, settings.monthly_budget_usd - monthlySpend);
