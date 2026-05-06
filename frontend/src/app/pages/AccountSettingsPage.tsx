@@ -2,10 +2,20 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
+import { api, Organization } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { Button } from '../../components/ui/button';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../../components/ui/select';
 import { Edit2 } from 'lucide-react';
 import { getAvatarUrl, getDisplayNameOrNull } from '../../lib/userIdentity';
+
+const NO_DEFAULT_ORG = '__none__';
 
 export default function AccountSettingsPage() {
   const { pathname } = useLocation();
@@ -24,6 +34,10 @@ export default function AccountSettingsPage() {
     github: false,
     google: false,
   });
+
+  const [organizations, setOrganizations] = useState<Organization[] | null>(null);
+  const [defaultOrgId, setDefaultOrgId] = useState<string | null>(null);
+  const [savingDefaultOrg, setSavingDefaultOrg] = useState(false);
 
   const trimmedName = displayName.trim();
   const currentName = (fullName || '').trim();
@@ -62,6 +76,62 @@ export default function AccountSettingsPage() {
     });
     setIntegrations(integrationMap);
   }, [user]);
+
+  // Load the user's orgs + current default for the picker. Failures are
+  // non-fatal — the card just won't render until orgs resolve.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [orgs, profile] = await Promise.all([
+          api.getOrganizations(),
+          api.getUserProfile(),
+        ]);
+        if (cancelled) return;
+        setOrganizations(orgs);
+        setDefaultOrgId(profile.default_organization_id);
+      } catch (error) {
+        console.error('Failed to load organizations / default org:', error);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleDefaultOrgChange = async (value: string) => {
+    if (savingDefaultOrg) return;
+    const newId = value === NO_DEFAULT_ORG ? null : value;
+    if (newId === defaultOrgId) return;
+
+    const previous = defaultOrgId;
+    setDefaultOrgId(newId);
+    setSavingDefaultOrg(true);
+    try {
+      await api.updateUserProfile({ default_organization_id: newId });
+      // Keep the localStorage cache in sync so SettingsRedirect + the
+      // OrganizationsLanding fast-path see the new default without a refetch.
+      if (newId) {
+        localStorage.setItem('deptex_default_org', newId);
+      } else {
+        localStorage.removeItem('deptex_default_org');
+      }
+      toast({
+        title: 'Default organization updated',
+        description: newId
+          ? 'You will land here next time you open Deptex.'
+          : 'Your default organization has been cleared.',
+      });
+    } catch (error) {
+      console.error('Failed to update default organization:', error);
+      setDefaultOrgId(previous);
+      toast({
+        title: 'Update failed',
+        description: 'Could not update your default organization. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setSavingDefaultOrg(false);
+    }
+  };
 
   useEffect(() => {
     const connected = searchParams.get('connected');
@@ -273,6 +343,35 @@ export default function AccountSettingsPage() {
                 >
                   {savingGeneral ? 'Saving...' : 'Save'}
                 </Button>
+              </div>
+            </div>
+
+            {/* Default Organization Card */}
+            <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+              <div className="p-6 space-y-3">
+                <h3 className="text-base font-semibold text-foreground">Default Organization</h3>
+                <p className="text-sm text-foreground-secondary">
+                  When you open Deptex, you'll land in this organization. Pick "No default" to land on the org switcher instead.
+                </p>
+                <div className="max-w-md">
+                  <Select
+                    value={defaultOrgId ?? NO_DEFAULT_ORG}
+                    onValueChange={handleDefaultOrgChange}
+                    disabled={savingDefaultOrg || organizations === null}
+                  >
+                    <SelectTrigger className="w-full bg-black/20 border-border">
+                      <SelectValue placeholder={organizations === null ? 'Loading...' : 'Select an organization'} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={NO_DEFAULT_ORG}>No default</SelectItem>
+                      {organizations?.map((org) => (
+                        <SelectItem key={org.id} value={org.id}>
+                          {org.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             </div>
           </div>
