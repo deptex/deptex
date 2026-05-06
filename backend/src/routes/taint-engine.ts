@@ -40,6 +40,7 @@ import {
   getById,
 } from '../lib/taint-engine/spec-cache';
 import { CostCapExceededError, getCostCapState } from '../lib/taint-engine/cost-cap';
+import { ALL_VULN_CLASSES, COST_CAP_MAX_USD, DEFAULT_MONTHLY_AI_COST_CAP_USD } from '../lib/taint-engine-defaults';
 
 const router = express.Router({ mergeParams: true });
 
@@ -82,17 +83,12 @@ function requirePerm(perm: string) {
 // Settings
 // ---------------------------------------------------------------------------
 
-const VULN_CLASSES = new Set([
-  'sql_injection', 'ssrf', 'xss', 'path_traversal', 'command_injection',
-  'prototype_pollution', 'deserialization', 'redos', 'file_upload',
-  'open_redirect', 'log_injection',
-]);
-
-const DEFAULT_VULN_CLASSES = [
-  'sql_injection', 'ssrf', 'xss', 'path_traversal', 'command_injection',
-  'prototype_pollution', 'deserialization', 'redos', 'file_upload',
-  'open_redirect', 'log_injection',
-];
+// Single source of truth lives in `backend/src/lib/taint-engine-defaults.ts`,
+// which mirrors `backend/depscanner/src/taint-engine/spec.ts:ALL_VULN_CLASSES`
+// (the engine's own constant). The defaults test asserts byte-equality across
+// all three surfaces (engine, this re-export, frontend mirror).
+const VULN_CLASSES: ReadonlySet<string> = new Set(ALL_VULN_CLASSES);
+const DEFAULT_VULN_CLASSES: readonly string[] = ALL_VULN_CLASSES;
 
 router.get('/:orgId/settings', requirePerm('view_ai_spending'), async (req: AuthRequest, res) => {
   try {
@@ -116,7 +112,7 @@ router.get('/:orgId/settings', requirePerm('view_ai_spending'), async (req: Auth
       organization_id: orgId,
       enabled: true,
       ai_layer_enabled: true,
-      monthly_ai_cost_cap_usd: 50.0,
+      monthly_ai_cost_cap_usd: DEFAULT_MONTHLY_AI_COST_CAP_USD,
       untyped_js_enabled: true,
       vuln_classes_enabled: DEFAULT_VULN_CLASSES,
       killswitch_active: false,
@@ -151,8 +147,8 @@ router.patch('/:orgId/settings', requirePerm('manage_aegis'), async (req: AuthRe
       if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
         return res.status(400).json({ error: 'monthly_ai_cost_cap_usd must be a non-negative number' });
       }
-      // Clamp to a reasonable range; the production-default is 50.
-      updates.monthly_ai_cost_cap_usd = Math.min(1000, Math.max(0, v));
+      // Clamp to a reasonable range; the production default lives in taint-engine-defaults.ts.
+      updates.monthly_ai_cost_cap_usd = Math.min(COST_CAP_MAX_USD, Math.max(0, v));
     }
     if ('vuln_classes_enabled' in req.body) {
       const arr = req.body.vuln_classes_enabled;

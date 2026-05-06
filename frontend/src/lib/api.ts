@@ -2424,6 +2424,30 @@ export const api = {
     });
   },
 
+  // Phase 6.5 — per-flow suppression. Hash-keyed (Option B / OD-4) so
+  // suppression survives writeFlows wipe-and-rewrite across re-extractions.
+  async createFlowSuppression(
+    organizationId: string,
+    projectId: string,
+    flowSignatureHash: string,
+    suppressedReason?: string
+  ): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/flow-suppressions`, {
+      method: 'POST',
+      body: JSON.stringify({ flow_signature_hash: flowSignatureHash, suppressed_reason: suppressedReason }),
+    });
+  },
+
+  async deleteFlowSuppression(
+    organizationId: string,
+    projectId: string,
+    flowSignatureHash: string
+  ): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/flow-suppressions/${encodeURIComponent(flowSignatureHash)}`, {
+      method: 'DELETE',
+    });
+  },
+
   async acceptVulnerabilityRisk(
     organizationId: string,
     projectId: string,
@@ -4972,6 +4996,17 @@ export interface PaginatedResponse<T> {
 }
 
 // Reachability types
+//
+// Phase 6.5 — `flow_nodes` is a heterogeneous JSONB array. Real source/sink
+// hops carry the legacy atom-shape fields (parentFileName, lineNumber, ...).
+// Synthetic AI-verdict nodes — written by the worker's fp-filter — carry
+// `synthetic: true` and discriminate on `kind`. The frontend filters synthetic
+// nodes OUT of the per-hop chain count and renders them in dedicated sub-rows.
+export type FlowNodeKind =
+  | 'ai_filter_verdict'
+  | 'ai_sanitization_verdict'
+  | 'ai_endpoint_verdict';
+
 export interface ReachableFlowNode {
   id?: number;
   label?: string;
@@ -4989,6 +5024,32 @@ export interface ReachableFlowNode {
   lineNumber?: number;
   columnNumber?: number;
   tags?: string;
+
+  // Phase 6.5 — engine-shape hop fields (newer than atom-shape; some flows
+  // already carry both during the migration window — render code reads
+  // whichever is present).
+  file?: string;
+  line?: number;
+
+  // Phase 6.5 — synthetic AI verdict node discriminator. When `synthetic` is
+  // true, this entry is a worker-emitted verdict, not a code hop. Real hops
+  // never set `synthetic`.
+  kind?: FlowNodeKind | string;
+  synthetic?: boolean;
+
+  // ai_filter_verdict
+  verdict?: 'kept' | 'dropped' | 'kept_on_error' | 'ai_truncated' | string;
+  confidence?: number;
+  model?: string;
+  reasoning?: string | null;
+
+  // ai_sanitization_verdict
+  is_sanitized?: boolean | null;
+  sanitizer_line?: number | null;
+  sanitizer_name?: string | null;
+
+  // ai_endpoint_verdict
+  classification?: EpdEntryPointClassification | string;
 }
 
 export interface ReachableFlow {
@@ -5009,6 +5070,23 @@ export interface ReachableFlow {
   flow_length: number;
   llm_prompt: string | null;
   created_at: string;
+
+  // Phase 6.5 — CVE-targeted taint engine fields. Populated only on
+  // `reachability_source='taint_engine'` rows that matched a CVE-tagged sink
+  // from a generated FrameworkSpec; framework-generic flows leave these null.
+  osv_id?: string | null;
+  reachability_source?: 'atom' | 'semgrep_taint' | 'taint_engine' | string | null;
+  reachability_level?: ReachabilityLevel;
+
+  // Stable hash keyed (source_file:line, sink_file:line, sink_method, osv_id).
+  // Survives writeFlows wipe-and-rewrite across re-extractions; backs per-flow
+  // suppression. Computed at write time on the worker; never trusted from API.
+  flow_signature_hash?: string | null;
+
+  // Server-computed from a LEFT JOIN against project_reachable_flow_suppressions
+  // on the GET /vulnerabilities/:osvId/detail endpoint — the row itself stays
+  // derived (the suppression lives in a separate user-state table).
+  is_suppressed?: boolean;
 }
 
 export interface UsageSlice {
@@ -5039,13 +5117,32 @@ export type ReachabilityLevel = 'unreachable' | 'module' | 'function' | 'data_fl
 /** EPD entry-point class. Drives the per-vuln badge in the security tables. */
 export type EpdEntryPointClassification = 'PUBLIC_UNAUTH' | 'AUTH_INTERNAL' | 'OFFLINE_WORKER' | 'UNKNOWN';
 
-/** EPD scoring lifecycle. `ai_verified` when BYOK ran end-to-end; other values drive the badge tooltip explanation. */
+/**
+ * EPD scoring lifecycle. The legacy values come from the original per-PDV
+ * Anthropic verifier (Phase 4). Phase 6.5 adds the new flow-aggregator path
+ * (`flow_aggregated` etc.) and the gated Anthropic fallback (`ai_verified_anthropic_fallback*`).
+ *
+ * `pending` is also an existing-backend value that wasn't surfaced here
+ * before — added now so consumers don't have to default-cast.
+ */
 export type EpdStatus =
+  // legacy (Phase 4)
   | 'ai_verified'
   | 'byok_missing'
   | 'fallback_no_ai'
   | 'ai_error_fallback'
-  | 'budget_exceeded';
+  | 'budget_exceeded'
+  | 'pending'
+  // Phase 6.5 — flow aggregator (M5)
+  | 'flow_aggregated'
+  | 'no_flows_evaluated'
+  | 'all_flows_suppressed'
+  | 'ai_truncated'
+  // Phase 6.5 — gated Anthropic fallback (OD-6)
+  | 'ai_verified_anthropic_fallback'
+  | 'ai_verified_anthropic_fallback_failed'
+  | 'ai_verified_anthropic_fallback_skipped_cost_cap'
+  | 'ai_verified_anthropic_fallback_skipped_burn_breaker';
 
 /** Per-org reachability rule generation policy (Phase 5). */
 export interface ReachabilitySettings {

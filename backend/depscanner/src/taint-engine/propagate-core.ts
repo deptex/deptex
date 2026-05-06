@@ -481,6 +481,9 @@ function sinkHitToFlow(hit: SinkHit, sinkContainingFunc: FunctionNode, maxPathLe
     source_description: hit.trace.source.description,
     sink_description: hit.sink.description,
     engine_confidence: scoreEngineConfidence(hit, flowNodes),
+    // Phase 6.5: stamp the CVE-targeted spec's osv_id onto the flow.
+    // Undefined when the sink came from a framework-generic spec.
+    osv_id: hit.sink.osv_id,
   };
 }
 

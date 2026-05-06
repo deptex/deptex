@@ -4357,6 +4357,9 @@ export default function OrganizationVulnerabilitiesPage() {
                                             <VulnerabilityOrgSidebarExpandedContent
                                               detail={detail.data}
                                               rowSummary={v.summary ?? null}
+                                              organizationId={orgId}
+                                              projectId={selectedProjectId ?? undefined}
+                                              canManage={Boolean(organization?.permissions?.manage_teams_and_projects)}
                                             />
                                           ) : (
                                             <div className="text-sm text-muted-foreground">No details available.</div>

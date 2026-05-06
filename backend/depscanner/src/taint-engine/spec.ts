@@ -74,12 +74,19 @@ export interface FrameworkSource {
  * If argument_indices is empty, ANY tainted argument triggers the sink
  * (used for variadic helpers like `console.log` or for functions where
  * every argument is unsafe).
+ *
+ * `osv_id` is set on sinks loaded from CVE-targeted FrameworkSpec rows
+ * (Phase 6.5). The Phase 6 file-loaded framework specs (express.yaml, etc.)
+ * leave it undefined — those flows are framework-generic, not CVE-attributed.
+ * When set, the propagator stamps it onto `Flow.osv_id` at sink-match so
+ * downstream classification + suppression can key on the CVE.
  */
 export interface FrameworkSink {
   pattern: string;
   vuln_class: VulnClass;
   argument_indices: number[];
   description: string;
+  osv_id?: string;
 }
 
 /**

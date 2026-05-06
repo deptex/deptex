@@ -1,0 +1,62 @@
+{
+  "schema": "deptex.phase5.tournament-final.v1",
+  "captured_at": "2026-05-05",
+  "purpose": "Frozen snapshot of Phase 5's final tournament-tuned generator state, captured before the Phase 6.5 framework_spec rewrite (RAA-3 + RAA-6). If the new generator regresses on a CVE shape Phase 5 covered, this is the reference for what 'used to work'.",
+  "winning_state": {
+    "model": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "provider": "openai",
+    "base_url": "https://api.deepinfra.com/v1/openai",
+    "prompt_version": "rulegen-v10",
+    "max_output_tokens_default": 6000,
+    "temperature": 0.1,
+    "validation_gates_in_order": [
+      "schema (zod parse + GeneratedPayloadSchema strict)",
+      "semgrep --validate (rule-yaml grammar gate, 5f)",
+      "fixture_pre_match (≥1 match on vulnerable_fixture)",
+      "fixture_safe_clean (0 matches on safe_fixture)",
+      "patch_pre_match (rule fires on parent SHA blob)",
+      "patch_post_clean (rule does NOT fire on fix SHA blob)"
+    ],
+    "retry_config": {
+      "max_attempts_per_cve": 4,
+      "rate_limit_max_attempts": 4,
+      "rate_limit_base_delay_ms": 4000,
+      "rate_limit_max_delay_ms": 60000,
+      "retry_strategy": "all-validation-failure (5g) — on any non-validated outcome rebuild prompt with concrete diagnosis (rule + fixtures + match counts + diagnosis class) and retry. Schema-only retry was 5f."
+    }
+  },
+  "recall_results": {
+    "corpus": "100-CVE stratified across ecosystems (npm, pypi, maven, gomod, rubygems, packagist, cargo, nuget). 12 dropped during dry-run cache prefetch; 88 final.",
+    "qwen_validated_pct": "72.7%",
+    "qwen_validated_count_88": 64,
+    "notes": [
+      "Per-shape: well over 80% on taint-mode CVEs with clear req.* sources; weakest on options-bag-shape (jwt.verify-style) and library-internal classes.",
+      "AI Semgrep one-shot ceiling memo (memory: ai_rule_generation_ceiling) called ~15-20% the floor for naive prompts; 5g rich-feedback retry pushed Qwen to 72.7% which roughly matches the autogrep paper's 50-60% one-shot + 20-30% retry-driven lift.",
+      "Phase 5h patch-symbols hint added concrete identifier list to the revision prompt — measurable lift on too-narrow failures (pre=0).",
+      "Forensic note: Gemini 2.5 Flash scored ~64% on the same corpus before tournament tuning; Qwen 3.5 Coder hit a ceiling around 35% one-shot before 5f-5h."
+    ]
+  },
+  "what_carried_forward_to_phase_6_5": {
+    "kept": [
+      "callProviderAndParse() multi-provider plumbing — Anthropic prefill, OpenAI response_format json_object, Gemini systemInstruction routing.",
+      "Rate-limit retry helper (withRateLimitRetry) — 429/5xx-aware exponential backoff with retry-after honoring.",
+      "Per-CVE retry framework with rich diagnosis (5g) — but feedback now describes FrameworkSpec failures (zod issue paths + engine round-trip mismatches) instead of Semgrep grammar/match errors.",
+      "Patch-symbol hint extraction (extractPatchAddedSymbols) — generic enough to apply to any output schema.",
+      "Few-shot loader pattern — rewritten with hand-ported FrameworkSpec examples in few-shot-examples.ts."
+    ],
+    "removed": [
+      "rule_yaml output field (replaced with framework_spec JSON).",
+      "Semgrep --validate gate (Gate 1 is now zod-strict; Gate 2 is engine round-trip).",
+      "Semgrep YAML grammar hints (focus-metavariable nesting, pattern-not list rejection, options-bag absence-of-key idiom, YAML-quote escaping). All Semgrep-specific.",
+      "VulnClass-playbook entries that taught the model Semgrep mode selection (mode: taint vs mode: search). FrameworkSpec has no mode discriminator — sinks are uniformly callee-pattern + argument_indices."
+    ],
+    "explicitly_at_risk": [
+      "Recall on options-bag-shape CVEs (jwt.verify with missing 'algorithms' key): Phase 5 expressed these in mode: search with metavariable-pattern. FrameworkSpec callee-text matching can't distinguish jwt.verify(t,k,opts) with vs without a specific options key — these CVEs may need a separate config-default detector or a per-CVE callable check (M5+).",
+      "Recall on insecure-default CVEs (yaml.load without Loader=, requests.get(verify=False)): same shape problem. The FrameworkSpec sink pattern matches the call by name; the safe form has the same name. Tracked as a known coverage hole; the few-shot library deliberately avoids these CVEs as exemplars."
+    ]
+  },
+  "regression_test_strategy": {
+    "before_phase_6_5_merge": "Run the new framework_spec generator against the same 88-CVE corpus on the same Qwen model. Gate the merge on validated_pct ≥ 50% (allow some headroom for the Semgrep-grammar drift) AND the per-language coverage matches Phase 5 within 10pp.",
+    "ongoing": "Capture the next tournament-final snapshot (this file's successor) the moment the new generator stabilises, so future M-phase rewrites have the same kind of frozen reference."
+  }
+}

@@ -1,69 +1,65 @@
 /**
- * Validates a generated Semgrep rule against:
- *   1. YAML parse — fails fast on malformed yaml.
- *   2. Fixture round-trip — rule MUST hit vulnerable_fixture, must NOT hit
- *      safe_fixture. This is a cheap local sanity check that catches the
- *      "rule matches nothing" / "rule matches everything" failure modes.
- *   3. Diff-targeted patch round-trip — autogrep-inspired: run Semgrep against
- *      each changed file's pre-patch (`before`) and post-patch (`after`)
- *      blob from the OSV fix commit. We use the per-file blobs already
- *      fetched by patch-fetch.ts — no clone needed.
+ * Validates a generated FrameworkSpec payload against:
  *
- * Patch round-trip semantics (note: relaxed from the autogrep paper):
- *   - `patch_post_clean` (post-fix matches must be 0) — HARD gate. If the
- *     rule fires on the fixed code, the rule is wrong by definition: it's
- *     matching code that the upstream maintainers consider safe.
- *   - `patch_pre_match` (≥1 pre-fix match across changed files) — ADVISORY.
- *     We generate app-callsite-aware rules whose sources are HTTP request
- *     shapes (`req.body`) and whose sinks are user-side calls
- *     (`_.toNumber($INPUT)`). Library-internal patches (e.g. lodash fixing
- *     a regex inside `_.toNumber`'s implementation) don't contain any
- *     `req.*` callers, so a correctly-shaped app-callsite rule will
- *     legitimately get pre_match=0 against such patches. Treating that as
- *     a hard fail is structurally wrong for our use case. We log it for
- *     telemetry / future prompt iteration but don't block validation.
+ *   Gate 1 — strict zod schema. Already enforced upstream by `parseAndValidate`
+ *            in generate.ts; reaching validateRule means schema_pass = true.
  *
- * Step (3) is gated behind `args.runPatchValidation`. When skipped (no
- * applicable changed files in the rule's language, or explicitly disabled),
- * fixture validation alone is sufficient.
+ *   Gate 2 — fixture round-trip via the Phase 6 cross-file taint engine.
+ *            The substituted spec (osv_id injected on every sink) is loaded
+ *            alongside the bundled framework specs (Express, Flask, etc.) and
+ *            the engine is run on the vulnerable_fixture and safe_fixture
+ *            files. Pass iff the spec emits ≥1 flow on the vulnerable fixture
+ *            (tagged with the CVE's sinks) and 0 flows on the safe fixture.
  *
- * All temp files are torn down in finally blocks regardless of outcome.
+ *   Gate 3 — diff-targeted patch round-trip (optional). Same engine call but
+ *            against the patch's pre-fix and post-fix file blobs. Hard-fail
+ *            on post-fix matches (the rule fires on what upstream considers
+ *            safe). Pre-fix matches are advisory only — app-callsite specs
+ *            legitimately get pre=0 against library-internal patches.
+ *
+ * No more Semgrep. No more YAML pre-pass. The Phase 5 generator's `semgrep
+ * --validate` rule-grammar gate is replaced by zod's `.strict()` mode +
+ * `findRogueOsvIdInSinks` + the engine's `validateSpec` pass (called via
+ * spec-loader's `validateSpec`). The engine round-trip itself is the
+ * authoritative "this spec actually emits flows" check.
  */
 
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { spawn } from 'child_process';
-import * as yaml from 'js-yaml';
 import type { GeneratedPayload } from './generate';
+import {
+  withOsvIdsSubstituted,
+  type FrameworkSpecJson,
+  type PersistedFrameworkSpec,
+} from './framework-spec-schema';
 import type { ChangedFileBlob } from './patch-fetch';
-import { semgrepLanguageFor } from './prompt-builder';
-
-const SIGKILL_GRACE_MS = 10_000;
-const MAX_STDOUT = 32 * 1024 * 1024;
-const MAX_STDERR = 32 * 1024;
-// Per-spawn watchdog so one hung semgrep child can't eat the entire 240s
-// per-CVE budget (which is shared across OSV fetch, patch fetch, AI calls,
-// and multiple semgrep invocations). A real semgrep run completes in <2s
-// against fixtures and <1s against `--validate`; 90s is generous enough that
-// nothing benign should ever trip it.
-const RUN_SEMGREP_TIMEOUT_MS = 90_000;
-const RUN_SEMGREP_VALIDATE_TIMEOUT_MS = 60_000;
+import { propagate } from '../taint-engine/propagator';
+import { propagatePython } from '../taint-engine/python/propagate';
+import { propagateJava } from '../taint-engine/java/propagate';
+import { propagateGo } from '../taint-engine/go/propagate';
+import { propagateRuby } from '../taint-engine/ruby/propagate';
+import { propagatePhp } from '../taint-engine/php/propagate';
+import { propagateRust } from '../taint-engine/rust/propagate';
+import { propagateCSharp } from '../taint-engine/csharp/propagate';
+import { loadSpec } from '../taint-engine/spec-loader';
+import type { FrameworkSpec, FrameworkLanguage, VulnClass } from '../taint-engine/spec';
+import type { PropagateResult } from '../taint-engine/propagator';
 
 export interface ValidateRuleArgs {
   payload: GeneratedPayload;
   cveId: string;
   ecosystem: string;
-  /** Per-file before/after blobs from the OSV fix commit (via patch-fetch).
-   *  When provided, validate.ts runs the rule against the pre-patch and
-   *  post-patch text of every applicable file and aggregates the matches. */
+  /** Per-file before/after blobs from the OSV fix commit. When provided +
+   *  runPatchValidation, validate runs Gate 3 against pre/post text. */
   changedFiles?: ChangedFileBlob[];
   workDir: string;
   signal?: AbortSignal;
-  semgrepBin?: string;
-  /** Run the diff-targeted patch round-trip in addition to fixture round-trip.
-   *  Defaults to true when changedFiles is provided. */
+  /** Run Gate 3 (patch round-trip) in addition to Gate 2 (fixture). Defaults
+   *  to true when changedFiles is provided. */
   runPatchValidation?: boolean;
+  /** Override the bundled framework-models directory — exposed for tests. */
+  frameworkModelsDir?: string;
 }
 
 export interface PerFileValidationBreakdown {
@@ -78,9 +74,16 @@ export interface PerFileValidationBreakdown {
  * `extraction_jobs.reachability_validation_breakdown` JSONB column.
  *
  * `schema_pass` is always true on a breakdown produced by validateRule —
- * reaching validate means the AI's JSON already passed Zod. Pre-validate
- * failure modes (parse_failed / invalid_schema / no_advisory etc.) get a
- * synthesized breakdown in index.ts where schema_pass=false.
+ * reaching validate means the AI's JSON already passed zod. Pre-validate
+ * failure modes (parse_failed / invalid_schema / prompt_injection_suspect /
+ * no_advisory etc.) get a synthesized breakdown in index.ts where
+ * schema_pass=false.
+ *
+ * `semgrep_parse_error` is retained for backward-compat with the
+ * extraction_jobs.reachability_validation_breakdown JSONB column written by
+ * Phase 5; in M2b it carries any engine-load error (spec validation failure,
+ * propagator throw) instead of Semgrep's grammar errors. M5 will rename the
+ * column once Phase 5 is fully retired.
  */
 export interface ValidationBreakdown {
   schema_pass: boolean;
@@ -100,11 +103,7 @@ export interface ValidationLog {
   errors: string[];
   took_ms: number;
   patch_validation_skipped_reason?: string;
-  /** Per-file pre/post match counts from the diff-targeted run. Populated
-   *  whenever patch validation actually ran (even with zero applicable files,
-   *  in which case it's an empty array). */
   patch_per_file?: PerFileValidationBreakdown[];
-  /** Per-CVE pass/fail breakdown rolled up into step-level telemetry. */
   validation_breakdown: ValidationBreakdown;
 }
 
@@ -114,7 +113,7 @@ export interface ValidationResult {
 }
 
 export class RuleValidationError extends Error {
-  readonly stage: 'yaml_parse' | 'fixture_run' | 'patch_run' | 'semgrep' | 'unexpected';
+  readonly stage: 'spec_load' | 'fixture_run' | 'patch_run' | 'engine' | 'unexpected';
 
   constructor(stage: RuleValidationError['stage'], message: string) {
     super(message);
@@ -123,25 +122,26 @@ export class RuleValidationError extends Error {
   }
 }
 
+const DEFAULT_FRAMEWORK_MODELS_DIR = path.resolve(__dirname, '..', 'taint-engine', 'framework-models');
+
 export async function validateRule(args: ValidateRuleArgs): Promise<ValidationResult> {
   const start = Date.now();
   const errors: string[] = [];
-  let stderrExcerpt: string | null = null;
 
-  // --- 1. YAML parse + ruleId/language sanity ---
-  // Apply a deterministic quote-fixing pre-pass to rescue rules where the AI
-  // forgot to single-quote pattern values containing YAML-special characters
-  // ({}[]:,*?!|> or the Semgrep ellipsis ...). Empirically lifts Gemini's
-  // validation rate by ~+5pp on the npm corpus and is provider-agnostic. The
-  // pre-pass only rewrites `pattern:` lines; `message:` and other scalars are
-  // untouched. Rule_yaml that's already well-formed passes through unchanged.
-  const normalizedYaml = quotePatternsInYaml(args.payload.rule_yaml);
-  const normalizedPayload: GeneratedPayload = normalizedYaml === args.payload.rule_yaml
-    ? args.payload
-    : { ...args.payload, rule_yaml: normalizedYaml };
-  let parsedRule: { id: string; language: string; metadataCve: string | null };
+  // --- Substitute osv_id on every sink. The persistence step does this
+  // again as the canonical assignment site, but the round-trip needs the
+  // substituted spec NOW so flow filtering can match by sink pattern.
+  const substituted = withOsvIdsSubstituted(args.payload.framework_spec, args.cveId);
+  const language = frameworkSpecLanguage(args.payload.framework_spec);
+
+  // --- Engine spec load: convert the JSON-shaped FrameworkSpec to the
+  // engine's runtime shape via spec-loader's validator. Catches anything
+  // the JSON schema accepted but the engine can't run (e.g. a vuln_class
+  // the engine doesn't recognise — the schema enum imports from the same
+  // source-of-truth, but defensive-load belt-and-braces).
+  let engineSpec: FrameworkSpec;
   try {
-    parsedRule = parseRuleYaml(normalizedPayload.rule_yaml);
+    engineSpec = persistedSpecToEngineSpec(substituted);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
@@ -152,40 +152,7 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
         patch_pre_matches: null,
         patch_post_matches: null,
         semgrep_stderr_excerpt: null,
-        errors: [`yaml_parse: ${msg}`],
-        took_ms: Date.now() - start,
-        validation_breakdown: {
-          // Schema (Zod) passed upstream; the rule_yaml string itself is what
-          // failed to parse here, which is a separate downstream gate. Surface
-          // it through semgrep_parse_error so the funnel reflects "the YAML
-          // the AI emitted wasn't a valid Semgrep config".
-          schema_pass: true,
-          fixture_pre_match: false,
-          fixture_safe_clean: false,
-          patch_pre_match: null,
-          patch_post_clean: null,
-          semgrep_parse_error: msg.slice(0, 500),
-        },
-      },
-    };
-  }
-
-  // Defense-in-depth against prompt-injection: the model receives untrusted
-  // OSV/patch content and could be steered into emitting metadata.cve for a
-  // different CVE than the one we're generating for. selectRulesForCves keys
-  // on metadata.cve, so a CVE-mismatch rule would be a no-op for the requested
-  // CVE — but rejecting it here makes the failure loud rather than silent.
-  if (parsedRule.metadataCve && parsedRule.metadataCve !== args.cveId) {
-    const msg = `metadata.cve mismatch: rule claims ${parsedRule.metadataCve} but generation was requested for ${args.cveId}`;
-    return {
-      status: 'failed_validation',
-      log: {
-        fixture_pre_matches: 0,
-        fixture_post_matches: 0,
-        patch_pre_matches: null,
-        patch_post_matches: null,
-        semgrep_stderr_excerpt: null,
-        errors: [`metadata_cve_mismatch: ${msg}`],
+        errors: [`spec_load: ${msg}`],
         took_ms: Date.now() - start,
         validation_breakdown: {
           schema_pass: true,
@@ -199,86 +166,46 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
     };
   }
 
-  const ext = sourceExtensionFor(args.ecosystem);
+  // --- Bundled framework specs for the language (sources). Filtered by
+  // language so cross-language patterns don't leak.
+  const frameworkSpecs = loadFrameworkSpecsForLanguage(args.frameworkModelsDir ?? DEFAULT_FRAMEWORK_MODELS_DIR, language);
+  const allSpecs: FrameworkSpec[] = [...frameworkSpecs, engineSpec];
+  const cveSinkPatterns = new Set(engineSpec.sinks.map((s) => s.pattern));
 
-  // --- 1.5. semgrep --validate (real schema gate) ---
-  // YAML parse only catches structural problems. Semgrep itself owns the
-  // grammar of pattern-either / focus-metavariable / pattern-not / etc., and
-  // refuses to load rules with bugs the YAML layer can't see. Running
-  // `semgrep scan --validate --config <rule>` is fast (no targets to scan)
-  // and surfaces a clean parser error we can feed back to the model in M1's
-  // retry loop. Without this gate, broken rules waste two full fixture
-  // docker invocations before failing with a cryptic stderr excerpt.
-  const semgrepValidateRoot = fs.mkdtempSync(path.join(args.workDir, `rulegen-vlt-`));
-  let semgrepValidateError: string | null = null;
-  try {
-    const ruleFile = path.join(semgrepValidateRoot, 'rule.yml');
-    fs.writeFileSync(ruleFile, normalizedPayload.rule_yaml, 'utf8');
-    const validateRun = await runSemgrepValidate({
-      ruleFile,
-      signal: args.signal,
-      semgrepBin: args.semgrepBin,
-    });
-    if (!validateRun.ok) {
-      semgrepValidateError = validateRun.errorExcerpt;
-    }
-  } catch (err) {
-    // semgrep validate itself crashed (docker missing, etc.). Don't fail the
-    // rule for our infra problem — fall through to fixture run, which will
-    // surface the real issue or succeed.
-  } finally {
-    safeRm(semgrepValidateRoot);
-  }
-  if (semgrepValidateError) {
-    return {
-      status: 'failed_validation',
-      log: {
-        fixture_pre_matches: 0,
-        fixture_post_matches: 0,
-        patch_pre_matches: null,
-        patch_post_matches: null,
-        semgrep_stderr_excerpt: semgrepValidateError,
-        errors: [`semgrep_validate: ${semgrepValidateError}`],
-        took_ms: Date.now() - start,
-        validation_breakdown: {
-          schema_pass: true,
-          fixture_pre_match: false,
-          fixture_safe_clean: false,
-          patch_pre_match: null,
-          patch_post_clean: null,
-          semgrep_parse_error: semgrepValidateError.slice(0, 500),
-        },
-      },
-    };
-  }
-
-  // --- 2. Fixture round-trip ---
-  const fixtureRoot = fs.mkdtempSync(path.join(args.workDir, `rulegen-fix-`));
+  // --- Gate 2: fixture round-trip ---
+  const ext = sourceExtensionForLanguage(language);
   let fixturePre = 0;
   let fixturePost = 0;
+  const fixtureRoot = fs.mkdtempSync(path.join(args.workDir, 'rulegen-fix-'));
   try {
-    const ruleFile = path.join(fixtureRoot, 'rule.yml');
-    fs.writeFileSync(ruleFile, normalizedPayload.rule_yaml, 'utf8');
     const vulnDir = path.join(fixtureRoot, 'vulnerable');
     const safeDir = path.join(fixtureRoot, 'safe');
     fs.mkdirSync(vulnDir, { recursive: true });
     fs.mkdirSync(safeDir, { recursive: true });
-    fs.writeFileSync(path.join(vulnDir, `index.${ext}`), normalizedPayload.vulnerable_fixture, 'utf8');
-    fs.writeFileSync(path.join(safeDir, `index.${ext}`), normalizedPayload.safe_fixture, 'utf8');
+    fs.writeFileSync(path.join(vulnDir, `index.${ext}`), args.payload.vulnerable_fixture, 'utf8');
+    fs.writeFileSync(path.join(safeDir, `index.${ext}`), args.payload.safe_fixture, 'utf8');
 
-    const vulnRun = await runSemgrep({ ruleFile, target: vulnDir, signal: args.signal, semgrepBin: args.semgrepBin });
-    const safeRun = await runSemgrep({ ruleFile, target: safeDir, signal: args.signal, semgrepBin: args.semgrepBin });
-    fixturePre = vulnRun.matches;
-    fixturePost = safeRun.matches;
-    if (vulnRun.stderr) stderrExcerpt = vulnRun.stderr;
-    if (!stderrExcerpt && safeRun.stderr) stderrExcerpt = safeRun.stderr;
+    fixturePre = await runEngineAndCount({
+      rootDir: vulnDir,
+      specs: allSpecs,
+      language,
+      cveSinkPatterns,
+      signal: args.signal,
+    });
+    fixturePost = await runEngineAndCount({
+      rootDir: safeDir,
+      specs: allSpecs,
+      language,
+      cveSinkPatterns,
+      signal: args.signal,
+    });
   } catch (err) {
     errors.push(`fixture_run: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     safeRm(fixtureRoot);
   }
 
-  // --- 3. Diff-targeted patch round-trip (optional) ---
+  // --- Gate 3: diff-targeted patch round-trip (optional) ---
   let patchPre: number | null = null;
   let patchPost: number | null = null;
   let patchPerFile: PerFileValidationBreakdown[] | undefined;
@@ -288,33 +215,25 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
   const shouldRunPatch = (args.runPatchValidation ?? true) && hasChangedFiles && errors.length === 0;
   if (shouldRunPatch && args.changedFiles) {
     try {
-      const applicable = filterApplicableChangedFiles(args.changedFiles, parsedRule.language);
+      const applicable = filterApplicableChangedFiles(args.changedFiles, language);
       if (applicable.length === 0) {
         patchSkipReason = 'no_applicable_changed_files';
       } else {
         const result = await runDiffTargetedValidation({
-          ruleYaml: normalizedPayload.rule_yaml,
+          allSpecs,
+          cveSinkPatterns,
           files: applicable,
-          language: parsedRule.language,
+          language,
           workDir: args.workDir,
           signal: args.signal,
-          semgrepBin: args.semgrepBin,
         });
         patchPre = result.preMatches;
         patchPost = result.postMatches;
         patchPerFile = result.perFile;
-        if (!stderrExcerpt && result.stderr) stderrExcerpt = result.stderr;
       }
     } catch (err) {
-      // Patch validation is best-effort — surface the reason but don't
-      // throw out of validateRule. The verdict logic below will treat null
-      // patch counts as "skipped" rather than failing the rule outright.
       const msg = err instanceof Error ? err.message : String(err);
-      if (err instanceof RuleValidationError) {
-        patchSkipReason = `${err.stage}: ${msg}`;
-      } else {
-        patchSkipReason = `unexpected: ${msg}`;
-      }
+      patchSkipReason = err instanceof RuleValidationError ? `${err.stage}: ${msg}` : `unexpected: ${msg}`;
     }
   } else if (!hasChangedFiles) {
     patchSkipReason = 'no_changed_files_provided';
@@ -326,40 +245,21 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
 
   // --- Verdict ---
   const fixturePass = fixturePre > 0 && fixturePost === 0;
-  if (!fixturePass) {
-    if (errors.length === 0) {
-      errors.push(`fixture_round_trip_failed: pre=${fixturePre} post=${fixturePost} (require pre>0 and post=0)`);
-    }
+  if (!fixturePass && errors.length === 0) {
+    errors.push(`fixture_round_trip_failed: pre=${fixturePre} post=${fixturePost} (require pre>0 and post=0)`);
   }
   if (patchPre !== null && patchPost !== null) {
-    // patch_pre_match is advisory only — see file header. App-callsite rules
-    // legitimately get pre_match=0 against library-internal patches, and
-    // failing on that excludes exactly the rules we want. Surface it through
-    // patch_validation_skipped_reason so telemetry still captures the signal.
+    // patch_pre_match is advisory: app-callsite specs legitimately get
+    // pre_match=0 against library-internal patches.
     if (patchPre <= 0 && !patchSkipReason) {
       patchSkipReason = 'patch_pre_match_zero_advisory';
     }
-    // patch_post_clean stays a hard gate: if the rule fires on the fixed
-    // code, the rule is matching what upstream considers safe.
+    // patch_post_clean is a HARD gate: if the spec fires on the fixed code,
+    // the spec is matching what upstream considers safe.
     if (patchPost > 0) errors.push(`patch_round_trip_failed: post-patch matches=${patchPost} (require 0)`);
   }
 
   const status = errors.length === 0 && fixturePass ? 'validated' : 'failed_validation';
-
-  // Heuristic: if Semgrep emitted stderr AND the fixture didn't fire, the
-  // stderr is likely a rule-parse / config-load error rather than a benign
-  // deprecation warning. Surface a short excerpt for the funnel telemetry.
-  //
-  // The regex deliberately excludes "Parsed" — Semgrep prints "Parsed lines:
-  // ~100.0%" on every successful scan, which used to false-positive this
-  // heuristic and trigger the M1 retry loop on rules that loaded fine but
-  // simply didn't match the fixture. With M2's `semgrep --validate` gate
-  // running upstream, real parse errors get caught there, so this heuristic
-  // is now belt-and-braces — keep it tight.
-  const looksLikeParseError =
-    !!stderrExcerpt &&
-    fixturePre === 0 &&
-    /\b(error|invalid|failed|cannot|could not|couldn't load|ruleparse)\b/i.test(stderrExcerpt);
 
   return {
     status,
@@ -368,7 +268,7 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
       fixture_post_matches: fixturePost,
       patch_pre_matches: patchPre,
       patch_post_matches: patchPost,
-      semgrep_stderr_excerpt: stderrExcerpt,
+      semgrep_stderr_excerpt: null,
       errors,
       took_ms: Date.now() - start,
       patch_validation_skipped_reason: patchSkipReason,
@@ -379,113 +279,82 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
         fixture_safe_clean: fixturePost === 0,
         patch_pre_match: patchPre === null ? null : patchPre > 0,
         patch_post_clean: patchPost === null ? null : patchPost === 0,
-        semgrep_parse_error: looksLikeParseError ? stderrExcerpt!.slice(0, 500) : null,
+        semgrep_parse_error: null,
       },
     },
   };
 }
 
 // ---------------------------------------------------------------------------
-// YAML parse helpers
+// Engine invocation helpers
 // ---------------------------------------------------------------------------
 
-function parseRuleYaml(yamlText: string): { id: string; language: string; metadataCve: string | null } {
-  let parsed: unknown;
-  try {
-    parsed = yaml.load(yamlText);
-  } catch (err) {
-    throw new Error(`YAML parse failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  const doc = parsed as { rules?: unknown };
-  if (!doc || typeof doc !== 'object' || !Array.isArray(doc.rules) || doc.rules.length !== 1) {
-    throw new Error("expected exactly one rule under 'rules:'");
-  }
-  const rule = doc.rules[0] as { id?: unknown; languages?: unknown; metadata?: unknown };
-  if (typeof rule.id !== 'string' || rule.id.length === 0) {
-    throw new Error('rule.id is missing');
-  }
-  const langs = Array.isArray(rule.languages) ? rule.languages.filter((x): x is string => typeof x === 'string') : [];
-  if (langs.length === 0) {
-    throw new Error("rule.languages is missing or empty");
-  }
-  const metadata = (rule.metadata && typeof rule.metadata === 'object') ? rule.metadata as { cve?: unknown } : null;
-  const metadataCve = metadata && typeof metadata.cve === 'string' ? metadata.cve : null;
-  return { id: rule.id, language: langs[0], metadataCve };
+interface RunEngineArgs {
+  rootDir: string;
+  specs: FrameworkSpec[];
+  language: FrameworkLanguage;
+  cveSinkPatterns: Set<string>;
+  signal?: AbortSignal;
 }
 
-const EXT_BY_ECOSYSTEM: Record<string, string> = {
-  npm: 'js',
-  pypi: 'py',
-  maven: 'java',
-  golang: 'go',
-  go: 'go',
-  rubygems: 'rb',
-  packagist: 'php',
-  cargo: 'rs',
-  nuget: 'cs',
-};
-
-function sourceExtensionFor(ecosystem: string): string {
-  const lang = semgrepLanguageFor(ecosystem);
-  // Sanity-tie the file extension to the prompt's chosen language so a rule
-  // targeting `javascript` gets a `.js` fixture file even if the ecosystem
-  // string is unfamiliar.
-  if (lang === 'javascript' || lang === 'typescript') return 'js';
-  if (lang === 'python') return 'py';
-  if (lang === 'java') return 'java';
-  if (lang === 'go') return 'go';
-  if (lang === 'ruby') return 'rb';
-  if (lang === 'php') return 'php';
-  if (lang === 'rust') return 'rs';
-  if (lang === 'csharp') return 'cs';
-  return EXT_BY_ECOSYSTEM[ecosystem.toLowerCase()] ?? 'txt';
+async function runEngineAndCount(args: RunEngineArgs): Promise<number> {
+  const result = await dispatchPropagate(args.rootDir, args.specs, args.language, args.signal);
+  // Count flows whose sink_pattern was contributed by the CVE-targeted spec
+  // (vs the bundled framework specs' sinks, which are noise here).
+  let count = 0;
+  for (const flow of result.flows) {
+    if (args.cveSinkPatterns.has(flow.sink_pattern)) count++;
+  }
+  return count;
 }
 
-function safeRm(p: string): void {
-  try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* non-fatal */ }
+async function dispatchPropagate(
+  rootDir: string,
+  specs: FrameworkSpec[],
+  language: FrameworkLanguage,
+  signal: AbortSignal | undefined,
+): Promise<PropagateResult> {
+  const onWarn = (_msg: string) => { /* swallow during validation; engine warnings aren't user-actionable here */ };
+  switch (language) {
+    case 'python':
+      return propagatePython({ rootDir, specs, onWarn, signal });
+    case 'java':
+      return propagateJava({ rootDir, specs, onWarn, signal });
+    case 'go':
+      return propagateGo({ rootDir, specs, onWarn, signal });
+    case 'ruby':
+      return propagateRuby({ rootDir, specs, onWarn, signal });
+    case 'php':
+      return propagatePhp({ rootDir, specs, onWarn, signal });
+    case 'rust':
+      return propagateRust({ rootDir, specs, onWarn, signal });
+    case 'csharp':
+      return propagateCSharp({ rootDir, specs, onWarn, signal });
+    case 'js':
+    default:
+      return propagate({ rootDir, specs, onWarn, signal });
+  }
 }
-
-// ---------------------------------------------------------------------------
-// Diff-targeted patch round-trip
-//
-// For each changed file in the rule's language with both `before` and `after`
-// blobs, we write the two snapshots to tmp files and run Semgrep against
-// each. Aggregate pre/post match counts decide the verdict: pass iff
-// preMatches > 0 and postMatches === 0.
-//
-// This replaced the previous clone-based path. Reasons:
-//   - App-level rules target callsite shapes (e.g. `_.template(req.body)`)
-//     that don't appear inside the upstream library repo. Whole-repo
-//     validation false-rejected such rules even when the rule was correct.
-//   - Network-free: no clone, no LFS, no submodules, no rate limits.
-//   - Bounded cost: changedFiles is already capped by patch-fetch.ts at
-//     8 files × 64KB, so worst-case validation is 16 small Semgrep runs.
-// ---------------------------------------------------------------------------
 
 interface DiffTargetedArgs {
-  ruleYaml: string;
+  allSpecs: FrameworkSpec[];
+  cveSinkPatterns: Set<string>;
   files: ChangedFileBlob[];
-  language: string;
+  language: FrameworkLanguage;
   workDir: string;
   signal?: AbortSignal;
-  semgrepBin?: string;
 }
 
 async function runDiffTargetedValidation(args: DiffTargetedArgs): Promise<{
   preMatches: number;
   postMatches: number;
   perFile: PerFileValidationBreakdown[];
-  stderr: string | null;
 }> {
-  const root = fs.mkdtempSync(path.join(args.workDir, `rulegen-diff-`));
+  const root = fs.mkdtempSync(path.join(args.workDir, 'rulegen-diff-'));
   try {
-    const ruleFile = path.join(root, 'rule.yml');
-    fs.writeFileSync(ruleFile, args.ruleYaml, 'utf8');
-
     const ext = sourceExtensionForLanguage(args.language);
     let preTotal = 0;
     let postTotal = 0;
-    let stderr: string | null = null;
     const perFile: PerFileValidationBreakdown[] = [];
 
     for (let i = 0; i < args.files.length; i++) {
@@ -498,42 +367,39 @@ async function runDiffTargetedValidation(args: DiffTargetedArgs): Promise<{
       fs.mkdirSync(beforeDir, { recursive: true });
       fs.mkdirSync(afterDir, { recursive: true });
 
-      // Write both snapshots under the rule-language extension. Original
-      // path is preserved as the basename so error messages stay meaningful,
-      // but we override the extension to whatever Semgrep expects for the
-      // declared rule language.
       const baseName = path.basename(file.path).replace(/\.[^./]+$/, '') || 'snippet';
-      const beforeFile = path.join(beforeDir, `${baseName}.${ext}`);
-      const afterFile = path.join(afterDir, `${baseName}.${ext}`);
-      fs.writeFileSync(beforeFile, before, 'utf8');
-      fs.writeFileSync(afterFile, after, 'utf8');
+      fs.writeFileSync(path.join(beforeDir, `${baseName}.${ext}`), before, 'utf8');
+      fs.writeFileSync(path.join(afterDir, `${baseName}.${ext}`), after, 'utf8');
 
-      const preRun = await runSemgrep({ ruleFile, target: beforeDir, signal: args.signal, semgrepBin: args.semgrepBin });
-      const postRun = await runSemgrep({ ruleFile, target: afterDir, signal: args.signal, semgrepBin: args.semgrepBin });
+      const pre = await runEngineAndCount({
+        rootDir: beforeDir,
+        specs: args.allSpecs,
+        language: args.language,
+        cveSinkPatterns: args.cveSinkPatterns,
+        signal: args.signal,
+      });
+      const post = await runEngineAndCount({
+        rootDir: afterDir,
+        specs: args.allSpecs,
+        language: args.language,
+        cveSinkPatterns: args.cveSinkPatterns,
+        signal: args.signal,
+      });
 
-      preTotal += preRun.matches;
-      postTotal += postRun.matches;
-      perFile.push({ path: file.path, pre: preRun.matches, post: postRun.matches });
-      if (!stderr && preRun.stderr) stderr = preRun.stderr;
-      if (!stderr && postRun.stderr) stderr = postRun.stderr;
+      preTotal += pre;
+      postTotal += post;
+      perFile.push({ path: file.path, pre, post });
     }
 
-    return { preMatches: preTotal, postMatches: postTotal, perFile, stderr };
+    return { preMatches: preTotal, postMatches: postTotal, perFile };
   } finally {
     safeRm(root);
   }
 }
 
-/**
- * Filter changedFiles down to ones the rule's language can actually run on:
- *   - file extension matches the rule language (so Semgrep can parse it)
- *   - both before and after blobs are present
- * If `before === null` the file was added by the fix (can't test pre-patch).
- * If `after === null` the file was deleted (can't test post-patch).
- */
 export function filterApplicableChangedFiles(
   files: ChangedFileBlob[],
-  language: string,
+  language: FrameworkLanguage,
 ): ChangedFileBlob[] {
   const accepted = expectedExtensionsForLanguage(language);
   return files.filter((f) => {
@@ -543,433 +409,93 @@ export function filterApplicableChangedFiles(
   });
 }
 
-function expectedExtensionsForLanguage(language: string): Set<string> {
+function expectedExtensionsForLanguage(language: FrameworkLanguage): Set<string> {
   switch (language) {
-    case 'javascript': return new Set(['js', 'jsx', 'mjs', 'cjs']);
-    case 'typescript': return new Set(['ts', 'tsx']);
-    case 'python':     return new Set(['py']);
-    case 'java':       return new Set(['java']);
-    case 'go':         return new Set(['go']);
-    case 'ruby':       return new Set(['rb']);
-    case 'php':        return new Set(['php']);
-    case 'rust':       return new Set(['rs']);
-    case 'csharp':     return new Set(['cs']);
-    default:           return new Set();
+    case 'js':     return new Set(['js', 'jsx', 'mjs', 'cjs', 'ts', 'tsx']);
+    case 'python': return new Set(['py']);
+    case 'java':   return new Set(['java']);
+    case 'go':     return new Set(['go']);
+    case 'ruby':   return new Set(['rb']);
+    case 'php':    return new Set(['php']);
+    case 'rust':   return new Set(['rs']);
+    case 'csharp': return new Set(['cs']);
+    default:       return new Set();
   }
 }
 
-function sourceExtensionForLanguage(language: string): string {
+function sourceExtensionForLanguage(language: FrameworkLanguage): string {
   switch (language) {
-    case 'javascript': return 'js';
-    case 'typescript': return 'ts';
-    case 'python':     return 'py';
-    case 'java':       return 'java';
-    case 'go':         return 'go';
-    case 'ruby':       return 'rb';
-    case 'php':        return 'php';
-    case 'rust':       return 'rs';
-    case 'csharp':     return 'cs';
-    default:           return 'txt';
+    case 'js':     return 'js';
+    case 'python': return 'py';
+    case 'java':   return 'java';
+    case 'go':     return 'go';
+    case 'ruby':   return 'rb';
+    case 'php':    return 'php';
+    case 'rust':   return 'rs';
+    case 'csharp': return 'cs';
+    default:       return 'txt';
   }
 }
 
-// ---------------------------------------------------------------------------
-// Semgrep invocation
-// ---------------------------------------------------------------------------
-
-interface RunSemgrepArgs {
-  ruleFile: string;
-  target: string;
-  signal?: AbortSignal;
-  semgrepBin?: string;
+function frameworkSpecLanguage(spec: FrameworkSpecJson): FrameworkLanguage {
+  // The schema's enum is ['js', 'python', ...] which is exactly the engine's
+  // FrameworkLanguage union. The cast is safe by construction.
+  return spec.language as FrameworkLanguage;
 }
 
-interface SemgrepRunResult {
-  matches: number;
-  stderr: string | null;
+/**
+ * Convert the JSON-shaped substituted FrameworkSpec to the engine's runtime
+ * shape. The engine's `FrameworkSpec` type drops the persisted-only `osv_id`
+ * field on sinks (the engine doesn't yet thread osv_id through Flow — that's
+ * M3 task 13). For Gate 2 we identify CVE flows by sink pattern instead, so
+ * dropping osv_id here is fine.
+ */
+function persistedSpecToEngineSpec(persisted: PersistedFrameworkSpec): FrameworkSpec {
+  return {
+    framework: persisted.framework,
+    version: persisted.version,
+    language: persisted.language,
+    sources: persisted.sources.map((s) => ({
+      pattern: s.pattern,
+      taint_kind: s.taint_kind,
+      description: s.description,
+    })),
+    // The zod-strict schema widens vuln_class to `string` (the import-then-
+    // cast trick to keep the enum dynamic), but the engine's type is the
+    // narrow `VulnClass` union. Both pull from `ALL_VULN_CLASSES`, so the
+    // cast is safe by construction — the schema rejects out-of-set values
+    // before we ever get here.
+    sinks: persisted.sinks.map((s) => ({
+      pattern: s.pattern,
+      vuln_class: s.vuln_class as VulnClass,
+      argument_indices: s.argument_indices,
+      description: s.description,
+    })),
+    sanitizers: persisted.sanitizers.map((s) => ({
+      pattern: s.pattern,
+      vuln_classes: s.vuln_classes as VulnClass[],
+      description: s.description,
+    })),
+  };
 }
 
-async function runSemgrep(args: RunSemgrepArgs): Promise<SemgrepRunResult> {
-  return await new Promise<SemgrepRunResult>((resolve, reject) => {
-    const semgrepBin = args.semgrepBin ?? 'semgrep';
-    // --quiet hides stderr too, which makes "exit code 7" diagnostics
-    // useless when a generated rule is malformed. Drop --quiet so we still
-    // capture the real config-load error message; --metrics=off keeps the
-    // network noise out.
-    //
-    // Docker fallback (DEPTEX_SEMGREP_DOCKER_IMAGE env): when set, run
-    // semgrep inside the named container instead of on the host. Required on
-    // Windows host where the Python launcher Semgrep is a non-functional stub
-    // — every scan returns exit=1 with no output. The deptex-cli image ships
-    // a working semgrep (1.160+), so we mount the workdir as /work and
-    // translate the rule + target paths into container space.
-    const dockerImage = process.env.DEPTEX_SEMGREP_DOCKER_IMAGE?.trim();
-    let cmd: string;
-    let cmdArgs: string[];
-    if (dockerImage) {
-      const common = commonAncestor(args.ruleFile, args.target);
-      const ruleInContainer = '/work/' + posixRelative(common, args.ruleFile);
-      const targetInContainer = '/work/' + posixRelative(common, args.target);
-      cmd = 'docker';
-      cmdArgs = [
-        'run', '--rm',
-        '-v', `${common}:/work`,
-        '--entrypoint', 'semgrep',
-        dockerImage,
-        'scan',
-        '--config', ruleInContainer,
-        '--json',
-        '--no-git-ignore',
-        '--metrics=off',
-        targetInContainer,
-      ];
-    } else {
-      cmd = semgrepBin;
-      cmdArgs = [
-        'scan',
-        '--config', args.ruleFile,
-        '--json',
-        '--no-git-ignore',
-        '--metrics=off',
-        args.target,
-      ];
-    }
-    const child = spawn(
-      cmd,
-      cmdArgs,
-      {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        detached: process.platform !== 'win32',
-        // Suppress Git-Bash path translation when invoking docker on Windows;
-        // the Linux paths we pass (/work/...) must reach docker verbatim.
-        env: dockerImage ? { ...process.env, MSYS_NO_PATHCONV: '1', MSYS2_ARG_CONV_EXCL: '*' } : process.env,
-      },
-    );
-
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    let stdoutLen = 0;
-    let stderrLen = 0;
-    let truncated = false;
-    let sigkillTimer: NodeJS.Timeout | undefined;
-
-    const killTree = () => {
-      try {
-        if (child.pid && process.platform !== 'win32') {
-          try { process.kill(-child.pid, 'SIGTERM'); } catch { child.kill('SIGTERM'); }
-        } else {
-          child.kill('SIGTERM');
-        }
-      } catch { /* gone */ }
-      if (!sigkillTimer) {
-        sigkillTimer = setTimeout(() => {
-          try {
-            if (child.pid && process.platform !== 'win32') {
-              try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
-            } else {
-              child.kill('SIGKILL');
-            }
-          } catch { /* gone */ }
-        }, SIGKILL_GRACE_MS);
-        sigkillTimer.unref?.();
-      }
-    };
-
-    child.stdout.on('data', (chunk: Buffer) => {
-      if (truncated) return;
-      stdoutLen += chunk.length;
-      if (stdoutLen > MAX_STDOUT) {
-        truncated = true;
-        stdoutChunks.length = 0;
-        killTree();
-        return;
-      }
-      stdoutChunks.push(chunk);
-    });
-    child.stderr.on('data', (chunk: Buffer) => {
-      if (stderrLen >= MAX_STDERR) return;
-      const room = MAX_STDERR - stderrLen;
-      const slice = chunk.length <= room ? chunk : chunk.subarray(0, room);
-      stderrChunks.push(slice);
-      stderrLen += slice.length;
-    });
-
-    const onAbort = () => killTree();
-    if (args.signal) {
-      if (args.signal.aborted) onAbort();
-      else args.signal.addEventListener('abort', onAbort, { once: true });
-    }
-    const watchdog = setTimeout(killTree, RUN_SEMGREP_TIMEOUT_MS);
-    watchdog.unref?.();
-
-    const cleanup = () => {
-      if (args.signal) args.signal.removeEventListener('abort', onAbort);
-      if (sigkillTimer) { clearTimeout(sigkillTimer); sigkillTimer = undefined; }
-      clearTimeout(watchdog);
-    };
-
-    child.on('error', (err) => { cleanup(); reject(new RuleValidationError('semgrep', err.message)); });
-    child.on('close', (code) => {
-      cleanup();
-      if (truncated) {
-        reject(new RuleValidationError('semgrep', `stdout exceeded ${MAX_STDOUT} bytes`));
-        return;
-      }
-      const stderrText = Buffer.concat(stderrChunks).toString('utf8').slice(0, MAX_STDERR);
-      // Semgrep exits 0 (no match) or 1 (match found) for valid configs.
-      // 2+ is a real error (bad rule, parse failure).
-      if (code !== 0 && code !== 1) {
-        reject(new RuleValidationError('semgrep', `semgrep exited ${code}: ${stderrText.slice(0, 500)}`));
-        return;
-      }
-      try {
-        const body = Buffer.concat(stdoutChunks).toString('utf8');
-        const parsed = body.length === 0 ? { results: [] } : JSON.parse(body) as { results?: unknown[] };
-        resolve({
-          matches: Array.isArray(parsed.results) ? parsed.results.length : 0,
-          stderr: stderrText.length > 0 ? sanitizeStderr(stderrText) : null,
-        });
-      } catch (err) {
-        reject(new RuleValidationError('semgrep', `semgrep JSON parse failed: ${err instanceof Error ? err.message : String(err)}`));
-      }
-    });
-  });
-}
-
-// ---------------------------------------------------------------------------
-// semgrep --validate (rule grammar gate)
-//
-// Runs `semgrep scan --validate --config <rule>` and reports whether the rule
-// loaded cleanly. We use the same docker fallback as runSemgrep — on Windows
-// hosts where the python-launcher Semgrep is a stub, validate-mode also
-// requires the deptex-cli image. Validate completes in <1s on the small rules
-// we generate (no targets, just parse + grammar check).
-// ---------------------------------------------------------------------------
-
-interface RunSemgrepValidateArgs {
-  ruleFile: string;
-  signal?: AbortSignal;
-  semgrepBin?: string;
-}
-
-interface SemgrepValidateResult {
-  ok: boolean;
-  errorExcerpt: string | null;
-}
-
-async function runSemgrepValidate(args: RunSemgrepValidateArgs): Promise<SemgrepValidateResult> {
-  return await new Promise<SemgrepValidateResult>((resolve, reject) => {
-    const semgrepBin = args.semgrepBin ?? 'semgrep';
-    const dockerImage = process.env.DEPTEX_SEMGREP_DOCKER_IMAGE?.trim();
-    let cmd: string;
-    let cmdArgs: string[];
-    if (dockerImage) {
-      const ruleDir = path.dirname(path.resolve(args.ruleFile));
-      const ruleBase = path.basename(args.ruleFile);
-      cmd = 'docker';
-      cmdArgs = [
-        'run', '--rm',
-        '-v', `${ruleDir}:/work`,
-        '--entrypoint', 'semgrep',
-        dockerImage,
-        'scan',
-        '--validate',
-        '--config', `/work/${ruleBase}`,
-        '--metrics=off',
-      ];
-    } else {
-      cmd = semgrepBin;
-      cmdArgs = [
-        'scan',
-        '--validate',
-        '--config', args.ruleFile,
-        '--metrics=off',
-      ];
-    }
-    const child = spawn(cmd, cmdArgs, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: process.platform !== 'win32',
-      env: dockerImage ? { ...process.env, MSYS_NO_PATHCONV: '1', MSYS2_ARG_CONV_EXCL: '*' } : process.env,
-    });
-    const stderrChunks: Buffer[] = [];
-    const stdoutChunks: Buffer[] = [];
-    let stderrLen = 0;
-    let sigkillTimer: NodeJS.Timeout | undefined;
-
-    const killTree = () => {
-      try {
-        if (child.pid && process.platform !== 'win32') {
-          try { process.kill(-child.pid, 'SIGTERM'); } catch { child.kill('SIGTERM'); }
-        } else {
-          child.kill('SIGTERM');
-        }
-      } catch { /* gone */ }
-      if (!sigkillTimer) {
-        sigkillTimer = setTimeout(() => {
-          try {
-            if (child.pid && process.platform !== 'win32') {
-              try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
-            } else {
-              child.kill('SIGKILL');
-            }
-          } catch { /* gone */ }
-        }, SIGKILL_GRACE_MS);
-        sigkillTimer.unref?.();
-      }
-    };
-
-    let stdoutLen = 0;
-    let truncated = false;
-    child.stdout.on('data', (chunk: Buffer) => {
-      if (truncated) return;
-      stdoutLen += chunk.length;
-      if (stdoutLen > MAX_STDOUT) {
-        truncated = true;
-        stdoutChunks.length = 0;
-        killTree();
-        return;
-      }
-      stdoutChunks.push(chunk);
-    });
-    child.stderr.on('data', (chunk: Buffer) => {
-      if (stderrLen >= MAX_STDERR) return;
-      const room = MAX_STDERR - stderrLen;
-      const slice = chunk.length <= room ? chunk : chunk.subarray(0, room);
-      stderrChunks.push(slice);
-      stderrLen += slice.length;
-    });
-
-    const onAbort = () => killTree();
-    if (args.signal) {
-      if (args.signal.aborted) onAbort();
-      else args.signal.addEventListener('abort', onAbort, { once: true });
-    }
-    const watchdog = setTimeout(killTree, RUN_SEMGREP_VALIDATE_TIMEOUT_MS);
-    watchdog.unref?.();
-
-    const cleanup = () => {
-      if (args.signal) args.signal.removeEventListener('abort', onAbort);
-      if (sigkillTimer) { clearTimeout(sigkillTimer); sigkillTimer = undefined; }
-      clearTimeout(watchdog);
-    };
-
-    child.on('error', (err) => { cleanup(); reject(new RuleValidationError('semgrep', err.message)); });
-    child.on('close', (code) => {
-      cleanup();
-      const stderrText = Buffer.concat(stderrChunks).toString('utf8').slice(0, MAX_STDERR);
-      const stdoutText = Buffer.concat(stdoutChunks).toString('utf8');
-      // Semgrep returns 0 when the config is valid. Non-zero means a parse /
-      // grammar error — extract a concise message for the model.
-      if (code === 0) {
-        resolve({ ok: true, errorExcerpt: null });
-      } else {
-        const combined = [stderrText, stdoutText].filter(Boolean).join('\n');
-        const excerpt = sanitizeStderr(combined).trim().slice(0, 500) || `semgrep validate exited ${code}`;
-        resolve({ ok: false, errorExcerpt: excerpt });
-      }
-    });
-  });
-}
-
-// ---------------------------------------------------------------------------
-// YAML quote-fixer
-//
-// AI-generated rules frequently emit `pattern:` values containing characters
-// YAML treats as flow-mapping syntax (`{`, `}`, `[`, `]`, `:`, `,`, `&`, `*`,
-// `?`, `!`, `|`, `>`) or the Semgrep ellipsis `...`. The prompt warns about
-// this but models still forget on a fraction of cases. This pre-pass walks
-// the rule_yaml line-by-line and force-single-quotes any unquoted `pattern:`
-// scalar that contains those characters — recovering rules that would
-// otherwise fail YAML parse with "bad indentation of a mapping entry".
-//
-// Scope: only `pattern:` lines. `message:` and other scalars are left alone
-// (their YAML preserves block-scalar markers like `|` and `>-` that the rewrite
-// would corrupt). Block-scalar `pattern:` lines (rare) are skipped too.
-// ---------------------------------------------------------------------------
-
-const NEEDS_QUOTING = /[\{\}\[\]:,&*?!|>]|\.\.\./;
-
-function quotePatternsInYaml(yamlText: string): string {
-  const lines = yamlText.split(/\r?\n/);
-  const out: string[] = [];
-  const re = /^(\s*-?\s*pattern\s*:\s+)([^\r\n]*)$/;
-  for (const line of lines) {
-    const m = line.match(re);
-    if (!m) { out.push(line); continue; }
-    const head = m[1];
-    let value = m[2];
-    const t = value.trim();
-    // Empty / block-scalar markers: leave as-is.
-    if (t === '' || t === '|' || t === '>' || t === '|-' || t === '>-' || t === '|+' || t === '>+') {
-      out.push(line);
-      continue;
-    }
-    // Strip trailing inline comment so we don't quote it inside the value.
-    let comment = '';
-    const ci = findInlineCommentStart(value);
-    if (ci >= 0) {
-      comment = value.slice(ci);
-      value = value.slice(0, ci).trimEnd();
-    }
-    out.push(`${head}${quotePatternValue(value)}${comment ? '  ' + comment : ''}`);
-  }
-  return out.join('\n');
-}
-
-function quotePatternValue(raw: string): string {
-  const trimmed = raw.trimEnd();
-  if (trimmed.length === 0) return raw;
-  // Already quoted (single or double) — leave alone.
-  const first = trimmed[0];
-  const last = trimmed[trimmed.length - 1];
-  if ((first === "'" && last === "'") || (first === '"' && last === '"')) return raw;
-  if (!NEEDS_QUOTING.test(trimmed)) return raw;
-  // Single-quote it; inner single quotes are escaped as '' per YAML's
-  // single-quoted-scalar rules.
-  const inner = trimmed.replace(/'/g, "''");
-  const trailingWs = raw.slice(trimmed.length);
-  return `'${inner}'${trailingWs}`;
-}
-
-function findInlineCommentStart(s: string): number {
-  // Honor quote state — `#` inside a quoted scalar is not a comment.
-  let inS = false, inD = false;
-  for (let i = 0; i < s.length; i++) {
-    const ch = s[i];
-    if (ch === "'" && !inD) inS = !inS;
-    else if (ch === '"' && !inS) inD = !inD;
-    else if (ch === '#' && !inS && !inD) {
-      if (i === 0 || /\s/.test(s[i - 1])) return i;
+function loadFrameworkSpecsForLanguage(modelsDir: string, language: FrameworkLanguage): FrameworkSpec[] {
+  if (!fs.existsSync(modelsDir)) return [];
+  const out: FrameworkSpec[] = [];
+  for (const entry of fs.readdirSync(modelsDir)) {
+    if (!entry.endsWith('.yaml') && !entry.endsWith('.yml')) continue;
+    try {
+      const spec = loadSpec(path.join(modelsDir, entry));
+      if ((spec.language ?? 'js') === language) out.push(spec);
+    } catch {
+      // Bad spec — skip; the engine startup path warns on the same files.
     }
   }
-  return -1;
+  return out;
 }
 
-/** Longest common parent directory of two absolute paths. */
-function commonAncestor(a: string, b: string): string {
-  const segA = path.resolve(a).split(path.sep);
-  const segB = path.resolve(b).split(path.sep);
-  const out: string[] = [];
-  for (let i = 0; i < Math.min(segA.length, segB.length); i++) {
-    if (segA[i] !== segB[i]) break;
-    out.push(segA[i]);
-  }
-  // Strip the file basename if the common prefix included the full path of one
-  // of the inputs (e.g. ruleFile lives directly under target's parent).
-  const joined = out.join(path.sep);
-  return path.dirname(joined) === joined || /\.[^./]+$/.test(joined) ? path.dirname(joined) : joined;
-}
-
-/** Path relative from `from` to `to`, with platform separators normalised to '/'. */
-function posixRelative(from: string, to: string): string {
-  return path.relative(from, to).split(path.sep).filter(Boolean).join('/');
-}
-
-function sanitizeStderr(raw: string): string {
-  return raw
-    .replace(/\/app\/[^\s:]+/g, '<app>')
-    .replace(/\/home\/[^/\s:]+\/[^\s:]+/g, '<home>')
-    .replace(/\/tmp\/[^\s:]+/g, '<tmp>');
+function safeRm(p: string): void {
+  try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* non-fatal */ }
 }
 
 // ---------------------------------------------------------------------------

@@ -32,13 +32,16 @@ import * as path from 'path';
 import pLimit from 'p-limit';
 import type { Storage } from './storage';
 import { withTimeout, logStepError, classifyError, StepTimeoutError } from './with-timeout';
-import { loadAllRulesWithSkipped } from './reachability-rules';
 import {
   generateRuleForCve,
   type AiProviderName,
   type GenerationResult,
   type ValidationBreakdown,
 } from './rule-generator';
+import {
+  withOsvIdsSubstituted,
+  FRAMEWORK_SPEC_PROMPT_VERSION,
+} from './rule-generator/framework-spec-schema';
 
 const STEP_NAME = 'rule_generation';
 // Bumped from 90s to accommodate up to 4 in-provider rate-limit retries
@@ -95,8 +98,6 @@ export interface RunRuleGenerationArgs {
   supabase: Storage;
   log: LogLike;
   signal?: AbortSignal;
-  /** Resolved at the call site so tests can pass a fake. */
-  platformRulesDir: string;
   /** Override the BYOK key resolver — exposed for tests. Production path
    *  reads from organization_ai_providers + AI_ENCRYPTION_KEY. */
   resolveApiKey?: (orgId: string, provider: AiProviderName) => Promise<string | null>;
@@ -213,10 +214,14 @@ export async function runRuleGenerationStep(
     return { ...ZERO_RESULT, ran: true, skipReasons };
   }
 
-  // --- 4. Subtract CVEs already covered (platform + org-existing) ---
-  const platformCves = await loadPlatformRuleCves(args.platformRulesDir, log);
+  // --- 4. Subtract CVEs already covered (org-existing only) ---
+  // Phase 6.5 / M5 — platform-shipped Semgrep rule packs were retired with
+  // the `reachability_rules` step. The new generator path emits FrameworkSpec
+  // (not Semgrep YAML), so the legacy "skip if a platform rule exists" guard
+  // would never have suppressed a generation attempt regardless. Any CVE the
+  // org has already validated stays in the skip set.
   const orgExistingCves = await loadOrgExistingRuleCves(organizationId, supabase);
-  const coveredCves = new Set([...platformCves, ...orgExistingCves]);
+  const coveredCves = new Set([...orgExistingCves]);
 
   const candidates: PipelineVulnRow[] = [];
   let alreadyCovered = 0;
@@ -296,12 +301,48 @@ export async function runRuleGenerationStep(
   const overallStart = Date.now();
   const maxWaitMs = settings.max_wait_seconds * 1_000;
 
+  // Per-CVE retry with exponential backoff for transient provider errors
+  // (429, 5xx, network). Non-transient outcomes — schema failure, fixture
+  // round-trip failure, prompt_injection_suspect — are NOT retried (the
+  // model would deterministically return the same result). This sits OUTSIDE
+  // generateRuleForCve's inner withRateLimitRetry so a sustained provider
+  // outage that exhausts the inner 4-attempt loop still gets 3 fresh tries
+  // here (with 30s of cool-down spread across all in-flight CVEs on 429).
+  const PROVIDER_RETRY_DELAYS_MS = [1_000, 4_000, 16_000];
+  const RATE_LIMIT_GLOBAL_COOL_DOWN_MS = 30_000;
+  // Shared timestamp: when ANY in-flight candidate hits a 429, we bump this
+  // to `Date.now() + cool_down` and every candidate that's about to fire
+  // waits past it before issuing its next call. Keeps the bursts out of the
+  // window the provider's already throttled.
+  let globalRateLimitedUntil = 0;
+
+  const isTransientProviderError = (status: GenerationResult['status'], errors: string[]): boolean => {
+    if (status !== 'provider_error') return false;
+    // Surface code lives in the error message string — `withRateLimitRetry`
+    // exhausted prepends "Rate-limited after ..." and 5xx/network errors
+    // prepend their own labels. Match conservatively so deterministic
+    // failures don't slip into the retry path.
+    const blob = errors.join(' | ').toLowerCase();
+    return /rate.?limit|429|503|502|504|fetch failed|terminated|socket hang up|econnreset|network/.test(blob);
+  };
+
+  const isRateLimitErrors = (errors: string[]): boolean => {
+    return /rate.?limit|429/i.test(errors.join(' | '));
+  };
+
+  // Per-CVE budget recheck. With pLimit(5), 5 concurrent CVEs can each pass
+  // a single pre-flight summation and burn the cap together. Re-reading
+  // monthlySpend before EACH pLimit task body picks up spend from sibling
+  // tasks that already wrote ai_usage_logs rows, so the 6th CVE in a batch
+  // sees 5 rows of new spend and bails. Same fail-closed semantics as
+  // applyBudgetCap: read failure → skip CVE.
+  const PER_CVE_PESSIMISTIC = 0.10;
+  const monthlyBudget = settings.monthly_budget_usd;
+
   const results = await Promise.all(
     candidates.map((vuln) =>
       limit(async () => {
-        // Bail if the overall step has already burned its budget — the
-        // outer pipeline timeout would have done this anyway, but bailing
-        // here lets us still write whatever finished.
+        // Bail if the overall step has already burned its budget.
         if (Date.now() - overallStart > maxWaitMs) {
           return {
             cveId: vuln.osv_id!,
@@ -309,48 +350,105 @@ export async function runRuleGenerationStep(
             reason: 'overall_max_wait_exceeded',
           };
         }
-        try {
-          const result = await withTimeout(
-            (innerSignal) =>
-              generateRuleForCve({
-                cveId: vuln.osv_id!,
-                packagePurl: vuln.package_purl!,
-                packageName: vuln.package_name!,
-                ecosystem: vuln.ecosystem!,
-                organizationId,
-                provider: settings!.ai_provider,
-                model: effectiveModel,
-                apiKey,
-                signal: combinedSignal(signal, innerSignal),
-                platformRulesDir: args.platformRulesDir,
-                githubToken: resolveGithubToken(),
-                baseUrl: resolveOpenAiCompatBaseUrl(settings!.ai_provider),
-              }),
-            PER_CVE_TIMEOUT_MS,
-            STEP_NAME,
-          );
-          return { cveId: vuln.osv_id!, skipped: false as const, result };
-        } catch (err) {
-          if (err instanceof StepTimeoutError) {
-            return { cveId: vuln.osv_id!, skipped: true as const, reason: 'timeout' };
-          }
-          if (jobId) {
-            const { code, message, stack } = classifyError(err);
-            await logStepError(supabase, {
-              jobId,
-              projectId,
-              step: STEP_NAME,
-              code,
-              message: `${vuln.osv_id}: ${message}`,
-              stack,
-              severity: 'warn',
-            });
-          }
-          return { cveId: vuln.osv_id!, skipped: true as const, reason: 'generation_threw' };
+
+        // Per-CVE cap recheck — fresh SUM read so concurrent slots converge.
+        const spendNow = await readRuleGenMonthlySpend(supabase, organizationId);
+        if (spendNow === null) {
+          return {
+            cveId: vuln.osv_id!,
+            skipped: true as const,
+            reason: 'budget_read_failed',
+          };
         }
+        if (spendNow + PER_CVE_PESSIMISTIC > monthlyBudget) {
+          return {
+            cveId: vuln.osv_id!,
+            skipped: true as const,
+            reason: 'budget_exhausted_mid_batch',
+          };
+        }
+
+        let lastResult: GenerationResult | null = null;
+        for (let attempt = 0; attempt <= PROVIDER_RETRY_DELAYS_MS.length; attempt++) {
+          // Honour the global rate-limit cool-down so concurrent slots wait
+          // out the same window instead of racing each other into 429s.
+          if (Date.now() < globalRateLimitedUntil) {
+            const waitMs = globalRateLimitedUntil - Date.now();
+            await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+          }
+          try {
+            const result = await withTimeout(
+              (innerSignal) =>
+                generateRuleForCve({
+                  cveId: vuln.osv_id!,
+                  packagePurl: vuln.package_purl!,
+                  packageName: vuln.package_name!,
+                  ecosystem: vuln.ecosystem!,
+                  organizationId,
+                  provider: settings!.ai_provider,
+                  model: effectiveModel,
+                  apiKey,
+                  signal: combinedSignal(signal, innerSignal),
+                  githubToken: resolveGithubToken(),
+                  baseUrl: resolveOpenAiCompatBaseUrl(settings!.ai_provider),
+                }),
+              PER_CVE_TIMEOUT_MS,
+              STEP_NAME,
+            );
+            lastResult = result;
+            if (!isTransientProviderError(result.status, result.errors)) break;
+            if (attempt === PROVIDER_RETRY_DELAYS_MS.length) break;
+            if (isRateLimitErrors(result.errors)) {
+              globalRateLimitedUntil = Math.max(
+                globalRateLimitedUntil,
+                Date.now() + RATE_LIMIT_GLOBAL_COOL_DOWN_MS,
+              );
+            }
+            await new Promise<void>((resolve) => setTimeout(resolve, PROVIDER_RETRY_DELAYS_MS[attempt]));
+            continue;
+          } catch (err) {
+            if (err instanceof StepTimeoutError) {
+              return { cveId: vuln.osv_id!, skipped: true as const, reason: 'timeout' };
+            }
+            if (jobId) {
+              const { code, message, stack } = classifyError(err);
+              await logStepError(supabase, {
+                jobId,
+                projectId,
+                step: STEP_NAME,
+                code,
+                message: `${vuln.osv_id}: ${message}`,
+                stack,
+                severity: 'warn',
+              });
+            }
+            return { cveId: vuln.osv_id!, skipped: true as const, reason: 'generation_threw' };
+          }
+        }
+        if (lastResult) return { cveId: vuln.osv_id!, skipped: false as const, result: lastResult };
+        return { cveId: vuln.osv_id!, skipped: true as const, reason: 'generation_threw' };
       }),
     ),
   );
+
+  // Surface a partial-failure summary log if a non-trivial fraction of CVEs
+  // ended in transient provider errors after retry — a systemic provider
+  // outage should be operator-visible, not silently recorded as 'failed'.
+  const errorClasses: Record<string, number> = {};
+  let providerErrorCount = 0;
+  for (const r of results) {
+    if (r.skipped) continue;
+    if (r.result.status === 'validated') continue;
+    errorClasses[`status:${r.result.status}`] = (errorClasses[`status:${r.result.status}`] ?? 0) + 1;
+    if (r.result.status === 'provider_error') providerErrorCount++;
+  }
+  if (providerErrorCount > 0 && providerErrorCount >= Math.max(3, Math.floor(candidates.length * 0.25))) {
+    await log.warn(
+      STEP_NAME,
+      `cve_spec_generation_partial: ${providerErrorCount}/${candidates.length} CVEs ended in provider_error after retries — likely a sustained provider outage`,
+      { error_classes: errorClasses, provider: settings.ai_provider, model: effectiveModel },
+    );
+  }
 
   // --- 8. Persist validated rules + tally stats ---
   let generatedCount = 0;
@@ -472,16 +570,6 @@ function canonicalCveId(osvId: string, aliases: string[] | null): string | null 
   return null;
 }
 
-async function loadPlatformRuleCves(rulesDir: string, log: LogLike): Promise<Set<string>> {
-  try {
-    const { loaded } = await loadAllRulesWithSkipped(rulesDir);
-    return new Set(loaded.map((r) => r.metadata.cve));
-  } catch (err) {
-    await log.warn(STEP_NAME, `Could not enumerate platform-shipped rules at ${rulesDir}: ${err instanceof Error ? err.message : String(err)}`);
-    return new Set();
-  }
-}
-
 async function loadOrgExistingRuleCves(orgId: string, supabase: Storage): Promise<Set<string>> {
   const { data, error } = await supabase
     .from('organization_generated_rules')
@@ -502,21 +590,23 @@ interface ApplyBudgetArgs {
   log: LogLike;
 }
 
-async function applyBudgetCap(args: ApplyBudgetArgs): Promise<{ effectiveModel: string; budgetSkipped: boolean }> {
-  const { settings, organizationId, candidateCount, supabase, log } = args;
-
-  // Pull this calendar month's spend on rule_generation from ai_usage_logs.
-  // Best-effort — failure to read defaults to "no spend yet".
-  let monthlySpend = 0;
+/**
+ * Read this calendar month's `rule_generation` spend from ai_usage_logs.
+ * Returns the SUM in USD, or `null` when the read failed — callers MUST
+ * fail-closed on null (skip / error out) rather than fall back to $0,
+ * which would silently disable the per-org cap during a Supabase outage.
+ */
+async function readRuleGenMonthlySpend(
+  supabase: Storage,
+  organizationId: string,
+): Promise<number | null> {
   try {
     const monthStart = new Date();
     monthStart.setUTCDate(1);
     monthStart.setUTCHours(0, 0, 0, 0);
     // The Storage abstraction (used in PGLite local-mode) doesn't expose
-    // .gte for non-string types, so cast to any here. PGLite's adapter
-    // does support gte at runtime; this just sidesteps the narrowed type.
-    // Failure is non-fatal — we'll fall back to zero spend and rely on
-    // the per-CVE budget heuristic alone.
+    // .gte for non-string types, so cast here. PGLite's adapter does
+    // support gte at runtime; this just sidesteps the narrowed type.
     const builder = supabase
       .from('ai_usage_logs')
       .select('estimated_cost')
@@ -524,20 +614,32 @@ async function applyBudgetCap(args: ApplyBudgetArgs): Promise<{ effectiveModel: 
       .eq('feature', 'rule_generation') as unknown as {
         gte: (col: string, val: string) => Promise<{ data: unknown; error: unknown }>;
       };
-    const { data } = await builder.gte('created_at', monthStart.toISOString());
+    const { data, error } = await builder.gte('created_at', monthStart.toISOString());
+    if (error) return null;
+    let sum = 0;
     for (const row of (data as Array<{ estimated_cost?: number | string }> | null) ?? []) {
       const v = typeof row.estimated_cost === 'string' ? parseFloat(row.estimated_cost) : row.estimated_cost ?? 0;
-      monthlySpend += Number(v) || 0;
+      sum += Number(v) || 0;
     }
-  } catch (err) {
-    // Read failure is non-fatal — fall back to zero monthly spend so a brief
-    // outage doesn't block legitimate generation. But log loudly: a sustained
-    // outage silently disables the per-org monthly_budget_usd cap, which is
-    // the only thing standing between us and a runaway BYOK bill.
+    return sum;
+  } catch {
+    return null;
+  }
+}
+
+async function applyBudgetCap(args: ApplyBudgetArgs): Promise<{ effectiveModel: string; budgetSkipped: boolean }> {
+  const { settings, organizationId, candidateCount, supabase, log } = args;
+
+  // Fail-closed on read error: previously we fell back to monthlySpend=0 on
+  // a Supabase outage, which silently disabled the per-org cap — the only
+  // thing standing between us and a runaway BYOK bill. Now: skip generation.
+  const monthlySpend = await readRuleGenMonthlySpend(supabase, organizationId);
+  if (monthlySpend === null) {
     await log.warn(
       STEP_NAME,
-      `Failed to read ai_usage_logs for monthly budget cap; falling back to zero spent. Monthly budget enforcement is degraded until this recovers: ${err instanceof Error ? err.message : String(err)}`,
+      'Skipping rule generation: ai_usage_logs read failed; cannot enforce monthly budget cap. Generation will resume when Supabase recovers.',
     );
+    return { effectiveModel: settings.ai_model, budgetSkipped: true };
   }
 
   const remaining = Math.max(0, settings.monthly_budget_usd - monthlySpend);
@@ -705,13 +807,41 @@ async function persistGeneratedRule(
     .eq('package_purl', result.packagePurl)
     .maybeSingle();
 
+  // Server-side osv_id substitution (Patch 5 / E1) — the persistence step is
+  // the SINGLE canonical assignment site for osv_id on a sink. The model
+  // never gets to set this; the DB-side framework_spec_osv_match_chk
+  // constraint (phase27a) enforces server-side as defense-in-depth.
+  const substitutedSpec = result.rule
+    ? withOsvIdsSubstituted(result.rule.framework_spec, result.cveId)
+    : null;
+
+  if (result.promptInjectionSuspect) {
+    await log.warn(
+      STEP_NAME,
+      `prompt_injection_suspect: ${result.cveId} model emitted osv_id on a sink. Row rejected.`,
+      {
+        cve_id: result.cveId,
+        provider: result.generatedWith.provider,
+        model: result.generatedWith.model,
+        attempts: result.attempts,
+      },
+    );
+  }
+
   const baseRow = {
     organization_id: organizationId,
     cve_id: result.cveId,
     package_purl: result.packagePurl,
     ecosystem: result.ecosystem,
     affected_version_range: result.affectedVersionRange ?? null,
-    rule_yaml: result.rule?.rule_yaml ?? '',
+    // M2b: write FrameworkSpec JSONB. Leave rule_yaml NULL on new rows —
+    // the phase27a migration dropped the NOT NULL on rule_yaml so we no
+    // longer need an empty-string placeholder. spec_format='framework_spec'
+    // is what the loader keys on; legacy 'semgrep_yaml' rows continue to
+    // load via the old path until M5 retires Phase 5 entirely.
+    rule_yaml: null,
+    framework_spec: substitutedSpec,
+    spec_format: 'framework_spec',
     vulnerable_fixture: result.rule?.vulnerable_fixture ?? '',
     safe_fixture: result.rule?.safe_fixture ?? '',
     reachability_level: result.rule?.reachability_level ?? 'function',
@@ -720,13 +850,22 @@ async function persistGeneratedRule(
     generated_with_model: result.generatedWith.model,
     generation_cost_usd: result.costUsd,
     validation_status: result.status === 'validated' ? 'validated' : 'failed_validation',
-    validation_log: result.validationLog ?? { errors: result.errors },
+    // prompt_version doesn't have a dedicated column on organization_generated_rules
+    // (the table predates Phase 5h's prompt-version tracking) — fold it into
+    // validation_log so the row still carries enough metadata to forensically
+    // disambiguate which generator authored it.
+    validation_log: {
+      ...(result.validationLog ?? { errors: result.errors }),
+      prompt_version: FRAMEWORK_SPEC_PROMPT_VERSION,
+      attempts: result.attempts,
+    },
     enabled: result.status === 'validated',
     generated_at: new Date().toISOString(),
   };
 
   // Drop empty-rule rows when there's nothing useful to persist (e.g.
-  // status=no_advisory) — the row would just be noise in the UI.
+  // status=no_advisory or prompt_injection_suspect with no payload) — the
+  // row would just be noise in the UI.
   if (!result.rule && result.status !== 'failed_validation') {
     return false;
   }
@@ -844,14 +983,6 @@ function combinedSignal(outer: AbortSignal | undefined, inner: AbortSignal): Abo
   return c.signal;
 }
 
-export function makePlatformRulesDir(): string {
-  // Allow self-host / local-CLI testing to point at an empty dir so an
-  // already-shipped platform rule doesn't shadow the AI-generation path
-  // we're trying to exercise.
-  const override = process.env.DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR;
-  if (override && override.length > 0) return override;
-  return path.resolve(__dirname, '..', 'reachability-rules');
-}
 
 export function makeStepWorkdir(prefix: string = 'deptex-rulegen-step-'): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));

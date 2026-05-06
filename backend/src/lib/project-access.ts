@@ -12,6 +12,42 @@ export interface ProjectAccessResult {
   error?: { status: number; message: string };
 }
 
+export interface ProjectInOrgResult {
+  valid: boolean;
+  error?: { status: number; message: string };
+}
+
+/**
+ * Verify that `projectId` belongs to `organizationId`. Routes shaped like
+ * `/organizations/:id/projects/:projectId/...` MUST call this before any
+ * other access check — otherwise an attacker who is a member of org A can
+ * pass org A's `:id` with a project from org B in `:projectId` and bypass
+ * the org-scoped permission check (because checkProjectAccess only verifies
+ * org A membership, not that projectId is actually in org A).
+ *
+ * Returns 404 (not 403) on mismatch as an anti-enumeration guard: attackers
+ * shouldn't be able to probe project UUIDs to learn which orgs they live in.
+ */
+export async function assertProjectInOrg(
+  projectId: string,
+  organizationId: string
+): Promise<ProjectInOrgResult> {
+  const { data, error } = await supabase
+    .from('projects')
+    .select('id, organization_id')
+    .eq('id', projectId)
+    .single();
+
+  if (error || !data || data.organization_id !== organizationId) {
+    return {
+      valid: false,
+      error: { status: 404, message: 'Project not found' },
+    };
+  }
+
+  return { valid: true };
+}
+
 /**
  * Confirm that `projectId` actually lives under `organizationId`. Without this
  * gate, a route handler that trusts checkProjectAccess / checkProjectManagePermission

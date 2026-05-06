@@ -11,6 +11,7 @@ import express from 'express';
 import { authenticateUser, type AuthRequest } from '../middleware/auth';
 import { supabase } from '../lib/supabase';
 import { createActivity } from '../lib/activities';
+import { DEFAULT_GENERATOR_MONTHLY_BUDGET_USD } from '../lib/taint-engine-defaults';
 
 const router = express.Router();
 
@@ -27,7 +28,7 @@ const DEFAULTS = {
   trigger_reevaluate_existing: false,
   ai_provider: 'anthropic',
   ai_model: 'claude-sonnet-4-6',
-  monthly_budget_usd: 10.0,
+  monthly_budget_usd: DEFAULT_GENERATOR_MONTHLY_BUDGET_USD,
   on_budget_exhaustion: 'skip',
   max_wait_seconds: 300,
 };

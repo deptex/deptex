@@ -57,9 +57,28 @@ async function main() {
     process.exit(1);
   }
 
-  // JSONB wrapper already sorts by (ord, ddl); copy out so the type-asserted
-  // array is mutable for any downstream tweaks.
-  const rows = ((data as DumpRow[] | null) ?? []).slice();
+  // JSONB wrapper sorts by (ord, ddl), but that places `function` AFTER
+  // `constraint`. PGLite parses the dump linearly and validates CHECK
+  // constraint expressions at constraint-creation time — so a CHECK that
+  // references a SQL function (e.g. framework_spec_osv_matches_cve on
+  // organization_generated_rules) errors with "function does not exist"
+  // unless the function is emitted first. Reorder so functions come before
+  // constraints; production Supabase never replays this dump (it runs
+  // migrations sequentially), so the change is PGLite-only.
+  const KIND_ORDER: Record<string, number> = {
+    enum: 0,
+    table: 1,
+    function: 2,
+    constraint: 3,
+    index: 4,
+    trigger: 5,
+  };
+  const rows = ((data as DumpRow[] | null) ?? []).slice().sort((a, b) => {
+    const ka = KIND_ORDER[a.kind] ?? 99;
+    const kb = KIND_ORDER[b.kind] ?? 99;
+    if (ka !== kb) return ka - kb;
+    return a.ord - b.ord;
+  });
 
   const out: string[] = [];
   out.push('-- Deptex schema dump');

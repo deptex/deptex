@@ -88,7 +88,7 @@ describe('Reachability Settings Routes', () => {
       expect(res.body.auto_generate_enabled).toBe(false);
       expect(res.body.trigger_severities).toEqual(['critical', 'high']);
       expect(res.body.ai_provider).toBe('anthropic');
-      expect(res.body.monthly_budget_usd).toBe(10.0);
+      expect(res.body.monthly_budget_usd).toBe(30.0);
       expect(res.body.on_budget_exhaustion).toBe('skip');
     });
 

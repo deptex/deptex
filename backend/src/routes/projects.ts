@@ -28,7 +28,7 @@ import { fetchGhsaVulnerabilitiesBatch, filterGhsaVulnsByVersion, ghsaSeverityTo
 import { getVulnCountsBatch, getVulnCountsForVersion, getVulnCountsForVersionsBatch, VulnCounts } from '../lib/vuln-counts';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
 import { getActiveExtractionId } from '../lib/active-extraction';
-import { checkProjectAccess, checkProjectManagePermission } from '../lib/project-access';
+import { checkProjectAccess, checkProjectManagePermission, assertProjectInOrg } from '../lib/project-access';
 import { emitEvent } from '../lib/event-bus';
 import {
   registerGitLabWebhook,
@@ -9551,6 +9551,29 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
         .order('flow_length', { ascending: true })
         .limit(20);
       reachableFlows = flows ?? [];
+
+      // Phase 6.5 — surface per-flow suppression state. The suppression table
+      // is keyed by flow_signature_hash (Option B / OD-4) so user-state
+      // survives writeFlows wipe-and-rewrite. Resolve to a boolean per flow
+      // here so the UI doesn't need a second round-trip. Graceful no-op if
+      // the table doesn't exist yet (pre-phase27a deploy / fresh local PGLite).
+      const hashes: string[] = (reachableFlows as any[])
+        .map((f: any) => f.flow_signature_hash)
+        .filter((h: any): h is string => typeof h === 'string' && h.length > 0);
+      if (hashes.length > 0) {
+        const { data: suppressionRows, error: suppressionError } = await supabase
+          .from('project_reachable_flow_suppressions')
+          .select('flow_signature_hash')
+          .eq('project_id', projectId)
+          .in('flow_signature_hash', hashes);
+        if (!suppressionError && suppressionRows) {
+          const suppressedSet = new Set<string>(suppressionRows.map((r: any) => r.flow_signature_hash));
+          reachableFlows = (reachableFlows as any[]).map((f: any) => ({
+            ...f,
+            is_suppressed: f.flow_signature_hash ? suppressedSet.has(f.flow_signature_hash) : false,
+          }));
+        }
+      }
     }
 
     res.json({
@@ -9663,6 +9686,121 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unsuppress', async
   } catch (error: any) {
     console.error('Error unsuppressing vulnerability:', error);
     res.status(500).json({ error: error.message || 'Failed to unsuppress vulnerability' });
+  }
+});
+
+// Phase 6.5 — per-flow suppression. Hash-keyed (Option B / OD-4) so the
+// suppression survives writeFlows' wipe-and-rewrite across re-extractions.
+// Mirrors the per-vuln suppress endpoints' permission model
+// (manage_projects / manage_teams_and_projects via checkProjectManagePermission).
+//
+// POST /api/organizations/:id/projects/:projectId/flow-suppressions
+router.post('/:id/projects/:projectId/flow-suppressions', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+    const { flow_signature_hash: flowSignatureHash, suppressed_reason: suppressedReason } = req.body ?? {};
+
+    if (typeof flowSignatureHash !== 'string' || !/^[0-9a-f]{64}$/i.test(flowSignatureHash)) {
+      return res.status(400).json({ error: 'flow_signature_hash must be a 64-character hex sha256' });
+    }
+    if (suppressedReason != null && typeof suppressedReason !== 'string') {
+      return res.status(400).json({ error: 'suppressed_reason must be a string when provided' });
+    }
+
+    // Tenant binding MUST happen before access/permission checks. Without it,
+    // a member of org A can submit org A's :id with a projectId from org B,
+    // pass checkProjectAccess (org A membership), and write a suppression
+    // bound to org B's project — the DB trigger blocks the INSERT, but only
+    // the route can return 404 cleanly.
+    const projectInOrg = await assertProjectInOrg(projectId, id);
+    if (!projectInOrg.valid) {
+      return res.status(projectInOrg.error!.status).json({ error: projectInOrg.error!.message });
+    }
+
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+    const canManage = await checkProjectManagePermission(userId, id, projectId);
+    if (!canManage) {
+      return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
+    }
+
+    // Anti-enumeration: never trust a client-supplied hash blindly. The hash
+    // must already exist on a flow row in this project, otherwise an attacker
+    // could enumerate hashes from another tenant by INSERTing into the
+    // suppression table. Project scope is checked via the `project_id` filter.
+    const { data: existing, error: existingError } = await supabase
+      .from('project_reachable_flows')
+      .select('id')
+      .eq('project_id', projectId)
+      .eq('flow_signature_hash', flowSignatureHash)
+      .limit(1);
+    if (existingError) throw existingError;
+    if (!existing || existing.length === 0) {
+      return res.status(404).json({ error: 'Flow not found for this project' });
+    }
+
+    // UNIQUE(project_id, flow_signature_hash) makes this idempotent — a
+    // re-suppress is a no-op. Pull the existing row when the upsert returns
+    // empty so the response shape is consistent.
+    const { data: inserted, error: insertError } = await supabase
+      .from('project_reachable_flow_suppressions')
+      .upsert({
+        organization_id: id,
+        project_id: projectId,
+        flow_signature_hash: flowSignatureHash,
+        suppressed_by: userId,
+        suppressed_reason: suppressedReason ?? null,
+      }, { onConflict: 'project_id,flow_signature_hash', ignoreDuplicates: false })
+      .select()
+      .single();
+    if (insertError) throw insertError;
+
+    res.json({ success: true, suppression: inserted });
+  } catch (error: any) {
+    console.error('Error creating flow suppression:', error);
+    res.status(500).json({ error: 'Failed to suppress flow' });
+  }
+});
+
+// DELETE /api/organizations/:id/projects/:projectId/flow-suppressions/:hash
+router.delete('/:id/projects/:projectId/flow-suppressions/:hash', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, hash: flowSignatureHash } = req.params;
+
+    if (!/^[0-9a-f]{64}$/i.test(flowSignatureHash)) {
+      return res.status(400).json({ error: 'hash must be a 64-character hex sha256' });
+    }
+
+    // Tenant binding before access/permission checks — see POST handler comment.
+    const projectInOrg = await assertProjectInOrg(projectId, id);
+    if (!projectInOrg.valid) {
+      return res.status(projectInOrg.error!.status).json({ error: projectInOrg.error!.message });
+    }
+
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+    const canManage = await checkProjectManagePermission(userId, id, projectId);
+    if (!canManage) {
+      return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
+    }
+
+    const { error } = await supabase
+      .from('project_reachable_flow_suppressions')
+      .delete()
+      .eq('project_id', projectId)
+      .eq('flow_signature_hash', flowSignatureHash);
+    if (error) throw error;
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Error deleting flow suppression:', error);
+    res.status(500).json({ error: 'Failed to un-suppress flow' });
   }
 });
 
