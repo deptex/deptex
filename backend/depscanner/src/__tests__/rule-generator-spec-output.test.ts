@@ -21,6 +21,10 @@ import {
   GenerationError,
 } from '../rule-generator/generate';
 import {
+  FrameworkSinkSchema,
+  isBroadSinkPattern,
+} from '../rule-generator/framework-spec-schema';
+import {
   validateRule,
   makeRuleGenWorkdir,
 } from '../rule-generator/validate';
@@ -237,5 +241,60 @@ describe('buildAttemptFailureFeedback', () => {
     });
     expect(feedback).toContain('too BROAD');
     expect(feedback).toContain('STATIC LITERAL');
+  });
+});
+
+describe('Phase 6.5 hardening — sink-pattern broadness guard', () => {
+  // Direct heuristic checks. Phase 6.5 / T4.2 added isBroadSinkPattern as a
+  // .refine() on FrameworkSinkSchema's `pattern`. The list of rejected forms
+  // is the prompt-injection attack surface — bare wildcards lift coverage to
+  // every call in the program. Explicit literal receivers must always pass.
+  test('rejects bare "*"', () => {
+    expect(isBroadSinkPattern('*')).toBe(true);
+  });
+
+  test('rejects "*.*(*)" (wildcard receiver and method)', () => {
+    expect(isBroadSinkPattern('*.*(*)')).toBe(true);
+  });
+
+  test('rejects "*.execute(*)" (wildcard receiver, concrete method)', () => {
+    expect(isBroadSinkPattern('*.execute(*)')).toBe(true);
+  });
+
+  test('rejects empty / whitespace-only patterns', () => {
+    expect(isBroadSinkPattern('')).toBe(true);
+    expect(isBroadSinkPattern('  ')).toBe(true);
+  });
+
+  test('accepts a literal-receiver dotted pattern', () => {
+    expect(isBroadSinkPattern('_.template(*)')).toBe(false);
+  });
+
+  test('accepts a single-identifier function pattern', () => {
+    expect(isBroadSinkPattern('eval(*)')).toBe(false);
+  });
+
+  test('accepts a multi-segment literal receiver', () => {
+    expect(isBroadSinkPattern('child_process.exec(*)')).toBe(false);
+  });
+
+  test('FrameworkSinkSchema rejects a too-broad pattern via the .refine()', () => {
+    const result = FrameworkSinkSchema.safeParse({
+      pattern: '*.execute(*)',
+      vuln_class: 'sql_injection',
+      argument_indices: [0],
+      description: 'too broad — would match every .execute call in the repo',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('FrameworkSinkSchema accepts a literal-receiver pattern', () => {
+    const result = FrameworkSinkSchema.safeParse({
+      pattern: '_.template(*)',
+      vuln_class: 'prototype_pollution',
+      argument_indices: [0],
+      description: 'lodash template prototype pollution sink',
+    });
+    expect(result.success).toBe(true);
   });
 });
