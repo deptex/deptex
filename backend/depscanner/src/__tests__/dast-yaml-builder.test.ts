@@ -80,6 +80,24 @@ describe('buildAutomationYaml — anonymous baseline (parity case)', () => {
     );
     expect(report.parameters.template).toBe('traditional-json');
   });
+
+  // Real-ZAP parity gates — locks the AF YAML rule coverage to the helper-script
+  // baseline. Without these, dropping pscanrulesAlpha/Beta or re-introducing the
+  // maxAlertsPerRule cap regresses Juice Shop anonymous parity from 80 findings
+  // back to 19 (mocked-spawn unit tests passed clean on both regressions).
+  it('addOns install list includes pscanrulesAlpha + pscanrulesBeta for parity', () => {
+    const { doc } = dumpAndParse(BASELINE_OPTS);
+    const addOns = doc.jobs.find((j: any) => j.type === 'addOns');
+    expect(addOns.parameters.install).toEqual(
+      expect.arrayContaining(['pscanrulesAlpha', 'pscanrulesBeta']),
+    );
+  });
+
+  it('passiveScan-config does NOT cap maxAlertsPerRule (zap-baseline.py has no cap)', () => {
+    const { doc } = dumpAndParse(BASELINE_OPTS);
+    const ps = doc.jobs.find((j: any) => j.type === 'passiveScan-config');
+    expect(ps.parameters.maxAlertsPerRule).toBeUndefined();
+  });
 });
 
 describe('buildAutomationYaml — runtime branching', () => {
