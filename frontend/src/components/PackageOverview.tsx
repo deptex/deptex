@@ -23,6 +23,7 @@ import { ProjectDependency, ProjectEffectivePolicies, api } from '../lib/api';
 import { useToast } from '../hooks/use-toast';
 
 import { DeprecateSidebar } from './DeprecateSidebar';
+import { CapabilitiesSection } from './CapabilitiesSection';
 
 interface PackageOverviewProps {
   dependency: ProjectDependency;
@@ -617,6 +618,17 @@ export default function PackageOverview({ dependency, organizationId, projectId,
               </div>
             )}
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="p-4">
+          <CapabilitiesSection
+            organizationId={organizationId}
+            ecosystem={dependency.ecosystem}
+            packageName={dependency.name}
+            version={dependency.version}
+          />
         </CardContent>
       </Card>
 

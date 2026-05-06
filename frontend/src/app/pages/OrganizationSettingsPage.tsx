@@ -38,6 +38,7 @@ import { CODE_BLOCK_BG } from '../../components/policy-monaco-setup';
 import SLAConfigurationSection from '../../components/settings/SLAConfigurationSection';
 import AISection from '../../components/settings/AISection';
 import ReachabilitySection from '../../components/settings/ReachabilitySection';
+import MaliciousAllowlistSection from '../../components/settings/MaliciousAllowlistSection';
 import { VALID_SETTINGS_SECTIONS, buildOrgSettingsSections } from '../../lib/orgSettingsSections';
 import PageHeader from '../../components/PageHeader';
 
@@ -4462,6 +4463,13 @@ export default function OrganizationSettingsPage() {
                 <div className="pt-8">
                   <SLAConfigurationSection organizationId={id} />
                 </div>
+              )}
+
+              {activeSection === 'malicious_allowlist' && id && (
+                <MaliciousAllowlistSection
+                  organizationId={id}
+                  canManage={!!effectivePermissions?.manage_organization_settings}
+                />
               )}
 
               {activeSection === 'audit_logs' && (

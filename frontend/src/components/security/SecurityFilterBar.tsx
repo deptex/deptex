@@ -6,6 +6,18 @@ import { cn } from '../../lib/utils';
 
 export type ReachabilityFilterLevel = 'all' | 'confirmed' | 'data_flow' | 'function' | 'module' | 'unreachable';
 
+/** Malicious-package reachability filter (v2). Separate vocabulary from
+ * the vulnerability filter — malicious findings use a lightweight
+ * per-package callgraph (function / module / imported_unused / unimported),
+ * not the full taint engine's confirmed / data_flow path. */
+export type MaliciousReachabilityFilterLevel =
+  | 'all'
+  | 'function'
+  | 'module'
+  | 'imported_unused'
+  | 'unimported'
+  | 'unknown';
+
 /** SLA status filter for vulnerability list/graph. */
 export type SlaStatusFilter = 'all' | 'on_track' | 'warning' | 'breached' | 'exempt';
 
@@ -17,6 +29,8 @@ export interface SecurityFilters {
   fixAvailable: boolean;
   reachableOnly: boolean;
   reachabilityLevel: ReachabilityFilterLevel;
+  /** v2 malicious-tab reachability filter. */
+  maliciousReachabilityLevel: MaliciousReachabilityFilterLevel;
   depType: 'all' | 'direct' | 'transitive';
   /** Filter by SLA status. */
   slaStatus: SlaStatusFilter;
@@ -30,6 +44,7 @@ const DEFAULT_FILTERS: SecurityFilters = {
   fixAvailable: false,
   reachableOnly: false,
   reachabilityLevel: 'all',
+  maliciousReachabilityLevel: 'all',
   depType: 'all',
   slaStatus: 'all',
 };
@@ -55,10 +70,11 @@ function SecurityFilterBar({ filters, onFiltersChange }: SecurityFilterBarProps)
     const fixAvailable = searchParams.get('fix') === 'true';
     const reachableOnly = searchParams.get('reachable') === 'true';
     const reachabilityLevel = (searchParams.get('reachability') as ReachabilityFilterLevel) || 'all';
+    const maliciousReachabilityLevel = (searchParams.get('malicious_reachability') as MaliciousReachabilityFilterLevel) || 'all';
     const depType = (searchParams.get('dep_type') as SecurityFilters['depType']) || 'all';
     const slaStatus = (searchParams.get('sla') as SlaStatusFilter) || 'all';
 
-    onFiltersChange({ severity, depscoreMin, epssMin, kevOnly, fixAvailable, reachableOnly, reachabilityLevel, depType, slaStatus });
+    onFiltersChange({ severity, depscoreMin, epssMin, kevOnly, fixAvailable, reachableOnly, reachabilityLevel, maliciousReachabilityLevel, depType, slaStatus });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -72,6 +88,7 @@ function SecurityFilterBar({ filters, onFiltersChange }: SecurityFilterBarProps)
     if (newFilters.fixAvailable) params.set('fix', 'true');
     if (newFilters.reachableOnly) params.set('reachable', 'true');
     if (newFilters.reachabilityLevel !== 'all') params.set('reachability', newFilters.reachabilityLevel);
+    if (newFilters.maliciousReachabilityLevel !== 'all') params.set('malicious_reachability', newFilters.maliciousReachabilityLevel);
     if (newFilters.depType !== 'all') params.set('dep_type', newFilters.depType);
     if (newFilters.slaStatus !== 'all') params.set('sla', newFilters.slaStatus);
     setSearchParams(params, { replace: true });
@@ -90,6 +107,7 @@ function SecurityFilterBar({ filters, onFiltersChange }: SecurityFilterBarProps)
     filters.fixAvailable,
     filters.reachableOnly,
     filters.reachabilityLevel !== 'all',
+    filters.maliciousReachabilityLevel !== 'all',
     filters.depType !== 'all',
     filters.slaStatus !== 'all',
   ].filter(Boolean).length;
@@ -198,6 +216,38 @@ function SecurityFilterBar({ filters, onFiltersChange }: SecurityFilterBarProps)
                     : color === 'orange' ? 'border-orange-500/30 bg-orange-500/10 text-orange-400'
                     : color === 'yellow' ? 'border-yellow-500/30 bg-yellow-500/10 text-yellow-400'
                     : color === 'green' ? 'border-green-500/30 bg-green-500/10 text-green-400'
+                    : color === 'zinc' ? 'border-zinc-500/30 bg-zinc-500/10 text-zinc-400'
+                    : 'border-primary/30 bg-primary/10 text-primary'
+                  : 'border-border text-zinc-500 hover:text-zinc-400'
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Malicious Reachability Level (v2 — applies to malicious-package findings) */}
+      <div>
+        <div className="text-xs font-medium text-zinc-400 mb-2">Malicious Package Reachability</div>
+        <div className="flex gap-2 flex-wrap">
+          {([
+            { value: 'all', label: 'All', color: 'primary' },
+            { value: 'function', label: 'Function', color: 'red' },
+            { value: 'module', label: 'Module', color: 'orange' },
+            { value: 'imported_unused', label: 'Imported, unused', color: 'yellow' },
+            { value: 'unimported', label: 'Unimported', color: 'zinc' },
+            { value: 'unknown', label: 'Unknown', color: 'zinc' },
+          ] as const).map(({ value, label, color }) => (
+            <button
+              key={value}
+              onClick={() => updateFilters({ ...filters, maliciousReachabilityLevel: value })}
+              className={cn(
+                'px-2 py-1 rounded text-xs transition-colors border',
+                filters.maliciousReachabilityLevel === value
+                  ? color === 'red' ? 'border-red-500/30 bg-red-500/10 text-red-400'
+                    : color === 'orange' ? 'border-orange-500/30 bg-orange-500/10 text-orange-400'
+                    : color === 'yellow' ? 'border-yellow-500/30 bg-yellow-500/10 text-yellow-400'
                     : color === 'zinc' ? 'border-zinc-500/30 bg-zinc-500/10 text-zinc-400'
                     : 'border-primary/30 bg-primary/10 text-primary'
                   : 'border-border text-zinc-500 hover:text-zinc-400'

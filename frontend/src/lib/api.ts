@@ -2217,9 +2217,16 @@ export const api = {
       organizationId: string,
       projectId: string,
       page = 1,
-      perPage = 50
+      perPage = 50,
+      filters?: { reachability?: MaliciousReachabilityLevel | 'unknown' | null }
     ): Promise<PaginatedResponse<MaliciousFinding>> {
-      return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/malicious-findings?page=${page}&per_page=${perPage}`);
+      const qs = new URLSearchParams();
+      qs.set('page', String(page));
+      qs.set('per_page', String(perPage));
+      if (filters?.reachability) qs.set('reachability', filters.reachability);
+      return fetchWithAuth(
+        `/api/organizations/${organizationId}/projects/${projectId}/malicious-findings?${qs.toString()}`
+      );
     },
     async get(
       organizationId: string,
@@ -2247,6 +2254,39 @@ export const api = {
       return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/malicious-findings/${findingId}/explain`, {
         method: 'POST',
       });
+    },
+  },
+
+  maliciousAllowlist: {
+    async list(organizationId: string): Promise<{ data: MaliciousAllowlistEntry[] }> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/malicious-allowlist`);
+    },
+    async add(
+      organizationId: string,
+      body: { package_name: string; version: string | null; ecosystem: string; reason: string }
+    ): Promise<MaliciousAllowlistEntry> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/malicious-allowlist`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+    },
+    async revoke(organizationId: string, entryId: string): Promise<{ success: boolean }> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/malicious-allowlist/${entryId}`, {
+        method: 'DELETE',
+      });
+    },
+  },
+
+  capabilities: {
+    async fetch(
+      organizationId: string,
+      ecosystem: string,
+      packageName: string,
+      version: string,
+    ): Promise<PackageCapabilities> {
+      return fetchWithAuth(
+        `/api/organizations/${organizationId}/packages/${encodeURIComponent(ecosystem)}/${encodeURIComponent(packageName)}/${encodeURIComponent(version)}/capabilities`,
+      );
     },
   },
 
@@ -4456,8 +4496,51 @@ export interface ScannerSummary {
   skipped_images: Array<{ image: string; reason: string }>;
 }
 
-export type MaliciousScanner = 'feed' | 'guarddog';
+export type MaliciousScanner = 'feed' | 'guarddog' | 'maintainer';
 export type MaliciousSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+
+/**
+ * v2 canonical ecosystem set. Widened from v1's 7 to 10 for 8-language
+ * capability detector parity (composer/cargo/nuget added).
+ */
+export const MALICIOUS_ECOSYSTEMS = [
+  'npm', 'pypi', 'maven', 'golang', 'rubygems',
+  'composer', 'cargo', 'nuget', 'github-actions', 'vscode',
+] as const;
+export type MaliciousEcosystem = typeof MALICIOUS_ECOSYSTEMS[number];
+
+export interface MaliciousAllowlistEntry {
+  id: string;
+  package_name: string;
+  version: string | null;
+  ecosystem: string;
+  reason: string;
+  added_by: string | null;
+  added_by_email: string;
+  added_at: string;
+  revoked_at: string | null;
+}
+
+/**
+ * Malicious-package reachability classification (v2). Distinct from the
+ * vulnerability ReachabilityLevel because malicious findings use a
+ * lightweight per-package callgraph, not the full taint engine.
+ */
+export type MaliciousReachabilityLevel =
+  | 'unimported'
+  | 'imported_unused'
+  | 'module'
+  | 'function';
+
+export interface MaliciousReachabilityDetails {
+  entry_points?: string[];
+  call_chain?: string[];
+  sink_file?: string;
+  sink_line?: number;
+  /** Set on soft-fail when the resolver threw — level will be null. */
+  error?: string;
+  message?: string;
+}
 
 export interface MaliciousFinding {
   id: string;
@@ -4486,7 +4569,43 @@ export interface MaliciousFinding {
   evidence?: { file_path: string; lines: [number, number]; snippet: string }[];
   ai_narrative?: string | null;
   ai_narrative_cached_at?: string | null;
+  reachability_level?: MaliciousReachabilityLevel | null;
+  reachability_details?: MaliciousReachabilityDetails | null;
+  reachability_computed_at?: string | null;
 }
+
+/**
+ * Per-package capability tags (malicious-packages-v2 M1b). Global cache —
+ * the same row is returned for every org that has the package in scope.
+ * Locked at 15 boolean tags for v2.
+ */
+export interface PackageCapabilities {
+  package_name: string;
+  version: string;
+  ecosystem: string;
+  scanner_version: string;
+  scanned_at: string;
+  scan_error: string | null;
+  capabilities: {
+    spawns_processes: boolean;
+    network_io: boolean;
+    eval_dynamic: boolean;
+    native_addon_load: boolean;
+    filesystem_write: boolean;
+    crypto_operations: boolean;
+    serialization_deser: boolean;
+    install_script: boolean;
+    dns_query: boolean;
+    websocket: boolean;
+    process_signal: boolean;
+    encrypted_payload: boolean;
+    dynamic_import: boolean;
+    reads_env: boolean;
+    clipboard_access: boolean;
+  };
+}
+
+export type CapabilityKey = keyof PackageCapabilities['capabilities'];
 
 export interface VulnerabilityEvent {
   id: string;

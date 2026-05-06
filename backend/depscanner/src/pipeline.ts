@@ -2203,6 +2203,17 @@ export async function runPipeline(
           }));
 
         const { runMaliciousScan, eventDeduplicationKey } = await import('./malicious-scan');
+        // Pass workspace info so the scan can build its own per-project
+        // tree-sitter usage index for reachability classification.
+        // Self-contained — does not depend on the Phase 6 taint engine.
+        const supportedReachabilityEcosystems: readonly SupportedEcosystem[] = [
+          'npm', 'pypi', 'maven', 'golang', 'gem', 'composer', 'cargo', 'nuget',
+        ];
+        const workspaceEcosystem = supportedReachabilityEcosystems.includes(
+          jobEcosystem as SupportedEcosystem,
+        )
+          ? (jobEcosystem as SupportedEcosystem)
+          : null;
         const result = await runMaliciousScan({
           supabase,
           projectId,
@@ -2210,6 +2221,8 @@ export async function runPipeline(
           extractionRunId: runId,
           jobId: job.jobId ?? runId,
           packages,
+          workspaceRoot,
+          workspaceEcosystem,
           log,
           checkCancelled,
           heartbeat,

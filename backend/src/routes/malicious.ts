@@ -19,6 +19,7 @@ import { supabase } from '../lib/supabase';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { getActiveExtractionId } from '../lib/active-extraction';
 import { checkProjectAccess, checkProjectManagePermission } from './project-access';
+import { createActivity } from '../lib/activities';
 
 const router = express.Router();
 router.use(authenticateUser);
@@ -50,24 +51,56 @@ router.get('/:id/projects/:projectId/malicious-findings', async (req: AuthReques
     const perPage = Math.min(200, Math.max(1, parseInt(String(req.query.per_page ?? '50'), 10) || 50));
     const offset = (page - 1) * perPage;
 
+    // ?reachability= filter — single value or comma-separated list. The
+    // sentinel 'unknown' selects rows where reachability_level IS NULL
+    // (resolver soft-failed or pre-v2 rows). All other values must be one
+    // of the canonical levels; unrecognised values are silently dropped
+    // so a malformed URL doesn't 500 the page.
+    const VALID_LEVELS = ['function', 'module', 'imported_unused', 'unimported'];
+    const requested = String(req.query.reachability ?? '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    const reachabilityLevels = requested.filter(s => VALID_LEVELS.includes(s));
+    const includeUnknown = requested.includes('unknown');
+
     const activeExtractionId = await getActiveExtractionId(supabase, projectId);
 
-    const { count } = await supabase
-      .from('project_malicious_findings')
-      .select('id', { count: 'exact', head: true })
-      .eq('project_id', projectId)
-      .eq('organization_id', id)
-      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
+    const applyReachabilityFilter = <T extends { or: any; in: any; is: any }>(q: T): T => {
+      if (reachabilityLevels.length > 0 && includeUnknown) {
+        // mix of "function,unknown" — OR clause across the list + null check
+        const inList = reachabilityLevels.map(l => `"${l}"`).join(',');
+        return q.or(`reachability_level.in.(${inList}),reachability_level.is.null`);
+      }
+      if (reachabilityLevels.length > 0) {
+        return q.in('reachability_level', reachabilityLevels);
+      }
+      if (includeUnknown) {
+        return q.is('reachability_level', null);
+      }
+      return q;
+    };
 
-    const { data, error } = await supabase
-      .from('project_malicious_findings')
-      .select('*')
-      .eq('project_id', projectId)
-      .eq('organization_id', id)
-      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
-      .order('severity', { ascending: true })
-      .order('created_at', { ascending: false })
-      .range(offset, offset + perPage - 1);
+    const { count } = await applyReachabilityFilter(
+      supabase
+        .from('project_malicious_findings')
+        .select('id', { count: 'exact', head: true })
+        .eq('project_id', projectId)
+        .eq('organization_id', id)
+        .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
+    );
+
+    const { data, error } = await applyReachabilityFilter(
+      supabase
+        .from('project_malicious_findings')
+        .select('*')
+        .eq('project_id', projectId)
+        .eq('organization_id', id)
+        .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
+        .order('severity', { ascending: true })
+        .order('created_at', { ascending: false })
+        .range(offset, offset + perPage - 1)
+    );
 
     if (error) throw error;
 
@@ -216,10 +249,13 @@ router.patch('/:id/projects/:projectId/malicious-findings/:findingId', async (re
       return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
     }
 
-    // Defence-in-depth: verify finding belongs to (orgId, projectId) before update
+    // Defence-in-depth: verify finding belongs to (orgId, projectId) before update.
+    // Also pull prior suppressed / risk_accepted state so the audit-log diff
+    // captures both sides (the in-row suppressed_by columns are overwritten
+    // on toggle and don't preserve history).
     const { data: finding } = await supabase
       .from('project_malicious_findings')
-      .select('id, project_id, organization_id')
+      .select('id, project_id, organization_id, rule_id, scanner, suppressed, risk_accepted')
       .eq('id', findingId)
       .maybeSingle();
     if (!finding || finding.project_id !== projectId || finding.organization_id !== id) {
@@ -276,6 +312,35 @@ router.patch('/:id/projects/:projectId/malicious-findings/:findingId', async (re
     if (pmf?.dependency_id) {
       await supabase.rpc('recompute_dependency_is_malicious', { p_dependency_ids: [pmf.dependency_id] });
     }
+
+    // Audit trail: per-finding suppression / risk-acceptance is the project-
+    // scoped twin of the org-scoped allowlist. The in-row suppressed_by /
+    // risk_accepted_by columns capture only the latest actor and get clobbered
+    // on toggle; the canonical activities feed is what an auditor reads to
+    // reconstruct who silenced which finding when.
+    const verb =
+      'suppressed' in update
+        ? (update.suppressed ? 'suppressed' : 'unsuppressed')
+        : (update.risk_accepted ? 'accepted-risk' : 'unaccepted-risk');
+    await createActivity({
+      organization_id: id,
+      user_id: userId,
+      activity_type: 'updated_malicious_finding',
+      description: `${verb} malicious finding ${finding.scanner}:${finding.rule_id}`,
+      metadata: {
+        finding_id: findingId,
+        project_id: projectId,
+        rule_id: finding.rule_id,
+        scanner: finding.scanner,
+        old_value: { suppressed: finding.suppressed, risk_accepted: finding.risk_accepted },
+        new_value: {
+          suppressed: 'suppressed' in update ? update.suppressed : finding.suppressed,
+          risk_accepted: 'risk_accepted' in update ? update.risk_accepted : finding.risk_accepted,
+        },
+        suppressed_reason: update.suppressed_reason ?? null,
+        risk_accepted_reason: update.risk_accepted_reason ?? null,
+      },
+    });
 
     res.json({ success: true });
   } catch (error: any) {
@@ -343,6 +408,68 @@ router.post('/:id/projects/:projectId/malicious-findings/:findingId/explain', as
       }
     }
 
+    // Maintainer findings need the latest signal-snapshot tuple inlined so
+    // the AI Explain prompt has concrete facts to narrate. We look up the
+    // most-recent snapshot for the package — older snapshots are pruned
+    // at 90 days; if the row's gone, we narrate without metadata strings
+    // (the signal booleans on the rule_id alone still produce a coherent
+    // explanation).
+    let maintainerContext: { signals: any; metadata: any } | undefined;
+    if (finding.scanner === 'maintainer') {
+      const { getLatestSnapshot } = await import('../lib/malicious/maintainer-snapshots');
+      const { computeMaintainerSignalsForPackage } = await import('../lib/malicious/maintainer-signals');
+      // We don't want a fresh registry pull on every Explain click, so just
+      // diff against the most-recent snapshot we have. The 30-day diff
+      // baseline lookup also goes against the same table.
+      const latest = await getLatestSnapshot(supabase, dep.name, pd.version, dep.ecosystem);
+      if (latest) {
+        // Re-run the signal compute using the latest snapshot as both the
+        // current-state proxy and the prior snapshot, then trust the
+        // pre-computed rule_id. This avoids a network call from the
+        // request path; the cron run is the source of truth for signals.
+        // For a richer narrative we could re-pull, but the cron-stored
+        // snapshot already has everything we need.
+        try {
+          // skipWriteSnapshot avoids re-upserting the same row on Explain.
+          const computed = await computeMaintainerSignalsForPackage(
+            supabase,
+            dep.name,
+            pd.version,
+            dep.ecosystem,
+            { skipWriteSnapshot: true },
+          );
+          if (computed) {
+            maintainerContext = {
+              signals: computed.signals,
+              metadata: {
+                maintainer_handles: latest.maintainer_handles ?? [],
+                primary_maintainer_email: latest.primary_maintainer_email ?? null,
+                observed_at: latest.observed_at,
+              },
+            };
+          }
+        } catch {
+          // Fall through with the snapshot data only — the signal booleans
+          // can be reconstructed from the rule_id slug if needed.
+          maintainerContext = {
+            signals: {
+              account_age_days: null,
+              install_script_present: finding.rule_id.includes('install_script') || finding.rule_id.includes('postinstall'),
+              email_changed_in_last_30d: finding.rule_id.includes('email_changed'),
+              maintainer_changed_in_last_30d: finding.rule_id.includes('maintainer_changed'),
+              signing_setup_changed: finding.rule_id.includes('signing_setup_changed'),
+              new_postinstall_added: finding.rule_id.includes('new_postinstall'),
+            },
+            metadata: {
+              maintainer_handles: latest.maintainer_handles ?? [],
+              primary_maintainer_email: latest.primary_maintainer_email ?? null,
+              observed_at: latest.observed_at,
+            },
+          };
+        }
+      }
+    }
+
     const { explainMaliciousFinding } = await import('../lib/malicious/explain');
     const outcome = await explainMaliciousFinding({
       organizationId: id,
@@ -356,6 +483,7 @@ router.post('/:id/projects/:projectId/malicious-findings/:findingId/explain', as
       ruleId: finding.rule_id,
       ruleMessage: finding.message,
       rawSourceSnippets: snippets,
+      maintainerContext,
     });
 
     if (!outcome.ok) {
@@ -399,6 +527,28 @@ internalRouter.post('/staleness-watchdog', async (req, res) => {
   } catch (error: any) {
     console.error('[malicious staleness-watchdog] failed:', error);
     res.status(500).json({ error: error?.message ?? 'watchdog failed' });
+  }
+});
+
+// M1c maintainer-signal sync. Runs once per day via the daily cron
+// dispatcher; pulls registry metadata for active deps, snapshots state,
+// emits findings on Shai-Hulud-class signal patterns. Cross-org fan-out
+// derives `organization_id` from `projects` per-row — never trust the
+// caller / job body / dependency table.
+internalRouter.post('/maintainer-signal-sync', async (req, res) => {
+  if (!verifyInternal(req)) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { runMaintainerSignalSync } = await import('../lib/malicious/maintainer-sync');
+    const limitParam = (req.body && typeof req.body === 'object' && (req.body as any).limit !== undefined)
+      ? Number((req.body as any).limit)
+      : undefined;
+    const result = await runMaintainerSignalSync(supabase, {
+      limit: Number.isFinite(limitParam) && (limitParam as number) > 0 ? (limitParam as number) : undefined,
+    });
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    console.error('[malicious maintainer-signal-sync] failed:', error);
+    res.status(500).json({ error: error?.message ?? 'maintainer-signal-sync failed' });
   }
 });
 
