@@ -105,13 +105,7 @@ async function main() {
     trigger: 'TRIGGERS',
   };
 
-  // Emit-order matters: PGLite parses top-down, so any CHECK constraint or
-  // expression index that references a user-defined function must see the
-  // function declared first. Earlier dumps put `function` after `constraint`
-  // and `index`, which broke `CHECK (framework_spec_osv_matches_cve(...))`
-  // at PGLite-bootstrap time. Triggers stay last (they reference functions
-  // too, but TRIGGERS-after-FUNCTIONS was already correct).
-  const KIND_ORDER: Array<keyof typeof sections> = [
+  const SECTION_ORDER: Array<keyof typeof sections> = [
     'enum',
     'table',
     'function',
@@ -124,7 +118,7 @@ async function main() {
     (grouped[row.kind] ??= []).push(row);
   }
 
-  for (const kind of KIND_ORDER) {
+  for (const kind of SECTION_ORDER) {
     const rowsForKind = grouped[kind];
     if (!rowsForKind || rowsForKind.length === 0) continue;
     out.push('');
@@ -139,7 +133,7 @@ async function main() {
   // Any unrecognised kinds the wrapper might emit in future — append at end
   // so they never sneak above the function section by accident.
   for (const kind of Object.keys(grouped)) {
-    if ((KIND_ORDER as string[]).includes(kind)) continue;
+    if ((SECTION_ORDER as string[]).includes(kind)) continue;
     out.push('');
     out.push('-- ============================================');
     out.push('-- ' + kind.toUpperCase());
