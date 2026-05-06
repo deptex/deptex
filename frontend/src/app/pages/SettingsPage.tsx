@@ -1,13 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useUserProfile } from '../../hooks/useUserProfile';
-import AppHeader from '../../components/AppHeader';
-import SettingsSidebar from '../../components/SettingsSidebar';
+import PersonalSettingsSidebar from '../../components/PersonalSettingsSidebar';
+import { SidebarInset, SidebarProvider } from '../../components/ui/sidebar';
 import { Button } from '../../components/ui/button';
-import { Switch } from '../../components/ui/switch';
 import { Toaster } from '../../components/ui/toaster';
 import { useToast } from '../../hooks/use-toast';
-import { Save, Edit2 } from 'lucide-react';
+import { Edit2 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useSearchParams, useLocation } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
@@ -175,31 +174,11 @@ export default function SettingsPage() {
 
   return (
     <>
-      <div className="min-h-screen bg-background">
-        <AppHeader
-          breadcrumb={[]}
-          showSearch={false}
-          showNewOrg={false}
-          customLeftContent={
-            <nav className="flex items-center gap-2 text-sm" aria-label="Settings">
-              <img
-                src="/images/logo.png"
-                alt="Deptex"
-                className="h-8 w-8 flex-shrink-0"
-              />
-              <div className="h-4 w-px bg-border flex-shrink-0 ml-1.5 mr-3" aria-hidden />
-              <span className="text-foreground font-medium">Settings</span>
-            </nav>
-          }
-        />
-
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
-          <div className="flex gap-8">
-            {/* Sidebar */}
-            <SettingsSidebar />
-
-            {/* Content */}
-            <div className="flex-1">
+      <SidebarProvider defaultOpen>
+        <PersonalSettingsSidebar />
+        <SidebarInset>
+          <div className="flex justify-center p-8">
+            <div className="w-full max-w-2xl">
               {!isConnectedAccounts && (
                 <div className="space-y-6">
                   {/* Profile Card: Display Name + Avatar */}
@@ -425,8 +404,8 @@ export default function SettingsPage() {
               )}
             </div>
           </div>
-        </div>
-      </div>
+        </SidebarInset>
+      </SidebarProvider>
 
       <Toaster position="bottom-right" />
     </>
