@@ -489,7 +489,7 @@ CREATE TABLE IF NOT EXISTS public.organization_generated_rules (
   last_used_at timestamp with time zone,
   use_count integer NOT NULL DEFAULT 0,
   framework_spec jsonb,
-  spec_format text NOT NULL DEFAULT 'framework_spec'::text
+  spec_format text NOT NULL DEFAULT 'semgrep_yaml'::text
 );
 CREATE TABLE IF NOT EXISTS public.organization_integrations (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -2116,6 +2116,33 @@ CREATE OR REPLACE FUNCTION public.array_to_vector(real[], integer, boolean)
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
 AS '$libdir/vector', $function$array_to_vector$function$
+;
+
+CREATE OR REPLACE FUNCTION public.assert_flow_suppression_tenant()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  actual_org uuid;
+BEGIN
+  SELECT organization_id INTO actual_org
+  FROM public.projects
+  WHERE id = NEW.project_id;
+
+  IF actual_org IS NULL THEN
+    RAISE EXCEPTION 'project % does not exist', NEW.project_id
+      USING ERRCODE = 'foreign_key_violation';
+  END IF;
+
+  IF actual_org <> NEW.organization_id THEN
+    RAISE EXCEPTION 'organization_id % does not own project % (actual: %)',
+      NEW.organization_id, NEW.project_id, actual_org
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  RETURN NEW;
+END;
+$function$
 ;
 
 CREATE OR REPLACE FUNCTION public.backfill_sla_for_organization(p_organization_id uuid)
@@ -4105,7 +4132,11 @@ AS $function$
   FROM public.ai_usage_logs
   WHERE organization_id = p_organization_id
     AND success = true
-    AND feature IN ('taint_engine_spec_inference', 'taint_engine_fp_filter')
+    AND feature IN (
+      'taint_engine_spec_inference',
+      'taint_engine_fp_filter',
+      'taint_engine_anthropic_fallback'
+    )
     AND created_at >= date_trunc('month', now() AT TIME ZONE 'UTC');
 $function$
 ;
@@ -5745,7 +5776,6 @@ AS '$libdir/vector', $function$vector$function$
 ;
 
 
-
 -- ============================================
 -- CONSTRAINTS (PK, UNIQUE, CHECK, FK — in that order)
 -- ============================================
@@ -6632,6 +6662,7 @@ CREATE UNIQUE INDEX project_dast_findings_unresolved ON public.project_dast_find
 CREATE UNIQUE INDEX project_dast_targets_label_unique ON public.project_dast_targets USING btree (project_id, label) WHERE (label IS NOT NULL);
 CREATE UNIQUE INDEX team_banned_versions_team_id_dependency_id_banned_version_key ON public.team_banned_versions USING btree (team_id, dependency_id, banned_version);
 CREATE UNIQUE INDEX team_deprecations_team_id_dependency_id_key ON public.team_deprecations USING btree (team_id, dependency_id);
+
 -- ============================================
 -- TRIGGERS
 -- ============================================
@@ -6646,6 +6677,7 @@ CREATE TRIGGER project_configured_images_enforce_org_id BEFORE INSERT OR UPDATE 
 CREATE TRIGGER project_container_findings_enforce_org_id BEFORE INSERT OR UPDATE OF project_id, organization_id ON public.project_container_findings FOR EACH ROW EXECUTE FUNCTION enforce_finding_org_id();
 CREATE TRIGGER project_iac_findings_enforce_org_id BEFORE INSERT OR UPDATE OF project_id, organization_id ON public.project_iac_findings FOR EACH ROW EXECUTE FUNCTION enforce_finding_org_id();
 CREATE TRIGGER project_integrations_updated_at BEFORE UPDATE ON public.project_integrations FOR EACH ROW EXECUTE FUNCTION update_project_integrations_updated_at();
+CREATE TRIGGER project_reachable_flow_suppressions_tenant_check BEFORE INSERT OR UPDATE ON public.project_reachable_flow_suppressions FOR EACH ROW EXECUTE FUNCTION assert_flow_suppression_tenant();
 CREATE TRIGGER team_integrations_updated_at BEFORE UPDATE ON public.team_integrations FOR EACH ROW EXECUTE FUNCTION update_team_integrations_updated_at();
 CREATE TRIGGER trg_cleanup_orphaned_watchlist AFTER DELETE ON public.project_watchlist FOR EACH ROW EXECUTE FUNCTION cleanup_orphaned_watchlist();
 CREATE TRIGGER trigger_update_pr_guardrails_updated_at BEFORE UPDATE ON public.project_pr_guardrails FOR EACH ROW EXECUTE FUNCTION update_pr_guardrails_updated_at();

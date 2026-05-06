@@ -184,10 +184,11 @@ describe('ProjectSettingsPage – Access', () => {
       { id: 'team-3', name: 'Other Team', description: '', avatar_url: null },
     ]);
     render(<ProjectSettingsPage />);
-    await waitFor(() => {
-      expect(screen.getByText('Contributing Teams')).toBeInTheDocument();
-    });
-    const addTeamBtn = screen.getByRole('button', { name: /Add Team/ });
+    // The loading skeleton also renders "Contributing Teams" text but no
+    // Add Team button — wait for the button itself to avoid a race where
+    // the prior `waitFor('Contributing Teams')` matched the skeleton on
+    // slower CI runners.
+    const addTeamBtn = await screen.findByRole('button', { name: /Add Team/ });
     await userEvent.click(addTeamBtn);
     await waitFor(() => {
       expect(screen.getByText(/Select teams to give them access/)).toBeInTheDocument();

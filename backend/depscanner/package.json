@@ -40,6 +40,7 @@
     "test:finalize": "tsx test/finalize-extraction.test.ts",
     "test:reachability-rules-e2e": "tsx test/reachability-rules-e2e.test.ts",
     "test:rule-generation-step-pglite": "tsx test/rule-generation-step-pglite.test.ts",
+    "test:dast-v2-1a-migration-pglite": "tsx test/dast-v2-1a-migration-pglite.ts",
     "docker:prepare": "mkdir -p .schema && cp ../database/schema.sql .schema/schema.sql",
     "docker:build": "npm run docker:prepare && docker build -t deptex-cli:local .",
     "scan": "./bin/deptex-scan",

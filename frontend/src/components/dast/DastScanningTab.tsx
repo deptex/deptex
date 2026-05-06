@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { Loader2, Globe, AlertTriangle, ShieldCheck, Play } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Loader2, AlertTriangle, ShieldCheck, Plus } from 'lucide-react';
 import { Button } from '../ui/button';
-import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { Switch } from '../ui/switch';
@@ -14,7 +13,17 @@ import {
   type DastConfigDTO,
   type DastJobDTO,
   type DastScanProfile,
+  type DastScopeConfig,
+  type DastTargetDTO,
 } from '../../lib/api';
+import { DastScopePanel } from './DastScopePanel';
+import { DastTargetsList } from './DastTargetsList';
+import { DastTargetEditDialog } from './DastTargetEditDialog';
+import {
+  ActiveScanOptInDialog,
+  hasActiveScanOptIn,
+  recordActiveScanOptIn,
+} from './ActiveScanOptInDialog';
 
 interface DastScanningTabProps {
   projectId: string;
@@ -22,10 +31,17 @@ interface DastScanningTabProps {
   canManage: boolean;
 }
 
+interface TabState {
+  enabled: boolean;
+  scan_profile: DastScanProfile;
+  scan_timeout_minutes: number;
+  scope_config: DastScopeConfig;
+}
+
 const SCAN_PROFILE_LABELS: Record<DastScanProfile, string> = {
-  auto: 'Auto (recommended)',
+  auto: 'Auto (passive baseline)',
   quick: 'Quick (passive only, ~2 min)',
-  full: 'Full (active, ~20+ min)',
+  full: 'Full (active fuzzing, ~20+ min)',
   api: 'API only (uses framework routes)',
 };
 
@@ -76,33 +92,63 @@ function statusLabel(status: DastJobDTO['status']): string {
   }
 }
 
+const EMPTY_STATE: TabState = {
+  enabled: false,
+  scan_profile: 'auto',
+  scan_timeout_minutes: 30,
+  scope_config: {},
+};
+
 export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) {
   const { toast } = useToast();
 
   const [loading, setLoading] = useState(true);
-  const [config, setConfig] = useState<DastConfigDTO>({
-    enabled: false,
-    target_url: '',
-    scan_profile: 'auto',
-    scan_timeout_minutes: 30,
-  });
-  const [savedConfig, setSavedConfig] = useState<DastConfigDTO | null>(null);
+  const [config, setConfig] = useState<TabState>(EMPTY_STATE);
+  const [savedConfig, setSavedConfig] = useState<TabState | null>(null);
   const [saving, setSaving] = useState(false);
-  const [scanning, setScanning] = useState(false);
 
+  const [targets, setTargets] = useState<DastTargetDTO[]>([]);
   const [jobs, setJobs] = useState<DastJobDTO[]>([]);
   const [jobsLoading, setJobsLoading] = useState(true);
 
+  const [editingTargetId, setEditingTargetId] = useState<string | null>(null);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [scanningTargetId, setScanningTargetId] = useState<string | null>(null);
+  const [recheckingRuntimeTargetId, setRecheckingRuntimeTargetId] = useState<string | null>(null);
+  const [activeScanDialog, setActiveScanDialog] = useState<DastTargetDTO | null>(null);
+
   const fallbackPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const refreshConfig = async () => {
+    const cfg = await api.getDastConfig(projectId);
+    const normalized: TabState = {
+      enabled: !!cfg.enabled,
+      scan_profile: cfg.scan_profile ?? 'auto',
+      scan_timeout_minutes: cfg.scan_timeout_minutes ?? 30,
+      scope_config: cfg.scope_config ?? {},
+    };
+    setConfig(normalized);
+    setSavedConfig(normalized);
+    setTargets(cfg.targets ?? []);
+  };
 
   const refreshJobs = async () => {
     try {
-      const next = await api.getDastJobs(projectId);
+      const next = await api.getDastJobs(projectId, { limit: 25 });
       setJobs(next);
     } catch (e: any) {
       console.error('[dast] failed to load jobs', e);
     } finally {
       setJobsLoading(false);
+    }
+  };
+
+  const refreshTargets = async () => {
+    try {
+      const next = await api.getDastTargets(projectId);
+      setTargets(next);
+    } catch (e: any) {
+      console.error('[dast] failed to load targets', e);
     }
   };
 
@@ -113,63 +159,71 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
 
     (async () => {
       try {
-        const [cfg] = await Promise.all([
-          api.getDastConfig(projectId),
-          refreshJobs(),
-        ]);
-        if (cancelled) return;
-        const normalized: DastConfigDTO = {
-          enabled: cfg.enabled,
-          target_url: cfg.target_url ?? '',
-          scan_profile: cfg.scan_profile ?? 'auto',
-          scan_timeout_minutes: cfg.scan_timeout_minutes ?? 30,
-        };
-        setConfig(normalized);
-        setSavedConfig(normalized);
+        await Promise.all([refreshConfig(), refreshJobs()]);
       } catch (e: any) {
         if (!cancelled) {
-          toast({ title: 'Failed to load DAST config', description: e?.message, variant: 'destructive' });
+          toast({
+            title: 'Failed to load DAST config',
+            description: e?.message,
+            variant: 'destructive',
+          });
         }
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
-  // Realtime: subscribe to scan_jobs changes for this project. RLS scopes
-  // server-side, but we belt-and-brace by also filtering on type='dast' in the
-  // refresh query (jobs API already does this).
+  // Realtime: scan_jobs (per-project) + project_dast_targets (per-project).
   useEffect(() => {
     if (!projectId) return;
     let realtimeOk = true;
 
     const channel = supabase
-      .channel(`dast-jobs-${projectId}`)
+      .channel(`dast-${projectId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'scan_jobs', filter: `project_id=eq.${projectId}` },
+        () => {
+          void refreshJobs();
+          void refreshTargets();
+        },
+      )
       .on(
         'postgres_changes',
         {
           event: '*',
           schema: 'public',
-          table: 'scan_jobs',
+          table: 'project_dast_targets',
           filter: `project_id=eq.${projectId}`,
         },
-        () => { void refreshJobs(); }
+        () => {
+          void refreshTargets();
+        },
       )
       .subscribe((status) => {
         if (status === 'TIMED_OUT' || status === 'CHANNEL_ERROR') {
           realtimeOk = false;
           if (!fallbackPollRef.current) {
-            fallbackPollRef.current = setInterval(refreshJobs, 5_000);
+            fallbackPollRef.current = setInterval(() => {
+              void refreshJobs();
+              void refreshTargets();
+            }, 5_000);
           }
         }
       });
 
     const timeout = setTimeout(() => {
       if (!realtimeOk && !fallbackPollRef.current) {
-        fallbackPollRef.current = setInterval(refreshJobs, 5_000);
+        fallbackPollRef.current = setInterval(() => {
+          void refreshJobs();
+          void refreshTargets();
+        }, 5_000);
       }
     }, 5_000);
 
@@ -184,16 +238,31 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
-  const isDirty =
-    savedConfig !== null && (
+  const isDirty = useMemo(() => {
+    if (!savedConfig) return false;
+    return (
       config.enabled !== savedConfig.enabled ||
-      (config.target_url ?? '') !== (savedConfig.target_url ?? '') ||
       config.scan_profile !== savedConfig.scan_profile ||
-      config.scan_timeout_minutes !== savedConfig.scan_timeout_minutes
+      config.scan_timeout_minutes !== savedConfig.scan_timeout_minutes ||
+      JSON.stringify(config.scope_config) !== JSON.stringify(savedConfig.scope_config)
     );
+  }, [config, savedConfig]);
 
-  const canScan = canManage && savedConfig?.enabled === true && !!savedConfig?.target_url && !scanning;
-  const hasActiveJob = jobs.some((j) => j.status === 'queued' || j.status === 'processing');
+  // Latest job per target_id, for the per-row scan status / auth-failed banner.
+  const jobsByTargetId = useMemo(() => {
+    const map: Record<string, DastJobDTO | undefined> = {};
+    for (const job of jobs) {
+      const tid = job.target_id;
+      if (!tid) continue;
+      if (!map[tid]) map[tid] = job;
+    }
+    return map;
+  }, [jobs]);
+
+  const editingTarget = useMemo(
+    () => targets.find((t) => t.id === editingTargetId) ?? null,
+    [targets, editingTargetId],
+  );
 
   const handleSave = async () => {
     if (!canManage) return;
@@ -201,39 +270,84 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
     try {
       const saved = await api.saveDastConfig(projectId, {
         enabled: config.enabled,
-        target_url: config.target_url ? config.target_url.trim() : null,
         scan_profile: config.scan_profile,
         scan_timeout_minutes: config.scan_timeout_minutes,
+        scope_config: config.scope_config,
       });
-      const normalized: DastConfigDTO = {
-        enabled: saved.enabled,
-        target_url: saved.target_url ?? '',
+      const normalized: TabState = {
+        enabled: !!saved.enabled,
         scan_profile: saved.scan_profile ?? 'auto',
         scan_timeout_minutes: saved.scan_timeout_minutes ?? 30,
+        scope_config: saved.scope_config ?? {},
       };
       setConfig(normalized);
       setSavedConfig(normalized);
+      if (saved.targets) setTargets(saved.targets);
       toast({ title: 'DAST settings saved' });
     } catch (e: any) {
-      const detail = e?.detail || e?.message || 'Save failed';
+      const detail = (e?.responseBody as any)?.detail || e?.message || 'Save failed';
       toast({ title: 'Failed to save', description: detail, variant: 'destructive' });
     } finally {
       setSaving(false);
     }
   };
 
-  const handleScan = async () => {
+  const triggerScan = async (target: DastTargetDTO) => {
     if (!canManage) return;
-    setScanning(true);
+    setScanningTargetId(target.id);
     try {
-      await api.triggerDastScan(projectId);
-      toast({ title: 'Scan queued', description: 'Findings will appear in the Security tab once the scan completes.' });
+      await api.triggerDastScan(projectId, { target_id: target.id });
+      toast({
+        title: 'Scan queued',
+        description: 'Findings will appear in the Security tab once the scan completes.',
+      });
       void refreshJobs();
+      void refreshTargets();
     } catch (e: any) {
-      const detail = e?.detail || e?.message || 'Failed to start scan';
+      const code = e?.message ?? 'failed';
+      const detail = humanizeScanError(code);
       toast({ title: 'Failed to start scan', description: detail, variant: 'destructive' });
     } finally {
-      setScanning(false);
+      setScanningTargetId(null);
+    }
+  };
+
+  const handleScan = async (target: DastTargetDTO) => {
+    // ActiveScanOptInDialog gates only on profile='full'. Auto / quick / api
+    // are passive — no consent dialog. localStorage memo per target after the
+    // first confirmation.
+    if (config.scan_profile === 'full' && !hasActiveScanOptIn(target.id)) {
+      setActiveScanDialog(target);
+      return;
+    }
+    await triggerScan(target);
+  };
+
+  const handleConfirmActiveScan = async () => {
+    if (!activeScanDialog) return;
+    recordActiveScanOptIn(activeScanDialog.id);
+    await triggerScan(activeScanDialog);
+  };
+
+  const handleRecheckRuntime = async (target: DastTargetDTO) => {
+    setRecheckingRuntimeTargetId(target.id);
+    try {
+      const result = await api.recheckDastTargetRuntime(projectId, target.id);
+      setTargets((prev) => prev.map((t) => (t.id === target.id ? result.target : t)));
+      toast({
+        title: 'Runtime re-probed',
+        description: result.probe.probed
+          ? `Detected as ${result.target.detected_runtime} (confidence ${Math.round(result.probe.confidence * 100)}%).`
+          : 'Probe inconclusive — first scan will retry.',
+      });
+    } catch (e: any) {
+      toast({
+        title: 'Failed to re-probe runtime',
+        description: e?.message,
+        variant: 'destructive',
+      });
+    } finally {
+      setRecheckingRuntimeTargetId(null);
     }
   };
 
@@ -242,8 +356,9 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
       <div>
         <h2 className="text-2xl font-semibold text-foreground">Scanning</h2>
         <p className="text-sm text-foreground-secondary mt-1">
-          Configure dynamic application security testing (DAST) for your deployed app.
-          Findings cross-link to known vulnerabilities in reachable dependencies.
+          Configure dynamic application security testing (DAST) for your deployed app. Scan
+          multiple URLs, store credentials securely per target, and cross-link findings to known
+          vulnerabilities in reachable dependencies.
         </p>
       </div>
 
@@ -251,153 +366,55 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
         <ScanningTabSkeleton />
       ) : (
         <>
-          {/* Target configuration card */}
-          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-            <div className="px-4 py-3 border-b border-border">
-              <h3 className="text-sm font-semibold text-foreground">Target</h3>
-            </div>
-            <div className="p-4 space-y-4">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <Label className="text-sm text-foreground">DAST enabled</Label>
-                  <p className="text-xs text-foreground-secondary mt-0.5">
-                    Required to trigger scans. Disabling preserves existing findings.
-                  </p>
-                </div>
-                <Switch
-                  checked={config.enabled}
-                  onCheckedChange={(v) => setConfig((c) => ({ ...c, enabled: v }))}
-                  disabled={!canManage}
-                />
-              </div>
+          <ProfileAndTimeoutCard
+            config={config}
+            savedConfig={savedConfig}
+            isDirty={isDirty}
+            saving={saving}
+            canManage={canManage}
+            onChange={setConfig}
+            onSave={handleSave}
+          />
 
-              <div>
-                <Label htmlFor="dast-target-url" className="text-sm text-foreground">Target URL</Label>
-                <p className="text-xs text-foreground-secondary mt-0.5 mb-2">
-                  Public-facing URL of the deployed app (staging recommended).
-                  Loopback, RFC1918, and Fly internal hosts are blocked.
-                </p>
-                <div className="flex items-center gap-2 max-w-xl">
-                  <Globe className="h-4 w-4 text-foreground-secondary shrink-0" />
-                  <Input
-                    id="dast-target-url"
-                    type="url"
-                    value={config.target_url ?? ''}
-                    onChange={(e) => setConfig((c) => ({ ...c, target_url: e.target.value }))}
-                    placeholder="https://staging.example.com"
-                    disabled={!canManage}
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-xl">
-                <div>
-                  <Label className="text-sm text-foreground">Scan profile</Label>
-                  <p className="text-xs text-foreground-secondary mt-0.5 mb-2">
-                    Auto picks API-scan when framework routes are detected, otherwise a passive baseline.
-                  </p>
-                  <Select
-                    value={config.scan_profile}
-                    onValueChange={(v) => setConfig((c) => ({ ...c, scan_profile: v as DastScanProfile }))}
-                    disabled={!canManage}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(Object.keys(SCAN_PROFILE_LABELS) as DastScanProfile[]).map((p) => (
-                        <SelectItem key={p} value={p}>{SCAN_PROFILE_LABELS[p]}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label className="text-sm text-foreground">Timeout</Label>
-                  <p className="text-xs text-foreground-secondary mt-0.5 mb-2">
-                    Hard limit on scan duration (5–60 minutes).
-                  </p>
-                  <Select
-                    value={String(config.scan_timeout_minutes)}
-                    onValueChange={(v) => setConfig((c) => ({ ...c, scan_timeout_minutes: Number(v) }))}
-                    disabled={!canManage}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {TIMEOUT_PRESETS.map((m) => (
-                        <SelectItem key={m} value={String(m)}>{m} minutes</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-            </div>
-            <div className="px-4 py-3 border-t border-border bg-black/20 flex items-center justify-between">
-              <p className="text-xs text-foreground-secondary">
-                {savedConfig?.enabled
-                  ? <span className="inline-flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" /> Active for this project</span>
-                  : <span className="inline-flex items-center gap-1 text-foreground-secondary"><AlertTriangle className="h-3.5 w-3.5" /> Disabled — saved scans won't run automatically</span>}
-              </p>
-              {canManage && (
-                <Button variant="outline" size="sm" onClick={handleSave} disabled={!isDirty || saving}>
-                  {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" /> : null}
-                  Save
-                </Button>
-              )}
-            </div>
-          </div>
-
-          {/* Scan now card */}
-          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-            <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-foreground">Manual scan</h3>
-              {canManage && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleScan}
-                        disabled={!canScan || hasActiveJob}
-                      >
-                        {scanning ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
-                        ) : (
-                          <Play className="h-3.5 w-3.5 mr-2" />
-                        )}
-                        Scan now
-                      </Button>
-                    </span>
-                  </TooltipTrigger>
-                  {!canScan ? (
-                    <TooltipContent>
-                      {!savedConfig?.enabled
-                        ? 'Enable DAST and save before scanning'
-                        : !savedConfig?.target_url
-                          ? 'Save a target URL before scanning'
-                          : hasActiveJob
-                            ? 'Another scan is already in progress'
-                            : 'Save settings before scanning'}
-                    </TooltipContent>
-                  ) : null}
-                </Tooltip>
-              )}
-            </div>
+          <Card title="Scope">
             <div className="p-4">
-              <p className="text-xs text-foreground-secondary">
-                Triggers an out-of-band scan. The depscanner worker boots a Fly machine and reports back to the Security tab on completion.
-                Concurrency: 1 active scan per project, 3 across the org.
-              </p>
+              <DastScopePanel
+                value={config.scope_config}
+                onChange={(scope) => setConfig((c) => ({ ...c, scope_config: scope }))}
+                disabled={!canManage}
+              />
             </div>
-          </div>
+          </Card>
 
-          {/* History */}
-          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-            <div className="px-4 py-3 border-b border-border">
-              <h3 className="text-sm font-semibold text-foreground">Scan history</h3>
-            </div>
+          <Card
+            title="Targets"
+            action={
+              canManage ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCreateDialogOpen(true)}
+                  disabled={!config.enabled}
+                >
+                  <Plus className="h-3.5 w-3.5 mr-2" /> Add target
+                </Button>
+              ) : null
+            }
+          >
+            <DastTargetsList
+              targets={targets}
+              jobsByTargetId={jobsByTargetId}
+              scanningTargetId={scanningTargetId}
+              recheckingRuntimeTargetId={recheckingRuntimeTargetId}
+              drainModeOn={false /* surfaced via 503 + per-row tooltip when triggered */}
+              canManage={canManage}
+              onScan={handleScan}
+              onEdit={(t) => setEditingTargetId(t.id)}
+              onRecheckRuntime={handleRecheckRuntime}
+            />
+          </Card>
+
+          <Card title="Scan history">
             {jobsLoading ? (
               <div className="p-4 space-y-2">
                 {[1, 2, 3].map((i) => (
@@ -407,11 +424,13 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
             ) : jobs.length === 0 ? (
               <div className="p-8 text-center">
                 <p className="text-sm text-foreground-secondary">No scans yet.</p>
-                <p className="text-xs text-foreground-secondary mt-1">Save a target URL above and click Scan now to run your first scan.</p>
+                <p className="text-xs text-foreground-secondary mt-1">
+                  Add a target above and click Scan to run your first scan.
+                </p>
               </div>
             ) : (
               <table className="w-full">
-                <thead className="bg-background-subtle/30 border-b border-border">
+                <thead className="bg-background-card-header border-b border-border">
                   <tr>
                     <th className="text-left text-xs font-medium text-foreground-secondary px-4 py-2.5">Target</th>
                     <th className="text-left text-xs font-medium text-foreground-secondary px-4 py-2.5">Profile</th>
@@ -439,7 +458,9 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
                               <TooltipTrigger asChild>
                                 <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
                               </TooltipTrigger>
-                              <TooltipContent className="max-w-md">{job.error}</TooltipContent>
+                              <TooltipContent className="max-w-md">
+                                {job.error_category ? `${job.error_category}: ${job.error}` : job.error}
+                              </TooltipContent>
                             </Tooltip>
                           ) : null}
                         </div>
@@ -458,10 +479,146 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
                 </tbody>
               </table>
             )}
-          </div>
+          </Card>
         </>
       )}
+
+      <DastTargetEditDialog
+        open={createDialogOpen}
+        onOpenChange={setCreateDialogOpen}
+        projectId={projectId}
+        target={null}
+        canManage={canManage}
+        onSaved={(t) => {
+          setTargets((prev) => [...prev, t]);
+        }}
+      />
+
+      <DastTargetEditDialog
+        open={editingTargetId !== null}
+        onOpenChange={(o) => !o && setEditingTargetId(null)}
+        projectId={projectId}
+        target={editingTarget}
+        canManage={canManage}
+        onSaved={(t) => {
+          setTargets((prev) => prev.map((p) => (p.id === t.id ? t : p)));
+        }}
+        onDeleted={(id) => {
+          setTargets((prev) => prev.filter((p) => p.id !== id));
+        }}
+      />
+
+      <ActiveScanOptInDialog
+        open={activeScanDialog !== null}
+        onOpenChange={(o) => !o && setActiveScanDialog(null)}
+        targetUrl={activeScanDialog?.target_url ?? ''}
+        onConfirm={handleConfirmActiveScan}
+      />
     </div>
+  );
+}
+
+interface CardProps {
+  title: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}
+function Card({ title, action, children }: CardProps) {
+  return (
+    <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+      <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+        {action}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+interface ProfileAndTimeoutCardProps {
+  config: TabState;
+  savedConfig: TabState | null;
+  isDirty: boolean;
+  saving: boolean;
+  canManage: boolean;
+  onChange: (next: TabState) => void;
+  onSave: () => void;
+}
+function ProfileAndTimeoutCard({ config, savedConfig, isDirty, saving, canManage, onChange, onSave }: ProfileAndTimeoutCardProps) {
+  return (
+    <Card title="Profile & timeout">
+      <div className="p-4 space-y-4">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <Label className="text-sm text-foreground">DAST enabled</Label>
+            <p className="text-xs text-foreground-secondary mt-0.5">
+              Required to add targets and trigger scans. Disabling preserves existing findings.
+            </p>
+          </div>
+          <Switch
+            checked={config.enabled}
+            onCheckedChange={(v) => onChange({ ...config, enabled: v })}
+            disabled={!canManage}
+          />
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-xl">
+          <div>
+            <Label className="text-sm text-foreground">Scan profile</Label>
+            <p className="text-xs text-foreground-secondary mt-0.5 mb-2">
+              Auto runs a passive baseline. Full activates fuzzing — gated by an opt-in dialog.
+            </p>
+            <Select
+              value={config.scan_profile}
+              onValueChange={(v) => onChange({ ...config, scan_profile: v as DastScanProfile })}
+              disabled={!canManage}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(SCAN_PROFILE_LABELS) as DastScanProfile[]).map((p) => (
+                  <SelectItem key={p} value={p}>{SCAN_PROFILE_LABELS[p]}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label className="text-sm text-foreground">Timeout</Label>
+            <p className="text-xs text-foreground-secondary mt-0.5 mb-2">
+              Hard limit on scan duration (5–60 minutes).
+            </p>
+            <Select
+              value={String(config.scan_timeout_minutes)}
+              onValueChange={(v) => onChange({ ...config, scan_timeout_minutes: Number(v) })}
+              disabled={!canManage}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TIMEOUT_PRESETS.map((m) => (
+                  <SelectItem key={m} value={String(m)}>{m} minutes</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </div>
+      <div className="px-4 py-3 border-t border-border bg-background-card-header flex items-center justify-between">
+        <p className="text-xs text-foreground-secondary">
+          {savedConfig?.enabled
+            ? <span className="inline-flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" /> Active for this project</span>
+            : <span className="inline-flex items-center gap-1 text-foreground-secondary"><AlertTriangle className="h-3.5 w-3.5" /> Disabled — saved scans won't run automatically</span>}
+        </p>
+        {canManage && (
+          <Button variant="outline" size="sm" onClick={onSave} disabled={!isDirty || saving}>
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" /> : null}
+            Save
+          </Button>
+        )}
+      </div>
+    </Card>
   );
 }
 
@@ -486,4 +643,23 @@ function ScanningTabSkeleton() {
       </div>
     </div>
   );
+}
+
+function humanizeScanError(code: string): string {
+  switch (code) {
+    case 'project_concurrent_dast_blocked':
+      return 'Another scan is already running for this project.';
+    case 'org_concurrent_dast_cap':
+      return 'Organization is at its concurrent scan cap. Wait for a scan to finish.';
+    case 'target_disabled':
+      return 'Target is disabled — enable it before scanning.';
+    case 'target_not_found':
+      return 'Target no longer exists.';
+    case 'invalid_target_url':
+      return 'Target URL became invalid (DNS / private host).';
+    case 'dast_queue_paused':
+      return 'DAST queue is paused for maintenance.';
+    default:
+      return 'See console for details.';
+  }
 }

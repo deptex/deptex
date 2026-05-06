@@ -1886,23 +1886,117 @@ export const api = {
     return fetchWithAuth(`/api/projects/${projectId}/dast/config`);
   },
 
-  async saveDastConfig(projectId: string, config: DastConfigDTO): Promise<DastConfigDTO> {
+  async saveDastConfig(
+    projectId: string,
+    config: Partial<DastConfigDTO>,
+  ): Promise<DastConfigDTO> {
     return fetchWithAuth(`/api/projects/${projectId}/dast/config`, {
       method: 'PUT',
       body: JSON.stringify(config),
     });
   },
 
-  async triggerDastScan(projectId: string): Promise<DastScanTriggerResponse> {
-    return fetchWithAuth(`/api/projects/${projectId}/dast/scan`, { method: 'POST' });
+  async getDastTargets(projectId: string): Promise<DastTargetDTO[]> {
+    return fetchWithAuth(`/api/projects/${projectId}/dast/targets`);
   },
 
-  async getDastJobs(projectId: string, limit = 20): Promise<DastJobDTO[]> {
-    return fetchWithAuth(`/api/projects/${projectId}/dast/jobs?limit=${limit}`);
+  async createDastTarget(
+    projectId: string,
+    body: { target_url: string; label?: string | null; enabled?: boolean },
+  ): Promise<DastTargetDTO> {
+    return fetchWithAuth(`/api/projects/${projectId}/dast/targets`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
   },
 
-  async getDastFindings(projectId: string, limit = 100): Promise<DastFindingDTO[]> {
-    return fetchWithAuth(`/api/projects/${projectId}/dast/findings?limit=${limit}`);
+  async updateDastTarget(
+    projectId: string,
+    targetId: string,
+    body: { label?: string | null; enabled?: boolean },
+  ): Promise<DastTargetDTO> {
+    return fetchWithAuth(`/api/projects/${projectId}/dast/targets/${targetId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+  },
+
+  async deleteDastTarget(projectId: string, targetId: string): Promise<void> {
+    await fetchWithAuth(`/api/projects/${projectId}/dast/targets/${targetId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  async recheckDastTargetRuntime(
+    projectId: string,
+    targetId: string,
+  ): Promise<DastRecheckRuntimeResponse> {
+    return fetchWithAuth(
+      `/api/projects/${projectId}/dast/targets/${targetId}/recheck-runtime`,
+      { method: 'POST' },
+    );
+  },
+
+  async getDastTargetCredentials(
+    projectId: string,
+    targetId: string,
+  ): Promise<DastCredentialSummaryDTO | null> {
+    try {
+      return await fetchWithAuth(
+        `/api/projects/${projectId}/dast/targets/${targetId}/credentials`,
+      );
+    } catch (e: any) {
+      if (e?.message === 'credentials_not_set') return null;
+      throw e;
+    }
+  },
+
+  async putDastTargetCredentials(
+    projectId: string,
+    targetId: string,
+    body: DastCredentialUpsertDTO,
+  ): Promise<DastCredentialSummaryDTO> {
+    return fetchWithAuth(
+      `/api/projects/${projectId}/dast/targets/${targetId}/credentials`,
+      { method: 'PUT', body: JSON.stringify(body) },
+    );
+  },
+
+  async deleteDastTargetCredentials(projectId: string, targetId: string): Promise<void> {
+    await fetchWithAuth(
+      `/api/projects/${projectId}/dast/targets/${targetId}/credentials`,
+      { method: 'DELETE' },
+    );
+  },
+
+  async triggerDastScan(
+    projectId: string,
+    body: { target_id: string },
+  ): Promise<DastScanTriggerResponse> {
+    return fetchWithAuth(`/api/projects/${projectId}/dast/scan`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+
+  async getDastJobs(
+    projectId: string,
+    opts: { limit?: number; targetId?: string } = {},
+  ): Promise<DastJobDTO[]> {
+    const params = new URLSearchParams();
+    params.set('limit', String(opts.limit ?? 20));
+    if (opts.targetId) params.set('target_id', opts.targetId);
+    return fetchWithAuth(`/api/projects/${projectId}/dast/jobs?${params.toString()}`);
+  },
+
+  async getDastFindings(
+    projectId: string,
+    opts: { limit?: number; targetId?: string } = {},
+  ): Promise<DastFindingDTO[]> {
+    const params = new URLSearchParams();
+    params.set('limit', String(opts.limit ?? 100));
+    if (opts.targetId) params.set('target_id', opts.targetId);
+    return fetchWithAuth(`/api/projects/${projectId}/dast/findings?${params.toString()}`);
   },
 
   async getProjectVulnerabilities(
@@ -3588,18 +3682,89 @@ export type DastSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export type DastFindingStatus = 'open' | 'suppressed' | 'risk_accepted' | 'fixed';
 export type DastConfidence = 'confirmed' | 'high' | 'medium' | 'low';
 export type ScanJobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled';
+export type DastAuthStrategy = 'form' | 'jwt' | 'cookie';
+export type DastDetectedRuntime = 'unknown' | 'classic' | 'spa';
+export type DastAuthState = 'anonymous' | 'authenticated' | 'authentication_lost';
+export type DastEngine = 'zap' | 'nuclei' | 'merged';
+
+export interface DastTargetDTO {
+  id: string;
+  target_url: string;
+  label: string | null;
+  enabled: boolean;
+  detected_runtime: DastDetectedRuntime;
+  detected_runtime_at: string | null;
+  detected_runtime_ttl_at: string | null;
+  has_credentials: boolean;
+  auth_strategy: DastAuthStrategy | null;
+  active_dast_run_id: string | null;
+  last_scanned_at: string | null;
+  created_at: string;
+}
+
+export interface DastScopeHeaderRule {
+  name: string;
+  value: string;
+  scope: 'all' | 'requests' | 'responses';
+}
+
+export interface DastScopeConfig {
+  include_patterns?: string[];
+  exclude_patterns?: string[];
+  header_rules?: DastScopeHeaderRule[];
+}
 
 export interface DastConfigDTO {
   enabled: boolean;
-  target_url: string | null;
+  target_url?: string | null;
   scan_profile: DastScanProfile;
   scan_timeout_minutes: number;
+  scope_config?: DastScopeConfig;
+  targets?: DastTargetDTO[];
+}
+
+export type DastCredentialPayloadSummary =
+  | { kind: 'form'; username_masked: string }
+  | { kind: 'jwt'; token_prefix: string; token_length: number; expires_in_minutes: number }
+  | { kind: 'cookie'; cookie_count: number; cookie_names: string[] };
+
+export interface DastCredentialSummaryDTO {
+  auth_strategy: DastAuthStrategy;
+  payload_summary: DastCredentialPayloadSummary;
+  logged_in_indicator: string | null;
+  logged_out_indicator: string | null;
+  updated_at: string;
+}
+
+export type DastCredentialUpsertPayload =
+  | {
+      kind: 'form';
+      login_url: string;
+      username_field: string;
+      password_field: string;
+      username: string;
+      password: string;
+    }
+  | { kind: 'jwt'; token: string }
+  | {
+      kind: 'cookie';
+      cookies: { name: string; value: string; domain?: string; path?: string }[];
+    };
+
+export interface DastCredentialUpsertDTO {
+  auth_strategy: DastAuthStrategy;
+  payload: DastCredentialUpsertPayload;
+  logged_in_indicator?: string;
+  logged_out_indicator?: string;
+  /** When true, server skips the form-login probe step at PUT time. */
+  skip_login_probe?: boolean;
 }
 
 export interface DastJobDTO {
   id: string;
   status: ScanJobStatus;
   trigger_source: string | null;
+  target_id?: string | null;
   target_url: string | null;
   scan_profile: DastScanProfile | null;
   findings_count: number | null;
@@ -3614,6 +3779,9 @@ export interface DastJobDTO {
 
 export interface DastFindingDTO {
   id: string;
+  target_id?: string | null;
+  auth_state?: DastAuthState | null;
+  engine?: DastEngine | null;
   endpoint_url: string;
   http_method: string;
   vulnerability_type: string;
@@ -3630,6 +3798,8 @@ export interface DastFindingDTO {
   handler_line: number | null;
   linked_sca_osv_id: string | null;
   linked_sca_project_dependency_id: string | null;
+  linked_sast_finding_id?: string | null;
+  cross_link_methods?: string[] | null;
   confirmed_exploitable: boolean;
   status: DastFindingStatus;
   risk_accepted_reason: string | null;
@@ -3639,9 +3809,20 @@ export interface DastFindingDTO {
 export interface DastScanTriggerResponse {
   jobId: string;
   status: ScanJobStatus;
+  target_id?: string;
   target_url: string;
   scan_profile: DastScanProfile;
+  detected_runtime?: DastDetectedRuntime;
   created_at: string;
+}
+
+export interface DastRecheckRuntimeResponse {
+  target: DastTargetDTO;
+  probe: {
+    probed: boolean;
+    confidence: number;
+    markers: string[];
+  };
 }
 
 export interface ExtractionRun {

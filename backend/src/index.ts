@@ -138,6 +138,12 @@ app.use('/api/organizations', organizationsRouter);
 app.use('/api/organizations', taintEngineRouter);
 app.use('/api/organizations', teamsRouter);
 app.use('/api/organizations', projectsRouter);
+
+// Drain mode middleware lives in middleware/dast-drain.ts so tests can
+// import it without pulling in this file's load-time side effects.
+import { dastDrainMiddleware } from './middleware/dast-drain';
+
+app.use('/api/projects', dastDrainMiddleware);
 app.use('/api/projects', dastRouter);
 app.use('/api/organizations', scannerFindingsRouter);
 app.use('/api/organizations', maliciousRouter);
