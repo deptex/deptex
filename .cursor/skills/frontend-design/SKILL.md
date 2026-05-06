@@ -22,15 +22,23 @@ Apply this skill when building or modifying frontend UI to stay consistent with 
 ## Layout & Structure
 
 ### Project Layout
-- **Header**: Fixed top `h-12`, `z-50`, `bg-background border-b border-border`
-- **Sidebar**: Fixed left `top-12 bottom-0 z-40`; collapsed `w-12`, expanded `w-48` with `transition-[width] duration-200`
-- **Main content**: `pl-12` (offset for sidebar), full viewport height
-- **Page container**: `min-h-screen bg-background`, `px-6 py-6` or `px-4 sm:px-6 lg:px-8 py-8`
+
+Org pages (`/organizations/:id/*`) use the Vercel-style shadcn sidebar shell:
+
+- **`<SidebarProvider>` + `<OrgSidebar>` + `<SidebarInset>`** — wired up in `OrganizationLayout.tsx`. There is no fixed top bar on org pages; the sidebar persists at full width.
+- **Sidebar** (`OrgSidebar.tsx`): persistent left rail at `w-56` (224px), `border-r border-border bg-background`, no hover-expand. Hosts the org switcher in `<SidebarHeader>`, main nav in `<SidebarContent>`, and the user-avatar dropdown (Account / Documentation / Feedback / Contact Support / Log out) in `<SidebarFooter>`.
+- **Drilldown**: when on `/organizations/:id/settings/*`, the sidebar swaps the org switcher for a `← Settings` back button and replaces the main nav with the settings sub-nav (built from `lib/orgSettingsSections.tsx`). The settings page itself is single-column; the sub-nav lives in the sidebar, not on the page.
+- **Per-page title bar**: `<PageHeader>` (`components/PageHeader.tsx`) provides a thin `min-h-12` band with title / description / right-side actions at the top of `<SidebarInset>`. Used on Vulnerabilities, Compliance, Flows, Settings. Skipped on Overview, Aegis, FlowEditor (full-bleed canvases).
+- **Page container**: pages mount inside `<SidebarInset>` (a `flex-1` flex column), so use `flex-1 min-h-0` for fill-remaining-space layouts and `mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6` for centered content.
+
+The shadcn sidebar block (`components/ui/sidebar.tsx`) is hand-edited to use the project's hex tokens (`bg-background`, `border-border`, etc) directly rather than introducing a parallel `--sidebar-*` HSL color system. If a future shadcn block depends on those vars, hand-map them the same way.
+
+`AppHeader.tsx` is **only** used on the personal `/settings` route now; do not introduce it on org pages.
 
 ### Tab Layouts
 - **Left nav + content**: Sidebar `w-52` or `w-64`, `border-r border-border`; content `flex-1`
 - **Dependencies**: Resizable package list (min 200px, max 480px, default 320px) + detail panel
-- **Settings**: Sticky section nav `w-64`, `sticky top-24 pt-8`; section content `flex-1`
+- **Settings**: Sub-nav lives in the sidebar drilldown; the page itself is single column
 
 ---
 

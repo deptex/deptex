@@ -20,6 +20,7 @@ import { api, Project, ProjectDependency, ProjectPullRequest } from '../../lib/a
 import { useToast } from '../../hooks/use-toast';
 import { Toaster } from '../../components/ui/toaster';
 import { ComplianceSidepanel } from '../../components/ComplianceSidepanel';
+import PageHeader from '../../components/PageHeader';
 import { FrameworkIcon } from '../../components/framework-icon';
 import { ProjectStatusBadge } from '../../components/ProjectStatusBadge';
 import { isInitialExtraction } from '../../lib/extractionStatus';
@@ -300,7 +301,11 @@ export default function CompliancePage() {
 
   return (
     <>
-      <div className="flex min-h-[calc(100vh-3rem)] overflow-hidden">
+      <PageHeader
+        title="Compliance"
+        description="Per-project policy and license compliance across the organization."
+      />
+      <div className="flex flex-1 min-h-0 overflow-hidden">
         <ComplianceSidepanel
           mode="organization"
           activeSection={activeSection}
