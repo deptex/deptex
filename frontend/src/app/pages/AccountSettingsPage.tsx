@@ -20,7 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../../components/ui/dialog';
-import { Edit2 } from 'lucide-react';
+import { Edit2, Loader2 } from 'lucide-react';
 import { getAvatarUrl, getDisplayNameOrNull } from '../../lib/userIdentity';
 
 const NO_DEFAULT_ORG = '__none__';
@@ -408,7 +408,7 @@ export default function AccountSettingsPage() {
                         onChange={(e) => setDisplayName(e.target.value)}
                         placeholder="Enter your display name"
                         maxLength={32}
-                        className="w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground-secondary placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                        className="w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                       />
                     </div>
                   </div>
@@ -452,9 +452,9 @@ export default function AccountSettingsPage() {
                   onClick={handleSaveGeneral}
                   disabled={!canSave}
                   size="sm"
-                  className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                  className="h-8 min-w-[64px] bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
                 >
-                  {savingGeneral ? 'Saving...' : 'Save'}
+                  {savingGeneral ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Save'}
                 </Button>
               </div>
             </div>
