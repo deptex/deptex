@@ -5,7 +5,6 @@ import { validateExternalUrl } from '../lib/url-guard';
 import { startDastMachine } from '../lib/fly-machines';
 import {
   checkProjectAccess,
-  checkProjectManagePermission,
   checkOrgManageIntegrationsPermission,
 } from '../lib/project-access';
 import { loadTargetOrDeny, isLoadTargetDeny } from '../lib/dast-tenant-guard';
@@ -185,8 +184,8 @@ router.put('/:projectId/dast/config', async (req: AuthRequest, res) => {
       return res.status(access.deny.status).json({ error: access.deny.message });
     }
 
-    if (!(await checkProjectManagePermission(userId, access.organizationId, projectId))) {
-      return res.status(403).json({ error: 'You do not have permission to manage this project' });
+    if (!(await checkOrgManageIntegrationsPermission(userId, access.organizationId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
     }
 
     const body = req.body ?? {};
@@ -273,8 +272,8 @@ router.post('/:projectId/dast/targets', async (req: AuthRequest, res) => {
     if (access.deny) {
       return res.status(access.deny.status).json({ error: access.deny.message });
     }
-    if (!(await checkProjectManagePermission(userId, access.organizationId, projectId))) {
-      return res.status(403).json({ error: 'You do not have permission to manage this project' });
+    if (!(await checkOrgManageIntegrationsPermission(userId, access.organizationId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
     }
 
     const { target_url, label, enabled } = req.body ?? {};
@@ -340,8 +339,8 @@ router.patch('/:projectId/dast/targets/:targetId', async (req: AuthRequest, res)
     if (access.deny) {
       return res.status(access.deny.status).json({ error: access.deny.message });
     }
-    if (!(await checkProjectManagePermission(userId, access.organizationId, projectId))) {
-      return res.status(403).json({ error: 'You do not have permission to manage this project' });
+    if (!(await checkOrgManageIntegrationsPermission(userId, access.organizationId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
     }
 
     const guard = await loadTargetOrDeny(supabase, targetId, projectId, access.organizationId);
@@ -401,8 +400,8 @@ router.delete('/:projectId/dast/targets/:targetId', async (req: AuthRequest, res
     if (access.deny) {
       return res.status(access.deny.status).json({ error: access.deny.message });
     }
-    if (!(await checkProjectManagePermission(userId, access.organizationId, projectId))) {
-      return res.status(403).json({ error: 'You do not have permission to manage this project' });
+    if (!(await checkOrgManageIntegrationsPermission(userId, access.organizationId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
     }
 
     const guard = await loadTargetOrDeny(supabase, targetId, projectId, access.organizationId);
@@ -435,8 +434,8 @@ router.post(
       if (access.deny) {
         return res.status(access.deny.status).json({ error: access.deny.message });
       }
-      if (!(await checkProjectManagePermission(userId, access.organizationId, projectId))) {
-        return res.status(403).json({ error: 'You do not have permission to manage this project' });
+      if (!(await checkOrgManageIntegrationsPermission(userId, access.organizationId))) {
+        return res.status(403).json({ error: 'You do not have permission to manage integrations' });
       }
 
       const guard = await loadTargetOrDeny(supabase, targetId, projectId, access.organizationId);
@@ -683,8 +682,8 @@ router.post('/:projectId/dast/scan', async (req: AuthRequest, res) => {
     if (access.deny) {
       return res.status(access.deny.status).json({ error: access.deny.message });
     }
-    if (!(await checkProjectManagePermission(userId, access.organizationId, projectId))) {
-      return res.status(403).json({ error: 'You do not have permission to manage this project' });
+    if (!(await checkOrgManageIntegrationsPermission(userId, access.organizationId))) {
+      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
     }
 
     const targetId = req.body?.target_id;
