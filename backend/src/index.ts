@@ -54,6 +54,7 @@ import maliciousRouter, { maliciousInternalRouter } from './routes/malicious';
 import reachabilitySettingsRouter from './routes/reachability-settings';
 import generatedRulesRouter from './routes/generated-rules';
 import registryCredentialsRouter from './routes/registry-credentials';
+import configuredImagesRouter from './routes/configured-images';
 
 const app = express();
 app.set('trust proxy', true);
@@ -145,6 +146,7 @@ app.use('/api/organizations', activitiesRouter);
 app.use('/api/organizations', reachabilitySettingsRouter);
 app.use('/api/organizations', generatedRulesRouter);
 app.use('/api/organizations', registryCredentialsRouter);
+app.use('/api/organizations', configuredImagesRouter);
 app.use('/api/integrations', integrationsRouter);
 app.use('/api/invitations', invitationsRouter);
 app.use('/api/aegis', aegisRouter);
