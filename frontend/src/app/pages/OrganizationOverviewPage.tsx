@@ -2613,7 +2613,7 @@ export default function OrganizationVulnerabilitiesPage() {
   ]);
 
   return (
-    <main className="relative flex flex-col min-h-[calc(100vh-3rem)] w-full bg-background">
+    <main className="relative flex flex-col min-h-[100vh] w-full bg-background">
       {error && (
         <div className="flex-shrink-0 px-4 pt-3">
           <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-3 text-sm text-destructive">
@@ -3260,7 +3260,7 @@ export default function OrganizationVulnerabilitiesPage() {
                           organizationId={orgId!}
                           rows={securityRows}
                           onStatusChange={() => void loadTeamVulns(1)}
-                          canManage={Boolean(organization?.permissions?.manage_teams_and_projects)}
+                          canManageFindings={!!organization?.permissions?.manage_teams_and_projects}
                         />
                         {Math.ceil(teamSidebarVulnsTotal / 50) > 1 && (
                           <div className="flex items-center justify-between gap-3 pt-2">

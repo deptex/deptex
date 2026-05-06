@@ -9,6 +9,7 @@ import {
   updateJobStatus,
   sendHeartbeat,
   isJobCancelled,
+  getSupportedJobTypes,
   type ExtractionJobRow,
 } from './job-db';
 
@@ -75,7 +76,8 @@ async function processDastJob(supabase: Storage, job: ExtractionJobRow): Promise
 }
 
 async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<void> {
-  const tag = job.type === 'dast' ? `[dast-${job.id}]` : `[ext-${job.id}]`;
+  const isDast = job.type === 'dast' || job.type === 'dast_zap' || job.type === 'dast_nuclei';
+  const tag = isDast ? `[dast-${job.id}]` : `[ext-${job.id}]`;
   console.log(`${tag} Dispatching ${job.type} job for project ${job.project_id}`);
 
   // Single shared heartbeat regardless of type. The pipeline-specific code below
@@ -91,7 +93,11 @@ async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<voi
   try {
     if (job.type === 'extraction') {
       await processExtractionJob(supabase, job);
-    } else if (job.type === 'dast') {
+    } else if (job.type === 'dast' || job.type === 'dast_zap' || job.type === 'dast_nuclei') {
+      // v2.1a routes all 'dast*' types through the same pipeline. The
+      // dast_zap / dast_nuclei split lands in v2.1c (engine column on
+      // findings, separate runner dispatchers). For now the worker treats
+      // them as aliases of 'dast'.
       await processDastJob(supabase, job);
     } else {
       const message = `Unsupported scan type: ${job.type}`;
@@ -113,17 +119,26 @@ async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<voi
 
 async function runWorker(): Promise<void> {
   const supabase = getSupabase();
-  console.log(`[depscanner] Worker starting, machine: ${MACHINE_ID}`);
+  // Startup probe: derive supported types ONCE so DAST is gated off cleanly
+  // when DAST_CREDENTIAL_KEY is absent. Per plan §Task 7 — silent-anonymous-
+  // fallback is the non-negotiable invariant; if the key is missing we want
+  // queue backpressure, not per-job hard-fails.
+  const supportedTypes = getSupportedJobTypes();
+  const dastEnabled = supportedTypes.some((t) => t.startsWith('dast'));
+  console.log(
+    `[depscanner] Worker starting, machine: ${MACHINE_ID}, supported_types=${supportedTypes.join(',')}${dastEnabled ? '' : ' (DAST disabled — DAST_CREDENTIAL_KEY missing)'}`,
+  );
 
   let lastJobTime = Date.now();
 
   while (true) {
     try {
-      const job = await claimJob(supabase, MACHINE_ID);
+      const job = await claimJob(supabase, MACHINE_ID, supportedTypes);
 
       if (job) {
         lastJobTime = Date.now();
-        const tag = job.type === 'dast' ? `[dast-${job.id}]` : `[ext-${job.id}]`;
+        const isDast = job.type === 'dast' || job.type === 'dast_zap' || job.type === 'dast_nuclei';
+        const tag = isDast ? `[dast-${job.id}]` : `[ext-${job.id}]`;
         console.log(`${tag} Claimed for project ${job.project_id} (attempt ${job.attempts})`);
 
         try {

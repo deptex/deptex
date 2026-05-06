@@ -19,6 +19,7 @@ import OrganizationOverviewPage from "./pages/OrganizationOverviewPage";
 import InvitePage from "./pages/InvitePage";
 import JoinPage from "./pages/JoinPage";
 import SettingsPage from "./pages/SettingsPage";
+import AccountSettingsPage from "./pages/AccountSettingsPage";
 import PlatformFeaturesPage from "./pages/PlatformFeaturesPage";
 import ProjectHealthPage from "./pages/ProjectHealthPage";
 import IntegrationsPage from "./pages/IntegrationsPage";
@@ -162,6 +163,18 @@ export const router = createBrowserRouter([
       {
         path: "flows/:flowId",
         element: <FlowEditorPage />,
+      },
+      {
+        path: "account",
+        element: <Navigate to="general" replace />,
+      },
+      {
+        path: "account/general",
+        element: <AccountSettingsPage />,
+      },
+      {
+        path: "account/connected-accounts",
+        element: <AccountSettingsPage />,
       },
       {
         path: ":tab",

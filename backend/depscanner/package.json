@@ -41,7 +41,9 @@
     "test:finalize": "tsx test/finalize-extraction.test.ts",
     "test:rule-generation-step-pglite": "tsx test/rule-generation-step-pglite.test.ts",
     "test:few-shot-gate2": "tsx test/few-shot-roundtrip-gate2.ts",
-    "docker:prepare": "mkdir -p .schema && cp ../database/schema.sql .schema/schema.sql",
+    "test:container-scan-cache-pglite": "tsx test/container-scan-cache-pglite.test.ts",
+    "test:dast-v2-1a-migration-pglite": "tsx test/dast-v2-1a-migration-pglite.ts",
+    "docker:prepare": "mkdir -p .schema && cp ../database/schema.sql .schema/schema.sql && tsx ../../scripts/sync-encryption.ts",
     "docker:build": "npm run docker:prepare && docker build -t deptex-cli:local .",
     "scan": "./bin/deptex-scan",
     "test:fixtures": "tsx test/snapshot.ts",
@@ -56,6 +58,7 @@
   ],
   "license": "LicenseRef-FSL-1.1-ALv2",
   "dependencies": {
+    "@aws-sdk/client-ecr": "^3.1043.0",
     "@cyclonedx/cdxgen": "^11.0.0",
     "@electric-sql/pglite": "^0.2.0",
     "@repomix/tree-sitter-wasms": "^0.1.17",

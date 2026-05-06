@@ -1,20 +1,17 @@
 import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import { api, type ScannerSummary } from '../../lib/api';
+import { api, frameworkLabel, type ScannerSummary } from '../../lib/api';
 import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
+import RegistryCredentialsSection from './RegistryCredentialsSection';
+import ConfiguredImagesSection from './ConfiguredImagesSection';
 
 interface Props {
   organizationId: string;
   projectId: string;
+  canManage: boolean;
   onTriggerRescan?: () => Promise<void> | void;
 }
-
-const FRAMEWORK_LABELS: Record<string, string> = {
-  terraform: 'Terraform',
-  kubernetes: 'Kubernetes',
-  dockerfile: 'Dockerfile',
-};
 
 function formatLastScan(iso: string | null): string {
   if (!iso) return 'Never';
@@ -29,6 +26,7 @@ function formatLastScan(iso: string | null): string {
 export default function ScannersPanel({
   organizationId,
   projectId,
+  canManage,
   onTriggerRescan,
 }: Props) {
   const [summary, setSummary] = useState<ScannerSummary | null>(null);
@@ -95,7 +93,7 @@ export default function ScannersPanel({
                         key={t}
                         className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-foreground/5 text-foreground-secondary border border-border"
                       >
-                        {FRAMEWORK_LABELS[t] ?? t}
+                        {frameworkLabel(t)}
                       </span>
                     ))}
                   </div>
@@ -152,6 +150,9 @@ export default function ScannersPanel({
           ) : null}
         </div>
       </div>
+
+      <RegistryCredentialsSection organizationId={organizationId} canManage={canManage} />
+      <ConfiguredImagesSection organizationId={organizationId} projectId={projectId} canManage={canManage} />
     </div>
   );
 }

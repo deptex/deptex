@@ -99,23 +99,52 @@ async function main() {
   const sections: Record<string, string> = {
     enum: 'ENUM TYPES',
     table: 'TABLES',
+    function: 'FUNCTIONS',
     constraint: 'CONSTRAINTS (PK, UNIQUE, CHECK, FK — in that order)',
     index: 'INDEXES',
-    function: 'FUNCTIONS',
     trigger: 'TRIGGERS',
   };
 
-  let currentKind = '';
+  // Emit-order matters: PGLite parses top-down, so any CHECK constraint or
+  // expression index that references a user-defined function must see the
+  // function declared first. Earlier dumps put `function` after `constraint`
+  // and `index`, which broke `CHECK (framework_spec_osv_matches_cve(...))`
+  // at PGLite-bootstrap time. Triggers stay last (they reference functions
+  // too, but TRIGGERS-after-FUNCTIONS was already correct).
+  const KIND_ORDER: Array<keyof typeof sections> = [
+    'enum',
+    'table',
+    'function',
+    'constraint',
+    'index',
+    'trigger',
+  ];
+  const grouped: Record<string, DumpRow[]> = {};
   for (const row of rows) {
-    if (row.kind !== currentKind) {
-      out.push('');
-      out.push('-- ============================================');
-      out.push('-- ' + (sections[row.kind] ?? row.kind.toUpperCase()));
-      out.push('-- ============================================');
-      currentKind = row.kind;
+    (grouped[row.kind] ??= []).push(row);
+  }
+
+  for (const kind of KIND_ORDER) {
+    const rowsForKind = grouped[kind];
+    if (!rowsForKind || rowsForKind.length === 0) continue;
+    out.push('');
+    out.push('-- ============================================');
+    out.push('-- ' + (sections[kind] ?? kind.toUpperCase()));
+    out.push('-- ============================================');
+    for (const row of rowsForKind) {
+      out.push(row.ddl);
+      if (kind === 'function') out.push('');
     }
-    out.push(row.ddl);
-    if (row.kind === 'function') out.push('');
+  }
+  // Any unrecognised kinds the wrapper might emit in future — append at end
+  // so they never sneak above the function section by accident.
+  for (const kind of Object.keys(grouped)) {
+    if ((KIND_ORDER as string[]).includes(kind)) continue;
+    out.push('');
+    out.push('-- ============================================');
+    out.push('-- ' + kind.toUpperCase());
+    out.push('-- ============================================');
+    for (const row of grouped[kind]) out.push(row.ddl);
   }
 
   fs.writeFileSync(OUT_FILE, out.join('\n') + '\n');
