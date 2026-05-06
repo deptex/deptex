@@ -42,7 +42,6 @@ import * as path from 'path';
 import {
   decryptCredential,
   isDastEncryptionConfigured,
-  wipePlaintext,
 } from './encryption';
 import type { Storage } from '../storage';
 import type { ExtractionJobRow } from '../job-db';
@@ -301,7 +300,6 @@ async function loadTenantGuardRows(
 
 interface LoadedCredential {
   credentialRow: CredentialRow;
-  plaintextBuffer: Buffer;
   payload: CredentialPayload;
 }
 
@@ -403,12 +401,10 @@ async function loadCredentialOrAbort(
     );
   }
 
-  const plaintextBuffer = Buffer.from(plaintext, 'utf-8');
   let payload: CredentialPayload;
   try {
     payload = JSON.parse(plaintext) as CredentialPayload;
   } catch (e) {
-    wipePlaintext(plaintextBuffer);
     // Generic message — Node's JSON.parse errors embed an excerpt of the
     // input, and at this stage `plaintext` is the user's decrypted credential
     // payload. Surfacing the raw error to scan_jobs.error_payload would leak
@@ -423,7 +419,7 @@ async function loadCredentialOrAbort(
     );
   }
 
-  return { credentialRow: credRow, plaintextBuffer, payload };
+  return { credentialRow: credRow, payload };
 }
 
 // ---------------------------------------------------------------------------
@@ -796,16 +792,17 @@ export async function runDastPipeline(
       },
     );
   } catch (e) {
-    if (cred) wipePlaintext(cred.plaintextBuffer);
     if (e instanceof DastPipelineAbortError) {
       console.error(`${tag} aborted during scan: ${e.errorCategory}`);
       await recordJobError(supabase, job.id, e.errorCategory, e.errorPayload, e.message);
     }
     throw e;
   }
-  // Wipe plaintext buffer immediately after spawn returns. The YAML on disk
-  // (which contained the plaintext) was unlinked inside runZapWithControlPlane.
-  if (cred) wipePlaintext(cred.plaintextBuffer);
+  // Plaintext lifetime is GC-bound: V8 strings holding the decrypted
+  // password/token/cookies are unreferenced once runZapWithControlPlane
+  // returns and the YAML temp file is unlinked. Fly machine isolation
+  // (one tenant per scan, machine destroyed at end) is the load-bearing
+  // safety property here, not buffer scrubbing.
 
   console.log(
     `${tag} ZAP returned ${zapResult.findings.length} findings in ${zapResult.durationMs}ms (auth_lost=${zapResult.authLostState.consecutiveLostCount})`,

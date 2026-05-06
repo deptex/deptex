@@ -82,9 +82,3 @@ export function decryptCredential(encrypted: string, storedVersion: number): str
 
   throw new Error('Unable to decrypt DAST credential — no valid encryption key available');
 }
-
-// Buffer.fill(0) zero-out helper. Workers MUST call this on the decrypted
-// plaintext buffer once they're done with it (see depscanner pipeline.ts).
-export function wipePlaintext(buf: Buffer): void {
-  buf.fill(0);
-}

@@ -2,16 +2,22 @@
 //
 // Mirrors `backend/src/lib/dast-encryption.ts` (the canonical implementation
 // the API uses). The two copies must stay in sync — same algorithm constants,
-// same key-rotation fallback semantics, same wipePlaintext signature.
-// Duplication exists because each package has rootDir: ./src and forbids
-// cross-package production imports; the cross-package shared lib is on the
-// v2.1b cleanup list.
+// same key-rotation fallback semantics. Duplication exists because each
+// package has rootDir: ./src and forbids cross-package production imports;
+// the cross-package shared lib is on the v2.1b cleanup list.
 //
 // This is the depscanner-side runtime: the worker calls decryptCredential at
-// scan-spawn time, hands the plaintext to buildAutomationYaml, then invokes
-// wipePlaintext on the buffer immediately after. The plaintext is NEVER
-// written to scan_jobs.payload, error_details, dast_logs, stderr, or QStash
-// payload (test-enforced via dast-log-scrub).
+// scan-spawn time, hands the plaintext to buildAutomationYaml, and relies on
+// (a) Fly machine isolation (one tenant per scan, machine destroyed at end)
+// and (b) GC of the JS strings holding the plaintext after the spawn returns.
+// We previously zero-filled a Buffer copy of the plaintext via wipePlaintext;
+// that was security theater because the actual plaintext lives in immutable
+// V8 strings (the decrypted return value, the JSON.parse'd payload object's
+// .password/.token/.cookies[].value fields, and the YAML written to disk
+// before unlink). Removing the buffer dance avoids creating false confidence.
+// The real safety properties remain: plaintext is NEVER written to
+// scan_jobs.payload, error_details, dast_logs, stderr, or QStash payload
+// (test-enforced via dast-log-scrub).
 
 import crypto from 'crypto';
 
@@ -72,8 +78,4 @@ export function decryptCredential(encrypted: string, storedVersion: number): str
   }
 
   throw new Error('Unable to decrypt DAST credential — no valid encryption key available');
-}
-
-export function wipePlaintext(buf: Buffer): void {
-  buf.fill(0);
 }

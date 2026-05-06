@@ -133,13 +133,3 @@ describe('dast-encryption — key rotation with previous-key fallback', () => {
     expect(() => lib.decryptCredential('not-a-valid-format', 1)).toThrow(/Invalid encrypted/);
   });
 });
-
-describe('dast-encryption — wipePlaintext', () => {
-  it('zero-fills the buffer in place', () => {
-    process.env.DAST_CREDENTIAL_KEY = KEY_A;
-    const lib = loadFresh();
-    const buf = Buffer.from('s3cr3t-fixture', 'utf8');
-    lib.wipePlaintext(buf);
-    for (const byte of buf) expect(byte).toBe(0);
-  });
-});
