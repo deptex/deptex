@@ -204,6 +204,13 @@ const REDACTION_PATTERNS: Array<[RegExp, string]> = [
   [/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, '[REDACTED_AWS_KEY]'],
   // Bearer tokens
   [/(?:Bearer|bearer)\s+[A-Za-z0-9+/=._-]{20,}/g, 'Bearer [REDACTED]'],
+  // Cookie / Set-Cookie request and response headers — cookie-strategy
+  // credentials are emitted by ZAP as `Cookie: session=...; csrf=...` when
+  // verbose tracing is enabled. We redact the entire header value (rather
+  // than only the first name=value pair) because every pair on the line is
+  // potentially sensitive and `;`-separated continuations would otherwise
+  // slip through. Stops at end-of-line so multi-header logs aren't squashed.
+  [/(?:^|\b)((?:set-)?cookie)\s*:\s*[^\r\n]+/gi, '$1: [REDACTED]'],
   // GitHub tokens
   [/\bghp_[A-Za-z0-9]{36}\b/g, '[REDACTED_GHP]'],
   [/\bghs_[A-Za-z0-9]{36}\b/g, '[REDACTED_GHS]'],
