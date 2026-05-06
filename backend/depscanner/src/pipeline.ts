@@ -1532,7 +1532,7 @@ export async function runPipeline(
           {
             const { data: pdvRows, error: pdvErr } = await supabase
               .from('project_dependency_vulnerabilities')
-              .select('osv_id, project_dependency_id')
+              .select('osv_id, project_dependency_id, aliases')
               .eq('project_id', projectId)
               .eq('extraction_run_id', runId);
             if (pdvErr) {
@@ -1544,10 +1544,22 @@ export async function runPipeline(
               const pdvList = (pdvRows ?? []) as Array<{
                 osv_id: string | null;
                 project_dependency_id: string | null;
+                aliases: string[] | null;
               }>;
               const pdIds = new Set<string>();
               for (const r of pdvList) {
-                if (r.osv_id) detectedCves.add(r.osv_id);
+                // Expand to CVE-shaped osv_id + any CVE-shaped alias. Some
+                // advisories (e.g. log4shell) arrive with GHSA-xxx as the
+                // primary id with the CVE in aliases; without expansion the
+                // generated framework_spec keyed on CVE-id never matches.
+                if (typeof r.osv_id === 'string' && r.osv_id.startsWith('CVE-')) {
+                  detectedCves.add(r.osv_id);
+                }
+                if (Array.isArray(r.aliases)) {
+                  for (const a of r.aliases) {
+                    if (typeof a === 'string' && a.startsWith('CVE-')) detectedCves.add(a);
+                  }
+                }
                 if (r.project_dependency_id) pdIds.add(r.project_dependency_id);
               }
               if (pdIds.size > 0) {
