@@ -43,6 +43,40 @@ export const FrameworkSourceSchema = z.object({
 }).strict();
 
 /**
+ * Reject sink patterns that are SO broad they would match nearly every call
+ * site in the codebase (e.g. `*`, `*.*(*)`, `*.execute(*)`). A prompt-
+ * injection-influenced model could emit such a pattern to make the spec fire
+ * on benign code; downstream the engine and EPD would flag noise as
+ * "confirmed reachable" and drown out real findings.
+ *
+ * Rule: if the callee text (everything before the first `(`) contains a `.`
+ * separator, the receiver portion (left of the last `.`) MUST contain at
+ * least one literal identifier character. Patterns that are pure wildcards
+ * or whitespace are rejected too.
+ *
+ * Accepted: `_.template(*)`, `eval(*)`, `pkg.api(arg)`, `RegExp(*)`.
+ * Rejected: `*`, `*.*(*)`, `*.execute(*)`, `*.method`.
+ */
+export function isBroadSinkPattern(pattern: string): boolean {
+  const trimmed = pattern.trim();
+  if (trimmed.length === 0) return true;
+  if (trimmed === '*') return true;
+
+  // Strip arg list and grab the callee text.
+  const parenIdx = trimmed.indexOf('(');
+  const callee = (parenIdx >= 0 ? trimmed.slice(0, parenIdx) : trimmed).trim();
+  if (callee.length === 0) return true;
+  if (!/[A-Za-z_]/.test(callee)) return true;
+
+  const dotIdx = callee.lastIndexOf('.');
+  if (dotIdx > 0) {
+    const receiver = callee.slice(0, dotIdx).trim();
+    if (!/[A-Za-z_]/.test(receiver)) return true;
+  }
+  return false;
+}
+
+/**
  * Sink schema — model output (no osv_id; substituted server-side).
  *
  * `argument_indices` is required by the engine's `validateSink` but accepts
@@ -50,9 +84,18 @@ export const FrameworkSourceSchema = z.object({
  * model to emit it explicitly (zod default would let the model omit it
  * silently, which is harder to debug when the model meant `[0]` but typed
  * nothing).
+ *
+ * `pattern` is refined to reject broad-wildcard patterns — see
+ * `isBroadSinkPattern` above for the rule and rationale.
  */
 export const FrameworkSinkSchema = z.object({
-  pattern: z.string().min(1),
+  pattern: z.string().min(1).refine(
+    (p) => !isBroadSinkPattern(p),
+    {
+      message:
+        'sink pattern is too broad — wildcard receivers (e.g. `*.execute(*)`) and bare `*` patterns match too many call sites; specify a literal receiver token (e.g. `_.template(*)`, `pkg.api(arg)`)',
+    },
+  ),
   vuln_class: z.enum(VULN_CLASSES),
   argument_indices: z.array(z.number().int().nonnegative()),
   description: z.string().min(1),

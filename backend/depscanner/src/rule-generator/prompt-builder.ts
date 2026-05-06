@@ -193,8 +193,12 @@ export function semgrepLanguageFor(ecosystem: string): FrameworkSpecJson['langua
  * Per-call random nonce for untrusted-content tag delimiters. 16 hex chars
  * (8 random bytes) — collision probability is ~2^-64 per call, more than
  * enough to make delimiter-injection attempts statistically detectable.
+ *
+ * Exported so the retry-prompt path in `rule-generator/index.ts` and the
+ * Anthropic-fallback path in `epd.ts` reuse the same generator (T4 of the
+ * Phase 6.5 hardening pass).
  */
-function makeNonce(): string {
+export function makeNonce(): string {
   return randomBytes(8).toString('hex');
 }
 
@@ -203,8 +207,10 @@ function makeNonce(): string {
  * scanned for any occurrence of `</untrusted_code_<nonce>` and replaced with
  * `<<REDACTED-DELIMITER>>` BEFORE being interpolated, so a malicious diff
  * containing the literal close-tag string cannot escape the wrapper.
+ *
+ * Exported so retry / fallback prompts reuse the same wrapping discipline.
  */
-function wrapBlob(label: string, content: string, nonce: string): string {
+export function wrapBlob(label: string, content: string, nonce: string): string {
   const closeTagPattern = new RegExp(`</?untrusted_code_${nonce}`, 'gi');
   const sanitized = content.replace(closeTagPattern, '<<REDACTED-DELIMITER>>');
   return `<untrusted_code_${nonce} source="${label.replace(/"/g, "'")}">\n${sanitized}\n</untrusted_code_${nonce}>`;
