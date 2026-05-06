@@ -48,12 +48,8 @@ export interface DastScopeConfig {
 
 export interface DastConfigDTO {
   enabled: boolean;
-  // Legacy v1 single-target field. Removed with phase24b once multi-target ships
-  // and the frontend reads `targets[]` exclusively.
-  target_url?: string | null;
   scan_profile: DastScanProfile;
   scan_timeout_minutes: number;
-  // v2.1a additions; populated by the multi-target route in Task 3.
   scope_config?: DastScopeConfig;
   targets?: DastTargetDTO[];
 }

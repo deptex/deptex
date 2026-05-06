@@ -3846,7 +3846,6 @@ export interface DastScopeConfig {
 
 export interface DastConfigDTO {
   enabled: boolean;
-  target_url?: string | null;
   scan_profile: DastScanProfile;
   scan_timeout_minutes: number;
   scope_config?: DastScopeConfig;
