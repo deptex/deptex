@@ -6,6 +6,7 @@ import { ToolCallGroup, type ToolCallEntry } from './ToolCallCard';
 import { PlanCard, PlanCardSkeleton } from './PlanCard';
 import { FixStatusCard } from './FixStatusCard';
 import type { AegisChatError } from '../../lib/aegis-api';
+import { isToolPart, toolNameFor } from '../../lib/aegis-parts';
 
 interface MessageBubbleProps {
   message: UIMessage;
@@ -29,21 +30,6 @@ function mapState(state: ToolStateKey | string | undefined): 'running' | 'done' 
   if (state === 'output-available') return 'done';
   if (state === 'output-error') return 'error';
   return 'running';
-}
-
-function isToolPart(part: any): boolean {
-  return (
-    part?.type === 'dynamic-tool' ||
-    (typeof part?.type === 'string' && part.type.startsWith('tool-'))
-  );
-}
-
-function toolNameFor(part: any): string {
-  if (part.toolName) return part.toolName as string;
-  if (typeof part.type === 'string' && part.type.startsWith('tool-')) {
-    return part.type.replace(/^tool-/, '');
-  }
-  return 'tool';
 }
 
 export function MessageBubble({
@@ -104,6 +90,12 @@ export function MessageBubble({
     }
     if (isToolPart(part)) {
       const toolName = toolNameFor(part);
+      // set_todos is pure UI bookkeeping for the ChatTodos strip — it
+      // should never render as a tool-call pill or PlanCard inline. Must
+      // come BEFORE the request_fix branch so a turn ending with
+      // [set_todos, request_fix(error)] still falls through to the error
+      // pill cleanly.
+      if (toolName === 'set_todos') return;
       const output = part.output as { fixId?: string; error?: string; revised?: boolean } | undefined;
       // Treat both runtime errors AND tool-returned `{error: "..."}` as
       // errors. Without the latter check, request_fix calls that returned
@@ -140,6 +132,10 @@ export function MessageBubble({
     }
   });
   flushTools();
+
+  // A turn whose only parts were set_todos calls produces zero elements; we
+  // skip the wrapping bubble entirely instead of rendering empty padding.
+  if (!isUser && !error && elements.length === 0) return null;
 
   return (
     <div className="px-4 py-2">

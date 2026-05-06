@@ -7,6 +7,7 @@ import { api, getAuthToken, type AIModelMetadata } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { MessageBubble } from './MessageBubble';
 import { ChatInput } from './ChatInput';
+import { ChatTodos } from './ChatTodos';
 import { ThreadIcon } from './ThreadIcon';
 
 const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:3001';
@@ -616,6 +617,7 @@ export function ChatPane({
       </div>
       <div className="px-4 pb-4">
         <div className="mx-auto max-w-3xl">
+          <ChatTodos messages={messages} streaming={status === 'streaming'} />
           <SendQueuePanel queue={sendQueue} onRemove={handleRemoveFromQueue} />
           <div className="rounded-2xl bg-background-card border border-border">
             <ChatInput
