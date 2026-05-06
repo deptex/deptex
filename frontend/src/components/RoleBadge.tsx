@@ -54,7 +54,7 @@ export function RoleBadge({ role, roleDisplayName, roleColor, className }: RoleB
 
     return (
         <span
-            className={cn(`px-2 py-0.5 rounded text-xs font-medium border flex-shrink-0 transition-colors`, badgeStyles, className)}
+            className={cn(`px-2 py-0.5 rounded-full text-xs font-medium border flex-shrink-0 transition-colors`, badgeStyles, className)}
             style={customStyle}
         >
             {displayName}

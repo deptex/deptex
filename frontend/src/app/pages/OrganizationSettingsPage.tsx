@@ -38,6 +38,9 @@ import { CODE_BLOCK_BG } from '../../components/policy-monaco-setup';
 import SLAConfigurationSection from '../../components/settings/SLAConfigurationSection';
 import AISection from '../../components/settings/AISection';
 import ReachabilitySection from '../../components/settings/ReachabilitySection';
+import MaliciousAllowlistSection from '../../components/settings/MaliciousAllowlistSection';
+import { VALID_SETTINGS_SECTIONS, buildOrgSettingsSections } from '../../lib/orgSettingsSections';
+import PageHeader from '../../components/PageHeader';
 
 interface OrganizationContextType {
   organization: Organization | null;
@@ -150,7 +153,6 @@ type WebhookCacheSnapshot = {
 };
 const orgWebhooksCache: Record<string, WebhookCacheSnapshot> = {};
 
-const VALID_SETTINGS_SECTIONS = new Set(['general', 'members', 'roles', 'ai', 'reachability', 'integrations', 'webhooks', 'notifications', 'policies', 'statuses', 'security_slas', 'audit_logs', 'sso', 'mfa', 'ip_allowlist', 'usage', 'plan']);
 
 /** Renders a tab-specific content skeleton for the org settings loading state. */
 function OrgSettingsTabSkeleton({ section }: { section: string }) {
@@ -2650,190 +2652,41 @@ export default function OrganizationSettingsPage() {
     }
   };
 
-  const orgSettingsSections = [
-    // General Category
-    {
-      id: 'category_general',
-      label: 'General',
-      isCategory: true,
-    },
-    {
-      id: 'general',
-      label: 'General',
-      icon: <Settings className="h-4 w-4 tab-icon-shake" />,
-    },
-    // Conditionally show Members section based on permissions
-    ...(effectivePermissions?.view_members ? [{
-      id: 'members',
-      label: 'Members',
-      icon: <UserCircle className="h-4 w-4 tab-icon-shake" />,
-    }] : []),
-    // Show Roles section if user can view/edit roles
-    ...(effectivePermissions?.edit_roles ? [{
-      id: 'roles',
-      label: 'Roles',
-      icon: <Users className="h-4 w-4 tab-icon-shake" />,
-    }] : []),
-    {
-      id: 'ai',
-      label: 'AI',
-      icon: <Sparkles className="h-4 w-4 tab-icon-shake" />,
-    },
-    // Reachability — gated on manage_organization_settings (PATCH writes monthly_budget_usd)
-    ...(effectivePermissions?.manage_organization_settings ? [{
-      id: 'reachability',
-      label: 'Reachability',
-      icon: <Network className="h-4 w-4 tab-icon-shake" />,
-    }] : []),
-    // Show Integrations section if user can manage integrations
-    ...(effectivePermissions?.manage_integrations ? [{
-      id: 'integrations',
-      label: 'Integrations',
-      icon: <Plug className="h-4 w-4 tab-icon-shake" />,
-    }] : []),
-    // Webhooks section - show when manage_integrations
-    ...(effectivePermissions?.manage_integrations ? [{
-      id: 'webhooks',
-      label: 'Webhooks',
-      icon: <Webhook className="h-4 w-4 tab-icon-shake" />,
-    }] : []),
-    // Notifications section (after Integrations) - show when manage_integrations OR manage_notifications
-    ...((effectivePermissions?.manage_integrations || effectivePermissions?.manage_notifications) ? [{
-      id: 'notifications',
-      label: 'Notifications',
-      icon: <Bell className="h-4 w-4 tab-icon-shake" />,
-    }] : []),
-    // AI Configuration moved to "AI & Automation" category below
+  // Section list lives in `lib/orgSettingsSections.tsx` so the sidebar drilldown renders the same items.
+  const orgSettingsSections = buildOrgSettingsSections(effectivePermissions);
 
-    // Security Category - only show when user has access to at least one security section
-    ...(canManageCompliance || effectivePermissions?.view_activity || effectivePermissions?.manage_security ? [{
-      id: 'category_security',
-      label: 'Security',
-      isCategory: true as const,
-    }] : []),
-    // Show Policies section only if user has manage_compliance (or legacy view_compliance/edit_policies before migration)
-    ...(canManageCompliance ? [{
-      id: 'policies',
-      label: 'Policies',
-      icon: <Shield className="h-4 w-4 tab-icon-shake" />,
-    }] : []),
-    ...(canManageCompliance ? [{
-      id: 'statuses',
-      label: 'Statuses',
-      icon: <Tag className="h-4 w-4 tab-icon-shake" />,
-    }] : []),
-    ...(canManageCompliance ? [{
-      id: 'security_slas',
-      label: 'Security SLAs',
-      icon: <Clock className="h-4 w-4 tab-icon-shake" />,
-    }] : []),
-    // Conditionally show Audit Logs section based on view_activity permission
-    ...(effectivePermissions?.view_activity ? [{
-      id: 'audit_logs',
-      label: 'Audit Logs',
-      icon: <FileText className="h-4 w-4 tab-icon-shake" />,
-    }] : []),
-    // Security sections - only show if user has manage_security permission
-    ...(effectivePermissions?.manage_security ? [
-      { id: 'sso', label: 'SSO', icon: <LogIn className="h-4 w-4 tab-icon-shake" /> },
-      { id: 'mfa', label: 'Multi-Factor Authentication', icon: <Smartphone className="h-4 w-4 tab-icon-shake" /> },
-      { id: 'ip_allowlist', label: 'IP Allowlist', icon: <Globe className="h-4 w-4 tab-icon-shake" /> },
-    ] : []),
-
-    // Plan Category - only show if user has manage_billing permission
-    ...(effectivePermissions?.manage_billing ? [{
-      id: 'category_plan',
-      label: 'Plan',
-      isCategory: true,
-    }] : []),
-    // Usage section - placeholder for future implementation (only visible with manage_billing)
-    ...(effectivePermissions?.manage_billing ? [{
-      id: 'usage',
-      label: 'Usage',
-      icon: <BarChart className="h-4 w-4 tab-icon-shake" />,
-    }] : []),
-    // Show Plan & Billing section if user has manage_billing permission
-    ...(effectivePermissions?.manage_billing ? [{
-      id: 'plan',
-      label: 'Plan & Billing',
-      icon: <CreditCard className="h-4 w-4 tab-icon-shake" />,
-    }] : []),
-  ];
+  const activeSectionLabel = (() => {
+    for (const entry of orgSettingsSections) {
+      if (!('isCategory' in entry && entry.isCategory) && entry.id === activeSection) {
+        return entry.label;
+      }
+    }
+    return 'General';
+  })();
 
   // Don't render if organization not loaded or permissions not checked yet — show full-page settings skeleton with tab-specific content
   if (!organization || !permissionsChecked) {
     const loadingSection = sectionParam && VALID_SETTINGS_SECTIONS.has(sectionParam) ? sectionParam : 'general';
     return (
-      <div className="bg-background">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
-          <div className="flex gap-8 items-start">
-            {/* Sidebar skeleton */}
-            <aside className="w-64 flex-shrink-0">
-              <div className="sticky top-24 pt-8 bg-background z-10">
-                <nav className="space-y-1">
-                  {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
-                    <div key={i} className="flex items-center gap-3 px-3 py-2">
-                      <div className="h-4 w-4 bg-muted animate-pulse rounded" />
-                      <div className="h-4 bg-muted animate-pulse rounded flex-1" style={{ maxWidth: i === 2 ? 48 : 120 }} />
-                    </div>
-                  ))}
-                </nav>
-              </div>
-            </aside>
-            {/* Tab-specific content skeleton */}
-            <div className="flex-1 no-scrollbar">
-              <OrgSettingsTabSkeleton section={loadingSection} />
-            </div>
+      <>
+        <PageHeader title={`Settings — ${activeSectionLabel}`} />
+        <div className="bg-background">
+          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
+            <OrgSettingsTabSkeleton section={loadingSection} />
           </div>
         </div>
-      </div>
+      </>
     );
   }
 
   return (
     <>
+      <PageHeader title={`Settings — ${activeSectionLabel}`} />
       <div className="bg-background">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
-          <div className="flex gap-8 items-start">
-            {/* Sidebar */}
-            <aside className="w-64 flex-shrink-0">
-              <div className="sticky top-24 pt-8 bg-background z-10">
-                <nav className="space-y-1">
-                  {orgSettingsSections.map((section) => {
-                    // Render category headers
-                    if ('isCategory' in section && section.isCategory) {
-                      return (
-                        <div
-                          key={section.id}
-                          className="px-3 pt-4 pb-2 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"
-                        >
-                          {section.label}
-                        </div>
-                      );
-                    }
-
-                    // Render regular sections — navigate so URL reflects active tab
-                    return (
-                      <button
-                        key={section.id}
-                        onClick={() => id && navigate(`/organizations/${id}/settings/${section.id}`)}
-                        className={`w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md transition-colors group ${activeSection === section.id
-                          ? 'text-foreground'
-                          : 'text-foreground-secondary hover:text-foreground'
-                          }`}
-                      >
-                        {section.icon}
-                        {section.label}
-                      </button>
-                    );
-                  })}
-                </nav>
-              </div>
-            </aside>
-
-            {/* Content */}
-            <div className="flex-1 no-scrollbar">
-              {activeSection === 'general' && (
+          {/* Sub-nav lives in the sidebar drilldown (OrgSidebar). Content is single column. */}
+          <div className="no-scrollbar">
+            {activeSection === 'general' && (
                 <div className="space-y-6 pt-8">
 
                   {/* Organization details - Combined Card */}
@@ -4612,6 +4465,13 @@ export default function OrganizationSettingsPage() {
                 </div>
               )}
 
+              {activeSection === 'malicious_allowlist' && id && (
+                <MaliciousAllowlistSection
+                  organizationId={id}
+                  canManage={!!effectivePermissions?.manage_organization_settings}
+                />
+              )}
+
               {activeSection === 'audit_logs' && (
                 <div className="h-full pt-8">
                   <AuditLogsSection />
@@ -5865,7 +5725,6 @@ export default function OrganizationSettingsPage() {
                 </DialogContent>
               </Dialog>
 
-            </div>
           </div>
         </div>
       </div>

@@ -27,6 +27,7 @@ RUN apt-get update && apt-get install -y \
   libxrender1 \
   xfonts-base \
   xfonts-encodings \
+  firefox-esr \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Eclipse Temurin JDK 21 (full JDK for Maven + atom)
@@ -143,6 +144,19 @@ RUN curl -sSfL https://github.com/trufflesecurity/trufflehog/releases/download/v
 COPY --from=zap /zap /zap
 ENV PATH="/zap:${PATH}" \
     ZAP_PATH="/zap/zap.sh"
+
+# Bake the ZAP Passive Scan Rules — Alpha and Beta packs into /zap/plugin/.
+# zap-baseline.py loads these by default at runtime via marketplace fetch;
+# the AF YAML's `addOns: install` job DOES NOT reliably download missing
+# add-ons (silent no-op observed against Juice Shop: 20 findings vs 43 from
+# baseline.py). Baking them in at build time is the deterministic fix and
+# also unblocks airgapped self-hosted deploys. Pinned by SHA-256.
+RUN curl -sSfL https://github.com/zaproxy/zap-extensions/releases/download/pscanrulesAlpha-v47/pscanrulesAlpha-alpha-47.zap \
+      -o /zap/plugin/pscanrulesAlpha-alpha-47.zap \
+  && echo "2420200733fda276d50da2b3c51f7f9974978b9a6e7cf764929d71509500e18e  /zap/plugin/pscanrulesAlpha-alpha-47.zap" | sha256sum -c - \
+  && curl -sSfL https://github.com/zaproxy/zap-extensions/releases/download/pscanrulesBeta-v47/pscanrulesBeta-beta-47.zap \
+      -o /zap/plugin/pscanrulesBeta-beta-47.zap \
+  && echo "ba01afb41d51663a2ea80eafea83507bf1103aeb784920b9395e8f7f12fddad4  /zap/plugin/pscanrulesBeta-beta-47.zap" | sha256sum -c -
 
 # ZAP's helper scripts (zap-baseline.py etc) need a small set of Python deps
 # that are normally pre-installed in the official ZAP image but not in

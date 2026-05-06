@@ -1886,23 +1886,117 @@ export const api = {
     return fetchWithAuth(`/api/projects/${projectId}/dast/config`);
   },
 
-  async saveDastConfig(projectId: string, config: DastConfigDTO): Promise<DastConfigDTO> {
+  async saveDastConfig(
+    projectId: string,
+    config: Partial<DastConfigDTO>,
+  ): Promise<DastConfigDTO> {
     return fetchWithAuth(`/api/projects/${projectId}/dast/config`, {
       method: 'PUT',
       body: JSON.stringify(config),
     });
   },
 
-  async triggerDastScan(projectId: string): Promise<DastScanTriggerResponse> {
-    return fetchWithAuth(`/api/projects/${projectId}/dast/scan`, { method: 'POST' });
+  async getDastTargets(projectId: string): Promise<DastTargetDTO[]> {
+    return fetchWithAuth(`/api/projects/${projectId}/dast/targets`);
   },
 
-  async getDastJobs(projectId: string, limit = 20): Promise<DastJobDTO[]> {
-    return fetchWithAuth(`/api/projects/${projectId}/dast/jobs?limit=${limit}`);
+  async createDastTarget(
+    projectId: string,
+    body: { target_url: string; label?: string | null; enabled?: boolean },
+  ): Promise<DastTargetDTO> {
+    return fetchWithAuth(`/api/projects/${projectId}/dast/targets`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
   },
 
-  async getDastFindings(projectId: string, limit = 100): Promise<DastFindingDTO[]> {
-    return fetchWithAuth(`/api/projects/${projectId}/dast/findings?limit=${limit}`);
+  async updateDastTarget(
+    projectId: string,
+    targetId: string,
+    body: { label?: string | null; enabled?: boolean },
+  ): Promise<DastTargetDTO> {
+    return fetchWithAuth(`/api/projects/${projectId}/dast/targets/${targetId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+  },
+
+  async deleteDastTarget(projectId: string, targetId: string): Promise<void> {
+    await fetchWithAuth(`/api/projects/${projectId}/dast/targets/${targetId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  async recheckDastTargetRuntime(
+    projectId: string,
+    targetId: string,
+  ): Promise<DastRecheckRuntimeResponse> {
+    return fetchWithAuth(
+      `/api/projects/${projectId}/dast/targets/${targetId}/recheck-runtime`,
+      { method: 'POST' },
+    );
+  },
+
+  async getDastTargetCredentials(
+    projectId: string,
+    targetId: string,
+  ): Promise<DastCredentialSummaryDTO | null> {
+    try {
+      return await fetchWithAuth(
+        `/api/projects/${projectId}/dast/targets/${targetId}/credentials`,
+      );
+    } catch (e: any) {
+      if (e?.message === 'credentials_not_set') return null;
+      throw e;
+    }
+  },
+
+  async putDastTargetCredentials(
+    projectId: string,
+    targetId: string,
+    body: DastCredentialUpsertDTO,
+  ): Promise<DastCredentialSummaryDTO> {
+    return fetchWithAuth(
+      `/api/projects/${projectId}/dast/targets/${targetId}/credentials`,
+      { method: 'PUT', body: JSON.stringify(body) },
+    );
+  },
+
+  async deleteDastTargetCredentials(projectId: string, targetId: string): Promise<void> {
+    await fetchWithAuth(
+      `/api/projects/${projectId}/dast/targets/${targetId}/credentials`,
+      { method: 'DELETE' },
+    );
+  },
+
+  async triggerDastScan(
+    projectId: string,
+    body: { target_id: string },
+  ): Promise<DastScanTriggerResponse> {
+    return fetchWithAuth(`/api/projects/${projectId}/dast/scan`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+
+  async getDastJobs(
+    projectId: string,
+    opts: { limit?: number; targetId?: string } = {},
+  ): Promise<DastJobDTO[]> {
+    const params = new URLSearchParams();
+    params.set('limit', String(opts.limit ?? 20));
+    if (opts.targetId) params.set('target_id', opts.targetId);
+    return fetchWithAuth(`/api/projects/${projectId}/dast/jobs?${params.toString()}`);
+  },
+
+  async getDastFindings(
+    projectId: string,
+    opts: { limit?: number; targetId?: string } = {},
+  ): Promise<DastFindingDTO[]> {
+    const params = new URLSearchParams();
+    params.set('limit', String(opts.limit ?? 100));
+    if (opts.targetId) params.set('target_id', opts.targetId);
+    return fetchWithAuth(`/api/projects/${projectId}/dast/findings?${params.toString()}`);
   },
 
   async getProjectVulnerabilities(
@@ -2229,9 +2323,16 @@ export const api = {
       organizationId: string,
       projectId: string,
       page = 1,
-      perPage = 50
+      perPage = 50,
+      filters?: { reachability?: MaliciousReachabilityLevel | 'unknown' | null }
     ): Promise<PaginatedResponse<MaliciousFinding>> {
-      return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/malicious-findings?page=${page}&per_page=${perPage}`);
+      const qs = new URLSearchParams();
+      qs.set('page', String(page));
+      qs.set('per_page', String(perPage));
+      if (filters?.reachability) qs.set('reachability', filters.reachability);
+      return fetchWithAuth(
+        `/api/organizations/${organizationId}/projects/${projectId}/malicious-findings?${qs.toString()}`
+      );
     },
     async get(
       organizationId: string,
@@ -2259,6 +2360,39 @@ export const api = {
       return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/malicious-findings/${findingId}/explain`, {
         method: 'POST',
       });
+    },
+  },
+
+  maliciousAllowlist: {
+    async list(organizationId: string): Promise<{ data: MaliciousAllowlistEntry[] }> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/malicious-allowlist`);
+    },
+    async add(
+      organizationId: string,
+      body: { package_name: string; version: string | null; ecosystem: string; reason: string }
+    ): Promise<MaliciousAllowlistEntry> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/malicious-allowlist`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+    },
+    async revoke(organizationId: string, entryId: string): Promise<{ success: boolean }> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/malicious-allowlist/${entryId}`, {
+        method: 'DELETE',
+      });
+    },
+  },
+
+  capabilities: {
+    async fetch(
+      organizationId: string,
+      ecosystem: string,
+      packageName: string,
+      version: string,
+    ): Promise<PackageCapabilities> {
+      return fetchWithAuth(
+        `/api/organizations/${organizationId}/packages/${encodeURIComponent(ecosystem)}/${encodeURIComponent(packageName)}/${encodeURIComponent(version)}/capabilities`,
+      );
     },
   },
 
@@ -3654,18 +3788,89 @@ export type DastSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export type DastFindingStatus = 'open' | 'suppressed' | 'risk_accepted' | 'fixed';
 export type DastConfidence = 'confirmed' | 'high' | 'medium' | 'low';
 export type ScanJobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled';
+export type DastAuthStrategy = 'form' | 'jwt' | 'cookie';
+export type DastDetectedRuntime = 'unknown' | 'classic' | 'spa';
+export type DastAuthState = 'anonymous' | 'authenticated' | 'authentication_lost';
+export type DastEngine = 'zap' | 'nuclei' | 'merged';
+
+export interface DastTargetDTO {
+  id: string;
+  target_url: string;
+  label: string | null;
+  enabled: boolean;
+  detected_runtime: DastDetectedRuntime;
+  detected_runtime_at: string | null;
+  detected_runtime_ttl_at: string | null;
+  has_credentials: boolean;
+  auth_strategy: DastAuthStrategy | null;
+  active_dast_run_id: string | null;
+  last_scanned_at: string | null;
+  created_at: string;
+}
+
+export interface DastScopeHeaderRule {
+  name: string;
+  value: string;
+  scope: 'all' | 'requests' | 'responses';
+}
+
+export interface DastScopeConfig {
+  include_patterns?: string[];
+  exclude_patterns?: string[];
+  header_rules?: DastScopeHeaderRule[];
+}
 
 export interface DastConfigDTO {
   enabled: boolean;
-  target_url: string | null;
+  target_url?: string | null;
   scan_profile: DastScanProfile;
   scan_timeout_minutes: number;
+  scope_config?: DastScopeConfig;
+  targets?: DastTargetDTO[];
+}
+
+export type DastCredentialPayloadSummary =
+  | { kind: 'form'; username_masked: string }
+  | { kind: 'jwt'; token_prefix: string; token_length: number; expires_in_minutes: number }
+  | { kind: 'cookie'; cookie_count: number; cookie_names: string[] };
+
+export interface DastCredentialSummaryDTO {
+  auth_strategy: DastAuthStrategy;
+  payload_summary: DastCredentialPayloadSummary;
+  logged_in_indicator: string | null;
+  logged_out_indicator: string | null;
+  updated_at: string;
+}
+
+export type DastCredentialUpsertPayload =
+  | {
+      kind: 'form';
+      login_url: string;
+      username_field: string;
+      password_field: string;
+      username: string;
+      password: string;
+    }
+  | { kind: 'jwt'; token: string }
+  | {
+      kind: 'cookie';
+      cookies: { name: string; value: string; domain?: string; path?: string }[];
+    };
+
+export interface DastCredentialUpsertDTO {
+  auth_strategy: DastAuthStrategy;
+  payload: DastCredentialUpsertPayload;
+  logged_in_indicator?: string;
+  logged_out_indicator?: string;
+  /** When true, server skips the form-login probe step at PUT time. */
+  skip_login_probe?: boolean;
 }
 
 export interface DastJobDTO {
   id: string;
   status: ScanJobStatus;
   trigger_source: string | null;
+  target_id?: string | null;
   target_url: string | null;
   scan_profile: DastScanProfile | null;
   findings_count: number | null;
@@ -3680,6 +3885,9 @@ export interface DastJobDTO {
 
 export interface DastFindingDTO {
   id: string;
+  target_id?: string | null;
+  auth_state?: DastAuthState | null;
+  engine?: DastEngine | null;
   endpoint_url: string;
   http_method: string;
   vulnerability_type: string;
@@ -3696,6 +3904,8 @@ export interface DastFindingDTO {
   handler_line: number | null;
   linked_sca_osv_id: string | null;
   linked_sca_project_dependency_id: string | null;
+  linked_sast_finding_id?: string | null;
+  cross_link_methods?: string[] | null;
   confirmed_exploitable: boolean;
   status: DastFindingStatus;
   risk_accepted_reason: string | null;
@@ -3705,9 +3915,20 @@ export interface DastFindingDTO {
 export interface DastScanTriggerResponse {
   jobId: string;
   status: ScanJobStatus;
+  target_id?: string;
   target_url: string;
   scan_profile: DastScanProfile;
+  detected_runtime?: DastDetectedRuntime;
   created_at: string;
+}
+
+export interface DastRecheckRuntimeResponse {
+  target: DastTargetDTO;
+  probe: {
+    probed: boolean;
+    confidence: number;
+    markers: string[];
+  };
 }
 
 export interface ExtractionRun {
@@ -4503,8 +4724,51 @@ export interface DeleteRegistryCredentialResponse {
   detached_image_count: number;
 }
 
-export type MaliciousScanner = 'feed' | 'guarddog';
+export type MaliciousScanner = 'feed' | 'guarddog' | 'maintainer';
 export type MaliciousSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+
+/**
+ * v2 canonical ecosystem set. Widened from v1's 7 to 10 for 8-language
+ * capability detector parity (composer/cargo/nuget added).
+ */
+export const MALICIOUS_ECOSYSTEMS = [
+  'npm', 'pypi', 'maven', 'golang', 'rubygems',
+  'composer', 'cargo', 'nuget', 'github-actions', 'vscode',
+] as const;
+export type MaliciousEcosystem = typeof MALICIOUS_ECOSYSTEMS[number];
+
+export interface MaliciousAllowlistEntry {
+  id: string;
+  package_name: string;
+  version: string | null;
+  ecosystem: string;
+  reason: string;
+  added_by: string | null;
+  added_by_email: string;
+  added_at: string;
+  revoked_at: string | null;
+}
+
+/**
+ * Malicious-package reachability classification (v2). Distinct from the
+ * vulnerability ReachabilityLevel because malicious findings use a
+ * lightweight per-package callgraph, not the full taint engine.
+ */
+export type MaliciousReachabilityLevel =
+  | 'unimported'
+  | 'imported_unused'
+  | 'module'
+  | 'function';
+
+export interface MaliciousReachabilityDetails {
+  entry_points?: string[];
+  call_chain?: string[];
+  sink_file?: string;
+  sink_line?: number;
+  /** Set on soft-fail when the resolver threw — level will be null. */
+  error?: string;
+  message?: string;
+}
 
 export interface MaliciousFinding {
   id: string;
@@ -4533,7 +4797,43 @@ export interface MaliciousFinding {
   evidence?: { file_path: string; lines: [number, number]; snippet: string }[];
   ai_narrative?: string | null;
   ai_narrative_cached_at?: string | null;
+  reachability_level?: MaliciousReachabilityLevel | null;
+  reachability_details?: MaliciousReachabilityDetails | null;
+  reachability_computed_at?: string | null;
 }
+
+/**
+ * Per-package capability tags (malicious-packages-v2 M1b). Global cache —
+ * the same row is returned for every org that has the package in scope.
+ * Locked at 15 boolean tags for v2.
+ */
+export interface PackageCapabilities {
+  package_name: string;
+  version: string;
+  ecosystem: string;
+  scanner_version: string;
+  scanned_at: string;
+  scan_error: string | null;
+  capabilities: {
+    spawns_processes: boolean;
+    network_io: boolean;
+    eval_dynamic: boolean;
+    native_addon_load: boolean;
+    filesystem_write: boolean;
+    crypto_operations: boolean;
+    serialization_deser: boolean;
+    install_script: boolean;
+    dns_query: boolean;
+    websocket: boolean;
+    process_signal: boolean;
+    encrypted_payload: boolean;
+    dynamic_import: boolean;
+    reads_env: boolean;
+    clipboard_access: boolean;
+  };
+}
+
+export type CapabilityKey = keyof PackageCapabilities['capabilities'];
 
 export interface VulnerabilityEvent {
   id: string;

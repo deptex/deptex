@@ -451,7 +451,7 @@
   transform-origin: center center;
 }
 
-.group:hover .tab-icon-shake {
+.nav-btn:hover .tab-icon-shake {
   animation: shake 0.5s ease-in-out;
 }
 

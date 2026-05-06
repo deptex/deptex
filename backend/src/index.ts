@@ -52,6 +52,9 @@ import gitlabWebhooksRouter from './routes/gitlab-webhooks';
 import bitbucketWebhooksRouter from './routes/bitbucket-webhooks';
 import flowsRouter from './routes/flows';
 import maliciousRouter, { maliciousInternalRouter } from './routes/malicious';
+import maliciousAllowlistRouter from './routes/malicious-allowlist';
+import capabilitiesRouter from './routes/capabilities';
+import maliciousRetentionRouter from './routes/malicious-retention';
 import reachabilitySettingsRouter from './routes/reachability-settings';
 import generatedRulesRouter from './routes/generated-rules';
 import registryCredentialsRouter from './routes/registry-credentials';
@@ -143,10 +146,19 @@ app.use('/api/organizations', organizationsRouter);
 app.use('/api/organizations', taintEngineRouter);
 app.use('/api/organizations', teamsRouter);
 app.use('/api/organizations', projectsRouter);
+
+// Drain mode middleware lives in middleware/dast-drain.ts so tests can
+// import it without pulling in this file's load-time side effects.
+import { dastDrainMiddleware } from './middleware/dast-drain';
+
+app.use('/api/projects', dastDrainMiddleware);
 app.use('/api/projects', dastRouter);
 app.use('/api/organizations', scannerFindingsRouter);
 app.use('/api/organizations', maliciousRouter);
+app.use('/api/organizations', maliciousAllowlistRouter);
+app.use('/api/organizations', capabilitiesRouter);
 app.use('/api/internal/malicious', maliciousInternalRouter);
+app.use('/api/internal/malicious', maliciousRetentionRouter);
 app.use('/api/organizations', organizationCanvasRouter);
 app.use('/api/organizations', activitiesRouter);
 app.use('/api/organizations', reachabilitySettingsRouter);

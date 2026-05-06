@@ -40,6 +40,50 @@ const BLOCKED_HOST_LITERALS = new Set([
  * add IMDS (169.254.169.254) and the Fly 6PN /16 (fdaa::/16) explicitly.
  */
 function isIpBlocked(ip: ipaddr.IPv4 | ipaddr.IPv6): { blocked: boolean; reason?: string } {
+  // IPv6 transition mechanisms tunnel an IPv4 destination inside an IPv6
+  // address. The Linux kernel routes them to the underlying IPv4 host, so an
+  // attacker can use `::ffff:169.254.169.254` to reach AWS IMDS — ipaddr.js
+  // classifies that as range='ipv4Mapped' which is NOT in our standard set.
+  // Recurse on the inner IPv4 so the existing block-list catches these.
+  if (ip.kind() === 'ipv6') {
+    const v6 = ip as ipaddr.IPv6;
+
+    if (v6.isIPv4MappedAddress()) {
+      const inner = v6.toIPv4Address();
+      const innerResult = isIpBlocked(inner);
+      if (innerResult.blocked) {
+        return {
+          blocked: true,
+          reason: `IPv4-mapped IPv6 wraps blocked ${innerResult.reason}`,
+        };
+      }
+      // Even when the inner IPv4 is public, mapped form has no legitimate
+      // scan-target use case (operators would type the IPv4 directly).
+      // Reject outright to remove the bypass surface.
+      return {
+        blocked: true,
+        reason: `IPv4-mapped IPv6 ${ip.toString()} — use the IPv4 form instead`,
+      };
+    }
+
+    // 6to4 (2002::/16) — embeds a public IPv4 in parts[1..2] high/low octets.
+    // No legitimate web-app scan target uses 6to4; reject outright.
+    if (v6.parts[0] === 0x2002) {
+      return {
+        blocked: true,
+        reason: `6to4 transition address ${ip.toString()}`,
+      };
+    }
+
+    // Teredo (2001::/32) — UDP-tunneled IPv4. Same rationale.
+    if (v6.parts[0] === 0x2001 && v6.parts[1] === 0x0000) {
+      return {
+        blocked: true,
+        reason: `Teredo transition address ${ip.toString()}`,
+      };
+    }
+  }
+
   const range = ip.range();
 
   // ipaddr.js named ranges that always block

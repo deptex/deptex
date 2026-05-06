@@ -3,6 +3,7 @@ import { Sparkles, ShieldAlert, Loader2 } from 'lucide-react';
 import { api, type MaliciousFinding } from '../../lib/api';
 import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
+import { ReachabilityBadge, type MaliciousReachabilityLevel } from './ReachabilityBadge';
 
 interface MaliciousFindingCardProps {
   organizationId: string;
@@ -10,6 +11,17 @@ interface MaliciousFindingCardProps {
   finding: MaliciousFinding;
   canManage: boolean;
   onStatusChange?: () => void;
+  /**
+   * When provided, the package name renders as a clickable button that
+   * fires this callback. Hosting pages typically use it to open a drawer
+   * showing the package's capability tags + other metadata.
+   */
+  onPackageClick?: (info: {
+    package_name: string;
+    package_version: string | null | undefined;
+    ecosystem: string | null | undefined;
+    project_dependency_id: string;
+  }) => void;
 }
 
 export function MaliciousFindingCard({
@@ -18,6 +30,7 @@ export function MaliciousFindingCard({
   finding,
   canManage,
   onStatusChange,
+  onPackageClick,
 }: MaliciousFindingCardProps) {
   const [explainState, setExplainState] = useState<
     | { kind: 'idle' }
@@ -79,12 +92,33 @@ export function MaliciousFindingCard({
             {finding.severity.toUpperCase()}
           </span>
           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-500/10 text-purple-300 border border-purple-500/20">
-            {finding.scanner === 'feed' ? 'Feed match' : 'GuardDog'}
+            {finding.scanner === 'feed' ? 'Feed match' : finding.scanner === 'maintainer' ? 'Maintainer signal' : 'GuardDog'}
           </span>
+          <ReachabilityBadge
+            level={(finding.reachability_level ?? null) as MaliciousReachabilityLevel | null}
+            details={finding.reachability_details}
+          />
           {finding.package_name && (
-            <span className="text-[11px] text-foreground-secondary font-mono">
-              {finding.package_name}@{finding.package_version} ({finding.ecosystem})
-            </span>
+            onPackageClick ? (
+              <button
+                type="button"
+                onClick={() =>
+                  onPackageClick({
+                    package_name: finding.package_name!,
+                    package_version: finding.package_version,
+                    ecosystem: finding.ecosystem,
+                    project_dependency_id: finding.project_dependency_id,
+                  })
+                }
+                className="text-[11px] text-foreground-secondary font-mono hover:text-foreground hover:underline underline-offset-2 transition-colors"
+              >
+                {finding.package_name}@{finding.package_version} ({finding.ecosystem})
+              </button>
+            ) : (
+              <span className="text-[11px] text-foreground-secondary font-mono">
+                {finding.package_name}@{finding.package_version} ({finding.ecosystem})
+              </span>
+            )
           )}
         </div>
         <div className="flex items-center gap-2">

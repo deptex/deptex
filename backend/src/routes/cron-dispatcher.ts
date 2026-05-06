@@ -143,6 +143,8 @@ router.post('/daily', async (req, res) => {
     '/api/internal/learning/recompute-patterns',
     '/api/workers/notification-cleanup',
     '/api/workers/watchtower-daily-poll',
+    '/api/internal/malicious/retention-prune',
+    '/api/internal/malicious/maintainer-signal-sync',
   ];
   const results: JobResult[] = [];
   for (const path of jobs) {
