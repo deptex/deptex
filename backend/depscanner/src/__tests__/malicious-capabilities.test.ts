@@ -93,6 +93,27 @@ describe('jsDetector', () => {
   });
 });
 
+describe('pyDetector — ReDoS regression (PDA-1)', () => {
+  // Pre-fix: RX_FS_WRITE had unbounded `[^)]*` between `open(` and the
+  // mode quote, allowing quadratic backtracking on adversarial inputs like
+  // `'open(a,'.repeat(N) + 'X'`. Measured 205KB → 3s, 342KB → 8s. Bounded
+  // to `[^,)\n]{0,200}` post-fix so timing stays linear regardless of N.
+  it('runs in linear time on adversarial open(a,...).repeat(N) input', () => {
+    const adversarial = 'open(a,'.repeat(50_000) + 'X'; // ~340KB
+    const t0 = Date.now();
+    jsDetector; // touch reference so the import isn't tree-shaken in test runner
+    const result = pyDetector.detect(adversarial);
+    const elapsed = Date.now() - t0;
+    // Pre-fix this took 8s+; post-fix it should complete in well under 1s
+    // on any developer machine. The 1500ms ceiling gives headroom for slow
+    // CI without letting the regression sneak back in.
+    expect(elapsed).toBeLessThan(1500);
+    // The adversarial input has no closing mode quote, so RX_FS_WRITE
+    // should NOT fire (no false positive from the quadratic-input pattern).
+    expect(result.filesystem_write).toBe(false);
+  });
+});
+
 describe('pyDetector', () => {
   test('detects spawns_processes via subprocess', () => {
     const r = pyDetector.detect('import subprocess\nsubprocess.run(["ls"])');
@@ -189,6 +210,34 @@ describe('csharpDetector', () => {
   test('detects native_addon_load via DllImport', () => {
     const r = csharpDetector.detect('[DllImport("user32.dll")]\nstatic extern void Beep();');
     expect(r.native_addon_load).toBe(true);
+  });
+});
+
+describe('detectInstallScript — ReDoS regression (PDA-2)', () => {
+  // Pre-fix: detectPypiInstallScript ran a regex with two adjacent unbounded
+  // `\w*` quantifiers (`class\s+\w*Install\w*\(...)`). A `setup.py` containing
+  // `class Install` + `Install`.repeat(N) + `X(notamatch)` triggered O(n²)
+  // backtracking — measured 60KB → 179ms, scales quadratically. Tightened
+  // to `class\s+[A-Za-z_]\w*Install\w*\(...)` post-fix (single trailing `\w*`
+  // is unambiguous).
+  it('runs in linear time on adversarial setup.py "class InstallInstall...X(z)"', () => {
+    const adversarial = 'class Install' + 'Install'.repeat(20_000) + 'X(notamatch)'; // ~140KB
+    const dir = makeTempPkg({ 'setup.py': adversarial });
+    const t0 = Date.now();
+    const result = detectInstallScript(dir, 'pypi');
+    const elapsed = Date.now() - t0;
+    // Pre-fix this 140KB input took ~1s and scaled quadratically; post-fix
+    // should finish in tens of ms.
+    expect(elapsed).toBeLessThan(1000);
+    // The adversarial class name doesn't match `(install|develop|build_py)`
+    // in the parens, so detection should be false (no FP from the regex).
+    expect(result).toBe(false);
+  });
+
+  it('still detects a real custom install hook in setup.py', () => {
+    const real = 'from setuptools.command.install import install\nclass MyInstall(install):\n    def run(self): pass';
+    const dir = makeTempPkg({ 'setup.py': real });
+    expect(detectInstallScript(dir, 'pypi')).toBe(true);
   });
 });
 

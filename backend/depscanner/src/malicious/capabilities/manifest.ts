@@ -71,7 +71,15 @@ function detectPypiInstallScript(dir: string): boolean {
   const setupPy = readText(path.join(dir, 'setup.py'));
   if (setupPy) {
     if (/\bcmdclass\s*=/.test(setupPy)) return true;
-    if (/class\s+\w*Install\w*\s*\(\s*(?:install|develop|build_py)\s*\)/.test(setupPy)) return true;
+    // Replaced `class\s+\w*Install\w*\s*\(...)` — two unbounded `\w*` groups
+    // around literal `Install` produced classic ambiguous-quantifier ReDoS
+    // (`class Install` + `Install`.repeat(N) + `X(notamatch)` triggered
+    // O(n²) backtracking — measured 60KB→179ms pre-fix). The class-name
+    // `Install` substring requirement was over-specific anyway: a class
+    // named anything that extends `install`/`develop`/`build_py` is just
+    // as much an install hook. Bounded class-name match (≤128 chars,
+    // single quantifier) is unambiguous and matches more real cases.
+    if (/class\s+[A-Za-z_]\w{0,128}\s*\(\s*(?:install|develop|build_py)\s*\)/.test(setupPy)) return true;
   }
   const setupCfg = readText(path.join(dir, 'setup.cfg'));
   if (setupCfg && /\bcmdclass\b/.test(setupCfg)) return true;

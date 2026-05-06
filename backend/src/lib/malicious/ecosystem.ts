@@ -88,3 +88,39 @@ export function canonicalizeEcosystem(raw: string | null | undefined): Canonical
 export function isCanonicalEcosystem(value: string): value is CanonicalEcosystem {
   return (CANONICAL_ECOSYSTEMS as readonly string[]).includes(value);
 }
+
+/**
+ * Canonicalize a package name for cross-source matching against
+ * `known_malicious_packages`.
+ *
+ * MUST run on BOTH the write path (feed-sync writing advisory rows) AND the
+ * read path (feeds.ts looking up an installed package) — otherwise GHSA's
+ * mixed-case names (`Django`, `Flask`, `Pillow`) silently miss installed
+ * packages whose SBOM-extracted names are lowercase.
+ *
+ * Per-ecosystem normalization rules (the safe over-match direction —
+ * applying the same transform on both sides preserves the equality):
+ *   - pypi: PEP 503 — lowercase + collapse `[-_.]+` to `-`
+ *   - npm, nuget, composer, cargo, vscode: lowercase (registry-canonical form)
+ *   - maven, golang, rubygems, github-actions: case-sensitive — preserve
+ */
+export function canonicalizePackageName(
+  name: string,
+  ecosystem: CanonicalEcosystem,
+): string {
+  switch (ecosystem) {
+    case 'pypi':
+      return name.toLowerCase().replace(/[-_.]+/g, '-');
+    case 'npm':
+    case 'nuget':
+    case 'composer':
+    case 'cargo':
+    case 'vscode':
+      return name.toLowerCase();
+    case 'maven':
+    case 'golang':
+    case 'rubygems':
+    case 'github-actions':
+      return name;
+  }
+}

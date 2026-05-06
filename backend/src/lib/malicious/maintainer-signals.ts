@@ -459,14 +459,25 @@ async function pullRubygems(
 // ───────────────────────────── helpers ────────────────────────────────────
 
 function stableHash(payload: unknown): string {
-  // JSON.stringify is deterministic for plain objects up to key order. We
-  // sort top-level keys so two objects with the same key/value pairs in
-  // different order produce the same hash.
-  const json = JSON.stringify(payload, Object.keys(flatten(payload)).sort());
-  return crypto.createHash('sha256').update(json).digest('hex');
+  return crypto.createHash('sha256').update(stableStringify(payload)).digest('hex');
 }
 
-function flatten(v: unknown): Record<string, unknown> {
-  if (v && typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>;
-  return { _value: v };
+/**
+ * Deterministic JSON-like serialization that recurses into nested objects
+ * and arrays. Earlier implementation passed `Object.keys(...).sort()` as the
+ * `JSON.stringify` replacer — but the array-form replacer is a key allowlist
+ * applied recursively, so any nested object whose keys aren't in the
+ * top-level list serialized as `{}`. That collapsed
+ * `[{ keyid: 'sig-2024' }]` and `[{ keyid: 'attacker-2026' }]` to the same
+ * hash and made `signing_setup_changed` (the npm-provenance-rotation
+ * Shai-Hulud-class signal) silently undetectable.
+ */
+function stableStringify(v: unknown): string {
+  if (v === null || v === undefined) return JSON.stringify(v);
+  if (Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']';
+  if (typeof v === 'object') {
+    const keys = Object.keys(v as Record<string, unknown>).sort();
+    return '{' + keys.map((k) => JSON.stringify(k) + ':' + stableStringify((v as Record<string, unknown>)[k])).join(',') + '}';
+  }
+  return JSON.stringify(v);
 }

@@ -1,4 +1,9 @@
-import { canonicalizeEcosystem, isCanonicalEcosystem, CANONICAL_ECOSYSTEMS } from '../malicious/ecosystem';
+import {
+  canonicalizeEcosystem,
+  canonicalizePackageName,
+  isCanonicalEcosystem,
+  CANONICAL_ECOSYSTEMS,
+} from '../malicious/ecosystem';
 
 describe('canonicalizeEcosystem', () => {
   // OSV.dev casing (https://ossf.github.io/osv-schema/) -> canonical
@@ -75,6 +80,56 @@ describe('canonicalizeEcosystem', () => {
     expect(canonicalizeEcosystem('')).toBeNull();
     expect(canonicalizeEcosystem(null)).toBeNull();
     expect(canonicalizeEcosystem(undefined)).toBeNull();
+  });
+});
+
+describe('canonicalizePackageName', () => {
+  // PEP 503 — lowercase + collapse [-_.]+ to '-'. Drives the P0 fix:
+  // GHSA stores `Django` / `Pillow` / `BeautifulSoup`; cdxgen's PURL output
+  // produces `django` / `pillow` / `beautifulsoup4`. Without per-ecosystem
+  // normalization on both write and read paths, the lookup misses entirely.
+  it.each([
+    ['Django', 'django'],
+    ['BeautifulSoup4', 'beautifulsoup4'],
+    ['PyYAML', 'pyyaml'],
+    ['Foo_Bar', 'foo-bar'],
+    ['foo.bar', 'foo-bar'],
+    ['Foo--Bar', 'foo-bar'],
+    ['django', 'django'],
+  ])('pypi: %s -> %s', (input, expected) => {
+    expect(canonicalizePackageName(input, 'pypi')).toBe(expected);
+  });
+
+  // npm/nuget/composer/cargo/vscode: lowercase per registry-canonical form.
+  it.each([
+    ['npm' as const, 'MyPkg', 'mypkg'],
+    ['npm' as const, '@Scope/Pkg', '@scope/pkg'],
+    ['nuget' as const, 'Newtonsoft.Json', 'newtonsoft.json'],
+    ['composer' as const, 'Vendor/Package', 'vendor/package'],
+    ['cargo' as const, 'My_Crate', 'my_crate'],
+    ['vscode' as const, 'MS.python', 'ms.python'],
+  ])('%s: %s -> %s (lowercase only, separators preserved)', (eco, input, expected) => {
+    expect(canonicalizePackageName(input, eco)).toBe(expected);
+  });
+
+  // Case-sensitive ecosystems: preserve as-is.
+  it.each([
+    ['maven' as const, 'com.Example:Lib', 'com.Example:Lib'],
+    ['golang' as const, 'github.com/Foo/Bar', 'github.com/Foo/Bar'],
+    ['rubygems' as const, 'Ruby_OS_Detector', 'Ruby_OS_Detector'],
+    ['github-actions' as const, 'Owner/Repo', 'Owner/Repo'],
+  ])('%s preserves case: %s -> %s', (eco, input, expected) => {
+    expect(canonicalizePackageName(input, eco)).toBe(expected);
+  });
+
+  it('matches advisory and SBOM names that differ only in PyPI normalization', () => {
+    // Advisory writer (feed-sync) and lookup (lookupFeed) both apply this —
+    // matching transforms on both sides preserve the equality, regardless of
+    // upstream casing.
+    const advisoryName = 'Django';
+    const sbomName = 'django';
+    expect(canonicalizePackageName(advisoryName, 'pypi'))
+      .toBe(canonicalizePackageName(sbomName, 'pypi'));
   });
 });
 

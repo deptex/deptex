@@ -51,6 +51,32 @@ export function canonicalizeEcosystem(raw: string | null | undefined): Canonical
 }
 
 /**
+ * Mirror of `canonicalizePackageName` from backend/src/lib/malicious/ecosystem.ts.
+ * Worker-side and backend-side MUST stay aligned so a feed row written by
+ * feed-sync (backend) is found by lookupFeed (depscanner).
+ */
+export function canonicalizePackageName(
+  name: string,
+  ecosystem: CanonicalEcosystem,
+): string {
+  switch (ecosystem) {
+    case 'pypi':
+      return name.toLowerCase().replace(/[-_.]+/g, '-');
+    case 'npm':
+    case 'nuget':
+    case 'composer':
+    case 'cargo':
+    case 'vscode':
+      return name.toLowerCase();
+    case 'maven':
+    case 'golang':
+    case 'rubygems':
+    case 'github-actions':
+      return name;
+  }
+}
+
+/**
  * GuardDog's CLI takes a different keyword for some ecosystems than the
  * canonical Deptex name. This maps canonical → guarddog-cli verb.
  *

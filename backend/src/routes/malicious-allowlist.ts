@@ -15,6 +15,7 @@ import express from 'express';
 import { authenticateUser, type AuthRequest } from '../middleware/auth';
 import { supabase } from '../lib/supabase';
 import { canonicalizeEcosystem, CANONICAL_ECOSYSTEMS } from '../lib/malicious/ecosystem';
+import { createActivity } from '../lib/activities';
 
 const router = express.Router();
 router.use(authenticateUser);
@@ -223,6 +224,25 @@ router.post('/:id/malicious-allowlist', async (req: AuthRequest, res) => {
       throw insertError;
     }
 
+    // Audit trail: allowlist entries auto-suppress matching project_malicious_findings
+    // on the next extraction (see apply_malicious_allowlist RPC). Suppression is a
+    // sensitive, security-impacting mutation — surface it in the canonical org
+    // activity feed so admins / SOC2 reviewers can trace why a malicious finding
+    // is no longer firing.
+    await createActivity({
+      organization_id: orgId,
+      user_id: userId,
+      activity_type: 'added_malicious_allowlist_entry',
+      description: `allowlisted ${eco}:${packageName}${verResult.value ? '@' + verResult.value : ' (all versions)'}`,
+      metadata: {
+        entry_id: (inserted as AllowlistRow).id,
+        package_name: packageName,
+        version: verResult.value,
+        ecosystem: eco,
+        reason,
+      },
+    });
+
     res.status(201).json(publicShape(inserted as AllowlistRow));
   } catch (error: any) {
     console.error('Error adding malicious allowlist entry:', error);
@@ -247,10 +267,12 @@ router.delete('/:id/malicious-allowlist/:entryId', async (req: AuthRequest, res)
 
     // Cross-org probe: same 404 for "no such entry" and "entry belongs to a
     // different org". Also already-revoked entries return 404 (idempotency
-    // would mask whether revocation succeeded).
+    // would mask whether revocation succeeded). Selecting the natural-key
+    // fields here so the audit metadata captures what was revoked, not just
+    // an opaque entry-id.
     const { data: existing } = await supabase
       .from('organization_malicious_allowlist')
-      .select('id, organization_id, revoked_at')
+      .select('id, organization_id, revoked_at, package_name, version, ecosystem, reason')
       .eq('id', entryId)
       .maybeSingle();
 
@@ -271,6 +293,25 @@ router.delete('/:id/malicious-allowlist/:entryId', async (req: AuthRequest, res)
       .eq('organization_id', orgId);  // belt-and-braces: scope by org_id even though we just verified
 
     if (updateError) throw updateError;
+
+    // Audit trail: revocation flips the security posture (matching findings
+    // stop being auto-suppressed on the next extraction). Mirrors the POST
+    // handler so the canonical activity feed shows both sides of the
+    // suppression lifecycle.
+    await createActivity({
+      organization_id: orgId,
+      user_id: userId,
+      activity_type: 'revoked_malicious_allowlist_entry',
+      description: `revoked allowlist for ${existing.ecosystem}:${existing.package_name}${existing.version ? '@' + existing.version : ''}`,
+      metadata: {
+        entry_id: entryId,
+        package_name: existing.package_name,
+        version: existing.version,
+        ecosystem: existing.ecosystem,
+        reason: existing.reason,
+      },
+    });
+
     res.json({ success: true });
   } catch (error: any) {
     console.error('Error revoking malicious allowlist entry:', error);

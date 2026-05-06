@@ -26,6 +26,19 @@ const MAX_UNCOMPRESSED_BYTES = 500 * 1024 * 1024; // 500 MB
 const MAX_COMPRESSION_RATIO = 100;
 const PER_PACKAGE_DOWNLOAD_TIMEOUT_MS = 30_000;
 
+// npm registry name regex (validate-npm-package-name's "valid for old packages"
+// shape, minus URL/git/file specs). Rejects anything pacote/npa would parse as
+// a non-registry spec — git+http://, http://, file:, ../, etc. — so SBOM-derived
+// names from arbitrary user repos cannot turn into SSRF / git-clone / LFR
+// primitives at fetch time. Names are case-insensitive at the npm registry
+// (modern names lowercase only); we match either case for the regex level and
+// rely on the registry to canonicalize.
+const NPM_NAME_RE = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/i;
+
+// PyPI/PEP 508 distribution name. Same defensive shape: rejects URL/file
+// direct-reference syntax (`name @ http://...`) before it reaches pip.
+const PYPI_NAME_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+
 export interface TarballCacheEntry {
   /** Absolute path to the unpacked source directory. */
   dir: string;
@@ -92,6 +105,22 @@ export class TarballCache {
   }
 
   private async fetchNpm(packageName: string, version: string, dest: string): Promise<void> {
+    // SECURITY: validate the package name BEFORE handing it to pacote.
+    // pacote's npa parser accepts URL, git, and file specs in addition to
+    // registry names — and packageName originates from cdxgen-parsed
+    // SBOMs of arbitrary user repos, so a malicious dependency named
+    // `git+http://169.254.170.2/...` (Fly metadata), `http://attacker/x.tgz`,
+    // or `../../../etc/passwd` would otherwise turn into SSRF / git-clone
+    // RCE / local-file read at scan time. Registry-name-shape only.
+    if (!NPM_NAME_RE.test(packageName)) {
+      throw new Error(`malicious-scan: rejected non-registry npm spec ${JSON.stringify(packageName)}`);
+    }
+    // Versions are passed unquoted to pacote — restrict to characters that
+    // semver-coerce can handle without hitting the version-spec parser's
+    // own URL/git fallback path.
+    if (!/^[A-Za-z0-9.+\-_]{1,64}$/.test(version)) {
+      throw new Error(`malicious-scan: rejected non-version npm version ${JSON.stringify(version)}`);
+    }
     // pacote is already a runtime dep of the worker; --no-scripts disables
     // any postinstall execution. We don't run install, only extract.
     const tarballPath = path.join(dest, '..', `${path.basename(dest)}.tgz`);
@@ -108,6 +137,15 @@ export class TarballCache {
   }
 
   private async fetchPypi(packageName: string, version: string, dest: string): Promise<void> {
+    // SECURITY: same rejection as fetchNpm — pip's PEP 508 parser accepts
+    // direct-reference URL specs (`name @ http://...`) under some option
+    // combinations. Block at the gate: distribution-name shape only.
+    if (!PYPI_NAME_RE.test(packageName)) {
+      throw new Error(`malicious-scan: rejected non-distribution PyPI spec ${JSON.stringify(packageName)}`);
+    }
+    if (!/^[A-Za-z0-9.+\-_!]{1,64}$/.test(version)) {
+      throw new Error(`malicious-scan: rejected non-version PyPI version ${JSON.stringify(version)}`);
+    }
     // pip download can produce sdist OR wheel. We try sdist first
     // (--no-binary=:all:) because the source layout is the cleanest input
     // for GuardDog. Many high-traffic packages (numpy, pillow, lxml) ship

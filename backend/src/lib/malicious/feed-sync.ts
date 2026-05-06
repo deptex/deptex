@@ -22,7 +22,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import StreamZip from 'node-stream-zip';
 import { supabase } from '../supabase';
-import { canonicalizeEcosystem, type CanonicalEcosystem } from './ecosystem';
+import { canonicalizeEcosystem, canonicalizePackageName, type CanonicalEcosystem } from './ecosystem';
 import type { MaliciousFeedSource, MaliciousFeedSyncState, MaliciousSeverity } from './types';
 import { getGitHubToken } from '../ghsa';
 import { resolveVulnerableRange, makePackumentCache, type PackumentCache } from './version-range';
@@ -355,8 +355,13 @@ async function advisoryToEntries(
   for (const a of list) {
     const ecoRaw = a?.package?.ecosystem ?? a?.ecosystem;
     const eco = canonicalizeEcosystem(ecoRaw ?? null) ?? canonical;
-    const name = a?.package?.name ?? a?.name;
-    if (!name) continue;
+    const rawName = a?.package?.name ?? a?.name;
+    if (!rawName) continue;
+    // Canonicalize on write so the read-side lookup (lookupFeed) finds the
+    // row regardless of advisory-source casing. PEP 503 normalization for
+    // pypi means GHSA's `Django` lands as `django`, matching the cdxgen
+    // SBOM output for installed PyPI packages.
+    const name = canonicalizePackageName(rawName, eco as CanonicalEcosystem);
 
     // 1. Explicit version list (OSV publishes these for most MAL-* entries).
     let versions: Array<string | null> | null = pickVersions(a);

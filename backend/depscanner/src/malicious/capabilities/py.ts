@@ -14,7 +14,15 @@ const RX_SPAWNS = /\b(?:subprocess\.(?:run|Popen|call|check_call|check_output)|o
 const RX_NETWORK = /\b(?:urllib\.request|urllib2|http\.client|httplib|requests\.(?:get|post|put|delete|patch|request|Session)|httpx\.(?:get|post|Client|AsyncClient)|aiohttp\.ClientSession|socket\.socket|telnetlib|ftplib)\b|\bimport\s+(?:requests|httpx|aiohttp|urllib3)\b|\bfrom\s+(?:requests|httpx|aiohttp|urllib3)\s+import\b/;
 const RX_EVAL = /(?<![\w.])eval\s*\(|(?<![\w.])exec\s*\(|\bcompile\s*\(/;
 const RX_NATIVE = /\bctypes\.(?:CDLL|cdll|windll|oledll|PyDLL)\b|\bcffi\.FFI\b|\bimport\s+ctypes\b|\bfrom\s+ctypes\s+import\b/;
-const RX_FS_WRITE = /\bopen\s*\([^)]*,\s*['"](?:w|a|x|wb|ab|xb|w\+|a\+|x\+|rb\+|wb\+|ab\+|xb\+)['"]|\bos\.(?:write|remove|unlink|rmdir|removedirs|rename|replace|mkdir|makedirs)\b|\bshutil\.(?:copy|copy2|copyfile|copytree|move|rmtree)\b|\bpathlib\.[\w.]+\.(?:write_text|write_bytes|unlink|rename|mkdir|rmdir)\b/;
+// Bounded `[^,)\n]{0,200}` instead of unbounded `[^)]*` — a malicious
+// `.py` containing many `open(` token starts followed by commas without a
+// matching mode quote ('open(a,'.repeat(N) + 'X') would otherwise drive
+// quadratic backtracking on the original engine. Measured pre-fix: 205KB→3s,
+// 342KB→8s; at the 5MB MAX_FILE_BYTES cap the worker event loop blocks for
+// minutes. The 200-char ceiling covers any realistic `open(path, mode)`
+// call site without giving the engine room to retry across thousands of
+// comma positions.
+const RX_FS_WRITE = /\bopen\s*\([^,)\n]{0,200},\s*['"](?:w|a|x|wb|ab|xb|w\+|a\+|x\+|rb\+|wb\+|ab\+|xb\+)['"]|\bos\.(?:write|remove|unlink|rmdir|removedirs|rename|replace|mkdir|makedirs)\b|\bshutil\.(?:copy|copy2|copyfile|copytree|move|rmtree)\b|\bpathlib\.[\w.]+\.(?:write_text|write_bytes|unlink|rename|mkdir|rmdir)\b/;
 const RX_CRYPTO = /\bimport\s+(?:hashlib|hmac|secrets)\b|\bfrom\s+(?:hashlib|hmac|secrets|cryptography|Crypto|nacl)\b|\bhashlib\.(?:md5|sha1|sha256|sha512|new)\b|\bcryptography\.(?:fernet|hazmat)\b/;
 const RX_SERDE = /\bpickle\.(?:loads?|Unpickler)\b|\bcPickle\.loads?\b|\bmarshal\.loads?\b|\bdill\.loads?\b|\byaml\.(?:load|unsafe_load|full_load)\s*\(|\bxml\.etree\.ElementTree\.parse\b/;
 const RX_DNS = /\bsocket\.(?:gethostbyname|gethostbyname_ex|getaddrinfo|gethostbyaddr)\b|\bimport\s+dns\.resolver\b|\bdns\.resolver\.Resolver\b/;

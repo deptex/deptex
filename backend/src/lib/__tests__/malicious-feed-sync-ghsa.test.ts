@@ -18,6 +18,7 @@
  *      preserving entries_added across the backoff.
  */
 import {
+  queryBuilder,
   setTableResponse,
   clearTableRegistry,
 } from '../../test/mocks/supabaseSingleton';
@@ -105,6 +106,57 @@ describe('GHSA per-ecosystem fan-out', () => {
     expect(npmQuery!).not.toContain('securityAdvisories');
     expect(npmQuery!).toContain('classifications: [MALWARE]');
     expect(npmQuery!).toContain('orderBy: { field: UPDATED_AT, direction: DESC }');
+  });
+
+  it('canonicalizes mixed-case PyPI advisory names on the write path (P0 BLI-001 regression)', async () => {
+    // GHSA stores advisories with their upstream casing (e.g. `Django`,
+    // `BeautifulSoup4`). cdxgen produces lowercase PEP 503 names from
+    // installed packages. Without normalization on the write path the
+    // lookup at lookupFeed time silently misses mixed-case advisories.
+    const upsertSpy = queryBuilder.upsert as jest.Mock;
+    upsertSpy.mockClear();
+
+    global.fetch = jest.fn(async (_url: any, init: any) => {
+      const body = JSON.parse(init.body);
+      if (/ecosystem:\s*PIP/.test(body.query)) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              securityVulnerabilities: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  {
+                    package: { ecosystem: 'PIP', name: 'Django' },
+                    vulnerableVersionRange: '== 4.2.0',
+                    advisory: {
+                      ghsaId: 'GHSA-test-pypi-mal',
+                      summary: 'malware',
+                      description: 'malware',
+                      severity: 'CRITICAL',
+                      withdrawnAt: null,
+                    },
+                  },
+                ],
+              },
+            },
+          }),
+        } as any;
+      }
+      return emptyGhsaPage();
+    }) as any;
+
+    const result = await runMaliciousFeedSync('ghsa');
+    expect(result.state).toBe('completed');
+
+    // Inspect the upsert payload — the advisory's `Django` MUST land in
+    // `known_malicious_packages` as `django` so feeds.ts lookups for
+    // cdxgen-extracted lowercase names match the row.
+    const upsertedRows = upsertSpy.mock.calls.flatMap((c: any[]) => c[0] ?? []);
+    const pypiRow = upsertedRows.find((r: any) => r.ecosystem === 'pypi');
+    expect(pypiRow).toBeDefined();
+    expect(pypiRow!.package_name).toBe('django'); // canonicalized, NOT 'Django'
   });
 
   it('retries on 429 with backoff and recovers the page', async () => {

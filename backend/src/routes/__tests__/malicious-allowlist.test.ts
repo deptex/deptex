@@ -22,6 +22,15 @@ jest.mock('../../lib/supabase', () => ({
   createUserClient: jest.fn(),
 }));
 
+// Mock the audit-log helper so we can assert allowlist mutations are
+// surfaced into the canonical org activity feed (P1 AL-1 / AL-2 regression).
+jest.mock('../../lib/activities', () => ({
+  createActivity: jest.fn().mockResolvedValue(undefined),
+}));
+const { createActivity: createActivityMock } = require('../../lib/activities') as {
+  createActivity: jest.Mock;
+};
+
 const ORG_ID = 'org-1';
 const OTHER_ORG_ID = 'org-2';
 const ENTRY_ID = 'entry-1';
@@ -54,6 +63,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   clearTableRegistry();
   (supabase.auth.getUser as jest.Mock).mockResolvedValue({ data: { user: USER }, error: null });
+  createActivityMock.mockClear();
 });
 
 // ─── GET list ───────────────────────────────────────────────────────────────
@@ -238,6 +248,44 @@ describe('POST /api/organizations/:id/malicious-allowlist', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/reason/i);
   });
+
+  it('writes an audit-log entry on add (P1 AL-1 regression)', async () => {
+    queueMembershipThenPermission('admin', { manage_organization_settings: true });
+    pushTableResponse('organization_malicious_allowlist', {
+      data: {
+        id: 'new-3', organization_id: ORG_ID, package_name: 'lodash', version: '4.17.20',
+        ecosystem: 'npm', reason: 'security review', added_by: USER.id,
+        added_by_email: USER.email, added_at: '2026-05-05', revoked_at: null,
+        revoked_by: null, revoked_by_email: null,
+      },
+      error: null,
+    });
+
+    const res = await request(app)
+      .post(`/api/organizations/${ORG_ID}/malicious-allowlist`)
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .send({
+        package_name: 'lodash',
+        version: '4.17.20',
+        ecosystem: 'npm',
+        reason: 'security review',
+      });
+
+    expect(res.status).toBe(201);
+    expect(createActivityMock).toHaveBeenCalledTimes(1);
+    expect(createActivityMock).toHaveBeenCalledWith(expect.objectContaining({
+      organization_id: ORG_ID,
+      user_id: USER.id,
+      activity_type: 'added_malicious_allowlist_entry',
+      description: expect.stringContaining('lodash'),
+      metadata: expect.objectContaining({
+        entry_id: 'new-3',
+        package_name: 'lodash',
+        version: '4.17.20',
+        ecosystem: 'npm',
+      }),
+    }));
+  });
 });
 
 // ─── DELETE revoke ─────────────────────────────────────────────────────────
@@ -246,7 +294,11 @@ describe('DELETE /api/organizations/:id/malicious-allowlist/:entryId', () => {
   it('soft-revokes when entry belongs to caller org', async () => {
     queueMembershipThenPermission('admin', { manage_organization_settings: true });
     setTableResponse('organization_malicious_allowlist', 'maybeSingle', {
-      data: { id: ENTRY_ID, organization_id: ORG_ID, revoked_at: null },
+      data: {
+        id: ENTRY_ID, organization_id: ORG_ID, revoked_at: null,
+        package_name: 'lodash', version: '4.17.20', ecosystem: 'npm',
+        reason: 'security review',
+      },
       error: null,
     });
 
@@ -256,6 +308,37 @@ describe('DELETE /api/organizations/:id/malicious-allowlist/:entryId', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+  });
+
+  it('writes an audit-log entry on revoke (P1 AL-2 regression)', async () => {
+    queueMembershipThenPermission('admin', { manage_organization_settings: true });
+    setTableResponse('organization_malicious_allowlist', 'maybeSingle', {
+      data: {
+        id: ENTRY_ID, organization_id: ORG_ID, revoked_at: null,
+        package_name: 'lodash', version: '4.17.20', ecosystem: 'npm',
+        reason: 'security review',
+      },
+      error: null,
+    });
+
+    const res = await request(app)
+      .delete(`/api/organizations/${ORG_ID}/malicious-allowlist/${ENTRY_ID}`)
+      .set('Authorization', `Bearer ${TOKEN}`);
+
+    expect(res.status).toBe(200);
+    expect(createActivityMock).toHaveBeenCalledTimes(1);
+    expect(createActivityMock).toHaveBeenCalledWith(expect.objectContaining({
+      organization_id: ORG_ID,
+      user_id: USER.id,
+      activity_type: 'revoked_malicious_allowlist_entry',
+      description: expect.stringContaining('lodash'),
+      metadata: expect.objectContaining({
+        entry_id: ENTRY_ID,
+        package_name: 'lodash',
+        version: '4.17.20',
+        ecosystem: 'npm',
+      }),
+    }));
   });
 
   it('returns 404 when the entry belongs to a different org (cross-org probe)', async () => {

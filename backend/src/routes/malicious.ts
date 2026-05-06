@@ -19,6 +19,7 @@ import { supabase } from '../lib/supabase';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { getActiveExtractionId } from '../lib/active-extraction';
 import { checkProjectAccess, checkProjectManagePermission } from './project-access';
+import { createActivity } from '../lib/activities';
 
 const router = express.Router();
 router.use(authenticateUser);
@@ -248,10 +249,13 @@ router.patch('/:id/projects/:projectId/malicious-findings/:findingId', async (re
       return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
     }
 
-    // Defence-in-depth: verify finding belongs to (orgId, projectId) before update
+    // Defence-in-depth: verify finding belongs to (orgId, projectId) before update.
+    // Also pull prior suppressed / risk_accepted state so the audit-log diff
+    // captures both sides (the in-row suppressed_by columns are overwritten
+    // on toggle and don't preserve history).
     const { data: finding } = await supabase
       .from('project_malicious_findings')
-      .select('id, project_id, organization_id')
+      .select('id, project_id, organization_id, rule_id, scanner, suppressed, risk_accepted')
       .eq('id', findingId)
       .maybeSingle();
     if (!finding || finding.project_id !== projectId || finding.organization_id !== id) {
@@ -308,6 +312,35 @@ router.patch('/:id/projects/:projectId/malicious-findings/:findingId', async (re
     if (pmf?.dependency_id) {
       await supabase.rpc('recompute_dependency_is_malicious', { p_dependency_ids: [pmf.dependency_id] });
     }
+
+    // Audit trail: per-finding suppression / risk-acceptance is the project-
+    // scoped twin of the org-scoped allowlist. The in-row suppressed_by /
+    // risk_accepted_by columns capture only the latest actor and get clobbered
+    // on toggle; the canonical activities feed is what an auditor reads to
+    // reconstruct who silenced which finding when.
+    const verb =
+      'suppressed' in update
+        ? (update.suppressed ? 'suppressed' : 'unsuppressed')
+        : (update.risk_accepted ? 'accepted-risk' : 'unaccepted-risk');
+    await createActivity({
+      organization_id: id,
+      user_id: userId,
+      activity_type: 'updated_malicious_finding',
+      description: `${verb} malicious finding ${finding.scanner}:${finding.rule_id}`,
+      metadata: {
+        finding_id: findingId,
+        project_id: projectId,
+        rule_id: finding.rule_id,
+        scanner: finding.scanner,
+        old_value: { suppressed: finding.suppressed, risk_accepted: finding.risk_accepted },
+        new_value: {
+          suppressed: 'suppressed' in update ? update.suppressed : finding.suppressed,
+          risk_accepted: 'risk_accepted' in update ? update.risk_accepted : finding.risk_accepted,
+        },
+        suppressed_reason: update.suppressed_reason ?? null,
+        risk_accepted_reason: update.risk_accepted_reason ?? null,
+      },
+    });
 
     res.json({ success: true });
   } catch (error: any) {

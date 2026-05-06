@@ -85,6 +85,58 @@ describe('parseTarListing — line parser (cross-platform)', () => {
   });
 });
 
+describe('TarballCache.fetch — spec-injection rejection (P1 SSRF-1 regression)', () => {
+  // pacote's npa parser accepts URL/git/file specs in addition to registry
+  // names. SBOM-derived names from arbitrary user repos must not turn into
+  // SSRF / git-clone RCE / LFR primitives. Validate at the gate before the
+  // string ever reaches pacote / pip.
+  let cache: TarballCache;
+
+  beforeEach(() => {
+    cache = new TarballCache(`spec-rej-${Date.now()}`);
+  });
+
+  afterEach(() => {
+    cache.cleanup();
+  });
+
+  // The TarballCache.fetch entry point catches and soft-fails on any throw,
+  // so we exercise the private fetchNpm / fetchPypi directly to assert the
+  // guard runs before any subprocess spawn. fetchNpm/fetchPypi are async
+  // (return Promise<void>) so we await .rejects.toThrow rather than the
+  // sync `expect(() => ...).toThrow` shape.
+  it.each([
+    'git+http://169.254.170.2/computeMetadata/',
+    'git+https://attacker.example/evil',
+    'http://attacker.example/x.tgz',
+    'https://attacker.example/x.tgz',
+    'file:///etc/passwd',
+    '../../../etc/passwd',
+    '/absolute/path',
+    'name with space',
+    'name\nwith\nnewlines',
+  ])('fetchNpm rejects non-registry spec %s', async (badName) => {
+    await expect((cache as any).fetchNpm(badName, '1.0.0', '/tmp/never-used'))
+      .rejects.toThrow(/rejected non-registry npm spec/);
+  });
+
+  it.each([
+    'name @ http://attacker.example/x.tgz',
+    '../../../etc/passwd',
+    '/absolute/path',
+    'http://attacker/pkg',
+    'name with space',
+  ])('fetchPypi rejects non-distribution spec %s', async (badName) => {
+    await expect((cache as any).fetchPypi(badName, '1.0.0', '/tmp/never-used'))
+      .rejects.toThrow(/rejected non-distribution PyPI spec/);
+  });
+
+  it('TarballCache.fetch soft-fails (returns null) on rejected spec', async () => {
+    const result = await cache.fetch('npm' as any, 'git+http://attacker/evil', '1.0.0');
+    expect(result).toBeNull();
+  });
+});
+
 describeIfTar('TarballCache.unpackTar — whitespace-in-filename robustness', () => {
   let workRoot: string;
   let cache: TarballCache;

@@ -177,6 +177,54 @@ describe('computeMaintainerSignalsForPackage — npm fixture path', () => {
     expect(result!.signals.new_postinstall_added).toBe(false);
   });
 
+  it('signingConfigHash discriminates nested keyid changes (P1 BLI-002 regression)', async () => {
+    // Pre-fix bug: stableHash used Object.keys(payload).sort() as the
+    // JSON.stringify replacer, which is a key allowlist applied recursively.
+    // Nested signature objects (`signatures: [{keyid:'sig-2024'}]`) collapsed
+    // to `{}` and produced the same sha256 across different keyids — silently
+    // hiding npm provenance / signing-key rotations (Shai-Hulud-class).
+    setTableResponse('package_maintainer_snapshots', 'maybeSingle', { data: null, error: null });
+
+    function payloadWithKeyid(keyid: string) {
+      return {
+        name: 'pkg',
+        time: { created: '2026-04-15T00:00:00.000Z' },
+        'dist-tags': { latest: '1.0.0' },
+        versions: {
+          '1.0.0': {
+            maintainers: [{ name: 'maint', email: 'maint@example.com' }],
+            scripts: {},
+            dist: {
+              signatures: [{ keyid, sig: 'present' }],
+              attestations: null,
+            },
+          },
+        },
+      };
+    }
+
+    const first = await computeMaintainerSignalsForPackage(
+      supabase as any,
+      'pkg',
+      '1.0.0',
+      'npm',
+      { now: NOW, fetcher: makeFetcher(payloadWithKeyid('sig-2024')) },
+    );
+    const second = await computeMaintainerSignalsForPackage(
+      supabase as any,
+      'pkg',
+      '1.0.0',
+      'npm',
+      { now: NOW, fetcher: makeFetcher(payloadWithKeyid('attacker-2026')) },
+    );
+
+    expect(first?.metadata.signingConfigHash).not.toBeNull();
+    expect(second?.metadata.signingConfigHash).not.toBeNull();
+    // Different keyid MUST produce different hash, otherwise signing_setup_changed
+    // can never fire for a true rotation event.
+    expect(first!.metadata.signingConfigHash).not.toBe(second!.metadata.signingConfigHash);
+  });
+
   it('returns null on 404 from registry without throwing', async () => {
     const result = await computeMaintainerSignalsForPackage(
       supabase as any,
