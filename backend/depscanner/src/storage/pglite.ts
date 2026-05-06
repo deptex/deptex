@@ -84,22 +84,44 @@ function defaultSchemaPath(): string {
 }
 
 /**
- * Strip schema-dump-helper functions from schema.sql before feeding it to PGLite.
+ * Strip schema-dump artifacts from schema.sql before feeding it to PGLite.
  *
- * pg_catalog_dump_v1() / pg_catalog_dump_v1_all() are introspection helpers used
- * exclusively by `npm run schema:dump` (production Supabase) — they're never
- * called from depscanner runtime. PGLite eagerly compiles function bodies at
- * CREATE time, so the forward reference inside _all() ("FROM pg_catalog_dump_v1()")
- * fails before the inner function is defined. Production Postgres tolerates
- * this; PGLite doesn't. Safe to drop entirely for local mode.
+ * Two classes of incompatibility:
+ *
+ * 1) Schema-dump helpers (pg_catalog_dump_v1 / pg_catalog_dump_v1_all) are
+ *    introspection helpers used exclusively by `npm run schema:dump`
+ *    (production Supabase) — never called from depscanner runtime. PGLite
+ *    eagerly compiles function bodies at CREATE time, so the forward
+ *    reference inside _all() ("FROM pg_catalog_dump_v1()") fails before the
+ *    inner function is defined. Production Postgres tolerates this.
+ *
+ * 2) Forward-referenced CHECK constraints. `organization_generated_rules`
+ *    has a `CHECK (framework_spec_osv_matches_cve(...))` whose function is
+ *    defined further down in the dump than the ALTER TABLE that adds the
+ *    constraint. Production Postgres allows the forward reference (function
+ *    is bound at CONSTRAINT trigger time); PGLite refuses with
+ *    `function ... does not exist`. Safe to drop because PGLite local-mode
+ *    doesn't insert into this table during reachability tests.
  */
 function stripPgliteIncompatible(sql: string): string {
-  // Match the full CREATE OR REPLACE FUNCTION block ending at `$function$;`.
-  // Both functions use the dollar-quoted body delimiter `$function$`.
-  return sql.replace(
+  let out = sql;
+
+  // (1) Drop the dump-helper functions entirely.
+  out = out.replace(
     /CREATE OR REPLACE FUNCTION public\.pg_catalog_dump_v1(_all)?\([^)]*\)[\s\S]*?\$function\$\s*;\s*/g,
     '',
   );
+
+  // (2) Drop CHECK constraints that reference functions defined later in the
+  //     dump. `framework_spec_osv_matches_cve` is the only known offender —
+  //     the function is defined further down, so PGLite fails to compile the
+  //     constraint when it's added.
+  out = out.replace(
+    /ALTER TABLE public\.organization_generated_rules\s+ADD CONSTRAINT[^;]*framework_spec_osv_matches_cve[^;]*;\s*/g,
+    '',
+  );
+
+  return out;
 }
 
 /**
