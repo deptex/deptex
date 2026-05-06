@@ -1,0 +1,23 @@
+{
+  "_documentation": "This file documents the shape of project_configured_images rows. The actual list of images scanned for a project lives in the database table, not in this file. Deptex reads project_configured_images at scan time; this JSON is here for engineers who want to see the canonical shape without pulling down the migration.",
+  "examples": [
+    {
+      "image_reference": "nginx:1.27",
+      "credentials_id": null,
+      "enabled": true,
+      "_note": "Public image. credentials_id=null means the scanner pulls anonymously."
+    },
+    {
+      "image_reference": "ghcr.io/acme/private-app:2025.04.01",
+      "credentials_id": "<uuid of an organization_registry_credentials row with registry_type='ghcr'>",
+      "enabled": true,
+      "_note": "Private image. The cred MUST belong to the same organization as the project."
+    },
+    {
+      "image_reference": "123456789012.dkr.ecr.us-west-2.amazonaws.com/internal/api@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "credentials_id": "<uuid of an organization_registry_credentials row with registry_type='ecr'>",
+      "enabled": false,
+      "_note": "Disabled rows are kept in the table but skipped by the orchestrator. Re-enabling counts against the per-project enabled cap of 20."
+    }
+  ]
+}
