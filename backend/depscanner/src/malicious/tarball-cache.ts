@@ -108,24 +108,55 @@ export class TarballCache {
   }
 
   private async fetchPypi(packageName: string, version: string, dest: string): Promise<void> {
-    // pip download produces sdist OR wheel. We tell it to prefer sdist
-    // (--no-binary=:all:) so we always get a source layout GuardDog can scan.
-    execFileSync('pip3', [
-      'download',
-      '--no-deps',
-      '--no-build-isolation',
-      '--no-binary=:all:',
-      '--dest',
-      dest,
-      `${packageName}==${version}`,
-    ], { stdio: 'pipe', timeout: PER_PACKAGE_DOWNLOAD_TIMEOUT_MS });
+    // pip download can produce sdist OR wheel. We try sdist first
+    // (--no-binary=:all:) because the source layout is the cleanest input
+    // for GuardDog. Many high-traffic packages (numpy, pillow, lxml) ship
+    // only wheels for older versions OR have sdists that require native
+    // toolchains the worker container doesn't have. When --no-binary fails
+    // for any reason, retry with no constraint so pip falls back to the
+    // wheel; .whl is just a zip, so unpackZip handles it. GuardDog can scan
+    // the wheel layout (the .py sources sit alongside the .dist-info
+    // metadata inside the zip).
+    let pipFailed = false;
+    try {
+      execFileSync('pip3', [
+        'download',
+        '--no-deps',
+        '--no-build-isolation',
+        '--no-binary=:all:',
+        '--dest',
+        dest,
+        `${packageName}==${version}`,
+      ], { stdio: 'pipe', timeout: PER_PACKAGE_DOWNLOAD_TIMEOUT_MS });
+    } catch {
+      pipFailed = true;
+    }
+
+    if (pipFailed || fs.readdirSync(dest).length === 0) {
+      // Wheel fallback. We still pin the version so we don't accidentally
+      // download a newer .whl. --prefer-binary lets pip pick wheels even if
+      // an sdist exists; --no-deps stops it pulling a dependency tree.
+      execFileSync('pip3', [
+        'download',
+        '--no-deps',
+        '--prefer-binary',
+        '--dest',
+        dest,
+        `${packageName}==${version}`,
+      ], { stdio: 'pipe', timeout: PER_PACKAGE_DOWNLOAD_TIMEOUT_MS });
+    }
 
     const downloaded = fs.readdirSync(dest);
-    const archive = downloaded.find((f) => f.endsWith('.tar.gz') || f.endsWith('.zip'));
+    const archive = downloaded.find((f) =>
+      f.endsWith('.tar.gz') || f.endsWith('.zip') || f.endsWith('.whl'),
+    );
     if (!archive) return; // pip already left us a tree
 
     const archivePath = path.join(dest, archive);
-    if (archive.endsWith('.zip')) {
+    if (archive.endsWith('.zip') || archive.endsWith('.whl')) {
+      // Wheels are zip-format with a fixed internal layout (`<pkg>/`
+      // siblings plus `<pkg>-<ver>.dist-info/`). unpackZip's zip-slip and
+      // bomb guards apply unchanged.
       this.unpackZip(archivePath, dest);
     } else {
       this.unpackTar(archivePath, dest);
@@ -137,24 +168,31 @@ export class TarballCache {
    * Tar unpacking with zip-slip + decompression-bomb guards. Uses the
    * system tar binary (BSD/GNU compatible) for streaming; we pre-validate
    * with a list pass before the extract pass.
+   *
+   * Listing parser: `tar --list --verbose --numeric-owner --gzip -f` keeps
+   * the owner/group field as `<uid>/<gid>` (no spaces — `numeric-owner`
+   * forces it, even in locales where the system passwd resolves to a
+   * username with whitespace) and the date/time format stays
+   * `YYYY-MM-DD HH:MM`. That gives us a regex anchor we can use to lift
+   * the entry path verbatim, including filenames containing whitespace —
+   * which the previous `split(/\s+/)` parser collapsed and mis-validated.
    */
   private unpackTar(tarballPath: string, dest: string): void {
     const tarballSize = fs.statSync(tarballPath).size;
 
     // Pass 1: list entries with sizes for sandbox checks.
-    const listOut = execFileSync('tar', ['-tzvf', tarballPath], {
-      stdio: 'pipe',
-      timeout: 30_000,
-    }).toString('utf8');
+    const listOut = execFileSync(
+      'tar',
+      ['--list', '--verbose', '--numeric-owner', '--gzip', '-f', tarballPath],
+      {
+        stdio: 'pipe',
+        timeout: 30_000,
+      },
+    ).toString('utf8');
 
     let total = 0;
     const resolvedRoot = path.resolve(dest);
-    for (const line of listOut.split('\n')) {
-      if (!line.trim()) continue;
-      const cols = line.split(/\s+/);
-      if (cols.length < 6) continue;
-      const size = parseInt(cols[2], 10) || 0;
-      const entryPath = cols.slice(5).join(' ');
+    for (const { size, entryPath } of parseTarListing(listOut)) {
       total += size;
       if (total > MAX_UNCOMPRESSED_BYTES) {
         throw new Error(`tarball exceeds ${MAX_UNCOMPRESSED_BYTES} bytes uncompressed`);
@@ -169,10 +207,14 @@ export class TarballCache {
     }
 
     // Pass 2: actual extract — sandbox-checked, no scripts to execute.
-    execFileSync('tar', ['-xzf', tarballPath, '-C', dest, '--no-same-owner', '--no-same-permissions'], {
-      stdio: 'pipe',
-      timeout: 60_000,
-    });
+    execFileSync(
+      'tar',
+      ['--extract', '--gzip', '--numeric-owner', '--no-same-owner', '--no-same-permissions', '-f', tarballPath, '-C', dest],
+      {
+        stdio: 'pipe',
+        timeout: 60_000,
+      },
+    );
   }
 
   private unpackZip(zipPath: string, dest: string): void {
@@ -203,4 +245,38 @@ with zipfile.ZipFile(src) as z:
       dest,
     ], { stdio: 'pipe', timeout: 60_000 });
   }
+}
+
+/**
+ * Parse the output of `tar --list --verbose --numeric-owner` into per-entry
+ * (size, entryPath) tuples. Exported for unit testing — the regex must
+ * survive whitespace inside filenames and symlink-target arrows, since both
+ * appeared in real npm/pypi tarballs and broke the v1 split-by-whitespace
+ * parser.
+ *
+ * Format anchor (numeric-owner forces uid/gid into the form `1000/1000`,
+ * with no whitespace):
+ *
+ *     -rw-r--r-- 1000/1000   12345 2024-01-01 00:00 path/to/file
+ *     lrwxrwxrwx 0/0             0 2024-01-01 00:00 symlink -> target
+ *
+ * Lines that don't match (totals headers, blank lines) are skipped.
+ */
+export function parseTarListing(output: string): Array<{ size: number; entryPath: string }> {
+  // Permissions, owner/group, size, date, time, then the rest is the path.
+  // The non-greedy `(.+?)\s*$` keeps trailing whitespace from the path
+  // value (rare but possible from busybox tar).
+  const ENTRY_RE = /^\S+\s+\S+\s+(\d+)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+(.+?)\s*$/;
+  const out: Array<{ size: number; entryPath: string }> = [];
+  for (const line of output.split('\n')) {
+    if (!line.trim()) continue;
+    const m = line.match(ENTRY_RE);
+    if (!m) continue;
+    const size = parseInt(m[1], 10) || 0;
+    // tar --verbose appends ` -> target` for symlinks; we must zip-slip
+    // resolve the *entry*, not the link target, so strip the arrow.
+    const entryPath = m[2].split(' -> ')[0];
+    out.push({ size, entryPath });
+  }
+  return out;
 }

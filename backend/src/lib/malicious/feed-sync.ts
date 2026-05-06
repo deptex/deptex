@@ -190,6 +190,25 @@ async function fetchOsvMaliciousForEcosystem(
 
 // ───────────────────────────── GHSA ────────────────────────────────────────
 
+// Map canonical ecosystem → GHSA `SecurityAdvisoryEcosystem` enum. v1 ran
+// a single un-filtered query and topped out at 5000 advisories total
+// (50 pages × 100/page). M2.1 fans out: one paginated query per ecosystem,
+// raising the effective cap to 5000 PER ecosystem (~35k aggregate). Skips
+// canonical ecosystems with no GHSA representation (vscode).
+const GHSA_ECOSYSTEMS: Array<{ canonical: CanonicalEcosystem; ghsa: string }> = [
+  { canonical: 'npm', ghsa: 'NPM' },
+  { canonical: 'pypi', ghsa: 'PIP' },
+  { canonical: 'maven', ghsa: 'MAVEN' },
+  { canonical: 'golang', ghsa: 'GO' },
+  { canonical: 'rubygems', ghsa: 'RUBYGEMS' },
+  { canonical: 'composer', ghsa: 'COMPOSER' },
+  { canonical: 'cargo', ghsa: 'RUST' },
+  { canonical: 'nuget', ghsa: 'NUGET' },
+  { canonical: 'github-actions', ghsa: 'ACTIONS' },
+];
+
+const GHSA_MAX_PAGES_PER_ECO = 50; // 50 × 100/page = 5k entries / ecosystem
+
 async function syncGhsa(): Promise<{ entries_added: number; entries_withdrawn: number }> {
   const token = getGitHubToken();
   if (!token) {
@@ -203,40 +222,35 @@ async function syncGhsa(): Promise<{ entries_added: number; entries_withdrawn: n
 
   let added = 0;
   let withdrawn = 0;
-  let cursor: string | null = null;
-  let pages = 0;
-  const maxPages = 50;
 
   // Per-run version-list cache so the 12th typosquat advisory targeting
-  // `lodash` doesn't trigger a 12th packument fetch.
+  // `lodash` doesn't trigger a 12th packument fetch. Cache spans all
+  // ecosystems — the cache is keyed (ecosystem, name) internally.
   const cache = makePackumentCache();
 
-  while (pages < maxPages) {
-    const page = await fetchGhsaMalwarePage(cursor, token);
-    if (!page || page.advisories.length === 0) break;
+  for (const eco of GHSA_ECOSYSTEMS) {
+    let cursor: string | null = null;
+    let pages = 0;
 
-    const entries: UpsertEntry[] = [];
-    for (const adv of page.advisories) {
-      // GHSA's `vulnerabilities` is a GraphQL connection: { nodes: [...] }.
-      // The earlier `vulnerabilities?.[0]` indexed the connection object as if
-      // it were an array → always undefined → every advisory got skipped and
-      // entries_added came back 0 even though the API returned 5k advisories.
-      const firstNode = adv.vulnerabilities?.nodes?.[0];
-      const ecoRaw = firstNode?.package?.ecosystem;
-      const canonical = canonicalizeEcosystem(ecoRaw ?? null);
-      if (!canonical) continue;
-      for (const e of await advisoryToEntries(adv, 'ghsa', canonical, cache)) {
-        entries.push(e);
+    while (pages < GHSA_MAX_PAGES_PER_ECO) {
+      const page = await fetchGhsaMalwarePage(cursor, token, eco.ghsa);
+      if (!page || page.advisories.length === 0) break;
+
+      const entries: UpsertEntry[] = [];
+      for (const adv of page.advisories) {
+        for (const e of await advisoryToEntries(adv, 'ghsa', eco.canonical, cache)) {
+          entries.push(e);
+        }
       }
+
+      const summary = await upsertEntries(entries);
+      added += summary.added;
+      withdrawn += summary.withdrawn;
+
+      if (!page.hasNextPage) break;
+      cursor = page.endCursor;
+      pages++;
     }
-
-    const summary = await upsertEntries(entries);
-    added += summary.added;
-    withdrawn += summary.withdrawn;
-
-    if (!page.hasNextPage) break;
-    cursor = page.endCursor;
-    pages++;
   }
 
   return { entries_added: added, entries_withdrawn: withdrawn };
@@ -245,10 +259,17 @@ async function syncGhsa(): Promise<{ entries_added: number; entries_withdrawn: n
 async function fetchGhsaMalwarePage(
   cursor: string | null,
   token: string,
+  ghsaEcosystem: string,
+  attempt = 0,
 ): Promise<{ advisories: any[]; hasNextPage: boolean; endCursor: string | null } | null> {
   const after = cursor ? `, after: ${JSON.stringify(cursor)}` : '';
+  // The advisory-level `ecosystem` filter is the M2.1 fan-out hinge: each
+  // call returns up to 5k MALWARE advisories scoped to one ecosystem,
+  // letting us page-walk per-eco without competing for the global 50-page
+  // cap. orderBy stays PUBLISHED_AT DESC so we always page through newest
+  // first — if we hit the cap, we miss old advisories rather than recent.
   const query = `query {
-    securityAdvisories(first: 100${after}, classifications: [MALWARE], orderBy: { field: PUBLISHED_AT, direction: DESC }) {
+    securityAdvisories(first: 100${after}, classifications: [MALWARE], ecosystem: ${ghsaEcosystem}, orderBy: { field: PUBLISHED_AT, direction: DESC }) {
       pageInfo { hasNextPage endCursor }
       nodes {
         ghsaId
@@ -275,12 +296,22 @@ async function fetchGhsaMalwarePage(
     },
     body: JSON.stringify({ query }),
   });
+
+  // Authenticated GraphQL is 5000 points/h. We can blow it if the cron run
+  // collides with concurrent automation; back off + retry with the cursor
+  // intact. 403 is also used for secondary-rate-limit (abuse detection).
+  if ((res.status === 429 || res.status === 403) && attempt < 3) {
+    const retryAfterRaw = res.headers.get('retry-after');
+    const retryAfterMs = retryAfterRaw ? Math.max(1000, parseInt(retryAfterRaw, 10) * 1000) : 30_000 * (attempt + 1);
+    await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
+    return fetchGhsaMalwarePage(cursor, token, ghsaEcosystem, attempt + 1);
+  }
   if (!res.ok) {
     throw new Error(`GHSA GraphQL ${res.status}: ${await res.text()}`);
   }
   const json = (await res.json()) as any;
   if (json.errors) {
-    throw new Error(`GHSA GraphQL errors: ${JSON.stringify(json.errors)}`);
+    throw new Error(`GHSA GraphQL errors (eco=${ghsaEcosystem}): ${JSON.stringify(json.errors)}`);
   }
   const sa = json.data?.securityAdvisories;
   if (!sa) return null;
