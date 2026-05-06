@@ -2118,6 +2118,112 @@ export const api = {
     );
   },
 
+  // ============================================================
+  // Registry credentials (org-scoped) + configured images (project-scoped)
+  // Backend routes mounted in src/routes/registry-credentials.ts and
+  // src/routes/configured-images.ts. The encrypted credential blob is never
+  // returned to the client — only metadata + the test endpoint's pass/fail.
+  // ============================================================
+
+  async listRegistryCredentials(organizationId: string): Promise<RegistryCredential[]> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/registry-credentials`);
+  },
+
+  async createRegistryCredential(
+    organizationId: string,
+    body: CreateRegistryCredentialBody
+  ): Promise<RegistryCredential> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/registry-credentials`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+
+  async updateRegistryCredentialDisplayName(
+    organizationId: string,
+    credentialId: string,
+    displayName: string
+  ): Promise<RegistryCredential> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/registry-credentials/${credentialId}`,
+      { method: 'PATCH', body: JSON.stringify({ display_name: displayName }) }
+    );
+  },
+
+  async rotateRegistryCredential(
+    organizationId: string,
+    credentialId: string,
+    newPlaintext: CredentialPlaintext
+  ): Promise<RegistryCredential> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/registry-credentials/${credentialId}/rotate`,
+      { method: 'PATCH', body: JSON.stringify({ credentials: newPlaintext }) }
+    );
+  },
+
+  async testRegistryCredential(
+    organizationId: string,
+    credentialId: string
+  ): Promise<RegistryCredentialTestResult> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/registry-credentials/${credentialId}/test`,
+      { method: 'POST' }
+    );
+  },
+
+  async deleteRegistryCredential(
+    organizationId: string,
+    credentialId: string
+  ): Promise<DeleteRegistryCredentialResponse> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/registry-credentials/${credentialId}`,
+      { method: 'DELETE' }
+    );
+  },
+
+  async listConfiguredImages(
+    organizationId: string,
+    projectId: string
+  ): Promise<ConfiguredImage[]> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/configured-images`
+    );
+  },
+
+  async createConfiguredImage(
+    organizationId: string,
+    projectId: string,
+    body: CreateConfiguredImageBody
+  ): Promise<ConfiguredImage> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/configured-images`,
+      { method: 'POST', body: JSON.stringify(body) }
+    );
+  },
+
+  async toggleConfiguredImage(
+    organizationId: string,
+    projectId: string,
+    imageId: string,
+    enabled: boolean
+  ): Promise<ConfiguredImage> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/configured-images/${imageId}`,
+      { method: 'PATCH', body: JSON.stringify({ enabled }) }
+    );
+  },
+
+  async deleteConfiguredImage(
+    organizationId: string,
+    projectId: string,
+    imageId: string
+  ): Promise<{ message: string }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/configured-images/${imageId}`,
+      { method: 'DELETE' }
+    );
+  },
+
   maliciousFindings: {
     async list(
       organizationId: string,
@@ -4380,6 +4486,21 @@ export interface ConfiguredImage {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface CreateConfiguredImageBody {
+  image_reference: string;
+  credentials_id?: string | null;
+  enabled?: boolean;
+}
+
+export type RegistryCredentialTestResult =
+  | { ok: true }
+  | { ok: false; error_class: 'decrypt_failed' | 'shape_invalid' };
+
+export interface DeleteRegistryCredentialResponse {
+  message: string;
+  detached_image_count: number;
 }
 
 export type MaliciousScanner = 'feed' | 'guarddog';
