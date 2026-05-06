@@ -85,4 +85,61 @@ router.put('/', async (req: AuthRequest, res) => {
   }
 });
 
+// DELETE /api/user-profile/self - Permanently delete the authenticated user.
+// Refuses if the user is the sole owner of any organization (to prevent
+// orphaning shared resources). Otherwise, calls Supabase's admin deleteUser
+// which cascades through user_profiles and organization_members via FK.
+router.delete('/self', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+
+    // 1. Find every org where this user is an owner.
+    const { data: ownerMemberships, error: ownerError } = await supabase
+      .from('organization_members')
+      .select('organization_id, organizations(id, name)')
+      .eq('user_id', userId)
+      .eq('role', 'owner');
+
+    if (ownerError) {
+      throw ownerError;
+    }
+
+    // 2. For each, check if there's at least one other owner.
+    const soleOwnerOrgs: { id: string; name: string }[] = [];
+    for (const m of ownerMemberships ?? []) {
+      const { count, error: countError } = await supabase
+        .from('organization_members')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', m.organization_id)
+        .eq('role', 'owner');
+      if (countError) {
+        throw countError;
+      }
+      if ((count ?? 0) <= 1) {
+        const org = (m as any).organizations as { id: string; name: string } | null;
+        if (org) soleOwnerOrgs.push(org);
+      }
+    }
+
+    if (soleOwnerOrgs.length > 0) {
+      return res.status(400).json({
+        error: 'You are the only owner of one or more organizations. Transfer ownership or delete the organization before deleting your account.',
+        organizations: soleOwnerOrgs,
+      });
+    }
+
+    // 3. Delete the auth user. CASCADE on user_profiles.user_id and
+    //    organization_members.user_id removes app-domain rows automatically.
+    const { error: deleteError } = await supabase.auth.admin.deleteUser(userId);
+    if (deleteError) {
+      throw deleteError;
+    }
+
+    res.status(204).send();
+  } catch (error: any) {
+    console.error('Error deleting user account:', error);
+    res.status(500).json({ error: 'Failed to delete account' });
+  }
+});
+
 export default router;

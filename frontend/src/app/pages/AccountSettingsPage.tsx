@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { useLocation, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { api, Organization } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
@@ -12,6 +12,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../../components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../../components/ui/dialog';
 import { Edit2 } from 'lucide-react';
 import { getAvatarUrl, getDisplayNameOrNull } from '../../lib/userIdentity';
 
@@ -19,8 +27,9 @@ const NO_DEFAULT_ORG = '__none__';
 
 export default function AccountSettingsPage() {
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const isConnectedAccounts = pathname.endsWith('connected-accounts');
-  const { user, signInWithGitHub, signInWithGoogle } = useAuth();
+  const { user, signInWithGitHub, signInWithGoogle, signOut } = useAuth();
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const avatarUrl = getAvatarUrl(user);
@@ -42,6 +51,11 @@ export default function AccountSettingsPage() {
   const [emailEditing, setEmailEditing] = useState(false);
   const [newEmail, setNewEmail] = useState('');
   const [savingEmail, setSavingEmail] = useState(false);
+
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteConfirmInput, setDeleteConfirmInput] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteBlockedOrgs, setDeleteBlockedOrgs] = useState<{ id: string; name: string }[] | null>(null);
 
   // Supabase exposes a pending email change as `new_email` on the user object
   // until the new address is confirmed. Treat it as the source of truth for
@@ -310,6 +324,48 @@ export default function AccountSettingsPage() {
     }
   };
 
+  const handleOpenDeleteDialog = () => {
+    setDeleteConfirmInput('');
+    setDeleteBlockedOrgs(null);
+    setDeleteDialogOpen(true);
+  };
+
+  const handleCloseDeleteDialog = () => {
+    if (deleting) return;
+    setDeleteDialogOpen(false);
+    setDeleteConfirmInput('');
+    setDeleteBlockedOrgs(null);
+  };
+
+  const handleDeleteAccount = async () => {
+    if (deleting) return;
+    if (!user?.email || deleteConfirmInput.trim().toLowerCase() !== user.email.toLowerCase()) {
+      return;
+    }
+
+    setDeleting(true);
+    try {
+      await api.deleteAccount();
+      toast({ title: 'Account deleted', description: 'Your account has been permanently removed.' });
+      await signOut();
+      navigate('/');
+    } catch (error: unknown) {
+      console.error('Error deleting account:', error);
+      const responseBody = (error as { responseBody?: { organizations?: { id: string; name: string }[] } } | null)?.responseBody;
+      if (responseBody?.organizations && responseBody.organizations.length > 0) {
+        setDeleteBlockedOrgs(responseBody.organizations);
+      } else {
+        toast({
+          title: 'Could not delete account',
+          description: 'Please try again or contact support.',
+          variant: 'destructive',
+        });
+      }
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const handleConnectProvider = async (provider: 'github' | 'google') => {
     try {
       if (provider === 'github') {
@@ -496,6 +552,86 @@ export default function AccountSettingsPage() {
                 </div>
               </div>
             </div>
+
+            {/* Danger Zone Card */}
+            <div className="bg-background-card border border-destructive/40 rounded-lg overflow-hidden">
+              <div className="p-6 space-y-3">
+                <h3 className="text-base font-semibold text-foreground">Delete Account</h3>
+                <p className="text-sm text-foreground-secondary">
+                  Permanently delete your account and all data tied to it. This cannot be undone. If you're the only owner of an organization, you'll need to transfer ownership or delete the organization first.
+                </p>
+              </div>
+              <div className="px-6 py-3 bg-black/20 border-t border-destructive/40 flex items-center justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleOpenDeleteDialog}
+                  className="h-8 border-destructive/50 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                >
+                  Delete account
+                </Button>
+              </div>
+            </div>
+
+            <Dialog open={deleteDialogOpen} onOpenChange={(open) => (open ? setDeleteDialogOpen(true) : handleCloseDeleteDialog())}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Delete your account?</DialogTitle>
+                  <DialogDescription>
+                    This permanently removes your profile, memberships, and all data tied to your account. There is no recovery.
+                  </DialogDescription>
+                </DialogHeader>
+
+                {deleteBlockedOrgs && deleteBlockedOrgs.length > 0 ? (
+                  <div className="space-y-3">
+                    <p className="text-sm text-foreground">
+                      You're the only owner of {deleteBlockedOrgs.length === 1 ? 'this organization' : 'these organizations'}:
+                    </p>
+                    <ul className="text-sm text-foreground-secondary list-disc list-inside space-y-1">
+                      {deleteBlockedOrgs.map((org) => (
+                        <li key={org.id}>{org.name}</li>
+                      ))}
+                    </ul>
+                    <p className="text-sm text-foreground-secondary">
+                      Transfer ownership or delete {deleteBlockedOrgs.length === 1 ? 'the organization' : 'them'} first, then come back here.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-sm text-foreground">
+                      Type your email <span className="font-medium">{user?.email}</span> to confirm.
+                    </p>
+                    <input
+                      type="text"
+                      value={deleteConfirmInput}
+                      onChange={(e) => setDeleteConfirmInput(e.target.value)}
+                      placeholder={user?.email ?? ''}
+                      autoFocus
+                      className="w-full px-3 py-2 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-all"
+                    />
+                  </div>
+                )}
+
+                <DialogFooter>
+                  <Button variant="outline" onClick={handleCloseDeleteDialog} disabled={deleting}>
+                    {deleteBlockedOrgs ? 'Close' : 'Cancel'}
+                  </Button>
+                  {!deleteBlockedOrgs && (
+                    <Button
+                      onClick={handleDeleteAccount}
+                      disabled={
+                        deleting ||
+                        !user?.email ||
+                        deleteConfirmInput.trim().toLowerCase() !== user.email.toLowerCase()
+                      }
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90 border border-destructive-foreground/20"
+                    >
+                      {deleting ? 'Deleting...' : 'Delete account'}
+                    </Button>
+                  )}
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </div>
         )}
 

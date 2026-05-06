@@ -973,6 +973,12 @@ export const api = {
     });
   },
 
+  async deleteAccount(): Promise<void> {
+    await fetchWithAuth('/api/user-profile/self', {
+      method: 'DELETE',
+    });
+  },
+
   async getOrganizationNotificationRules(organizationId: string): Promise<OrganizationNotificationRule[]> {
     return fetchWithAuth(`/api/organizations/${organizationId}/notification-rules`);
   },
