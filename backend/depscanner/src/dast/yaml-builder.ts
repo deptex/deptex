@@ -124,21 +124,33 @@ export function buildAutomationYaml(opts: BuildAutomationYamlOptions): string {
 
   const jobs: Array<Record<string, unknown>> = [];
 
-  // 1. addOns — install just what we need so the AF run doesn't hit a missing
-  // job-type at parse time.
+  // 1. addOns — install what we need so the AF run doesn't hit a missing job
+  // type at parse time. Includes pscanrulesAlpha + pscanrulesBeta to match
+  // zap-baseline.py's coverage (parity check: anonymous AF run must produce
+  // findings within +/-10% of zap-baseline.py — `feedback_docker_vs_source_e2e`
+  // surfaced the gap when AF emitted ~half the alerts of helper-script).
   jobs.push({
     type: 'addOns',
     parameters: {
-      install: ['ascanrules', 'pscanrules', 'spider', 'spiderAjax', 'replacer'],
+      install: [
+        'ascanrules',
+        'pscanrules',
+        'pscanrulesAlpha',
+        'pscanrulesBeta',
+        'spider',
+        'spiderAjax',
+        'replacer',
+      ],
     },
   });
 
-  // 2. passiveScan-config — bound rule output so a chatty rule doesn't pollute
-  // the report; scan only what's in scope.
+  // 2. passiveScan-config — scan only what's in scope. We deliberately do NOT
+  // cap maxAlertsPerRule: zap-baseline.py has no per-rule cap, and capping
+  // dropped Juice Shop CSP coverage from 15 hits to 5 in real-ZAP testing,
+  // breaking parity with the helper-script path.
   jobs.push({
     type: 'passiveScan-config',
     parameters: {
-      maxAlertsPerRule: 10,
       scanOnlyInScope: true,
       enableTags: false,
     },

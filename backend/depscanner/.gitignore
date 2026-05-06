@@ -23,4 +23,8 @@ test/iterate/cache/
 
 # Operator-driven runbooks (ad-hoc, not part of CI). Per dast-v2-1a-engine plan task 10.
 test/dast-v2-1a-juice-shop-e2e.sh
+test/dast-v2-1a-juice-shop-runner.ts
+test/dast-v2-1a-juice-shop-pipeline.ts
+test/dast-v2-1a-juice-shop-driver.js
+test/dast-v2-1a-rerun-all.sh
 
