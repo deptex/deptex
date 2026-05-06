@@ -220,6 +220,9 @@ function validateJwtExp(token: string, scanTimeoutMinutes: number): CredentialVa
 
 export interface LoginProbeOptions {
   fetchImpl?: typeof fetch;
+  // SSRF / DNS-rebind guard. Defaults to `validateExternalUrl` so route
+  // callers don't have to pass it; tests inject a stub to avoid real DNS.
+  validateUrl?: typeof validateExternalUrl;
   // Caller passes the validated indicators (already shape-checked).
   loggedInIndicator?: string;
   loggedOutIndicator?: string;
@@ -295,7 +298,8 @@ export async function probeFormLogin(
   payload: Extract<DastCredentialUpsertPayload, { kind: 'form' }>,
   opts: LoginProbeOptions = {},
 ): Promise<CredentialValidateError | null> {
-  const guard = await validateExternalUrl(payload.login_url);
+  const guardFn = opts.validateUrl ?? validateExternalUrl;
+  const guard = await guardFn(payload.login_url);
   if (guard.valid === false) {
     return { error_code: 'login_url_invalid', detail: guard.reason };
   }
@@ -361,7 +365,7 @@ export async function probeFormLogin(
         } catch {
           return { error_code: 'login_url_invalid', detail: 'malformed redirect Location header' };
         }
-        const r2 = await validateExternalUrl(currentUrl);
+        const r2 = await guardFn(currentUrl);
         if (r2.valid === false) {
           return { error_code: 'login_url_invalid', detail: 'redirect destination rejected by SSRF guard' };
         }
