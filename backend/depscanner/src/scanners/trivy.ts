@@ -66,74 +66,20 @@ export function parseDockerfileFinalStage(
 }
 
 // ============================================================
-// Container pull eligibility — Patch C
+// ghcr owner extraction — used by the App-token fallback path in the
+// orchestrator's container-scan loop. M8 retired the v1 classifyImageRef
+// special-case; the only surviving ghcr-specific logic is the namespace
+// check, which still needs the image's owner segment.
 // ============================================================
 
-export type PullEligibility =
-  | { kind: 'public_dockerhub' }
-  | { kind: 'ghcr'; owner: string }
-  | { kind: 'unsupported_registry' };
-
-const KNOWN_REGISTRY_HOSTS = new Set([
-  'docker.io',
-  'index.docker.io',
-  'registry-1.docker.io',
-  'ghcr.io',
-  'public.ecr.aws',
-  'quay.io',
-  'gcr.io',
-  'mcr.microsoft.com',
-]);
-
-/**
- * Classify a Docker image reference for v1 pull policy.
- *
- *   docker.io/library/node:20  → public_dockerhub
- *   node:20                    → public_dockerhub (bare-name resolves to docker.io/library)
- *   ghcr.io/<owner>/foo:tag    → ghcr (owner returned for namespace check)
- *   anything else with a host  → unsupported_registry
- */
-export function classifyImageRef(imageRef: string): PullEligibility {
-  // Strip digest pin if present.
+export function extractGhcrOwner(imageRef: string): string | null {
   const noDigest = imageRef.split('@')[0];
   const firstSlash = noDigest.indexOf('/');
-
-  // Docker CLI rule: a host must precede the first "/", AND the segment
-  // before that "/" must look like a host (contains ".", contains ":<port>",
-  // or is the literal "localhost"). When there's no "/", it's always a bare
-  // name in the docker.io/library namespace — `:` there is the tag separator,
-  // not a port.
-  if (firstSlash === -1) {
-    return { kind: 'public_dockerhub' };
-  }
-  const firstSegment = noDigest.slice(0, firstSlash);
-  const looksLikeHost =
-    firstSegment === 'localhost' ||
-    /\./.test(firstSegment) ||
-    /:\d+$/.test(firstSegment);
-
-  if (!looksLikeHost) {
-    // e.g. "library/node:20" — bare-name with explicit library prefix.
-    return { kind: 'public_dockerhub' };
-  }
-
-  if (
-    firstSegment === 'docker.io' ||
-    firstSegment === 'index.docker.io' ||
-    firstSegment === 'registry-1.docker.io'
-  ) {
-    return { kind: 'public_dockerhub' };
-  }
-
-  if (firstSegment === 'ghcr.io') {
-    const rest = noDigest.slice(firstSlash + 1);
-    const owner = rest.split('/')[0]?.split(':')[0] ?? '';
-    if (!owner) return { kind: 'unsupported_registry' };
-    return { kind: 'ghcr', owner };
-  }
-
-  // Any other host (ECR, GCR, ACR, Quay, Harbor, JFrog, private docker.io) → skip.
-  return { kind: 'unsupported_registry' };
+  if (firstSlash === -1) return null;
+  if (noDigest.slice(0, firstSlash) !== 'ghcr.io') return null;
+  const rest = noDigest.slice(firstSlash + 1);
+  const owner = rest.split('/')[0]?.split(':')[0] ?? '';
+  return owner.length > 0 ? owner : null;
 }
 
 // ============================================================
@@ -438,7 +384,7 @@ export async function runTrivyImage(
 // ============================================================
 
 let cachedVersion: string | null = null;
-async function trivyVersion(): Promise<string> {
+export async function trivyVersion(): Promise<string> {
   if (cachedVersion) return cachedVersion;
   try {
     const v = await runScannerSubprocess({

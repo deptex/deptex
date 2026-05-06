@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-  classifyImageRef,
+  extractGhcrOwner,
   normalizeDigest,
   parseDockerfileFinalStage,
   parseTrivyConfigOutput,
@@ -82,41 +82,32 @@ describe('parseDockerfileFinalStage (Patch E)', () => {
   });
 });
 
-describe('classifyImageRef (Patch C)', () => {
-  it('treats bare-name images as public docker hub', () => {
-    expect(classifyImageRef('node:20')).toEqual({ kind: 'public_dockerhub' });
-  });
-
-  it('treats library/* images as public docker hub', () => {
-    expect(classifyImageRef('library/nginx:alpine')).toEqual({ kind: 'public_dockerhub' });
-  });
-
-  it('treats explicit docker.io as public docker hub', () => {
-    expect(classifyImageRef('docker.io/library/postgres:15')).toEqual({
-      kind: 'public_dockerhub',
-    });
-  });
-
+describe('extractGhcrOwner', () => {
   it('extracts the owner from a ghcr.io image', () => {
-    expect(classifyImageRef('ghcr.io/anthropic/foo:bar')).toEqual({
-      kind: 'ghcr',
-      owner: 'anthropic',
-    });
+    expect(extractGhcrOwner('ghcr.io/anthropic/foo:bar')).toBe('anthropic');
   });
 
-  it('marks ECR / GCR / ACR / Quay / Harbor as unsupported_registry at v1', () => {
-    expect(classifyImageRef('123456789.dkr.ecr.us-east-1.amazonaws.com/foo:tag').kind).toBe(
-      'unsupported_registry'
-    );
-    expect(classifyImageRef('gcr.io/my-project/foo:tag').kind).toBe('unsupported_registry');
-    expect(classifyImageRef('myorg.azurecr.io/foo:tag').kind).toBe('unsupported_registry');
-    expect(classifyImageRef('quay.io/myorg/foo:tag').kind).toBe('unsupported_registry');
-    expect(classifyImageRef('harbor.example.com/myorg/foo:tag').kind).toBe('unsupported_registry');
+  it('extracts the owner when a digest pin is present', () => {
+    expect(
+      extractGhcrOwner(
+        'ghcr.io/anthropic/foo@sha256:abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234'
+      )
+    ).toBe('anthropic');
   });
 
-  it('extracts ghcr owner correctly when a digest pin is present', () => {
-    const result = classifyImageRef('ghcr.io/anthropic/foo@sha256:abcd1234');
-    expect(result).toEqual({ kind: 'ghcr', owner: 'anthropic' });
+  it('returns null for non-ghcr hosts', () => {
+    expect(extractGhcrOwner('docker.io/library/node:20')).toBeNull();
+    expect(extractGhcrOwner('myorg.azurecr.io/foo:tag')).toBeNull();
+    expect(extractGhcrOwner('quay.io/team/foo')).toBeNull();
+  });
+
+  it('returns null for bare-name images (implicit docker.io)', () => {
+    expect(extractGhcrOwner('node:20')).toBeNull();
+    expect(extractGhcrOwner('library/nginx')).toBeNull();
+  });
+
+  it('returns null when ghcr ref is missing the owner segment', () => {
+    expect(extractGhcrOwner('ghcr.io/')).toBeNull();
   });
 });
 

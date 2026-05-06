@@ -69,7 +69,20 @@ export interface SkippedImage {
     | 'ghcr_namespace_mismatch'
     | 'private_registry_unsupported_at_v1'
     | 'no_dockerfile'
-    | 'parse_failed';
+    | 'parse_failed'
+    // v2 — populated by container-scan substep failures (M8). Each maps 1:1
+    // to a tag in classifyContainerScanError so the reason a row is skipped is
+    // recoverable from extraction_step_errors alone, no log-grep required.
+    | 'no_matching_cred'
+    | 'cred_decrypt_failed'
+    | 'auth_invalid'
+    | 'auth_throttled'
+    | 'auth_disabled'
+    | 'auth_mint_failed'
+    | 'registry_5xx'
+    | 'manifest_not_found'
+    | 'trivy_partial'
+    | 'budget_exhausted';
 }
 
 export type RegistryType =

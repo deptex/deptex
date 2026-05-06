@@ -27,13 +27,15 @@ interface IaCRow extends Record<string, unknown> {
   metadata: Record<string, unknown> | null;
 }
 
+type ContainerImageSource = 'dockerfile_base' | 'configured_image';
+
 interface ContainerRow extends Record<string, unknown> {
   project_id: string;
   extraction_run_id: string;
   scanner_version: string | null;
   image_reference: string;
   image_digest: string;
-  image_source: 'dockerfile_base';
+  image_source: ContainerImageSource;
   os_package_name: string;
   os_package_version: string;
   os_package_ecosystem: string | null;
@@ -133,7 +135,8 @@ export async function upsertContainerFindings(
   supabase: SupabaseClient,
   projectId: string,
   runId: string,
-  findings: ContainerFinding[]
+  findings: ContainerFinding[],
+  imageSource: ContainerImageSource = 'dockerfile_base'
 ): Promise<UpsertResult> {
   if (findings.length === 0) {
     return { inserted: 0, staleDeleted: 0 };
@@ -145,7 +148,7 @@ export async function upsertContainerFindings(
     scanner_version: f.scanner_version,
     image_reference: f.image_reference,
     image_digest: f.image_digest,
-    image_source: 'dockerfile_base',
+    image_source: imageSource,
     os_package_name: f.os_package_name,
     os_package_version: f.os_package_version,
     os_package_ecosystem: f.os_package_ecosystem,
