@@ -252,6 +252,9 @@ export async function runCheckov(
     exe: 'checkov',
     args,
     cwd: opts.repoPath,
+    // Checkov reports on real repos are well under 16MB; cap defends against
+    // a target repo with tens of thousands of generated misconfig findings.
+    stdoutMaxBytes: 16 * 1024 * 1024,
     signal: opts.signal,
     onHeartbeat: opts.onHeartbeat,
     logger: opts.logger,

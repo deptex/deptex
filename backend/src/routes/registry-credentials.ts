@@ -147,21 +147,56 @@ function validatePlaintext(c: any): { ok: true; value: CredentialPlaintext } | {
 }
 
 /**
- * Validate registry_url against the SSRF guard. Accepts user input with or
- * without scheme; prepends https:// if missing so the URL parser succeeds,
- * then runs the standard private-IP / loopback / IMDS / Fly 6PN block list.
+ * Validate + normalize registry_url. Returns the canonical `host[:port]` form
+ * when valid so the downstream insert/update writes a clean value (no scheme,
+ * no path, no query, no fragment, no userinfo). Rejects:
+ *   - non-http(s) schemes
+ *   - any path / query / fragment / userinfo (these would confuse the
+ *     resolveRegistryHostname logic in registry-auth.ts and the Azure AAD
+ *     token POST URL concat)
+ *   - hosts that resolve to private / loopback / IMDS / Fly 6PN (SSRF guard)
  */
-async function validateRegistryUrl(rawUrl: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+async function validateAndNormalizeRegistryUrl(
+  rawUrl: string,
+): Promise<{ ok: true; normalized: string } | { ok: false; reason: string }> {
   if (typeof rawUrl !== 'string' || rawUrl.trim().length === 0) {
     return { ok: false, reason: 'registry_url is empty' };
   }
-  let normalized = rawUrl.trim();
-  // Strip trailing slash for consistent host extraction.
-  while (normalized.endsWith('/')) normalized = normalized.slice(0, -1);
-  if (!/^https?:\/\//i.test(normalized)) normalized = `https://${normalized}`;
-  const result = await validateExternalUrl(normalized);
-  if (!result.valid) return { ok: false, reason: result.reason };
-  return { ok: true };
+  let input = rawUrl.trim();
+  while (input.endsWith('/')) input = input.slice(0, -1);
+  // Reject characters that imply path / query / fragment / userinfo BEFORE
+  // we hand the value to URL() — http://evil.com#@169.254... could otherwise
+  // be parsed in surprising ways across runtimes.
+  if (/[#?@]/.test(input)) {
+    return { ok: false, reason: 'registry_url must not contain #, ? or @' };
+  }
+  // Allow optional scheme; reject anything that's not http/https.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(input) && !/^https?:\/\//i.test(input)) {
+    return { ok: false, reason: 'registry_url scheme must be http or https' };
+  }
+  const withScheme = /^https?:\/\//i.test(input) ? input : `https://${input}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(withScheme);
+  } catch {
+    return { ok: false, reason: 'registry_url is not a valid URL' };
+  }
+  // After URL parsing: any non-empty pathname (other than '/'), search, hash,
+  // username, or password is a foot-gun. Registry URLs are host-only.
+  if (parsed.pathname && parsed.pathname !== '/' && parsed.pathname !== '') {
+    return { ok: false, reason: 'registry_url must not contain a path' };
+  }
+  if (parsed.search || parsed.hash || parsed.username || parsed.password) {
+    return { ok: false, reason: 'registry_url must not contain a query, fragment, or userinfo' };
+  }
+  const guard = await validateExternalUrl(withScheme);
+  if (!guard.valid) return { ok: false, reason: guard.reason };
+  // Canonical stored form: host[:port], lowercased. Mirrors
+  // resolveRegistryHostname's expectations exactly so the worker doesn't
+  // need to strip a scheme at runtime.
+  const host = parsed.hostname.toLowerCase();
+  const port = parsed.port;
+  return { ok: true, normalized: port ? `${host}:${port}` : host };
 }
 
 const META_COLUMNS =
@@ -223,14 +258,16 @@ router.post('/:id/registry-credentials', authenticateUser, async (req: AuthReque
     if (registry_url !== undefined && registry_url !== null && typeof registry_url !== 'string') {
       return res.status(400).json({ error: 'registry_url must be a string or null' });
     }
+    let normalizedRegistryUrl: string | null = null;
     if (typeof registry_url === 'string' && registry_url.trim()) {
       if (tooLong('registry_url', registry_url.trim())) {
         return res.status(400).json({ error: 'registry_url too long' });
       }
-      const urlCheck = await validateRegistryUrl(registry_url);
+      const urlCheck = await validateAndNormalizeRegistryUrl(registry_url);
       if (!urlCheck.ok) {
         return res.status(400).json({ error: 'registry_url_blocked', reason: urlCheck.reason });
       }
+      normalizedRegistryUrl = urlCheck.normalized;
     }
 
     const validated = validatePlaintext(credentials);
@@ -259,7 +296,7 @@ router.post('/:id/registry-credentials', authenticateUser, async (req: AuthReque
       .insert({
         organization_id: orgId,
         registry_type,
-        registry_url: registry_url?.trim() || null,
+        registry_url: normalizedRegistryUrl,
         display_name: display_name.trim(),
         credential_shape: validated.value.shape,
         encrypted_credentials: encrypted,

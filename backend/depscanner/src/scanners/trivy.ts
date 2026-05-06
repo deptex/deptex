@@ -204,6 +204,9 @@ export async function runTrivyConfig(
       opts.repoPath,
     ],
     cwd: opts.repoPath,
+    // Trivy config scans on a typical repo are well under 16MB; cap to defend
+    // against a malicious target with thousands of generated YAMLs.
+    stdoutMaxBytes: 16 * 1024 * 1024,
     signal: opts.signal,
     onHeartbeat: opts.onHeartbeat,
     logger: opts.logger,
@@ -365,6 +368,10 @@ export async function runTrivyImage(
     verboseLog: opts.verboseLog,
     verboseLogStep: 'container_scan',
     env,
+    // Real Trivy image scans of legitimate base images stay <2MB; 64MB is
+    // a generous ceiling that defends the worker from a malicious registry
+    // serving a manifest whose layers expand to a hundred-MB CVE report.
+    stdoutMaxBytes: 64 * 1024 * 1024,
   });
   if (result.exitCode !== 0 && result.exitCode !== 1) {
     warnings.push(`trivy_image_exit_${result.exitCode}`);
@@ -578,7 +585,12 @@ function defaultCraneRunner(
     if (options.dockerConfigDir) env.DOCKER_CONFIG = options.dockerConfigDir;
     execFile(
       'crane',
-      ['digest', imageRef],
+      // Pin the platform to match runTrivyImage's --platform linux/amd64 flag.
+      // Without this, on a non-amd64 host (Apple Silicon dev, future ARM Fly
+      // machines) crane returns the host-platform manifest digest while Trivy
+      // returns the amd64 child digest, the 4-guard mismatch trips, and the
+      // cache never warms for any multi-arch image.
+      ['digest', '--platform', 'linux/amd64', imageRef],
       {
         timeout: options.timeoutMs,
         killSignal: 'SIGKILL',

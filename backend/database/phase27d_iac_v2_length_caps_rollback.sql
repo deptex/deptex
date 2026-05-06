@@ -1,0 +1,7 @@
+-- Rollback for phase27d_iac_v2_length_caps.sql.
+
+ALTER TABLE project_container_findings DROP CONSTRAINT IF EXISTS pcf_risk_accepted_reason_length_check;
+ALTER TABLE project_iac_findings DROP CONSTRAINT IF EXISTS piaf_risk_accepted_reason_length_check;
+ALTER TABLE project_configured_images DROP CONSTRAINT IF EXISTS pci_image_reference_length_check;
+ALTER TABLE organization_registry_credentials DROP CONSTRAINT IF EXISTS orc_registry_url_length_check;
+ALTER TABLE organization_registry_credentials DROP CONSTRAINT IF EXISTS orc_display_name_length_check;

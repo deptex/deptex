@@ -264,16 +264,27 @@ function severityRank(severity: string | null | undefined): number {
 
 /** Recursive key-sort so JSON.stringify is byte-stable across runs. The hash
  *  has to round-trip Postgres → Node, so any property-order drift would manifest
- *  as a false `cache_integrity_mismatch`. */
+ *  as a false `cache_integrity_mismatch`.
+ *
+ *  Skips properties whose value is `undefined` to match `JSON.stringify` /
+ *  Postgres JSONB semantics (both drop undefined). Without this guard, a future
+ *  parser that emits `field: undefined` (instead of `field: null`) would
+ *  produce a write-side hash that includes `"field":undefined` while the
+ *  read-side rebuilds the object without the field, hashes differently, and
+ *  every read of that row trips integrity-mismatch.
+ */
 function canonicalJson(value: unknown): string {
+  if (value === undefined) return JSON.stringify(null); // unreachable at top, defensive
   if (value === null || typeof value !== 'object') {
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) {
-    return `[${value.map((v) => canonicalJson(v)).join(',')}]`;
+    return `[${value.map((v) => (v === undefined ? 'null' : canonicalJson(v))).join(',')}]`;
   }
   const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
+  const keys = Object.keys(obj)
+    .filter((k) => obj[k] !== undefined)
+    .sort();
   return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(',')}}`;
 }
 

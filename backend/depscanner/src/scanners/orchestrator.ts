@@ -504,6 +504,20 @@ async function buildDockerConfigDir(
       const auth = await mintAuthForCredential(plaintext, planEntry.credHostname);
       entries.push([planEntry.credHostname, auth]);
       authedHosts.add(planEntry.credHostname);
+      // Stamp last_used_at so the UI can surface stale-credential nudges.
+      // Best-effort — a failed UPDATE here must not abort envelope build.
+      ctx.supabase
+        .from('organization_registry_credentials')
+        .update({ last_used_at: new Date().toISOString() })
+        .eq('id', credId)
+        .eq('organization_id', ctx.organizationId)
+        .then(({ error }: { error: any }) => {
+          if (error) {
+            ctx.logger
+              .warn('container_scan.build_auth_envelope', `last_used_at update failed for ${credId}: ${error.message}`)
+              .catch(() => {});
+          }
+        });
     } catch (e: any) {
       // Per Patch 8 — per-cred failure doesn't abort envelope build; the
       // affected images later skip with cred_decrypt_failed / auth_mint_failed.

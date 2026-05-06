@@ -47,26 +47,38 @@ export function decryptApiKey(encrypted: string, storedVersion: number): string 
   const ciphertext = Buffer.from(parts[1], 'base64');
   const authTag = Buffer.from(parts[2], 'base64');
 
+  // Buffer.concat([update, final]).toString('utf8') is byte-stable across
+  // Node versions and never splits a multi-byte sequence mid-character.
+  // The previous `update + final('utf8')` form coerced update's Buffer to a
+  // utf-8 string before concat, which could emit U+FFFD on a chunk boundary.
   const currentKey = getCurrentKey();
   if (currentKey) {
     try {
       const decipher = crypto.createDecipheriv(ALGORITHM, currentKey, nonce, { authTagLength: AUTH_TAG_LENGTH });
       decipher.setAuthTag(authTag);
-      return decipher.update(ciphertext) + decipher.final('utf8');
+      return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
     } catch {
-      // Current key failed — try previous if version mismatch
+      // Current key failed — try previous (regardless of stored version, since
+      // a partial rotation could leave the row's version bumped while the
+      // ciphertext is still old).
     }
   }
 
-  if (storedVersion < getCurrentKeyVersion()) {
-    const prevKey = getPreviousKey();
-    if (prevKey) {
+  const prevKey = getPreviousKey();
+  if (prevKey) {
+    try {
       const decipher = crypto.createDecipheriv(ALGORITHM, prevKey, nonce, { authTagLength: AUTH_TAG_LENGTH });
       decipher.setAuthTag(authTag);
-      return decipher.update(ciphertext) + decipher.final('utf8');
+      return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+    } catch {
+      // fall through
     }
   }
 
+  // storedVersion is no longer load-bearing — auth-tag verification is the
+  // primary correctness check. Keep the parameter so existing callers don't
+  // break, but reference it in the error to aid debugging.
+  void storedVersion;
   throw new Error('Unable to decrypt API key — no valid encryption key available');
 }
 
