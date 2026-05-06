@@ -87,6 +87,7 @@ interface FixRow {
   osv_id: string | null;
   semgrep_finding_id: string | null;
   secret_finding_id: string | null;
+  thread_id: string | null;
 }
 
 function shapeFixRow(row: FixRow) {
@@ -114,6 +115,7 @@ function shapeFixRow(row: FixRow) {
     diffSummary: row.diff_summary,
     errorMessage: row.error_message,
     createdAt: row.created_at,
+    threadId: row.thread_id,
   };
 }
 
@@ -121,7 +123,7 @@ async function loadFixRow(fixId: string): Promise<FixRow | null> {
   const { data } = await supabase
     .from('project_security_fixes')
     .select(
-      'id, organization_id, project_id, fix_type, status, plan, plan_generated_at, plan_base_sha, plan_base_branch, approval_token, approved_at, rejected_at, pr_url, pr_number, diff_summary, error_message, created_at, triggered_by, osv_id, semgrep_finding_id, secret_finding_id',
+      'id, organization_id, project_id, fix_type, status, plan, plan_generated_at, plan_base_sha, plan_base_branch, approval_token, approved_at, rejected_at, pr_url, pr_number, diff_summary, error_message, created_at, triggered_by, osv_id, semgrep_finding_id, secret_finding_id, thread_id',
     )
     .eq('id', fixId)
     .maybeSingle();
@@ -340,12 +342,42 @@ router.get('/pending', async (req: AuthRequest, res) => {
   const { data, error } = await supabase
     .from('project_security_fixes')
     .select(
-      'id, organization_id, project_id, fix_type, status, plan, plan_generated_at, plan_base_sha, plan_base_branch, approval_token, approved_at, rejected_at, pr_url, pr_number, diff_summary, error_message, created_at, triggered_by, osv_id, semgrep_finding_id, secret_finding_id',
+      'id, organization_id, project_id, fix_type, status, plan, plan_generated_at, plan_base_sha, plan_base_branch, approval_token, approved_at, rejected_at, pr_url, pr_number, diff_summary, error_message, created_at, triggered_by, osv_id, semgrep_finding_id, secret_finding_id, thread_id',
     )
     .eq('organization_id', organizationId)
     .in('status', ['planning', 'awaiting_approval'])
     .order('created_at', { ascending: false })
     .limit(100);
+
+  if (error) return res.status(500).json({ error: error.message });
+  return res.json({ fixes: (data ?? []).map((row: any) => shapeFixRow(row)) });
+});
+
+router.get('/by-thread/:threadId', async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const threadId = req.params.threadId;
+  if (!threadId) return res.status(400).json({ error: 'threadId is required' });
+
+  // Auth: scope to threads visible to this user. Reading from the thread
+  // row also tells us the org so we can run the membership check.
+  const { data: thread, error: threadError } = await supabase
+    .from('aegis_chat_threads')
+    .select('id, organization_id')
+    .eq('id', threadId)
+    .maybeSingle();
+  if (threadError) return res.status(500).json({ error: threadError.message });
+  if (!thread) return res.status(404).json({ error: 'Thread not found' });
+  if (!(await isOrgMember(thread.organization_id, userId))) {
+    return res.status(403).json({ error: 'Not a member of this organization' });
+  }
+
+  const { data, error } = await supabase
+    .from('project_security_fixes')
+    .select(
+      'id, organization_id, project_id, fix_type, status, plan, plan_generated_at, plan_base_sha, plan_base_branch, approval_token, approved_at, rejected_at, pr_url, pr_number, diff_summary, error_message, created_at, triggered_by, osv_id, semgrep_finding_id, secret_finding_id, thread_id',
+    )
+    .eq('thread_id', threadId)
+    .order('created_at', { ascending: true });
 
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ fixes: (data ?? []).map((row: any) => shapeFixRow(row)) });

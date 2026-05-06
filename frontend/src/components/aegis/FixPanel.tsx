@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, Circle, ExternalLink, ListChecks, Loader2, RefreshCw, ShieldOff, X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, Ban, CheckCircle2, ChevronDown, ChevronRight, Circle, ClipboardList, ExternalLink, ListChecks, Loader2, RefreshCw, ShieldOff } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { api, type AIModelMetadata, type FixPlan, type FixRecord, type FixStatus } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ModelPicker } from './ModelPicker';
 import { Button } from '../ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../ui/dropdown-menu';
 import { FixStatusPill } from './FixStatusPill';
 import { useFixPanel } from './FixPanelContext';
 
@@ -24,7 +30,7 @@ interface FixPanelProps {
 }
 
 export function FixPanel({ fixId, onClose }: FixPanelProps) {
-  const { view, registeredFixIds, openFix, showList } = useFixPanel();
+  const { view } = useFixPanel();
 
   // ESC always closes the panel regardless of view.
   useEffect(() => {
@@ -36,29 +42,12 @@ export function FixPanel({ fixId, onClose }: FixPanelProps) {
   }, [onClose]);
 
   const showListView = view === 'list' || !fixId;
-  const fixCount = registeredFixIds.length;
 
   return (
     <div className="h-full flex flex-col bg-background overflow-hidden relative">
-      {/* Breadcrumb — only shows when there are siblings to navigate to.
-          In detail view it offers a way back to the list; in list view it
-          is hidden because the list IS the top level. The panel's close
-          affordance lives on the resize divider in FixPanelHost (hover to
-          reveal a chevron), not in this header. */}
-      {!showListView && fixCount > 1 && (
-        <button
-          type="button"
-          onClick={showList}
-          className="flex items-center gap-1.5 px-6 pt-4 text-xs text-foreground-secondary hover:text-foreground transition-colors text-left"
-        >
-          <ArrowLeft className="h-3 w-3" />
-          {fixCount} plan{fixCount === 1 ? '' : 's'}
-        </button>
-      )}
-
       <div className="flex-1 overflow-y-auto">
         {showListView ? (
-          <FixListBody fixIds={registeredFixIds} onSelect={openFix} />
+          <FixListBody />
         ) : (
           <FixDetailBody fixId={fixId} />
         )}
@@ -72,6 +61,7 @@ interface FixDetailBodyProps {
 }
 
 function FixDetailBody({ fixId }: FixDetailBodyProps) {
+  const { fixes, openFix } = useFixPanel();
   const [fix, setFix] = useState<FixRecord | null>(null);
   const [plan, setPlan] = useState<FixPlan | null>(null);
   const [loading, setLoading] = useState(true);
@@ -224,18 +214,79 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
 
   const refusal = plan.refusal;
 
+  const hasSiblings = fixes.length > 1;
+
+  const showInlineAction = !refusal && status === 'awaiting_approval';
+
   return (
     <div className="px-6 pt-5 pb-6">
-      <div className="flex items-start justify-between gap-3">
-        <div className="text-lg font-semibold text-foreground leading-snug pr-8 flex-1 min-w-0">
-          {plan.summary}
-        </div>
+      {/* Title + (when awaiting_approval) inline action area on a single row,
+          so the primary action (Start) sits beside the plan name rather
+          than dropping to a second row beneath it. */}
+      <div className="flex items-center justify-between gap-3">
+        {hasSiblings ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="group flex items-center gap-1.5 text-lg font-semibold text-foreground leading-snug min-w-0 max-w-full text-left rounded-sm hover:opacity-80 transition-opacity focus:outline-none"
+              >
+                <span className="truncate">{plan.summary}</span>
+                <ChevronDown className="h-4 w-4 shrink-0 text-foreground-secondary" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="start"
+              className="min-w-[var(--radix-dropdown-menu-trigger-width)] max-w-[calc(100vw-3rem)]"
+            >
+              {fixes.map((f) => {
+                const isActive = f.id === fixId;
+                const label = f.plan?.summary ?? 'Generating plan…';
+                return (
+                  <DropdownMenuItem
+                    key={f.id}
+                    onSelect={() => { if (!isActive) openFix(f.id); }}
+                    className={cn('gap-2 items-center', isActive && 'bg-background-subtle')}
+                  >
+                    <FixStatusIcon status={f.status} />
+                    <span className="flex-1 truncate text-sm">{label}</span>
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <div className="text-lg font-semibold text-foreground leading-snug min-w-0 truncate">
+            {plan.summary}
+          </div>
+        )}
+        {showInlineAction && (
+          <div className="flex items-center gap-2 shrink-0">
+            {enabledModels.length > 0 && selectedModelId && (
+              <ModelPicker
+                models={enabledModels}
+                selectedModelId={selectedModelId}
+                onSelect={handleSelectModel}
+              />
+            )}
+            <Button
+              type="button"
+              variant="solid"
+              disabled={busy !== null || !token}
+              onClick={handleApprove}
+              className="h-8 px-3 shrink-0"
+            >
+              {busy === 'approve' ? <Loader2 className="animate-spin" /> : null}
+              Start
+            </Button>
+          </div>
+        )}
       </div>
 
-      {/* Action area — sits right under the title so the primary action
-          (Approve) is reachable without scrolling. Refusal blocks render
-          in place of the action bar; PR link replaces it on completion. */}
-      {refusal ? (
+      {/* Below the title row: contextual status / warning / error blocks
+          that aren't the inline action. Refusal block, staleness banner,
+          approval error, terminal-state pill, in-flight pill. */}
+      {refusal && (
         <div className="mt-4 rounded-md border border-warning/30 bg-warning/5 px-3 py-2.5">
           <div className="flex gap-2.5 items-start text-sm text-foreground">
             <ShieldOff className="h-4 w-4 mt-0.5 text-warning shrink-0" />
@@ -250,64 +301,41 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
             </div>
           </div>
         </div>
-      ) : status === 'awaiting_approval' ? (
-        <div className="mt-4 space-y-2">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <FixStatusPill status={status} />
-            <div className="flex items-center gap-2">
-              {enabledModels.length > 0 && selectedModelId && (
-                <ModelPicker
-                  models={enabledModels}
-                  selectedModelId={selectedModelId}
-                  onSelect={handleSelectModel}
-                />
-              )}
-              <Button
-                type="button"
-                variant="solid"
-                disabled={busy !== null || !token}
-                onClick={handleApprove}
-                className="h-8 px-3 shrink-0"
-              >
-                {busy === 'approve' ? <Loader2 className="animate-spin" /> : null}
-                Approve
-              </Button>
-            </div>
+      )}
+      {showInlineAction && staleness.loaded && staleness.isStale && (
+        <div className="mt-3 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning flex items-start gap-2">
+          <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+          <div className="flex-1">
+            This plan is based on a commit that no longer matches the branch head. Regenerate
+            to refresh against the latest commit.
           </div>
-          {staleness.loaded && staleness.isStale && (
-            <div className="rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning flex items-start gap-2">
-              <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-              <div className="flex-1">
-                This plan is based on a commit that no longer matches the branch head. Regenerate
-                to refresh against the latest commit.
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={busy === 'regenerate'}
-                onClick={handleRegenerate}
-                className="h-7 text-xs gap-1.5 shrink-0"
-              >
-                {busy === 'regenerate' ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-                Regenerate
-              </Button>
-            </div>
-          )}
-          {error && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-              {error}
-            </div>
-          )}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy === 'regenerate'}
+            onClick={handleRegenerate}
+            className="h-7 text-xs gap-1.5 shrink-0"
+          >
+            {busy === 'regenerate' ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            Regenerate
+          </Button>
         </div>
-      ) : TERMINAL_STATUSES.includes(status) ? (
+      )}
+      {showInlineAction && error && (
+        <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {error}
+        </div>
+      )}
+      {!refusal && TERMINAL_STATUSES.includes(status) && (
         <div className="mt-4 flex items-center gap-2">
           <FixStatusPill status={status} />
           {fix?.errorMessage && status === 'failed' && (
             <span className="text-xs text-destructive truncate min-w-0">{fix.errorMessage}</span>
           )}
         </div>
-      ) : (
+      )}
+      {!refusal && status !== 'awaiting_approval' && !TERMINAL_STATUSES.includes(status) && (
         <div className="mt-4">
           <FixStatusPill status={status} />
         </div>
@@ -421,28 +449,26 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
   );
 }
 
-interface FixListBodyProps {
-  fixIds: string[];
-  onSelect: (fixId: string) => void;
-}
+function FixListBody() {
+  const { fixes, openFix } = useFixPanel();
 
-function FixListBody({ fixIds, onSelect }: FixListBodyProps) {
-  if (fixIds.length === 0) {
+  if (fixes.length === 0) {
     return (
       <div className="px-6 pt-5 pb-6 text-sm text-foreground-secondary">
-        No plans yet. Ask Aegis to fix an issue and the plan will appear here.
+        No fixes yet. Ask Aegis to fix an issue and the plan will appear here.
       </div>
     );
   }
+
   return (
     <div className="px-6 pt-5 pb-6">
       <div className="text-lg font-semibold text-foreground leading-snug pr-8">
-        Plans
+        Fixes
       </div>
-      <ul className="mt-4 space-y-2">
-        {fixIds.map((id) => (
-          <li key={id}>
-            <FixListRow fixId={id} onSelect={onSelect} />
+      <ul className="mt-4 space-y-1">
+        {fixes.map((f) => (
+          <li key={f.id}>
+            <FixListRow fix={f} onSelect={() => openFix(f.id)} />
           </li>
         ))}
       </ul>
@@ -451,95 +477,49 @@ function FixListBody({ fixIds, onSelect }: FixListBodyProps) {
 }
 
 interface FixListRowProps {
-  fixId: string;
-  onSelect: (fixId: string) => void;
+  fix: FixRecord;
+  onSelect: () => void;
 }
 
-function FixListRow({ fixId, onSelect }: FixListRowProps) {
-  const [fix, setFix] = useState<FixRecord | null>(null);
-
-  const refresh = useCallback(async () => {
-    try {
-      const { fix: refreshed } = await api.getFix(fixId);
-      setFix(refreshed);
-    } catch {
-      // ignore
-    }
-  }, [fixId]);
-
-  useEffect(() => { void refresh(); }, [refresh]);
-
-  useEffect(() => {
-    let cancelled = false;
-    let channel: ReturnType<typeof supabase.channel> | null = null;
-    (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      await (supabase.realtime as any).setAuth(session?.access_token ?? null);
-      if (cancelled) return;
-      channel = supabase
-        .channel(`fix-list-${fixId}`)
-        .on(
-          'postgres_changes',
-          { event: 'UPDATE', schema: 'public', table: 'project_security_fixes', filter: `id=eq.${fixId}` },
-          () => { void refresh(); },
-        )
-        .subscribe();
-    })();
-    return () => {
-      cancelled = true;
-      if (channel) supabase.removeChannel(channel);
-    };
-  }, [fixId, refresh]);
-
-  const summary = fix?.plan?.summary ?? 'Generating plan…';
-  const status: FixStatus = fix?.status ?? 'planning';
+function FixListRow({ fix, onSelect }: FixListRowProps) {
+  const summary = fix.plan?.summary ?? 'Generating plan…';
+  const status = fix.status;
 
   return (
     <button
       type="button"
-      onClick={() => onSelect(fixId)}
-      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-md border border-border bg-background-subtle/30 hover:bg-background-subtle text-left transition-colors"
+      onClick={onSelect}
+      className="group w-full flex items-center gap-3 px-4 py-3 rounded-md border border-border bg-background-subtle/30 hover:bg-background-subtle/60 transition-colors text-left"
     >
-      <ListRowStatusIcon status={status} />
-      <div className="min-w-0 flex-1">
-        <div className="text-sm text-foreground truncate">{summary}</div>
-        <div className="mt-0.5 text-xs text-foreground-secondary">
-          {statusLabel(status)}
-        </div>
-      </div>
-      <ChevronRight className="h-3.5 w-3.5 text-foreground-secondary shrink-0" />
+      <FixStatusIcon status={status} />
+      <span className="text-sm font-medium text-foreground truncate flex-1">{summary}</span>
+      <ChevronRight className="h-3.5 w-3.5 text-foreground-secondary/60 shrink-0 group-hover:text-foreground-secondary transition-colors" />
     </button>
   );
 }
 
-function statusLabel(status: FixStatus): string {
+// Single icon that reflects the fix's lifecycle state. Sits at the start of
+// each row in place of the wordy badge — at-a-glance status without
+// repeating words the title already implies.
+function FixStatusIcon({ status }: { status: FixStatus }) {
+  const iconCls = 'h-4 w-4 shrink-0';
   switch (status) {
-    case 'planning': return 'Generating plan…';
-    case 'awaiting_approval': return 'Awaiting approval';
-    case 'approved': return 'Approved · queued';
-    case 'executing': return 'Executing';
-    case 'completed': return 'Completed';
-    case 'failed': return 'Failed';
-    case 'rejected': return 'Rejected';
-    default: return status;
+    case 'planning':
+      return <Loader2 className={cn(iconCls, 'animate-spin text-foreground-secondary')} aria-label="Generating plan" />;
+    case 'awaiting_approval':
+      return <ClipboardList className={cn(iconCls, 'text-foreground-secondary')} aria-label="Plan ready" />;
+    case 'approved':
+    case 'executing':
+      return <Loader2 className={cn(iconCls, 'animate-spin text-foreground-secondary')} aria-label="Executing" />;
+    case 'completed':
+      return <CheckCircle2 className={cn(iconCls, 'text-success')} aria-label="Completed" />;
+    case 'failed':
+      return <AlertCircle className={cn(iconCls, 'text-destructive')} aria-label="Failed" />;
+    case 'rejected':
+      return <Ban className={cn(iconCls, 'text-foreground-secondary')} aria-label="Rejected" />;
+    default:
+      return <Circle className={cn(iconCls, 'text-foreground-secondary')} />;
   }
-}
-
-function ListRowStatusIcon({ status }: { status: FixStatus }) {
-  if (status === 'planning' || status === 'approved' || status === 'executing') {
-    return <Loader2 className="h-3.5 w-3.5 text-foreground-secondary animate-spin shrink-0" />;
-  }
-  if (status === 'completed') {
-    return <CheckCircle2 className="h-3.5 w-3.5 text-success shrink-0" />;
-  }
-  if (status === 'failed') {
-    return <AlertTriangle className="h-3.5 w-3.5 text-destructive shrink-0" />;
-  }
-  if (status === 'rejected') {
-    return <X className="h-3.5 w-3.5 text-foreground-secondary shrink-0" />;
-  }
-  // awaiting_approval
-  return <Circle className="h-3.5 w-3.5 text-warning shrink-0" />;
 }
 
 // Skeleton mirror of the real plan panel layout — title, Issue (label +

@@ -104,18 +104,29 @@ export function MessageBubble({
     }
     if (isToolPart(part)) {
       const toolName = toolNameFor(part);
-      const output = part.output as { fixId?: string } | undefined;
-      const isError = part.state === 'output-error';
+      const output = part.output as { fixId?: string; error?: string; revised?: boolean } | undefined;
+      // Treat both runtime errors AND tool-returned `{error: "..."}` as
+      // errors. Without the latter check, request_fix calls that returned
+      // a handled error (missing handle, no GitHub installation, etc.)
+      // would slip through with state='output-available' but no fixId,
+      // leaving the chat with a permanent "Generating plan…" skeleton.
+      const isError = part.state === 'output-error' || !!output?.error;
       const resolved = part.state === 'output-available' && output?.fixId;
 
-      if (toolName === 'request_fix' && !isError) {
+      if ((toolName === 'request_fix' || toolName === 'revise_fix') && !isError) {
         flushTools();
+        const isRevise = toolName === 'revise_fix';
         if (resolved) {
           elements.push(
-            <PlanCard key={`plan-${i}`} fixId={output.fixId!} organizationId={organizationId} />,
+            <PlanCard
+              key={`plan-${i}`}
+              fixId={output.fixId!}
+              organizationId={organizationId}
+              revised={isRevise}
+            />,
           );
         } else {
-          elements.push(<PlanCardSkeleton key={`plan-skel-${i}`} />);
+          elements.push(<PlanCardSkeleton key={`plan-skel-${i}`} revised={isRevise} />);
         }
         return;
       }

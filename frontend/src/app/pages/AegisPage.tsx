@@ -6,6 +6,8 @@ import { ChatPane } from '../../components/aegis/ChatPane';
 import { SearchChatsModal } from '../../components/aegis/SearchChatsModal';
 import { PlanCard } from '../../components/aegis/PlanCard';
 import { RoutinesPanel } from '../../components/aegis/RoutinesPanel';
+import { FixPanelProvider } from '../../components/aegis/FixPanelContext';
+import { FixPanelHost } from '../../components/aegis/FixPanelHost';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
 
@@ -158,29 +160,34 @@ export default function AegisPage() {
   }
 
   return (
-    <div className="flex flex-col h-[100vh] bg-background">
-      {routinesActive ? (
-        <RoutinesPanel />
-      ) : (
-        <>
-          {fixIdParam && (
-            <div className="px-4 pt-4">
-              <div className="mx-auto max-w-3xl">
-                <PlanCard fixId={fixIdParam} />
-              </div>
-            </div>
+    <FixPanelProvider threadId={routinesActive ? null : (activeThreadId ?? null)}>
+      <div className="flex h-[100vh] bg-background">
+        <div className="flex-1 flex flex-col min-w-0">
+          {routinesActive ? (
+            <RoutinesPanel />
+          ) : (
+            <>
+              {fixIdParam && (
+                <div className="px-4 pt-4">
+                  <div className="mx-auto max-w-3xl">
+                    <PlanCard fixId={fixIdParam} />
+                  </div>
+                </div>
+              )}
+              <ChatPane
+                key={chatKey}
+                organizationId={orgId}
+                threadId={activeThreadId}
+                currentUserId={user?.id ?? ''}
+                displayName={displayName}
+                onThreadCreated={handleThreadCreated}
+                onThreadUpdated={handleThreadUpdated}
+              />
+            </>
           )}
-          <ChatPane
-            key={chatKey}
-            organizationId={orgId}
-            threadId={activeThreadId}
-            currentUserId={user?.id ?? ''}
-            displayName={displayName}
-            onThreadCreated={handleThreadCreated}
-            onThreadUpdated={handleThreadUpdated}
-          />
-        </>
-      )}
+        </div>
+        <FixPanelHost />
+      </div>
       <SearchChatsModal
         open={searchOpen}
         onOpenChange={setSearchOpen}
@@ -188,6 +195,6 @@ export default function AegisPage() {
         onSelect={handleSelect}
         onSetArchived={handleSetArchived}
       />
-    </div>
+    </FixPanelProvider>
   );
 }

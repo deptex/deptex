@@ -226,7 +226,7 @@ export type FixStatus =
   | 'failed'
   | 'rejected';
 export type PlanLanguage =
-  | 'js' | 'ts' | 'python' | 'go' | 'java' | 'ruby' | 'php' | 'rust' | 'csharp';
+  | 'js' | 'ts' | 'python' | 'go' | 'java' | 'ruby' | 'php' | 'rust' | 'csharp' | 'other';
 export type PlanDiffSize = 'small' | 'medium' | 'large';
 
 export interface PlanFileChange {
@@ -252,6 +252,7 @@ export interface FixPlan {
 }
 
 export interface FixRecord {
+  threadId?: string | null;
   id: string;
   organizationId: string;
   projectId: string;
@@ -3021,6 +3022,10 @@ export const api = {
 
   async regenerateFixPlan(fixId: string): Promise<RequestFixResponse> {
     return fetchWithAuth(`/api/aegis/fix/${fixId}/regenerate`, { method: 'POST' });
+  },
+
+  async getFixesByThread(threadId: string): Promise<{ fixes: FixRecord[] }> {
+    return fetchWithAuth(`/api/aegis/fix/by-thread/${threadId}`);
   },
 
   async getPendingFixes(organizationId: string): Promise<{ fixes: FixRecord[] }> {

@@ -3,6 +3,7 @@ import { PanelRight } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useFixPanel } from './FixPanelContext';
 import { FixPanel } from './FixPanel';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 
 const PANEL_MIN = 360;
 const PANEL_MAX_RATIO = 0.7;
@@ -28,7 +29,7 @@ function readStoredWidth() {
 }
 
 export function FixPanelHost() {
-  const { activeFixId, view, registeredFixIds, openFix, closeFix } = useFixPanel();
+  const { activeFixId, view, fixes, openFix, closeFix, showList } = useFixPanel();
   const [panelWidth, setPanelWidth] = useState<number>(readStoredWidth);
   const [isDragging, setIsDragging] = useState(false);
   // Holds the fixId currently visible in the panel — including during the
@@ -77,19 +78,22 @@ export function FixPanelHost() {
   const wrapperWidth = isOpen ? panelWidth + DIVIDER_WIDTH : 0;
 
   // The toggle button is visible whenever the panel is open OR the thread
-  // has at least one registered fix (so the user can re-open the panel
-  // after dismissing). Hidden entirely when no fixes have happened yet so
-  // it doesn't clutter regular Aegis chats.
-  const showToggle = isOpen || registeredFixIds.length > 0;
+  // has at least one fix (so the user can re-open the panel after
+  // dismissing). Hidden entirely when no fixes exist so it doesn't clutter
+  // regular Aegis chats.
+  const showToggle = isOpen || fixes.length > 0;
   const togglePanel = useCallback(() => {
     if (isOpen) {
       closeFix();
       return;
     }
-    if (registeredFixIds.length > 0) {
-      openFix(registeredFixIds[registeredFixIds.length - 1]);
+    // Re-open: list view if multiple plans, single fix detail if one.
+    if (fixes.length >= 2) {
+      showList();
+    } else if (fixes.length === 1) {
+      openFix(fixes[0].id);
     }
-  }, [isOpen, registeredFixIds, openFix, closeFix]);
+  }, [isOpen, fixes, openFix, showList, closeFix]);
 
   return (
     <div
@@ -115,14 +119,23 @@ export function FixPanelHost() {
           (so they can re-open) as long as the thread has any registered
           fixes; hidden on a fresh Aegis chat with no fixes yet. */}
       {showToggle && (
-        <button
-          type="button"
-          onClick={togglePanel}
-          aria-label={isOpen ? 'Close panel' : 'Open panel'}
-          className="absolute top-3 -left-8 h-6 w-6 rounded-md text-foreground-secondary hover:bg-background-subtle hover:text-foreground inline-flex items-center justify-center transition-colors z-20"
-        >
-          <PanelRight className="h-4 w-4" />
-        </button>
+        <TooltipProvider delayDuration={200}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={togglePanel}
+                aria-label={isOpen ? 'Close panel' : 'Open panel'}
+                className="absolute top-3 -left-8 h-6 w-6 rounded-md text-foreground-secondary hover:bg-background-subtle hover:text-foreground inline-flex items-center justify-center transition-colors z-20"
+              >
+                <PanelRight className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="left" sideOffset={6}>
+              {isOpen ? 'Close panel' : 'Open panel'}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
       <aside className="flex-1 border-l border-border overflow-hidden">
         {(renderedFixId || view === 'list') && (

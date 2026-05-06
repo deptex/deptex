@@ -611,6 +611,8 @@ export default function OrgSidebar({
                 </SidebarGroupContent>
               </SidebarGroup>
 
+              <div className="mx-3 border-t border-border" />
+
               {aegisThreadsLoading && aegisThreads.length === 0 && (
                 <SidebarGroup>
                   <SidebarGroupContent>
@@ -621,8 +623,8 @@ export default function OrgSidebar({
                             className="flex items-center gap-3 h-9 px-3"
                             style={{ opacity: 1 - i * 0.15 }}
                           >
-                            <div className="h-3.5 w-3.5 rounded-full bg-foreground/[0.08] animate-pulse flex-shrink-0" style={{ animationDelay: `${i * 60}ms` }} />
-                            <div className="h-2.5 rounded bg-foreground/[0.08] animate-pulse" style={{ width: w, animationDelay: `${i * 60}ms` }} />
+                            <div className="h-5 w-5 rounded-full bg-foreground/[0.08] animate-pulse flex-shrink-0" style={{ animationDelay: `${i * 60}ms` }} />
+                            <div className="h-3.5 rounded bg-foreground/[0.08] animate-pulse" style={{ animationDelay: `${i * 60}ms`, width: w }} />
                           </div>
                         </SidebarMenuItem>
                       ))}

@@ -2,7 +2,7 @@
 // from the parent backend tree (separate tsconfig + Docker image), so the
 // shape lives here too. Keep in sync.
 
-export type PlanLanguage = 'js' | 'ts' | 'python' | 'go' | 'java' | 'ruby' | 'php' | 'rust' | 'csharp';
+export type PlanLanguage = 'js' | 'ts' | 'python' | 'go' | 'java' | 'ruby' | 'php' | 'rust' | 'csharp' | 'other';
 export type PlanDiffSize = 'small' | 'medium' | 'large';
 export type FindingType = 'vulnerability' | 'semgrep' | 'secret';
 export type FileChangeAction = 'modify' | 'create' | 'delete';
@@ -44,9 +44,12 @@ export interface FixPlan {
   refusal?: PlanRefusal;
 }
 
-export const SHIP_GATE_LANGUAGES: readonly PlanLanguage[] = ['js', 'ts', 'python', 'go'] as const;
+// 'other' (config / env / dockerfile / yaml / shell) is always enabled —
+// it doesn't require language-specific bootstrap, so the LANGUAGE_GATE
+// check below treats it as universally available.
+export const SHIP_GATE_LANGUAGES: readonly PlanLanguage[] = ['js', 'ts', 'python', 'go', 'other'] as const;
 export const ALL_LANGUAGES: readonly PlanLanguage[] = [
-  'js', 'ts', 'python', 'go', 'java', 'ruby', 'php', 'rust', 'csharp',
+  'js', 'ts', 'python', 'go', 'java', 'ruby', 'php', 'rust', 'csharp', 'other',
 ] as const;
 export const MAX_DIFF_LOC = 500;
 export const MAX_TOOL_CALLS = 30;
@@ -67,7 +70,10 @@ export function getEnabledLanguages(): readonly PlanLanguage[] {
     .split(',')
     .map((s) => s.trim().toLowerCase())
     .filter((s): s is PlanLanguage => (ALL_LANGUAGES as readonly string[]).includes(s));
-  return parsed.length > 0 ? parsed : SHIP_GATE_LANGUAGES;
+  if (parsed.length === 0) return SHIP_GATE_LANGUAGES;
+  // 'other' (config/env/dockerfile/etc.) bypasses code-toolchain bootstrap,
+  // so it's always allowed regardless of an operator's LANGUAGE_GATE.
+  return parsed.includes('other') ? parsed : ([...parsed, 'other'] as const);
 }
 
 export function isLanguageEnabled(lang: PlanLanguage): boolean {

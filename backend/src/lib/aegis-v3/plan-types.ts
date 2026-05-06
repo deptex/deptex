@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export type FindingType = 'vulnerability' | 'semgrep' | 'secret';
-export type PlanLanguage = 'js' | 'ts' | 'python' | 'go' | 'java' | 'ruby' | 'php' | 'rust' | 'csharp';
+export type PlanLanguage = 'js' | 'ts' | 'python' | 'go' | 'java' | 'ruby' | 'php' | 'rust' | 'csharp' | 'other';
 export type PlanDiffSize = 'small' | 'medium' | 'large';
 export type FileChangeAction = 'modify' | 'create' | 'delete';
 
@@ -25,6 +25,7 @@ export const PLAN_LANGUAGES: readonly PlanLanguage[] = [
   'php',
   'rust',
   'csharp',
+  'other',
 ] as const;
 
 export const SHIP_GATE_LANGUAGES: readonly PlanLanguage[] = ['js', 'ts', 'python', 'go'] as const;
@@ -120,7 +121,7 @@ export const fixPlanSchema = z.object({
   testCommand: z.string().min(1),
   verification: z.string().min(1).optional(),
   verificationSteps: z.array(verificationStepSchema).min(1).max(6).optional(),
-  language: z.enum(['js', 'ts', 'python', 'go', 'java', 'ruby', 'php', 'rust', 'csharp']),
+  language: z.enum(['js', 'ts', 'python', 'go', 'java', 'ruby', 'php', 'rust', 'csharp', 'other']),
   estimatedDiffSize: z.enum(['small', 'medium', 'large']),
   wallClockBudgetSec: z.number().int().positive().max(900),
   refusal: refusalSchema.optional(),

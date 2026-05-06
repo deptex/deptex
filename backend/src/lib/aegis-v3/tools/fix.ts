@@ -104,7 +104,7 @@ const requestFix: AegisToolEntry<{
     if ('error' in handleResolution) return { error: handleResolution.error };
     const findingId = handleResolution.rowId;
 
-    const insertRow = {
+    const insertRow: Record<string, any> = {
       project_id: projectId,
       organization_id: ctx.orgId,
       fix_type: findingType,
@@ -114,6 +114,9 @@ const requestFix: AegisToolEntry<{
       [fixTypeColumn(findingType)]: findingId,
       payload: { source: 'aegis_tool_request_fix' },
     };
+    // Phase 28: durable thread <-> fix link so the panel can list every
+    // plan generated in this thread without relying on frontend memory.
+    if (ctx.threadId) insertRow.thread_id = ctx.threadId;
 
     const { data: created, error: insertError } = await ctx.supabase
       .from('project_security_fixes')
@@ -185,6 +188,175 @@ const requestFix: AegisToolEntry<{
       status,
       plan: result.plan,
       refusal: result.plan.refusal,
+    };
+  },
+};
+
+const reviseFix: AegisToolEntry<{
+  instructions: string;
+  planMatch?: string;
+}, {
+  fixId?: string;
+  status?: FixStatus;
+  plan?: FixPlan;
+  refusal?: { reason: string; manualSuggestion?: string };
+  revised?: boolean;
+  error?: string;
+}> = {
+  name: 'revise_fix',
+  description:
+    "Revise the plan for an EXISTING fix in this chat thread, incorporating user feedback as binding direction. Use this when the user pushes back on a plan you already produced (e.g. 'add more tests', 'use a different library', 'skip the rollback step'). Do NOT use this to start a new fix — call `request_fix` for that. Resolves the target fix from the current chat thread automatically; if the thread has multiple revisable plans, pass `planMatch` (a few distinctive words from the plan title or file path the user named) to disambiguate. Replaces the existing plan and re-arms the approval flow.",
+  permission: 'trigger_fix',
+  danger: 'medium',
+  inputSchema: jsonSchema({
+    type: 'object',
+    properties: {
+      instructions: {
+        type: 'string',
+        minLength: 4,
+        maxLength: 2000,
+        description: "Plain-language feedback to apply to the existing plan. Quote or paraphrase the user's own words rather than your interpretation.",
+      },
+      planMatch: {
+        type: 'string',
+        minLength: 2,
+        maxLength: 200,
+        description: "Optional disambiguator. A distinctive substring from the target plan's title or the file path the user mentioned (e.g. '.env.production', 'secrets.js'). Required when the thread has more than one revisable plan; ignored otherwise. Case-insensitive substring match against the plan summary.",
+      },
+    },
+    required: ['instructions'],
+    additionalProperties: false,
+  }),
+  execute: async ({ instructions, planMatch }, ctx) => {
+    if (!ctx.threadId) {
+      return { error: 'revise_fix can only be used inside a chat thread.' };
+    }
+
+    const { data: candidates, error: lookupError } = await ctx.supabase
+      .from('project_security_fixes')
+      .select('id, project_id, organization_id, fix_type, status, osv_id, semgrep_finding_id, secret_finding_id, plan, created_at')
+      .eq('organization_id', ctx.orgId)
+      .eq('thread_id', ctx.threadId)
+      .in('status', ['awaiting_approval', 'failed'])
+      .order('created_at', { ascending: false });
+    if (lookupError) {
+      return { error: `Failed to look up fixes in this thread: ${lookupError.message}` };
+    }
+    if (!candidates || candidates.length === 0) {
+      return {
+        error:
+          'No revisable fix in this thread. Plans can only be revised while awaiting approval or after a refusal — once a fix is executing or completed it is final.',
+      };
+    }
+    let target = candidates[0];
+    if (candidates.length > 1) {
+      const trimmed = planMatch?.trim();
+      if (!trimmed) {
+        const titles = candidates
+          .map((c: any) => `- ${c.plan?.summary ?? '(plan still generating)'}`)
+          .join('\n');
+        return {
+          error:
+            `This thread has ${candidates.length} revisable plans:\n${titles}\nCall revise_fix again with planMatch set to a distinctive substring (e.g. a file name) of the target plan's title.`,
+        };
+      }
+      const needle = trimmed.toLowerCase();
+      const matches = candidates.filter((c: any) =>
+        ((c.plan?.summary ?? '') as string).toLowerCase().includes(needle),
+      );
+      if (matches.length === 0) {
+        return {
+          error: `planMatch '${trimmed}' did not match any plan in this thread. Re-read the plan titles in the fix panel and try a more distinctive substring.`,
+        };
+      }
+      if (matches.length > 1) {
+        return {
+          error: `planMatch '${trimmed}' matched ${matches.length} plans. Pass a more distinctive substring (e.g. a file name) so it picks exactly one.`,
+        };
+      }
+      target = matches[0];
+    }
+
+    const findingId =
+      target.fix_type === 'vulnerability'
+        ? target.osv_id
+        : target.fix_type === 'semgrep'
+          ? target.semgrep_finding_id
+          : target.secret_finding_id;
+    if (!findingId) {
+      return { error: 'Existing fix row is missing its finding id and cannot be revised.' };
+    }
+
+    // Flip to planning so the panel + chat show the spinner immediately
+    // via realtime, and so the now-stale approval token can't be used.
+    await ctx.supabase
+      .from('project_security_fixes')
+      .update({
+        status: 'planning' as FixStatus,
+        plan: null,
+        plan_generated_at: null,
+        plan_base_sha: null,
+        plan_base_branch: null,
+        approval_token: null,
+        approved_at: null,
+        approved_by_user_id: null,
+        rejected_at: null,
+        rejected_by_user_id: null,
+        rejection_reason: null,
+        error_message: null,
+        completed_at: null,
+      })
+      .eq('id', target.id);
+
+    let result;
+    try {
+      result = await generateFixPlan({
+        organizationId: ctx.orgId,
+        projectId: target.project_id,
+        findingType: target.fix_type,
+        findingId,
+        triggeredByUserId: ctx.userId,
+        userInstructions: instructions,
+      });
+    } catch (err: any) {
+      await ctx.supabase
+        .from('project_security_fixes')
+        .update({
+          status: 'failed',
+          error_message: `Plan revision failed: ${err?.message ?? 'unknown error'}`,
+          completed_at: new Date().toISOString(),
+        })
+        .eq('id', target.id);
+      return { fixId: target.id, status: 'failed', error: err?.message ?? 'Plan revision failed', revised: true };
+    }
+
+    const generatedAt = new Date().toISOString();
+    const isRefusal = !!result.plan.refusal;
+    const status: FixStatus = isRefusal ? 'failed' : 'awaiting_approval';
+    const approvalToken = isRefusal
+      ? null
+      : signApprovalToken(target.id, ctx.orgId, generatedAt);
+
+    await ctx.supabase
+      .from('project_security_fixes')
+      .update({
+        status,
+        plan: result.plan,
+        plan_generated_at: generatedAt,
+        plan_base_sha: result.baseSha,
+        plan_base_branch: result.baseBranch,
+        approval_token: approvalToken,
+        error_message: isRefusal ? `Refusal: ${result.plan.refusal?.reason}` : null,
+        completed_at: isRefusal ? generatedAt : null,
+      })
+      .eq('id', target.id);
+
+    return {
+      fixId: target.id,
+      status,
+      plan: result.plan,
+      refusal: result.plan.refusal,
+      revised: true,
     };
   },
 };
@@ -333,4 +505,4 @@ const checkFixStatus: AegisToolEntry<{ fixId: string }, {
   },
 };
 
-export const fixTools: AegisToolEntry[] = [requestFix, approveFix, rejectFix, checkFixStatus];
+export const fixTools: AegisToolEntry[] = [requestFix, reviseFix, approveFix, rejectFix, checkFixStatus];

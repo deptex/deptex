@@ -14,6 +14,10 @@ interface PlanCardProps {
   organizationId?: string;
   initialFix?: FixRecord | null;
   onStatusChange?: (status: FixStatus) => void;
+  // True when this pill represents a revise_fix tool call (vs. the original
+  // request_fix). Renders a small "Revised" tag so the chat history reads
+  // "first plan → revised plan" naturally.
+  revised?: boolean;
 }
 
 // One-line pill rendered in the chat scroll. Click to focus the side panel
@@ -24,6 +28,7 @@ export function PlanCard({
   fixId,
   initialFix = null,
   onStatusChange,
+  revised = false,
 }: PlanCardProps) {
   const [fix, setFix] = useState<FixRecord | null>(initialFix);
   const { activeFixId, openFix, registerFix } = useFixPanel();
@@ -85,20 +90,27 @@ export function PlanCard({
     >
       <ListChecks className="h-4 w-4 text-foreground-secondary shrink-0" />
       <span className="text-sm text-foreground truncate flex-1 min-w-0">{summary}</span>
+      {revised && (
+        <span className="shrink-0 rounded-sm border border-border bg-background-subtle px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-foreground-secondary">
+          Revised
+        </span>
+      )}
       <FixStatusPill status={status} />
       <ChevronRight className="h-3.5 w-3.5 text-foreground-secondary shrink-0 group-hover:text-foreground transition-colors" />
     </button>
   );
 }
 
-// In-flight skeleton for the chat pill — rendered while request_fix is
-// streaming and we don't have a fixId yet. Mirrors the pill shape so when
-// the tool resolves nothing shifts.
-export function PlanCardSkeleton() {
+// In-flight skeleton for the chat pill — rendered while request_fix or
+// revise_fix is streaming and we don't have a fixId yet. Mirrors the pill
+// shape so when the tool resolves nothing shifts.
+export function PlanCardSkeleton({ revised = false }: { revised?: boolean }) {
   return (
     <div className="my-2 w-full flex items-center gap-3 px-4 py-2.5 rounded-md border border-border bg-background-card-header">
       <Loader2 className="h-4 w-4 text-foreground-secondary shrink-0 animate-spin" />
-      <span className="text-sm text-foreground-secondary flex-1 min-w-0">Generating plan…</span>
+      <span className="text-sm text-foreground-secondary flex-1 min-w-0">
+        {revised ? 'Revising plan…' : 'Generating plan…'}
+      </span>
     </div>
   );
 }

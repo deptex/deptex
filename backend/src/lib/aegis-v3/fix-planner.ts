@@ -21,6 +21,10 @@ export interface PlannerInput {
   findingType: FindingType;
   findingId: string;
   triggeredByUserId: string;
+  // Free-form revision feedback the user gave in chat. When present the
+  // planner treats it as binding direction over its own defaults
+  // (e.g. "add more tests", "use the env var X", "skip the rollback step").
+  userInstructions?: string;
 }
 
 export interface PlannerResult {
@@ -126,6 +130,7 @@ PLANNING RULES:
    - python: \`pytest\` — the executor sets up a venv with pytest available, so just write \`pytest\` (or \`pytest path/to/test.py\` to scope). Do NOT prefix with \`.venv/bin/\`.
    - go: \`go test ./...\` (or a narrower package path if appropriate). \`go mod download\` runs automatically before tests.
    - java: \`mvn test\`. ruby: \`bundle exec rspec\`. php: \`composer test\`. rust: \`cargo test\`. csharp: \`dotnet test\`.
+   - other (config files, env files, dockerfile, yaml/json, shell scripts, terraform, etc.): pick the lightest reasonable check the repo supports — \`echo ok\` is acceptable when no test exists, but prefer a real syntax/lint check when one is wired up (e.g. \`yq -y . file.yml > /dev/null\`, \`docker build --target validate\`, \`terraform validate\`). Use \`language: "other"\` for any file that isn't a primary code language.
 4. estimatedDiffSize: small (<100 LOC), medium (100-500), large (>500). Plans estimated as "large" should be split.
 5. wallClockBudgetSec defaults to 300. Increase only when the language toolchain is slow (e.g., Java/Maven up to 600).
 6. fileChanges should list each touched file with a one-sentence rationale. Do not include diffs — those are produced during execution.
@@ -153,7 +158,7 @@ Include refusal.reason ONLY when a fix cannot be safely produced. Examples of re
 When you DO set refusal, still populate the other fields with best-effort placeholders so the schema validates; humans will read the refusal first.`;
 
 function buildUserPrompt(input: PlannerInput, ctx: Record<string, any>, repo: RepoLookup): string {
-  return [
+  const lines = [
     `Finding type: ${input.findingType}`,
     `Finding id: ${input.findingId}`,
     `Repository: ${repo.repoFullName} (default branch: ${repo.defaultBranch})`,
@@ -162,8 +167,16 @@ function buildUserPrompt(input: PlannerInput, ctx: Record<string, any>, repo: Re
     JSON.stringify(ctx, null, 2),
     '',
     `Default wall-clock budget: ${DEFAULT_WALL_CLOCK_BUDGET_SEC}s.`,
-    'Produce the plan now.',
-  ].join('\n');
+  ];
+  if (input.userInstructions && input.userInstructions.trim().length > 0) {
+    lines.push(
+      '',
+      'USER REVISION REQUEST (binding — incorporate over your own defaults):',
+      input.userInstructions.trim(),
+    );
+  }
+  lines.push('Produce the plan now.');
+  return lines.join('\n');
 }
 
 // Cheap-tier models (DeepSeek V4 Flash, Qwen 3.6, GPT-5 nano) flake on nested
@@ -209,6 +222,10 @@ function normalizePlanShape(raw: any, input: PlannerInput): any {
   delete out.desiredState;
 
   // Language aliases. Some models output natural-language combos.
+  // Anything that doesn't map to a real code language (config files, env
+  // files, dockerfile, yaml, json, etc.) collapses to 'other' so plans for
+  // non-code edits don't blow up the validator.
+  const VALID_LANGS = new Set(['js', 'ts', 'python', 'go', 'java', 'ruby', 'php', 'rust', 'csharp', 'other']);
   if (typeof out.language === 'string') {
     const langAliases: Record<string, string> = {
       javascript: 'js',
@@ -219,9 +236,35 @@ function normalizePlanShape(raw: any, input: PlannerInput): any {
       golang: 'go',
       'c#': 'csharp',
       cs: 'csharp',
+      // Common non-code categories the model might emit for config / env /
+      // infra-only edits — all collapse to 'other'.
+      env: 'other',
+      dotenv: 'other',
+      config: 'other',
+      yaml: 'other',
+      yml: 'other',
+      json: 'other',
+      toml: 'other',
+      ini: 'other',
+      dockerfile: 'other',
+      docker: 'other',
+      shell: 'other',
+      bash: 'other',
+      sh: 'other',
+      hcl: 'other',
+      terraform: 'other',
+      tf: 'other',
+      markdown: 'other',
+      md: 'other',
+      none: 'other',
+      n_a: 'other',
+      'n/a': 'other',
     };
     const key = out.language.toLowerCase().trim();
     if (langAliases[key]) out.language = langAliases[key];
+    else if (!VALID_LANGS.has(out.language)) out.language = 'other';
+  } else if (out.language == null) {
+    out.language = 'other';
   }
 
   // todos normalization. Cheap models often emit strings instead of
@@ -353,7 +396,7 @@ async function generatePlanWithRetry(
       '    { "command": "npm test", "description": "<one sentence on what this covers for THIS fix>" },',
       '    { "command": "npm run lint", "description": "<one sentence>" }',
       '  ],',
-      '  "language": "js" | "ts" | "python" | "go" | "java" | "ruby" | "php" | "rust" | "csharp",',
+      '  "language": "js" | "ts" | "python" | "go" | "java" | "ruby" | "php" | "rust" | "csharp" | "other",',
       '  "estimatedDiffSize": "small" | "medium" | "large",',
       '  "wallClockBudgetSec": 300',
       '}',
