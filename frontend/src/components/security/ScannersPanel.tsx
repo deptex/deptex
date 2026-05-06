@@ -3,10 +3,12 @@ import { Loader2 } from 'lucide-react';
 import { api, frameworkLabel, type ScannerSummary } from '../../lib/api';
 import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
+import RegistryCredentialsSection from './RegistryCredentialsSection';
 
 interface Props {
   organizationId: string;
   projectId: string;
+  canManage: boolean;
   onTriggerRescan?: () => Promise<void> | void;
 }
 
@@ -23,6 +25,7 @@ function formatLastScan(iso: string | null): string {
 export default function ScannersPanel({
   organizationId,
   projectId,
+  canManage,
   onTriggerRescan,
 }: Props) {
   const [summary, setSummary] = useState<ScannerSummary | null>(null);
@@ -146,6 +149,8 @@ export default function ScannersPanel({
           ) : null}
         </div>
       </div>
+
+      <RegistryCredentialsSection organizationId={organizationId} canManage={canManage} />
     </div>
   );
 }
