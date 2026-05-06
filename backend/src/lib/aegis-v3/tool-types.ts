@@ -26,6 +26,10 @@ export interface AegisToolEntry<Input = any, Output = unknown> {
   inputSchema: FlexibleSchema<Input>;
   permission?: ToolPermissionKey;
   danger?: ToolDanger;
+  // Defaults to true. Set false for tools whose calls are pure UI bookkeeping
+  // (e.g. set_todos) — they should not write a row to aegis_tool_executions
+  // every step, which would otherwise pollute cost/usage dashboards.
+  audit?: boolean;
   execute: (input: Input, ctx: AegisToolContext) => Promise<Output>;
 }
 

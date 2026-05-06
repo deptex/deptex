@@ -9,6 +9,7 @@ import { intelligenceTools } from './intelligence';
 import { policyTools } from './policy';
 import { issuesTools } from './issues';
 import { fixTools } from './fix';
+import { chatTools } from './chat';
 
 export const ALL_AEGIS_TOOLS: AegisToolEntry[] = [
   ...projectsTools,
@@ -20,6 +21,7 @@ export const ALL_AEGIS_TOOLS: AegisToolEntry[] = [
   ...policyTools,
   ...issuesTools,
   ...fixTools,
+  ...chatTools,
 ];
 
 export function buildToolSet(ctx: AegisToolContext) {

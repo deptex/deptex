@@ -146,6 +146,26 @@ describe('aegis-v3 helpers', () => {
       });
       expect(out).toContain('Current context: project');
     });
+
+    it('includes the multi-step todos rule and lists set_todos under Plan', () => {
+      const out = buildAegisSystemPrompt({
+        orgName: 'Acme',
+        organizationId: ORG_ID,
+      });
+      expect(out).toContain('set_todos');
+      expect(out).toContain('Multi-step plans');
+      expect(out).toContain('user-visible workstreams');
+      expect(out).toMatch(/\*\*WRONG\*\*/);
+    });
+
+    it('does not contradict the parallel revise_fix fan-out rule', () => {
+      const out = buildAegisSystemPrompt({
+        orgName: 'Acme',
+        organizationId: ORG_ID,
+      });
+      expect(out).toContain('Plan revisions');
+      expect(out).toContain('parallel `revise_fix` fan-out');
+    });
   });
 
   describe('thread helpers', () => {

@@ -78,23 +78,41 @@ describe('registry shape', () => {
         'list_teams',
         'reject_fix',
         'request_fix',
+        'revise_fix',
+        'list_organization_members',
+        'list_team_members',
+        'list_organization_roles',
+        'list_team_roles',
+        'list_project_issues',
+        'set_todos',
       ].sort(),
     );
 
-    const readOnly = ALL_AEGIS_TOOLS.filter(
-      (t) => !['request_fix', 'approve_fix', 'reject_fix', 'check_fix_status'].includes(t.name),
+    const safeNoPermissionTools = ALL_AEGIS_TOOLS.filter(
+      (t) =>
+        !['request_fix', 'revise_fix', 'approve_fix', 'reject_fix', 'check_fix_status'].includes(
+          t.name,
+        ),
     );
-    for (const t of readOnly) {
+    for (const t of safeNoPermissionTools) {
       expect(t.danger).toBe('safe');
       expect(t.permission).toBeUndefined();
     }
 
     const writeTools = ALL_AEGIS_TOOLS.filter((t) =>
-      ['request_fix', 'approve_fix', 'reject_fix'].includes(t.name),
+      ['request_fix', 'revise_fix', 'approve_fix', 'reject_fix'].includes(t.name),
     );
     for (const t of writeTools) {
       expect(t.permission).toBe('trigger_fix');
     }
+  });
+
+  it('set_todos is registered with audit:false and safe danger', () => {
+    const entry = ALL_AEGIS_TOOLS.find((t) => t.name === 'set_todos');
+    expect(entry).toBeDefined();
+    expect(entry?.danger).toBe('safe');
+    expect(entry?.permission).toBeUndefined();
+    expect(entry?.audit).toBe(false);
   });
 
   it('no read-only tool advertises a UUID-formatted arg', () => {

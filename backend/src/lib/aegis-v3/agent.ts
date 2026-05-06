@@ -3,7 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { supabase } from '../../lib/supabase';
 import { getLanguageModelForOrg, getProviderInfoForOrg } from './provider';
 import { buildAegisSystemPrompt, type SystemPromptContext } from './system-prompt';
-import { buildToolSet } from './tools';
+import { ALL_AEGIS_TOOLS, buildToolSet } from './tools';
 import { saveAssistantMessage, saveToolExecution, logChatUsage } from './persistence';
 import { stepsToMessageParts } from './parts';
 import { recordActualCost } from '../ai/cost-cap';
@@ -91,6 +91,8 @@ export async function createAegisAgent(opts: CreateAegisAgentOptions): Promise<T
         resultByCallId.set(r.toolCallId, (r as { output?: unknown }).output);
       }
       for (const call of toolCalls) {
+        const entry = ALL_AEGIS_TOOLS.find((t) => t.name === call.toolName);
+        if (entry?.audit === false) continue;
         await saveToolExecution({
           organizationId: opts.orgId,
           userId: opts.userId,
