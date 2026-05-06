@@ -3,9 +3,16 @@
 Phase 24a is the **additive half** of the two-phase migration that introduces
 multi-target DAST scanning, encrypted form/JWT/cookie credentials, SPA detection,
 scope rules, and three-layer cross-tenant validation. The destructive half
-(phase24b — drop legacy columns, flip `findings.target_id NOT NULL`, drop wrapper
-RPCs, drop `DAST_RUNNER_MODE=helper_script`) lands separately after a ≥7-day
-shadow window proves the new path safe.
+(phase24b — drop legacy columns, flip `findings.target_id NOT NULL`, drop
+wrapper RPCs) lands separately after a ≥7-day shadow window proves the new
+path safe.
+
+The original `DAST_RUNNER_MODE=helper_script` rollback flag has been retired:
+the worker only ever spawned the AF YAML path through `runZapWithControlPlane`
+in `backend/depscanner/src/dast/pipeline.ts`, so the dispatcher and the
+helper-script + api-scan code paths in `runner.ts` were never reachable in
+production. Real-ZAP e2e validated AF YAML against Juice Shop before the
+helper-script code was deleted; v2.1b no longer needs to drop the flag.
 
 This runbook covers the v2.1a rollout DAG. The steps **must** run in order — the
 worker has to speak both the legacy `commit_dast_run(uuid, text)` and the new
