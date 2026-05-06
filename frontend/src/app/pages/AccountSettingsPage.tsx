@@ -1,30 +1,43 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { useUserProfile } from '../../hooks/useUserProfile';
-import { useParams, useLocation, useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
-import { api } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { Button } from '../../components/ui/button';
 import { Edit2 } from 'lucide-react';
+import { getAvatarUrl, getDisplayNameOrNull } from '../../lib/userIdentity';
 
 export default function AccountSettingsPage() {
-  const { id: orgId } = useParams<{ id: string }>();
   const { pathname } = useLocation();
   const isConnectedAccounts = pathname.endsWith('connected-accounts');
   const { user, signInWithGitHub, signInWithGoogle } = useAuth();
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { avatarUrl, fullName } = useUserProfile();
+  const avatarUrl = getAvatarUrl(user);
+  const fullName = getDisplayNameOrNull(user);
 
-  const [displayName, setDisplayName] = useState(fullName || user?.user_metadata?.full_name || '');
-  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const [displayName, setDisplayName] = useState(fullName || '');
+  const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [savingGeneral, setSavingGeneral] = useState(false);
   const [integrations, setIntegrations] = useState<Record<string, boolean>>({
     github: false,
     google: false,
   });
 
-  // Tab title
+  const trimmedName = displayName.trim();
+  const currentName = (fullName || '').trim();
+  const isNameInvalid = trimmedName.length === 0 || trimmedName.length > 32;
+  const isNameUnchanged = trimmedName === currentName;
+  const isAvatarPending = pendingAvatarFile !== null;
+  const hasPendingChange = !isNameUnchanged || isAvatarPending;
+  const canSave = !savingGeneral && !isNameInvalid && hasPendingChange;
+
+  useEffect(() => {
+    if (!previewUrl) return;
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [previewUrl]);
+
   useEffect(() => {
     const prev = document.title;
     document.title = 'Account Settings | Deptex';
@@ -33,63 +46,23 @@ export default function AccountSettingsPage() {
     };
   }, []);
 
-  // Sync display name from hook
+  // Re-sync the input when the live name changes (e.g., after our own save
+  // propagates through onAuthStateChange, or after OAuth re-login).
   useEffect(() => {
     if (fullName) {
       setDisplayName(fullName);
     }
   }, [fullName]);
 
-  // Load integrations on mount and check GitHub login
   useEffect(() => {
-    loadIntegrations();
-    // Check if user logged in with GitHub via Supabase
-    if (user?.identities?.some((identity: any) => identity.provider === 'github')) {
-      setIntegrations(prev => ({ ...prev, github: true }));
-    }
-    // Check and restore avatar if missing from metadata but exists in storage
-    checkAndRestoreAvatar();
+    const integrationMap: Record<string, boolean> = { github: false, google: false };
+    user?.identities?.forEach((identity) => {
+      if (identity.provider === 'github') integrationMap.github = true;
+      else if (identity.provider === 'google') integrationMap.google = true;
+    });
+    setIntegrations(integrationMap);
   }, [user]);
 
-  // Check if avatar exists in storage but is missing from profile, and restore it
-  const checkAndRestoreAvatar = async () => {
-    if (!user?.id) return;
-
-    try {
-      // Check if profile already has avatar_url
-      const profile = await api.getUserProfile();
-      if (profile.avatar_url) return;
-
-      // List files in the user's avatar folder
-      const { data: files, error } = await supabase.storage
-        .from('avatars')
-        .list(user.id, {
-          limit: 1,
-          sortBy: { column: 'created_at', order: 'desc' }
-        });
-
-      if (error) {
-        console.error('Error checking avatar storage:', error);
-        return;
-      }
-
-      // If we found a file, restore the avatar_url in profile
-      if (files && files.length > 0) {
-        const filePath = `${user.id}/${files[0].name}`;
-        const { data: { publicUrl } } = supabase.storage
-          .from('avatars')
-          .getPublicUrl(filePath);
-
-        // Update user profile with the restored avatar URL
-        await api.updateUserProfile({ avatar_url: publicUrl });
-        console.log('Avatar restored from storage');
-      }
-    } catch (error) {
-      console.error('Error in checkAndRestoreAvatar:', error);
-    }
-  };
-
-  // Handle OAuth callback
   useEffect(() => {
     const connected = searchParams.get('connected');
     const error = searchParams.get('error');
@@ -100,8 +73,6 @@ export default function AccountSettingsPage() {
         title: 'Connected',
         description: `${connected.charAt(0).toUpperCase() + connected.slice(1)} has been connected successfully.`,
       });
-      loadIntegrations();
-      // Clean up URL
       setSearchParams({});
     } else if (error) {
       toast({
@@ -113,38 +84,103 @@ export default function AccountSettingsPage() {
     }
   }, [searchParams, toast, setSearchParams]);
 
-  const loadIntegrations = async () => {
-    try {
-      // For user settings, we only care about login providers (GitHub, Google)
-      // Check if user logged in with these providers via Supabase
-      const integrationMap: Record<string, boolean> = {
-        github: false,
-        google: false,
-      };
+  const handleAvatarSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
 
-      // Check identities from Supabase Auth
-      if (user?.identities) {
-        user.identities.forEach((identity: any) => {
-          if (identity.provider === 'github') {
-            integrationMap.github = true;
-          } else if (identity.provider === 'google') {
-            integrationMap.google = true;
-          }
-        });
-      }
-
-      setIntegrations(integrationMap);
-    } catch (error: any) {
-      console.error('Failed to load integrations:', error);
+    if (file.size > 5 * 1024 * 1024) {
+      toast({
+        title: 'File too large',
+        description: 'Please upload an image smaller than 5MB.',
+        variant: 'destructive',
+      });
+      return;
     }
+
+    if (!file.type.startsWith('image/')) {
+      toast({
+        title: 'Invalid file type',
+        description: 'Please upload an image file.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setPendingAvatarFile(file);
+    setPreviewUrl(URL.createObjectURL(file));
   };
 
-  const handleSaveGeneral = () => {
-    // TODO: Implement API call to save settings
-    toast({
-      title: 'Settings saved',
-      description: 'Your general settings have been updated.',
-    });
+  const handleSaveGeneral = async () => {
+    if (!canSave) return;
+    if (!isNameUnchanged && isNameInvalid) {
+      toast({
+        title: 'Invalid display name',
+        description: trimmedName.length === 0
+          ? 'Display name cannot be empty.'
+          : 'Display name must be 32 characters or fewer.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setSavingGeneral(true);
+    let uploadedFilePath: string | null = null;
+    try {
+      const updates: Record<string, string> = {};
+      if (!isNameUnchanged) {
+        updates.custom_full_name = trimmedName;
+      }
+
+      if (pendingAvatarFile && user?.id) {
+        const fileExt = pendingAvatarFile.name.split('.').pop();
+        const fileName = `${user.id}-${Date.now()}.${fileExt}`;
+        const filePath = `${user.id}/${fileName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from('avatars')
+          .upload(filePath, pendingAvatarFile, {
+            cacheControl: '3600',
+            upsert: true,
+          });
+        if (uploadError) throw uploadError;
+        uploadedFilePath = filePath;
+
+        const { data: { publicUrl } } = supabase.storage
+          .from('avatars')
+          .getPublicUrl(filePath);
+        updates.custom_avatar_url = publicUrl;
+      }
+
+      const { error: updateError } = await supabase.auth.updateUser({ data: updates });
+      if (updateError) throw updateError;
+
+      setPendingAvatarFile(null);
+      setPreviewUrl(null);
+      toast({
+        title: 'Settings saved',
+        description: 'Your changes have been applied.',
+      });
+    } catch (error) {
+      console.error('Error saving settings:', error);
+      // If we uploaded the avatar but the auth update failed, drop the
+      // orphan file so the bucket doesn't accumulate dead uploads.
+      if (uploadedFilePath) {
+        await supabase.storage
+          .from('avatars')
+          .remove([uploadedFilePath])
+          .catch((cleanupError) => {
+            console.error('Failed to clean up orphaned avatar:', cleanupError);
+          });
+      }
+      toast({
+        title: 'Save failed',
+        description: 'Could not save your changes. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setSavingGeneral(false);
+    }
   };
 
   const handleConnectProvider = async (provider: 'github' | 'google') => {
@@ -154,11 +190,11 @@ export default function AccountSettingsPage() {
       } else if (provider === 'google') {
         await signInWithGoogle();
       }
-      // The OAuth flow will redirect, so we don't need to do anything else here
-    } catch (error: any) {
+    } catch (error) {
+      console.error(`Error connecting ${provider}:`, error);
       toast({
         title: 'Connection failed',
-        description: error.message || `Failed to connect ${provider}. Please try again.`,
+        description: `Failed to connect ${provider}. Please try again.`,
         variant: 'destructive',
       });
     }
@@ -174,7 +210,6 @@ export default function AccountSettingsPage() {
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
         {!isConnectedAccounts && (
           <div className="space-y-6">
-            {/* Profile Card: Display Name + Avatar */}
             <div className="bg-background-card border border-border rounded-lg overflow-hidden">
               <div className="p-6">
                 <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] items-start gap-6">
@@ -189,6 +224,7 @@ export default function AccountSettingsPage() {
                         value={displayName}
                         onChange={(e) => setDisplayName(e.target.value)}
                         placeholder="Enter your display name"
+                        maxLength={32}
                         className="w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground-secondary placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
                       />
                     </div>
@@ -199,90 +235,19 @@ export default function AccountSettingsPage() {
                       accept="image/*"
                       className="hidden"
                       id="avatar-upload"
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-
-                        if (file.size > 5 * 1024 * 1024) {
-                          toast({
-                            title: 'File too large',
-                            description: 'Please upload an image smaller than 5MB.',
-                            variant: 'destructive',
-                          });
-                          return;
-                        }
-
-                        if (!file.type.startsWith('image/')) {
-                          toast({
-                            title: 'Invalid file type',
-                            description: 'Please upload an image file.',
-                            variant: 'destructive',
-                          });
-                          return;
-                        }
-
-                        try {
-                          setIsUploadingAvatar(true);
-                          const fileExt = file.name.split('.').pop();
-                          const fileName = `${user?.id}-${Date.now()}.${fileExt}`;
-                          const filePath = `${user?.id}/${fileName}`;
-
-                          const { error: uploadError } = await supabase.storage
-                            .from('avatars')
-                            .upload(filePath, file, {
-                              cacheControl: '3600',
-                              upsert: true,
-                            });
-
-                          if (uploadError) throw uploadError;
-
-                          const { data: { publicUrl } } = supabase.storage
-                            .from('avatars')
-                            .getPublicUrl(filePath);
-
-                          await api.updateUserProfile({ avatar_url: publicUrl });
-
-                          if (user?.id) {
-                            localStorage.removeItem(`user_profile_${user.id}`);
-                          }
-
-                          await new Promise<void>((resolve) => {
-                            const img = new Image();
-                            img.onload = () => resolve();
-                            img.onerror = () => resolve();
-                            img.src = publicUrl;
-                          });
-
-                          toast({
-                            title: 'Avatar updated',
-                            description: 'Your avatar has been updated successfully.',
-                          });
-
-                          window.location.reload();
-                        } catch (error: any) {
-                          console.error('Error uploading avatar:', error);
-                          setIsUploadingAvatar(false);
-                          toast({
-                            title: 'Upload failed',
-                            description: error.message || 'Failed to upload avatar. Please try again.',
-                            variant: 'destructive',
-                          });
-                        }
-
-                        e.target.value = '';
-                      }}
+                      onChange={handleAvatarSelect}
                     />
-                    <label htmlFor="avatar-upload" className={`cursor-pointer block group ${isUploadingAvatar ? 'pointer-events-none' : ''}`}>
+                    <label htmlFor="avatar-upload" className={`cursor-pointer block group ${savingGeneral ? 'pointer-events-none' : ''}`}>
                       <div className="relative">
                         <img
-                          src={avatarUrl}
+                          src={previewUrl || avatarUrl}
                           alt={user?.email || 'User'}
                           className="h-20 w-20 rounded-full object-cover border-2 border-border group-hover:border-primary/50 transition-all shadow-lg"
                           onError={(e) => {
                             e.currentTarget.src = '/images/blank_profile_image.png';
                           }}
                         />
-                        {isUploadingAvatar ? (
+                        {savingGeneral && isAvatarPending ? (
                           <div className="absolute inset-0 rounded-full bg-black/60 flex items-center justify-center">
                             <span className="animate-spin h-6 w-6 border-2 border-white border-t-transparent rounded-full" />
                           </div>
@@ -302,10 +267,11 @@ export default function AccountSettingsPage() {
                 </p>
                 <Button
                   onClick={handleSaveGeneral}
+                  disabled={!canSave}
                   size="sm"
                   className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
                 >
-                  Save
+                  {savingGeneral ? 'Saving...' : 'Save'}
                 </Button>
               </div>
             </div>

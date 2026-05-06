@@ -2,7 +2,8 @@ import { useState, useRef, useEffect, useLayoutEffect, useCallback, memo } from 
 import { createPortal } from 'react-dom';
 import { ArrowUp, X, User, ChevronDown, Brain, Eraser } from 'lucide-react';
 import { api } from '../lib/api';
-import { useUserProfile } from '../hooks/useUserProfile';
+import { useAuth } from '../contexts/AuthContext';
+import { getAvatarUrl, getDisplayNameOrNull } from '../lib/userIdentity';
 import { Avatar, AvatarImage, AvatarFallback } from './ui/avatar';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { cn } from '../lib/utils';
@@ -226,7 +227,9 @@ export function PolicyAIAssistant({
   const [isStreaming, setIsStreaming] = useState(false);
   const [showTargetDropdown, setShowTargetDropdown] = useState(false);
   const [contextUsage, setContextUsage] = useState<{ inputTokens: number; outputTokens: number } | null>(null);
-  const { avatarUrl, fullName } = useUserProfile();
+  const { user } = useAuth();
+  const avatarUrl = getAvatarUrl(user);
+  const fullName = getDisplayNameOrNull(user);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 

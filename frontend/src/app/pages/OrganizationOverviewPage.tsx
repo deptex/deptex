@@ -29,7 +29,7 @@ import { isExtractionOngoing, isInitialExtraction } from '../../lib/extractionSt
 import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
 import { ExtractionProgressCard } from '../../components/ExtractionProgressCard';
 import { useAuth } from '../../contexts/AuthContext';
-import { useUserProfile } from '../../hooks/useUserProfile';
+import { getAvatarUrl, getDisplayNameOrNull } from '../../lib/userIdentity';
 import { useToast } from '../../hooks/use-toast';
 import {
   useOrganizationOverviewGraphLayout,
@@ -293,7 +293,8 @@ export default function OrganizationVulnerabilitiesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { avatarUrl: myAvatarUrl, fullName: myFullName } = useUserProfile();
+  const myAvatarUrl = getAvatarUrl(user);
+  const myFullName = getDisplayNameOrNull(user);
   const { toast } = useToast();
   const { organization } = useOutletContext<OrganizationContextType>();
   const [teamsById, setTeamsById] = useState<Record<string, Team>>({});

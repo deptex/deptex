@@ -1857,8 +1857,6 @@ CREATE TABLE IF NOT EXISTS public.user_notifications (
 CREATE TABLE IF NOT EXISTS public.user_profiles (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL,
-  avatar_url text,
-  full_name text,
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now(),
   default_organization_id uuid
