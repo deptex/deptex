@@ -28,7 +28,7 @@ import { fetchGhsaVulnerabilitiesBatch, filterGhsaVulnsByVersion, ghsaSeverityTo
 import { getVulnCountsBatch, getVulnCountsForVersion, getVulnCountsForVersionsBatch, VulnCounts } from '../lib/vuln-counts';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
 import { getActiveExtractionId } from '../lib/active-extraction';
-import { checkProjectAccess, checkProjectManagePermission } from '../lib/project-access';
+import { checkProjectAccess, checkProjectManagePermission, assertProjectInOrg } from '../lib/project-access';
 import { emitEvent } from '../lib/event-bus';
 import {
   registerGitLabWebhook,
@@ -9708,6 +9708,16 @@ router.post('/:id/projects/:projectId/flow-suppressions', async (req: AuthReques
       return res.status(400).json({ error: 'suppressed_reason must be a string when provided' });
     }
 
+    // Tenant binding MUST happen before access/permission checks. Without it,
+    // a member of org A can submit org A's :id with a projectId from org B,
+    // pass checkProjectAccess (org A membership), and write a suppression
+    // bound to org B's project — the DB trigger blocks the INSERT, but only
+    // the route can return 404 cleanly.
+    const projectInOrg = await assertProjectInOrg(projectId, id);
+    if (!projectInOrg.valid) {
+      return res.status(projectInOrg.error!.status).json({ error: projectInOrg.error!.message });
+    }
+
     const accessCheck = await checkProjectAccess(userId, id, projectId);
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
@@ -9763,6 +9773,12 @@ router.delete('/:id/projects/:projectId/flow-suppressions/:hash', async (req: Au
 
     if (!/^[0-9a-f]{64}$/i.test(flowSignatureHash)) {
       return res.status(400).json({ error: 'hash must be a 64-character hex sha256' });
+    }
+
+    // Tenant binding before access/permission checks — see POST handler comment.
+    const projectInOrg = await assertProjectInOrg(projectId, id);
+    if (!projectInOrg.valid) {
+      return res.status(projectInOrg.error!.status).json({ error: projectInOrg.error!.message });
     }
 
     const accessCheck = await checkProjectAccess(userId, id, projectId);
