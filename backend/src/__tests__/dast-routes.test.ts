@@ -303,6 +303,75 @@ describe('PUT /api/projects/:projectId/dast/targets/:targetId/credentials', () =
 
     process.env.DAST_CREDENTIAL_KEY = saved;
   });
+
+  // skip_login_probe boundary — the route maps body.skip_login_probe to
+  // runFormProbe via strict equality (`=== true`). A regression to a
+  // truthy-check (`!!body.skip_login_probe`) would let an attacker pass
+  // any non-empty string ('never', 'no', 'true') to skip credential
+  // verification and persist an unverified credential.
+  //
+  // Discriminator: when the probe runs against the test fixture login_url,
+  // the global fetch attempts a real network call which fails (test env
+  // has no DNS for app.example.com), surfacing as 422 login_probe_failed.
+  // When the probe is skipped, the route proceeds to encrypt+upsert and
+  // returns 200. So response status doubles as the runFormProbe witness.
+  describe('skip_login_probe boundary (=== true, not truthy)', () => {
+    function makeFormBody(extras: Record<string, unknown> = {}) {
+      return {
+        auth_strategy: 'form',
+        payload: {
+          kind: 'form',
+          login_url: 'https://app.example.com/login',
+          username_field: 'email',
+          password_field: 'password',
+          username: 'a@b.c',
+          password: 'fixture-pw',
+        },
+        ...extras,
+      };
+    }
+
+    function setupForm() {
+      setProjectAccessOwner(PROJECT_A, ORG_A);
+      setTableResponse('project_dast_targets', 'maybeSingle', {
+        data: targetRowOrgA(),
+        error: null,
+      });
+      setTableResponse('project_dast_config', 'maybeSingle', {
+        data: { scan_timeout_minutes: 30 },
+        error: null,
+      });
+      setTableResponse('project_dast_credentials', 'then', { data: null, error: null });
+    }
+
+    it('skip_login_probe=true (boolean) → probe is skipped (200)', async () => {
+      setupForm();
+      const r = await request(makeApp())
+        .put(`/api/projects/${PROJECT_A}/dast/targets/${TARGET_A}/credentials`)
+        .send(makeFormBody({ skip_login_probe: true }));
+      expect(r.status).toBe(200);
+    });
+
+    it("skip_login_probe='true' (string) → probe RUNS and fails on test fixture", async () => {
+      setupForm();
+      const r = await request(makeApp())
+        .put(`/api/projects/${PROJECT_A}/dast/targets/${TARGET_A}/credentials`)
+        .send(makeFormBody({ skip_login_probe: 'true' }));
+      // Probe ran — response is the 422 from probeFormLogin (fetch failed
+      // on test-env DNS → opaque "login endpoint did not respond").
+      expect(r.status).toBe(422);
+      expect(r.body.error_code).toBe('login_probe_failed');
+    });
+
+    it('skip_login_probe=1 (number) → probe RUNS', async () => {
+      setupForm();
+      const r = await request(makeApp())
+        .put(`/api/projects/${PROJECT_A}/dast/targets/${TARGET_A}/credentials`)
+        .send(makeFormBody({ skip_login_probe: 1 }));
+      expect(r.status).toBe(422);
+      expect(r.body.error_code).toBe('login_probe_failed');
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

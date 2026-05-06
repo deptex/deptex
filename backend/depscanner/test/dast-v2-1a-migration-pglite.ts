@@ -334,6 +334,134 @@ async function main() {
   assert(fnNames.includes('queue_scan_job'), 'queue_scan_job present');
 
   // -------------------------------------------------------------------------
+  // RPC SQL semantics — actually CALL queue_scan_job + commit_dast_target_run
+  // and verify the error texts + side-effects the route layer maps to HTTP
+  // responses. Pre-2.1a-hardening, the migration test only checked the RPCs
+  // EXIST in pg_proc; if the body's RAISE messages drifted, every route's
+  // text-based status mapping silently fell through to 500. (v2.1a critical
+  // review P1.)
+  // -------------------------------------------------------------------------
+  console.log('\nRPC semantics — queue_scan_job + commit_dast_target_run...');
+
+  // proj-a has a real-legacy target (https://staging.proj-a.example), org=ORG.
+  const targetA = (
+    await storage.db.query<{ id: string }>(
+      `SELECT id FROM project_dast_targets WHERE project_id = '${PROJ_A}';`,
+    )
+  ).rows[0].id;
+  assert(targetA, 'proj-a backfill produced a target row');
+
+  // 1) Tenant drift: pass a target_id from one project but project_id of
+  //    another. RPC must raise 'tenant drift'.
+  const projB = PROJ_B;
+  const targetB = (
+    await storage.db.query<{ id: string }>(
+      `SELECT id FROM project_dast_targets WHERE project_id = '${projB}';`,
+    )
+  ).rows[0].id;
+
+  let driftMsg = '';
+  try {
+    await storage.db.exec(`
+      SELECT queue_scan_job(
+        '${PROJ_A}'::uuid, '${ORG}'::uuid, 'dast_zap', '{}'::jsonb,
+        '${targetB}'::uuid, 'https://app.example.com/', NULL, NULL, NULL, NULL
+      );
+    `);
+  } catch (e: any) {
+    driftMsg = String(e?.message ?? '');
+  }
+  assert(
+    /tenant drift/i.test(driftMsg),
+    `cross-project target_id raises 'tenant drift' (got: ${driftMsg.slice(0, 120)})`,
+  );
+
+  // 2) SSRF: private host literal must be rejected at the DB layer.
+  let ssrfMsg = '';
+  try {
+    await storage.db.exec(`
+      SELECT queue_scan_job(
+        '${PROJ_A}'::uuid, '${ORG}'::uuid, 'dast_zap', '{}'::jsonb,
+        '${targetA}'::uuid, 'http://169.254.169.254/', NULL, NULL, NULL, NULL
+      );
+    `);
+  } catch (e: any) {
+    ssrfMsg = String(e?.message ?? '');
+  }
+  assert(
+    /rejected.*private|loopback|internal/i.test(ssrfMsg),
+    `IMDS host raises private/loopback/internal (got: ${ssrfMsg.slice(0, 120)})`,
+  );
+
+  // 3) Happy path: queue a DAST scan for proj-a with a public URL — should
+  //    succeed and insert a scan_jobs row.
+  await storage.db.exec(`DELETE FROM scan_jobs WHERE project_id = '${PROJ_A}';`);
+  const okRow = await storage.db.query<{ id: string; status: string }>(`
+    SELECT (queue_scan_job(
+      '${PROJ_A}'::uuid, '${ORG}'::uuid, 'dast_zap', '{}'::jsonb,
+      '${targetA}'::uuid, 'https://app.example.com/', NULL, NULL, NULL, NULL
+    )).id;
+  `);
+  assert(okRow.rows.length === 1, 'queue_scan_job happy path inserts one row');
+  const scanJobId = okRow.rows[0].id;
+
+  // 4) Per-project concurrency cap: a second queue for the same project
+  //    must raise 'project_concurrent_dast_blocked'.
+  let projConcurMsg = '';
+  try {
+    await storage.db.exec(`
+      SELECT queue_scan_job(
+        '${PROJ_A}'::uuid, '${ORG}'::uuid, 'dast_zap', '{}'::jsonb,
+        '${targetA}'::uuid, 'https://app.example.com/', NULL, NULL, NULL, NULL
+      );
+    `);
+  } catch (e: any) {
+    projConcurMsg = String(e?.message ?? '');
+  }
+  assert(
+    /project_concurrent_dast_blocked/.test(projConcurMsg),
+    `second concurrent queue raises 'project_concurrent_dast_blocked' (got: ${projConcurMsg.slice(0, 120)})`,
+  );
+
+  // 5) commit_dast_target_run rotates the active_dast_run_id pointer on the
+  //    target row. Mark the scan_jobs row processing then call commit; the
+  //    target's active_dast_run_id should equal the run id we passed.
+  await storage.db.exec(`UPDATE scan_jobs SET status = 'processing' WHERE id = '${scanJobId}';`);
+  const runId = 'dast_run_test_001';
+  await storage.db.exec(`
+    SELECT commit_dast_target_run('${targetA}'::uuid, '${runId}');
+  `);
+  const targetAfter = await storage.db.query<{
+    active_dast_run_id: string;
+    previous_dast_run_id: string;
+  }>(`
+    SELECT active_dast_run_id, previous_dast_run_id
+    FROM project_dast_targets WHERE id = '${targetA}';
+  `);
+  assert(
+    targetAfter.rows[0].active_dast_run_id === runId,
+    `commit_dast_target_run sets active_dast_run_id to ${runId} (got ${targetAfter.rows[0].active_dast_run_id})`,
+  );
+
+  // 6) commit_dast_run (legacy wrapper) delegates to commit_dast_target_run
+  //    against the project's first target — confirm it still works.
+  await storage.db.exec(`UPDATE project_dast_targets SET active_dast_run_id = NULL WHERE id = '${targetA}';`);
+  const legacyRunId = 'dast_run_legacy_001';
+  await storage.db.exec(`
+    SELECT commit_dast_run('${PROJ_A}'::uuid, '${legacyRunId}');
+  `);
+  const targetAfterLegacy = await storage.db.query<{ active_dast_run_id: string }>(`
+    SELECT active_dast_run_id FROM project_dast_targets WHERE id = '${targetA}';
+  `);
+  assert(
+    targetAfterLegacy.rows[0].active_dast_run_id === legacyRunId,
+    `commit_dast_run wrapper delegates correctly (got ${targetAfterLegacy.rows[0].active_dast_run_id})`,
+  );
+
+  // Reset for downstream idempotency probe.
+  await storage.db.exec(`DELETE FROM scan_jobs WHERE project_id = '${PROJ_A}';`);
+
+  // -------------------------------------------------------------------------
   // Idempotency probe — re-run pass-1, expect zero churn.
   // -------------------------------------------------------------------------
   console.log('\nIdempotency probe — re-run backfill, expect no churn...');
