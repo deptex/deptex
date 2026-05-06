@@ -76,6 +76,39 @@ RUN curl -sSfL https://github.com/aquasecurity/trivy/releases/download/v0.69.3/t
   && chmod +x /usr/local/bin/trivy \
   && trivy --version
 
+# Crane (go-containerregistry) for HEAD-only manifest digest probe before the
+# Trivy pull. Crane runs IN the worker that holds decrypted AWS root keys +
+# GCP service-account JSON + Azure SP secrets — a compromised binary equals
+# full credential exfiltration across every customer. Hence the same pinned
+# tarball + sha256sum -c verification we apply to TruffleHog. Multi-arch via
+# the buildx-populated TARGETARCH ARG. Bumping CRANE_VERSION without bumping
+# both SHAs is enforced by .github/workflows/crane-pin-check.yml.
+ARG CRANE_VERSION=v0.20.2
+ARG CRANE_SHA256_AMD64=c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b
+ARG CRANE_SHA256_ARM64=aff0db48825124c9331ea310057214bd4e92c01aa2e414d539e9659841d9422a
+ARG TARGETARCH
+RUN set -eux; \
+    case "$TARGETARCH" in \
+      amd64) CRANE_ARCH=x86_64; CRANE_SHA256=$CRANE_SHA256_AMD64 ;; \
+      arm64) CRANE_ARCH=arm64;  CRANE_SHA256=$CRANE_SHA256_ARM64 ;; \
+      "") echo "TARGETARCH not set — build with docker buildx so it auto-populates"; exit 1 ;; \
+      *) echo "Unsupported arch: $TARGETARCH"; exit 1 ;; \
+    esac; \
+    curl -sSfL "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_${CRANE_ARCH}.tar.gz" \
+      -o /tmp/crane.tar.gz; \
+    echo "${CRANE_SHA256}  /tmp/crane.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/crane.tar.gz -C /usr/local/bin crane; \
+    rm /tmp/crane.tar.gz; \
+    chmod +x /usr/local/bin/crane; \
+    crane version
+# cosign verify-blob is the next-tier hardening. go-containerregistry releases
+# ARE cosign-signed (Sigstore keyless OIDC). Add when cosign is in the base
+# image:
+#   RUN cosign verify-blob \
+#     --certificate-identity-regexp='https://github.com/google/go-containerregistry' \
+#     --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
+#     /tmp/crane.tar.gz
+
 # Install GuardDog into an isolated venv. GuardDog ships its own pinned
 # Semgrep dependency that conflicts with the version above; dropping it into
 # /opt/guarddog-venv keeps the conflicts contained to the malicious-package

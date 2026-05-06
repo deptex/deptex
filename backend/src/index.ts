@@ -18,6 +18,7 @@ import userNotificationsRouter from './routes/user-notifications';
 import aegisTaskStepRouter from './routes/aegis-task-step';
 import stripeWebhooksRouter from './routes/stripe-webhooks';
 import syncCounterResetRouter from './routes/sync-counter-reset';
+import scannerCacheReaperRouter from './routes/scanner-cache-reaper';
 import ssoRouter from './routes/sso';
 import userSessionsRouter from './routes/user-sessions';
 import userApiTokensRouter from './routes/user-api-tokens';
@@ -56,6 +57,8 @@ import capabilitiesRouter from './routes/capabilities';
 import maliciousRetentionRouter from './routes/malicious-retention';
 import reachabilitySettingsRouter from './routes/reachability-settings';
 import generatedRulesRouter from './routes/generated-rules';
+import registryCredentialsRouter from './routes/registry-credentials';
+import configuredImagesRouter from './routes/configured-images';
 
 const app = express();
 app.set('trust proxy', true);
@@ -98,8 +101,12 @@ app.use((req, res, next) => {
   next();
 });
 
-// Parse JSON and capture raw body for signature verification (QStash, GitHub webhook)
+// Parse JSON and capture raw body for signature verification (QStash, GitHub webhook).
+// Explicit limit so a future refactor can't silently uncap the body-parser
+// default; 100kb is plenty for any current route (registry creds top out at
+// ~10kb after per-field caps).
 app.use(express.json({
+  limit: '100kb',
   verify: (req: any, res, buf) => {
     req.rawBody = buf.toString();
   }
@@ -123,6 +130,7 @@ app.use('/api/user-notifications', userNotificationsRouter);
 app.use('/api/internal/aegis', aegisTaskStepRouter);
 app.use('/api/stripe/webhooks', stripeWebhooksRouter);
 app.use('/api/workers', syncCounterResetRouter);
+app.use('/api/workers', scannerCacheReaperRouter);
 app.use('/api/sso', ssoRouter);
 app.use('/api/user/sessions', userSessionsRouter);
 app.use('/api/user/api-tokens', userApiTokensRouter);
@@ -155,6 +163,8 @@ app.use('/api/organizations', organizationCanvasRouter);
 app.use('/api/organizations', activitiesRouter);
 app.use('/api/organizations', reachabilitySettingsRouter);
 app.use('/api/organizations', generatedRulesRouter);
+app.use('/api/organizations', registryCredentialsRouter);
+app.use('/api/organizations', configuredImagesRouter);
 app.use('/api/integrations', integrationsRouter);
 app.use('/api/invitations', invitationsRouter);
 app.use('/api/aegis', aegisRouter);

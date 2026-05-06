@@ -10,7 +10,9 @@ import {
     SiDart, SiFlutter,
     SiElixir,
     SiSwift,
+    SiTerraform, SiKubernetes, SiDocker, SiHelm, SiServerless, SiGithubactions,
 } from '@icons-pack/react-simple-icons';
+import { Cloud, FileCode } from 'lucide-react';
 
 const icons: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
     nextjs: SiNextdotjs,
@@ -52,6 +54,19 @@ const icons: Record<string, React.ComponentType<{ size?: number; className?: str
     flutter: SiFlutter,
     elixir: SiElixir,
     swift: SiSwift,
+
+    // IaC frameworks (M14). Brand icons used where Simple Icons ships them;
+    // generic lucide-react glyphs used as placeholders for AWS/Azure-derived
+    // formats which Simple Icons no longer publishes.
+    terraform: SiTerraform,
+    kubernetes: SiKubernetes,
+    dockerfile: SiDocker,
+    helm: SiHelm,
+    serverless: SiServerless,
+    github_actions: SiGithubactions,
+    cloudformation: Cloud,
+    arm: Cloud,
+    bicep: FileCode,
 } as Record<string, React.ComponentType<{ size?: number; className?: string }>>;
 
 export function FrameworkIcon({ frameworkId, size = 20, className }: { frameworkId?: string | null; size?: number; className?: string }) {

@@ -1,4 +1,4 @@
-import { parseCheckovOutput } from '../checkov';
+import { extractComplianceRefs, parseCheckovOutput } from '../checkov';
 
 describe('parseCheckovOutput', () => {
   it('parses a single-framework report and emits a stable checkov:<rule>:<resource> fingerprint', () => {
@@ -91,21 +91,68 @@ describe('parseCheckovOutput', () => {
     expect(parseCheckovOutput(sample, 'checkov@3.2.420')).toHaveLength(0);
   });
 
-  it('drops findings whose framework Checkov reports as unsupported at v1', () => {
+  it('drops findings whose check_type is outside the v2 framework taxonomy', () => {
+    // bitbucket_pipelines is a real Checkov framework but not in our 9-value
+    // IaCFramework union; such findings are dropped.
     const sample = JSON.stringify({
-      check_type: 'cloudformation',
+      check_type: 'bitbucket_pipelines',
       results: {
         failed_checks: [
           {
-            bc_check_id: 'CKV_AWS_99',
-            resource_address: 'AWS::S3::Bucket.x',
-            file_path: 'cfn.yml',
-            check_name: 'cfn',
+            check_id: 'CKV_BITBUCKET_1',
+            resource_address: 'pipeline.steps[0]',
+            file_path: 'bitbucket-pipelines.yml',
+            check_name: 'bb',
           },
         ],
       },
     });
     expect(parseCheckovOutput(sample, 'checkov@3.2.420')).toHaveLength(0);
+  });
+
+  it.each([
+    ['cloudformation', 'CKV_AWS_99', 'cfn.yml'],
+    ['helm', 'CKV_K8S_8', 'charts/web/templates/deploy.yaml'],
+    ['arm', 'CKV_AZURE_1', 'azure/template.json'],
+    ['bicep', 'CKV_AZURE_50', 'main.bicep'],
+    ['serverless', 'CKV_AWS_115', 'serverless.yml'],
+    ['github_actions', 'CKV_GHA_1', '.github/workflows/ci.yml'],
+  ])('maps Checkov check_type %s through to the canonical framework', (checkType, ruleId, filePath) => {
+    const sample = JSON.stringify({
+      check_type: checkType,
+      results: {
+        failed_checks: [
+          {
+            check_id: ruleId,
+            resource_address: 'r.name',
+            file_path: filePath,
+            check_name: 'rule',
+          },
+        ],
+      },
+    });
+    const findings = parseCheckovOutput(sample, 'checkov@3.2.420');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].framework).toBe(checkType);
+  });
+
+  it('aliases the kustomize check_type to the kubernetes framework', () => {
+    const sample = JSON.stringify({
+      check_type: 'kustomize',
+      results: {
+        failed_checks: [
+          {
+            check_id: 'CKV_K8S_8',
+            resource_address: 'Deployment.app',
+            file_path: 'overlays/prod/kustomization.yaml',
+            check_name: 'k',
+          },
+        ],
+      },
+    });
+    const findings = parseCheckovOutput(sample, 'checkov@3.2.420');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].framework).toBe('kubernetes');
   });
 
   it('returns [] on malformed JSON', () => {
@@ -135,5 +182,113 @@ describe('parseCheckovOutput', () => {
     expect(findings).toHaveLength(1);
     expect(findings[0].rule_id).toBe('CKV_AWS_145');
     expect(findings[0].iac_fingerprint).toBe('checkov:CKV_AWS_145:aws_s3_bucket.public_bucket');
+  });
+
+  it('threads compliance_refs through from metadata.benchmark', () => {
+    const sample = JSON.stringify({
+      check_type: 'terraform',
+      results: {
+        failed_checks: [
+          {
+            check_id: 'CKV_AWS_20',
+            resource_address: 'aws_s3_bucket.x',
+            file_path: 'main.tf',
+            check_name: 'r',
+            metadata: {
+              benchmark: {
+                'CIS AWS V1.4': ['1.1.1', '1.1.2'],
+                SOC2: ['CC6.1'],
+              },
+            },
+          },
+        ],
+      },
+    });
+    const findings = parseCheckovOutput(sample, 'checkov@3.2.420');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].compliance_refs).toEqual({
+      cis_aws_v1_4: ['1.1.1', '1.1.2'],
+      soc2: ['CC6.1'],
+    });
+  });
+
+  it('emits compliance_refs = null when metadata.benchmark is absent', () => {
+    const sample = JSON.stringify({
+      check_type: 'terraform',
+      results: {
+        failed_checks: [
+          {
+            check_id: 'CKV_AWS_20',
+            resource_address: 'aws_s3_bucket.x',
+            file_path: 'main.tf',
+            check_name: 'r',
+            metadata: {},
+          },
+        ],
+      },
+    });
+    const findings = parseCheckovOutput(sample, 'checkov@3.2.420');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].compliance_refs).toBeNull();
+  });
+});
+
+describe('extractComplianceRefs', () => {
+  it('returns null for absent / empty metadata', () => {
+    expect(extractComplianceRefs(null)).toBeNull();
+    expect(extractComplianceRefs(undefined)).toBeNull();
+    expect(extractComplianceRefs({})).toBeNull();
+    expect(extractComplianceRefs({ benchmark: null } as any)).toBeNull();
+  });
+
+  it('parses the object-shaped benchmark map', () => {
+    expect(
+      extractComplianceRefs({
+        benchmark: {
+          'CIS Kubernetes V1.7': ['5.1.1', '5.1.2'],
+          'NIST 800-53': ['AC-2'],
+        },
+      })
+    ).toEqual({
+      cis_kubernetes_v1_7: ['5.1.1', '5.1.2'],
+      nist_800_53: ['AC-2'],
+    });
+  });
+
+  it('parses the array-of-pairs benchmark shape', () => {
+    expect(
+      extractComplianceRefs({
+        benchmark: [
+          { name: 'PCI-DSS', ids: ['1.2.1'] },
+          { name: 'HIPAA', ids: ['164.312(a)(1)'] },
+        ],
+      })
+    ).toEqual({
+      pci_dss: ['1.2.1'],
+      hipaa: ['164.312(a)(1)'],
+    });
+  });
+
+  it('returns null when the benchmark map exists but every entry is empty', () => {
+    expect(
+      extractComplianceRefs({
+        benchmark: {
+          'CIS AWS': [],
+          SOC2: [null, undefined, ''] as any,
+        },
+      })
+    ).toBeNull();
+  });
+
+  it('skips array entries that are missing name or ids', () => {
+    expect(
+      extractComplianceRefs({
+        benchmark: [
+          { name: 'CIS AWS', ids: ['1.1'] },
+          { name: 'incomplete' }, // no ids
+          { ids: ['x'] }, // no name
+        ] as any,
+      })
+    ).toEqual({ cis_aws: ['1.1'] });
   });
 });

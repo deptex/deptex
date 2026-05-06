@@ -2212,6 +2212,112 @@ export const api = {
     );
   },
 
+  // ============================================================
+  // Registry credentials (org-scoped) + configured images (project-scoped)
+  // Backend routes mounted in src/routes/registry-credentials.ts and
+  // src/routes/configured-images.ts. The encrypted credential blob is never
+  // returned to the client — only metadata + the test endpoint's pass/fail.
+  // ============================================================
+
+  async listRegistryCredentials(organizationId: string): Promise<RegistryCredential[]> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/registry-credentials`);
+  },
+
+  async createRegistryCredential(
+    organizationId: string,
+    body: CreateRegistryCredentialBody
+  ): Promise<RegistryCredential> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/registry-credentials`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+
+  async updateRegistryCredentialDisplayName(
+    organizationId: string,
+    credentialId: string,
+    displayName: string
+  ): Promise<RegistryCredential> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/registry-credentials/${credentialId}`,
+      { method: 'PATCH', body: JSON.stringify({ display_name: displayName }) }
+    );
+  },
+
+  async rotateRegistryCredential(
+    organizationId: string,
+    credentialId: string,
+    newPlaintext: CredentialPlaintext
+  ): Promise<RegistryCredential> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/registry-credentials/${credentialId}/rotate`,
+      { method: 'PATCH', body: JSON.stringify({ credentials: newPlaintext }) }
+    );
+  },
+
+  async testRegistryCredential(
+    organizationId: string,
+    credentialId: string
+  ): Promise<RegistryCredentialTestResult> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/registry-credentials/${credentialId}/test`,
+      { method: 'POST' }
+    );
+  },
+
+  async deleteRegistryCredential(
+    organizationId: string,
+    credentialId: string
+  ): Promise<DeleteRegistryCredentialResponse> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/registry-credentials/${credentialId}`,
+      { method: 'DELETE' }
+    );
+  },
+
+  async listConfiguredImages(
+    organizationId: string,
+    projectId: string
+  ): Promise<ConfiguredImage[]> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/configured-images`
+    );
+  },
+
+  async createConfiguredImage(
+    organizationId: string,
+    projectId: string,
+    body: CreateConfiguredImageBody
+  ): Promise<ConfiguredImage> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/configured-images`,
+      { method: 'POST', body: JSON.stringify(body) }
+    );
+  },
+
+  async toggleConfiguredImage(
+    organizationId: string,
+    projectId: string,
+    imageId: string,
+    enabled: boolean
+  ): Promise<ConfiguredImage> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/configured-images/${imageId}`,
+      { method: 'PATCH', body: JSON.stringify({ enabled }) }
+    );
+  },
+
+  async deleteConfiguredImage(
+    organizationId: string,
+    projectId: string,
+    imageId: string
+  ): Promise<{ message: string }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/configured-images/${imageId}`,
+      { method: 'DELETE' }
+    );
+  },
+
   maliciousFindings: {
     async list(
       organizationId: string,
@@ -4426,6 +4532,39 @@ export interface LicenseViolation {
   depscore: number | null;
 }
 
+// Mirror of `IAC_FRAMEWORKS` in `backend/depscanner/src/scanners/types.ts`.
+// Kept in sync manually (frontend can't import from depscanner package).
+export const IAC_FRAMEWORKS = [
+  'terraform',
+  'kubernetes',
+  'dockerfile',
+  'helm',
+  'cloudformation',
+  'arm',
+  'bicep',
+  'serverless',
+  'github_actions',
+] as const;
+
+export type IaCFramework = (typeof IAC_FRAMEWORKS)[number];
+
+const IAC_FRAMEWORK_LABELS: Record<IaCFramework, string> = {
+  terraform: 'Terraform',
+  kubernetes: 'Kubernetes',
+  dockerfile: 'Dockerfile',
+  helm: 'Helm',
+  cloudformation: 'CloudFormation',
+  arm: 'Azure ARM',
+  bicep: 'Bicep',
+  serverless: 'Serverless',
+  github_actions: 'GitHub Actions',
+};
+
+export function frameworkLabel(framework: IaCFramework | string | null | undefined): string {
+  if (!framework) return '';
+  return IAC_FRAMEWORK_LABELS[framework as IaCFramework] ?? String(framework);
+}
+
 export interface IaCFinding {
   id: string;
   project_id: string;
@@ -4434,7 +4573,7 @@ export interface IaCFinding {
   scanner: 'trivy' | 'checkov';
   scanner_version: string | null;
   rule_id: string;
-  framework: 'terraform' | 'kubernetes' | 'dockerfile';
+  framework: IaCFramework;
   file_path: string;
   start_line: number | null;
   end_line: number | null;
@@ -4446,6 +4585,7 @@ export interface IaCFinding {
   code_snippet: string | null;
   rule_doc_url: string | null;
   iac_fingerprint: string | null;
+  compliance_refs: Record<string, string[]> | null;
   status: 'open' | 'ignored';
   suppressed: boolean;
   risk_accepted: boolean;
@@ -4463,7 +4603,7 @@ export interface ContainerFinding {
   scanner_version: string | null;
   image_reference: string;
   image_digest: string;
-  image_source: 'dockerfile_base';
+  image_source: 'dockerfile_base' | 'configured_image';
   os_package_name: string;
   os_package_version: string;
   os_package_ecosystem: string | null;
@@ -4491,9 +4631,97 @@ export interface ContainerFinding {
 export interface ScannerSummary {
   iac: { critical: number; high: number; medium: number; low: number; info: number; ignored: number };
   container: { critical: number; high: number; medium: number; low: number; info: number; ignored: number };
-  infra_types: Array<'terraform' | 'kubernetes' | 'dockerfile'>;
+  infra_types: Array<IaCFramework>;
   last_scan_at: string | null;
   skipped_images: Array<{ image: string; reason: string }>;
+}
+
+export type RegistryType =
+  | 'ghcr'
+  | 'ecr'
+  | 'gcr'
+  | 'acr'
+  | 'dockerhub'
+  | 'quay'
+  | 'harbor'
+  | 'jfrog'
+  | 'custom';
+
+export type CredentialShape =
+  | 'username_password'
+  | 'aws_keys'
+  | 'gcp_service_account_key'
+  | 'azure_service_principal'
+  | 'token';
+
+// Public API shape — encrypted_credentials is server-only and never serialized
+// in responses. Mirrors backend/depscanner/src/scanners/types.ts; kept in sync
+// manually (frontend can't import from depscanner package).
+export interface RegistryCredential {
+  id: string;
+  organization_id: string;
+  registry_type: RegistryType;
+  registry_url: string | null;
+  display_name: string;
+  credential_shape: CredentialShape;
+  encryption_key_version: number;
+  last_used_at: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type CredentialPlaintext =
+  | { shape: 'username_password'; username: string; password: string }
+  | {
+      shape: 'aws_keys';
+      access_key_id: string;
+      secret_access_key: string;
+      session_token?: string;
+      region: string;
+    }
+  | { shape: 'gcp_service_account_key'; service_account_json: string }
+  | {
+      shape: 'azure_service_principal';
+      client_id: string;
+      client_secret: string;
+      tenant_id: string;
+    }
+  | { shape: 'token'; token: string };
+
+export interface CreateRegistryCredentialBody {
+  registry_type: RegistryType;
+  registry_url?: string | null;
+  display_name: string;
+  credentials: CredentialPlaintext;
+}
+
+export interface ConfiguredImage {
+  id: string;
+  project_id: string;
+  organization_id: string;
+  image_reference: string;
+  credentials_id: string | null;
+  credentials_display?: { display_name: string; registry_type: RegistryType } | null;
+  enabled: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateConfiguredImageBody {
+  image_reference: string;
+  credentials_id?: string | null;
+  enabled?: boolean;
+}
+
+export type RegistryCredentialTestResult =
+  | { ok: true }
+  | { ok: false; error_class: 'decrypt_failed' | 'shape_invalid' };
+
+export interface DeleteRegistryCredentialResponse {
+  message: string;
+  detached_image_count: number;
 }
 
 export type MaliciousScanner = 'feed' | 'guarddog' | 'maintainer';

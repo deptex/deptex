@@ -3443,6 +3443,28 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.enforce_pci_org_id_and_null_creds()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  derived_org UUID;
+BEGIN
+  derived_org := (SELECT organization_id FROM projects WHERE id = NEW.project_id);
+  IF derived_org IS NULL THEN
+    RAISE EXCEPTION 'enforce_pci_org_id_and_null_creds: project % not found', NEW.project_id;
+  END IF;
+
+  IF TG_OP = 'UPDATE' AND derived_org IS DISTINCT FROM OLD.organization_id THEN
+    NEW.credentials_id := NULL;
+  END IF;
+
+  NEW.organization_id := derived_org;
+  RETURN NEW;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.enforce_pmf_org_consistency()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -4474,6 +4496,33 @@ CREATE OR REPLACE FUNCTION public.inner_product(vector, vector)
 AS '$libdir/vector', $function$inner_product$function$
 ;
 
+CREATE OR REPLACE FUNCTION public.insert_configured_image_with_cap(p_project_id uuid, p_organization_id uuid, p_image_reference text, p_credentials_id uuid, p_enabled boolean, p_created_by uuid, p_cap integer DEFAULT 20)
+ RETURNS SETOF project_configured_images
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  current_count INTEGER;
+BEGIN
+  IF p_enabled THEN
+    SELECT count(*) INTO current_count
+      FROM project_configured_images
+      WHERE project_id = p_project_id AND enabled = true
+      FOR UPDATE;
+    IF current_count >= p_cap THEN
+      RAISE EXCEPTION 'image_cap_reached' USING ERRCODE = 'check_violation';
+    END IF;
+  END IF;
+
+  RETURN QUERY
+    INSERT INTO project_configured_images
+      (project_id, organization_id, image_reference, credentials_id, enabled, created_by)
+    VALUES
+      (p_project_id, p_organization_id, p_image_reference, p_credentials_id, p_enabled, p_created_by)
+    RETURNING *;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.insert_malicious_findings_with_recompute(p_findings jsonb)
  RETURNS integer
  LANGUAGE plpgsql
@@ -5462,6 +5511,34 @@ end;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.update_configured_image_with_cap(p_image_id uuid, p_project_id uuid, p_organization_id uuid, p_enabled boolean, p_credentials_id_set boolean, p_credentials_id uuid, p_cap integer DEFAULT 20)
+ RETURNS SETOF project_configured_images
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  current_count INTEGER;
+BEGIN
+  IF p_enabled IS TRUE THEN
+    SELECT count(*) INTO current_count
+      FROM project_configured_images
+      WHERE project_id = p_project_id AND enabled = true AND id <> p_image_id
+      FOR UPDATE;
+    IF current_count >= p_cap THEN
+      RAISE EXCEPTION 'image_cap_reached' USING ERRCODE = 'check_violation';
+    END IF;
+  END IF;
+
+  RETURN QUERY
+    UPDATE project_configured_images SET
+      enabled = COALESCE(p_enabled, enabled),
+      credentials_id = CASE WHEN p_credentials_id_set THEN p_credentials_id ELSE credentials_id END,
+      updated_at = NOW()
+    WHERE id = p_image_id AND project_id = p_project_id AND organization_id = p_organization_id
+    RETURNING *;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.update_organization_integrations_updated_at()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -6015,7 +6092,9 @@ ALTER TABLE public.organization_notification_rules ADD CONSTRAINT organization_n
 ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_policy_changes_code_type_check CHECK ((code_type = ANY (ARRAY['package_policy'::text, 'project_status'::text, 'pr_check'::text])));
 ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_ai_provider_check CHECK ((ai_provider = ANY (ARRAY['anthropic'::text, 'openai'::text, 'google'::text])));
 ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_on_budget_exhaustion_check CHECK ((on_budget_exhaustion = ANY (ARRAY['skip'::text, 'fall_back_to_haiku'::text])));
+ALTER TABLE public.organization_registry_credentials ADD CONSTRAINT orc_display_name_length_check CHECK ((length(display_name) <= 200));
 ALTER TABLE public.organization_registry_credentials ADD CONSTRAINT orc_registry_shape_pair_check CHECK (((((((((((((((((registry_type = 'ghcr'::text) AND (credential_shape = 'username_password'::text)) OR ((registry_type = 'ghcr'::text) AND (credential_shape = 'token'::text))) OR ((registry_type = 'ecr'::text) AND (credential_shape = 'aws_keys'::text))) OR ((registry_type = 'gcr'::text) AND (credential_shape = 'gcp_service_account_key'::text))) OR ((registry_type = 'acr'::text) AND (credential_shape = 'azure_service_principal'::text))) OR ((registry_type = 'acr'::text) AND (credential_shape = 'username_password'::text))) OR ((registry_type = 'dockerhub'::text) AND (credential_shape = 'username_password'::text))) OR ((registry_type = 'dockerhub'::text) AND (credential_shape = 'token'::text))) OR ((registry_type = 'quay'::text) AND (credential_shape = 'username_password'::text))) OR ((registry_type = 'quay'::text) AND (credential_shape = 'token'::text))) OR ((registry_type = 'harbor'::text) AND (credential_shape = 'username_password'::text))) OR ((registry_type = 'jfrog'::text) AND (credential_shape = 'username_password'::text))) OR ((registry_type = 'jfrog'::text) AND (credential_shape = 'token'::text))) OR ((registry_type = 'custom'::text) AND (credential_shape = 'username_password'::text))) OR ((registry_type = 'custom'::text) AND (credential_shape = 'token'::text))));
+ALTER TABLE public.organization_registry_credentials ADD CONSTRAINT orc_registry_url_length_check CHECK (((registry_url IS NULL) OR (length(registry_url) <= 512)));
 ALTER TABLE public.organization_registry_credentials ADD CONSTRAINT organization_registry_credentials_credential_shape_check CHECK ((credential_shape = ANY (ARRAY['username_password'::text, 'aws_keys'::text, 'gcp_service_account_key'::text, 'azure_service_principal'::text, 'token'::text])));
 ALTER TABLE public.organization_registry_credentials ADD CONSTRAINT organization_registry_credentials_registry_type_check CHECK ((registry_type = ANY (ARRAY['ghcr'::text, 'ecr'::text, 'gcr'::text, 'acr'::text, 'dockerhub'::text, 'quay'::text, 'harbor'::text, 'jfrog'::text, 'custom'::text])));
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_max_hours_check CHECK ((max_hours > 0));
@@ -6028,6 +6107,8 @@ ALTER TABLE public.package_maintainer_snapshots ADD CONSTRAINT pms_ecosystem_chk
 ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'composer'::text, 'cargo'::text, 'nuget'::text, 'github-actions'::text, 'vscode'::text])));
 ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_scanner_chk CHECK ((scanner = ANY (ARRAY['guarddog'::text, 'ai_review'::text])));
 ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text])));
+ALTER TABLE public.project_configured_images ADD CONSTRAINT pci_image_reference_length_check CHECK ((length(image_reference) <= 512));
+ALTER TABLE public.project_container_findings ADD CONSTRAINT pcf_risk_accepted_reason_length_check CHECK (((risk_accepted_reason IS NULL) OR (length(risk_accepted_reason) <= 4096)));
 ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_image_source_check CHECK ((image_source = ANY (ARRAY['dockerfile_base'::text, 'configured_image'::text])));
 ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_scan_profile_check CHECK ((scan_profile = ANY (ARRAY['auto'::text, 'quick'::text, 'full'::text, 'api'::text])));
 ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_scan_timeout_minutes_check CHECK (((scan_timeout_minutes >= 5) AND (scan_timeout_minutes <= 60)));
@@ -6041,6 +6122,7 @@ ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_dete
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_epd_confidence_tier CHECK (((epd_confidence_tier IS NULL) OR (epd_confidence_tier = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text]))));
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_reachability_status CHECK ((reachability_status = ANY (ARRAY['reachable'::text, 'unreachable'::text, 'unknown'::text])));
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_sla_status CHECK (((sla_status IS NULL) OR (sla_status = ANY (ARRAY['on_track'::text, 'warning'::text, 'breached'::text, 'met'::text, 'resolved_late'::text, 'exempt'::text]))));
+ALTER TABLE public.project_iac_findings ADD CONSTRAINT piaf_risk_accepted_reason_length_check CHECK (((risk_accepted_reason IS NULL) OR (length(risk_accepted_reason) <= 4096)));
 ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_framework_check CHECK ((framework = ANY (ARRAY['terraform'::text, 'kubernetes'::text, 'dockerfile'::text, 'helm'::text, 'cloudformation'::text, 'arm'::text, 'bicep'::text, 'serverless'::text, 'github_actions'::text])));
 ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_scanner_check CHECK ((scanner = ANY (ARRAY['trivy'::text, 'checkov'::text])));
 ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_reachability_chk CHECK (((reachability_level IS NULL) OR (reachability_level = ANY (ARRAY['unimported'::text, 'imported_unused'::text, 'module'::text, 'function'::text]))));
@@ -6458,6 +6540,7 @@ CREATE INDEX idx_pc_lookup ON public.package_capabilities USING btree (package_n
 CREATE INDEX idx_pcf_org_status_depscore ON public.project_container_findings USING btree (organization_id, status, depscore DESC NULLS LAST);
 CREATE INDEX idx_pcf_project_run ON public.project_container_findings USING btree (project_id, extraction_run_id);
 CREATE INDEX idx_pcf_severity ON public.project_container_findings USING btree (severity);
+CREATE INDEX idx_pci_credentials_id ON public.project_configured_images USING btree (credentials_id, organization_id) WHERE (credentials_id IS NOT NULL);
 CREATE INDEX idx_pci_org ON public.project_configured_images USING btree (organization_id);
 CREATE INDEX idx_pci_project_enabled ON public.project_configured_images USING btree (project_id, enabled) WHERE (enabled = true);
 CREATE INDEX idx_pd_namespace ON public.project_dependencies USING btree (namespace) WHERE (namespace IS NOT NULL);
@@ -6671,9 +6754,8 @@ CREATE TRIGGER aegis_creator_leaves_org AFTER DELETE ON public.organization_memb
 CREATE TRIGGER create_project_roles_trigger AFTER INSERT ON public.projects FOR EACH ROW EXECUTE FUNCTION create_default_project_roles();
 CREATE TRIGGER create_team_roles_trigger AFTER INSERT ON public.teams FOR EACH ROW EXECUTE FUNCTION create_default_team_roles();
 CREATE TRIGGER organization_integrations_updated_at BEFORE UPDATE ON public.organization_integrations FOR EACH ROW EXECUTE FUNCTION update_organization_integrations_updated_at();
-CREATE TRIGGER pci_null_creds_on_org_move BEFORE UPDATE ON public.project_configured_images FOR EACH ROW EXECUTE FUNCTION pci_null_credentials_id_on_org_move();
 CREATE TRIGGER pmf_enforce_org_consistency BEFORE INSERT OR UPDATE OF organization_id, project_id ON public.project_malicious_findings FOR EACH ROW EXECUTE FUNCTION enforce_pmf_org_consistency();
-CREATE TRIGGER project_configured_images_enforce_org_id BEFORE INSERT OR UPDATE ON public.project_configured_images FOR EACH ROW EXECUTE FUNCTION enforce_project_scoped_org_id();
+CREATE TRIGGER project_configured_images_enforce_org_id BEFORE INSERT OR UPDATE ON public.project_configured_images FOR EACH ROW EXECUTE FUNCTION enforce_pci_org_id_and_null_creds();
 CREATE TRIGGER project_container_findings_enforce_org_id BEFORE INSERT OR UPDATE OF project_id, organization_id ON public.project_container_findings FOR EACH ROW EXECUTE FUNCTION enforce_finding_org_id();
 CREATE TRIGGER project_iac_findings_enforce_org_id BEFORE INSERT OR UPDATE OF project_id, organization_id ON public.project_iac_findings FOR EACH ROW EXECUTE FUNCTION enforce_finding_org_id();
 CREATE TRIGGER project_integrations_updated_at BEFORE UPDATE ON public.project_integrations FOR EACH ROW EXECUTE FUNCTION update_project_integrations_updated_at();

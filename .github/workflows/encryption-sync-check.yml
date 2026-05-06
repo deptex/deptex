@@ -1,0 +1,43 @@
+name: Encryption helper sync check
+
+# Enforces: backend/depscanner/src/lib/encryption.ts is the truncated mirror of
+# backend/src/lib/ai/encryption.ts (everything above the DEPSCANNER-SYNC marker).
+# If a PR edits the source without re-running scripts/sync-encryption.ts and
+# committing the regenerated copy, this workflow fails the PR.
+#
+# Mirrors the schema-check workflow's spirit: the committed copy keeps a fresh
+# checkout buildable, and CI guards against drift instead of forcing every dev
+# to remember to resync.
+
+on:
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  check-encryption-synced:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install tsx
+        run: npm install -g tsx
+
+      - name: Re-run sync script
+        run: tsx scripts/sync-encryption.ts
+
+      - name: Fail if depscanner copy diverges
+        run: |
+          DRIFT=$(git status --porcelain backend/depscanner/src/lib/encryption.ts)
+          if [ -n "$DRIFT" ]; then
+            echo "::error::backend/depscanner/src/lib/encryption.ts is out of sync with backend/src/lib/ai/encryption.ts."
+            echo ""
+            echo "Run \`npx tsx scripts/sync-encryption.ts\` and commit the regenerated file."
+            echo ""
+            git --no-pager diff -- backend/depscanner/src/lib/encryption.ts || true
+            exit 1
+          fi
+          echo "encryption.ts is in sync."
