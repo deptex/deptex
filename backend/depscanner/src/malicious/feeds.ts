@@ -6,7 +6,7 @@
  * `scanner='feed'` finding with severity `critical`.
  */
 import type { Storage } from '../storage';
-import { canonicalizeEcosystem } from './ecosystem';
+import { canonicalizeEcosystem, canonicalizePackageName } from './ecosystem';
 
 export interface FeedHit {
   source: 'osv' | 'ghsa';
@@ -24,10 +24,16 @@ export async function lookupFeed(
   const canonical = canonicalizeEcosystem(ecosystem);
   if (!canonical) return [];
 
+  // Canonicalize package_name on the read path so a GHSA advisory for
+  // `Django` (mixed case, written canonically as `django` per PEP 503)
+  // matches an installed `django` from cdxgen. MUST stay in sync with
+  // feed-sync's write-side canonicalization in advisoryToEntries.
+  const canonicalName = canonicalizePackageName(packageName, canonical);
+
   const { data, error } = await supabase
     .from('known_malicious_packages')
     .select('source, source_id, severity, description, version, withdrawn_at')
-    .eq('package_name', packageName)
+    .eq('package_name', canonicalName)
     .eq('ecosystem', canonical);
 
   if (error || !data) return [];

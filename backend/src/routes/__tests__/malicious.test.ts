@@ -16,6 +16,13 @@ jest.mock('../../lib/active-extraction', () => ({
   getActiveExtractionId: jest.fn().mockResolvedValue('run-1'),
 }));
 
+jest.mock('../../lib/activities', () => ({
+  createActivity: jest.fn().mockResolvedValue(undefined),
+}));
+const { createActivity: createActivityMock } = require('../../lib/activities') as {
+  createActivity: jest.Mock;
+};
+
 const ORG_A = 'org-a';
 const ORG_B = 'org-b';
 const PROJECT_A = 'proj-a';
@@ -93,7 +100,11 @@ describe('PATCH /api/organizations/:id/projects/:projectId/malicious-findings/:f
   it('suppresses a finding when the user has manage permission', async () => {
     grantOrgOwnerAccess();
     setTableResponse('project_malicious_findings', 'maybeSingle', {
-      data: { id: FINDING_A, project_id: PROJECT_A, organization_id: ORG_A },
+      data: {
+        id: FINDING_A, project_id: PROJECT_A, organization_id: ORG_A,
+        rule_id: 'guarddog/npm-install-script', scanner: 'guarddog',
+        suppressed: false, risk_accepted: false,
+      },
       error: null,
     });
     setTableResponse('project_malicious_findings', 'then', { data: null, error: null });
@@ -107,6 +118,45 @@ describe('PATCH /api/organizations/:id/projects/:projectId/malicious-findings/:f
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+  });
+
+  it('writes an audit-log entry on suppress (P2 AL-3 regression)', async () => {
+    grantOrgOwnerAccess();
+    setTableResponse('project_malicious_findings', 'maybeSingle', {
+      data: {
+        id: FINDING_A, project_id: PROJECT_A, organization_id: ORG_A,
+        rule_id: 'guarddog/npm-install-script', scanner: 'guarddog',
+        suppressed: false, risk_accepted: false,
+      },
+      error: null,
+    });
+    setTableResponse('project_malicious_findings', 'then', { data: null, error: null });
+    setTableResponse('project_malicious_findings', 'single', { data: { dependency_id: 'dep-1' }, error: null });
+    setRpcResponse('recompute_dependency_is_malicious', { data: null, error: null });
+    createActivityMock.mockClear();
+
+    const res = await request(app)
+      .patch(`/api/organizations/${ORG_A}/projects/${PROJECT_A}/malicious-findings/${FINDING_A}`)
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .send({ suppressed: true, suppressed_reason: 'internal allowlist' });
+
+    expect(res.status).toBe(200);
+    expect(createActivityMock).toHaveBeenCalledTimes(1);
+    expect(createActivityMock).toHaveBeenCalledWith(expect.objectContaining({
+      organization_id: ORG_A,
+      user_id: userInOrgA.id,
+      activity_type: 'updated_malicious_finding',
+      description: expect.stringMatching(/^suppressed/),
+      metadata: expect.objectContaining({
+        finding_id: FINDING_A,
+        project_id: PROJECT_A,
+        rule_id: 'guarddog/npm-install-script',
+        scanner: 'guarddog',
+        old_value: { suppressed: false, risk_accepted: false },
+        new_value: { suppressed: true, risk_accepted: false },
+        suppressed_reason: 'internal allowlist',
+      }),
+    }));
   });
 
   it('returns 403 when the user lacks manage permission', async () => {
@@ -129,7 +179,10 @@ describe('PATCH /api/organizations/:id/projects/:projectId/malicious-findings/:f
   it('returns 404 when the finding belongs to a different project', async () => {
     grantOrgOwnerAccess();
     setTableResponse('project_malicious_findings', 'maybeSingle', {
-      data: { id: FINDING_A, project_id: 'some-other-project', organization_id: ORG_A },
+      data: {
+        id: FINDING_A, project_id: 'some-other-project', organization_id: ORG_A,
+        rule_id: 'r', scanner: 'guarddog', suppressed: false, risk_accepted: false,
+      },
       error: null,
     });
 
@@ -144,7 +197,10 @@ describe('PATCH /api/organizations/:id/projects/:projectId/malicious-findings/:f
   it('returns 404 when the finding belongs to a different org (defence-in-depth)', async () => {
     grantOrgOwnerAccess();
     setTableResponse('project_malicious_findings', 'maybeSingle', {
-      data: { id: FINDING_A, project_id: PROJECT_A, organization_id: ORG_B },
+      data: {
+        id: FINDING_A, project_id: PROJECT_A, organization_id: ORG_B,
+        rule_id: 'r', scanner: 'guarddog', suppressed: false, risk_accepted: false,
+      },
       error: null,
     });
 

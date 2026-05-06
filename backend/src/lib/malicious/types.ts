@@ -3,7 +3,7 @@
  * Mirrors the schema in `backend/database/malicious_packages_v1.sql`.
  */
 
-export type MaliciousScanner = 'feed' | 'guarddog';
+export type MaliciousScanner = 'feed' | 'guarddog' | 'maintainer';
 export type MaliciousSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export type MaliciousFeedSource = 'osv' | 'ghsa';
 export type MaliciousFeedSyncState = 'pending' | 'running' | 'completed' | 'failed' | 'dlq';

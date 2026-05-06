@@ -150,6 +150,17 @@ CREATE TABLE IF NOT EXISTS public.banned_versions (
   created_at timestamp with time zone DEFAULT now(),
   dependency_id uuid NOT NULL
 );
+CREATE TABLE IF NOT EXISTS public.container_image_scan_cache (
+  image_digest text NOT NULL,
+  scanner text NOT NULL,
+  scanner_version text NOT NULL,
+  trivy_db_version_day text NOT NULL,
+  scan_results jsonb NOT NULL,
+  scan_results_hash text NOT NULL,
+  first_scanned_by_org_id uuid,
+  first_scanned_run_id text,
+  scanned_at timestamp with time zone NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS public.demo_requests (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   first_name text NOT NULL,
@@ -462,7 +473,7 @@ CREATE TABLE IF NOT EXISTS public.organization_generated_rules (
   package_purl text NOT NULL,
   ecosystem text NOT NULL,
   affected_version_range text,
-  rule_yaml text NOT NULL,
+  rule_yaml text,
   vulnerable_fixture text NOT NULL,
   safe_fixture text NOT NULL,
   reachability_level text NOT NULL,
@@ -476,7 +487,9 @@ CREATE TABLE IF NOT EXISTS public.organization_generated_rules (
   previous_versions jsonb NOT NULL DEFAULT '[]'::jsonb,
   generated_at timestamp with time zone NOT NULL DEFAULT now(),
   last_used_at timestamp with time zone,
-  use_count integer NOT NULL DEFAULT 0
+  use_count integer NOT NULL DEFAULT 0,
+  framework_spec jsonb,
+  spec_format text NOT NULL DEFAULT 'framework_spec'::text
 );
 CREATE TABLE IF NOT EXISTS public.organization_integrations (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -515,6 +528,20 @@ CREATE TABLE IF NOT EXISTS public.organization_ip_allowlist (
   label text,
   created_by uuid NOT NULL,
   created_at timestamp with time zone DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.organization_malicious_allowlist (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  organization_id uuid NOT NULL,
+  package_name text NOT NULL,
+  version text,
+  ecosystem text NOT NULL,
+  reason text NOT NULL,
+  added_by uuid,
+  added_by_email text NOT NULL,
+  added_at timestamp with time zone NOT NULL DEFAULT now(),
+  revoked_at timestamp with time zone,
+  revoked_by uuid,
+  revoked_by_email text
 );
 CREATE TABLE IF NOT EXISTS public.organization_members (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -614,11 +641,25 @@ CREATE TABLE IF NOT EXISTS public.organization_reachability_settings (
   trigger_reevaluate_existing boolean NOT NULL DEFAULT false,
   ai_provider text NOT NULL DEFAULT 'anthropic'::text,
   ai_model text NOT NULL DEFAULT 'claude-sonnet-4-6'::text,
-  monthly_budget_usd numeric(10,2) NOT NULL DEFAULT 10.00,
+  monthly_budget_usd numeric(10,2) NOT NULL DEFAULT 30.00,
   on_budget_exhaustion text NOT NULL DEFAULT 'skip'::text,
   max_wait_seconds integer NOT NULL DEFAULT 300,
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_by uuid
+);
+CREATE TABLE IF NOT EXISTS public.organization_registry_credentials (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  organization_id uuid NOT NULL,
+  registry_type text NOT NULL,
+  registry_url text,
+  display_name text NOT NULL,
+  credential_shape text NOT NULL,
+  encrypted_credentials text NOT NULL,
+  encryption_key_version integer NOT NULL DEFAULT 1,
+  last_used_at timestamp with time zone,
+  created_by uuid,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS public.organization_roles (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -744,7 +785,9 @@ CREATE TABLE IF NOT EXISTS public.organizations (
   canvas_cursors_enabled boolean DEFAULT true,
   epd_max_run_cost_usd numeric(6,2),
   epd_budget_exceeded_behavior text,
-  default_ai_provider text NOT NULL DEFAULT 'anthropic'::text
+  default_ai_provider text NOT NULL DEFAULT 'anthropic'::text,
+  default_model text,
+  enabled_models jsonb
 );
 CREATE TABLE IF NOT EXISTS public.package_anomalies (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -754,6 +797,30 @@ CREATE TABLE IF NOT EXISTS public.package_anomalies (
   anomaly_score double precision NOT NULL DEFAULT 0,
   score_breakdown jsonb DEFAULT '[]'::jsonb,
   detected_at timestamp with time zone DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.package_capabilities (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  package_name text NOT NULL,
+  version text NOT NULL,
+  ecosystem text NOT NULL,
+  scanner_version text NOT NULL,
+  spawns_processes boolean NOT NULL DEFAULT false,
+  network_io boolean NOT NULL DEFAULT false,
+  eval_dynamic boolean NOT NULL DEFAULT false,
+  native_addon_load boolean NOT NULL DEFAULT false,
+  filesystem_write boolean NOT NULL DEFAULT false,
+  crypto_operations boolean NOT NULL DEFAULT false,
+  serialization_deser boolean NOT NULL DEFAULT false,
+  install_script boolean NOT NULL DEFAULT false,
+  dns_query boolean NOT NULL DEFAULT false,
+  websocket boolean NOT NULL DEFAULT false,
+  process_signal boolean NOT NULL DEFAULT false,
+  encrypted_payload boolean NOT NULL DEFAULT false,
+  dynamic_import boolean NOT NULL DEFAULT false,
+  reads_env boolean NOT NULL DEFAULT false,
+  clipboard_access boolean NOT NULL DEFAULT false,
+  scanned_at timestamp with time zone NOT NULL DEFAULT now(),
+  scan_error text
 );
 CREATE TABLE IF NOT EXISTS public.package_commit_touched_functions (
   watched_package_id uuid NOT NULL,
@@ -798,6 +865,18 @@ CREATE TABLE IF NOT EXISTS public.package_contributors (
   last_commit_date timestamp with time zone,
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.package_maintainer_snapshots (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  package_name text NOT NULL,
+  version text NOT NULL,
+  ecosystem text NOT NULL,
+  observed_at timestamp with time zone NOT NULL DEFAULT now(),
+  maintainer_handles text[] NOT NULL DEFAULT '{}'::text[],
+  primary_maintainer_email text,
+  signing_config_hash text,
+  postinstall_hash text,
+  registry_metadata_raw jsonb
 );
 CREATE TABLE IF NOT EXISTS public.package_reputation_scores (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -857,6 +936,17 @@ CREATE TABLE IF NOT EXISTS public.project_commits (
   provider_url text,
   created_at timestamp with time zone DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS public.project_configured_images (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  project_id uuid NOT NULL,
+  organization_id uuid NOT NULL,
+  image_reference text NOT NULL,
+  credentials_id uuid,
+  enabled boolean NOT NULL DEFAULT true,
+  created_by uuid,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS public.project_container_findings (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   project_id uuid NOT NULL,
@@ -901,6 +991,20 @@ CREATE TABLE IF NOT EXISTS public.project_dast_config (
   scan_profile text NOT NULL DEFAULT 'auto'::text,
   scan_timeout_minutes integer NOT NULL DEFAULT 30,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  scope_config jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE TABLE IF NOT EXISTS public.project_dast_credentials (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  target_id uuid NOT NULL,
+  organization_id uuid NOT NULL,
+  auth_strategy text NOT NULL,
+  encrypted_payload text NOT NULL,
+  encryption_key_version integer NOT NULL DEFAULT 1,
+  logged_in_indicator text,
+  logged_out_indicator text,
+  retry_login_on_lost boolean NOT NULL DEFAULT false,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS public.project_dast_findings (
@@ -929,7 +1033,28 @@ CREATE TABLE IF NOT EXISTS public.project_dast_findings (
   risk_accepted_by uuid,
   risk_accepted_at timestamp with time zone,
   risk_accepted_reason text,
-  created_at timestamp with time zone NOT NULL DEFAULT now()
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  target_id uuid,
+  auth_state text NOT NULL DEFAULT 'anonymous'::text,
+  engine text NOT NULL DEFAULT 'zap'::text,
+  linked_sast_finding_id uuid,
+  cross_link_methods text[] DEFAULT ARRAY[]::text[]
+);
+CREATE TABLE IF NOT EXISTS public.project_dast_targets (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL,
+  organization_id uuid NOT NULL,
+  target_url text NOT NULL,
+  label text,
+  enabled boolean NOT NULL DEFAULT true,
+  detected_runtime text NOT NULL DEFAULT 'unknown'::text,
+  detected_runtime_at timestamp with time zone,
+  detected_runtime_ttl_at timestamp with time zone,
+  active_dast_run_id text,
+  previous_dast_run_id text,
+  last_scanned_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS public.project_dependencies (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1069,7 +1194,8 @@ CREATE TABLE IF NOT EXISTS public.project_iac_findings (
   risk_accepted_by uuid,
   risk_accepted_at timestamp with time zone,
   risk_accepted_reason text,
-  created_at timestamp with time zone DEFAULT now()
+  created_at timestamp with time zone DEFAULT now(),
+  compliance_refs jsonb
 );
 CREATE TABLE IF NOT EXISTS public.project_integrations (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1108,7 +1234,10 @@ CREATE TABLE IF NOT EXISTS public.project_malicious_findings (
   risk_accepted_by uuid,
   risk_accepted_at timestamp with time zone,
   risk_accepted_reason text,
-  created_at timestamp with time zone NOT NULL DEFAULT now()
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  reachability_level text,
+  reachability_details jsonb,
+  reachability_computed_at timestamp with time zone
 );
 CREATE TABLE IF NOT EXISTS public.project_members (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1212,6 +1341,16 @@ CREATE TABLE IF NOT EXISTS public.project_pull_requests (
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS public.project_reachable_flow_suppressions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  organization_id uuid NOT NULL,
+  project_id uuid NOT NULL,
+  flow_signature_hash text NOT NULL,
+  suppressed_by uuid,
+  suppressed_at timestamp with time zone NOT NULL DEFAULT now(),
+  suppressed_reason text,
+  created_at timestamp with time zone NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS public.project_reachable_flows (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   project_id uuid NOT NULL,
@@ -1232,7 +1371,8 @@ CREATE TABLE IF NOT EXISTS public.project_reachable_flows (
   created_at timestamp with time zone DEFAULT now(),
   reachability_source text NOT NULL DEFAULT 'atom'::text,
   osv_id text,
-  rule_id text
+  rule_id text,
+  flow_signature_hash text
 );
 CREATE TABLE IF NOT EXISTS public.project_repositories (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1333,7 +1473,8 @@ CREATE TABLE IF NOT EXISTS public.project_security_fixes (
   rejected_at timestamp with time zone,
   rejected_by_user_id uuid,
   rejection_reason text,
-  malicious_finding_id uuid
+  malicious_finding_id uuid,
+  thread_id uuid
 );
 CREATE TABLE IF NOT EXISTS public.project_semgrep_findings (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1476,7 +1617,11 @@ CREATE TABLE IF NOT EXISTS public.scan_jobs (
   error_category text,
   findings_count integer,
   duration_seconds integer,
-  malicious_scan_status text
+  malicious_scan_status text,
+  target_id uuid,
+  credential_id uuid,
+  credential_payload_hash text,
+  error_payload jsonb
 );
 CREATE TABLE IF NOT EXISTS public.scim_user_mappings (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1571,7 +1716,7 @@ CREATE TABLE IF NOT EXISTS public.taint_engine_settings (
   organization_id uuid NOT NULL,
   enabled boolean DEFAULT true,
   ai_layer_enabled boolean DEFAULT true,
-  monthly_ai_cost_cap_usd numeric(10,2) DEFAULT 50.00,
+  monthly_ai_cost_cap_usd numeric(10,2) DEFAULT 75.00,
   untyped_js_enabled boolean DEFAULT true,
   vuln_classes_enabled text[] DEFAULT ARRAY['sql_injection'::text, 'ssrf'::text, 'xss'::text, 'path_traversal'::text, 'command_injection'::text, 'prototype_pollution'::text, 'deserialization'::text, 'redos'::text, 'file_upload'::text, 'open_redirect'::text, 'log_injection'::text],
   killswitch_active boolean DEFAULT false,
@@ -1580,7 +1725,8 @@ CREATE TABLE IF NOT EXISTS public.taint_engine_settings (
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now(),
   ai_fp_filter_confidence_threshold numeric(3,2) DEFAULT 0.70,
-  rollout_pct_override smallint
+  rollout_pct_override smallint,
+  cve_targeted_taint_enabled boolean NOT NULL DEFAULT true
 );
 CREATE TABLE IF NOT EXISTS public.team_banned_versions (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1773,812 +1919,6 @@ CREATE TABLE IF NOT EXISTS public.webhook_deliveries (
 );
 
 -- ============================================
--- CONSTRAINTS (PK, UNIQUE, CHECK, FK — in that order)
--- ============================================
-ALTER TABLE public.activities ADD CONSTRAINT activities_pkey PRIMARY KEY (id);
-ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_pkey PRIMARY KEY (thread_id);
-ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_pkey PRIMARY KEY (id);
-ALTER TABLE public.aegis_chat_participants ADD CONSTRAINT aegis_chat_participants_pkey PRIMARY KEY (thread_id, user_id);
-ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_pkey PRIMARY KEY (id);
-ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_pkey PRIMARY KEY (thread_id, user_id);
-ALTER TABLE public.aegis_event_triggers ADD CONSTRAINT aegis_event_triggers_pkey PRIMARY KEY (id);
-ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_pkey PRIMARY KEY (id);
-ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_pkey PRIMARY KEY (id);
-ALTER TABLE public.ai_usage_logs ADD CONSTRAINT ai_usage_logs_pkey PRIMARY KEY (id);
-ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_pkey PRIMARY KEY (id);
-ALTER TABLE public.banned_versions ADD CONSTRAINT banned_versions_pkey PRIMARY KEY (id);
-ALTER TABLE public.demo_requests ADD CONSTRAINT demo_requests_pkey PRIMARY KEY (id);
-ALTER TABLE public.dependencies ADD CONSTRAINT dependencies_new_pkey PRIMARY KEY (id);
-ALTER TABLE public.dependency_note_reactions ADD CONSTRAINT dependency_note_reactions_pkey PRIMARY KEY (id);
-ALTER TABLE public.dependency_notes ADD CONSTRAINT dependency_notes_pkey PRIMARY KEY (id);
-ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_pkey PRIMARY KEY (id);
-ALTER TABLE public.dependency_version_edges ADD CONSTRAINT dependency_version_edges_pkey PRIMARY KEY (id);
-ALTER TABLE public.dependency_versions ADD CONSTRAINT dependency_versions_pkey PRIMARY KEY (id);
-ALTER TABLE public.dependency_vulnerabilities ADD CONSTRAINT dependency_vulnerabilities_pkey PRIMARY KEY (id);
-ALTER TABLE public.extraction_logs ADD CONSTRAINT extraction_logs_pkey PRIMARY KEY (id);
-ALTER TABLE public.extraction_step_errors ADD CONSTRAINT extraction_step_errors_pkey PRIMARY KEY (id);
-ALTER TABLE public.feedback ADD CONSTRAINT feedback_pkey PRIMARY KEY (id);
-ALTER TABLE public.flow_node_executions ADD CONSTRAINT flow_node_executions_pkey PRIMARY KEY (id);
-ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_pkey PRIMARY KEY (id);
-ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_pkey PRIMARY KEY (id);
-ALTER TABLE public.flows ADD CONSTRAINT flows_pkey PRIMARY KEY (id);
-ALTER TABLE public.invitation_teams ADD CONSTRAINT invitation_teams_pkey PRIMARY KEY (id);
-ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_pkey PRIMARY KEY (id);
-ALTER TABLE public.license_obligations ADD CONSTRAINT license_obligations_pkey PRIMARY KEY (id);
-ALTER TABLE public.malicious_feed_sync_runs ADD CONSTRAINT malicious_feed_sync_runs_pkey PRIMARY KEY (id);
-ALTER TABLE public.notification_deliveries ADD CONSTRAINT notification_deliveries_pkey PRIMARY KEY (id);
-ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_pkey PRIMARY KEY (id);
-ALTER TABLE public.notification_rule_changes ADD CONSTRAINT notification_rule_changes_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_asset_tiers ADD CONSTRAINT organization_asset_tiers_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_integrations ADD CONSTRAINT organization_integrations_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_ip_allowlist ADD CONSTRAINT organization_ip_allowlist_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_members ADD CONSTRAINT organization_members_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_mfa_exemptions ADD CONSTRAINT organization_mfa_exemptions_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_notification_rules ADD CONSTRAINT organization_notification_rules_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_package_policies ADD CONSTRAINT organization_package_policies_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_plans ADD CONSTRAINT organization_plans_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_policies ADD CONSTRAINT organization_policies_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_policy_changes_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_pr_checks ADD CONSTRAINT organization_pr_checks_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_pkey PRIMARY KEY (organization_id);
-ALTER TABLE public.organization_roles ADD CONSTRAINT organization_roles_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_scim_configs ADD CONSTRAINT organization_scim_configs_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_sso_bypass_tokens ADD CONSTRAINT organization_sso_bypass_tokens_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_sso_providers ADD CONSTRAINT organization_sso_providers_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_status_codes ADD CONSTRAINT organization_status_codes_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_statuses ADD CONSTRAINT organization_statuses_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_watchlist ADD CONSTRAINT organization_watchlist_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_watchlist_cleared_commits ADD CONSTRAINT organization_watchlist_cleared_commits_pkey PRIMARY KEY (id);
-ALTER TABLE public.organizations ADD CONSTRAINT organizations_pkey PRIMARY KEY (id);
-ALTER TABLE public.package_anomalies ADD CONSTRAINT package_anomalies_pkey PRIMARY KEY (id);
-ALTER TABLE public.package_commits ADD CONSTRAINT package_commits_pkey PRIMARY KEY (id);
-ALTER TABLE public.package_contributors ADD CONSTRAINT package_contributors_pkey PRIMARY KEY (id);
-ALTER TABLE public.package_reputation_scores ADD CONSTRAINT package_reputation_scores_pkey PRIMARY KEY (id);
-ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_pkey PRIMARY KEY (id);
-ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_commits ADD CONSTRAINT project_commits_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_dependencies ADD CONSTRAINT project_dependencies_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_dependency_files ADD CONSTRAINT project_dependency_files_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_integrations ADD CONSTRAINT project_integrations_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_members ADD CONSTRAINT project_members_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_notification_rules ADD CONSTRAINT project_notification_rules_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_pr_guardrails ADD CONSTRAINT project_pr_guardrails_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_pull_requests ADD CONSTRAINT project_pull_requests_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_repositories ADD CONSTRAINT project_repositories_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_roles ADD CONSTRAINT project_roles_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_secret_findings ADD CONSTRAINT project_secret_findings_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_semgrep_findings ADD CONSTRAINT project_semgrep_findings_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_usage_slices ADD CONSTRAINT project_usage_slices_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_version_candidates ADD CONSTRAINT project_version_candidates_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_vulnerability_events ADD CONSTRAINT project_vulnerability_events_pkey PRIMARY KEY (id);
-ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_pkey PRIMARY KEY (id);
-ALTER TABLE public.projects ADD CONSTRAINT projects_pkey PRIMARY KEY (id);
-ALTER TABLE public.scan_jobs ADD CONSTRAINT extraction_jobs_pkey PRIMARY KEY (id);
-ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_pkey PRIMARY KEY (id);
-ALTER TABLE public.security_audit_logs ADD CONSTRAINT security_audit_logs_pkey PRIMARY KEY (id);
-ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_pkey PRIMARY KEY (id);
-ALTER TABLE public.sla_policy_changes ADD CONSTRAINT sla_policy_changes_pkey PRIMARY KEY (id);
-ALTER TABLE public.stripe_webhook_events ADD CONSTRAINT stripe_webhook_events_pkey PRIMARY KEY (id);
-ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_pkey PRIMARY KEY (id);
-ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_pkey PRIMARY KEY (id);
-ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_pkey PRIMARY KEY (organization_id);
-ALTER TABLE public.team_banned_versions ADD CONSTRAINT team_banned_versions_pkey PRIMARY KEY (id);
-ALTER TABLE public.team_deprecations ADD CONSTRAINT team_deprecations_pkey PRIMARY KEY (id);
-ALTER TABLE public.team_integrations ADD CONSTRAINT team_integrations_pkey PRIMARY KEY (id);
-ALTER TABLE public.team_members ADD CONSTRAINT team_members_pkey PRIMARY KEY (id);
-ALTER TABLE public.team_notification_rules ADD CONSTRAINT team_notification_rules_pkey PRIMARY KEY (id);
-ALTER TABLE public.team_roles ADD CONSTRAINT team_roles_pkey PRIMARY KEY (id);
-ALTER TABLE public.teams ADD CONSTRAINT teams_pkey PRIMARY KEY (id);
-ALTER TABLE public.user_integrations ADD CONSTRAINT user_integrations_pkey PRIMARY KEY (id);
-ALTER TABLE public.user_notification_preferences ADD CONSTRAINT user_notification_preferences_pkey PRIMARY KEY (id);
-ALTER TABLE public.user_notifications ADD CONSTRAINT user_notifications_pkey PRIMARY KEY (id);
-ALTER TABLE public.user_profiles ADD CONSTRAINT user_profiles_pkey PRIMARY KEY (id);
-ALTER TABLE public.user_sessions ADD CONSTRAINT user_sessions_pkey PRIMARY KEY (id);
-ALTER TABLE public.watched_packages ADD CONSTRAINT watched_packages_pkey PRIMARY KEY (id);
-ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_pkey PRIMARY KEY (id);
-ALTER TABLE public.webhook_deliveries ADD CONSTRAINT webhook_deliveries_pkey PRIMARY KEY (id);
-ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_code_key UNIQUE (code);
-ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_organization_id_key UNIQUE (organization_id);
-ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_token_hash_key UNIQUE (token_hash);
-ALTER TABLE public.dependency_note_reactions ADD CONSTRAINT dependency_note_reactions_note_id_user_id_emoji_key UNIQUE (note_id, user_id, emoji);
-ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_project_id_dependency_id_type_target_version_key UNIQUE (project_id, dependency_id, type, target_version);
-ALTER TABLE public.dependency_version_edges ADD CONSTRAINT dependency_version_edges_parent_version_id_child_version_id_key UNIQUE (parent_version_id, child_version_id);
-ALTER TABLE public.dependency_versions ADD CONSTRAINT dependency_versions_dependency_version_key UNIQUE (dependency_id, version);
-ALTER TABLE public.dependency_vulnerabilities ADD CONSTRAINT dependency_vulnerabilities_dependency_id_osv_id_key UNIQUE (dependency_id, osv_id);
-ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_flow_id_version_key UNIQUE (flow_id, version);
-ALTER TABLE public.invitation_teams ADD CONSTRAINT invitation_teams_invitation_id_team_id_key UNIQUE (invitation_id, team_id);
-ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_natural_key UNIQUE NULLS NOT DISTINCT (source, source_id, package_name, version, ecosystem);
-ALTER TABLE public.license_obligations ADD CONSTRAINT license_obligations_license_spdx_id_key UNIQUE (license_spdx_id);
-ALTER TABLE public.organization_asset_tiers ADD CONSTRAINT organization_asset_tiers_organization_id_name_key UNIQUE (organization_id, name);
-ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_organization_id_cve_id_package_key UNIQUE (organization_id, cve_id, package_purl);
-ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_organization_id_email_status_key UNIQUE (organization_id, email, status) DEFERRABLE INITIALLY DEFERRED;
-ALTER TABLE public.organization_members ADD CONSTRAINT organization_members_organization_id_user_id_key UNIQUE (organization_id, user_id);
-ALTER TABLE public.organization_mfa_exemptions ADD CONSTRAINT organization_mfa_exemptions_organization_id_user_id_key UNIQUE (organization_id, user_id);
-ALTER TABLE public.organization_package_policies ADD CONSTRAINT organization_package_policies_organization_id_key UNIQUE (organization_id);
-ALTER TABLE public.organization_plans ADD CONSTRAINT organization_plans_organization_id_key UNIQUE (organization_id);
-ALTER TABLE public.organization_policies ADD CONSTRAINT organization_policies_organization_id_key UNIQUE (organization_id);
-ALTER TABLE public.organization_pr_checks ADD CONSTRAINT organization_pr_checks_organization_id_key UNIQUE (organization_id);
-ALTER TABLE public.organization_roles ADD CONSTRAINT organization_roles_organization_id_name_key UNIQUE (organization_id, name);
-ALTER TABLE public.organization_scim_configs ADD CONSTRAINT organization_scim_configs_organization_id_key UNIQUE (organization_id);
-ALTER TABLE public.organization_sla_policies ADD CONSTRAINT uq_sla_policies_org_severity_tier UNIQUE NULLS NOT DISTINCT (organization_id, severity, asset_tier_id);
-ALTER TABLE public.organization_sso_providers ADD CONSTRAINT organization_sso_providers_domain_key UNIQUE (domain);
-ALTER TABLE public.organization_sso_providers ADD CONSTRAINT organization_sso_providers_organization_id_key UNIQUE (organization_id);
-ALTER TABLE public.organization_status_codes ADD CONSTRAINT organization_status_codes_organization_id_key UNIQUE (organization_id);
-ALTER TABLE public.organization_statuses ADD CONSTRAINT organization_statuses_organization_id_name_key UNIQUE (organization_id, name);
-ALTER TABLE public.organization_watchlist ADD CONSTRAINT organization_watchlist_organization_id_dependency_id_key UNIQUE (organization_id, dependency_id);
-ALTER TABLE public.package_anomalies ADD CONSTRAINT package_anomalies_watched_package_id_commit_sha_key UNIQUE (watched_package_id, commit_sha);
-ALTER TABLE public.package_commit_touched_functions ADD CONSTRAINT package_commit_touched_functi_watched_package_id_commit_sha_key UNIQUE (watched_package_id, commit_sha, function_name);
-ALTER TABLE public.package_commits ADD CONSTRAINT package_commits_watched_package_id_sha_key UNIQUE (watched_package_id, sha);
-ALTER TABLE public.package_contributors ADD CONSTRAINT package_contributors_watched_package_id_author_email_key UNIQUE (watched_package_id, author_email);
-ALTER TABLE public.package_reputation_scores ADD CONSTRAINT package_reputation_scores_dependency_id_key UNIQUE (dependency_id);
-ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_key UNIQUE (package_name, version, ecosystem, scanner);
-ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_project_id_key UNIQUE (project_id);
-ALTER TABLE public.project_dependencies ADD CONSTRAINT project_dependencies_project_id_name_version_is_direct_sour_key UNIQUE (project_id, name, version, is_direct, source);
-ALTER TABLE public.project_dependency_files ADD CONSTRAINT pdf_extraction_run_unique UNIQUE (project_dependency_id, file_path, extraction_run_id);
-ALTER TABLE public.project_dependency_functions ADD CONSTRAINT pdfn_extraction_run_unique UNIQUE (project_dependency_id, function_name, extraction_run_id);
-ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT pdv_extraction_run_unique UNIQUE (project_id, project_dependency_id, osv_id, extraction_run_id);
-ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_extraction_run_id_file_path_key UNIQUE (project_id, extraction_run_id, file_path, line_number, framework, handler_name);
-ALTER TABLE public.project_malicious_findings ADD CONSTRAINT pmf_dedup UNIQUE NULLS NOT DISTINCT (project_id, project_dependency_id, rule_id, scanner, extraction_run_id);
-ALTER TABLE public.project_members ADD CONSTRAINT project_members_project_id_user_id_key UNIQUE (project_id, user_id);
-ALTER TABLE public.project_pr_guardrails ADD CONSTRAINT project_pr_guardrails_project_id_key UNIQUE (project_id);
-ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_source_dedup_key UNIQUE NULLS NOT DISTINCT (project_id, extraction_run_id, purl, entry_point_file, entry_point_line, sink_method, osv_id, rule_id);
-ALTER TABLE public.project_repositories ADD CONSTRAINT project_repositories_project_id_key UNIQUE (project_id);
-ALTER TABLE public.project_roles ADD CONSTRAINT project_roles_project_id_name_key UNIQUE (project_id, name);
-ALTER TABLE public.project_secret_findings ADD CONSTRAINT psecf_extraction_run_unique UNIQUE (project_id, detector_type, file_path, start_line, extraction_run_id);
-ALTER TABLE public.project_semgrep_findings ADD CONSTRAINT psemf_extraction_run_unique UNIQUE (project_id, rule_id, file_path, start_line, extraction_run_id);
-ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_project_id_team_id_key UNIQUE (project_id, team_id);
-ALTER TABLE public.project_usage_slices ADD CONSTRAINT pus_extraction_run_unique UNIQUE (project_id, file_path, line_number, target_name, extraction_run_id);
-ALTER TABLE public.project_version_candidates ADD CONSTRAINT project_version_candidates_project_id_package_name_ecosyste_key UNIQUE (project_id, package_name, ecosystem, candidate_type);
-ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_project_id_organization_watchlist_id_key UNIQUE (project_id, organization_watchlist_id);
-ALTER TABLE public.projects ADD CONSTRAINT projects_organization_id_name_key UNIQUE (organization_id, name);
-ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_organization_id_scim_external_id_key UNIQUE (organization_id, scim_external_id);
-ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_organization_id_project_id_snapshot_key UNIQUE (organization_id, project_id, snapshot_date);
-ALTER TABLE public.stripe_webhook_events ADD CONSTRAINT stripe_webhook_events_event_id_key UNIQUE (event_id);
-ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_organization_id_framework_nam_key UNIQUE (organization_id, framework_name, framework_version);
-ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_project_id_extraction_run_id_key UNIQUE (project_id, extraction_run_id);
-ALTER TABLE public.team_members ADD CONSTRAINT team_members_team_id_user_id_key UNIQUE (team_id, user_id);
-ALTER TABLE public.team_roles ADD CONSTRAINT team_roles_team_id_name_key UNIQUE (team_id, name);
-ALTER TABLE public.teams ADD CONSTRAINT teams_organization_id_name_key UNIQUE (organization_id, name);
-ALTER TABLE public.user_integrations ADD CONSTRAINT user_integrations_user_id_provider_key UNIQUE (user_id, provider);
-ALTER TABLE public.user_notification_preferences ADD CONSTRAINT user_notification_preferences_user_id_organization_id_key UNIQUE (user_id, organization_id);
-ALTER TABLE public.user_profiles ADD CONSTRAINT user_profiles_user_id_key UNIQUE (user_id);
-ALTER TABLE public.user_sessions ADD CONSTRAINT user_sessions_session_id_key UNIQUE (session_id);
-ALTER TABLE public.watched_packages ADD CONSTRAINT watched_packages_dependency_id_key UNIQUE (dependency_id);
-ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_role_check CHECK ((role = ANY (ARRAY['user'::text, 'assistant'::text])));
-ALTER TABLE public.ai_usage_logs ADD CONSTRAINT ai_usage_logs_tier_check CHECK ((tier = ANY (ARRAY['platform'::text, 'byok'::text])));
-ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_type_check CHECK ((type = ANY (ARRAY['bump'::text, 'decrease'::text, 'remove'::text])));
-ALTER TABLE public.extraction_logs ADD CONSTRAINT extraction_logs_level_check CHECK ((level = ANY (ARRAY['info'::text, 'success'::text, 'warning'::text, 'error'::text])));
-ALTER TABLE public.extraction_step_errors ADD CONSTRAINT chk_extraction_step_errors_severity CHECK ((severity = ANY (ARRAY['warn'::text, 'error'::text])));
-ALTER TABLE public.feedback ADD CONSTRAINT feedback_type_check CHECK ((type = ANY (ARRAY['issue'::text, 'idea'::text])));
-ALTER TABLE public.flow_node_executions ADD CONSTRAINT flow_node_executions_status_check CHECK ((status = ANY (ARRAY['success'::text, 'failed'::text, 'skipped'::text])));
-ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_status_check CHECK ((status = ANY (ARRAY['running'::text, 'completed'::text, 'failed'::text, 'skipped'::text, 'dry_run'::text])));
-ALTER TABLE public.flows ADD CONSTRAINT flows_flow_type_check CHECK ((flow_type = ANY (ARRAY['notification'::text, 'pr_check'::text, 'policy'::text, 'status'::text])));
-ALTER TABLE public.flows ADD CONSTRAINT flows_scope_check CHECK ((scope = ANY (ARRAY['organization'::text, 'team'::text, 'project'::text])));
-ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'github-actions'::text, 'vscode'::text])));
-ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_source_chk CHECK ((source = ANY (ARRAY['osv'::text, 'ghsa'::text])));
-ALTER TABLE public.malicious_feed_sync_runs ADD CONSTRAINT mfsr_source_chk CHECK ((source = ANY (ARRAY['osv'::text, 'ghsa'::text])));
-ALTER TABLE public.malicious_feed_sync_runs ADD CONSTRAINT mfsr_state_chk CHECK ((state = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'dlq'::text])));
-ALTER TABLE public.notification_deliveries ADD CONSTRAINT notification_deliveries_rule_scope_check CHECK ((rule_scope = ANY (ARRAY['organization'::text, 'team'::text, 'project'::text])));
-ALTER TABLE public.notification_deliveries ADD CONSTRAINT notification_deliveries_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'sending'::text, 'delivered'::text, 'failed'::text, 'rate_limited'::text, 'skipped'::text, 'dry_run'::text])));
-ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_priority_check CHECK ((priority = ANY (ARRAY['critical'::text, 'high'::text, 'normal'::text, 'low'::text])));
-ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'dispatching'::text, 'dispatched'::text, 'failed'::text])));
-ALTER TABLE public.notification_rule_changes ADD CONSTRAINT notification_rule_changes_rule_scope_check CHECK ((rule_scope = ANY (ARRAY['organization'::text, 'team'::text, 'project'::text])));
-ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_validation_status_check CHECK ((validation_status = ANY (ARRAY['pending'::text, 'validated'::text, 'failed_validation'::text, 'manual_override'::text])));
-ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'accepted'::text, 'rejected'::text, 'expired'::text])));
-ALTER TABLE public.organization_notification_rules ADD CONSTRAINT organization_notification_rules_trigger_type_check CHECK ((trigger_type = ANY (ARRAY['weekly_digest'::text, 'custom_code_pipeline'::text])));
-ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_policy_changes_code_type_check CHECK ((code_type = ANY (ARRAY['package_policy'::text, 'project_status'::text, 'pr_check'::text])));
-ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_ai_provider_check CHECK ((ai_provider = ANY (ARRAY['anthropic'::text, 'openai'::text, 'google'::text])));
-ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_on_budget_exhaustion_check CHECK ((on_budget_exhaustion = ANY (ARRAY['skip'::text, 'fall_back_to_haiku'::text])));
-ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_max_hours_check CHECK ((max_hours > 0));
-ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_severity_check CHECK ((severity = ANY (ARRAY['critical'::text, 'high'::text, 'medium'::text, 'low'::text])));
-ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_warning_threshold_percent_check CHECK (((warning_threshold_percent >= 1) AND (warning_threshold_percent <= 99)));
-ALTER TABLE public.organizations ADD CONSTRAINT organizations_default_ai_provider_check CHECK ((default_ai_provider = ANY (ARRAY['openai'::text, 'anthropic'::text, 'google'::text, 'deepinfra'::text])));
-ALTER TABLE public.organizations ADD CONSTRAINT organizations_epd_budget_exceeded_behavior_check CHECK ((epd_budget_exceeded_behavior = ANY (ARRAY['fail_job'::text, 'continue_with_fallback'::text])));
-ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'github-actions'::text, 'vscode'::text])));
-ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_scanner_chk CHECK ((scanner = ANY (ARRAY['guarddog'::text, 'ai_review'::text])));
-ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text])));
-ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_image_source_check CHECK ((image_source = 'dockerfile_base'::text));
-ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_scan_profile_check CHECK ((scan_profile = ANY (ARRAY['auto'::text, 'quick'::text, 'full'::text, 'api'::text])));
-ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_scan_timeout_minutes_check CHECK (((scan_timeout_minutes >= 5) AND (scan_timeout_minutes <= 60)));
-ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_confidence_check CHECK ((confidence = ANY (ARRAY['confirmed'::text, 'high'::text, 'medium'::text, 'low'::text])));
-ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_severity_check CHECK ((severity = ANY (ARRAY['critical'::text, 'high'::text, 'medium'::text, 'low'::text, 'info'::text])));
-ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_status_check CHECK ((status = ANY (ARRAY['open'::text, 'suppressed'::text, 'risk_accepted'::text, 'fixed'::text])));
-ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_epd_confidence_tier CHECK (((epd_confidence_tier IS NULL) OR (epd_confidence_tier = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text]))));
-ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_reachability_status CHECK ((reachability_status = ANY (ARRAY['reachable'::text, 'unreachable'::text, 'unknown'::text])));
-ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_sla_status CHECK (((sla_status IS NULL) OR (sla_status = ANY (ARRAY['on_track'::text, 'warning'::text, 'breached'::text, 'met'::text, 'resolved_late'::text, 'exempt'::text]))));
-ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_framework_check CHECK ((framework = ANY (ARRAY['terraform'::text, 'kubernetes'::text, 'dockerfile'::text])));
-ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_scanner_check CHECK ((scanner = ANY (ARRAY['trivy'::text, 'checkov'::text])));
-ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_scanner_check CHECK ((scanner = ANY (ARRAY['feed'::text, 'guarddog'::text])));
-ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_severity_check CHECK ((severity = ANY (ARRAY['critical'::text, 'high'::text, 'medium'::text, 'low'::text, 'info'::text])));
-ALTER TABLE public.project_notification_rules ADD CONSTRAINT project_notification_rules_trigger_type_check CHECK ((trigger_type = ANY (ARRAY['weekly_digest'::text, 'custom_code_pipeline'::text])));
-ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_code_type_check CHECK ((code_type = ANY (ARRAY['package_policy'::text, 'project_status'::text, 'pr_check'::text])));
-ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'accepted'::text, 'rejected'::text])));
-ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_policy_type_check CHECK ((policy_type = ANY (ARRAY['compliance'::text, 'pull_request'::text, 'full'::text])));
-ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_slsa_enforcement_check CHECK (((slsa_enforcement IS NULL) OR (slsa_enforcement = ANY (ARRAY['none'::text, 'recommended'::text, 'require_provenance'::text, 'require_attestations'::text, 'require_signed'::text]))));
-ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_slsa_level_check CHECK (((slsa_level IS NULL) OR ((slsa_level >= 1) AND (slsa_level <= 4))));
-ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'accepted'::text, 'rejected'::text, 'revoked'::text])));
-ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_reachability_source_check CHECK ((reachability_source = ANY (ARRAY['atom'::text, 'semgrep_taint'::text, 'taint_engine'::text])));
-ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_fix_type_check CHECK ((fix_type = ANY (ARRAY['vulnerability'::text, 'semgrep'::text, 'secret'::text])));
-ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_status_check CHECK ((status = ANY (ARRAY['planning'::text, 'awaiting_approval'::text, 'approved'::text, 'executing'::text, 'completed'::text, 'failed'::text, 'rejected'::text])));
-ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_strategy_check CHECK ((strategy = ANY (ARRAY['bump_version'::text, 'code_patch'::text, 'add_wrapper'::text, 'pin_transitive'::text, 'remove_unused'::text, 'fix_semgrep'::text, 'remediate_secret'::text])));
-ALTER TABLE public.projects ADD CONSTRAINT projects_health_score_check CHECK (((health_score >= 0) AND (health_score <= 100)));
-ALTER TABLE public.scan_jobs ADD CONSTRAINT extraction_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])));
-ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_dast_columns_match_type CHECK (((type = 'dast'::text) OR ((target_url IS NULL) AND (scan_profile IS NULL) AND (timeout_minutes IS NULL) AND (trigger_source IS NULL) AND (triggered_by IS NULL) AND (error_category IS NULL) AND (findings_count IS NULL) AND (duration_seconds IS NULL))));
-ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_error_category_check CHECK (((error_category IS NULL) OR (error_category = ANY (ARRAY['timeout'::text, 'unreachable_target'::text, 'ssrf_blocked'::text, 'auth_failed'::text, 'engine_crash'::text, 'unknown'::text]))));
-ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_malicious_scan_status_check CHECK (((malicious_scan_status IS NULL) OR (malicious_scan_status = ANY (ARRAY['complete'::text, 'partial'::text, 'failed'::text]))));
-ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_scan_profile_check CHECK (((scan_profile IS NULL) OR (scan_profile = ANY (ARRAY['auto'::text, 'quick'::text, 'full'::text, 'api'::text]))));
-ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_trigger_source_check CHECK (((trigger_source IS NULL) OR (trigger_source = ANY (ARRAY['manual'::text, 'webhook'::text, 'scheduled'::text, 'aegis'::text]))));
-ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_type_check CHECK ((type = ANY (ARRAY['extraction'::text, 'dast'::text])));
-ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_source_type_check CHECK ((source_type = ANY (ARRAY['hand_written'::text, 'ai_inferred'::text, 'user_edited'::text])));
-ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_status_check CHECK ((status = ANY (ARRAY['running'::text, 'completed'::text, 'failed'::text, 'aborted'::text, 'skipped'::text])));
-ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_rollout_chk CHECK (((rollout_pct_override IS NULL) OR ((rollout_pct_override >= 0) AND (rollout_pct_override <= 100))));
-ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_threshold_chk CHECK (((ai_fp_filter_confidence_threshold >= (0)::numeric) AND (ai_fp_filter_confidence_threshold <= (1)::numeric)));
-ALTER TABLE public.team_notification_rules ADD CONSTRAINT team_notification_rules_trigger_type_check CHECK ((trigger_type = ANY (ARRAY['weekly_digest'::text, 'custom_code_pipeline'::text])));
-ALTER TABLE public.user_notification_preferences ADD CONSTRAINT user_notification_preferences_digest_preference_check CHECK ((digest_preference = ANY (ARRAY['instant'::text, 'daily_digest'::text, 'weekly_digest'::text, 'off'::text])));
-ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_job_type_check CHECK ((job_type = ANY (ARRAY['full_analysis'::text, 'new_version'::text, 'batch_version_analysis'::text, 'poll_sweep'::text])));
-ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text])));
-ALTER TABLE public.activities ADD CONSTRAINT activities_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.activities ADD CONSTRAINT activities_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
-ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
-ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
-ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
-ALTER TABLE public.aegis_chat_participants ADD CONSTRAINT aegis_chat_participants_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
-ALTER TABLE public.aegis_chat_participants ADD CONSTRAINT aegis_chat_participants_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
-ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL;
-ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
-ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.aegis_event_triggers ADD CONSTRAINT aegis_event_triggers_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
-ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
-ALTER TABLE public.ai_usage_logs ADD CONSTRAINT ai_usage_logs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.banned_versions ADD CONSTRAINT banned_versions_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.banned_versions ADD CONSTRAINT banned_versions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.dependency_note_reactions ADD CONSTRAINT dependency_note_reactions_note_id_fkey FOREIGN KEY (note_id) REFERENCES dependency_notes(id) ON DELETE CASCADE;
-ALTER TABLE public.dependency_note_reactions ADD CONSTRAINT dependency_note_reactions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.dependency_notes ADD CONSTRAINT dependency_notes_author_id_fkey FOREIGN KEY (author_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.dependency_notes ADD CONSTRAINT dependency_notes_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.dependency_version_edges ADD CONSTRAINT dependency_version_edges_child_version_id_fkey FOREIGN KEY (child_version_id) REFERENCES dependency_versions(id) ON DELETE CASCADE;
-ALTER TABLE public.dependency_version_edges ADD CONSTRAINT dependency_version_edges_parent_version_id_fkey FOREIGN KEY (parent_version_id) REFERENCES dependency_versions(id) ON DELETE CASCADE;
-ALTER TABLE public.dependency_versions ADD CONSTRAINT fk_dependency_versions_dependency FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.extraction_logs ADD CONSTRAINT extraction_logs_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.extraction_step_errors ADD CONSTRAINT extraction_step_errors_extraction_job_id_fkey FOREIGN KEY (extraction_job_id) REFERENCES scan_jobs(id) ON DELETE CASCADE;
-ALTER TABLE public.extraction_step_errors ADD CONSTRAINT extraction_step_errors_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.feedback ADD CONSTRAINT feedback_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.flow_node_executions ADD CONSTRAINT flow_node_executions_flow_run_id_fkey FOREIGN KEY (flow_run_id) REFERENCES flow_runs(id) ON DELETE CASCADE;
-ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_flow_id_fkey FOREIGN KEY (flow_id) REFERENCES flows(id) ON DELETE CASCADE;
-ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_trigger_event_id_fkey FOREIGN KEY (trigger_event_id) REFERENCES notification_events(id) ON DELETE SET NULL;
-ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_changed_by_user_id_fkey FOREIGN KEY (changed_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_flow_id_fkey FOREIGN KEY (flow_id) REFERENCES flows(id) ON DELETE CASCADE;
-ALTER TABLE public.flows ADD CONSTRAINT flows_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.flows ADD CONSTRAINT flows_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.invitation_teams ADD CONSTRAINT invitation_teams_invitation_id_fkey FOREIGN KEY (invitation_id) REFERENCES organization_invitations(id) ON DELETE CASCADE;
-ALTER TABLE public.invitation_teams ADD CONSTRAINT invitation_teams_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
-ALTER TABLE public.notification_deliveries ADD CONSTRAINT notification_deliveries_event_id_fkey FOREIGN KEY (event_id) REFERENCES notification_events(id) ON DELETE CASCADE;
-ALTER TABLE public.notification_deliveries ADD CONSTRAINT notification_deliveries_flow_run_id_fkey FOREIGN KEY (flow_run_id) REFERENCES flow_runs(id) ON DELETE SET NULL;
-ALTER TABLE public.notification_deliveries ADD CONSTRAINT notification_deliveries_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL;
-ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE SET NULL;
-ALTER TABLE public.notification_rule_changes ADD CONSTRAINT notification_rule_changes_changed_by_user_id_fkey FOREIGN KEY (changed_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.notification_rule_changes ADD CONSTRAINT notification_rule_changes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_asset_tiers ADD CONSTRAINT organization_asset_tiers_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_deprecated_by_fkey FOREIGN KEY (deprecated_by) REFERENCES auth.users(id);
-ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_integrations ADD CONSTRAINT organization_integrations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_invited_by_fkey FOREIGN KEY (invited_by) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE SET NULL;
-ALTER TABLE public.organization_ip_allowlist ADD CONSTRAINT organization_ip_allowlist_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
-ALTER TABLE public.organization_ip_allowlist ADD CONSTRAINT organization_ip_allowlist_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_members ADD CONSTRAINT organization_members_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_members ADD CONSTRAINT organization_members_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_mfa_exemptions ADD CONSTRAINT organization_mfa_exemptions_exempted_by_fkey FOREIGN KEY (exempted_by) REFERENCES auth.users(id);
-ALTER TABLE public.organization_mfa_exemptions ADD CONSTRAINT organization_mfa_exemptions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_mfa_exemptions ADD CONSTRAINT organization_mfa_exemptions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_notification_rules ADD CONSTRAINT organization_notification_rules_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.organization_notification_rules ADD CONSTRAINT organization_notification_rules_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_package_policies ADD CONSTRAINT organization_package_policies_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_package_policies ADD CONSTRAINT organization_package_policies_updated_by_id_fkey FOREIGN KEY (updated_by_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.organization_plans ADD CONSTRAINT organization_plans_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_policies ADD CONSTRAINT organization_policies_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_policy_changes_author_id_fkey FOREIGN KEY (author_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_policy_changes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_policy_changes_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES organization_policy_changes(id) ON DELETE SET NULL;
-ALTER TABLE public.organization_pr_checks ADD CONSTRAINT organization_pr_checks_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_pr_checks ADD CONSTRAINT organization_pr_checks_updated_by_id_fkey FOREIGN KEY (updated_by_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES auth.users(id);
-ALTER TABLE public.organization_roles ADD CONSTRAINT organization_roles_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_scim_configs ADD CONSTRAINT organization_scim_configs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_asset_tier_id_fkey FOREIGN KEY (asset_tier_id) REFERENCES organization_asset_tiers(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_sso_bypass_tokens ADD CONSTRAINT organization_sso_bypass_tokens_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
-ALTER TABLE public.organization_sso_bypass_tokens ADD CONSTRAINT organization_sso_bypass_tokens_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_sso_providers ADD CONSTRAINT organization_sso_providers_default_role_id_fkey FOREIGN KEY (default_role_id) REFERENCES organization_roles(id);
-ALTER TABLE public.organization_sso_providers ADD CONSTRAINT organization_sso_providers_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_status_codes ADD CONSTRAINT organization_status_codes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_status_codes ADD CONSTRAINT organization_status_codes_updated_by_id_fkey FOREIGN KEY (updated_by_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.organization_statuses ADD CONSTRAINT organization_statuses_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_watchlist ADD CONSTRAINT organization_watchlist_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_watchlist ADD CONSTRAINT organization_watchlist_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_watchlist_cleared_commits ADD CONSTRAINT organization_watchlist_cleared_commits_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_watchlist_cleared_commits ADD CONSTRAINT organization_watchlist_cleared_commits_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.package_anomalies ADD CONSTRAINT package_anomalies_contributor_id_fkey FOREIGN KEY (contributor_id) REFERENCES package_contributors(id) ON DELETE CASCADE;
-ALTER TABLE public.package_anomalies ADD CONSTRAINT package_anomalies_watched_package_id_fkey FOREIGN KEY (watched_package_id) REFERENCES watched_packages(id) ON DELETE CASCADE;
-ALTER TABLE public.package_commit_touched_functions ADD CONSTRAINT package_commit_touched_functions_watched_package_id_fkey FOREIGN KEY (watched_package_id) REFERENCES watched_packages(id) ON DELETE CASCADE;
-ALTER TABLE public.package_commits ADD CONSTRAINT package_commits_watched_package_id_fkey FOREIGN KEY (watched_package_id) REFERENCES watched_packages(id) ON DELETE CASCADE;
-ALTER TABLE public.package_contributors ADD CONSTRAINT package_contributors_watched_package_id_fkey FOREIGN KEY (watched_package_id) REFERENCES watched_packages(id) ON DELETE CASCADE;
-ALTER TABLE public.package_reputation_scores ADD CONSTRAINT package_reputation_scores_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_triggered_by_id_fkey FOREIGN KEY (triggered_by_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.project_commits ADD CONSTRAINT project_commits_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_risk_accepted_by_fkey FOREIGN KEY (risk_accepted_by) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_suppressed_by_fkey FOREIGN KEY (suppressed_by) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_linked_sca_project_dependency_id_fkey FOREIGN KEY (linked_sca_project_dependency_id) REFERENCES project_dependencies(id) ON DELETE SET NULL;
-ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_risk_accepted_by_fkey FOREIGN KEY (risk_accepted_by) REFERENCES auth.users(id);
-ALTER TABLE public.project_dependencies ADD CONSTRAINT fk_project_dependencies_version FOREIGN KEY (dependency_version_id) REFERENCES dependency_versions(id) ON DELETE SET NULL;
-ALTER TABLE public.project_dependencies ADD CONSTRAINT project_dependencies_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_dependency_files ADD CONSTRAINT project_dependency_files_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_risk_accepted_by_fkey FOREIGN KEY (risk_accepted_by) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_suppressed_by_fkey FOREIGN KEY (suppressed_by) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.project_integrations ADD CONSTRAINT project_integrations_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id);
-ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_risk_accepted_by_fkey FOREIGN KEY (risk_accepted_by) REFERENCES auth.users(id);
-ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_suppressed_by_fkey FOREIGN KEY (suppressed_by) REFERENCES auth.users(id);
-ALTER TABLE public.project_members ADD CONSTRAINT project_members_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_members ADD CONSTRAINT project_members_role_id_fkey FOREIGN KEY (role_id) REFERENCES project_roles(id) ON DELETE RESTRICT;
-ALTER TABLE public.project_members ADD CONSTRAINT project_members_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.project_notification_rules ADD CONSTRAINT project_notification_rules_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.project_notification_rules ADD CONSTRAINT project_notification_rules_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_author_id_fkey FOREIGN KEY (author_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES project_policy_changes(id) ON DELETE SET NULL;
-ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_reviewer_id_fkey FOREIGN KEY (reviewer_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_pr_guardrails ADD CONSTRAINT project_pr_guardrails_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_pull_requests ADD CONSTRAINT project_pull_requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id);
-ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_repositories ADD CONSTRAINT project_repositories_integration_id_fkey FOREIGN KEY (integration_id) REFERENCES organization_integrations(id) ON DELETE SET NULL;
-ALTER TABLE public.project_repositories ADD CONSTRAINT project_repositories_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_roles ADD CONSTRAINT project_roles_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_secret_findings ADD CONSTRAINT project_secret_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_approved_by_user_id_fkey FOREIGN KEY (approved_by_user_id) REFERENCES auth.users(id);
-ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id);
-ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_malicious_finding_id_fkey FOREIGN KEY (malicious_finding_id) REFERENCES project_malicious_findings(id) ON DELETE SET NULL;
-ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_rejected_by_user_id_fkey FOREIGN KEY (rejected_by_user_id) REFERENCES auth.users(id);
-ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_triggered_by_fkey FOREIGN KEY (triggered_by) REFERENCES auth.users(id);
-ALTER TABLE public.project_semgrep_findings ADD CONSTRAINT project_semgrep_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
-ALTER TABLE public.project_usage_slices ADD CONSTRAINT project_usage_slices_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_version_candidates ADD CONSTRAINT project_version_candidates_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_vulnerability_events ADD CONSTRAINT project_vulnerability_events_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE SET NULL;
-ALTER TABLE public.project_vulnerability_events ADD CONSTRAINT project_vulnerability_events_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_organization_watchlist_id_fkey FOREIGN KEY (organization_watchlist_id) REFERENCES organization_watchlist(id) ON DELETE CASCADE;
-ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.projects ADD CONSTRAINT projects_asset_tier_id_fkey FOREIGN KEY (asset_tier_id) REFERENCES organization_asset_tiers(id) ON DELETE SET NULL;
-ALTER TABLE public.projects ADD CONSTRAINT projects_canvas_position_updated_by_fkey FOREIGN KEY (canvas_position_updated_by) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.projects ADD CONSTRAINT projects_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.projects ADD CONSTRAINT projects_status_id_fkey FOREIGN KEY (status_id) REFERENCES organization_statuses(id) ON DELETE SET NULL;
-ALTER TABLE public.scan_jobs ADD CONSTRAINT extraction_jobs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.scan_jobs ADD CONSTRAINT extraction_jobs_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_triggered_by_fkey FOREIGN KEY (triggered_by) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.security_audit_logs ADD CONSTRAINT security_audit_logs_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES auth.users(id);
-ALTER TABLE public.security_audit_logs ADD CONSTRAINT security_audit_logs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.sla_policy_changes ADD CONSTRAINT sla_policy_changes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_edited_by_user_id_fkey FOREIGN KEY (edited_by_user_id) REFERENCES auth.users(id);
-ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.team_banned_versions ADD CONSTRAINT team_banned_versions_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.team_banned_versions ADD CONSTRAINT team_banned_versions_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
-ALTER TABLE public.team_deprecations ADD CONSTRAINT team_deprecations_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.team_deprecations ADD CONSTRAINT team_deprecations_deprecated_by_fkey FOREIGN KEY (deprecated_by) REFERENCES auth.users(id);
-ALTER TABLE public.team_deprecations ADD CONSTRAINT team_deprecations_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
-ALTER TABLE public.team_integrations ADD CONSTRAINT team_integrations_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
-ALTER TABLE public.team_members ADD CONSTRAINT team_members_role_id_fkey FOREIGN KEY (role_id) REFERENCES team_roles(id) ON DELETE SET NULL;
-ALTER TABLE public.team_members ADD CONSTRAINT team_members_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
-ALTER TABLE public.team_members ADD CONSTRAINT team_members_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.team_notification_rules ADD CONSTRAINT team_notification_rules_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.team_notification_rules ADD CONSTRAINT team_notification_rules_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
-ALTER TABLE public.team_roles ADD CONSTRAINT team_roles_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
-ALTER TABLE public.teams ADD CONSTRAINT teams_canvas_position_updated_by_fkey FOREIGN KEY (canvas_position_updated_by) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.teams ADD CONSTRAINT teams_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.user_integrations ADD CONSTRAINT user_integrations_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.user_notification_preferences ADD CONSTRAINT user_notification_preferences_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.user_notification_preferences ADD CONSTRAINT user_notification_preferences_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.user_notifications ADD CONSTRAINT user_notifications_event_id_fkey FOREIGN KEY (event_id) REFERENCES notification_events(id) ON DELETE SET NULL;
-ALTER TABLE public.user_notifications ADD CONSTRAINT user_notifications_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.user_notifications ADD CONSTRAINT user_notifications_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL;
-ALTER TABLE public.user_notifications ADD CONSTRAINT user_notifications_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.user_profiles ADD CONSTRAINT user_profiles_default_organization_id_fkey FOREIGN KEY (default_organization_id) REFERENCES organizations(id) ON DELETE SET NULL;
-ALTER TABLE public.user_profiles ADD CONSTRAINT user_profiles_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.user_sessions ADD CONSTRAINT user_sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.watched_packages ADD CONSTRAINT fk_watched_packages_dependency FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL;
-
--- ============================================
--- INDEXES
--- ============================================
-CREATE INDEX idx_activities_activity_type ON public.activities USING btree (activity_type);
-CREATE INDEX idx_activities_created_at ON public.activities USING btree (created_at DESC);
-CREATE INDEX idx_activities_metadata ON public.activities USING gin (metadata);
-CREATE INDEX idx_activities_org_type_date ON public.activities USING btree (organization_id, activity_type, created_at DESC);
-CREATE INDEX idx_activities_organization_id ON public.activities USING btree (organization_id);
-CREATE INDEX idx_activities_user_id ON public.activities USING btree (user_id);
-CREATE INDEX idx_aegis_chat_invite_codes_active_code ON public.aegis_chat_invite_codes USING btree (code) WHERE (revoked_at IS NULL);
-CREATE INDEX idx_aegis_chat_messages_created_at ON public.aegis_chat_messages USING btree (created_at DESC);
-CREATE INDEX idx_aegis_chat_messages_thread_id ON public.aegis_chat_messages USING btree (thread_id);
-CREATE INDEX idx_aegis_chat_participants_user_id ON public.aegis_chat_participants USING btree (user_id);
-CREATE INDEX idx_aegis_chat_threads_organization_id ON public.aegis_chat_threads USING btree (organization_id);
-CREATE INDEX idx_aegis_chat_threads_updated_at ON public.aegis_chat_threads USING btree (updated_at DESC);
-CREATE INDEX idx_aegis_chat_threads_user_id ON public.aegis_chat_threads USING btree (user_id);
-CREATE INDEX idx_aegis_chat_user_state_user_id ON public.aegis_chat_user_state USING btree (user_id);
-CREATE INDEX idx_aegis_event_triggers_event ON public.aegis_event_triggers USING btree (event_type) WHERE (enabled = true);
-CREATE INDEX idx_aegis_event_triggers_org ON public.aegis_event_triggers USING btree (organization_id);
-CREATE INDEX idx_aegis_tool_exec_created ON public.aegis_tool_executions USING btree (created_at DESC);
-CREATE INDEX idx_aegis_tool_exec_org ON public.aegis_tool_executions USING btree (organization_id);
-CREATE INDEX idx_aegis_tool_exec_thread ON public.aegis_tool_executions USING btree (thread_id);
-CREATE INDEX idx_aegis_tool_exec_tool ON public.aegis_tool_executions USING btree (tool_name);
-CREATE INDEX idx_aegis_tool_exec_user ON public.aegis_tool_executions USING btree (user_id);
-CREATE INDEX idx_api_tokens_hash ON public.api_tokens USING btree (token_hash) WHERE (revoked_at IS NULL);
-CREATE INDEX idx_api_tokens_org ON public.api_tokens USING btree (organization_id) WHERE (revoked_at IS NULL);
-CREATE INDEX idx_api_tokens_user ON public.api_tokens USING btree (user_id) WHERE (revoked_at IS NULL);
-CREATE INDEX idx_aul_org_created ON public.ai_usage_logs USING btree (organization_id, created_at DESC);
-CREATE INDEX idx_aul_org_month ON public.ai_usage_logs USING btree (organization_id, created_at) WHERE (success = true);
-CREATE INDEX idx_aul_user_feature ON public.ai_usage_logs USING btree (user_id, feature, created_at DESC);
-CREATE INDEX idx_banned_versions_org_dependency_id ON public.banned_versions USING btree (organization_id, dependency_id);
-CREATE INDEX idx_debt_snapshots_org_date ON public.security_debt_snapshots USING btree (organization_id, snapshot_date DESC);
-CREATE INDEX idx_debt_snapshots_project ON public.security_debt_snapshots USING btree (project_id, snapshot_date DESC);
-CREATE INDEX idx_demo_requests_created_at ON public.demo_requests USING btree (created_at DESC);
-CREATE INDEX idx_demo_requests_email ON public.demo_requests USING btree (email);
-CREATE INDEX idx_dependencies_github_url ON public.dependencies USING btree (github_url);
-CREATE INDEX idx_dependencies_name ON public.dependencies USING btree (name);
-CREATE INDEX idx_dependencies_status ON public.dependencies USING btree (status);
-CREATE INDEX idx_dependency_note_reactions_note ON public.dependency_note_reactions USING btree (note_id);
-CREATE INDEX idx_dependency_note_reactions_user ON public.dependency_note_reactions USING btree (user_id);
-CREATE INDEX idx_dependency_notes_pd ON public.dependency_notes USING btree (project_dependency_id);
-CREATE INDEX idx_dependency_prs_project_dependency_type ON public.dependency_prs USING btree (project_id, dependency_id, type);
-CREATE INDEX idx_dependency_versions_dependency_id ON public.dependency_versions USING btree (dependency_id);
-CREATE INDEX idx_dependency_versions_version ON public.dependency_versions USING btree (version);
-CREATE INDEX idx_dependency_vulnerabilities_dependency_id ON public.dependency_vulnerabilities USING btree (dependency_id);
-CREATE INDEX idx_dependency_vulnerabilities_osv_id ON public.dependency_vulnerabilities USING btree (osv_id);
-CREATE INDEX idx_dependency_vulnerabilities_severity ON public.dependency_vulnerabilities USING btree (severity);
-CREATE INDEX idx_dve_child ON public.dependency_version_edges USING btree (child_version_id);
-CREATE INDEX idx_dve_parent ON public.dependency_version_edges USING btree (parent_version_id);
-CREATE INDEX idx_extraction_logs_project ON public.extraction_logs USING btree (project_id);
-CREATE INDEX idx_extraction_logs_run ON public.extraction_logs USING btree (run_id);
-CREATE INDEX idx_extraction_step_errors_created ON public.extraction_step_errors USING btree (created_at DESC);
-CREATE INDEX idx_extraction_step_errors_project_created ON public.extraction_step_errors USING btree (project_id, created_at DESC);
-CREATE INDEX idx_extraction_step_errors_step_code ON public.extraction_step_errors USING btree (step, code);
-CREATE INDEX idx_feedback_created_at ON public.feedback USING btree (created_at DESC);
-CREATE INDEX idx_feedback_type ON public.feedback USING btree (type);
-CREATE INDEX idx_feedback_user_id ON public.feedback USING btree (user_id) WHERE (user_id IS NOT NULL);
-CREATE INDEX idx_flow_node_executions_run ON public.flow_node_executions USING btree (flow_run_id, executed_at);
-CREATE INDEX idx_flow_runs_flow_started ON public.flow_runs USING btree (flow_id, started_at DESC);
-CREATE INDEX idx_flow_runs_org_started ON public.flow_runs USING btree (organization_id, started_at DESC);
-CREATE INDEX idx_flow_runs_trigger_event ON public.flow_runs USING btree (trigger_event_id) WHERE (trigger_event_id IS NOT NULL);
-CREATE INDEX idx_flow_versions_flow ON public.flow_versions USING btree (flow_id, version DESC);
-CREATE INDEX idx_flows_org_type_active ON public.flows USING btree (organization_id, flow_type, active) WHERE (active = true);
-CREATE INDEX idx_flows_scope ON public.flows USING btree (scope, scope_id);
-CREATE INDEX idx_invitation_teams_invitation_id ON public.invitation_teams USING btree (invitation_id);
-CREATE INDEX idx_invitation_teams_team_id ON public.invitation_teams USING btree (team_id);
-CREATE INDEX idx_ip_allowlist_org ON public.organization_ip_allowlist USING btree (organization_id);
-CREATE INDEX idx_known_malicious_packages_lookup ON public.known_malicious_packages USING btree (package_name, ecosystem) WHERE (withdrawn_at IS NULL);
-CREATE INDEX idx_license_obligations_spdx ON public.license_obligations USING btree (license_spdx_id);
-CREATE INDEX idx_mfsr_source_state ON public.malicious_feed_sync_runs USING btree (source, state, completed_at DESC);
-CREATE INDEX idx_notif_deliveries_event ON public.notification_deliveries USING btree (event_id);
-CREATE INDEX idx_notif_deliveries_flow_run ON public.notification_deliveries USING btree (flow_run_id) WHERE (flow_run_id IS NOT NULL);
-CREATE INDEX idx_notif_deliveries_org_time ON public.notification_deliveries USING btree (organization_id, created_at DESC);
-CREATE INDEX idx_notif_deliveries_status ON public.notification_deliveries USING btree (status) WHERE (status = ANY (ARRAY['pending'::text, 'failed'::text]));
-CREATE INDEX idx_notif_events_batch ON public.notification_events USING btree (batch_id) WHERE (batch_id IS NOT NULL);
-CREATE INDEX idx_notif_events_dedup ON public.notification_events USING btree (deduplication_key, created_at DESC) WHERE (deduplication_key IS NOT NULL);
-CREATE INDEX idx_notif_events_org ON public.notification_events USING btree (organization_id, created_at DESC);
-CREATE INDEX idx_notif_events_project ON public.notification_events USING btree (project_id, created_at DESC);
-CREATE INDEX idx_notif_events_status ON public.notification_events USING btree (status) WHERE (status = 'pending'::text);
-CREATE INDEX idx_notif_events_stuck ON public.notification_events USING btree (created_at, dispatch_attempts) WHERE (status = 'pending'::text);
-CREATE INDEX idx_ogr_cve ON public.organization_generated_rules USING btree (cve_id);
-CREATE INDEX idx_ogr_org_enabled ON public.organization_generated_rules USING btree (organization_id, enabled);
-CREATE INDEX idx_ogr_status ON public.organization_generated_rules USING btree (organization_id, validation_status);
-CREATE INDEX idx_op_status ON public.organization_plans USING btree (subscription_status);
-CREATE INDEX idx_op_stripe_customer ON public.organization_plans USING btree (stripe_customer_id);
-CREATE INDEX idx_op_stripe_subscription ON public.organization_plans USING btree (stripe_subscription_id);
-CREATE INDEX idx_op_tier ON public.organization_plans USING btree (plan_tier);
-CREATE INDEX idx_org_package_policies_org ON public.organization_package_policies USING btree (organization_id);
-CREATE INDEX idx_org_policy_changes_org ON public.organization_policy_changes USING btree (organization_id);
-CREATE INDEX idx_org_policy_changes_type ON public.organization_policy_changes USING btree (organization_id, code_type);
-CREATE INDEX idx_org_pr_checks_org ON public.organization_pr_checks USING btree (organization_id);
-CREATE INDEX idx_org_reach_settings_updated_by ON public.organization_reachability_settings USING btree (updated_by);
-CREATE INDEX idx_org_status_codes_org ON public.organization_status_codes USING btree (organization_id);
-CREATE INDEX idx_organization_asset_tiers_org ON public.organization_asset_tiers USING btree (organization_id);
-CREATE INDEX idx_organization_asset_tiers_rank ON public.organization_asset_tiers USING btree (organization_id, rank);
-CREATE INDEX idx_organization_deprecations_org_dependency_id ON public.organization_deprecations USING btree (organization_id, dependency_id);
-CREATE INDEX idx_organization_integrations_org_id ON public.organization_integrations USING btree (organization_id);
-CREATE INDEX idx_organization_integrations_provider ON public.organization_integrations USING btree (provider);
-CREATE INDEX idx_organization_integrations_status ON public.organization_integrations USING btree (status);
-CREATE INDEX idx_organization_invitations_email ON public.organization_invitations USING btree (email);
-CREATE INDEX idx_organization_invitations_org_email_status ON public.organization_invitations USING btree (organization_id, email, status);
-CREATE INDEX idx_organization_invitations_org_id ON public.organization_invitations USING btree (organization_id);
-CREATE INDEX idx_organization_invitations_status ON public.organization_invitations USING btree (status);
-CREATE INDEX idx_organization_invitations_team_id ON public.organization_invitations USING btree (team_id);
-CREATE INDEX idx_organization_members_org_id ON public.organization_members USING btree (organization_id);
-CREATE INDEX idx_organization_members_user_id ON public.organization_members USING btree (user_id);
-CREATE INDEX idx_organization_notification_rules_org_id ON public.organization_notification_rules USING btree (organization_id);
-CREATE INDEX idx_organization_policies_org_id ON public.organization_policies USING btree (organization_id);
-CREATE INDEX idx_organization_roles_display_order ON public.organization_roles USING btree (organization_id, display_order);
-CREATE INDEX idx_organization_roles_org_id ON public.organization_roles USING btree (organization_id);
-CREATE INDEX idx_organization_statuses_org ON public.organization_statuses USING btree (organization_id);
-CREATE INDEX idx_organization_statuses_rank ON public.organization_statuses USING btree (organization_id, rank);
-CREATE INDEX idx_organization_watchlist_cleared_commits_dependency_id ON public.organization_watchlist_cleared_commits USING btree (organization_id, dependency_id) WHERE (dependency_id IS NOT NULL);
-CREATE INDEX idx_organization_watchlist_cleared_commits_org_dependency_id ON public.organization_watchlist_cleared_commits USING btree (organization_id, dependency_id);
-CREATE INDEX idx_organization_watchlist_dependency_id ON public.organization_watchlist USING btree (dependency_id);
-CREATE INDEX idx_organization_watchlist_name ON public.organization_watchlist USING btree (name);
-CREATE INDEX idx_organization_watchlist_org_name ON public.organization_watchlist USING btree (organization_id, name);
-CREATE INDEX idx_organization_watchlist_organization_id_dependency_id ON public.organization_watchlist USING btree (organization_id, dependency_id);
-CREATE INDEX idx_organizations_github_installation_id ON public.organizations USING btree (github_installation_id) WHERE (github_installation_id IS NOT NULL);
-CREATE INDEX idx_package_anomalies_anomaly_score ON public.package_anomalies USING btree (anomaly_score DESC);
-CREATE INDEX idx_package_anomalies_contributor_id ON public.package_anomalies USING btree (contributor_id);
-CREATE INDEX idx_package_anomalies_detected_at ON public.package_anomalies USING btree (detected_at DESC);
-CREATE INDEX idx_package_anomalies_watched_package_id ON public.package_anomalies USING btree (watched_package_id);
-CREATE INDEX idx_package_commit_touched_functions_lookup ON public.package_commit_touched_functions USING btree (watched_package_id, commit_sha);
-CREATE INDEX idx_package_commits_author_email ON public.package_commits USING btree (author_email);
-CREATE INDEX idx_package_commits_timestamp ON public.package_commits USING btree ("timestamp" DESC);
-CREATE INDEX idx_package_commits_watched_package_created_at ON public.package_commits USING btree (watched_package_id, created_at DESC);
-CREATE INDEX idx_package_commits_watched_package_id ON public.package_commits USING btree (watched_package_id);
-CREATE INDEX idx_package_contributors_author_email ON public.package_contributors USING btree (author_email);
-CREATE INDEX idx_package_contributors_total_commits ON public.package_contributors USING btree (total_commits DESC);
-CREATE INDEX idx_package_contributors_watched_package_id ON public.package_contributors USING btree (watched_package_id);
-CREATE INDEX idx_package_security_cache_lookup ON public.package_security_cache USING btree (package_name, version, ecosystem, scanner);
-CREATE INDEX idx_pcf_org_status_depscore ON public.project_container_findings USING btree (organization_id, status, depscore DESC NULLS LAST);
-CREATE INDEX idx_pcf_project_run ON public.project_container_findings USING btree (project_id, extraction_run_id);
-CREATE INDEX idx_pcf_severity ON public.project_container_findings USING btree (severity);
-CREATE INDEX idx_pd_namespace ON public.project_dependencies USING btree (namespace) WHERE (namespace IS NOT NULL);
-CREATE INDEX idx_pdf_dep_extraction_run ON public.project_dependency_files USING btree (project_dependency_id, extraction_run_id);
-CREATE INDEX idx_pdfn_dep_extraction_run ON public.project_dependency_functions USING btree (project_dependency_id, extraction_run_id);
-CREATE INDEX idx_pdv_project_epd_confidence ON public.project_dependency_vulnerabilities USING btree (project_id, epd_confidence_tier);
-CREATE INDEX idx_pdv_project_extraction_run ON public.project_dependency_vulnerabilities USING btree (project_id, extraction_run_id);
-CREATE INDEX idx_pdv_project_reachability_contextual ON public.project_dependency_vulnerabilities USING btree (project_id, reachability_status, contextual_depscore DESC);
-CREATE INDEX idx_pdv_rereview_triggered ON public.project_dependency_vulnerabilities USING btree (project_id, re_review_triggered_at DESC) WHERE (re_review_triggered_at IS NOT NULL);
-CREATE INDEX idx_pdv_sla_deadline ON public.project_dependency_vulnerabilities USING btree (sla_deadline_at) WHERE (sla_status = ANY (ARRAY['on_track'::text, 'warning'::text]));
-CREATE INDEX idx_pdv_sla_status ON public.project_dependency_vulnerabilities USING btree (sla_status) WHERE (sla_status IS NOT NULL);
-CREATE INDEX idx_pdv_sla_warning_at ON public.project_dependency_vulnerabilities USING btree (sla_warning_at) WHERE ((sla_status = 'on_track'::text) AND (sla_warning_at IS NOT NULL));
-CREATE INDEX idx_pdv_status ON public.project_dependency_vulnerabilities USING btree (status);
-CREATE INDEX idx_pep_classification ON public.project_entry_points USING btree (classification);
-CREATE INDEX idx_pep_framework ON public.project_entry_points USING btree (framework);
-CREATE INDEX idx_pep_project ON public.project_entry_points USING btree (project_id);
-CREATE INDEX idx_pep_project_run ON public.project_entry_points USING btree (project_id, extraction_run_id);
-CREATE INDEX idx_pep_run ON public.project_entry_points USING btree (extraction_run_id);
-CREATE INDEX idx_piacf_framework ON public.project_iac_findings USING btree (framework);
-CREATE INDEX idx_piacf_org_status_depscore ON public.project_iac_findings USING btree (organization_id, status, depscore DESC NULLS LAST);
-CREATE INDEX idx_piacf_project_run ON public.project_iac_findings USING btree (project_id, extraction_run_id);
-CREATE INDEX idx_piacf_severity ON public.project_iac_findings USING btree (severity);
-CREATE INDEX idx_pmf_dep ON public.project_malicious_findings USING btree (dependency_id);
-CREATE INDEX idx_pmf_org ON public.project_malicious_findings USING btree (organization_id);
-CREATE INDEX idx_pmf_project_open ON public.project_malicious_findings USING btree (project_id, suppressed, risk_accepted);
-CREATE INDEX idx_pmf_project_run ON public.project_malicious_findings USING btree (project_id, extraction_run_id);
-CREATE INDEX idx_policy_eval_jobs_org ON public.policy_evaluation_jobs USING btree (organization_id);
-CREATE INDEX idx_policy_eval_jobs_status ON public.policy_evaluation_jobs USING btree (organization_id, status);
-CREATE INDEX idx_prf_project_dep ON public.project_reachable_flows USING btree (project_id, dependency_id);
-CREATE INDEX idx_prf_project_entry ON public.project_reachable_flows USING btree (project_id, entry_point_file);
-CREATE INDEX idx_prf_project_extraction_run ON public.project_reachable_flows USING btree (project_id, extraction_run_id);
-CREATE INDEX idx_prf_project_purl ON public.project_reachable_flows USING btree (project_id, purl);
-CREATE INDEX idx_prf_project_run_osv ON public.project_reachable_flows USING btree (project_id, extraction_run_id, osv_id) WHERE (osv_id IS NOT NULL);
-CREATE INDEX idx_prf_run ON public.project_reachable_flows USING btree (extraction_run_id);
-CREATE INDEX idx_prf_run_source ON public.project_reachable_flows USING btree (extraction_run_id, reachability_source);
-CREATE INDEX idx_project_commits_project_id ON public.project_commits USING btree (project_id);
-CREATE INDEX idx_project_commits_sha ON public.project_commits USING btree (sha);
-CREATE INDEX idx_project_dast_config_org ON public.project_dast_config USING btree (organization_id);
-CREATE INDEX idx_project_dast_findings_handler ON public.project_dast_findings USING btree (project_id, handler_file_path, handler_function_name) WHERE (handler_file_path IS NOT NULL);
-CREATE INDEX idx_project_dast_findings_org_severity ON public.project_dast_findings USING btree (organization_id, severity, status) WHERE (status = 'open'::text);
-CREATE INDEX idx_project_dast_findings_run ON public.project_dast_findings USING btree (project_id, dast_run_id);
-CREATE INDEX idx_project_dast_findings_sca_link ON public.project_dast_findings USING btree (linked_sca_project_dependency_id) WHERE (linked_sca_project_dependency_id IS NOT NULL);
-CREATE INDEX idx_project_dependencies_active ON public.project_dependencies USING btree (project_id) WHERE (removed_at IS NULL);
-CREATE INDEX idx_project_dependencies_dependency_id ON public.project_dependencies USING btree (dependency_id);
-CREATE INDEX idx_project_dependencies_dependency_version_id ON public.project_dependencies USING btree (dependency_version_id);
-CREATE INDEX idx_project_dependencies_name ON public.project_dependencies USING btree (name);
-CREATE INDEX idx_project_dependencies_policy_result ON public.project_dependencies USING gin (policy_result);
-CREATE INDEX idx_project_dependencies_project_id ON public.project_dependencies USING btree (project_id);
-CREATE INDEX idx_project_dependencies_project_id_dependency_id ON public.project_dependencies USING btree (project_id, dependency_id);
-CREATE INDEX idx_project_dependency_files_project_dependency_id ON public.project_dependency_files USING btree (project_dependency_id);
-CREATE INDEX idx_project_dependency_functions_function_name ON public.project_dependency_functions USING btree (function_name);
-CREATE INDEX idx_project_dependency_functions_project_dependency_id ON public.project_dependency_functions USING btree (project_dependency_id);
-CREATE INDEX idx_project_dependency_vulnerabilities_osv_id ON public.project_dependency_vulnerabilities USING btree (osv_id);
-CREATE INDEX idx_project_dependency_vulnerabilities_project_dependency_id ON public.project_dependency_vulnerabilities USING btree (project_dependency_id);
-CREATE INDEX idx_project_dependency_vulnerabilities_project_id ON public.project_dependency_vulnerabilities USING btree (project_id);
-CREATE INDEX idx_project_dependency_vulnerabilities_severity ON public.project_dependency_vulnerabilities USING btree (severity);
-CREATE INDEX idx_project_integrations_project_id ON public.project_integrations USING btree (project_id);
-CREATE INDEX idx_project_integrations_provider ON public.project_integrations USING btree (provider);
-CREATE INDEX idx_project_integrations_status ON public.project_integrations USING btree (status);
-CREATE INDEX idx_project_members_project_id ON public.project_members USING btree (project_id);
-CREATE INDEX idx_project_members_role_id ON public.project_members USING btree (role_id);
-CREATE INDEX idx_project_members_user_id ON public.project_members USING btree (user_id);
-CREATE INDEX idx_project_notification_rules_project_id ON public.project_notification_rules USING btree (project_id);
-CREATE INDEX idx_project_policy_changes_org ON public.project_policy_changes USING btree (organization_id);
-CREATE INDEX idx_project_policy_changes_project ON public.project_policy_changes USING btree (project_id);
-CREATE INDEX idx_project_policy_changes_status ON public.project_policy_changes USING btree (organization_id, status);
-CREATE INDEX idx_project_policy_changes_type ON public.project_policy_changes USING btree (project_id, code_type, status);
-CREATE INDEX idx_project_policy_exceptions_org_id ON public.project_policy_exceptions USING btree (organization_id);
-CREATE INDEX idx_project_policy_exceptions_project_id ON public.project_policy_exceptions USING btree (project_id);
-CREATE INDEX idx_project_policy_exceptions_project_pending_type ON public.project_policy_exceptions USING btree (organization_id, project_id, status, policy_type) WHERE (status = 'pending'::text);
-CREATE INDEX idx_project_policy_exceptions_status ON public.project_policy_exceptions USING btree (status);
-CREATE INDEX idx_project_pr_guardrails_project_id ON public.project_pr_guardrails USING btree (project_id);
-CREATE INDEX idx_project_prs_project_id ON public.project_pull_requests USING btree (project_id);
-CREATE INDEX idx_project_prs_status ON public.project_pull_requests USING btree (status);
-CREATE INDEX idx_project_repositories_integration_id ON public.project_repositories USING btree (integration_id);
-CREATE INDEX idx_project_repositories_project_id ON public.project_repositories USING btree (project_id);
-CREATE INDEX idx_project_repositories_repo_id ON public.project_repositories USING btree (repo_id);
-CREATE INDEX idx_project_roles_display_order ON public.project_roles USING btree (project_id, display_order);
-CREATE INDEX idx_project_roles_project_id ON public.project_roles USING btree (project_id);
-CREATE INDEX idx_project_teams_is_owner ON public.project_teams USING btree (project_id, is_owner);
-CREATE INDEX idx_project_teams_project_id ON public.project_teams USING btree (project_id);
-CREATE INDEX idx_project_teams_team_id ON public.project_teams USING btree (team_id);
-CREATE INDEX idx_project_watchlist_project ON public.project_watchlist USING btree (project_id);
-CREATE INDEX idx_project_watchlist_watchlist ON public.project_watchlist USING btree (organization_watchlist_id);
-CREATE INDEX idx_projects_active_dast_run ON public.projects USING btree (active_dast_run_id) WHERE (active_dast_run_id IS NOT NULL);
-CREATE INDEX idx_projects_asset_tier_id ON public.projects USING btree (asset_tier_id);
-CREATE INDEX idx_projects_canvas_position_updated_by ON public.projects USING btree (canvas_position_updated_by) WHERE (canvas_position_updated_by IS NOT NULL);
-CREATE INDEX idx_projects_framework ON public.projects USING btree (framework);
-CREATE INDEX idx_projects_is_compliant ON public.projects USING btree (is_compliant);
-CREATE INDEX idx_projects_organization_id ON public.projects USING btree (organization_id);
-CREATE INDEX idx_projects_status_id ON public.projects USING btree (status_id);
-CREATE INDEX idx_psecf_depscore ON public.project_secret_findings USING btree (depscore DESC NULLS LAST);
-CREATE INDEX idx_psecf_project ON public.project_secret_findings USING btree (project_id);
-CREATE INDEX idx_psecf_project_extraction_run ON public.project_secret_findings USING btree (project_id, extraction_run_id);
-CREATE INDEX idx_psecf_run ON public.project_secret_findings USING btree (extraction_run_id);
-CREATE INDEX idx_psecf_status ON public.project_secret_findings USING btree (status);
-CREATE INDEX idx_psemf_depscore ON public.project_semgrep_findings USING btree (depscore DESC NULLS LAST);
-CREATE INDEX idx_psemf_fingerprint ON public.project_semgrep_findings USING btree (project_id, semgrep_fingerprint) WHERE (semgrep_fingerprint IS NOT NULL);
-CREATE INDEX idx_psemf_project_extraction_run ON public.project_semgrep_findings USING btree (project_id, extraction_run_id);
-CREATE INDEX idx_psemf_status ON public.project_semgrep_findings USING btree (status);
-CREATE INDEX idx_psf_org_status ON public.project_security_fixes USING btree (organization_id, status);
-CREATE INDEX idx_psf_org_status_pending ON public.project_security_fixes USING btree (organization_id, status) WHERE (status = ANY (ARRAY['planning'::text, 'awaiting_approval'::text]));
-CREATE INDEX idx_psf_osv ON public.project_security_fixes USING btree (project_id, osv_id) WHERE (osv_id IS NOT NULL);
-CREATE INDEX idx_psf_project ON public.project_semgrep_findings USING btree (project_id);
-CREATE INDEX idx_psf_project_status ON public.project_security_fixes USING btree (project_id, status);
-CREATE INDEX idx_psf_run ON public.project_semgrep_findings USING btree (extraction_run_id);
-CREATE INDEX idx_psf_status_approved ON public.project_security_fixes USING btree (status, approved_at) WHERE (status = 'approved'::text);
-CREATE INDEX idx_psf_status_executing ON public.project_security_fixes USING btree (status, heartbeat_at) WHERE (status = 'executing'::text);
-CREATE INDEX idx_pus_project_extraction_run ON public.project_usage_slices USING btree (project_id, extraction_run_id);
-CREATE INDEX idx_pus_project_file ON public.project_usage_slices USING btree (project_id, file_path);
-CREATE INDEX idx_pus_project_type ON public.project_usage_slices USING btree (project_id, target_type);
-CREATE INDEX idx_pus_run ON public.project_usage_slices USING btree (extraction_run_id);
-CREATE INDEX idx_pvc_project_package ON public.project_version_candidates USING btree (project_id, package_name, ecosystem);
-CREATE INDEX idx_pve_created_at ON public.project_vulnerability_events USING btree (created_at DESC);
-CREATE INDEX idx_pve_event_type ON public.project_vulnerability_events USING btree (event_type);
-CREATE INDEX idx_pve_extraction_run_id ON public.project_vulnerability_events USING btree (extraction_run_id) WHERE (extraction_run_id IS NOT NULL);
-CREATE INDEX idx_pve_osv_id ON public.project_vulnerability_events USING btree (osv_id);
-CREATE INDEX idx_pve_project_dependency_id ON public.project_vulnerability_events USING btree (project_dependency_id) WHERE (project_dependency_id IS NOT NULL);
-CREATE INDEX idx_pve_project_id ON public.project_vulnerability_events USING btree (project_id);
-CREATE INDEX idx_reputation_scores_dep ON public.package_reputation_scores USING btree (dependency_id);
-CREATE INDEX idx_reputation_scores_score ON public.package_reputation_scores USING btree (score);
-CREATE INDEX idx_rule_changes_rule ON public.notification_rule_changes USING btree (rule_id, created_at DESC);
-CREATE INDEX idx_sal_action ON public.security_audit_logs USING btree (organization_id, action);
-CREATE INDEX idx_sal_actor ON public.security_audit_logs USING btree (actor_id);
-CREATE INDEX idx_sal_org_created ON public.security_audit_logs USING btree (organization_id, created_at DESC);
-CREATE INDEX idx_scan_jobs_org ON public.scan_jobs USING btree (organization_id);
-CREATE INDEX idx_scan_jobs_project ON public.scan_jobs USING btree (project_id);
-CREATE INDEX idx_scan_jobs_status_created ON public.scan_jobs USING btree (status, created_at);
-CREATE INDEX idx_scan_jobs_type_status_created ON public.scan_jobs USING btree (type, status, created_at);
-CREATE INDEX idx_scim_mappings_org ON public.scim_user_mappings USING btree (organization_id);
-CREATE INDEX idx_sla_policies_asset_tier ON public.organization_sla_policies USING btree (asset_tier_id) WHERE (asset_tier_id IS NOT NULL);
-CREATE INDEX idx_sla_policies_org ON public.organization_sla_policies USING btree (organization_id);
-CREATE INDEX idx_sla_policy_changes_created ON public.sla_policy_changes USING btree (created_at DESC);
-CREATE INDEX idx_sla_policy_changes_org ON public.sla_policy_changes USING btree (organization_id);
-CREATE INDEX idx_sso_bypass_org ON public.organization_sso_bypass_tokens USING btree (organization_id) WHERE (used_at IS NULL);
-CREATE INDEX idx_swe_event_id ON public.stripe_webhook_events USING btree (event_id);
-CREATE INDEX idx_team_banned_versions_team_dependency_id ON public.team_banned_versions USING btree (team_id, dependency_id);
-CREATE INDEX idx_team_deprecations_team_dependency_id ON public.team_deprecations USING btree (team_id, dependency_id);
-CREATE INDEX idx_team_integrations_provider ON public.team_integrations USING btree (provider);
-CREATE INDEX idx_team_integrations_status ON public.team_integrations USING btree (status);
-CREATE INDEX idx_team_integrations_team_id ON public.team_integrations USING btree (team_id);
-CREATE INDEX idx_team_members_role_id ON public.team_members USING btree (role_id);
-CREATE INDEX idx_team_members_team_id ON public.team_members USING btree (team_id);
-CREATE INDEX idx_team_members_user_id ON public.team_members USING btree (user_id);
-CREATE INDEX idx_team_notification_rules_team_id ON public.team_notification_rules USING btree (team_id);
-CREATE INDEX idx_team_roles_display_order ON public.team_roles USING btree (team_id, display_order);
-CREATE INDEX idx_team_roles_team_id ON public.team_roles USING btree (team_id);
-CREATE INDEX idx_teams_canvas_position_updated_by ON public.teams USING btree (canvas_position_updated_by) WHERE (canvas_position_updated_by IS NOT NULL);
-CREATE INDEX idx_teams_organization_id ON public.teams USING btree (organization_id);
-CREATE INDEX idx_temf_framework ON public.taint_engine_framework_models USING btree (framework_name);
-CREATE INDEX idx_temf_org_active ON public.taint_engine_framework_models USING btree (organization_id, is_active);
-CREATE INDEX idx_ter_failed_recent ON public.taint_engine_runs USING btree (created_at DESC) WHERE (status = 'failed'::text);
-CREATE INDEX idx_ter_org_created ON public.taint_engine_runs USING btree (organization_id, created_at DESC);
-CREATE INDEX idx_ter_project_extraction ON public.taint_engine_runs USING btree (project_id, extraction_run_id);
-CREATE INDEX idx_ter_status_created ON public.taint_engine_runs USING btree (status, created_at DESC);
-CREATE INDEX idx_user_integrations_provider ON public.user_integrations USING btree (provider);
-CREATE INDEX idx_user_integrations_user_id ON public.user_integrations USING btree (user_id);
-CREATE INDEX idx_user_notifs_unread ON public.user_notifications USING btree (user_id, read_at) WHERE (read_at IS NULL);
-CREATE INDEX idx_user_notifs_user ON public.user_notifications USING btree (user_id, created_at DESC);
-CREATE INDEX idx_user_profiles_default_organization_id ON public.user_profiles USING btree (default_organization_id);
-CREATE INDEX idx_user_profiles_user_id ON public.user_profiles USING btree (user_id);
-CREATE INDEX idx_user_sessions_active ON public.user_sessions USING btree (last_active_at DESC);
-CREATE INDEX idx_user_sessions_user ON public.user_sessions USING btree (user_id);
-CREATE INDEX idx_watched_packages_last_polled_at ON public.watched_packages USING btree (last_polled_at) WHERE (status = 'ready'::text);
-CREATE INDEX idx_watched_packages_status ON public.watched_packages USING btree (status);
-CREATE INDEX idx_watchtower_jobs_heartbeat ON public.watchtower_jobs USING btree (heartbeat_at) WHERE (status = 'processing'::text);
-CREATE INDEX idx_watchtower_jobs_priority ON public.watchtower_jobs USING btree (priority, created_at) WHERE (status = 'queued'::text);
-CREATE INDEX idx_watchtower_jobs_status ON public.watchtower_jobs USING btree (status) WHERE (status = ANY (ARRAY['queued'::text, 'processing'::text]));
-CREATE INDEX idx_webhook_deliveries_created ON public.webhook_deliveries USING btree (created_at);
-CREATE INDEX idx_webhook_deliveries_delivery_id ON public.webhook_deliveries USING btree (delivery_id);
-CREATE INDEX idx_webhook_deliveries_repo ON public.webhook_deliveries USING btree (repo_full_name);
-CREATE UNIQUE INDEX banned_versions_organization_id_dependency_id_banned_version_ke ON public.banned_versions USING btree (organization_id, dependency_id, banned_version);
-CREATE UNIQUE INDEX idx_dependencies_ecosystem_name ON public.dependencies USING btree (ecosystem, name);
-CREATE UNIQUE INDEX idx_notif_events_dedup_unique ON public.notification_events USING btree (deduplication_key) WHERE (deduplication_key IS NOT NULL);
-CREATE UNIQUE INDEX idx_org_integrations_org_provider_installation ON public.organization_integrations USING btree (organization_id, provider, installation_id) WHERE (installation_id IS NOT NULL);
-CREATE UNIQUE INDEX idx_pcf_fingerprint ON public.project_container_findings USING btree (project_id, container_fingerprint) WHERE (container_fingerprint IS NOT NULL);
-CREATE UNIQUE INDEX idx_pcf_unique ON public.project_container_findings USING btree (project_id, image_digest, os_package_name, os_package_version, vulnerability_id, extraction_run_id);
-CREATE UNIQUE INDEX idx_piacf_fingerprint ON public.project_iac_findings USING btree (project_id, scanner, iac_fingerprint) WHERE (iac_fingerprint IS NOT NULL);
-CREATE UNIQUE INDEX idx_piacf_unique ON public.project_iac_findings USING btree (project_id, rule_id, file_path, start_line_key, extraction_run_id);
-CREATE UNIQUE INDEX idx_project_commits_project_sha ON public.project_commits USING btree (project_id, sha);
-CREATE UNIQUE INDEX idx_project_prs_project_pr ON public.project_pull_requests USING btree (project_id, pr_number, provider);
-CREATE UNIQUE INDEX idx_project_repositories_repo_full_name_package_json_path ON public.project_repositories USING btree (repo_full_name, package_json_path);
-CREATE UNIQUE INDEX idx_project_teams_single_owner ON public.project_teams USING btree (project_id) WHERE (is_owner = true);
-CREATE UNIQUE INDEX idx_pve_unique_per_run ON public.project_vulnerability_events USING btree (project_id, osv_id, event_type, extraction_run_id, project_dependency_id) WHERE (extraction_run_id IS NOT NULL);
-CREATE UNIQUE INDEX organization_deprecations_organization_id_dependency_id_key ON public.organization_deprecations USING btree (organization_id, dependency_id);
-CREATE UNIQUE INDEX organization_watchlist_cleared_commits_org_dependency_id_commit ON public.organization_watchlist_cleared_commits USING btree (organization_id, dependency_id, commit_sha);
-CREATE UNIQUE INDEX project_dast_findings_resolved ON public.project_dast_findings USING btree (project_id, dast_run_id, rule_id, handler_file_path, handler_function_name, vulnerability_type) WHERE (handler_file_path IS NOT NULL);
-CREATE UNIQUE INDEX project_dast_findings_unresolved ON public.project_dast_findings USING btree (project_id, dast_run_id, rule_id, endpoint_url, http_method, vulnerability_type) WHERE (handler_file_path IS NULL);
-CREATE UNIQUE INDEX team_banned_versions_team_id_dependency_id_banned_version_key ON public.team_banned_versions USING btree (team_id, dependency_id, banned_version);
-CREATE UNIQUE INDEX team_deprecations_team_id_dependency_id_key ON public.team_deprecations USING btree (team_id, dependency_id);
-
--- ============================================
 -- FUNCTIONS
 -- ============================================
 CREATE OR REPLACE FUNCTION public._pdv_reachability_rank(p_level text)
@@ -2635,6 +1975,61 @@ BEGIN
   END IF;
   
   RETURN NEW;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.apply_malicious_allowlist(p_org_id uuid, p_extraction_run_id text)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  v_suppressed integer := 0;
+  v_dep_ids uuid[];
+BEGIN
+  WITH allowlisted AS (
+    UPDATE public.project_malicious_findings pmf
+    SET
+      suppressed = true,
+      suppressed_at = now(),
+      suppressed_reason = 'allowlist:' || (
+        SELECT oma.id::text
+        FROM public.organization_malicious_allowlist oma
+        INNER JOIN public.project_dependencies pd2 ON pd2.id = pmf.project_dependency_id
+        INNER JOIN public.dependencies d2 ON d2.id = pd2.dependency_id
+        WHERE oma.organization_id = p_org_id
+          AND oma.revoked_at IS NULL
+          AND oma.package_name = d2.name
+          AND oma.ecosystem = public.canonicalize_malicious_ecosystem(d2.ecosystem)
+          AND (oma.version IS NULL OR oma.version = pd2.version)
+        ORDER BY (oma.version IS NULL) ASC, oma.added_at DESC
+        LIMIT 1
+      )
+    FROM public.organization_malicious_allowlist oma
+    INNER JOIN public.project_dependencies pd ON pd.id = pmf.project_dependency_id
+    INNER JOIN public.dependencies d ON d.id = pd.dependency_id
+    WHERE pmf.organization_id = p_org_id
+      AND pmf.extraction_run_id = p_extraction_run_id
+      AND pmf.suppressed = false
+      AND oma.organization_id = p_org_id
+      AND oma.revoked_at IS NULL
+      AND oma.package_name = d.name
+      AND oma.ecosystem = public.canonicalize_malicious_ecosystem(d.ecosystem)
+      AND (oma.version IS NULL OR oma.version = pd.version)
+    RETURNING pmf.id, pmf.dependency_id
+  ),
+  suppressed_count AS (
+    SELECT count(*)::integer AS n,
+           array_agg(DISTINCT dependency_id) AS dep_ids
+    FROM allowlisted
+  )
+  SELECT n, dep_ids INTO v_suppressed, v_dep_ids FROM suppressed_count;
+
+  IF v_dep_ids IS NOT NULL AND array_length(v_dep_ids, 1) > 0 THEN
+    PERFORM public.recompute_dependency_is_malicious(v_dep_ids);
+  END IF;
+
+  RETURN COALESCE(v_suppressed, 0);
 END;
 $function$
 ;
@@ -2918,6 +2313,16 @@ AS $function$
     WHEN 'go'               THEN 'golang'
     WHEN 'rubygems'         THEN 'rubygems'
     WHEN 'gem'              THEN 'rubygems'
+    WHEN 'composer'         THEN 'composer'
+    WHEN 'packagist'        THEN 'composer'
+    WHEN 'php'              THEN 'composer'
+    WHEN 'cargo'            THEN 'cargo'
+    WHEN 'rust'             THEN 'cargo'
+    WHEN 'crates.io'        THEN 'cargo'
+    WHEN 'nuget'            THEN 'nuget'
+    WHEN 'csharp'           THEN 'nuget'
+    WHEN 'dotnet'           THEN 'nuget'
+    WHEN '.net'             THEN 'nuget'
     WHEN 'github-actions'   THEN 'github-actions'
     WHEN 'github-action'    THEN 'github-actions'
     WHEN 'github actions'   THEN 'github-actions'
@@ -3049,6 +2454,21 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.cleanup_container_image_scan_cache(retention_days integer DEFAULT 30)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  rows_deleted INTEGER;
+BEGIN
+  DELETE FROM container_image_scan_cache
+    WHERE scanned_at < NOW() - (retention_days || ' days')::INTERVAL;
+  GET DIAGNOSTICS rows_deleted = ROW_COUNT;
+  RETURN rows_deleted;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.cleanup_orphaned_watchlist()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -3069,16 +2489,38 @@ $function$
 CREATE OR REPLACE FUNCTION public.commit_dast_run(p_project_id uuid, p_dast_run_id text)
  RETURNS void
  LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+  v_target_id UUID;
+BEGIN
+  SELECT id INTO v_target_id
+  FROM project_dast_targets
+  WHERE project_id = p_project_id
+  ORDER BY created_at LIMIT 1;
+
+  IF v_target_id IS NULL THEN
+    RAISE EXCEPTION 'commit_dast_run wrapper: no target found for project %', p_project_id;
+  END IF;
+
+  PERFORM commit_dast_target_run(v_target_id, p_dast_run_id);
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.commit_dast_target_run(p_target_id uuid, p_dast_run_id text)
+ RETURNS void
+ LANGUAGE plpgsql
 AS $function$
 DECLARE
   v_prior_run_id TEXT;
+  v_project_id UUID;
 BEGIN
-  SELECT active_dast_run_id INTO v_prior_run_id
-  FROM projects WHERE id = p_project_id
-  FOR UPDATE;
+  SELECT active_dast_run_id, project_id INTO v_prior_run_id, v_project_id
+  FROM project_dast_targets WHERE id = p_target_id FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'commit_dast_run: project % not found', p_project_id;
+    RAISE EXCEPTION 'commit_dast_target_run: target % not found', p_target_id;
   END IF;
 
   IF v_prior_run_id IS NOT NULL THEN
@@ -3088,9 +2530,9 @@ BEGIN
         risk_accepted_at = old_f.risk_accepted_at,
         risk_accepted_reason = old_f.risk_accepted_reason
     FROM project_dast_findings old_f
-    WHERE new_f.project_id = p_project_id
+    WHERE new_f.target_id = p_target_id
       AND new_f.dast_run_id = p_dast_run_id
-      AND old_f.project_id = p_project_id
+      AND old_f.target_id = p_target_id
       AND old_f.dast_run_id = v_prior_run_id
       AND old_f.rule_id IS NOT DISTINCT FROM new_f.rule_id
       AND old_f.vulnerability_type = new_f.vulnerability_type
@@ -3108,10 +2550,16 @@ BEGIN
       );
   END IF;
 
+  UPDATE project_dast_targets
+  SET previous_dast_run_id = active_dast_run_id,
+      active_dast_run_id   = p_dast_run_id,
+      last_scanned_at      = NOW()
+  WHERE id = p_target_id;
+
   UPDATE projects
   SET previous_dast_run_id = active_dast_run_id,
-      active_dast_run_id = p_dast_run_id
-  WHERE id = p_project_id;
+      active_dast_run_id   = p_dast_run_id
+  WHERE id = v_project_id;
 END;
 $function$
 ;
@@ -3988,6 +3436,20 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.enforce_project_scoped_org_id()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  NEW.organization_id := (SELECT organization_id FROM projects WHERE id = NEW.project_id);
+  IF NEW.organization_id IS NULL THEN
+    RAISE EXCEPTION 'enforce_project_scoped_org_id: project % not found', NEW.project_id;
+  END IF;
+  RETURN NEW;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.engage_taint_engine_killswitch(p_organization_id uuid, p_reason text)
  RETURNS void
  LANGUAGE plpgsql
@@ -4465,6 +3927,24 @@ BEGIN
     'reap', v_reap_result
   );
 END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.framework_spec_osv_matches_cve(spec jsonb, cve text)
+ RETURNS boolean
+ LANGUAGE sql
+ IMMUTABLE PARALLEL SAFE
+AS $function$
+  SELECT
+    spec IS NULL
+    OR NOT (spec ? 'sinks')
+    OR jsonb_typeof(spec -> 'sinks') IS DISTINCT FROM 'array'
+    OR NOT EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(spec -> 'sinks') AS sink
+      WHERE sink ? 'osv_id'
+        AND (sink ->> 'osv_id') IS DISTINCT FROM cve
+    );
 $function$
 ;
 
@@ -4974,7 +4454,8 @@ BEGIN
   WITH inserted AS (
     INSERT INTO public.project_malicious_findings (
       project_id, organization_id, extraction_run_id, project_dependency_id,
-      dependency_id, rule_id, scanner, severity, message, depscore
+      dependency_id, rule_id, scanner, severity, message, depscore,
+      reachability_level, reachability_details, reachability_computed_at
     )
     SELECT
       (f->>'project_id')::uuid,
@@ -4986,7 +4467,13 @@ BEGIN
       f->>'scanner',
       f->>'severity',
       f->>'message',
-      (f->>'depscore')::integer
+      (f->>'depscore')::integer,
+      f->>'reachability_level',
+      f->'reachability_details',
+      CASE
+        WHEN f ? 'reachability_level' AND (f->>'reachability_level') IS NOT NULL THEN now()
+        ELSE NULL
+      END
     FROM jsonb_array_elements(p_findings) AS f
     ON CONFLICT (project_id, project_dependency_id, rule_id, scanner, extraction_run_id)
       DO NOTHING
@@ -5123,6 +4610,19 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.pci_null_credentials_id_on_org_move()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF TG_OP = 'UPDATE' AND NEW.organization_id != OLD.organization_id THEN
+    NEW.credentials_id := NULL;
+  END IF;
+  RETURN NEW;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.pg_catalog_dump_v1_all()
  RETURNS jsonb
  LANGUAGE sql
@@ -5248,54 +4748,82 @@ END;
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.queue_scan_job(p_project_id uuid, p_organization_id uuid, p_type text, p_payload jsonb, p_target_url text DEFAULT NULL::text, p_scan_profile text DEFAULT NULL::text, p_timeout_minutes integer DEFAULT NULL::integer, p_trigger_source text DEFAULT NULL::text, p_triggered_by uuid DEFAULT NULL::uuid)
+CREATE OR REPLACE FUNCTION public.queue_scan_job(p_project_id uuid, p_organization_id uuid, p_type text, p_payload jsonb, p_target_id uuid DEFAULT NULL::uuid, p_target_url text DEFAULT NULL::text, p_scan_profile text DEFAULT NULL::text, p_timeout_minutes integer DEFAULT NULL::integer, p_trigger_source text DEFAULT NULL::text, p_triggered_by uuid DEFAULT NULL::uuid)
  RETURNS scan_jobs
  LANGUAGE plpgsql
 AS $function$
 DECLARE
-  v_project_concurrent INTEGER;
-  v_org_concurrent INTEGER;
-  v_host TEXT;
+  v_resolved_target_id UUID;
+  v_target_org_id UUID;
+  v_target_project_id UUID;
+  v_org_concurrent INT;
+  v_proj_concurrent INT;
   v_inserted scan_jobs%ROWTYPE;
+  v_credential_id UUID;
+  v_credential_hash TEXT;
+  v_host TEXT;
 BEGIN
-  IF p_type = 'dast' THEN
-    IF p_target_url IS NULL THEN
-      RAISE EXCEPTION 'queue_scan_job: target_url is required for type=dast'
+  IF p_type IN ('dast', 'dast_zap', 'dast_nuclei') THEN
+    IF p_target_id IS NULL THEN
+      SELECT id INTO v_resolved_target_id
+      FROM project_dast_targets WHERE project_id = p_project_id
+      ORDER BY created_at LIMIT 1;
+    ELSE
+      v_resolved_target_id := p_target_id;
+    END IF;
+
+    IF v_resolved_target_id IS NULL THEN
+      RAISE EXCEPTION 'queue_scan_job: no DAST target found for project %', p_project_id
         USING ERRCODE = 'P0001';
     END IF;
 
-    v_host := lower(
-      substring(p_target_url FROM '^[a-z]+://([^:/?#]+)')
-    );
+    SELECT project_id, organization_id INTO v_target_project_id, v_target_org_id
+    FROM project_dast_targets WHERE id = v_resolved_target_id;
+
+    IF v_target_project_id IS NULL THEN
+      RAISE EXCEPTION 'queue_scan_job: target % vanished mid-call', v_resolved_target_id
+        USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_target_project_id <> p_project_id OR v_target_org_id <> p_organization_id THEN
+      RAISE EXCEPTION
+        'queue_scan_job: tenant drift — target % belongs to (project=%, org=%); caller passed (project=%, org=%)',
+        v_resolved_target_id, v_target_project_id, v_target_org_id, p_project_id, p_organization_id
+        USING ERRCODE = 'P0001';
+    END IF;
+
+    IF p_target_url IS NULL THEN
+      SELECT target_url INTO p_target_url
+      FROM project_dast_targets WHERE id = v_resolved_target_id;
+    END IF;
+
+    v_host := lower(substring(p_target_url FROM '^[a-z]+://([^:/?#]+)'));
 
     IF v_host IS NULL OR v_host = '' THEN
       RAISE EXCEPTION 'queue_scan_job: target_url must be http(s) URL with host'
         USING ERRCODE = 'P0001';
     END IF;
 
-    IF v_host = 'localhost'
-       OR v_host = '0.0.0.0'
-       OR v_host = '::1'
-       OR v_host LIKE '127.%'
-       OR v_host LIKE '10.%'
-       OR v_host LIKE '192.168.%'
+    IF v_host = 'localhost' OR v_host = '0.0.0.0' OR v_host = '::1'
+       OR v_host LIKE '127.%' OR v_host LIKE '10.%' OR v_host LIKE '192.168.%'
        OR v_host ~ '^172\.(1[6-9]|2[0-9]|3[0-1])\.'
-       OR v_host LIKE '169.254.%'
-       OR v_host LIKE 'fe80:%'
-       OR v_host LIKE 'fdaa:%'
-       OR v_host LIKE '%.internal'
-       OR v_host LIKE '%.fly.dev.internal' THEN
+       OR v_host LIKE '169.254.%' OR v_host LIKE 'fe80:%' OR v_host LIKE 'fdaa:%'
+       OR v_host LIKE '%.internal' OR v_host LIKE '%.fly.dev.internal' THEN
       RAISE EXCEPTION 'queue_scan_job: target_url host % rejected (private/loopback/internal)', v_host
         USING ERRCODE = 'P0001';
     END IF;
 
-    SELECT COUNT(*) INTO v_project_concurrent
+    SELECT id, encode(digest(encrypted_payload, 'sha256'), 'hex')
+    INTO v_credential_id, v_credential_hash
+    FROM project_dast_credentials WHERE target_id = v_resolved_target_id;
+
+    SELECT COUNT(*) INTO v_proj_concurrent
     FROM scan_jobs
     WHERE project_id = p_project_id
-      AND type = 'dast'
+      AND type IN ('dast', 'dast_zap', 'dast_nuclei')
       AND status IN ('queued', 'processing');
 
-    IF v_project_concurrent >= 1 THEN
+    IF v_proj_concurrent >= 1 THEN
       RAISE EXCEPTION 'queue_scan_job: project_concurrent_dast_blocked'
         USING ERRCODE = 'P0001',
               DETAIL = 'A DAST scan is already queued or running for this project.';
@@ -5304,23 +4832,24 @@ BEGIN
     SELECT COUNT(*) INTO v_org_concurrent
     FROM scan_jobs
     WHERE organization_id = p_organization_id
-      AND type = 'dast'
+      AND type IN ('dast', 'dast_zap', 'dast_nuclei')
       AND status IN ('queued', 'processing');
 
-    IF v_org_concurrent >= 3 THEN
+    IF v_org_concurrent >= 5 THEN
       RAISE EXCEPTION 'queue_scan_job: org_concurrent_dast_cap'
         USING ERRCODE = 'P0001',
-              DETAIL = 'Organization is at the 3-concurrent DAST scan cap.';
+              DETAIL = 'Organization is at the 5-concurrent DAST scan cap.';
     END IF;
   END IF;
 
   INSERT INTO scan_jobs (
-    project_id, organization_id, type, payload,
-    target_url, scan_profile, timeout_minutes, trigger_source, triggered_by
-  )
-  VALUES (
-    p_project_id, p_organization_id, p_type, COALESCE(p_payload, '{}'::jsonb),
-    p_target_url, p_scan_profile, p_timeout_minutes, p_trigger_source, p_triggered_by
+    project_id, organization_id, type, status, payload,
+    target_id, target_url, scan_profile, timeout_minutes,
+    trigger_source, triggered_by, credential_id, credential_payload_hash
+  ) VALUES (
+    p_project_id, p_organization_id, p_type, 'queued', COALESCE(p_payload, '{}'::jsonb),
+    v_resolved_target_id, p_target_url, p_scan_profile, p_timeout_minutes,
+    p_trigger_source, p_triggered_by, v_credential_id, v_credential_hash
   )
   RETURNING * INTO v_inserted;
 
@@ -6216,6 +5745,893 @@ AS '$libdir/vector', $function$vector$function$
 ;
 
 
+
+-- ============================================
+-- CONSTRAINTS (PK, UNIQUE, CHECK, FK — in that order)
+-- ============================================
+ALTER TABLE public.activities ADD CONSTRAINT activities_pkey PRIMARY KEY (id);
+ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_pkey PRIMARY KEY (thread_id);
+ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_pkey PRIMARY KEY (id);
+ALTER TABLE public.aegis_chat_participants ADD CONSTRAINT aegis_chat_participants_pkey PRIMARY KEY (thread_id, user_id);
+ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_pkey PRIMARY KEY (id);
+ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_pkey PRIMARY KEY (thread_id, user_id);
+ALTER TABLE public.aegis_event_triggers ADD CONSTRAINT aegis_event_triggers_pkey PRIMARY KEY (id);
+ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_pkey PRIMARY KEY (id);
+ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_pkey PRIMARY KEY (id);
+ALTER TABLE public.ai_usage_logs ADD CONSTRAINT ai_usage_logs_pkey PRIMARY KEY (id);
+ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_pkey PRIMARY KEY (id);
+ALTER TABLE public.banned_versions ADD CONSTRAINT banned_versions_pkey PRIMARY KEY (id);
+ALTER TABLE public.container_image_scan_cache ADD CONSTRAINT container_image_scan_cache_pkey PRIMARY KEY (image_digest, scanner, scanner_version, trivy_db_version_day);
+ALTER TABLE public.demo_requests ADD CONSTRAINT demo_requests_pkey PRIMARY KEY (id);
+ALTER TABLE public.dependencies ADD CONSTRAINT dependencies_new_pkey PRIMARY KEY (id);
+ALTER TABLE public.dependency_note_reactions ADD CONSTRAINT dependency_note_reactions_pkey PRIMARY KEY (id);
+ALTER TABLE public.dependency_notes ADD CONSTRAINT dependency_notes_pkey PRIMARY KEY (id);
+ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_pkey PRIMARY KEY (id);
+ALTER TABLE public.dependency_version_edges ADD CONSTRAINT dependency_version_edges_pkey PRIMARY KEY (id);
+ALTER TABLE public.dependency_versions ADD CONSTRAINT dependency_versions_pkey PRIMARY KEY (id);
+ALTER TABLE public.dependency_vulnerabilities ADD CONSTRAINT dependency_vulnerabilities_pkey PRIMARY KEY (id);
+ALTER TABLE public.extraction_logs ADD CONSTRAINT extraction_logs_pkey PRIMARY KEY (id);
+ALTER TABLE public.extraction_step_errors ADD CONSTRAINT extraction_step_errors_pkey PRIMARY KEY (id);
+ALTER TABLE public.feedback ADD CONSTRAINT feedback_pkey PRIMARY KEY (id);
+ALTER TABLE public.flow_node_executions ADD CONSTRAINT flow_node_executions_pkey PRIMARY KEY (id);
+ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_pkey PRIMARY KEY (id);
+ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_pkey PRIMARY KEY (id);
+ALTER TABLE public.flows ADD CONSTRAINT flows_pkey PRIMARY KEY (id);
+ALTER TABLE public.invitation_teams ADD CONSTRAINT invitation_teams_pkey PRIMARY KEY (id);
+ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_pkey PRIMARY KEY (id);
+ALTER TABLE public.license_obligations ADD CONSTRAINT license_obligations_pkey PRIMARY KEY (id);
+ALTER TABLE public.malicious_feed_sync_runs ADD CONSTRAINT malicious_feed_sync_runs_pkey PRIMARY KEY (id);
+ALTER TABLE public.notification_deliveries ADD CONSTRAINT notification_deliveries_pkey PRIMARY KEY (id);
+ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_pkey PRIMARY KEY (id);
+ALTER TABLE public.notification_rule_changes ADD CONSTRAINT notification_rule_changes_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_asset_tiers ADD CONSTRAINT organization_asset_tiers_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_integrations ADD CONSTRAINT organization_integrations_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_ip_allowlist ADD CONSTRAINT organization_ip_allowlist_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_malicious_allowlist ADD CONSTRAINT organization_malicious_allowlist_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_members ADD CONSTRAINT organization_members_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_mfa_exemptions ADD CONSTRAINT organization_mfa_exemptions_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_notification_rules ADD CONSTRAINT organization_notification_rules_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_package_policies ADD CONSTRAINT organization_package_policies_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_plans ADD CONSTRAINT organization_plans_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_policies ADD CONSTRAINT organization_policies_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_policy_changes_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_pr_checks ADD CONSTRAINT organization_pr_checks_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_pkey PRIMARY KEY (organization_id);
+ALTER TABLE public.organization_registry_credentials ADD CONSTRAINT organization_registry_credentials_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_roles ADD CONSTRAINT organization_roles_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_scim_configs ADD CONSTRAINT organization_scim_configs_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_sso_bypass_tokens ADD CONSTRAINT organization_sso_bypass_tokens_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_sso_providers ADD CONSTRAINT organization_sso_providers_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_status_codes ADD CONSTRAINT organization_status_codes_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_statuses ADD CONSTRAINT organization_statuses_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_watchlist ADD CONSTRAINT organization_watchlist_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_watchlist_cleared_commits ADD CONSTRAINT organization_watchlist_cleared_commits_pkey PRIMARY KEY (id);
+ALTER TABLE public.organizations ADD CONSTRAINT organizations_pkey PRIMARY KEY (id);
+ALTER TABLE public.package_anomalies ADD CONSTRAINT package_anomalies_pkey PRIMARY KEY (id);
+ALTER TABLE public.package_capabilities ADD CONSTRAINT package_capabilities_pkey PRIMARY KEY (id);
+ALTER TABLE public.package_commits ADD CONSTRAINT package_commits_pkey PRIMARY KEY (id);
+ALTER TABLE public.package_contributors ADD CONSTRAINT package_contributors_pkey PRIMARY KEY (id);
+ALTER TABLE public.package_maintainer_snapshots ADD CONSTRAINT package_maintainer_snapshots_pkey PRIMARY KEY (id);
+ALTER TABLE public.package_reputation_scores ADD CONSTRAINT package_reputation_scores_pkey PRIMARY KEY (id);
+ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_pkey PRIMARY KEY (id);
+ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_commits ADD CONSTRAINT project_commits_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_configured_images ADD CONSTRAINT project_configured_images_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_dast_credentials ADD CONSTRAINT project_dast_credentials_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_dependencies ADD CONSTRAINT project_dependencies_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_dependency_files ADD CONSTRAINT project_dependency_files_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_integrations ADD CONSTRAINT project_integrations_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_members ADD CONSTRAINT project_members_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_notification_rules ADD CONSTRAINT project_notification_rules_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_pr_guardrails ADD CONSTRAINT project_pr_guardrails_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_pull_requests ADD CONSTRAINT project_pull_requests_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_reachable_flow_suppressions ADD CONSTRAINT project_reachable_flow_suppressions_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_repositories ADD CONSTRAINT project_repositories_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_roles ADD CONSTRAINT project_roles_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_secret_findings ADD CONSTRAINT project_secret_findings_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_semgrep_findings ADD CONSTRAINT project_semgrep_findings_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_usage_slices ADD CONSTRAINT project_usage_slices_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_version_candidates ADD CONSTRAINT project_version_candidates_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_vulnerability_events ADD CONSTRAINT project_vulnerability_events_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_pkey PRIMARY KEY (id);
+ALTER TABLE public.projects ADD CONSTRAINT projects_pkey PRIMARY KEY (id);
+ALTER TABLE public.scan_jobs ADD CONSTRAINT extraction_jobs_pkey PRIMARY KEY (id);
+ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_pkey PRIMARY KEY (id);
+ALTER TABLE public.security_audit_logs ADD CONSTRAINT security_audit_logs_pkey PRIMARY KEY (id);
+ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_pkey PRIMARY KEY (id);
+ALTER TABLE public.sla_policy_changes ADD CONSTRAINT sla_policy_changes_pkey PRIMARY KEY (id);
+ALTER TABLE public.stripe_webhook_events ADD CONSTRAINT stripe_webhook_events_pkey PRIMARY KEY (id);
+ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_pkey PRIMARY KEY (id);
+ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_pkey PRIMARY KEY (id);
+ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_pkey PRIMARY KEY (organization_id);
+ALTER TABLE public.team_banned_versions ADD CONSTRAINT team_banned_versions_pkey PRIMARY KEY (id);
+ALTER TABLE public.team_deprecations ADD CONSTRAINT team_deprecations_pkey PRIMARY KEY (id);
+ALTER TABLE public.team_integrations ADD CONSTRAINT team_integrations_pkey PRIMARY KEY (id);
+ALTER TABLE public.team_members ADD CONSTRAINT team_members_pkey PRIMARY KEY (id);
+ALTER TABLE public.team_notification_rules ADD CONSTRAINT team_notification_rules_pkey PRIMARY KEY (id);
+ALTER TABLE public.team_roles ADD CONSTRAINT team_roles_pkey PRIMARY KEY (id);
+ALTER TABLE public.teams ADD CONSTRAINT teams_pkey PRIMARY KEY (id);
+ALTER TABLE public.user_integrations ADD CONSTRAINT user_integrations_pkey PRIMARY KEY (id);
+ALTER TABLE public.user_notification_preferences ADD CONSTRAINT user_notification_preferences_pkey PRIMARY KEY (id);
+ALTER TABLE public.user_notifications ADD CONSTRAINT user_notifications_pkey PRIMARY KEY (id);
+ALTER TABLE public.user_profiles ADD CONSTRAINT user_profiles_pkey PRIMARY KEY (id);
+ALTER TABLE public.user_sessions ADD CONSTRAINT user_sessions_pkey PRIMARY KEY (id);
+ALTER TABLE public.watched_packages ADD CONSTRAINT watched_packages_pkey PRIMARY KEY (id);
+ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_pkey PRIMARY KEY (id);
+ALTER TABLE public.webhook_deliveries ADD CONSTRAINT webhook_deliveries_pkey PRIMARY KEY (id);
+ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_code_key UNIQUE (code);
+ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_organization_id_key UNIQUE (organization_id);
+ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_token_hash_key UNIQUE (token_hash);
+ALTER TABLE public.dependency_note_reactions ADD CONSTRAINT dependency_note_reactions_note_id_user_id_emoji_key UNIQUE (note_id, user_id, emoji);
+ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_project_id_dependency_id_type_target_version_key UNIQUE (project_id, dependency_id, type, target_version);
+ALTER TABLE public.dependency_version_edges ADD CONSTRAINT dependency_version_edges_parent_version_id_child_version_id_key UNIQUE (parent_version_id, child_version_id);
+ALTER TABLE public.dependency_versions ADD CONSTRAINT dependency_versions_dependency_version_key UNIQUE (dependency_id, version);
+ALTER TABLE public.dependency_vulnerabilities ADD CONSTRAINT dependency_vulnerabilities_dependency_id_osv_id_key UNIQUE (dependency_id, osv_id);
+ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_flow_id_version_key UNIQUE (flow_id, version);
+ALTER TABLE public.invitation_teams ADD CONSTRAINT invitation_teams_invitation_id_team_id_key UNIQUE (invitation_id, team_id);
+ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_natural_key UNIQUE NULLS NOT DISTINCT (source, source_id, package_name, version, ecosystem);
+ALTER TABLE public.license_obligations ADD CONSTRAINT license_obligations_license_spdx_id_key UNIQUE (license_spdx_id);
+ALTER TABLE public.organization_asset_tiers ADD CONSTRAINT organization_asset_tiers_organization_id_name_key UNIQUE (organization_id, name);
+ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_organization_id_cve_id_package_key UNIQUE (organization_id, cve_id, package_purl);
+ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_organization_id_email_status_key UNIQUE (organization_id, email, status) DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE public.organization_malicious_allowlist ADD CONSTRAINT oma_natural_key UNIQUE NULLS NOT DISTINCT (organization_id, package_name, version, ecosystem);
+ALTER TABLE public.organization_members ADD CONSTRAINT organization_members_organization_id_user_id_key UNIQUE (organization_id, user_id);
+ALTER TABLE public.organization_mfa_exemptions ADD CONSTRAINT organization_mfa_exemptions_organization_id_user_id_key UNIQUE (organization_id, user_id);
+ALTER TABLE public.organization_package_policies ADD CONSTRAINT organization_package_policies_organization_id_key UNIQUE (organization_id);
+ALTER TABLE public.organization_plans ADD CONSTRAINT organization_plans_organization_id_key UNIQUE (organization_id);
+ALTER TABLE public.organization_policies ADD CONSTRAINT organization_policies_organization_id_key UNIQUE (organization_id);
+ALTER TABLE public.organization_pr_checks ADD CONSTRAINT organization_pr_checks_organization_id_key UNIQUE (organization_id);
+ALTER TABLE public.organization_registry_credentials ADD CONSTRAINT orc_id_org_uq UNIQUE (id, organization_id);
+ALTER TABLE public.organization_roles ADD CONSTRAINT organization_roles_organization_id_name_key UNIQUE (organization_id, name);
+ALTER TABLE public.organization_scim_configs ADD CONSTRAINT organization_scim_configs_organization_id_key UNIQUE (organization_id);
+ALTER TABLE public.organization_sla_policies ADD CONSTRAINT uq_sla_policies_org_severity_tier UNIQUE NULLS NOT DISTINCT (organization_id, severity, asset_tier_id);
+ALTER TABLE public.organization_sso_providers ADD CONSTRAINT organization_sso_providers_domain_key UNIQUE (domain);
+ALTER TABLE public.organization_sso_providers ADD CONSTRAINT organization_sso_providers_organization_id_key UNIQUE (organization_id);
+ALTER TABLE public.organization_status_codes ADD CONSTRAINT organization_status_codes_organization_id_key UNIQUE (organization_id);
+ALTER TABLE public.organization_statuses ADD CONSTRAINT organization_statuses_organization_id_name_key UNIQUE (organization_id, name);
+ALTER TABLE public.organization_watchlist ADD CONSTRAINT organization_watchlist_organization_id_dependency_id_key UNIQUE (organization_id, dependency_id);
+ALTER TABLE public.package_anomalies ADD CONSTRAINT package_anomalies_watched_package_id_commit_sha_key UNIQUE (watched_package_id, commit_sha);
+ALTER TABLE public.package_capabilities ADD CONSTRAINT pc_natural_key UNIQUE (package_name, version, ecosystem);
+ALTER TABLE public.package_commit_touched_functions ADD CONSTRAINT package_commit_touched_functi_watched_package_id_commit_sha_key UNIQUE (watched_package_id, commit_sha, function_name);
+ALTER TABLE public.package_commits ADD CONSTRAINT package_commits_watched_package_id_sha_key UNIQUE (watched_package_id, sha);
+ALTER TABLE public.package_contributors ADD CONSTRAINT package_contributors_watched_package_id_author_email_key UNIQUE (watched_package_id, author_email);
+ALTER TABLE public.package_maintainer_snapshots ADD CONSTRAINT pms_natural_key UNIQUE NULLS NOT DISTINCT (package_name, version, ecosystem, observed_at);
+ALTER TABLE public.package_reputation_scores ADD CONSTRAINT package_reputation_scores_dependency_id_key UNIQUE (dependency_id);
+ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_key UNIQUE (package_name, version, ecosystem, scanner);
+ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_project_id_key UNIQUE (project_id);
+ALTER TABLE public.project_dast_credentials ADD CONSTRAINT project_dast_credentials_target_id_key UNIQUE (target_id);
+ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_project_id_target_url_key UNIQUE (project_id, target_url);
+ALTER TABLE public.project_dependencies ADD CONSTRAINT project_dependencies_project_id_name_version_is_direct_sour_key UNIQUE (project_id, name, version, is_direct, source);
+ALTER TABLE public.project_dependency_files ADD CONSTRAINT pdf_extraction_run_unique UNIQUE (project_dependency_id, file_path, extraction_run_id);
+ALTER TABLE public.project_dependency_functions ADD CONSTRAINT pdfn_extraction_run_unique UNIQUE (project_dependency_id, function_name, extraction_run_id);
+ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT pdv_extraction_run_unique UNIQUE (project_id, project_dependency_id, osv_id, extraction_run_id);
+ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_extraction_run_id_file_path_key UNIQUE (project_id, extraction_run_id, file_path, line_number, framework, handler_name);
+ALTER TABLE public.project_malicious_findings ADD CONSTRAINT pmf_dedup UNIQUE NULLS NOT DISTINCT (project_id, project_dependency_id, rule_id, scanner, extraction_run_id);
+ALTER TABLE public.project_members ADD CONSTRAINT project_members_project_id_user_id_key UNIQUE (project_id, user_id);
+ALTER TABLE public.project_pr_guardrails ADD CONSTRAINT project_pr_guardrails_project_id_key UNIQUE (project_id);
+ALTER TABLE public.project_reachable_flow_suppressions ADD CONSTRAINT project_reachable_flow_suppressions_unique UNIQUE (project_id, flow_signature_hash);
+ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_source_dedup_key UNIQUE NULLS NOT DISTINCT (project_id, extraction_run_id, purl, entry_point_file, entry_point_line, sink_method, osv_id, rule_id);
+ALTER TABLE public.project_repositories ADD CONSTRAINT project_repositories_project_id_key UNIQUE (project_id);
+ALTER TABLE public.project_roles ADD CONSTRAINT project_roles_project_id_name_key UNIQUE (project_id, name);
+ALTER TABLE public.project_secret_findings ADD CONSTRAINT psecf_extraction_run_unique UNIQUE (project_id, detector_type, file_path, start_line, extraction_run_id);
+ALTER TABLE public.project_semgrep_findings ADD CONSTRAINT psemf_extraction_run_unique UNIQUE (project_id, rule_id, file_path, start_line, extraction_run_id);
+ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_project_id_team_id_key UNIQUE (project_id, team_id);
+ALTER TABLE public.project_usage_slices ADD CONSTRAINT pus_extraction_run_unique UNIQUE (project_id, file_path, line_number, target_name, extraction_run_id);
+ALTER TABLE public.project_version_candidates ADD CONSTRAINT project_version_candidates_project_id_package_name_ecosyste_key UNIQUE (project_id, package_name, ecosystem, candidate_type);
+ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_project_id_organization_watchlist_id_key UNIQUE (project_id, organization_watchlist_id);
+ALTER TABLE public.projects ADD CONSTRAINT projects_organization_id_name_key UNIQUE (organization_id, name);
+ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_organization_id_scim_external_id_key UNIQUE (organization_id, scim_external_id);
+ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_organization_id_project_id_snapshot_key UNIQUE (organization_id, project_id, snapshot_date);
+ALTER TABLE public.stripe_webhook_events ADD CONSTRAINT stripe_webhook_events_event_id_key UNIQUE (event_id);
+ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_organization_id_framework_nam_key UNIQUE (organization_id, framework_name, framework_version);
+ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_project_id_extraction_run_id_key UNIQUE (project_id, extraction_run_id);
+ALTER TABLE public.team_members ADD CONSTRAINT team_members_team_id_user_id_key UNIQUE (team_id, user_id);
+ALTER TABLE public.team_roles ADD CONSTRAINT team_roles_team_id_name_key UNIQUE (team_id, name);
+ALTER TABLE public.teams ADD CONSTRAINT teams_organization_id_name_key UNIQUE (organization_id, name);
+ALTER TABLE public.user_integrations ADD CONSTRAINT user_integrations_user_id_provider_key UNIQUE (user_id, provider);
+ALTER TABLE public.user_notification_preferences ADD CONSTRAINT user_notification_preferences_user_id_organization_id_key UNIQUE (user_id, organization_id);
+ALTER TABLE public.user_profiles ADD CONSTRAINT user_profiles_user_id_key UNIQUE (user_id);
+ALTER TABLE public.user_sessions ADD CONSTRAINT user_sessions_session_id_key UNIQUE (session_id);
+ALTER TABLE public.watched_packages ADD CONSTRAINT watched_packages_dependency_id_key UNIQUE (dependency_id);
+ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_role_check CHECK ((role = ANY (ARRAY['user'::text, 'assistant'::text])));
+ALTER TABLE public.ai_usage_logs ADD CONSTRAINT ai_usage_logs_tier_check CHECK ((tier = ANY (ARRAY['platform'::text, 'byok'::text])));
+ALTER TABLE public.container_image_scan_cache ADD CONSTRAINT container_image_scan_cache_image_digest_check CHECK ((image_digest ~ '^[a-f0-9]{64}(\+linux/(amd64|arm64))?$'::text));
+ALTER TABLE public.container_image_scan_cache ADD CONSTRAINT container_image_scan_cache_scan_results_check CHECK ((octet_length((scan_results)::text) <= 1048576));
+ALTER TABLE public.container_image_scan_cache ADD CONSTRAINT container_image_scan_cache_scan_results_hash_check CHECK ((scan_results_hash ~ '^[a-f0-9]{64}$'::text));
+ALTER TABLE public.container_image_scan_cache ADD CONSTRAINT container_image_scan_cache_scanner_check CHECK ((scanner = 'trivy'::text));
+ALTER TABLE public.container_image_scan_cache ADD CONSTRAINT container_image_scan_cache_trivy_db_version_day_check CHECK ((trivy_db_version_day ~ '^\d{4}-\d{2}-\d{2}$'::text));
+ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_type_check CHECK ((type = ANY (ARRAY['bump'::text, 'decrease'::text, 'remove'::text])));
+ALTER TABLE public.extraction_logs ADD CONSTRAINT extraction_logs_level_check CHECK ((level = ANY (ARRAY['info'::text, 'success'::text, 'warning'::text, 'error'::text])));
+ALTER TABLE public.extraction_step_errors ADD CONSTRAINT chk_extraction_step_errors_severity CHECK ((severity = ANY (ARRAY['warn'::text, 'error'::text])));
+ALTER TABLE public.feedback ADD CONSTRAINT feedback_type_check CHECK ((type = ANY (ARRAY['issue'::text, 'idea'::text])));
+ALTER TABLE public.flow_node_executions ADD CONSTRAINT flow_node_executions_status_check CHECK ((status = ANY (ARRAY['success'::text, 'failed'::text, 'skipped'::text])));
+ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_status_check CHECK ((status = ANY (ARRAY['running'::text, 'completed'::text, 'failed'::text, 'skipped'::text, 'dry_run'::text])));
+ALTER TABLE public.flows ADD CONSTRAINT flows_flow_type_check CHECK ((flow_type = ANY (ARRAY['notification'::text, 'pr_check'::text, 'policy'::text, 'status'::text])));
+ALTER TABLE public.flows ADD CONSTRAINT flows_scope_check CHECK ((scope = ANY (ARRAY['organization'::text, 'team'::text, 'project'::text])));
+ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'composer'::text, 'cargo'::text, 'nuget'::text, 'github-actions'::text, 'vscode'::text])));
+ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_source_chk CHECK ((source = ANY (ARRAY['osv'::text, 'ghsa'::text])));
+ALTER TABLE public.malicious_feed_sync_runs ADD CONSTRAINT mfsr_source_chk CHECK ((source = ANY (ARRAY['osv'::text, 'ghsa'::text])));
+ALTER TABLE public.malicious_feed_sync_runs ADD CONSTRAINT mfsr_state_chk CHECK ((state = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'dlq'::text])));
+ALTER TABLE public.notification_deliveries ADD CONSTRAINT notification_deliveries_rule_scope_check CHECK ((rule_scope = ANY (ARRAY['organization'::text, 'team'::text, 'project'::text])));
+ALTER TABLE public.notification_deliveries ADD CONSTRAINT notification_deliveries_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'sending'::text, 'delivered'::text, 'failed'::text, 'rate_limited'::text, 'skipped'::text, 'dry_run'::text])));
+ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_priority_check CHECK ((priority = ANY (ARRAY['critical'::text, 'high'::text, 'normal'::text, 'low'::text])));
+ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'dispatching'::text, 'dispatched'::text, 'failed'::text])));
+ALTER TABLE public.notification_rule_changes ADD CONSTRAINT notification_rule_changes_rule_scope_check CHECK ((rule_scope = ANY (ARRAY['organization'::text, 'team'::text, 'project'::text])));
+ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_framework_spec_osv_match_chk CHECK (framework_spec_osv_matches_cve(framework_spec, cve_id));
+ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_spec_format_check CHECK ((spec_format = ANY (ARRAY['semgrep_yaml'::text, 'framework_spec'::text])));
+ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_spec_shape_chk CHECK ((((spec_format = 'semgrep_yaml'::text) AND (rule_yaml IS NOT NULL)) OR ((spec_format = 'framework_spec'::text) AND (framework_spec IS NOT NULL))));
+ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_validation_status_check CHECK ((validation_status = ANY (ARRAY['pending'::text, 'validated'::text, 'failed_validation'::text, 'manual_override'::text])));
+ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'accepted'::text, 'rejected'::text, 'expired'::text])));
+ALTER TABLE public.organization_malicious_allowlist ADD CONSTRAINT oma_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'composer'::text, 'cargo'::text, 'nuget'::text, 'github-actions'::text, 'vscode'::text])));
+ALTER TABLE public.organization_notification_rules ADD CONSTRAINT organization_notification_rules_trigger_type_check CHECK ((trigger_type = ANY (ARRAY['weekly_digest'::text, 'custom_code_pipeline'::text])));
+ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_policy_changes_code_type_check CHECK ((code_type = ANY (ARRAY['package_policy'::text, 'project_status'::text, 'pr_check'::text])));
+ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_ai_provider_check CHECK ((ai_provider = ANY (ARRAY['anthropic'::text, 'openai'::text, 'google'::text])));
+ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_on_budget_exhaustion_check CHECK ((on_budget_exhaustion = ANY (ARRAY['skip'::text, 'fall_back_to_haiku'::text])));
+ALTER TABLE public.organization_registry_credentials ADD CONSTRAINT orc_registry_shape_pair_check CHECK (((((((((((((((((registry_type = 'ghcr'::text) AND (credential_shape = 'username_password'::text)) OR ((registry_type = 'ghcr'::text) AND (credential_shape = 'token'::text))) OR ((registry_type = 'ecr'::text) AND (credential_shape = 'aws_keys'::text))) OR ((registry_type = 'gcr'::text) AND (credential_shape = 'gcp_service_account_key'::text))) OR ((registry_type = 'acr'::text) AND (credential_shape = 'azure_service_principal'::text))) OR ((registry_type = 'acr'::text) AND (credential_shape = 'username_password'::text))) OR ((registry_type = 'dockerhub'::text) AND (credential_shape = 'username_password'::text))) OR ((registry_type = 'dockerhub'::text) AND (credential_shape = 'token'::text))) OR ((registry_type = 'quay'::text) AND (credential_shape = 'username_password'::text))) OR ((registry_type = 'quay'::text) AND (credential_shape = 'token'::text))) OR ((registry_type = 'harbor'::text) AND (credential_shape = 'username_password'::text))) OR ((registry_type = 'jfrog'::text) AND (credential_shape = 'username_password'::text))) OR ((registry_type = 'jfrog'::text) AND (credential_shape = 'token'::text))) OR ((registry_type = 'custom'::text) AND (credential_shape = 'username_password'::text))) OR ((registry_type = 'custom'::text) AND (credential_shape = 'token'::text))));
+ALTER TABLE public.organization_registry_credentials ADD CONSTRAINT organization_registry_credentials_credential_shape_check CHECK ((credential_shape = ANY (ARRAY['username_password'::text, 'aws_keys'::text, 'gcp_service_account_key'::text, 'azure_service_principal'::text, 'token'::text])));
+ALTER TABLE public.organization_registry_credentials ADD CONSTRAINT organization_registry_credentials_registry_type_check CHECK ((registry_type = ANY (ARRAY['ghcr'::text, 'ecr'::text, 'gcr'::text, 'acr'::text, 'dockerhub'::text, 'quay'::text, 'harbor'::text, 'jfrog'::text, 'custom'::text])));
+ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_max_hours_check CHECK ((max_hours > 0));
+ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_severity_check CHECK ((severity = ANY (ARRAY['critical'::text, 'high'::text, 'medium'::text, 'low'::text])));
+ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_warning_threshold_percent_check CHECK (((warning_threshold_percent >= 1) AND (warning_threshold_percent <= 99)));
+ALTER TABLE public.organizations ADD CONSTRAINT organizations_default_ai_provider_check CHECK ((default_ai_provider = ANY (ARRAY['openai'::text, 'anthropic'::text, 'google'::text, 'deepinfra'::text])));
+ALTER TABLE public.organizations ADD CONSTRAINT organizations_epd_budget_exceeded_behavior_check CHECK ((epd_budget_exceeded_behavior = ANY (ARRAY['fail_job'::text, 'continue_with_fallback'::text])));
+ALTER TABLE public.package_capabilities ADD CONSTRAINT pc_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'composer'::text, 'cargo'::text, 'nuget'::text, 'github-actions'::text, 'vscode'::text])));
+ALTER TABLE public.package_maintainer_snapshots ADD CONSTRAINT pms_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'composer'::text, 'cargo'::text, 'nuget'::text, 'github-actions'::text, 'vscode'::text])));
+ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'composer'::text, 'cargo'::text, 'nuget'::text, 'github-actions'::text, 'vscode'::text])));
+ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_scanner_chk CHECK ((scanner = ANY (ARRAY['guarddog'::text, 'ai_review'::text])));
+ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text])));
+ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_image_source_check CHECK ((image_source = ANY (ARRAY['dockerfile_base'::text, 'configured_image'::text])));
+ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_scan_profile_check CHECK ((scan_profile = ANY (ARRAY['auto'::text, 'quick'::text, 'full'::text, 'api'::text])));
+ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_scan_timeout_minutes_check CHECK (((scan_timeout_minutes >= 5) AND (scan_timeout_minutes <= 60)));
+ALTER TABLE public.project_dast_credentials ADD CONSTRAINT project_dast_credentials_auth_strategy_check CHECK ((auth_strategy = ANY (ARRAY['form'::text, 'jwt'::text, 'cookie'::text, 'recorded'::text])));
+ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_auth_state_check CHECK ((auth_state = ANY (ARRAY['anonymous'::text, 'authenticated'::text, 'authentication_lost'::text])));
+ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_confidence_check CHECK ((confidence = ANY (ARRAY['confirmed'::text, 'high'::text, 'medium'::text, 'low'::text])));
+ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_engine_check CHECK ((engine = ANY (ARRAY['zap'::text, 'nuclei'::text, 'merged'::text])));
+ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_severity_check CHECK ((severity = ANY (ARRAY['critical'::text, 'high'::text, 'medium'::text, 'low'::text, 'info'::text])));
+ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_status_check CHECK ((status = ANY (ARRAY['open'::text, 'suppressed'::text, 'risk_accepted'::text, 'fixed'::text])));
+ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_detected_runtime_check CHECK ((detected_runtime = ANY (ARRAY['unknown'::text, 'classic'::text, 'spa'::text])));
+ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_epd_confidence_tier CHECK (((epd_confidence_tier IS NULL) OR (epd_confidence_tier = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text]))));
+ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_reachability_status CHECK ((reachability_status = ANY (ARRAY['reachable'::text, 'unreachable'::text, 'unknown'::text])));
+ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_sla_status CHECK (((sla_status IS NULL) OR (sla_status = ANY (ARRAY['on_track'::text, 'warning'::text, 'breached'::text, 'met'::text, 'resolved_late'::text, 'exempt'::text]))));
+ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_framework_check CHECK ((framework = ANY (ARRAY['terraform'::text, 'kubernetes'::text, 'dockerfile'::text, 'helm'::text, 'cloudformation'::text, 'arm'::text, 'bicep'::text, 'serverless'::text, 'github_actions'::text])));
+ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_scanner_check CHECK ((scanner = ANY (ARRAY['trivy'::text, 'checkov'::text])));
+ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_reachability_chk CHECK (((reachability_level IS NULL) OR (reachability_level = ANY (ARRAY['unimported'::text, 'imported_unused'::text, 'module'::text, 'function'::text]))));
+ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_scanner_check CHECK ((scanner = ANY (ARRAY['feed'::text, 'guarddog'::text, 'maintainer'::text])));
+ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_severity_check CHECK ((severity = ANY (ARRAY['critical'::text, 'high'::text, 'medium'::text, 'low'::text, 'info'::text])));
+ALTER TABLE public.project_notification_rules ADD CONSTRAINT project_notification_rules_trigger_type_check CHECK ((trigger_type = ANY (ARRAY['weekly_digest'::text, 'custom_code_pipeline'::text])));
+ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_code_type_check CHECK ((code_type = ANY (ARRAY['package_policy'::text, 'project_status'::text, 'pr_check'::text])));
+ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'accepted'::text, 'rejected'::text])));
+ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_policy_type_check CHECK ((policy_type = ANY (ARRAY['compliance'::text, 'pull_request'::text, 'full'::text])));
+ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_slsa_enforcement_check CHECK (((slsa_enforcement IS NULL) OR (slsa_enforcement = ANY (ARRAY['none'::text, 'recommended'::text, 'require_provenance'::text, 'require_attestations'::text, 'require_signed'::text]))));
+ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_slsa_level_check CHECK (((slsa_level IS NULL) OR ((slsa_level >= 1) AND (slsa_level <= 4))));
+ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'accepted'::text, 'rejected'::text, 'revoked'::text])));
+ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_reachability_source_check CHECK ((reachability_source = ANY (ARRAY['atom'::text, 'semgrep_taint'::text, 'taint_engine'::text])));
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_fix_type_check CHECK ((fix_type = ANY (ARRAY['vulnerability'::text, 'semgrep'::text, 'secret'::text])));
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_status_check CHECK ((status = ANY (ARRAY['planning'::text, 'awaiting_approval'::text, 'approved'::text, 'executing'::text, 'completed'::text, 'failed'::text, 'rejected'::text])));
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_strategy_check CHECK ((strategy = ANY (ARRAY['bump_version'::text, 'code_patch'::text, 'add_wrapper'::text, 'pin_transitive'::text, 'remove_unused'::text, 'fix_semgrep'::text, 'remediate_secret'::text])));
+ALTER TABLE public.projects ADD CONSTRAINT projects_health_score_check CHECK (((health_score >= 0) AND (health_score <= 100)));
+ALTER TABLE public.scan_jobs ADD CONSTRAINT extraction_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])));
+ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_dast_columns_match_type CHECK (((type = 'dast'::text) OR ((target_url IS NULL) AND (scan_profile IS NULL) AND (timeout_minutes IS NULL) AND (trigger_source IS NULL) AND (triggered_by IS NULL) AND (error_category IS NULL) AND (findings_count IS NULL) AND (duration_seconds IS NULL))));
+ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_error_category_check CHECK (((error_category IS NULL) OR (error_category = ANY (ARRAY['timeout'::text, 'unreachable_target'::text, 'ssrf_blocked'::text, 'auth_failed'::text, 'engine_crash'::text, 'unknown'::text, 'tenant_drift_detected'::text, 'dast_credential_key_missing'::text, 'dast_credential_key_stale'::text, 'dast_credential_rotated'::text]))));
+ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_malicious_scan_status_check CHECK (((malicious_scan_status IS NULL) OR (malicious_scan_status = ANY (ARRAY['complete'::text, 'partial'::text, 'failed'::text]))));
+ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_scan_profile_check CHECK (((scan_profile IS NULL) OR (scan_profile = ANY (ARRAY['auto'::text, 'quick'::text, 'full'::text, 'api'::text]))));
+ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_trigger_source_check CHECK (((trigger_source IS NULL) OR (trigger_source = ANY (ARRAY['manual'::text, 'webhook'::text, 'recovery'::text, 'scheduled'::text, 'on_deploy'::text, 'aegis'::text]))));
+ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_type_check CHECK ((type = ANY (ARRAY['extraction'::text, 'dast'::text, 'dast_zap'::text, 'dast_nuclei'::text])));
+ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_source_type_check CHECK ((source_type = ANY (ARRAY['hand_written'::text, 'ai_inferred'::text, 'user_edited'::text])));
+ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_status_check CHECK ((status = ANY (ARRAY['running'::text, 'completed'::text, 'failed'::text, 'aborted'::text, 'skipped'::text])));
+ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_cost_cap_sane CHECK (((monthly_ai_cost_cap_usd >= (0)::numeric) AND (monthly_ai_cost_cap_usd <= (1000)::numeric)));
+ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_rollout_chk CHECK (((rollout_pct_override IS NULL) OR ((rollout_pct_override >= 0) AND (rollout_pct_override <= 100))));
+ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_threshold_chk CHECK (((ai_fp_filter_confidence_threshold >= (0)::numeric) AND (ai_fp_filter_confidence_threshold <= (1)::numeric)));
+ALTER TABLE public.team_notification_rules ADD CONSTRAINT team_notification_rules_trigger_type_check CHECK ((trigger_type = ANY (ARRAY['weekly_digest'::text, 'custom_code_pipeline'::text])));
+ALTER TABLE public.user_notification_preferences ADD CONSTRAINT user_notification_preferences_digest_preference_check CHECK ((digest_preference = ANY (ARRAY['instant'::text, 'daily_digest'::text, 'weekly_digest'::text, 'off'::text])));
+ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_job_type_check CHECK ((job_type = ANY (ARRAY['full_analysis'::text, 'new_version'::text, 'batch_version_analysis'::text, 'poll_sweep'::text])));
+ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text])));
+ALTER TABLE public.activities ADD CONSTRAINT activities_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.activities ADD CONSTRAINT activities_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
+ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+ALTER TABLE public.aegis_chat_participants ADD CONSTRAINT aegis_chat_participants_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_chat_participants ADD CONSTRAINT aegis_chat_participants_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
+ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL;
+ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_chat_user_state ADD CONSTRAINT aegis_chat_user_state_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_event_triggers ADD CONSTRAINT aegis_event_triggers_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
+ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+ALTER TABLE public.ai_usage_logs ADD CONSTRAINT ai_usage_logs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.banned_versions ADD CONSTRAINT banned_versions_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
+ALTER TABLE public.banned_versions ADD CONSTRAINT banned_versions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.container_image_scan_cache ADD CONSTRAINT container_image_scan_cache_first_scanned_by_org_id_fkey FOREIGN KEY (first_scanned_by_org_id) REFERENCES organizations(id) ON DELETE SET NULL;
+ALTER TABLE public.dependency_note_reactions ADD CONSTRAINT dependency_note_reactions_note_id_fkey FOREIGN KEY (note_id) REFERENCES dependency_notes(id) ON DELETE CASCADE;
+ALTER TABLE public.dependency_note_reactions ADD CONSTRAINT dependency_note_reactions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.dependency_notes ADD CONSTRAINT dependency_notes_author_id_fkey FOREIGN KEY (author_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.dependency_notes ADD CONSTRAINT dependency_notes_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
+ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
+ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.dependency_version_edges ADD CONSTRAINT dependency_version_edges_child_version_id_fkey FOREIGN KEY (child_version_id) REFERENCES dependency_versions(id) ON DELETE CASCADE;
+ALTER TABLE public.dependency_version_edges ADD CONSTRAINT dependency_version_edges_parent_version_id_fkey FOREIGN KEY (parent_version_id) REFERENCES dependency_versions(id) ON DELETE CASCADE;
+ALTER TABLE public.dependency_versions ADD CONSTRAINT fk_dependency_versions_dependency FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
+ALTER TABLE public.extraction_logs ADD CONSTRAINT extraction_logs_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.extraction_step_errors ADD CONSTRAINT extraction_step_errors_extraction_job_id_fkey FOREIGN KEY (extraction_job_id) REFERENCES scan_jobs(id) ON DELETE CASCADE;
+ALTER TABLE public.extraction_step_errors ADD CONSTRAINT extraction_step_errors_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.feedback ADD CONSTRAINT feedback_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.flow_node_executions ADD CONSTRAINT flow_node_executions_flow_run_id_fkey FOREIGN KEY (flow_run_id) REFERENCES flow_runs(id) ON DELETE CASCADE;
+ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_flow_id_fkey FOREIGN KEY (flow_id) REFERENCES flows(id) ON DELETE CASCADE;
+ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_trigger_event_id_fkey FOREIGN KEY (trigger_event_id) REFERENCES notification_events(id) ON DELETE SET NULL;
+ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_changed_by_user_id_fkey FOREIGN KEY (changed_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_flow_id_fkey FOREIGN KEY (flow_id) REFERENCES flows(id) ON DELETE CASCADE;
+ALTER TABLE public.flows ADD CONSTRAINT flows_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.flows ADD CONSTRAINT flows_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.invitation_teams ADD CONSTRAINT invitation_teams_invitation_id_fkey FOREIGN KEY (invitation_id) REFERENCES organization_invitations(id) ON DELETE CASCADE;
+ALTER TABLE public.invitation_teams ADD CONSTRAINT invitation_teams_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
+ALTER TABLE public.notification_deliveries ADD CONSTRAINT notification_deliveries_event_id_fkey FOREIGN KEY (event_id) REFERENCES notification_events(id) ON DELETE CASCADE;
+ALTER TABLE public.notification_deliveries ADD CONSTRAINT notification_deliveries_flow_run_id_fkey FOREIGN KEY (flow_run_id) REFERENCES flow_runs(id) ON DELETE SET NULL;
+ALTER TABLE public.notification_deliveries ADD CONSTRAINT notification_deliveries_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL;
+ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE SET NULL;
+ALTER TABLE public.notification_rule_changes ADD CONSTRAINT notification_rule_changes_changed_by_user_id_fkey FOREIGN KEY (changed_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.notification_rule_changes ADD CONSTRAINT notification_rule_changes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_asset_tiers ADD CONSTRAINT organization_asset_tiers_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_deprecated_by_fkey FOREIGN KEY (deprecated_by) REFERENCES auth.users(id);
+ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_integrations ADD CONSTRAINT organization_integrations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_invited_by_fkey FOREIGN KEY (invited_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE SET NULL;
+ALTER TABLE public.organization_ip_allowlist ADD CONSTRAINT organization_ip_allowlist_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
+ALTER TABLE public.organization_ip_allowlist ADD CONSTRAINT organization_ip_allowlist_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_malicious_allowlist ADD CONSTRAINT organization_malicious_allowlist_added_by_fkey FOREIGN KEY (added_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.organization_malicious_allowlist ADD CONSTRAINT organization_malicious_allowlist_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_malicious_allowlist ADD CONSTRAINT organization_malicious_allowlist_revoked_by_fkey FOREIGN KEY (revoked_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.organization_members ADD CONSTRAINT organization_members_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_members ADD CONSTRAINT organization_members_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_mfa_exemptions ADD CONSTRAINT organization_mfa_exemptions_exempted_by_fkey FOREIGN KEY (exempted_by) REFERENCES auth.users(id);
+ALTER TABLE public.organization_mfa_exemptions ADD CONSTRAINT organization_mfa_exemptions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_mfa_exemptions ADD CONSTRAINT organization_mfa_exemptions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_notification_rules ADD CONSTRAINT organization_notification_rules_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.organization_notification_rules ADD CONSTRAINT organization_notification_rules_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_package_policies ADD CONSTRAINT organization_package_policies_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_package_policies ADD CONSTRAINT organization_package_policies_updated_by_id_fkey FOREIGN KEY (updated_by_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.organization_plans ADD CONSTRAINT organization_plans_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_policies ADD CONSTRAINT organization_policies_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_policy_changes_author_id_fkey FOREIGN KEY (author_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_policy_changes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_policy_changes_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES organization_policy_changes(id) ON DELETE SET NULL;
+ALTER TABLE public.organization_pr_checks ADD CONSTRAINT organization_pr_checks_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_pr_checks ADD CONSTRAINT organization_pr_checks_updated_by_id_fkey FOREIGN KEY (updated_by_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES auth.users(id);
+ALTER TABLE public.organization_registry_credentials ADD CONSTRAINT organization_registry_credentials_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.organization_registry_credentials ADD CONSTRAINT organization_registry_credentials_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_roles ADD CONSTRAINT organization_roles_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_scim_configs ADD CONSTRAINT organization_scim_configs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_asset_tier_id_fkey FOREIGN KEY (asset_tier_id) REFERENCES organization_asset_tiers(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_sso_bypass_tokens ADD CONSTRAINT organization_sso_bypass_tokens_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
+ALTER TABLE public.organization_sso_bypass_tokens ADD CONSTRAINT organization_sso_bypass_tokens_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_sso_providers ADD CONSTRAINT organization_sso_providers_default_role_id_fkey FOREIGN KEY (default_role_id) REFERENCES organization_roles(id);
+ALTER TABLE public.organization_sso_providers ADD CONSTRAINT organization_sso_providers_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_status_codes ADD CONSTRAINT organization_status_codes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_status_codes ADD CONSTRAINT organization_status_codes_updated_by_id_fkey FOREIGN KEY (updated_by_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.organization_statuses ADD CONSTRAINT organization_statuses_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_watchlist ADD CONSTRAINT organization_watchlist_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_watchlist ADD CONSTRAINT organization_watchlist_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_watchlist_cleared_commits ADD CONSTRAINT organization_watchlist_cleared_commits_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_watchlist_cleared_commits ADD CONSTRAINT organization_watchlist_cleared_commits_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.package_anomalies ADD CONSTRAINT package_anomalies_contributor_id_fkey FOREIGN KEY (contributor_id) REFERENCES package_contributors(id) ON DELETE CASCADE;
+ALTER TABLE public.package_anomalies ADD CONSTRAINT package_anomalies_watched_package_id_fkey FOREIGN KEY (watched_package_id) REFERENCES watched_packages(id) ON DELETE CASCADE;
+ALTER TABLE public.package_commit_touched_functions ADD CONSTRAINT package_commit_touched_functions_watched_package_id_fkey FOREIGN KEY (watched_package_id) REFERENCES watched_packages(id) ON DELETE CASCADE;
+ALTER TABLE public.package_commits ADD CONSTRAINT package_commits_watched_package_id_fkey FOREIGN KEY (watched_package_id) REFERENCES watched_packages(id) ON DELETE CASCADE;
+ALTER TABLE public.package_contributors ADD CONSTRAINT package_contributors_watched_package_id_fkey FOREIGN KEY (watched_package_id) REFERENCES watched_packages(id) ON DELETE CASCADE;
+ALTER TABLE public.package_reputation_scores ADD CONSTRAINT package_reputation_scores_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
+ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_triggered_by_id_fkey FOREIGN KEY (triggered_by_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.project_commits ADD CONSTRAINT project_commits_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_configured_images ADD CONSTRAINT pci_credentials_same_org_fk FOREIGN KEY (credentials_id, organization_id) REFERENCES organization_registry_credentials(id, organization_id) ON DELETE SET NULL;
+ALTER TABLE public.project_configured_images ADD CONSTRAINT project_configured_images_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.project_configured_images ADD CONSTRAINT project_configured_images_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_configured_images ADD CONSTRAINT project_configured_images_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_risk_accepted_by_fkey FOREIGN KEY (risk_accepted_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_suppressed_by_fkey FOREIGN KEY (suppressed_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_dast_credentials ADD CONSTRAINT project_dast_credentials_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_dast_credentials ADD CONSTRAINT project_dast_credentials_target_id_fkey FOREIGN KEY (target_id) REFERENCES project_dast_targets(id) ON DELETE CASCADE;
+ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_linked_sast_finding_id_fkey FOREIGN KEY (linked_sast_finding_id) REFERENCES project_semgrep_findings(id) ON DELETE SET NULL;
+ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_linked_sca_project_dependency_id_fkey FOREIGN KEY (linked_sca_project_dependency_id) REFERENCES project_dependencies(id) ON DELETE SET NULL;
+ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_risk_accepted_by_fkey FOREIGN KEY (risk_accepted_by) REFERENCES auth.users(id);
+ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_target_id_fkey FOREIGN KEY (target_id) REFERENCES project_dast_targets(id) ON DELETE CASCADE;
+ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_dependencies ADD CONSTRAINT fk_project_dependencies_version FOREIGN KEY (dependency_version_id) REFERENCES dependency_versions(id) ON DELETE SET NULL;
+ALTER TABLE public.project_dependencies ADD CONSTRAINT project_dependencies_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_dependency_files ADD CONSTRAINT project_dependency_files_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
+ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
+ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
+ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_risk_accepted_by_fkey FOREIGN KEY (risk_accepted_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_suppressed_by_fkey FOREIGN KEY (suppressed_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.project_integrations ADD CONSTRAINT project_integrations_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id);
+ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
+ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_risk_accepted_by_fkey FOREIGN KEY (risk_accepted_by) REFERENCES auth.users(id);
+ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_suppressed_by_fkey FOREIGN KEY (suppressed_by) REFERENCES auth.users(id);
+ALTER TABLE public.project_members ADD CONSTRAINT project_members_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_members ADD CONSTRAINT project_members_role_id_fkey FOREIGN KEY (role_id) REFERENCES project_roles(id) ON DELETE RESTRICT;
+ALTER TABLE public.project_members ADD CONSTRAINT project_members_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.project_notification_rules ADD CONSTRAINT project_notification_rules_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.project_notification_rules ADD CONSTRAINT project_notification_rules_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_author_id_fkey FOREIGN KEY (author_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES project_policy_changes(id) ON DELETE SET NULL;
+ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_reviewer_id_fkey FOREIGN KEY (reviewer_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_pr_guardrails ADD CONSTRAINT project_pr_guardrails_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_pull_requests ADD CONSTRAINT project_pull_requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_reachable_flow_suppressions ADD CONSTRAINT project_reachable_flow_suppressions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_reachable_flow_suppressions ADD CONSTRAINT project_reachable_flow_suppressions_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_reachable_flow_suppressions ADD CONSTRAINT project_reachable_flow_suppressions_suppressed_by_fkey FOREIGN KEY (suppressed_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id);
+ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_repositories ADD CONSTRAINT project_repositories_integration_id_fkey FOREIGN KEY (integration_id) REFERENCES organization_integrations(id) ON DELETE SET NULL;
+ALTER TABLE public.project_repositories ADD CONSTRAINT project_repositories_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_roles ADD CONSTRAINT project_roles_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_secret_findings ADD CONSTRAINT project_secret_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_approved_by_user_id_fkey FOREIGN KEY (approved_by_user_id) REFERENCES auth.users(id);
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id);
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_malicious_finding_id_fkey FOREIGN KEY (malicious_finding_id) REFERENCES project_malicious_findings(id) ON DELETE SET NULL;
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_rejected_by_user_id_fkey FOREIGN KEY (rejected_by_user_id) REFERENCES auth.users(id);
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE SET NULL;
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_triggered_by_fkey FOREIGN KEY (triggered_by) REFERENCES auth.users(id);
+ALTER TABLE public.project_semgrep_findings ADD CONSTRAINT project_semgrep_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
+ALTER TABLE public.project_usage_slices ADD CONSTRAINT project_usage_slices_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_version_candidates ADD CONSTRAINT project_version_candidates_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_vulnerability_events ADD CONSTRAINT project_vulnerability_events_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE SET NULL;
+ALTER TABLE public.project_vulnerability_events ADD CONSTRAINT project_vulnerability_events_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_organization_watchlist_id_fkey FOREIGN KEY (organization_watchlist_id) REFERENCES organization_watchlist(id) ON DELETE CASCADE;
+ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.projects ADD CONSTRAINT projects_asset_tier_id_fkey FOREIGN KEY (asset_tier_id) REFERENCES organization_asset_tiers(id) ON DELETE SET NULL;
+ALTER TABLE public.projects ADD CONSTRAINT projects_canvas_position_updated_by_fkey FOREIGN KEY (canvas_position_updated_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.projects ADD CONSTRAINT projects_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.projects ADD CONSTRAINT projects_status_id_fkey FOREIGN KEY (status_id) REFERENCES organization_statuses(id) ON DELETE SET NULL;
+ALTER TABLE public.scan_jobs ADD CONSTRAINT extraction_jobs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.scan_jobs ADD CONSTRAINT extraction_jobs_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_credential_id_fkey FOREIGN KEY (credential_id) REFERENCES project_dast_credentials(id) ON DELETE SET NULL;
+ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_target_id_fkey FOREIGN KEY (target_id) REFERENCES project_dast_targets(id) ON DELETE SET NULL;
+ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_triggered_by_fkey FOREIGN KEY (triggered_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.security_audit_logs ADD CONSTRAINT security_audit_logs_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES auth.users(id);
+ALTER TABLE public.security_audit_logs ADD CONSTRAINT security_audit_logs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.sla_policy_changes ADD CONSTRAINT sla_policy_changes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_edited_by_user_id_fkey FOREIGN KEY (edited_by_user_id) REFERENCES auth.users(id);
+ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.team_banned_versions ADD CONSTRAINT team_banned_versions_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
+ALTER TABLE public.team_banned_versions ADD CONSTRAINT team_banned_versions_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
+ALTER TABLE public.team_deprecations ADD CONSTRAINT team_deprecations_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
+ALTER TABLE public.team_deprecations ADD CONSTRAINT team_deprecations_deprecated_by_fkey FOREIGN KEY (deprecated_by) REFERENCES auth.users(id);
+ALTER TABLE public.team_deprecations ADD CONSTRAINT team_deprecations_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
+ALTER TABLE public.team_integrations ADD CONSTRAINT team_integrations_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
+ALTER TABLE public.team_members ADD CONSTRAINT team_members_role_id_fkey FOREIGN KEY (role_id) REFERENCES team_roles(id) ON DELETE SET NULL;
+ALTER TABLE public.team_members ADD CONSTRAINT team_members_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
+ALTER TABLE public.team_members ADD CONSTRAINT team_members_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.team_notification_rules ADD CONSTRAINT team_notification_rules_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.team_notification_rules ADD CONSTRAINT team_notification_rules_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
+ALTER TABLE public.team_roles ADD CONSTRAINT team_roles_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
+ALTER TABLE public.teams ADD CONSTRAINT teams_canvas_position_updated_by_fkey FOREIGN KEY (canvas_position_updated_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.teams ADD CONSTRAINT teams_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.user_integrations ADD CONSTRAINT user_integrations_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.user_notification_preferences ADD CONSTRAINT user_notification_preferences_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.user_notification_preferences ADD CONSTRAINT user_notification_preferences_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.user_notifications ADD CONSTRAINT user_notifications_event_id_fkey FOREIGN KEY (event_id) REFERENCES notification_events(id) ON DELETE SET NULL;
+ALTER TABLE public.user_notifications ADD CONSTRAINT user_notifications_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.user_notifications ADD CONSTRAINT user_notifications_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL;
+ALTER TABLE public.user_notifications ADD CONSTRAINT user_notifications_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.user_profiles ADD CONSTRAINT user_profiles_default_organization_id_fkey FOREIGN KEY (default_organization_id) REFERENCES organizations(id) ON DELETE SET NULL;
+ALTER TABLE public.user_profiles ADD CONSTRAINT user_profiles_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.user_sessions ADD CONSTRAINT user_sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.watched_packages ADD CONSTRAINT fk_watched_packages_dependency FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
+ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
+ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL;
+
+-- ============================================
+-- INDEXES
+-- ============================================
+CREATE INDEX idx_activities_activity_type ON public.activities USING btree (activity_type);
+CREATE INDEX idx_activities_created_at ON public.activities USING btree (created_at DESC);
+CREATE INDEX idx_activities_metadata ON public.activities USING gin (metadata);
+CREATE INDEX idx_activities_org_type_date ON public.activities USING btree (organization_id, activity_type, created_at DESC);
+CREATE INDEX idx_activities_organization_id ON public.activities USING btree (organization_id);
+CREATE INDEX idx_activities_user_id ON public.activities USING btree (user_id);
+CREATE INDEX idx_aegis_chat_invite_codes_active_code ON public.aegis_chat_invite_codes USING btree (code) WHERE (revoked_at IS NULL);
+CREATE INDEX idx_aegis_chat_messages_created_at ON public.aegis_chat_messages USING btree (created_at DESC);
+CREATE INDEX idx_aegis_chat_messages_thread_id ON public.aegis_chat_messages USING btree (thread_id);
+CREATE INDEX idx_aegis_chat_participants_user_id ON public.aegis_chat_participants USING btree (user_id);
+CREATE INDEX idx_aegis_chat_threads_organization_id ON public.aegis_chat_threads USING btree (organization_id);
+CREATE INDEX idx_aegis_chat_threads_updated_at ON public.aegis_chat_threads USING btree (updated_at DESC);
+CREATE INDEX idx_aegis_chat_threads_user_id ON public.aegis_chat_threads USING btree (user_id);
+CREATE INDEX idx_aegis_chat_user_state_user_id ON public.aegis_chat_user_state USING btree (user_id);
+CREATE INDEX idx_aegis_event_triggers_event ON public.aegis_event_triggers USING btree (event_type) WHERE (enabled = true);
+CREATE INDEX idx_aegis_event_triggers_org ON public.aegis_event_triggers USING btree (organization_id);
+CREATE INDEX idx_aegis_tool_exec_created ON public.aegis_tool_executions USING btree (created_at DESC);
+CREATE INDEX idx_aegis_tool_exec_org ON public.aegis_tool_executions USING btree (organization_id);
+CREATE INDEX idx_aegis_tool_exec_thread ON public.aegis_tool_executions USING btree (thread_id);
+CREATE INDEX idx_aegis_tool_exec_tool ON public.aegis_tool_executions USING btree (tool_name);
+CREATE INDEX idx_aegis_tool_exec_user ON public.aegis_tool_executions USING btree (user_id);
+CREATE INDEX idx_api_tokens_hash ON public.api_tokens USING btree (token_hash) WHERE (revoked_at IS NULL);
+CREATE INDEX idx_api_tokens_org ON public.api_tokens USING btree (organization_id) WHERE (revoked_at IS NULL);
+CREATE INDEX idx_api_tokens_user ON public.api_tokens USING btree (user_id) WHERE (revoked_at IS NULL);
+CREATE INDEX idx_aul_org_created ON public.ai_usage_logs USING btree (organization_id, created_at DESC);
+CREATE INDEX idx_aul_org_month ON public.ai_usage_logs USING btree (organization_id, created_at) WHERE (success = true);
+CREATE INDEX idx_aul_user_feature ON public.ai_usage_logs USING btree (user_id, feature, created_at DESC);
+CREATE INDEX idx_banned_versions_org_dependency_id ON public.banned_versions USING btree (organization_id, dependency_id);
+CREATE INDEX idx_cisc_scanned_at ON public.container_image_scan_cache USING btree (scanned_at);
+CREATE INDEX idx_debt_snapshots_org_date ON public.security_debt_snapshots USING btree (organization_id, snapshot_date DESC);
+CREATE INDEX idx_debt_snapshots_project ON public.security_debt_snapshots USING btree (project_id, snapshot_date DESC);
+CREATE INDEX idx_demo_requests_created_at ON public.demo_requests USING btree (created_at DESC);
+CREATE INDEX idx_demo_requests_email ON public.demo_requests USING btree (email);
+CREATE INDEX idx_dependencies_github_url ON public.dependencies USING btree (github_url);
+CREATE INDEX idx_dependencies_name ON public.dependencies USING btree (name);
+CREATE INDEX idx_dependencies_status ON public.dependencies USING btree (status);
+CREATE INDEX idx_dependency_note_reactions_note ON public.dependency_note_reactions USING btree (note_id);
+CREATE INDEX idx_dependency_note_reactions_user ON public.dependency_note_reactions USING btree (user_id);
+CREATE INDEX idx_dependency_notes_pd ON public.dependency_notes USING btree (project_dependency_id);
+CREATE INDEX idx_dependency_prs_project_dependency_type ON public.dependency_prs USING btree (project_id, dependency_id, type);
+CREATE INDEX idx_dependency_versions_dependency_id ON public.dependency_versions USING btree (dependency_id);
+CREATE INDEX idx_dependency_versions_version ON public.dependency_versions USING btree (version);
+CREATE INDEX idx_dependency_vulnerabilities_dependency_id ON public.dependency_vulnerabilities USING btree (dependency_id);
+CREATE INDEX idx_dependency_vulnerabilities_osv_id ON public.dependency_vulnerabilities USING btree (osv_id);
+CREATE INDEX idx_dependency_vulnerabilities_severity ON public.dependency_vulnerabilities USING btree (severity);
+CREATE INDEX idx_dve_child ON public.dependency_version_edges USING btree (child_version_id);
+CREATE INDEX idx_dve_parent ON public.dependency_version_edges USING btree (parent_version_id);
+CREATE INDEX idx_extraction_logs_project ON public.extraction_logs USING btree (project_id);
+CREATE INDEX idx_extraction_logs_run ON public.extraction_logs USING btree (run_id);
+CREATE INDEX idx_extraction_step_errors_created ON public.extraction_step_errors USING btree (created_at DESC);
+CREATE INDEX idx_extraction_step_errors_project_created ON public.extraction_step_errors USING btree (project_id, created_at DESC);
+CREATE INDEX idx_extraction_step_errors_step_code ON public.extraction_step_errors USING btree (step, code);
+CREATE INDEX idx_feedback_created_at ON public.feedback USING btree (created_at DESC);
+CREATE INDEX idx_feedback_type ON public.feedback USING btree (type);
+CREATE INDEX idx_feedback_user_id ON public.feedback USING btree (user_id) WHERE (user_id IS NOT NULL);
+CREATE INDEX idx_flow_node_executions_run ON public.flow_node_executions USING btree (flow_run_id, executed_at);
+CREATE INDEX idx_flow_runs_flow_started ON public.flow_runs USING btree (flow_id, started_at DESC);
+CREATE INDEX idx_flow_runs_org_started ON public.flow_runs USING btree (organization_id, started_at DESC);
+CREATE INDEX idx_flow_runs_trigger_event ON public.flow_runs USING btree (trigger_event_id) WHERE (trigger_event_id IS NOT NULL);
+CREATE INDEX idx_flow_versions_flow ON public.flow_versions USING btree (flow_id, version DESC);
+CREATE INDEX idx_flows_org_type_active ON public.flows USING btree (organization_id, flow_type, active) WHERE (active = true);
+CREATE INDEX idx_flows_scope ON public.flows USING btree (scope, scope_id);
+CREATE INDEX idx_invitation_teams_invitation_id ON public.invitation_teams USING btree (invitation_id);
+CREATE INDEX idx_invitation_teams_team_id ON public.invitation_teams USING btree (team_id);
+CREATE INDEX idx_ip_allowlist_org ON public.organization_ip_allowlist USING btree (organization_id);
+CREATE INDEX idx_known_malicious_packages_lookup ON public.known_malicious_packages USING btree (package_name, ecosystem) WHERE (withdrawn_at IS NULL);
+CREATE INDEX idx_license_obligations_spdx ON public.license_obligations USING btree (license_spdx_id);
+CREATE INDEX idx_mfsr_source_state ON public.malicious_feed_sync_runs USING btree (source, state, completed_at DESC);
+CREATE INDEX idx_notif_deliveries_event ON public.notification_deliveries USING btree (event_id);
+CREATE INDEX idx_notif_deliveries_flow_run ON public.notification_deliveries USING btree (flow_run_id) WHERE (flow_run_id IS NOT NULL);
+CREATE INDEX idx_notif_deliveries_org_time ON public.notification_deliveries USING btree (organization_id, created_at DESC);
+CREATE INDEX idx_notif_deliveries_status ON public.notification_deliveries USING btree (status) WHERE (status = ANY (ARRAY['pending'::text, 'failed'::text]));
+CREATE INDEX idx_notif_events_batch ON public.notification_events USING btree (batch_id) WHERE (batch_id IS NOT NULL);
+CREATE INDEX idx_notif_events_dedup ON public.notification_events USING btree (deduplication_key, created_at DESC) WHERE (deduplication_key IS NOT NULL);
+CREATE INDEX idx_notif_events_org ON public.notification_events USING btree (organization_id, created_at DESC);
+CREATE INDEX idx_notif_events_project ON public.notification_events USING btree (project_id, created_at DESC);
+CREATE INDEX idx_notif_events_status ON public.notification_events USING btree (status) WHERE (status = 'pending'::text);
+CREATE INDEX idx_notif_events_stuck ON public.notification_events USING btree (created_at, dispatch_attempts) WHERE (status = 'pending'::text);
+CREATE INDEX idx_ogr_cve ON public.organization_generated_rules USING btree (cve_id);
+CREATE INDEX idx_ogr_org_enabled ON public.organization_generated_rules USING btree (organization_id, enabled);
+CREATE INDEX idx_ogr_status ON public.organization_generated_rules USING btree (organization_id, validation_status);
+CREATE INDEX idx_oma_lookup ON public.organization_malicious_allowlist USING btree (organization_id, package_name, ecosystem) WHERE (revoked_at IS NULL);
+CREATE INDEX idx_oma_org_active ON public.organization_malicious_allowlist USING btree (organization_id) WHERE (revoked_at IS NULL);
+CREATE INDEX idx_op_status ON public.organization_plans USING btree (subscription_status);
+CREATE INDEX idx_op_stripe_customer ON public.organization_plans USING btree (stripe_customer_id);
+CREATE INDEX idx_op_stripe_subscription ON public.organization_plans USING btree (stripe_subscription_id);
+CREATE INDEX idx_op_tier ON public.organization_plans USING btree (plan_tier);
+CREATE INDEX idx_orc_org ON public.organization_registry_credentials USING btree (organization_id);
+CREATE INDEX idx_org_generated_rules_org_format_enabled ON public.organization_generated_rules USING btree (organization_id, spec_format, enabled, validation_status) WHERE (enabled = true);
+CREATE INDEX idx_org_package_policies_org ON public.organization_package_policies USING btree (organization_id);
+CREATE INDEX idx_org_policy_changes_org ON public.organization_policy_changes USING btree (organization_id);
+CREATE INDEX idx_org_policy_changes_type ON public.organization_policy_changes USING btree (organization_id, code_type);
+CREATE INDEX idx_org_pr_checks_org ON public.organization_pr_checks USING btree (organization_id);
+CREATE INDEX idx_org_reach_settings_updated_by ON public.organization_reachability_settings USING btree (updated_by);
+CREATE INDEX idx_org_status_codes_org ON public.organization_status_codes USING btree (organization_id);
+CREATE INDEX idx_organization_asset_tiers_org ON public.organization_asset_tiers USING btree (organization_id);
+CREATE INDEX idx_organization_asset_tiers_rank ON public.organization_asset_tiers USING btree (organization_id, rank);
+CREATE INDEX idx_organization_deprecations_org_dependency_id ON public.organization_deprecations USING btree (organization_id, dependency_id);
+CREATE INDEX idx_organization_integrations_org_id ON public.organization_integrations USING btree (organization_id);
+CREATE INDEX idx_organization_integrations_provider ON public.organization_integrations USING btree (provider);
+CREATE INDEX idx_organization_integrations_status ON public.organization_integrations USING btree (status);
+CREATE INDEX idx_organization_invitations_email ON public.organization_invitations USING btree (email);
+CREATE INDEX idx_organization_invitations_org_email_status ON public.organization_invitations USING btree (organization_id, email, status);
+CREATE INDEX idx_organization_invitations_org_id ON public.organization_invitations USING btree (organization_id);
+CREATE INDEX idx_organization_invitations_status ON public.organization_invitations USING btree (status);
+CREATE INDEX idx_organization_invitations_team_id ON public.organization_invitations USING btree (team_id);
+CREATE INDEX idx_organization_members_org_id ON public.organization_members USING btree (organization_id);
+CREATE INDEX idx_organization_members_user_id ON public.organization_members USING btree (user_id);
+CREATE INDEX idx_organization_notification_rules_org_id ON public.organization_notification_rules USING btree (organization_id);
+CREATE INDEX idx_organization_policies_org_id ON public.organization_policies USING btree (organization_id);
+CREATE INDEX idx_organization_roles_display_order ON public.organization_roles USING btree (organization_id, display_order);
+CREATE INDEX idx_organization_roles_org_id ON public.organization_roles USING btree (organization_id);
+CREATE INDEX idx_organization_statuses_org ON public.organization_statuses USING btree (organization_id);
+CREATE INDEX idx_organization_statuses_rank ON public.organization_statuses USING btree (organization_id, rank);
+CREATE INDEX idx_organization_watchlist_cleared_commits_dependency_id ON public.organization_watchlist_cleared_commits USING btree (organization_id, dependency_id) WHERE (dependency_id IS NOT NULL);
+CREATE INDEX idx_organization_watchlist_cleared_commits_org_dependency_id ON public.organization_watchlist_cleared_commits USING btree (organization_id, dependency_id);
+CREATE INDEX idx_organization_watchlist_dependency_id ON public.organization_watchlist USING btree (dependency_id);
+CREATE INDEX idx_organization_watchlist_name ON public.organization_watchlist USING btree (name);
+CREATE INDEX idx_organization_watchlist_org_name ON public.organization_watchlist USING btree (organization_id, name);
+CREATE INDEX idx_organization_watchlist_organization_id_dependency_id ON public.organization_watchlist USING btree (organization_id, dependency_id);
+CREATE INDEX idx_organizations_github_installation_id ON public.organizations USING btree (github_installation_id) WHERE (github_installation_id IS NOT NULL);
+CREATE INDEX idx_package_anomalies_anomaly_score ON public.package_anomalies USING btree (anomaly_score DESC);
+CREATE INDEX idx_package_anomalies_contributor_id ON public.package_anomalies USING btree (contributor_id);
+CREATE INDEX idx_package_anomalies_detected_at ON public.package_anomalies USING btree (detected_at DESC);
+CREATE INDEX idx_package_anomalies_watched_package_id ON public.package_anomalies USING btree (watched_package_id);
+CREATE INDEX idx_package_commit_touched_functions_lookup ON public.package_commit_touched_functions USING btree (watched_package_id, commit_sha);
+CREATE INDEX idx_package_commits_author_email ON public.package_commits USING btree (author_email);
+CREATE INDEX idx_package_commits_timestamp ON public.package_commits USING btree ("timestamp" DESC);
+CREATE INDEX idx_package_commits_watched_package_created_at ON public.package_commits USING btree (watched_package_id, created_at DESC);
+CREATE INDEX idx_package_commits_watched_package_id ON public.package_commits USING btree (watched_package_id);
+CREATE INDEX idx_package_contributors_author_email ON public.package_contributors USING btree (author_email);
+CREATE INDEX idx_package_contributors_total_commits ON public.package_contributors USING btree (total_commits DESC);
+CREATE INDEX idx_package_contributors_watched_package_id ON public.package_contributors USING btree (watched_package_id);
+CREATE INDEX idx_package_security_cache_lookup ON public.package_security_cache USING btree (package_name, version, ecosystem, scanner);
+CREATE INDEX idx_pc_high_signal ON public.package_capabilities USING btree (package_name, ecosystem) WHERE ((eval_dynamic = true) OR (network_io = true) OR (spawns_processes = true));
+CREATE INDEX idx_pc_lookup ON public.package_capabilities USING btree (package_name, version, ecosystem);
+CREATE INDEX idx_pcf_org_status_depscore ON public.project_container_findings USING btree (organization_id, status, depscore DESC NULLS LAST);
+CREATE INDEX idx_pcf_project_run ON public.project_container_findings USING btree (project_id, extraction_run_id);
+CREATE INDEX idx_pcf_severity ON public.project_container_findings USING btree (severity);
+CREATE INDEX idx_pci_org ON public.project_configured_images USING btree (organization_id);
+CREATE INDEX idx_pci_project_enabled ON public.project_configured_images USING btree (project_id, enabled) WHERE (enabled = true);
+CREATE INDEX idx_pd_namespace ON public.project_dependencies USING btree (namespace) WHERE (namespace IS NOT NULL);
+CREATE INDEX idx_pdf_dep_extraction_run ON public.project_dependency_files USING btree (project_dependency_id, extraction_run_id);
+CREATE INDEX idx_pdfn_dep_extraction_run ON public.project_dependency_functions USING btree (project_dependency_id, extraction_run_id);
+CREATE INDEX idx_pdv_project_epd_confidence ON public.project_dependency_vulnerabilities USING btree (project_id, epd_confidence_tier);
+CREATE INDEX idx_pdv_project_extraction_run ON public.project_dependency_vulnerabilities USING btree (project_id, extraction_run_id);
+CREATE INDEX idx_pdv_project_reachability_contextual ON public.project_dependency_vulnerabilities USING btree (project_id, reachability_status, contextual_depscore DESC);
+CREATE INDEX idx_pdv_rereview_triggered ON public.project_dependency_vulnerabilities USING btree (project_id, re_review_triggered_at DESC) WHERE (re_review_triggered_at IS NOT NULL);
+CREATE INDEX idx_pdv_sla_deadline ON public.project_dependency_vulnerabilities USING btree (sla_deadline_at) WHERE (sla_status = ANY (ARRAY['on_track'::text, 'warning'::text]));
+CREATE INDEX idx_pdv_sla_status ON public.project_dependency_vulnerabilities USING btree (sla_status) WHERE (sla_status IS NOT NULL);
+CREATE INDEX idx_pdv_sla_warning_at ON public.project_dependency_vulnerabilities USING btree (sla_warning_at) WHERE ((sla_status = 'on_track'::text) AND (sla_warning_at IS NOT NULL));
+CREATE INDEX idx_pdv_status ON public.project_dependency_vulnerabilities USING btree (status);
+CREATE INDEX idx_pep_classification ON public.project_entry_points USING btree (classification);
+CREATE INDEX idx_pep_framework ON public.project_entry_points USING btree (framework);
+CREATE INDEX idx_pep_project ON public.project_entry_points USING btree (project_id);
+CREATE INDEX idx_pep_project_run ON public.project_entry_points USING btree (project_id, extraction_run_id);
+CREATE INDEX idx_pep_run ON public.project_entry_points USING btree (extraction_run_id);
+CREATE INDEX idx_piacf_framework ON public.project_iac_findings USING btree (framework);
+CREATE INDEX idx_piacf_org_status_depscore ON public.project_iac_findings USING btree (organization_id, status, depscore DESC NULLS LAST);
+CREATE INDEX idx_piacf_project_run ON public.project_iac_findings USING btree (project_id, extraction_run_id);
+CREATE INDEX idx_piacf_severity ON public.project_iac_findings USING btree (severity);
+CREATE INDEX idx_pmf_dep ON public.project_malicious_findings USING btree (dependency_id);
+CREATE INDEX idx_pmf_org ON public.project_malicious_findings USING btree (organization_id);
+CREATE INDEX idx_pmf_project_open ON public.project_malicious_findings USING btree (project_id, suppressed, risk_accepted);
+CREATE INDEX idx_pmf_project_run ON public.project_malicious_findings USING btree (project_id, extraction_run_id);
+CREATE INDEX idx_pmf_reachability ON public.project_malicious_findings USING btree (project_id, reachability_level) WHERE ((suppressed = false) AND (risk_accepted = false));
+CREATE INDEX idx_pms_lookup ON public.package_maintainer_snapshots USING btree (package_name, ecosystem, version, observed_at DESC);
+CREATE INDEX idx_policy_eval_jobs_org ON public.policy_evaluation_jobs USING btree (organization_id);
+CREATE INDEX idx_policy_eval_jobs_status ON public.policy_evaluation_jobs USING btree (organization_id, status);
+CREATE INDEX idx_prf_project_dep ON public.project_reachable_flows USING btree (project_id, dependency_id);
+CREATE INDEX idx_prf_project_entry ON public.project_reachable_flows USING btree (project_id, entry_point_file);
+CREATE INDEX idx_prf_project_extraction_run ON public.project_reachable_flows USING btree (project_id, extraction_run_id);
+CREATE INDEX idx_prf_project_purl ON public.project_reachable_flows USING btree (project_id, purl);
+CREATE INDEX idx_prf_project_run_osv ON public.project_reachable_flows USING btree (project_id, extraction_run_id, osv_id) WHERE (osv_id IS NOT NULL);
+CREATE INDEX idx_prf_project_signature_hash ON public.project_reachable_flows USING btree (project_id, flow_signature_hash) WHERE (flow_signature_hash IS NOT NULL);
+CREATE INDEX idx_prf_run ON public.project_reachable_flows USING btree (extraction_run_id);
+CREATE INDEX idx_prf_run_source ON public.project_reachable_flows USING btree (extraction_run_id, reachability_source);
+CREATE INDEX idx_prf_suppressions_org ON public.project_reachable_flow_suppressions USING btree (organization_id);
+CREATE INDEX idx_prf_suppressions_suppressed_by ON public.project_reachable_flow_suppressions USING btree (suppressed_by) WHERE (suppressed_by IS NOT NULL);
+CREATE INDEX idx_project_commits_project_id ON public.project_commits USING btree (project_id);
+CREATE INDEX idx_project_commits_sha ON public.project_commits USING btree (sha);
+CREATE INDEX idx_project_dast_config_org ON public.project_dast_config USING btree (organization_id);
+CREATE INDEX idx_project_dast_credentials_org ON public.project_dast_credentials USING btree (organization_id);
+CREATE INDEX idx_project_dast_findings_handler ON public.project_dast_findings USING btree (project_id, handler_file_path, handler_function_name) WHERE (handler_file_path IS NOT NULL);
+CREATE INDEX idx_project_dast_findings_org_severity ON public.project_dast_findings USING btree (organization_id, severity, status) WHERE (status = 'open'::text);
+CREATE INDEX idx_project_dast_findings_run ON public.project_dast_findings USING btree (project_id, dast_run_id);
+CREATE INDEX idx_project_dast_findings_sca_link ON public.project_dast_findings USING btree (linked_sca_project_dependency_id) WHERE (linked_sca_project_dependency_id IS NOT NULL);
+CREATE INDEX idx_project_dast_targets_active_run ON public.project_dast_targets USING btree (active_dast_run_id) WHERE (active_dast_run_id IS NOT NULL);
+CREATE INDEX idx_project_dast_targets_org ON public.project_dast_targets USING btree (organization_id);
+CREATE INDEX idx_project_dast_targets_project ON public.project_dast_targets USING btree (project_id);
+CREATE INDEX idx_project_dependencies_active ON public.project_dependencies USING btree (project_id) WHERE (removed_at IS NULL);
+CREATE INDEX idx_project_dependencies_dependency_id ON public.project_dependencies USING btree (dependency_id);
+CREATE INDEX idx_project_dependencies_dependency_version_id ON public.project_dependencies USING btree (dependency_version_id);
+CREATE INDEX idx_project_dependencies_name ON public.project_dependencies USING btree (name);
+CREATE INDEX idx_project_dependencies_policy_result ON public.project_dependencies USING gin (policy_result);
+CREATE INDEX idx_project_dependencies_project_id ON public.project_dependencies USING btree (project_id);
+CREATE INDEX idx_project_dependencies_project_id_dependency_id ON public.project_dependencies USING btree (project_id, dependency_id);
+CREATE INDEX idx_project_dependency_files_project_dependency_id ON public.project_dependency_files USING btree (project_dependency_id);
+CREATE INDEX idx_project_dependency_functions_function_name ON public.project_dependency_functions USING btree (function_name);
+CREATE INDEX idx_project_dependency_functions_project_dependency_id ON public.project_dependency_functions USING btree (project_dependency_id);
+CREATE INDEX idx_project_dependency_vulnerabilities_osv_id ON public.project_dependency_vulnerabilities USING btree (osv_id);
+CREATE INDEX idx_project_dependency_vulnerabilities_project_dependency_id ON public.project_dependency_vulnerabilities USING btree (project_dependency_id);
+CREATE INDEX idx_project_dependency_vulnerabilities_project_id ON public.project_dependency_vulnerabilities USING btree (project_id);
+CREATE INDEX idx_project_dependency_vulnerabilities_severity ON public.project_dependency_vulnerabilities USING btree (severity);
+CREATE INDEX idx_project_integrations_project_id ON public.project_integrations USING btree (project_id);
+CREATE INDEX idx_project_integrations_provider ON public.project_integrations USING btree (provider);
+CREATE INDEX idx_project_integrations_status ON public.project_integrations USING btree (status);
+CREATE INDEX idx_project_members_project_id ON public.project_members USING btree (project_id);
+CREATE INDEX idx_project_members_role_id ON public.project_members USING btree (role_id);
+CREATE INDEX idx_project_members_user_id ON public.project_members USING btree (user_id);
+CREATE INDEX idx_project_notification_rules_project_id ON public.project_notification_rules USING btree (project_id);
+CREATE INDEX idx_project_policy_changes_org ON public.project_policy_changes USING btree (organization_id);
+CREATE INDEX idx_project_policy_changes_project ON public.project_policy_changes USING btree (project_id);
+CREATE INDEX idx_project_policy_changes_status ON public.project_policy_changes USING btree (organization_id, status);
+CREATE INDEX idx_project_policy_changes_type ON public.project_policy_changes USING btree (project_id, code_type, status);
+CREATE INDEX idx_project_policy_exceptions_org_id ON public.project_policy_exceptions USING btree (organization_id);
+CREATE INDEX idx_project_policy_exceptions_project_id ON public.project_policy_exceptions USING btree (project_id);
+CREATE INDEX idx_project_policy_exceptions_project_pending_type ON public.project_policy_exceptions USING btree (organization_id, project_id, status, policy_type) WHERE (status = 'pending'::text);
+CREATE INDEX idx_project_policy_exceptions_status ON public.project_policy_exceptions USING btree (status);
+CREATE INDEX idx_project_pr_guardrails_project_id ON public.project_pr_guardrails USING btree (project_id);
+CREATE INDEX idx_project_prs_project_id ON public.project_pull_requests USING btree (project_id);
+CREATE INDEX idx_project_prs_status ON public.project_pull_requests USING btree (status);
+CREATE INDEX idx_project_repositories_integration_id ON public.project_repositories USING btree (integration_id);
+CREATE INDEX idx_project_repositories_project_id ON public.project_repositories USING btree (project_id);
+CREATE INDEX idx_project_repositories_repo_id ON public.project_repositories USING btree (repo_id);
+CREATE INDEX idx_project_roles_display_order ON public.project_roles USING btree (project_id, display_order);
+CREATE INDEX idx_project_roles_project_id ON public.project_roles USING btree (project_id);
+CREATE INDEX idx_project_security_fixes_thread_id ON public.project_security_fixes USING btree (thread_id, created_at DESC) WHERE (thread_id IS NOT NULL);
+CREATE INDEX idx_project_teams_is_owner ON public.project_teams USING btree (project_id, is_owner);
+CREATE INDEX idx_project_teams_project_id ON public.project_teams USING btree (project_id);
+CREATE INDEX idx_project_teams_team_id ON public.project_teams USING btree (team_id);
+CREATE INDEX idx_project_watchlist_project ON public.project_watchlist USING btree (project_id);
+CREATE INDEX idx_project_watchlist_watchlist ON public.project_watchlist USING btree (organization_watchlist_id);
+CREATE INDEX idx_projects_active_dast_run ON public.projects USING btree (active_dast_run_id) WHERE (active_dast_run_id IS NOT NULL);
+CREATE INDEX idx_projects_asset_tier_id ON public.projects USING btree (asset_tier_id);
+CREATE INDEX idx_projects_canvas_position_updated_by ON public.projects USING btree (canvas_position_updated_by) WHERE (canvas_position_updated_by IS NOT NULL);
+CREATE INDEX idx_projects_framework ON public.projects USING btree (framework);
+CREATE INDEX idx_projects_is_compliant ON public.projects USING btree (is_compliant);
+CREATE INDEX idx_projects_organization_id ON public.projects USING btree (organization_id);
+CREATE INDEX idx_projects_status_id ON public.projects USING btree (status_id);
+CREATE INDEX idx_psecf_depscore ON public.project_secret_findings USING btree (depscore DESC NULLS LAST);
+CREATE INDEX idx_psecf_project ON public.project_secret_findings USING btree (project_id);
+CREATE INDEX idx_psecf_project_extraction_run ON public.project_secret_findings USING btree (project_id, extraction_run_id);
+CREATE INDEX idx_psecf_run ON public.project_secret_findings USING btree (extraction_run_id);
+CREATE INDEX idx_psecf_status ON public.project_secret_findings USING btree (status);
+CREATE INDEX idx_psemf_depscore ON public.project_semgrep_findings USING btree (depscore DESC NULLS LAST);
+CREATE INDEX idx_psemf_fingerprint ON public.project_semgrep_findings USING btree (project_id, semgrep_fingerprint) WHERE (semgrep_fingerprint IS NOT NULL);
+CREATE INDEX idx_psemf_project_extraction_run ON public.project_semgrep_findings USING btree (project_id, extraction_run_id);
+CREATE INDEX idx_psemf_status ON public.project_semgrep_findings USING btree (status);
+CREATE INDEX idx_psf_org_status ON public.project_security_fixes USING btree (organization_id, status);
+CREATE INDEX idx_psf_org_status_pending ON public.project_security_fixes USING btree (organization_id, status) WHERE (status = ANY (ARRAY['planning'::text, 'awaiting_approval'::text]));
+CREATE INDEX idx_psf_osv ON public.project_security_fixes USING btree (project_id, osv_id) WHERE (osv_id IS NOT NULL);
+CREATE INDEX idx_psf_project ON public.project_semgrep_findings USING btree (project_id);
+CREATE INDEX idx_psf_project_status ON public.project_security_fixes USING btree (project_id, status);
+CREATE INDEX idx_psf_run ON public.project_semgrep_findings USING btree (extraction_run_id);
+CREATE INDEX idx_psf_status_approved ON public.project_security_fixes USING btree (status, approved_at) WHERE (status = 'approved'::text);
+CREATE INDEX idx_psf_status_executing ON public.project_security_fixes USING btree (status, heartbeat_at) WHERE (status = 'executing'::text);
+CREATE INDEX idx_pus_project_extraction_run ON public.project_usage_slices USING btree (project_id, extraction_run_id);
+CREATE INDEX idx_pus_project_file ON public.project_usage_slices USING btree (project_id, file_path);
+CREATE INDEX idx_pus_project_type ON public.project_usage_slices USING btree (project_id, target_type);
+CREATE INDEX idx_pus_run ON public.project_usage_slices USING btree (extraction_run_id);
+CREATE INDEX idx_pvc_project_package ON public.project_version_candidates USING btree (project_id, package_name, ecosystem);
+CREATE INDEX idx_pve_created_at ON public.project_vulnerability_events USING btree (created_at DESC);
+CREATE INDEX idx_pve_event_type ON public.project_vulnerability_events USING btree (event_type);
+CREATE INDEX idx_pve_extraction_run_id ON public.project_vulnerability_events USING btree (extraction_run_id) WHERE (extraction_run_id IS NOT NULL);
+CREATE INDEX idx_pve_osv_id ON public.project_vulnerability_events USING btree (osv_id);
+CREATE INDEX idx_pve_project_dependency_id ON public.project_vulnerability_events USING btree (project_dependency_id) WHERE (project_dependency_id IS NOT NULL);
+CREATE INDEX idx_pve_project_id ON public.project_vulnerability_events USING btree (project_id);
+CREATE INDEX idx_reputation_scores_dep ON public.package_reputation_scores USING btree (dependency_id);
+CREATE INDEX idx_reputation_scores_score ON public.package_reputation_scores USING btree (score);
+CREATE INDEX idx_rule_changes_rule ON public.notification_rule_changes USING btree (rule_id, created_at DESC);
+CREATE INDEX idx_sal_action ON public.security_audit_logs USING btree (organization_id, action);
+CREATE INDEX idx_sal_actor ON public.security_audit_logs USING btree (actor_id);
+CREATE INDEX idx_sal_org_created ON public.security_audit_logs USING btree (organization_id, created_at DESC);
+CREATE INDEX idx_scan_jobs_org ON public.scan_jobs USING btree (organization_id);
+CREATE INDEX idx_scan_jobs_project ON public.scan_jobs USING btree (project_id);
+CREATE INDEX idx_scan_jobs_status_created ON public.scan_jobs USING btree (status, created_at);
+CREATE INDEX idx_scan_jobs_type_status_created ON public.scan_jobs USING btree (type, status, created_at);
+CREATE INDEX idx_scim_mappings_org ON public.scim_user_mappings USING btree (organization_id);
+CREATE INDEX idx_sla_policies_asset_tier ON public.organization_sla_policies USING btree (asset_tier_id) WHERE (asset_tier_id IS NOT NULL);
+CREATE INDEX idx_sla_policies_org ON public.organization_sla_policies USING btree (organization_id);
+CREATE INDEX idx_sla_policy_changes_created ON public.sla_policy_changes USING btree (created_at DESC);
+CREATE INDEX idx_sla_policy_changes_org ON public.sla_policy_changes USING btree (organization_id);
+CREATE INDEX idx_sso_bypass_org ON public.organization_sso_bypass_tokens USING btree (organization_id) WHERE (used_at IS NULL);
+CREATE INDEX idx_swe_event_id ON public.stripe_webhook_events USING btree (event_id);
+CREATE INDEX idx_team_banned_versions_team_dependency_id ON public.team_banned_versions USING btree (team_id, dependency_id);
+CREATE INDEX idx_team_deprecations_team_dependency_id ON public.team_deprecations USING btree (team_id, dependency_id);
+CREATE INDEX idx_team_integrations_provider ON public.team_integrations USING btree (provider);
+CREATE INDEX idx_team_integrations_status ON public.team_integrations USING btree (status);
+CREATE INDEX idx_team_integrations_team_id ON public.team_integrations USING btree (team_id);
+CREATE INDEX idx_team_members_role_id ON public.team_members USING btree (role_id);
+CREATE INDEX idx_team_members_team_id ON public.team_members USING btree (team_id);
+CREATE INDEX idx_team_members_user_id ON public.team_members USING btree (user_id);
+CREATE INDEX idx_team_notification_rules_team_id ON public.team_notification_rules USING btree (team_id);
+CREATE INDEX idx_team_roles_display_order ON public.team_roles USING btree (team_id, display_order);
+CREATE INDEX idx_team_roles_team_id ON public.team_roles USING btree (team_id);
+CREATE INDEX idx_teams_canvas_position_updated_by ON public.teams USING btree (canvas_position_updated_by) WHERE (canvas_position_updated_by IS NOT NULL);
+CREATE INDEX idx_teams_organization_id ON public.teams USING btree (organization_id);
+CREATE INDEX idx_temf_framework ON public.taint_engine_framework_models USING btree (framework_name);
+CREATE INDEX idx_temf_org_active ON public.taint_engine_framework_models USING btree (organization_id, is_active);
+CREATE INDEX idx_ter_failed_recent ON public.taint_engine_runs USING btree (created_at DESC) WHERE (status = 'failed'::text);
+CREATE INDEX idx_ter_org_created ON public.taint_engine_runs USING btree (organization_id, created_at DESC);
+CREATE INDEX idx_ter_project_extraction ON public.taint_engine_runs USING btree (project_id, extraction_run_id);
+CREATE INDEX idx_ter_status_created ON public.taint_engine_runs USING btree (status, created_at DESC);
+CREATE INDEX idx_user_integrations_provider ON public.user_integrations USING btree (provider);
+CREATE INDEX idx_user_integrations_user_id ON public.user_integrations USING btree (user_id);
+CREATE INDEX idx_user_notifs_unread ON public.user_notifications USING btree (user_id, read_at) WHERE (read_at IS NULL);
+CREATE INDEX idx_user_notifs_user ON public.user_notifications USING btree (user_id, created_at DESC);
+CREATE INDEX idx_user_profiles_default_organization_id ON public.user_profiles USING btree (default_organization_id);
+CREATE INDEX idx_user_profiles_user_id ON public.user_profiles USING btree (user_id);
+CREATE INDEX idx_user_sessions_active ON public.user_sessions USING btree (last_active_at DESC);
+CREATE INDEX idx_user_sessions_user ON public.user_sessions USING btree (user_id);
+CREATE INDEX idx_watched_packages_last_polled_at ON public.watched_packages USING btree (last_polled_at) WHERE (status = 'ready'::text);
+CREATE INDEX idx_watched_packages_status ON public.watched_packages USING btree (status);
+CREATE INDEX idx_watchtower_jobs_heartbeat ON public.watchtower_jobs USING btree (heartbeat_at) WHERE (status = 'processing'::text);
+CREATE INDEX idx_watchtower_jobs_priority ON public.watchtower_jobs USING btree (priority, created_at) WHERE (status = 'queued'::text);
+CREATE INDEX idx_watchtower_jobs_status ON public.watchtower_jobs USING btree (status) WHERE (status = ANY (ARRAY['queued'::text, 'processing'::text]));
+CREATE INDEX idx_webhook_deliveries_created ON public.webhook_deliveries USING btree (created_at);
+CREATE INDEX idx_webhook_deliveries_delivery_id ON public.webhook_deliveries USING btree (delivery_id);
+CREATE INDEX idx_webhook_deliveries_repo ON public.webhook_deliveries USING btree (repo_full_name);
+CREATE UNIQUE INDEX banned_versions_organization_id_dependency_id_banned_version_ke ON public.banned_versions USING btree (organization_id, dependency_id, banned_version);
+CREATE UNIQUE INDEX idx_dependencies_ecosystem_name ON public.dependencies USING btree (ecosystem, name);
+CREATE UNIQUE INDEX idx_notif_events_dedup_unique ON public.notification_events USING btree (deduplication_key) WHERE (deduplication_key IS NOT NULL);
+CREATE UNIQUE INDEX idx_org_integrations_org_provider_installation ON public.organization_integrations USING btree (organization_id, provider, installation_id) WHERE (installation_id IS NOT NULL);
+CREATE UNIQUE INDEX idx_pcf_fingerprint ON public.project_container_findings USING btree (project_id, container_fingerprint) WHERE (container_fingerprint IS NOT NULL);
+CREATE UNIQUE INDEX idx_pcf_unique ON public.project_container_findings USING btree (project_id, image_digest, os_package_name, os_package_version, vulnerability_id, extraction_run_id);
+CREATE UNIQUE INDEX idx_pci_project_image ON public.project_configured_images USING btree (project_id, image_reference);
+CREATE UNIQUE INDEX idx_piacf_fingerprint ON public.project_iac_findings USING btree (project_id, scanner, iac_fingerprint) WHERE (iac_fingerprint IS NOT NULL);
+CREATE UNIQUE INDEX idx_piacf_unique ON public.project_iac_findings USING btree (project_id, rule_id, file_path, start_line_key, extraction_run_id);
+CREATE UNIQUE INDEX idx_project_commits_project_sha ON public.project_commits USING btree (project_id, sha);
+CREATE UNIQUE INDEX idx_project_prs_project_pr ON public.project_pull_requests USING btree (project_id, pr_number, provider);
+CREATE UNIQUE INDEX idx_project_repositories_repo_full_name_package_json_path ON public.project_repositories USING btree (repo_full_name, package_json_path);
+CREATE UNIQUE INDEX idx_project_teams_single_owner ON public.project_teams USING btree (project_id) WHERE (is_owner = true);
+CREATE UNIQUE INDEX idx_pve_unique_per_run ON public.project_vulnerability_events USING btree (project_id, osv_id, event_type, extraction_run_id, project_dependency_id) WHERE (extraction_run_id IS NOT NULL);
+CREATE UNIQUE INDEX organization_deprecations_organization_id_dependency_id_key ON public.organization_deprecations USING btree (organization_id, dependency_id);
+CREATE UNIQUE INDEX organization_watchlist_cleared_commits_org_dependency_id_commit ON public.organization_watchlist_cleared_commits USING btree (organization_id, dependency_id, commit_sha);
+CREATE UNIQUE INDEX project_dast_findings_resolved ON public.project_dast_findings USING btree (project_id, dast_run_id, rule_id, handler_file_path, handler_function_name, vulnerability_type) WHERE (handler_file_path IS NOT NULL);
+CREATE UNIQUE INDEX project_dast_findings_target_resolved ON public.project_dast_findings USING btree (target_id, dast_run_id, rule_id, handler_file_path, handler_function_name, vulnerability_type) WHERE ((handler_file_path IS NOT NULL) AND (target_id IS NOT NULL));
+CREATE UNIQUE INDEX project_dast_findings_target_unresolved ON public.project_dast_findings USING btree (target_id, dast_run_id, rule_id, endpoint_url, http_method, vulnerability_type) WHERE ((handler_file_path IS NULL) AND (target_id IS NOT NULL));
+CREATE UNIQUE INDEX project_dast_findings_unresolved ON public.project_dast_findings USING btree (project_id, dast_run_id, rule_id, endpoint_url, http_method, vulnerability_type) WHERE (handler_file_path IS NULL);
+CREATE UNIQUE INDEX project_dast_targets_label_unique ON public.project_dast_targets USING btree (project_id, label) WHERE (label IS NOT NULL);
+CREATE UNIQUE INDEX team_banned_versions_team_id_dependency_id_banned_version_key ON public.team_banned_versions USING btree (team_id, dependency_id, banned_version);
+CREATE UNIQUE INDEX team_deprecations_team_id_dependency_id_key ON public.team_deprecations USING btree (team_id, dependency_id);
 -- ============================================
 -- TRIGGERS
 -- ============================================
@@ -6224,7 +6640,9 @@ CREATE TRIGGER aegis_creator_leaves_org AFTER DELETE ON public.organization_memb
 CREATE TRIGGER create_project_roles_trigger AFTER INSERT ON public.projects FOR EACH ROW EXECUTE FUNCTION create_default_project_roles();
 CREATE TRIGGER create_team_roles_trigger AFTER INSERT ON public.teams FOR EACH ROW EXECUTE FUNCTION create_default_team_roles();
 CREATE TRIGGER organization_integrations_updated_at BEFORE UPDATE ON public.organization_integrations FOR EACH ROW EXECUTE FUNCTION update_organization_integrations_updated_at();
+CREATE TRIGGER pci_null_creds_on_org_move BEFORE UPDATE ON public.project_configured_images FOR EACH ROW EXECUTE FUNCTION pci_null_credentials_id_on_org_move();
 CREATE TRIGGER pmf_enforce_org_consistency BEFORE INSERT OR UPDATE OF organization_id, project_id ON public.project_malicious_findings FOR EACH ROW EXECUTE FUNCTION enforce_pmf_org_consistency();
+CREATE TRIGGER project_configured_images_enforce_org_id BEFORE INSERT OR UPDATE ON public.project_configured_images FOR EACH ROW EXECUTE FUNCTION enforce_project_scoped_org_id();
 CREATE TRIGGER project_container_findings_enforce_org_id BEFORE INSERT OR UPDATE OF project_id, organization_id ON public.project_container_findings FOR EACH ROW EXECUTE FUNCTION enforce_finding_org_id();
 CREATE TRIGGER project_iac_findings_enforce_org_id BEFORE INSERT OR UPDATE OF project_id, organization_id ON public.project_iac_findings FOR EACH ROW EXECUTE FUNCTION enforce_finding_org_id();
 CREATE TRIGGER project_integrations_updated_at BEFORE UPDATE ON public.project_integrations FOR EACH ROW EXECUTE FUNCTION update_project_integrations_updated_at();
