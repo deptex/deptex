@@ -13,3 +13,41 @@
 export const DEFAULT_MONTHLY_AI_COST_CAP_USD = 75;
 
 export const DEFAULT_GENERATOR_MONTHLY_BUDGET_USD = 30;
+
+/**
+ * Closed taxonomy of vulnerability classes the engine + generator understand.
+ * Mirrors `backend/src/lib/taint-engine-defaults.ts:ALL_VULN_CLASSES`, which
+ * itself mirrors `backend/depscanner/src/taint-engine/spec.ts`. The byte-
+ * equality test in backend/src/__tests__/taint-engine-defaults.test.ts pins
+ * all three.
+ *
+ * Adding a new vuln class touches FOUR files: the engine spec.ts, the
+ * backend defaults mirror, this frontend mirror, and the migration's
+ * vuln_classes_enabled CHECK list.
+ */
+export type VulnClass =
+  | 'sql_injection'
+  | 'ssrf'
+  | 'xss'
+  | 'path_traversal'
+  | 'command_injection'
+  | 'prototype_pollution'
+  | 'deserialization'
+  | 'redos'
+  | 'file_upload'
+  | 'open_redirect'
+  | 'log_injection';
+
+export const ALL_VULN_CLASSES: readonly VulnClass[] = [
+  'sql_injection',
+  'ssrf',
+  'xss',
+  'path_traversal',
+  'command_injection',
+  'prototype_pollution',
+  'deserialization',
+  'redos',
+  'file_upload',
+  'open_redirect',
+  'log_injection',
+];

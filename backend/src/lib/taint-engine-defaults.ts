@@ -20,3 +20,41 @@ export const DEFAULT_GENERATOR_MONTHLY_BUDGET_USD = 30;
 
 /** Defensive upper bound enforced by both DB CHECK and route validators. */
 export const COST_CAP_MAX_USD = 1000;
+
+/**
+ * Closed taxonomy of vulnerability classes the taint engine + generator
+ * understand. Mirrors `backend/depscanner/src/taint-engine/spec.ts`'s
+ * `ALL_VULN_CLASSES` byte-for-byte; the depscanner is its own tsc package
+ * (rootDir=./src), so production code in backend/src can't import from
+ * depscanner — we duplicate and pin equality with a unit test.
+ *
+ * Also mirrored in `frontend/src/lib/taint-engine-defaults.ts` for future
+ * dropdowns / filter UIs. Adding a new vuln class touches THREE files (the
+ * engine, this file, the frontend mirror) and the migration's CHECK list.
+ */
+export type VulnClass =
+  | 'sql_injection'
+  | 'ssrf'
+  | 'xss'
+  | 'path_traversal'
+  | 'command_injection'
+  | 'prototype_pollution'
+  | 'deserialization'
+  | 'redos'
+  | 'file_upload'
+  | 'open_redirect'
+  | 'log_injection';
+
+export const ALL_VULN_CLASSES: readonly VulnClass[] = [
+  'sql_injection',
+  'ssrf',
+  'xss',
+  'path_traversal',
+  'command_injection',
+  'prototype_pollution',
+  'deserialization',
+  'redos',
+  'file_upload',
+  'open_redirect',
+  'log_injection',
+];

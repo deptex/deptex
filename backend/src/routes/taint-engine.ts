@@ -40,7 +40,7 @@ import {
   getById,
 } from '../lib/taint-engine/spec-cache';
 import { CostCapExceededError, getCostCapState } from '../lib/taint-engine/cost-cap';
-import { COST_CAP_MAX_USD, DEFAULT_MONTHLY_AI_COST_CAP_USD } from '../lib/taint-engine-defaults';
+import { ALL_VULN_CLASSES, COST_CAP_MAX_USD, DEFAULT_MONTHLY_AI_COST_CAP_USD } from '../lib/taint-engine-defaults';
 
 const router = express.Router({ mergeParams: true });
 
@@ -83,17 +83,12 @@ function requirePerm(perm: string) {
 // Settings
 // ---------------------------------------------------------------------------
 
-const VULN_CLASSES = new Set([
-  'sql_injection', 'ssrf', 'xss', 'path_traversal', 'command_injection',
-  'prototype_pollution', 'deserialization', 'redos', 'file_upload',
-  'open_redirect', 'log_injection',
-]);
-
-const DEFAULT_VULN_CLASSES = [
-  'sql_injection', 'ssrf', 'xss', 'path_traversal', 'command_injection',
-  'prototype_pollution', 'deserialization', 'redos', 'file_upload',
-  'open_redirect', 'log_injection',
-];
+// Single source of truth lives in `backend/src/lib/taint-engine-defaults.ts`,
+// which mirrors `backend/depscanner/src/taint-engine/spec.ts:ALL_VULN_CLASSES`
+// (the engine's own constant). The defaults test asserts byte-equality across
+// all three surfaces (engine, this re-export, frontend mirror).
+const VULN_CLASSES: ReadonlySet<string> = new Set(ALL_VULN_CLASSES);
+const DEFAULT_VULN_CLASSES: readonly string[] = ALL_VULN_CLASSES;
 
 router.get('/:orgId/settings', requirePerm('view_ai_spending'), async (req: AuthRequest, res) => {
   try {
