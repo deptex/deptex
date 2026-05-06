@@ -807,6 +807,13 @@ export async function applyEpdScoringFallback(
   projectId: string,
   repoRoot: string,
   logger: LogLike,
+  /**
+   * fp-filter spend already incurred by the upstream taint engine for this
+   * extraction. Folded into the burn-breaker ceiling so a healthy fp-filter
+   * pass + an aggressive Anthropic fallback can't compound past the
+   * 25%-of-monthly-cap per-extraction ceiling.
+   */
+  taintEngineFpFilterCostUsd = 0,
 ): Promise<void> {
   const { data: projectRow } = await supabase
     .from('projects')
@@ -1245,13 +1252,18 @@ ${sourceContext || 'none'}`;
         };
       } else if (
         burnBreakerCeiling !== Infinity
-        && extractionAnthropicCostUsd + projectedCost > burnBreakerCeiling
+        && (taintEngineFpFilterCostUsd + extractionAnthropicCostUsd + projectedCost) > burnBreakerCeiling
       ) {
+        // Fold fp-filter spend into the per-extraction burn ceiling: the
+        // engine's healthy fp-filter pass + an aggressive Anthropic
+        // fallback shouldn't compound past 25% of the monthly cap.
         burnBreakerEngaged = true;
         await logger.warn('epd', 'ai_anthropic_fallback_burn_breaker_engaged', {
           epd_phase: 'burn_breaker',
           extraction_id: projectId,
-          cumulative_cost: Number(extractionAnthropicCostUsd.toFixed(6)),
+          fp_filter_cost: Number(taintEngineFpFilterCostUsd.toFixed(6)),
+          anthropic_cost: Number(extractionAnthropicCostUsd.toFixed(6)),
+          cumulative_cost: Number((taintEngineFpFilterCostUsd + extractionAnthropicCostUsd).toFixed(6)),
           cap: burnBreakerCeiling,
         });
         aggregated = {
@@ -1268,12 +1280,41 @@ ${sourceContext || 'none'}`;
           epd_status: 'budget_exceeded',
         };
       } else {
+        const callStart = Date.now();
         try {
           const apiKey = decryptedApiKey as string;
           const ai = await verifyWithAnthropic(apiKey, anthropicModel, contextPayload);
           const callCost = estimateCostUsd(anthropicModel, ai.inputTokens, ai.outputTokens);
           runSpendUsd += callCost;
           extractionAnthropicCostUsd += callCost;
+
+          // Persist into ai_usage_logs so the cost-cap RPC's whitelist
+          // (extended in phase28a to include taint_engine_anthropic_fallback)
+          // sees this spend on the next extraction's monthly-spend lookup.
+          // Failure to write is non-fatal — telemetry shouldn't block the
+          // user's depscore update.
+          try {
+            await supabase.from('ai_usage_logs').insert({
+              organization_id: organizationId,
+              user_id: organizationId,
+              feature: 'taint_engine_anthropic_fallback',
+              tier: 'byok',
+              provider: 'anthropic',
+              model: anthropicModel,
+              input_tokens: ai.inputTokens,
+              output_tokens: ai.outputTokens,
+              estimated_cost: Number(callCost.toFixed(8)),
+              context_type: 'taint_engine_run',
+              context_id: projectId,
+              duration_ms: Date.now() - callStart,
+              success: true,
+            });
+          } catch (logErr) {
+            await logger.warn('epd', `ai_usage_logs insert failed for anthropic fallback: ${logErr instanceof Error ? logErr.message : String(logErr)}`, {
+              epd_phase: 'usage_log_failed',
+              vuln_row_id: row.id,
+            });
+          }
           // Anthropic wins when the triple was degraded — overwrite the
           // aggregator's classification + sanitization with Anthropic's
           // verdict, recompute factor + contextual.
@@ -1309,6 +1350,31 @@ ${sourceContext || 'none'}`;
             project_dependency_id: projectDependencyId,
             error_message: msg,
           });
+          // Telemetry-only row — RPC's WHERE success=true filter excludes
+          // it from monthly-spend totals so a flaky upstream doesn't drain
+          // the cap. Still useful for the usage analytics dashboard.
+          if (organizationId) {
+            try {
+              await supabase.from('ai_usage_logs').insert({
+                organization_id: organizationId,
+                user_id: organizationId,
+                feature: 'taint_engine_anthropic_fallback',
+                tier: 'byok',
+                provider: 'anthropic',
+                model: anthropicModel,
+                input_tokens: 0,
+                output_tokens: 0,
+                estimated_cost: 0,
+                context_type: 'taint_engine_run',
+                context_id: projectId,
+                duration_ms: Date.now() - callStart,
+                success: false,
+                error_message: msg.slice(0, 500),
+              });
+            } catch {
+              /* swallow telemetry failures */
+            }
+          }
           aggregated = {
             ...aggregated,
             epd_status: 'ai_verified_anthropic_fallback_failed',

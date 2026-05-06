@@ -1480,6 +1480,10 @@ export async function runPipeline(
     // updateReachabilityLevels call below can validate that every promoted
     // confirmed-tier flow has an osv_id matching a real loaded spec.
     const validOsvIds = new Set<string>();
+    // Captured at the same scope so the EPD step can fold this into its
+    // burn-breaker ceiling (T3.5: prevent fp-filter + Anthropic compounding
+    // past the per-extraction 25%-of-monthly-cap ceiling).
+    let taintEngineFpFilterCostUsd = 0;
     {
       const stepStart = Date.now();
       await updateStep(supabase, projectId, 'taint_engine');
@@ -1707,6 +1711,7 @@ export async function runPipeline(
               for (const e of writeResult.errors) {
                 await log.warn('taint_engine', `flow write: ${e}`);
               }
+              taintEngineFpFilterCostUsd = aiFilter?.costUsd ?? 0;
               await writeTaintEngineRun(supabase, {
                 projectId,
                 organizationId,
@@ -1718,7 +1723,7 @@ export async function runPipeline(
                 totalMs: Date.now() - stepStart,
                 flowsEmitted: propagation.flows.length,
                 flowsAfterAiFilter: survivors.length,
-                aiCostUsd: aiFilter?.costUsd ?? 0,
+                aiCostUsd: taintEngineFpFilterCostUsd,
                 frameworksDetected: frameworksLoaded,
                 isTypedJsProject: propagation.callgraph.isTypedJsProject,
                 typedFilesPct: propagation.callgraph.typedFilesPct,
@@ -1845,7 +1850,7 @@ export async function runPipeline(
     // the env / per-org `fail_job` behavior can hard-fail when chosen.
     const epdStart = Date.now();
     try {
-      await applyEpdScoringFallback(supabase, projectId, workspaceRoot, log);
+      await applyEpdScoringFallback(supabase, projectId, workspaceRoot, log, taintEngineFpFilterCostUsd);
     } catch (epdErr: any) {
       if (epdErr instanceof EpdBudgetExceededError) throw epdErr;
       if (job.jobId) {
