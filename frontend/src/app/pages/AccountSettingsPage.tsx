@@ -39,6 +39,16 @@ export default function AccountSettingsPage() {
   const [defaultOrgId, setDefaultOrgId] = useState<string | null>(null);
   const [savingDefaultOrg, setSavingDefaultOrg] = useState(false);
 
+  const [emailEditing, setEmailEditing] = useState(false);
+  const [newEmail, setNewEmail] = useState('');
+  const [savingEmail, setSavingEmail] = useState(false);
+
+  // Supabase exposes a pending email change as `new_email` on the user object
+  // until the new address is confirmed. Treat it as the source of truth for
+  // the "verification pending" state.
+  const pendingEmail = (user as unknown as { new_email?: string } | null)?.new_email ?? null;
+  const emailVerified = !!user?.email_confirmed_at;
+
   const trimmedName = displayName.trim();
   const currentName = (fullName || '').trim();
   const isNameInvalid = trimmedName.length === 0 || trimmedName.length > 32;
@@ -253,6 +263,53 @@ export default function AccountSettingsPage() {
     }
   };
 
+  const handleStartEmailEdit = () => {
+    setNewEmail(user?.email ?? '');
+    setEmailEditing(true);
+  };
+
+  const handleCancelEmailEdit = () => {
+    setEmailEditing(false);
+    setNewEmail('');
+  };
+
+  const handleSaveEmail = async () => {
+    if (savingEmail) return;
+    const trimmed = newEmail.trim();
+    if (!trimmed || !trimmed.includes('@')) {
+      toast({
+        title: 'Invalid email',
+        description: 'Please enter a valid email address.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (trimmed.toLowerCase() === (user?.email ?? '').toLowerCase()) {
+      handleCancelEmailEdit();
+      return;
+    }
+
+    setSavingEmail(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ email: trimmed });
+      if (error) throw error;
+      toast({
+        title: 'Verification sent',
+        description: `Check ${trimmed} for a confirmation link to complete the change.`,
+      });
+      handleCancelEmailEdit();
+    } catch (error) {
+      console.error('Error updating email:', error);
+      toast({
+        title: 'Could not change email',
+        description: 'Please try again or contact support.',
+        variant: 'destructive',
+      });
+    } finally {
+      setSavingEmail(false);
+    }
+  };
+
   const handleConnectProvider = async (provider: 'github' | 'google') => {
     try {
       if (provider === 'github') {
@@ -343,6 +400,71 @@ export default function AccountSettingsPage() {
                 >
                   {savingGeneral ? 'Saving...' : 'Save'}
                 </Button>
+              </div>
+            </div>
+
+            {/* Email Card */}
+            <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+              <div className="p-6 space-y-3">
+                <h3 className="text-base font-semibold text-foreground">Email</h3>
+                <p className="text-sm text-foreground-secondary">
+                  Used for sign-in and notifications. Changing it requires confirming the new address.
+                </p>
+
+                {!emailEditing ? (
+                  <div className="flex items-center gap-3 max-w-md">
+                    <div className="flex-1 min-w-0 px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground truncate">
+                      {user?.email ?? '—'}
+                    </div>
+                    {emailVerified && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-500/10 text-green-500 border border-green-500/20 flex-shrink-0">
+                        Verified
+                      </span>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleStartEmailEdit}
+                      className="h-9 flex-shrink-0"
+                    >
+                      Change
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 max-w-md">
+                    <input
+                      type="email"
+                      value={newEmail}
+                      onChange={(e) => setNewEmail(e.target.value)}
+                      placeholder="new@example.com"
+                      autoFocus
+                      className="flex-1 min-w-0 px-3 py-2 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                    />
+                    <Button
+                      size="sm"
+                      onClick={handleSaveEmail}
+                      disabled={savingEmail || newEmail.trim().length === 0}
+                      className="h-9 bg-primary text-primary-foreground hover:bg-primary/90"
+                    >
+                      {savingEmail ? 'Sending...' : 'Send link'}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleCancelEmailEdit}
+                      disabled={savingEmail}
+                      className="h-9"
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                )}
+
+                {pendingEmail && pendingEmail !== user?.email && (
+                  <p className="text-xs text-foreground-secondary">
+                    Verification pending for <span className="text-foreground font-medium">{pendingEmail}</span>. Click the link in your inbox to complete the change.
+                  </p>
+                )}
               </div>
             </div>
 
