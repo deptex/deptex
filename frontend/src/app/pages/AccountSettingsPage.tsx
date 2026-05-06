@@ -12,15 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../../components/ui/select';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../../components/ui/dialog';
-import { Edit2, Loader2 } from 'lucide-react';
+import { Edit2, Loader2, Trash2 } from 'lucide-react';
 import { getAvatarUrl, getDisplayNameOrNull } from '../../lib/userIdentity';
 
 const NO_DEFAULT_ORG = '__none__';
@@ -46,13 +38,17 @@ export default function AccountSettingsPage() {
 
   const [organizations, setOrganizations] = useState<Organization[] | null>(null);
   const [defaultOrgId, setDefaultOrgId] = useState<string | null>(null);
+  const [pendingDefaultOrgId, setPendingDefaultOrgId] = useState<string | null>(null);
   const [savingDefaultOrg, setSavingDefaultOrg] = useState(false);
+
+  const isDefaultOrgDirty = pendingDefaultOrgId !== defaultOrgId;
+  const canSaveDefaultOrg = !savingDefaultOrg && organizations !== null && isDefaultOrgDirty;
 
   const [emailEditing, setEmailEditing] = useState(false);
   const [newEmail, setNewEmail] = useState('');
   const [savingEmail, setSavingEmail] = useState(false);
 
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmInput, setDeleteConfirmInput] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [deleteBlockedOrgs, setDeleteBlockedOrgs] = useState<{ id: string; name: string }[] | null>(null);
@@ -114,6 +110,7 @@ export default function AccountSettingsPage() {
         if (cancelled) return;
         setOrganizations(orgs);
         setDefaultOrgId(profile.default_organization_id);
+        setPendingDefaultOrgId(profile.default_organization_id);
       } catch (error) {
         console.error('Failed to load organizations / default org:', error);
       }
@@ -121,32 +118,34 @@ export default function AccountSettingsPage() {
     return () => { cancelled = true; };
   }, []);
 
-  const handleDefaultOrgChange = async (value: string) => {
-    if (savingDefaultOrg) return;
-    const newId = value === NO_DEFAULT_ORG ? null : value;
-    if (newId === defaultOrgId) return;
+  const handleSelectDefaultOrg = (value: string) => {
+    setPendingDefaultOrgId(value === NO_DEFAULT_ORG ? null : value);
+  };
+
+  const handleSaveDefaultOrg = async () => {
+    if (!canSaveDefaultOrg) return;
 
     const previous = defaultOrgId;
-    setDefaultOrgId(newId);
     setSavingDefaultOrg(true);
     try {
-      await api.updateUserProfile({ default_organization_id: newId });
+      await api.updateUserProfile({ default_organization_id: pendingDefaultOrgId });
+      setDefaultOrgId(pendingDefaultOrgId);
       // Keep the localStorage cache in sync so SettingsRedirect + the
       // OrganizationsLanding fast-path see the new default without a refetch.
-      if (newId) {
-        localStorage.setItem('deptex_default_org', newId);
+      if (pendingDefaultOrgId) {
+        localStorage.setItem('deptex_default_org', pendingDefaultOrgId);
       } else {
         localStorage.removeItem('deptex_default_org');
       }
       toast({
         title: 'Default organization updated',
-        description: newId
+        description: pendingDefaultOrgId
           ? 'You will land here next time you open Deptex.'
           : 'Your default organization has been cleared.',
       });
     } catch (error) {
       console.error('Failed to update default organization:', error);
-      setDefaultOrgId(previous);
+      setPendingDefaultOrgId(previous);
       toast({
         title: 'Update failed',
         description: 'Could not update your default organization. Please try again.',
@@ -324,15 +323,15 @@ export default function AccountSettingsPage() {
     }
   };
 
-  const handleOpenDeleteDialog = () => {
+  const handleOpenDeleteConfirm = () => {
     setDeleteConfirmInput('');
     setDeleteBlockedOrgs(null);
-    setDeleteDialogOpen(true);
+    setShowDeleteConfirm(true);
   };
 
-  const handleCloseDeleteDialog = () => {
+  const handleCancelDelete = () => {
     if (deleting) return;
-    setDeleteDialogOpen(false);
+    setShowDeleteConfirm(false);
     setDeleteConfirmInput('');
     setDeleteBlockedOrgs(null);
   };
@@ -533,105 +532,137 @@ export default function AccountSettingsPage() {
                 </p>
                 <div className="max-w-md">
                   <Select
-                    value={defaultOrgId ?? NO_DEFAULT_ORG}
-                    onValueChange={handleDefaultOrgChange}
+                    value={pendingDefaultOrgId ?? NO_DEFAULT_ORG}
+                    onValueChange={handleSelectDefaultOrg}
                     disabled={savingDefaultOrg || organizations === null}
                   >
-                    <SelectTrigger className="w-full bg-black/20 border-border">
+                    <SelectTrigger className="w-full h-10 bg-black/20 border-border [&>span]:flex [&>span]:items-center [&>span]:gap-2 [&>span]:min-w-0 [&>span]:flex-1">
                       <SelectValue placeholder={organizations === null ? 'Loading...' : 'Select an organization'} />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value={NO_DEFAULT_ORG}>No default</SelectItem>
+                      <SelectItem value={NO_DEFAULT_ORG}>
+                        <span className="text-foreground-secondary">No default</span>
+                      </SelectItem>
                       {organizations?.map((org) => (
                         <SelectItem key={org.id} value={org.id}>
-                          {org.name}
+                          <div className="flex items-center gap-2 min-w-0">
+                            <img
+                              src={org.avatar_url || '/images/org_profile.png'}
+                              alt={org.name}
+                              className="h-5 w-5 rounded-full object-cover bg-transparent flex-shrink-0"
+                            />
+                            <span className="truncate">{org.name}</span>
+                          </div>
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
               </div>
-            </div>
-
-            {/* Danger Zone Card */}
-            <div className="bg-background-card border border-destructive/40 rounded-lg overflow-hidden">
-              <div className="p-6 space-y-3">
-                <h3 className="text-base font-semibold text-foreground">Delete Account</h3>
-                <p className="text-sm text-foreground-secondary">
-                  Permanently delete your account and all data tied to it. This cannot be undone. If you're the only owner of an organization, you'll need to transfer ownership or delete the organization first.
+              <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
+                <p className="text-xs text-foreground-secondary">
+                  Members of an org can be set as default. You can always switch in the sidebar.
                 </p>
-              </div>
-              <div className="px-6 py-3 bg-black/20 border-t border-destructive/40 flex items-center justify-end">
                 <Button
-                  variant="outline"
+                  onClick={handleSaveDefaultOrg}
+                  disabled={!canSaveDefaultOrg}
                   size="sm"
-                  onClick={handleOpenDeleteDialog}
-                  className="h-8 border-destructive/50 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  className="h-8 min-w-[64px] bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
                 >
-                  Delete account
+                  {savingDefaultOrg ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Save'}
                 </Button>
               </div>
             </div>
 
-            <Dialog open={deleteDialogOpen} onOpenChange={(open) => (open ? setDeleteDialogOpen(true) : handleCloseDeleteDialog())}>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Delete your account?</DialogTitle>
-                  <DialogDescription>
-                    This permanently removes your profile, memberships, and all data tied to your account. There is no recovery.
-                  </DialogDescription>
-                </DialogHeader>
-
-                {deleteBlockedOrgs && deleteBlockedOrgs.length > 0 ? (
-                  <div className="space-y-3">
-                    <p className="text-sm text-foreground">
-                      You're the only owner of {deleteBlockedOrgs.length === 1 ? 'this organization' : 'these organizations'}:
-                    </p>
-                    <ul className="text-sm text-foreground-secondary list-disc list-inside space-y-1">
-                      {deleteBlockedOrgs.map((org) => (
-                        <li key={org.id}>{org.name}</li>
-                      ))}
-                    </ul>
+            {/* Danger Zone */}
+            <div className="border border-destructive/30 rounded-lg overflow-hidden bg-destructive/5">
+              <div className="px-6 py-3 border-b border-destructive/30 bg-destructive/10">
+                <h3 className="text-sm font-semibold text-destructive uppercase tracking-wide">Danger Zone</h3>
+              </div>
+              <div className="p-6">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1">
+                    <h4 className="text-base font-semibold text-foreground mb-1">Delete Account</h4>
                     <p className="text-sm text-foreground-secondary">
-                      Transfer ownership or delete {deleteBlockedOrgs.length === 1 ? 'the organization' : 'them'} first, then come back here.
+                      Permanently delete your account and everything tied to it — profile, memberships, and per-user data. This cannot be undone.
                     </p>
                   </div>
-                ) : (
-                  <div className="space-y-3">
-                    <p className="text-sm text-foreground">
-                      Type your email <span className="font-medium">{user?.email}</span> to confirm.
-                    </p>
-                    <input
-                      type="text"
-                      value={deleteConfirmInput}
-                      onChange={(e) => setDeleteConfirmInput(e.target.value)}
-                      placeholder={user?.email ?? ''}
-                      autoFocus
-                      className="w-full px-3 py-2 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-all"
-                    />
-                  </div>
-                )}
-
-                <DialogFooter>
-                  <Button variant="outline" onClick={handleCloseDeleteDialog} disabled={deleting}>
-                    {deleteBlockedOrgs ? 'Close' : 'Cancel'}
-                  </Button>
-                  {!deleteBlockedOrgs && (
+                  {!showDeleteConfirm && (
                     <Button
-                      onClick={handleDeleteAccount}
-                      disabled={
-                        deleting ||
-                        !user?.email ||
-                        deleteConfirmInput.trim().toLowerCase() !== user.email.toLowerCase()
-                      }
-                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90 border border-destructive-foreground/20"
+                      onClick={handleOpenDeleteConfirm}
+                      variant="outline"
+                      size="sm"
+                      className="flex-shrink-0 h-8 border-destructive/50 text-destructive hover:bg-destructive/10 hover:border-destructive"
                     >
-                      {deleting ? 'Deleting...' : 'Delete account'}
+                      <Trash2 className="h-3.5 w-3.5 mr-2" />
+                      Delete
                     </Button>
                   )}
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
+                </div>
+
+                {showDeleteConfirm && (
+                  <div className="mt-4 p-4 bg-background/50 rounded-lg border border-destructive/30 space-y-4">
+                    {deleteBlockedOrgs && deleteBlockedOrgs.length > 0 ? (
+                      <>
+                        <p className="text-sm text-foreground">
+                          You're the only owner of {deleteBlockedOrgs.length === 1 ? 'this organization' : 'these organizations'}:
+                        </p>
+                        <ul className="text-sm text-foreground-secondary list-disc list-inside space-y-1">
+                          {deleteBlockedOrgs.map((org) => (
+                            <li key={org.id}>{org.name}</li>
+                          ))}
+                        </ul>
+                        <p className="text-sm text-foreground-secondary">
+                          Transfer ownership or delete {deleteBlockedOrgs.length === 1 ? 'the organization' : 'them'} first, then come back here.
+                        </p>
+                        <div>
+                          <Button onClick={handleCancelDelete} variant="ghost" size="sm" className="h-8">
+                            Close
+                          </Button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm text-foreground">
+                          To confirm deletion, type <strong className="text-destructive font-mono bg-destructive/10 px-1.5 py-0.5 rounded">{user?.email}</strong> below:
+                        </p>
+                        <input
+                          type="text"
+                          value={deleteConfirmInput}
+                          onChange={(e) => setDeleteConfirmInput(e.target.value)}
+                          placeholder={user?.email ?? ''}
+                          autoFocus
+                          className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-all"
+                        />
+                        <div className="flex gap-2">
+                          <Button
+                            onClick={handleDeleteAccount}
+                            variant="destructive"
+                            size="sm"
+                            disabled={
+                              deleting ||
+                              !user?.email ||
+                              deleteConfirmInput.trim().toLowerCase() !== user.email.toLowerCase()
+                            }
+                            className="h-8"
+                          >
+                            {deleting ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
+                            ) : (
+                              <Trash2 className="h-3.5 w-3.5 mr-2" />
+                            )}
+                            Delete Forever
+                          </Button>
+                          <Button onClick={handleCancelDelete} variant="ghost" size="sm" className="h-8">
+                            Cancel
+                          </Button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
