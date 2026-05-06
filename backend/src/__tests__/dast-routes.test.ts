@@ -510,7 +510,7 @@ describe('Drain mode — POST /dast/scan returns 503 when INTERNAL_DAST_PAUSED=t
   // divergence between the test stub and the real wiring is exactly what
   // this gate is supposed to prevent (path regex drift, write-method drift).
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { dastDrainMiddleware } = require('../index');
+  const { dastDrainMiddleware } = require('../middleware/dast-drain');
 
   function makeAppWithDrain() {
     const app = express();

@@ -136,31 +136,9 @@ app.use('/api/organizations', taintEngineRouter);
 app.use('/api/organizations', teamsRouter);
 app.use('/api/organizations', projectsRouter);
 
-// Phase 24a drain mode — blocks new DAST scan submissions while a deploy is
-// rolling out the v2.1a/b worker shim swap. Only the POST scan trigger is
-// blocked; reads, target CRUD, and credential CRUD continue to pass through
-// so the UI can still surface state and operators can clean up. See
-// docs/runbooks/dast-v2-1a-deploy.md for the full deploy DAG.
-//
-// Exported so tests import the production wiring rather than re-implementing
-// the path regex inline (a divergence between test and prod is exactly the
-// failure mode this middleware exists to prevent).
-export const DAST_SCAN_DRAIN_PATH = /^\/[^/]+\/dast\/scan\/?$/;
-
-export function dastDrainMiddleware(
-  req: express.Request,
-  res: express.Response,
-  next: express.NextFunction,
-) {
-  if (
-    process.env.INTERNAL_DAST_PAUSED === 'true' &&
-    req.method === 'POST' &&
-    DAST_SCAN_DRAIN_PATH.test(req.path)
-  ) {
-    return res.status(503).json({ error: 'dast_queue_paused' });
-  }
-  next();
-}
+// Drain mode middleware lives in middleware/dast-drain.ts so tests can
+// import it without pulling in this file's load-time side effects.
+import { dastDrainMiddleware } from './middleware/dast-drain';
 
 app.use('/api/projects', dastDrainMiddleware);
 app.use('/api/projects', dastRouter);
